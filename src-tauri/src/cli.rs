@@ -262,8 +262,8 @@ mod tests {
 
     #[test]
     fn resolve_dotdot_against_cwd() {
-        let resolved = resolve_file_arg(&argv(&["lightink", "sub\\..\\note.md"]), Some("/home/user"))
-            .unwrap();
+        let resolved =
+            resolve_file_arg(&argv(&["lightink", "sub\\..\\note.md"]), Some("/home/user")).unwrap();
         assert_eq!(
             resolved,
             std::path::PathBuf::from("/home/user")

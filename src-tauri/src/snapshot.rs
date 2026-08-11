@@ -46,9 +46,11 @@ fn stable_path_hash(file_path: &str) -> String {
 
 /// 快照文件完整路径：`<base_dir>/<hash>.snapshot`。
 pub fn snapshot_path_for(base_dir: &Path, file_path: &str) -> PathBuf {
-    base_dir
-        .join(SNAPSHOT_DIR_NAME)
-        .join(format!("{}.{}", stable_path_hash(file_path), SNAPSHOT_EXT))
+    base_dir.join(SNAPSHOT_DIR_NAME).join(format!(
+        "{}.{}",
+        stable_path_hash(file_path),
+        SNAPSHOT_EXT
+    ))
 }
 
 /// 未命名草稿索引条目（序列化进 untitled-index.json）。
@@ -87,8 +89,8 @@ fn load_untitled_index(base_dir: &Path) -> Vec<UntitledIndexEntry> {
 
 fn save_untitled_index(base_dir: &Path, entries: &[UntitledIndexEntry]) -> Result<(), String> {
     let path = untitled_index_path(base_dir);
-    let body = serde_json::to_string(entries)
-        .map_err(|e| format!("无法序列化未命名快照索引: {}", e))?;
+    let body =
+        serde_json::to_string(entries).map_err(|e| format!("无法序列化未命名快照索引: {}", e))?;
     write_file_impl(&path, &body)
 }
 
@@ -185,7 +187,10 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 /// 「崩溃新于保存」启发式：快照存在且其 mtime 晚于磁盘文件 mtime 时，
 /// 返回快照内容；否则返回 None。磁盘文件不存在时视为 epoch 0，
 /// 任何存在的快照都算「更新」。
-pub fn read_stale_snapshot_impl(base_dir: &Path, file_path: &str) -> Result<Option<String>, String> {
+pub fn read_stale_snapshot_impl(
+    base_dir: &Path,
+    file_path: &str,
+) -> Result<Option<String>, String> {
     let snap = snapshot_path_for(base_dir, file_path);
     let snap_mtime = match mtime(&snap) {
         Some(t) => t,
@@ -210,7 +215,11 @@ fn resolve_base_dir(app: &tauri::AppHandle) -> PathBuf {
 }
 
 #[tauri::command]
-pub fn write_snapshot(app: tauri::AppHandle, file_path: String, content: String) -> Result<(), String> {
+pub fn write_snapshot(
+    app: tauri::AppHandle,
+    file_path: String,
+    content: String,
+) -> Result<(), String> {
     write_snapshot_impl(&resolve_base_dir(&app), &file_path, &content)
 }
 
@@ -220,7 +229,10 @@ pub fn clear_snapshot(app: tauri::AppHandle, file_path: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn read_stale_snapshot(app: tauri::AppHandle, file_path: String) -> Result<Option<String>, String> {
+pub fn read_stale_snapshot(
+    app: tauri::AppHandle,
+    file_path: String,
+) -> Result<Option<String>, String> {
     read_stale_snapshot_impl(&resolve_base_dir(&app), &file_path)
 }
 
@@ -379,7 +391,12 @@ pub fn restore_version(
     version_id: String,
     current_content: String,
 ) -> Result<String, String> {
-    restore_version_impl(&resolve_base_dir(&app), &file_path, &version_id, &current_content)
+    restore_version_impl(
+        &resolve_base_dir(&app),
+        &file_path,
+        &version_id,
+        &current_content,
+    )
 }
 
 #[cfg(test)]
@@ -396,7 +413,10 @@ mod tests {
     #[test]
     fn hash_is_stable_and_path_form_insensitive() {
         // 同一字符串多次哈希一致（跨运行稳定是 FNV-1a 的算法属性）
-        assert_eq!(stable_path_hash("C:\\a\\b.md"), stable_path_hash("C:\\a\\b.md"));
+        assert_eq!(
+            stable_path_hash("C:\\a\\b.md"),
+            stable_path_hash("C:\\a\\b.md")
+        );
         // 正/反斜杠差异映射到同一快照
         assert_eq!(
             stable_path_hash("C:/Docs/Note.md"),
@@ -430,8 +450,12 @@ mod tests {
 
         let drafts = list_untitled_drafts_impl(dir.path()).expect("list");
         assert_eq!(drafts.len(), 2);
-        assert!(drafts.iter().any(|d| d.key == "untitled-a1b2c3" && d.content == "草稿甲"));
-        assert!(drafts.iter().any(|d| d.key == "untitled-d4e5f6" && d.content == "草稿乙"));
+        assert!(drafts
+            .iter()
+            .any(|d| d.key == "untitled-a1b2c3" && d.content == "草稿甲"));
+        assert!(drafts
+            .iter()
+            .any(|d| d.key == "untitled-d4e5f6" && d.content == "草稿乙"));
 
         clear_snapshot_impl(dir.path(), "untitled-a1b2c3").expect("clear");
         let drafts = list_untitled_drafts_impl(dir.path()).expect("list after clear");
@@ -457,7 +481,10 @@ mod tests {
             .collect();
 
         for handle in handles {
-            handle.join().expect("writer thread").expect("write snapshot");
+            handle
+                .join()
+                .expect("writer thread")
+                .expect("write snapshot");
         }
         let drafts = list_untitled_drafts_impl(&base).expect("list drafts");
         assert_eq!(drafts.len(), 12);
@@ -618,6 +645,8 @@ mod tests {
         let restored = restore_version_impl(dir.path(), &path, &old.id, "当前").expect("restore");
         assert_eq!(restored, "旧版本");
         let list = list_versions_impl(dir.path(), &path).expect("list");
-        assert!(list.iter().any(|m| read_version_impl(dir.path(), &path, &m.id).unwrap_or_default() == "当前"));
+        assert!(list
+            .iter()
+            .any(|m| read_version_impl(dir.path(), &path, &m.id).unwrap_or_default() == "当前"));
     }
 }

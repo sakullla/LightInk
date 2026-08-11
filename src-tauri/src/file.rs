@@ -11,8 +11,7 @@ use std::time::UNIX_EPOCH;
 
 /// 读取 UTF-8 文本文件。io 错误映射为可读的中文错误信息。
 pub fn read_file_impl(path: &Path) -> Result<String, String> {
-    fs::read_to_string(path)
-        .map_err(|e| format!("无法读取文件 {}: {}", path.display(), e))
+    fs::read_to_string(path).map_err(|e| format!("无法读取文件 {}: {}", path.display(), e))
 }
 
 /// 原子写入：先写同目录临时文件并 flush/sync，再 rename 覆盖目标。
@@ -27,11 +26,10 @@ pub fn write_file_impl(path: &Path, content: &str) -> Result<(), String> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| format!("无效的保存路径: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
+    fs::create_dir_all(parent).map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
 
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|e| format!("无法创建临时文件: {}", e))?;
+    let mut tmp =
+        tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("无法创建临时文件: {}", e))?;
     tmp.write_all(content.as_bytes())
         .map_err(|e| format!("写入临时文件失败: {}", e))?;
     tmp.as_file()
@@ -79,8 +77,8 @@ fn fingerprint_reader(mut reader: impl Read) -> Result<String, std::io::Error> {
 /// 取文件的修改时间、大小与内容指纹。读不到文件/修改时间时报可读中文错误
 /// （R13 失败行为：stat 失败 → 前端提示文件不可读，不做自动动作）。
 pub fn stat_file_impl(path: &Path) -> Result<FileStat, String> {
-    let file = File::open(path)
-        .map_err(|e| format!("无法读取文件信息 {}: {}", path.display(), e))?;
+    let file =
+        File::open(path).map_err(|e| format!("无法读取文件信息 {}: {}", path.display(), e))?;
     let meta = file
         .metadata()
         .map_err(|e| format!("无法读取文件信息 {}: {}", path.display(), e))?;
@@ -107,8 +105,7 @@ pub fn stat_file(path: String) -> Result<FileStat, String> {
 }
 
 /// 标准 base64 编码表（与 asset.rs 自实现 decoder 的字母表一致，无新 crate）。
-const B64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// 编码为标准 base64（含 `+` `/` 与 `=` 填充）。供 `read_file_bytes` 把二进制电子书
 /// 字节以字符串形式经 IPC 传给前端（前端 atob 解码）。输入可以是任意字节（含中文、
@@ -160,7 +157,8 @@ mod tests {
     fn roundtrip_chinese_and_special_chars() {
         let dir = temp_dir();
         let path = dir.path().join("笔记.md");
-        let content = "# 标题 🎉\n\n中文内容、特殊字符 <>&\"'\\、emoji 🚀、零宽\u{200b}字符。\n\n第二行\n";
+        let content =
+            "# 标题 🎉\n\n中文内容、特殊字符 <>&\"'\\、emoji 🚀、零宽\u{200b}字符。\n\n第二行\n";
         write_file_impl(&path, content).expect("write");
         let back = read_file_impl(&path).expect("read");
         assert_eq!(back, content);
@@ -233,7 +231,11 @@ mod tests {
         let dir = temp_dir();
         let missing = dir.path().join("nope.md");
         let err = stat_file_impl(&missing).expect_err("must fail");
-        assert!(err.contains("无法读取文件信息"), "unexpected error: {}", err);
+        assert!(
+            err.contains("无法读取文件信息"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -259,7 +261,7 @@ mod tests {
         let enc = encode_base64(&bin);
         assert_eq!(enc.len(), 8);
         assert_eq!(enc.matches('=').count(), 1); // 5 字节 → 1 填充
-        // 中文 UTF-8 字节同样满足长度约束。
+                                                 // 中文 UTF-8 字节同样满足长度约束。
         let zh = encode_base64("轻墨 🚀".as_bytes());
         assert_eq!(zh.len() % 4, 0);
     }

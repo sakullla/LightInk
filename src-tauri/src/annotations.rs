@@ -15,7 +15,9 @@ const ANNOTATIONS_DIR: &str = "annotations";
 
 /// 标注文件路径：`<base_dir>/annotations/<content_hash>.json`。
 fn annotations_path(base_dir: &Path, content_hash: &str) -> std::path::PathBuf {
-    base_dir.join(ANNOTATIONS_DIR).join(format!("{}.json", content_hash))
+    base_dir
+        .join(ANNOTATIONS_DIR)
+        .join(format!("{}.json", content_hash))
 }
 
 /// 读标注 JSON。文件缺失或不可读返回空串（视为无标注，不报错、不阻断）。
@@ -133,10 +135,18 @@ mod tests {
         let mtime_before = fs::metadata(&src).unwrap().modified().unwrap();
         let hash = crate::asset::content_hash_hex(content);
         write_annotations_impl(dir.path(), &hash, r#"{"version":1,"annotations":[]}"#).unwrap();
-        assert_eq!(fs::read(&src).unwrap(), content, "source content must not change");
+        assert_eq!(
+            fs::read(&src).unwrap(),
+            content,
+            "source content must not change"
+        );
         let mtime_after = fs::metadata(&src).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after, "source mtime must not change");
         // 标注确实写到了 annotations/<hash>.json，而非源文件。
-        assert!(dir.path().join(ANNOTATIONS_DIR).join(format!("{hash}.json")).exists());
+        assert!(dir
+            .path()
+            .join(ANNOTATIONS_DIR)
+            .join(format!("{hash}.json"))
+            .exists());
     }
 }

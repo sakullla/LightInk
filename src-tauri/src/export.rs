@@ -29,8 +29,7 @@ const STAGING_DIR_NAME: &str = "staging-assets";
 
 /// 编码标准 base64（含 `=` 填充；空输入编码为空串）。
 pub fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = u32::from(chunk[0]);
@@ -181,8 +180,7 @@ pub fn read_image_base64_impl(
             full.display()
         ));
     }
-    let bytes =
-        fs::read(&full).map_err(|e| format!("无法读取图片 {}: {}", full.display(), e))?;
+    let bytes = fs::read(&full).map_err(|e| format!("无法读取图片 {}: {}", full.display(), e))?;
     Ok(encode_base64(&bytes))
 }
 
@@ -355,18 +353,15 @@ mod tests {
         let doc_dir = dir.path().join("docs");
         fs::create_dir_all(doc_dir.join("assets")).unwrap();
         fs::write(doc_dir.join("assets").join("a.png"), b"\x89PNG fake").unwrap();
-        let b64 = read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/a.png")
-            .expect("read");
+        let b64 =
+            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/a.png").expect("read");
         assert_eq!(b64, encode_base64(b"\x89PNG fake"));
     }
 
     #[test]
     fn reads_image_from_session_staging_when_unsaved() {
         let dir = temp_dir();
-        let staged = dir
-            .path()
-            .join(STAGING_DIR_NAME)
-            .join("untitled-ab12");
+        let staged = dir.path().join(STAGING_DIR_NAME).join("untitled-ab12");
         fs::create_dir_all(&staged).unwrap();
         fs::write(staged.join("b.gif"), b"GIF89a").unwrap();
         let b64 = read_image_base64_impl(None, dir.path(), Some("untitled-ab12"), "assets/b.gif")
@@ -380,9 +375,7 @@ mod tests {
         // 缺 session id
         assert!(read_image_base64_impl(None, dir.path(), None, "assets/a.png").is_err());
         // 暂存模式拒绝 assets/ 之外的路径
-        assert!(
-            read_image_base64_impl(None, dir.path(), Some("s"), "other/a.png").is_err()
-        );
+        assert!(read_image_base64_impl(None, dir.path(), Some("s"), "other/a.png").is_err());
     }
 
     #[test]
@@ -401,9 +394,7 @@ mod tests {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
         fs::create_dir_all(&doc_dir).unwrap();
-        assert!(
-            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "../secret.png").is_err()
-        );
+        assert!(read_image_base64_impl(Some(&doc_dir), dir.path(), None, "../secret.png").is_err());
         let err = read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/nope.png")
             .expect_err("must fail");
         assert!(err.contains("无法解析图片"), "unexpected: {}", err);

@@ -174,11 +174,10 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| format!("无效的保存路径: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
+    fs::create_dir_all(parent).map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
 
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|e| format!("无法创建临时文件: {}", e))?;
+    let mut tmp =
+        tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("无法创建临时文件: {}", e))?;
     tmp.write_all(bytes)
         .map_err(|e| format!("写入临时文件失败: {}", e))?;
     tmp.as_file()
@@ -408,13 +407,7 @@ pub fn save_asset(
     let bytes = decode_base64(&bytes_base64)?;
     let staging_root = resolve_base_dir(&app);
     let doc_dir = resolve_doc_dir(doc_path.as_deref())?;
-    save_asset_impl(
-        doc_dir.as_deref(),
-        &staging_root,
-        &session_id,
-        &bytes,
-        &ext,
-    )
+    save_asset_impl(doc_dir.as_deref(), &staging_root, &session_id, &bytes, &ext)
 }
 
 /// 「插入图片」从本地文件导入（纯逻辑）：读取源文件字节，按与粘贴/拖拽
@@ -534,8 +527,8 @@ mod tests {
     #[test]
     fn save_without_doc_goes_to_session_staging() {
         let dir = temp_dir();
-        let rel = save_asset_impl(None, dir.path(), "untitled-ab12", b"GIF89a", "gif")
-            .expect("save");
+        let rel =
+            save_asset_impl(None, dir.path(), "untitled-ab12", b"GIF89a", "gif").expect("save");
         assert!(rel.starts_with("assets/") && rel.ends_with(".gif"));
         let file_name = rel.strip_prefix("assets/").unwrap();
         let staged = dir
@@ -591,7 +584,10 @@ mod tests {
                 found = true;
             }
         }
-        assert!(found, "sanitized staging file must exist under staging root");
+        assert!(
+            found,
+            "sanitized staging file must exist under staging root"
+        );
         assert!(save_asset_impl(None, dir.path(), "", b"data", "png").is_err());
     }
 
@@ -704,10 +700,14 @@ mod tests {
         let source = dir.path().join("照片.JPG");
         fs::write(&source, b"\xff\xd8jpeg-bytes").unwrap();
         let doc_dir = dir.path().join("docs");
-        let rel = import_image_asset_impl(Some(&doc_dir), dir.path(), "s", &source)
-            .expect("import");
+        let rel =
+            import_image_asset_impl(Some(&doc_dir), dir.path(), "s", &source).expect("import");
         // 扩展名小写化（JPG → jpg），内容一致。
-        assert!(rel.starts_with("assets/") && rel.ends_with(".jpg"), "rel = {}", rel);
+        assert!(
+            rel.starts_with("assets/") && rel.ends_with(".jpg"),
+            "rel = {}",
+            rel
+        );
         assert_eq!(fs::read(doc_dir.join(&rel)).unwrap(), b"\xff\xd8jpeg-bytes");
     }
 
@@ -716,8 +716,7 @@ mod tests {
         let dir = temp_dir();
         let source = dir.path().join("p.webp");
         fs::write(&source, b"RIFFwebp").unwrap();
-        let rel = import_image_asset_impl(None, dir.path(), "untitled-z", &source)
-            .expect("import");
+        let rel = import_image_asset_impl(None, dir.path(), "untitled-z", &source).expect("import");
         let name = rel.strip_prefix("assets/").unwrap();
         let staged = dir
             .path()
