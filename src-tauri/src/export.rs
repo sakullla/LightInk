@@ -371,7 +371,7 @@ mod tests {
     fn rejects_traversal_and_reports_missing() {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
-        fs::create_dir_all(&doc_dir).unwrap();
+        fs::create_dir_all(doc_dir.join(ASSETS_DIR_NAME)).unwrap();
         assert!(read_image_base64_impl(Some(&doc_dir), dir.path(), None, "../secret.png").is_err());
         let err = read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/nope.png")
             .expect_err("must fail");
