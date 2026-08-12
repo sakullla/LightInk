@@ -39,9 +39,10 @@ pub fn write_annotations_impl(
     content_hash: &str,
     json: &str,
 ) -> Result<(), String> {
+    let path = annotations_path(base_dir, content_hash)?;
     let dir = base_dir.join(ANNOTATIONS_DIR);
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建标注目录: {}", e))?;
-    crate::file::write_file_impl(&annotations_path(base_dir, content_hash)?, json)
+    crate::file::write_file_impl(&path, json)
 }
 
 fn resolve_base_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
