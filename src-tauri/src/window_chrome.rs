@@ -20,14 +20,31 @@ pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
 }
 
 /// Parse `#rrggbb` into a Windows COLORREF (`0x00bbggrr`).
+#[cfg(any(windows, test))]
 pub fn parse_hex_colorref(raw: &str) -> Option<u32> {
     let (red, green, blue) = parse_hex_rgb(raw)?;
     Some(u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16))
 }
 
+#[cfg(any(
+    test,
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 const LINUX_CAPTION_CLASS: &str = "lightink-reader-caption";
 
 /// GTK CSS that tints our window's CSD titlebar. Empty string restores default.
+#[cfg(any(
+    test,
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 pub fn linux_caption_css(caption: Option<&str>, text: Option<&str>) -> String {
     let Some(caption) = caption.filter(|value| parse_hex_rgb(value).is_some()) else {
         return String::new();

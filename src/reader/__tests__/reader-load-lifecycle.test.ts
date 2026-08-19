@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
 import {
@@ -127,11 +127,38 @@ function readerViewDeps(
   } as Parameters<typeof createReaderView>[1];
 }
 
+function clearReaderStorage(): void {
+  delete document.documentElement.dataset.readingLayout;
+  try {
+    const storage = globalThis.localStorage;
+    if (storage === undefined) {
+      return;
+    }
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key !== null && key.startsWith('lightink.reader.')) {
+        keys.push(key);
+      }
+    }
+    for (const key of keys) {
+      storage.removeItem(key);
+    }
+  } catch {
+    // jsdom / Node without Storage.
+  }
+}
+
+beforeEach(() => {
+  clearReaderStorage();
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   pdfMock.renderPdfInto.mockReset();
   document.body.replaceChildren();
+  clearReaderStorage();
 });
 
 describe('Reader load lifecycle', () => {
@@ -302,8 +329,9 @@ describe('Reader load lifecycle', () => {
           { title: 'Two', html: '<p>two</p>' },
         ],
       }),
+      progressStorage: null,
     });
-    await view.load('book.epub');
+    await view.load('coalesce.epub');
     useReaderScrollLayout(host);
 
     const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
@@ -886,12 +914,13 @@ describe('Reader R7 memory regressions', () => {
           { title: 'Two', html: '<p>two</p>' },
         ],
       }),
+      progressStorage: null,
     });
 
     await view.load('doc.pdf');
     expect(view.state).toMatchObject({ phase: 'ready', current: 3, total: 10, locationKind: 'page' });
 
-    await view.load('book.epub');
+    await view.load('switch-to-flow.epub');
     expect(view.state).toMatchObject({ phase: 'ready', total: 2, locationKind: 'chapter' });
     expect(handles[0]!.destroy).toHaveBeenCalledTimes(1);
 
