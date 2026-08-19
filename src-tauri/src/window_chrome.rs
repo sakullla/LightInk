@@ -27,7 +27,6 @@ pub fn parse_hex_colorref(raw: &str) -> Option<u32> {
 }
 
 #[cfg(any(
-    test,
     target_os = "linux",
     target_os = "dragonfly",
     target_os = "freebsd",
@@ -38,14 +37,13 @@ const LINUX_CAPTION_CLASS: &str = "lightink-reader-caption";
 
 /// GTK CSS that tints our window's CSD titlebar. Empty string restores default.
 #[cfg(any(
-    test,
     target_os = "linux",
     target_os = "dragonfly",
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd"
 ))]
-pub fn linux_caption_css(caption: Option<&str>, text: Option<&str>) -> String {
+fn linux_caption_css(caption: Option<&str>, text: Option<&str>) -> String {
     let Some(caption) = caption.filter(|value| parse_hex_rgb(value).is_some()) else {
         return String::new();
     };
@@ -269,7 +267,15 @@ fn with_linux_caption_provider(f: impl FnOnce(&gtk::CssProvider)) {
 
 #[cfg(test)]
 mod tests {
-    use super::{linux_caption_css, parse_hex_colorref, parse_hex_rgb};
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    use super::linux_caption_css;
+    use super::{parse_hex_colorref, parse_hex_rgb};
 
     #[test]
     fn parses_sepia_page_to_colorref() {
@@ -281,6 +287,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     fn linux_css_tints_then_clears() {
         let css = linux_caption_css(Some("#fbf0d9"), Some("#5c4a32"));
         assert!(css.contains("lightink-reader-caption"));
