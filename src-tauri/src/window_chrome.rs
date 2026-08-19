@@ -154,6 +154,7 @@ fn apply_macos_caption_color(
     let caption = caption.map(str::to_string);
     let window = window.clone();
     window
+        .clone()
         .run_on_main_thread(move || {
             let Ok(raw) = window.ns_window() else {
                 return;
@@ -199,6 +200,7 @@ fn apply_linux_caption_color(
     let tinted = !css.is_empty();
     let window = window.clone();
     window
+        .clone()
         .run_on_main_thread(move || {
             let Ok(gtk_window) = window.gtk_window() else {
                 return;

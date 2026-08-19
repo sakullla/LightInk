@@ -504,6 +504,7 @@ export function createLibraryView(
   cacheLimitInput.max = '1024';
   cacheLimitInput.step = '0.25';
   cacheLimitInput.required = true;
+  cacheLimitLabel.className = 'lightink-library-field';
   cacheLimitLabel.append(cacheLimitLabelText, cacheLimitInput);
   const cacheLimitSave = button(doc, '', 'lightink-library-primary');
   cacheLimitSave.type = 'submit';
@@ -1503,9 +1504,16 @@ export function createLibraryView(
       deps.notify(errorText(error, labels().offline), 'error');
     }
   });
+  const setCacheLimitOpen = (open: boolean): void => {
+    cacheLimitForm.hidden = !open;
+    cacheLimitButton.classList.toggle('is-open', open);
+    cacheLimitButton.setAttribute('aria-expanded', String(open));
+  };
+  cacheLimitButton.setAttribute('aria-expanded', 'false');
   cacheLimitButton.addEventListener('click', () => {
-    cacheLimitForm.hidden = !cacheLimitForm.hidden;
-    if (!cacheLimitForm.hidden) cacheLimitInput.focus();
+    const open = cacheLimitForm.hidden;
+    setCacheLimitOpen(open);
+    if (open) cacheLimitInput.focus();
   });
   cacheLimitForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1513,7 +1521,7 @@ export function createLibraryView(
     if (!Number.isFinite(gibibytes) || gibibytes <= 0) return;
     try {
       await deps.library.setCacheLimit(Math.round(gibibytes * 1024 ** 3));
-      cacheLimitForm.hidden = true;
+      setCacheLimitOpen(false);
       await updateCacheSummary();
       cacheLimitButton.focus();
     } catch (error) {

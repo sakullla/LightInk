@@ -621,15 +621,33 @@ describe('LibraryView manage and catalog', () => {
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(false);
     await openManage(host);
     expect(libraryPage(host)).toBe('manage');
-    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const limitButton = host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!;
+    limitButton.click();
     const form = host.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
     const input = form.elements.namedItem('cacheLimitGiB') as HTMLInputElement;
+    const apply = form.querySelector<HTMLButtonElement>('.lightink-library-primary');
+    expect(limitButton.getAttribute('aria-expanded')).toBe('true');
+    expect(limitButton.classList.contains('is-open')).toBe(true);
+    expect(form.querySelector('label')?.classList.contains('lightink-library-field')).toBe(true);
+    expect(apply?.textContent).toBe('应用');
+    expect(apply?.type).toBe('submit');
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-library-cache-limit-form\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-cache-limit-form[^{]*\.lightink-library-primary\s*\{[^}]*white-space:\s*nowrap/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-library-cache-limit-form\s*\{[^}]*grid-template-columns:\s*minmax\(150px/,
+    );
     input.value = '3.5';
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
 
     expect(deps.library.setCacheLimit).toHaveBeenCalledWith(3.5 * 1024 ** 3);
     expect(form.hidden).toBe(true);
+    expect(limitButton.getAttribute('aria-expanded')).toBe('false');
     view.destroy();
   });
 
