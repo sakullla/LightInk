@@ -23,8 +23,7 @@ use url::Url;
 
 pub const MAX_RANGE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_FRONTEND_SAFE_BYTES: u64 = (1_u64 << 53) - 1;
-pub const OPDS_KEYRING_SERVICE: &str = "lightink.opds";
-pub const WEBDAV_KEYRING_SERVICE: &str = "lightink.webdav";
+const KEYRING_SERVICE: &str = "lightink.opds";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -271,7 +270,7 @@ fn header_string(headers: &HeaderMap, name: reqwest::header::HeaderName) -> Opti
         .map(ToOwned::to_owned)
 }
 
-pub(crate) fn apply_credential(
+fn apply_credential(
     builder: RequestBuilder,
     credential: Option<&RemoteCredential>,
 ) -> RequestBuilder {
@@ -284,7 +283,7 @@ pub(crate) fn apply_credential(
     }
 }
 
-pub(crate) fn response_error(response: &Response) -> Option<RemoteError> {
+fn response_error(response: &Response) -> Option<RemoteError> {
     match response.status() {
         StatusCode::UNAUTHORIZED => Some(RemoteError::status(
             "REMOTE_AUTH_REQUIRED",
@@ -311,7 +310,7 @@ fn redirect_allowed_for_request(initial: &Url, from: &Url, to: &Url, authenticat
     redirect_allowed(from, to) && (!authenticated || same_origin(initial, to))
 }
 
-pub(crate) fn build_client(initial: &Url, authenticated: bool) -> Result<Client, RemoteError> {
+fn build_client(initial: &Url, authenticated: bool) -> Result<Client, RemoteError> {
     let first = initial.clone();
     let credential_origin = initial.clone();
     let policy = reqwest::redirect::Policy::custom(move |attempt| {
@@ -384,20 +383,8 @@ fn ensure_frontend_safe_size(size: u64) -> Result<u64, RemoteError> {
     Ok(size)
 }
 
-fn session_credential_key(service: &str, credential_ref: &str) -> String {
-    format!("{service}\0{credential_ref}")
-}
-
 fn load_credential(state: &RemoteState, credential_ref: &str) -> Option<RemoteCredential> {
-    load_credential_for_service(state, OPDS_KEYRING_SERVICE, credential_ref)
-}
-
-pub(crate) fn load_credential_for_service(
-    state: &RemoteState,
-    service: &str,
-    credential_ref: &str,
-) -> Option<RemoteCredential> {
-    if let Ok(entry) = keyring::Entry::new(service, credential_ref) {
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, credential_ref) {
         if let Ok(value) = entry.get_password() {
             if let Ok(credential) = serde_json::from_str(&value) {
                 return Some(credential);
@@ -408,24 +395,11 @@ pub(crate) fn load_credential_for_service(
         .session_credentials
         .lock()
         .ok()
-        .and_then(|credentials| {
-            credentials
-                .get(&session_credential_key(service, credential_ref))
-                .cloned()
-        })
+        .and_then(|credentials| credentials.get(credential_ref).cloned())
 }
 
 pub(crate) fn store_credential_value(
     state: &RemoteState,
-    credential_ref: String,
-    credential: RemoteCredential,
-) -> Result<CredentialStoreResult, RemoteError> {
-    store_credential_for_service(state, OPDS_KEYRING_SERVICE, credential_ref, credential)
-}
-
-pub(crate) fn store_credential_for_service(
-    state: &RemoteState,
-    service: &str,
     credential_ref: String,
     credential: RemoteCredential,
 ) -> Result<CredentialStoreResult, RemoteError> {
@@ -435,23 +409,16 @@ pub(crate) fn store_credential_for_service(
             "凭据引用不能为空",
         ));
     }
-    if service != OPDS_KEYRING_SERVICE && service != WEBDAV_KEYRING_SERVICE {
-        return Err(RemoteError::new(
-            "REMOTE_CREDENTIAL_INVALID",
-            "不支持的凭据服务名",
-        ));
-    }
     let serialized = serde_json::to_string(&credential)
         .map_err(|_| RemoteError::new("REMOTE_CREDENTIAL_INVALID", "无法准备远程凭据"))?;
-    let persisted = keyring::Entry::new(service, &credential_ref)
+    let persisted = keyring::Entry::new(KEYRING_SERVICE, &credential_ref)
         .and_then(|entry| entry.set_password(&serialized))
         .is_ok();
-    let session_key = session_credential_key(service, &credential_ref);
     let mut session_credentials = state.session_credentials.lock().map_err(|_| lock_error())?;
     if persisted {
-        session_credentials.remove(&session_key);
+        session_credentials.remove(&credential_ref);
     } else {
-        session_credentials.insert(session_key, credential);
+        session_credentials.insert(credential_ref.clone(), credential);
     }
     Ok(CredentialStoreResult {
         credential_ref,
@@ -480,45 +447,15 @@ pub(crate) fn forget_credential_value(
     state: &RemoteState,
     credential_ref: &str,
 ) -> Result<(), RemoteError> {
-    forget_credential_for_service(state, OPDS_KEYRING_SERVICE, credential_ref)
-}
-
-pub(crate) fn forget_credential_for_service(
-    state: &RemoteState,
-    service: &str,
-    credential_ref: &str,
-) -> Result<(), RemoteError> {
     state
         .session_credentials
         .lock()
         .map_err(|_| lock_error())?
-        .remove(&session_credential_key(service, credential_ref));
-    if let Ok(entry) = keyring::Entry::new(service, credential_ref) {
+        .remove(credential_ref);
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, credential_ref) {
         let _ = entry.delete_credential();
     }
     Ok(())
-}
-
-pub(crate) fn webdav_store_credential(
-    state: &RemoteState,
-    credential_ref: String,
-    credential: RemoteCredential,
-) -> Result<CredentialStoreResult, RemoteError> {
-    store_credential_for_service(state, WEBDAV_KEYRING_SERVICE, credential_ref, credential)
-}
-
-pub(crate) fn webdav_forget_credential(
-    state: &RemoteState,
-    credential_ref: &str,
-) -> Result<(), RemoteError> {
-    forget_credential_for_service(state, WEBDAV_KEYRING_SERVICE, credential_ref)
-}
-
-pub(crate) fn webdav_load_credential(
-    state: &RemoteState,
-    credential_ref: &str,
-) -> Option<RemoteCredential> {
-    load_credential_for_service(state, WEBDAV_KEYRING_SERVICE, credential_ref)
 }
 
 pub(crate) async fn fetch_remote_text(
@@ -527,29 +464,9 @@ pub(crate) async fn fetch_remote_text(
     allow_http: bool,
     credential_ref: Option<&str>,
     max_bytes: usize,
-) -> Result<(Url, String), RemoteError> {
-    fetch_remote_text_for_service(
-        state,
-        OPDS_KEYRING_SERVICE,
-        raw_url,
-        allow_http,
-        credential_ref,
-        max_bytes,
-    )
-    .await
-}
-
-pub(crate) async fn fetch_remote_text_for_service(
-    state: &RemoteState,
-    service: &str,
-    raw_url: &str,
-    allow_http: bool,
-    credential_ref: Option<&str>,
-    max_bytes: usize,
-) -> Result<(Url, String), RemoteError> {
+) -> Result<(Url, Option<String>, String), RemoteError> {
     let url = validate_remote_url(raw_url, allow_http)?;
-    let credential =
-        credential_ref.and_then(|reference| load_credential_for_service(state, service, reference));
+    let credential = credential_ref.and_then(|reference| load_credential(state, reference));
     let client = build_client(&url, credential.is_some())?;
     let response = apply_credential(client.get(url), credential.as_ref())
         .send()
@@ -577,6 +494,7 @@ pub(crate) async fn fetch_remote_text_for_service(
         ));
     }
     let final_url = response.url().clone();
+    let content_type = header_string(response.headers(), reqwest::header::CONTENT_TYPE);
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -593,7 +511,7 @@ pub(crate) async fn fetch_remote_text_for_service(
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| RemoteError::new("REMOTE_TEXT_ENCODING", "远程目录不是有效的 UTF-8 XML"))?;
-    Ok((final_url, text))
+    Ok((final_url, content_type, text))
 }
 
 async fn open_cache_file(path: &Path, size: u64) -> Result<tokio::fs::File, RemoteError> {
@@ -1453,79 +1371,5 @@ mod tests {
         assert!(token.is_cancelled());
         drop(guard);
         assert!(state.active_requests.lock().unwrap().is_empty());
-    }
-
-    fn basic_credential(username: &str, password: &str) -> RemoteCredential {
-        RemoteCredential::Basic {
-            username: username.to_string(),
-            password: password.to_string(),
-        }
-    }
-
-    fn credential_username(credential: &RemoteCredential) -> &str {
-        match credential {
-            RemoteCredential::Basic { username, .. } => username,
-            RemoteCredential::Bearer { .. } => panic!("expected basic credential"),
-        }
-    }
-
-    #[test]
-    fn webdav_keyring_service_is_independent_from_opds() {
-        assert_eq!(OPDS_KEYRING_SERVICE, "lightink.opds");
-        assert_eq!(WEBDAV_KEYRING_SERVICE, "lightink.webdav");
-        assert_ne!(OPDS_KEYRING_SERVICE, WEBDAV_KEYRING_SERVICE);
-        assert!(store_credential_for_service(
-            &RemoteState::default(),
-            "lightink.other",
-            "ref".into(),
-            basic_credential("user", "secret"),
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn webdav_http_url_is_rejected_until_explicitly_allowed() {
-        assert_eq!(
-            validate_remote_url("http://dav.example.test/sync", false)
-                .unwrap_err()
-                .code,
-            "REMOTE_HTTP_NOT_ALLOWED"
-        );
-        assert!(validate_remote_url("https://dav.example.test/sync", false).is_ok());
-        assert!(validate_remote_url("http://192.168.1.8/sync", true).is_ok());
-    }
-
-    #[test]
-    fn webdav_session_credentials_do_not_share_opds_refs() {
-        let state = RemoteState::default();
-        let credential_ref = format!("shared-ref-{}", std::process::id());
-        let _ = forget_credential_value(&state, &credential_ref);
-        let _ = webdav_forget_credential(&state, &credential_ref);
-
-        store_credential_value(
-            &state,
-            credential_ref.clone(),
-            basic_credential("opds-user", "opds-secret"),
-        )
-        .unwrap();
-        webdav_store_credential(
-            &state,
-            credential_ref.clone(),
-            basic_credential("dav-user", "dav-secret"),
-        )
-        .unwrap();
-
-        let opds = load_credential(&state, &credential_ref).expect("opds credential");
-        let webdav = webdav_load_credential(&state, &credential_ref).expect("webdav credential");
-        assert_eq!(credential_username(&opds), "opds-user");
-        assert_eq!(credential_username(&webdav), "dav-user");
-
-        forget_credential_value(&state, &credential_ref).unwrap();
-        assert!(load_credential(&state, &credential_ref).is_none());
-        let webdav = webdav_load_credential(&state, &credential_ref).expect("webdav remains");
-        assert_eq!(credential_username(&webdav), "dav-user");
-
-        webdav_forget_credential(&state, &credential_ref).unwrap();
-        assert!(webdav_load_credential(&state, &credential_ref).is_none());
     }
 }

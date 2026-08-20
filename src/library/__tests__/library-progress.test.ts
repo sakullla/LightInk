@@ -4,6 +4,7 @@ import {
   bindLibraryProgress,
   libraryProgressAliasKey,
   loadLibraryProgressAlias,
+  migrateLibraryProgressAliases,
   projectLibraryProgress,
   saveLibraryProgressAlias,
 } from '../library-progress.js';
@@ -186,6 +187,28 @@ describe('library progress alias', () => {
     saveLibraryProgressAlias(storage, 'item-b', '');
     expect(loadLibraryProgressAlias(storage, 'item-b')).toBeNull();
     expect(loadLibraryProgressAlias(null, 'item-a')).toBeNull();
+  });
+
+  it('moves legacy reader identities to managed item ids', () => {
+    const storage = memoryStorage();
+    saveLibraryProgressAlias(storage, 'local:/books/a.epub', 'content-hash-a');
+    migrateLibraryProgressAliases(
+      storage,
+      [
+        {
+          aliasId: 'local:/books/a.epub',
+          itemId: 'managed:hash-a',
+        },
+        {
+          aliasId: 'local:/books/b.epub',
+          itemId: 'managed:hash-b',
+        },
+      ],
+      new Map([['local:/books/b.epub', '/books/b.epub']]),
+    );
+
+    expect(loadLibraryProgressAlias(storage, 'managed:hash-a')).toBe('content-hash-a');
+    expect(loadLibraryProgressAlias(storage, 'managed:hash-b')).toBe('/books/b.epub');
   });
 });
 

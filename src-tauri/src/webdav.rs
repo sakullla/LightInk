@@ -1,1400 +1,1342 @@
-//! WebDAV sync for reading progress, annotations, and shelf groups.
+//! WebDAV 配置与安全传输基础。
 //!
-//! Credentials use the independent `lightink.webdav` keyring service (see
-//! [`crate::remote`]). The sync document is a single JSON file keyed by
-//! content hash; newer `updatedAt` wins. Passwords, tokens, and ebook bytes
-//! never enter the document.
+//! 该模块只负责同步目标的凭据边界、URL/路径策略和 WebDAV 原语。同步
+//! 合并及本地数据库记录由 `sync.rs` 提供；这样网络错误不会直接污染书库。
 
-use crate::annotations::{
-    list_annotations_by_hash, merge_annotations_json, merge_remote_annotations_impl,
-};
-use crate::identifiers::validate_content_hash;
-use crate::library::{
-    self, add_library_group_member, list_library_group_members, list_library_groups,
-    open_database_at, remove_library_group, remove_library_group_member, upsert_library_group,
-    LibraryGroup,
-};
-use crate::remote::{
-    apply_credential, build_client, response_error, validate_remote_url, webdav_forget_credential,
-    webdav_load_credential, webdav_store_credential, RemoteCredential, RemoteError, RemoteState,
-};
-use reqwest::header::CONTENT_TYPE;
-use reqwest::StatusCode;
-use rusqlite::{params, OptionalExtension};
+use futures_util::StreamExt;
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use reqwest::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
+use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::Path;
-use tauri::{AppHandle, State};
+use std::path::{Component, Path};
+use std::sync::Mutex;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, State};
+use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 use url::Url;
+use uuid::Uuid;
 
-const CONFIG_FILE: &str = "webdav.json";
-const LAST_SYNC_FILE: &str = "webdav-last-sync.json";
-const SYNC_DOCUMENT_NAME: &str = "lightink-sync.json";
-const SYNC_DOCUMENT_VERSION: u32 = 1;
-const MAX_SYNC_BYTES: usize = 8 * 1024 * 1024;
-const DEFAULT_CREDENTIAL_REF: &str = "webdav-sync";
-const RESERVED_SHELF_FILTERS: &[&str] = &["all", "in-progress", "unread", "text", "comic"];
+const CONFIG_FILE: &str = "sync-profile.json";
+const KEYRING_SERVICE: &str = "lightink.sync";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub const MAX_SYNC_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_SYNC_BLOB_BYTES: u64 = 512 * 1024 * 1024;
+pub const WEBDAV_ROOT: &str = "LightInk/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WebDavConfig {
-    pub url: String,
-    #[serde(default)]
-    pub username: Option<String>,
-    pub allow_http: bool,
-    pub credential_ref: String,
+pub enum SyncAuthKind {
+    Basic,
+    Bearer,
 }
 
-/// Command-facing config. Secrets stay in the keyring; this only reports presence.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WebDavPublicConfig {
-    pub url: String,
-    pub username: String,
-    pub has_password: bool,
-    pub allow_http: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SyncCredential {
+    Basic { username: String, password: String },
+    Bearer { token: String },
 }
 
-#[derive(Debug, Deserialize)]
+impl SyncCredential {
+    pub fn kind(&self) -> SyncAuthKind {
+        match self {
+            Self::Basic { .. } => SyncAuthKind::Basic,
+            Self::Bearer { .. } => SyncAuthKind::Bearer,
+        }
+    }
+
+    fn validate(&self) -> Result<(), WebDavError> {
+        match self {
+            Self::Basic { username, password } => {
+                if username.trim().is_empty() || password.is_empty() {
+                    return Err(WebDavError::new(
+                        "SYNC_CREDENTIAL_INVALID",
+                        "Basic 用户名和密码不能为空",
+                    ));
+                }
+            }
+            Self::Bearer { token } if token.trim().is_empty() => {
+                return Err(WebDavError::new(
+                    "SYNC_CREDENTIAL_INVALID",
+                    "Bearer 令牌不能为空",
+                ));
+            }
+            Self::Bearer { .. } => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WebDavConfigInput {
+pub struct SyncProfile {
+    pub id: String,
+    pub name: String,
     pub url: String,
-    pub username: Option<String>,
-    pub password: Option<String>,
+    pub auth_type: SyncAuthKind,
+    pub allow_http: bool,
+    pub needs_credential: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProfileInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub url: String,
+    pub auth_type: SyncAuthKind,
     pub allow_http: Option<bool>,
+    pub credential: Option<SyncCredential>,
     pub clear_credential: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncedProgress {
-    pub version: u32,
-    pub kind: String,
-    pub index: i64,
-    pub ratio: f64,
-    pub updated_at: i64,
+pub struct SyncCredentialResult {
+    pub credential_ref: String,
+    pub persisted: bool,
+    pub needs_credential: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncedGroup {
-    pub id: String,
-    pub parent_id: Option<String>,
-    pub name: String,
-    pub source: String,
-    pub smart_key: Option<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    #[serde(default)]
-    pub removed: bool,
+pub struct WebDavCapability {
+    pub reachable: bool,
+    pub supports_propfind: bool,
+    pub supports_mkcol: bool,
+    pub supports_move: bool,
+    pub supports_conditional_put: bool,
+    pub final_url: String,
+    pub server: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncedMember {
-    pub group_id: String,
-    pub content_hash: String,
-    pub updated_at: i64,
-    #[serde(default)]
-    pub removed: bool,
+pub struct WebDavError {
+    pub code: String,
+    pub message: String,
+    pub status: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncDocument {
-    pub version: u32,
-    #[serde(default)]
-    pub progress: BTreeMap<String, SyncedProgress>,
-    #[serde(default)]
-    pub annotations: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub groups: Vec<SyncedGroup>,
-    #[serde(default)]
-    pub members: Vec<SyncedMember>,
-}
-
-impl Default for SyncDocument {
-    fn default() -> Self {
+impl WebDavError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            version: SYNC_DOCUMENT_VERSION,
-            progress: BTreeMap::new(),
-            annotations: BTreeMap::new(),
-            groups: Vec::new(),
-            members: Vec::new(),
+            code: code.into(),
+            message: message.into(),
+            status: None,
+        }
+    }
+
+    fn status(code: impl Into<String>, message: impl Into<String>, status: StatusCode) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            status: Some(status.as_u16()),
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebDavSyncInput {
-    #[serde(default)]
-    pub progress: BTreeMap<String, SyncedProgress>,
-    #[serde(default)]
-    pub item_hashes: Vec<ItemHash>,
+#[derive(Default)]
+pub struct WebDavState {
+    session_credentials: Mutex<std::collections::HashMap<String, SyncCredential>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ItemHash {
-    pub item_id: String,
-    pub content_hash: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedProfile {
+    profile: SyncProfile,
+    credential_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct WebDavSyncResult {
-    pub progress: BTreeMap<String, SyncedProgress>,
-    pub groups: Vec<SyncedGroup>,
-    pub members: Vec<SyncedMember>,
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
 }
 
-#[tauri::command]
-pub fn webdav_get_config(
-    app: AppHandle,
-    state: State<'_, RemoteState>,
-) -> Result<Option<WebDavPublicConfig>, RemoteError> {
-    let Some(config) = load_config(&app_data_dir(&app)?)? else {
-        return Ok(None);
+fn credential_ref(profile_id: &str) -> String {
+    format!("sync-profile-{}", profile_id)
+}
+
+fn keyring_credential(reference: &str) -> Option<SyncCredential> {
+    keyring::Entry::new(KEYRING_SERVICE, reference)
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .and_then(|value| serde_json::from_str(&value).ok())
+}
+
+fn save_keyring_credential(reference: &str, credential: &SyncCredential) -> bool {
+    let Ok(value) = serde_json::to_string(credential) else {
+        return false;
     };
-    Ok(Some(public_config(&config, state.inner())))
+    keyring::Entry::new(KEYRING_SERVICE, reference)
+        .and_then(|entry| entry.set_password(&value))
+        .is_ok()
 }
 
-#[tauri::command]
-pub fn webdav_save_config(
-    app: AppHandle,
-    state: State<'_, RemoteState>,
-    config: WebDavConfigInput,
-) -> Result<WebDavPublicConfig, RemoteError> {
-    let allow_http = config.allow_http.unwrap_or(false);
-    let url = validate_remote_url(&config.url, allow_http)?;
-    if config.clear_credential.unwrap_or(false) && config.password.is_some() {
-        return Err(RemoteError::new(
-            "WEBDAV_CONFIG_INVALID",
-            "不能同时清除和设置 WebDAV 凭据",
-        ));
-    }
-    let existing = load_config(&app_data_dir(&app)?)?;
-    let credential_ref = existing
-        .as_ref()
-        .map(|value| value.credential_ref.clone())
-        .unwrap_or_else(|| DEFAULT_CREDENTIAL_REF.to_string());
-    if config.clear_credential.unwrap_or(false) {
-        webdav_forget_credential(state.inner(), &credential_ref)?;
-    } else if let Some(password) = config.password.as_deref() {
-        let username = config
-            .username
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| RemoteError::new("WEBDAV_CONFIG_INVALID", "保存密码时需要用户名"))?;
-        webdav_store_credential(
-            state.inner(),
-            credential_ref.clone(),
-            RemoteCredential::Basic {
-                username: username.to_string(),
-                password: password.to_string(),
-            },
-        )?;
-    }
-    let saved = WebDavConfig {
-        url: url.to_string(),
-        username: config
-            .username
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .or_else(|| existing.and_then(|value| value.username)),
-        allow_http,
-        credential_ref,
-    };
-    write_config(&app_data_dir(&app)?, &saved)?;
-    Ok(public_config(&saved, state.inner()))
-}
-
-fn public_config(config: &WebDavConfig, state: &RemoteState) -> WebDavPublicConfig {
-    WebDavPublicConfig {
-        url: config.url.clone(),
-        username: config.username.clone().unwrap_or_default(),
-        has_password: webdav_load_credential(state, &config.credential_ref).is_some(),
-        allow_http: config.allow_http,
+fn delete_keyring_credential(reference: &str) {
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, reference) {
+        let _ = entry.delete_credential();
     }
 }
 
-#[tauri::command]
-pub fn webdav_forget(app: AppHandle, state: State<'_, RemoteState>) -> Result<(), RemoteError> {
-    if let Some(config) = load_config(&app_data_dir(&app)?)? {
-        webdav_forget_credential(state.inner(), &config.credential_ref)?;
+fn load_persisted(app: &AppHandle) -> Result<Option<PersistedProfile>, WebDavError> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| {
+            WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法定位同步配置目录: {error}"),
+            )
+        })?
+        .join(CONFIG_FILE);
+    match fs::read_to_string(path) {
+        Ok(value) => serde_json::from_str(&value).map(Some).map_err(|error| {
+            WebDavError::new("SYNC_CONFIG_INVALID", format!("同步配置损坏: {error}"))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(WebDavError::new(
+            "SYNC_STORAGE_ERROR",
+            format!("无法读取同步配置: {error}"),
+        )),
     }
-    let directory = app_data_dir(&app)?;
-    let _ = fs::remove_file(directory.join(CONFIG_FILE));
-    let _ = fs::remove_file(directory.join(LAST_SYNC_FILE));
+}
+
+fn persist_profile(app: &AppHandle, value: &PersistedProfile) -> Result<(), WebDavError> {
+    let directory = app.path().app_data_dir().map_err(|error| {
+        WebDavError::new(
+            "SYNC_STORAGE_ERROR",
+            format!("无法定位同步配置目录: {error}"),
+        )
+    })?;
+    fs::create_dir_all(&directory).map_err(|error| {
+        WebDavError::new(
+            "SYNC_STORAGE_ERROR",
+            format!("无法创建同步配置目录: {error}"),
+        )
+    })?;
+    let body = serde_json::to_vec_pretty(value).map_err(|error| {
+        WebDavError::new(
+            "SYNC_CONFIG_INVALID",
+            format!("无法序列化同步配置: {error}"),
+        )
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory).map_err(|error| {
+        WebDavError::new(
+            "SYNC_STORAGE_ERROR",
+            format!("无法创建同步配置临时文件: {error}"),
+        )
+    })?;
+    std::io::Write::write_all(&mut temporary, &body).map_err(|error| {
+        WebDavError::new("SYNC_STORAGE_ERROR", format!("无法写入同步配置: {error}"))
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        WebDavError::new("SYNC_STORAGE_ERROR", format!("无法同步同步配置: {error}"))
+    })?;
+    temporary
+        .persist(directory.join(CONFIG_FILE))
+        .map_err(|error| {
+            WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法提交同步配置: {}", error.error),
+            )
+        })?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn webdav_sync(
-    app: AppHandle,
-    state: State<'_, RemoteState>,
-    input: WebDavSyncInput,
-) -> Result<WebDavSyncResult, RemoteError> {
-    let directory = app_data_dir(&app)?;
-    let config = load_config(&directory)?
-        .ok_or_else(|| RemoteError::new("WEBDAV_NOT_CONFIGURED", "尚未配置 WebDAV"))?;
-    let url = validate_remote_url(&config.url, config.allow_http)?;
-    let document_url = sync_document_url(&url)?;
-    let credential = webdav_load_credential(state.inner(), &config.credential_ref);
-    let remote_text =
-        download_sync_document(&document_url, credential.as_ref(), MAX_SYNC_BYTES).await?;
-    let remote = parse_sync_document(&remote_text)?;
-    let last = load_last_sync(&directory)?;
-    let local = collect_local_document(
-        &directory,
-        &input.progress,
-        &input.item_hashes,
-        last.as_ref(),
-    )?;
-    let merged = merge_sync_documents(&local, &remote);
-    let body = serialize_sync_document(&merged)?;
-    upload_sync_document(&document_url, credential.as_ref(), &body).await?;
-    apply_merged_document(&directory, &merged, &input.item_hashes)?;
-    write_last_sync(&directory, &merged)?;
-    Ok(WebDavSyncResult {
-        progress: merged.progress,
-        groups: merged
-            .groups
-            .into_iter()
-            .filter(|group| !group.removed)
-            .collect(),
-        members: merged
-            .members
-            .into_iter()
-            .filter(|member| !member.removed)
-            .collect(),
+pub fn validate_webdav_url(raw: &str, allow_http: bool) -> Result<Url, WebDavError> {
+    if raw.chars().any(char::is_control) || raw.trim().is_empty() {
+        return Err(WebDavError::new(
+            "SYNC_URL_INVALID",
+            "WebDAV 地址为空或包含控制字符",
+        ));
+    }
+    let mut url = Url::parse(raw.trim())
+        .map_err(|_| WebDavError::new("SYNC_URL_INVALID", "WebDAV 地址格式无效"))?;
+    if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        return Err(WebDavError::new(
+            "SYNC_URL_INVALID",
+            "地址不能包含用户名、密码或主机名缺失",
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(WebDavError::new(
+            "SYNC_URL_INVALID",
+            "WebDAV 根地址不能带查询参数或片段",
+        ));
+    }
+    match url.scheme() {
+        "https" => {}
+        "http" if allow_http => {}
+        "http" => {
+            return Err(WebDavError::new(
+                "SYNC_HTTP_NOT_ALLOWED",
+                "HTTP/LAN 同步必须显式开启",
+            ))
+        }
+        _ => {
+            return Err(WebDavError::new(
+                "SYNC_SCHEME_UNSUPPORTED",
+                "仅支持 HTTP(S) WebDAV",
+            ))
+        }
+    }
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(if path.is_empty() { "/" } else { &path });
+    Ok(url)
+}
+
+pub fn redirect_allowed(from: &Url, to: &Url, authenticated: bool) -> bool {
+    if to.host_str().is_none()
+        || !to.username().is_empty()
+        || to.password().is_some()
+        || !matches!(to.scheme(), "http" | "https")
+        || (from.scheme() == "https" && to.scheme() == "http")
+    {
+        return false;
+    }
+    !authenticated
+        || (from.scheme() == to.scheme()
+            && from.host_str() == to.host_str()
+            && from.port_or_known_default() == to.port_or_known_default())
+}
+
+/// 将同步协议的相对路径约束在固定的 `LightInk/v1` 根下。
+pub fn validate_relative_path(path: &str) -> Result<String, WebDavError> {
+    if path.starts_with('/') || path.starts_with('\\') {
+        return Err(WebDavError::new(
+            "SYNC_PATH_INVALID",
+            "远端路径不能是绝对路径",
+        ));
+    }
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() || trimmed.len() > 1024 || trimmed.chars().any(char::is_control) {
+        return Err(WebDavError::new(
+            "SYNC_PATH_INVALID",
+            "远端路径为空、过长或包含控制字符",
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in Path::new(trimmed).components() {
+        let Component::Normal(value) = component else {
+            return Err(WebDavError::new(
+                "SYNC_PATH_INVALID",
+                "远端路径不能包含 .、.. 或绝对路径",
+            ));
+        };
+        let value = value
+            .to_str()
+            .ok_or_else(|| WebDavError::new("SYNC_PATH_INVALID", "远端路径不是有效 UTF-8"))?;
+        if value.is_empty() || value == "." || value == ".." || value.contains('\\') {
+            return Err(WebDavError::new("SYNC_PATH_INVALID", "远端路径分量无效"));
+        }
+        parts.push(value.to_owned());
+    }
+    if parts.is_empty() {
+        return Err(WebDavError::new("SYNC_PATH_INVALID", "远端路径为空"));
+    }
+    Ok(parts.join("/"))
+}
+
+pub fn remote_blob_path(hash: &str) -> Result<String, WebDavError> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WebDavError::new(
+            "SYNC_HASH_INVALID",
+            "正文哈希必须是 64 位十六进制 SHA-256",
+        ));
+    }
+    Ok(format!(
+        "{WEBDAV_ROOT}/blobs/sha256/{}/{}",
+        &hash[..2],
+        hash
+    ))
+}
+
+pub fn remote_state_path(device_id: &str) -> Result<String, WebDavError> {
+    let id = validate_relative_path(device_id)?;
+    if id.contains('/') || !id.ends_with(".json") {
+        return Err(WebDavError::new(
+            "SYNC_DEVICE_ID_INVALID",
+            "设备状态路径无效",
+        ));
+    }
+    Ok(format!("{WEBDAV_ROOT}/devices/{id}"))
+}
+
+/// Non-secret descriptor shared by clients of one sync target.
+pub fn remote_profile_path() -> Result<String, WebDavError> {
+    let path = validate_relative_path(&format!("{WEBDAV_ROOT}/profile.json"))?;
+    Ok(path)
+}
+
+fn build_client(initial: &Url, authenticated: bool) -> Result<Client, WebDavError> {
+    let first = initial.clone();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("redirect limit exceeded");
+        }
+        let from = attempt.previous().last().unwrap_or(&first);
+        let allowed = if authenticated {
+            // Credentials are attached to every request, so every hop must
+            // remain on the originally configured origin.
+            redirect_allowed(&first, attempt.url(), true)
+        } else {
+            redirect_allowed(from, attempt.url(), false)
+                && !(first.scheme() == "https" && attempt.url().scheme() == "http")
+        };
+        if !allowed {
+            return attempt.error("unsafe redirect refused");
+        }
+        attempt.follow()
+    });
+    Client::builder()
+        .redirect(policy)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .referer(false)
+        .user_agent(concat!("LightInk/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| {
+            WebDavError::new(
+                "SYNC_CLIENT_ERROR",
+                format!("无法创建 WebDAV 客户端: {error}"),
+            )
+        })
+}
+
+fn apply_credential(
+    builder: RequestBuilder,
+    credential: Option<&SyncCredential>,
+) -> RequestBuilder {
+    match credential {
+        Some(SyncCredential::Basic { username, password }) => {
+            builder.basic_auth(username, Some(password))
+        }
+        Some(SyncCredential::Bearer { token }) => builder.bearer_auth(token),
+        None => builder,
+    }
+}
+
+fn response_error(response: &Response) -> Option<WebDavError> {
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED {
+        Some(WebDavError::status(
+            "SYNC_AUTH_REQUIRED",
+            "WebDAV 需要重新输入凭据",
+            status,
+        ))
+    } else if status == StatusCode::FORBIDDEN {
+        Some(WebDavError::status(
+            "SYNC_FORBIDDEN",
+            "没有 WebDAV 访问权限",
+            status,
+        ))
+    } else if status.is_client_error() || status.is_server_error() {
+        Some(WebDavError::status(
+            "SYNC_HTTP_ERROR",
+            format!("WebDAV 返回 HTTP {}", status.as_u16()),
+            status,
+        ))
+    } else {
+        None
+    }
+}
+
+fn url_for(base: &Url, relative: &str) -> Result<Url, WebDavError> {
+    let relative = validate_relative_path(relative)?;
+    let mut url = base.clone();
+    let prefix = url.path().trim_end_matches('/');
+    url.set_path(&format!("{prefix}/{relative}"));
+    Ok(url)
+}
+
+#[derive(Clone)]
+pub struct WebDavClient {
+    base: Url,
+    client: Client,
+    credential: Option<SyncCredential>,
+}
+
+impl WebDavClient {
+    pub fn new(base: Url, credential: Option<SyncCredential>) -> Result<Self, WebDavError> {
+        if let Some(value) = credential.as_ref() {
+            value.validate()?;
+        }
+        let client = build_client(&base, credential.is_some())?;
+        Ok(Self {
+            base,
+            client,
+            credential,
+        })
+    }
+
+    pub fn url_for(&self, relative: &str) -> Result<Url, WebDavError> {
+        url_for(&self.base, relative)
+    }
+
+    async fn send_raw(&self, request: RequestBuilder) -> Result<Response, WebDavError> {
+        let response = request.send().await.map_err(|error| {
+            WebDavError::new("SYNC_NETWORK_ERROR", format!("WebDAV 网络错误: {error}"))
+        })?;
+        Ok(response)
+    }
+
+    async fn send(&self, request: RequestBuilder) -> Result<Response, WebDavError> {
+        let response = self.send_raw(request).await?;
+        if let Some(error) = response_error(&response) {
+            return Err(error);
+        }
+        Ok(response)
+    }
+
+    pub async fn propfind(&self, relative: &str, depth: &str) -> Result<Response, WebDavError> {
+        if !matches!(depth, "0" | "1" | "infinity") {
+            return Err(WebDavError::new("SYNC_DEPTH_INVALID", "PROPFIND 深度无效"));
+        }
+        let url = self.url_for(relative)?;
+        self.send(apply_credential(
+            self.client
+                .request(Method::from_bytes(b"PROPFIND").unwrap(), url)
+                .header("Depth", depth)
+                .header(CONTENT_LENGTH, "0"),
+            self.credential.as_ref(),
+        ))
+        .await
+    }
+
+    pub async fn list_hrefs(&self, relative: &str) -> Result<Vec<String>, WebDavError> {
+        let response = self.propfind(relative, "1").await?;
+        let bytes = response.bytes().await.map_err(|error| {
+            WebDavError::new(
+                "SYNC_NETWORK_ERROR",
+                format!("无法读取 WebDAV 目录: {error}"),
+            )
+        })?;
+        if bytes.len() as u64 > MAX_SYNC_RESPONSE_BYTES {
+            return Err(WebDavError::new(
+                "SYNC_RESPONSE_TOO_LARGE",
+                "WebDAV 目录响应超过大小限制",
+            ));
+        }
+        let mut reader = Reader::from_reader(bytes.as_ref());
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        let mut hrefs = Vec::new();
+        let mut in_href = false;
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(event))
+                    if event.name().as_ref().rsplit(|byte| *byte == b':').next()
+                        == Some(b"href") =>
+                {
+                    in_href = true;
+                }
+                Ok(Event::Text(text)) if in_href => {
+                    let value = text.decode().map_err(|error| {
+                        WebDavError::new(
+                            "SYNC_RESPONSE_INVALID",
+                            format!("WebDAV href 无效: {error}"),
+                        )
+                    })?;
+                    if !value.trim().is_empty() {
+                        hrefs.push(value.into_owned());
+                    }
+                }
+                Ok(Event::End(event))
+                    if event.name().as_ref().rsplit(|byte| *byte == b':').next()
+                        == Some(b"href") =>
+                {
+                    in_href = false;
+                }
+                Ok(Event::Eof) => break,
+                Err(error) => {
+                    return Err(WebDavError::new(
+                        "SYNC_RESPONSE_INVALID",
+                        format!("WebDAV 目录 XML 无效: {error}"),
+                    ))
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+        Ok(hrefs)
+    }
+
+    pub async fn mkcol(&self, relative: &str) -> Result<(), WebDavError> {
+        let url = self.url_for(relative)?;
+        let response = self
+            .send_raw(apply_credential(
+                self.client
+                    .request(Method::from_bytes(b"MKCOL").unwrap(), url),
+                self.credential.as_ref(),
+            ))
+            .await?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        if matches!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED | StatusCode::CONFLICT
+        ) {
+            // Existing collections are reported as 405 by most servers and as
+            // 409 by a few Nextcloud-compatible implementations.  A PROPFIND
+            // confirms that the target really exists; a missing parent still
+            // returns an error instead of being silently accepted.
+            self.propfind(relative, "0").await?;
+            return Ok(());
+        }
+        Err(response_error(&response).unwrap_or_else(|| {
+            WebDavError::status("SYNC_HTTP_ERROR", "创建 WebDAV 目录失败", response.status())
+        }))
+    }
+
+    pub async fn get_bytes(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+        token: Option<&CancellationToken>,
+    ) -> Result<(Vec<u8>, Url, Option<String>), WebDavError> {
+        let url = self.url_for(relative)?;
+        let response = self
+            .send(apply_credential(
+                self.client.get(url),
+                self.credential.as_ref(),
+            ))
+            .await?;
+        let final_url = response.url().clone();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        if response
+            .content_length()
+            .is_some_and(|size| size > max_bytes)
+        {
+            return Err(WebDavError::new(
+                "SYNC_RESPONSE_TOO_LARGE",
+                "WebDAV 响应超过大小限制",
+            ));
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = match token {
+            Some(token) => {
+                tokio::select! { _ = token.cancelled() => return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消")), next = stream.next() => next }
+            }
+            None => stream.next().await,
+        } {
+            let chunk = chunk.map_err(|error| {
+                WebDavError::new("SYNC_NETWORK_ERROR", format!("WebDAV 下载中断: {error}"))
+            })?;
+            if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
+                return Err(WebDavError::new(
+                    "SYNC_RESPONSE_TOO_LARGE",
+                    "WebDAV 响应超过大小限制",
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((bytes, final_url, content_type))
+    }
+
+    pub async fn put_bytes(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        if_none_match: bool,
+    ) -> Result<(), WebDavError> {
+        if bytes.len() as u64 > MAX_SYNC_BLOB_BYTES {
+            return Err(WebDavError::new(
+                "SYNC_BLOB_TOO_LARGE",
+                "同步正文超过大小限制",
+            ));
+        }
+        let url = self.url_for(relative)?;
+        let mut request = self.client.put(url).body(bytes.to_vec());
+        if if_none_match {
+            request = request.header("If-None-Match", "*");
+        }
+        let response = self
+            .send_raw(apply_credential(request, self.credential.as_ref()))
+            .await?;
+        if if_none_match && response.status() == StatusCode::PRECONDITION_FAILED {
+            return Ok(());
+        }
+        if !response.status().is_success() {
+            return Err(WebDavError::status(
+                "SYNC_HTTP_ERROR",
+                "WebDAV 条件写入失败",
+                response.status(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn move_object(
+        &self,
+        source_relative: &str,
+        destination_relative: &str,
+        overwrite: bool,
+    ) -> Result<(), WebDavError> {
+        let source = self.url_for(source_relative)?;
+        let destination = self.url_for(destination_relative)?;
+        let response = self
+            .send_raw(apply_credential(
+                self.client
+                    .request(Method::from_bytes(b"MOVE").unwrap(), source)
+                    .header(
+                        "Destination",
+                        HeaderValue::from_str(destination.as_str()).map_err(|_| {
+                            WebDavError::new("SYNC_URL_INVALID", "MOVE 目标地址无效")
+                        })?,
+                    )
+                    .header("Overwrite", if overwrite { "T" } else { "F" }),
+                self.credential.as_ref(),
+            ))
+            .await?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        Err(response_error(&response).unwrap_or_else(|| {
+            WebDavError::status("SYNC_HTTP_ERROR", "WebDAV MOVE 失败", response.status())
+        }))
+    }
+
+    async fn rejects_existing_conditional_put(&self, relative: &str) -> Result<bool, WebDavError> {
+        let url = self.url_for(relative)?;
+        let response = self
+            .send_raw(apply_credential(
+                self.client
+                    .put(url)
+                    .header("If-None-Match", "*")
+                    .body(Vec::from(&b"replacement"[..])),
+                self.credential.as_ref(),
+            ))
+            .await?;
+        if response.status() == StatusCode::PRECONDITION_FAILED {
+            return Ok(true);
+        }
+        if response.status().is_success() {
+            return Ok(false);
+        }
+        Err(response_error(&response).unwrap_or_else(|| {
+            WebDavError::status(
+                "SYNC_HTTP_ERROR",
+                "WebDAV 条件写入探测失败",
+                response.status(),
+            )
+        }))
+    }
+
+    async fn cleanup_capability_probe(&self, probe: &str) {
+        let paths = [
+            format!("{probe}/conditional"),
+            format!("{probe}/move-source"),
+            format!("{probe}/move-target"),
+        ];
+        for path in paths {
+            let _ = self.delete(&path).await;
+        }
+        let _ = self.delete(probe).await;
+    }
+
+    /// 通过同目录临时对象 + MOVE 原子提交完整状态快照。
+    pub async fn put_atomic(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        token: Option<&CancellationToken>,
+    ) -> Result<(), WebDavError> {
+        if bytes.len() as u64 > MAX_SYNC_RESPONSE_BYTES {
+            return Err(WebDavError::new(
+                "SYNC_SNAPSHOT_TOO_LARGE",
+                "同步快照超过大小限制",
+            ));
+        }
+        if token.is_some_and(CancellationToken::is_cancelled) {
+            return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+        }
+        let temp_relative = format!(
+            "{}.tmp-{}",
+            validate_relative_path(relative)?,
+            Uuid::new_v4()
+        );
+        let temp = self.url_for(&temp_relative)?;
+        let put = self.client.put(temp.clone()).body(bytes.to_vec());
+        let response = self
+            .send_raw(apply_credential(put, self.credential.as_ref()))
+            .await?;
+        if !response.status().is_success() {
+            return Err(WebDavError::status(
+                "SYNC_HTTP_ERROR",
+                "WebDAV 临时上传失败",
+                response.status(),
+            ));
+        }
+        if token.is_some_and(CancellationToken::is_cancelled) {
+            let _ = self.delete(&temp_relative).await;
+            return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+        }
+        drop(temp);
+        let response = self.move_object(&temp_relative, relative, true).await;
+        if response.is_err() {
+            let _ = self.delete(&temp_relative).await;
+        }
+        response.map(|_| ())
+    }
+
+    pub async fn delete(&self, relative: &str) -> Result<(), WebDavError> {
+        let url = self.url_for(relative)?;
+        let response = self
+            .send_raw(apply_credential(
+                self.client.delete(url),
+                self.credential.as_ref(),
+            ))
+            .await?;
+        if !(response.status().is_success() || response.status() == StatusCode::NOT_FOUND) {
+            return Err(WebDavError::status(
+                "SYNC_HTTP_ERROR",
+                "WebDAV 删除失败",
+                response.status(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn download_verified(
+        &self,
+        relative: &str,
+        destination: &Path,
+        expected_hash: &str,
+        expected_size: Option<u64>,
+        token: Option<&CancellationToken>,
+    ) -> Result<(), WebDavError> {
+        if expected_hash.len() != 64
+            || !expected_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(WebDavError::new("SYNC_HASH_INVALID", "下载正文哈希无效"));
+        }
+        if expected_size.is_some_and(|size| size > MAX_SYNC_BLOB_BYTES) {
+            return Err(WebDavError::new(
+                "SYNC_BLOB_TOO_LARGE",
+                "下载正文超过大小限制",
+            ));
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| WebDavError::new("SYNC_STORAGE_ERROR", "下载目标路径无效"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            WebDavError::new("SYNC_STORAGE_ERROR", format!("无法创建下载目录: {error}"))
+        })?;
+        let temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+            WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法创建下载临时文件: {error}"),
+            )
+        })?;
+        // Keep the cleanup guard while Tokio owns the file. `TempPath` removes
+        // failed partial downloads; after the handle is closed it can perform
+        // the final atomic rename without a second live file descriptor.
+        let (file, temporary_path) = temporary.into_parts();
+        let temporary_path_for_error = temporary_path.to_path_buf();
+        let mut file = tokio::fs::File::from_std(file);
+        let url = self.url_for(relative)?;
+        let request = apply_credential(self.client.get(url), self.credential.as_ref());
+        let response = match token {
+            Some(token) => tokio::select! {
+                _ = token.cancelled() => {
+                    return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+                }
+                response = self.send(request) => response?,
+            },
+            None => self.send(request).await?,
+        };
+        if response.content_length().is_some_and(|size| {
+            size > MAX_SYNC_BLOB_BYTES || expected_size.is_some_and(|expected| size != expected)
+        }) {
+            return Err(WebDavError::new(
+                "SYNC_HASH_MISMATCH",
+                "下载正文大小校验失败",
+            ));
+        }
+        let mut stream = response.bytes_stream();
+        let mut hasher = Sha256::new();
+        let mut downloaded = 0_u64;
+        while let Some(chunk) = match token {
+            Some(token) => tokio::select! {
+                _ = token.cancelled() => {
+                    return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+                }
+                next = stream.next() => next,
+            },
+            None => stream.next().await,
+        } {
+            let chunk = chunk.map_err(|error| {
+                WebDavError::new("SYNC_NETWORK_ERROR", format!("WebDAV 下载中断: {error}"))
+            })?;
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| WebDavError::new("SYNC_BLOB_TOO_LARGE", "下载正文超过大小限制"))?;
+            if downloaded > MAX_SYNC_BLOB_BYTES
+                || expected_size.is_some_and(|expected| downloaded > expected)
+            {
+                return Err(WebDavError::new(
+                    "SYNC_HASH_MISMATCH",
+                    "下载正文大小校验失败",
+                ));
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).await.map_err(|error| {
+                WebDavError::new("SYNC_STORAGE_ERROR", format!("无法写入下载文件: {error}"))
+            })?;
+        }
+        if expected_size.is_some_and(|size| downloaded != size) {
+            return Err(WebDavError::new(
+                "SYNC_HASH_MISMATCH",
+                "下载正文大小校验失败",
+            ));
+        }
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected_hash {
+            return Err(WebDavError::new(
+                "SYNC_HASH_MISMATCH",
+                "下载正文 SHA-256 校验失败",
+            ));
+        }
+        file.sync_all().await.map_err(|error| {
+            WebDavError::new("SYNC_STORAGE_ERROR", format!("无法同步下载文件: {error}"))
+        })?;
+        drop(file);
+        temporary_path.persist(destination).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary_path_for_error);
+            WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法提交下载文件: {}", error.error),
+            )
+        })?;
+        Ok(())
+    }
+
+    pub async fn capability(&self) -> Result<WebDavCapability, WebDavError> {
+        let mut supports_mkcol = true;
+        for directory in ["LightInk", "LightInk/v1"] {
+            match self.mkcol(directory).await {
+                Ok(()) => {}
+                Err(error) if matches!(error.status, Some(404 | 405 | 409 | 501)) => {
+                    supports_mkcol = false;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let response = match self.propfind("LightInk/v1", "0").await {
+            Ok(response) => Some(response),
+            Err(error) if matches!(error.status, Some(404 | 405 | 409 | 501)) => None,
+            Err(error) => return Err(error),
+        };
+        let (reachable, supports_propfind, final_url, server) = match response.as_ref() {
+            Some(response) => (
+                response.status().is_success() || response.status() == StatusCode::MULTI_STATUS,
+                true,
+                response.url().to_string(),
+                response
+                    .headers()
+                    .get("Server")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned),
+            ),
+            None => (false, false, self.base.to_string(), None),
+        };
+        let probe = format!("LightInk/v1/.capability-{}", Uuid::new_v4());
+        let mut supports_conditional_put = false;
+        let mut supports_move = false;
+        if supports_mkcol && response.is_some() {
+            match self.mkcol(&probe).await {
+                Ok(()) => {}
+                Err(error) if matches!(error.status, Some(404 | 405 | 409 | 501)) => {
+                    supports_mkcol = false;
+                }
+                Err(error) => {
+                    self.cleanup_capability_probe(&probe).await;
+                    return Err(error);
+                }
+            }
+        }
+        if supports_mkcol && response.is_some() {
+            let conditional = format!("{probe}/conditional");
+            let conditional_created = match self.put_bytes(&conditional, b"original", false).await {
+                Ok(()) => true,
+                Err(error) if matches!(error.status, Some(405 | 409 | 501)) => false,
+                Err(error) => {
+                    self.cleanup_capability_probe(&probe).await;
+                    return Err(error);
+                }
+            };
+            if conditional_created {
+                supports_conditional_put =
+                    match self.rejects_existing_conditional_put(&conditional).await {
+                        Ok(value) => value,
+                        Err(error) if matches!(error.status, Some(405 | 409 | 501)) => false,
+                        Err(error) => {
+                            self.cleanup_capability_probe(&probe).await;
+                            return Err(error);
+                        }
+                    };
+            }
+            let source = format!("{probe}/move-source");
+            let target = format!("{probe}/move-target");
+            let source_created = match self.put_bytes(&source, b"move", false).await {
+                Ok(()) => true,
+                Err(error) if matches!(error.status, Some(405 | 409 | 501)) => false,
+                Err(error) => {
+                    self.cleanup_capability_probe(&probe).await;
+                    return Err(error);
+                }
+            };
+            if source_created {
+                supports_move = match self.move_object(&source, &target, false).await {
+                    Ok(()) => true,
+                    Err(error) if matches!(error.status, Some(405 | 409 | 501)) => false,
+                    Err(error) => {
+                        self.cleanup_capability_probe(&probe).await;
+                        return Err(error);
+                    }
+                };
+            }
+            // The probe may contain files and a moved target.  Remove every
+            // leaf first, then the collection, so capability checks do not
+            // leave unbounded junk on the remote server.
+            for path in [&conditional, &source, &target, &probe] {
+                let _ = self.delete(path).await;
+            }
+        }
+        Ok(WebDavCapability {
+            reachable,
+            supports_propfind,
+            supports_mkcol,
+            supports_move,
+            supports_conditional_put,
+            final_url,
+            server,
+        })
+    }
+}
+
+fn load_credential(state: &WebDavState, reference: &str) -> Option<SyncCredential> {
+    keyring_credential(reference).or_else(|| {
+        state
+            .session_credentials
+            .lock()
+            .ok()
+            .and_then(|values| values.get(reference).cloned())
     })
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, RemoteError> {
-    library::app_data_dir(app).map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))
-}
-
-fn load_config(directory: &Path) -> Result<Option<WebDavConfig>, RemoteError> {
-    let path = directory.join(CONFIG_FILE);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = fs::read_to_string(&path).map_err(|error| {
-        RemoteError::new(
-            "WEBDAV_STORAGE_ERROR",
-            format!("无法读取 WebDAV 配置: {error}"),
-        )
-    })?;
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|_| RemoteError::new("WEBDAV_STORAGE_ERROR", "WebDAV 配置损坏"))
-}
-
-fn write_config(directory: &Path, config: &WebDavConfig) -> Result<(), RemoteError> {
-    fs::create_dir_all(directory).map_err(|error| {
-        RemoteError::new(
-            "WEBDAV_STORAGE_ERROR",
-            format!("无法保存 WebDAV 配置: {error}"),
-        )
-    })?;
-    let text = serde_json::to_string(config)
-        .map_err(|_| RemoteError::new("WEBDAV_STORAGE_ERROR", "无法序列化 WebDAV 配置"))?;
-    crate::file::write_file_impl(&directory.join(CONFIG_FILE), &text)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))
-}
-
-fn load_last_sync(directory: &Path) -> Result<Option<SyncDocument>, RemoteError> {
-    let path = directory.join(LAST_SYNC_FILE);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = fs::read_to_string(&path).unwrap_or_default();
-    if text.trim().is_empty() {
-        return Ok(None);
-    }
-    match parse_sync_document(&text) {
-        Ok(document) => Ok(Some(document)),
-        Err(_) => Ok(None),
-    }
-}
-
-fn write_last_sync(directory: &Path, document: &SyncDocument) -> Result<(), RemoteError> {
-    let text = serialize_sync_document(document)?;
-    crate::file::write_file_impl(&directory.join(LAST_SYNC_FILE), &text)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))
-}
-
-pub(crate) fn sync_document_url(base: &Url) -> Result<Url, RemoteError> {
-    if base.path().ends_with(".json") {
-        return Ok(base.clone());
-    }
-    base.join(SYNC_DOCUMENT_NAME)
-        .map_err(|_| RemoteError::new("WEBDAV_URL_INVALID", "无法拼接 WebDAV 同步文档地址"))
-}
-
-pub(crate) fn parse_sync_document(text: &str) -> Result<SyncDocument, RemoteError> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(SyncDocument::default());
-    }
-    let parsed: serde_json::Value = serde_json::from_str(trimmed)
-        .map_err(|_| RemoteError::new("WEBDAV_DOCUMENT_INVALID", "同步文档损坏，无法合并"))?;
-    if !parsed.is_object() {
-        return Err(RemoteError::new(
-            "WEBDAV_DOCUMENT_INVALID",
-            "同步文档格式无法识别",
+pub fn profile_with_credential(
+    app: &AppHandle,
+    state: &WebDavState,
+    profile: &SyncProfile,
+) -> Result<WebDavClient, WebDavError> {
+    let url = validate_webdav_url(&profile.url, profile.allow_http)?;
+    let reference = credential_ref(&profile.id);
+    let credential = load_credential(state, &reference)
+        .filter(|credential| credential.kind() == profile.auth_type);
+    if credential.is_none() {
+        return Err(WebDavError::new(
+            "SYNC_AUTH_REQUIRED",
+            "请先输入 WebDAV 凭据",
         ));
     }
-    let document: SyncDocument = serde_json::from_value(parsed)
-        .map_err(|_| RemoteError::new("WEBDAV_DOCUMENT_INVALID", "同步文档字段无法识别"))?;
-    if document.version != SYNC_DOCUMENT_VERSION {
-        return Err(RemoteError::new(
-            "WEBDAV_DOCUMENT_INVALID",
-            "同步文档版本无法识别",
-        ));
-    }
-    Ok(sanitize_document(document))
+    let _ = app;
+    WebDavClient::new(url, credential)
 }
 
-pub(crate) fn serialize_sync_document(document: &SyncDocument) -> Result<String, RemoteError> {
-    let sanitized = sanitize_document(document.clone());
-    let value = serde_json::to_value(&sanitized)
-        .map_err(|_| RemoteError::new("WEBDAV_DOCUMENT_INVALID", "无法准备同步文档"))?;
-    if document_contains_secrets(&value) {
-        return Err(RemoteError::new(
-            "WEBDAV_DOCUMENT_INVALID",
-            "同步文档不能包含凭据",
-        ));
-    }
-    serde_json::to_string(&sanitized)
-        .map_err(|_| RemoteError::new("WEBDAV_DOCUMENT_INVALID", "无法序列化同步文档"))
+pub(crate) fn active_profile_client(
+    app: &AppHandle,
+    state: &WebDavState,
+) -> Result<(SyncProfile, WebDavClient), WebDavError> {
+    let profile = load_persisted(app)?
+        .map(|value| value.profile)
+        .ok_or_else(|| WebDavError::new("SYNC_PROFILE_MISSING", "尚未配置 WebDAV 同步目标"))?;
+    let client = profile_with_credential(app, state, &profile)?;
+    Ok((profile, client))
 }
 
-fn sanitize_document(mut document: SyncDocument) -> SyncDocument {
-    document.version = SYNC_DOCUMENT_VERSION;
-    document.progress.retain(|hash, progress| {
-        validate_content_hash(hash).is_ok()
-            && (progress.kind == "flow" || progress.kind == "page")
-            && progress.version == 1
+#[tauri::command]
+pub fn sync_get_profile(app: AppHandle) -> Result<Option<SyncProfile>, WebDavError> {
+    Ok(load_persisted(&app)?.map(|value| value.profile))
+}
+
+#[tauri::command]
+pub fn sync_save_profile(
+    app: AppHandle,
+    state: State<'_, WebDavState>,
+    input: SyncProfileInput,
+) -> Result<SyncProfile, WebDavError> {
+    save_profile_value(&app, state.inner(), input)
+}
+
+fn save_profile_value(
+    app: &AppHandle,
+    state: &WebDavState,
+    input: SyncProfileInput,
+) -> Result<SyncProfile, WebDavError> {
+    if input.name.trim().is_empty() {
+        return Err(WebDavError::new(
+            "SYNC_PROFILE_INVALID",
+            "同步目标名称不能为空",
+        ));
+    }
+    let allow_http = input.allow_http.unwrap_or(false);
+    let url = validate_webdav_url(&input.url, allow_http)?;
+    let id = input
+        .id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let previous = load_persisted(app)?;
+    let reference = credential_ref(&id);
+    let authentication_changed = previous.as_ref().is_some_and(|stored| {
+        stored.profile.id == id && stored.profile.auth_type != input.auth_type
     });
-    document
-        .annotations
-        .retain(|hash, _| validate_content_hash(hash).is_ok());
-    document
-        .groups
-        .retain(|group| !is_reserved_group(&group.id));
-    document.members.retain(|member| {
-        validate_content_hash(&member.content_hash).is_ok() && !is_reserved_group(&member.group_id)
-    });
-    document
-}
-
-fn is_reserved_group(id: &str) -> bool {
-    RESERVED_SHELF_FILTERS.contains(&id)
-}
-
-fn document_contains_secrets(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(map) => map.iter().any(|(key, child)| {
-            let lowered = key.to_ascii_lowercase();
-            matches!(
-                lowered.as_str(),
-                "password" | "token" | "secret" | "credential" | "credentialref"
-            ) || document_contains_secrets(child)
-        }),
-        serde_json::Value::Array(items) => items.iter().any(document_contains_secrets),
-        _ => false,
-    }
-}
-
-pub(crate) fn merge_sync_documents(local: &SyncDocument, remote: &SyncDocument) -> SyncDocument {
-    SyncDocument {
-        version: SYNC_DOCUMENT_VERSION,
-        progress: merge_progress(&local.progress, &remote.progress),
-        annotations: merge_annotations_map(&local.annotations, &remote.annotations),
-        groups: merge_groups(&local.groups, &remote.groups),
-        members: merge_members(&local.members, &remote.members),
-    }
-}
-
-fn merge_progress(
-    local: &BTreeMap<String, SyncedProgress>,
-    remote: &BTreeMap<String, SyncedProgress>,
-) -> BTreeMap<String, SyncedProgress> {
-    let mut merged = BTreeMap::new();
-    let mut hashes = local.keys().cloned().collect::<HashSet<_>>();
-    hashes.extend(remote.keys().cloned());
-    for hash in hashes {
-        if validate_content_hash(&hash).is_err() {
-            continue;
-        }
-        match (local.get(&hash), remote.get(&hash)) {
-            (Some(left), Some(right)) if right.updated_at > left.updated_at => {
-                merged.insert(hash, right.clone());
-            }
-            (Some(left), _) => {
-                merged.insert(hash, left.clone());
-            }
-            (None, Some(right)) => {
-                merged.insert(hash, right.clone());
-            }
-            (None, None) => {}
-        }
-    }
-    merged
-}
-
-fn merge_annotations_map(
-    local: &BTreeMap<String, serde_json::Value>,
-    remote: &BTreeMap<String, serde_json::Value>,
-) -> BTreeMap<String, serde_json::Value> {
-    let mut merged = BTreeMap::new();
-    let mut hashes = local.keys().cloned().collect::<HashSet<_>>();
-    hashes.extend(remote.keys().cloned());
-    for hash in hashes {
-        if validate_content_hash(&hash).is_err() {
-            continue;
-        }
-        let local_json = local
-            .get(&hash)
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let remote_json = remote
-            .get(&hash)
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let merged_json = merge_annotations_json(&local_json, &remote_json);
-        if merged_json.trim().is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str(&merged_json) {
-            merged.insert(hash, value);
-        }
-    }
-    merged
-}
-
-fn merge_groups(local: &[SyncedGroup], remote: &[SyncedGroup]) -> Vec<SyncedGroup> {
-    let mut winners: BTreeMap<String, SyncedGroup> = BTreeMap::new();
-    for group in local.iter().chain(remote.iter()) {
-        if is_reserved_group(&group.id) {
-            continue;
-        }
-        match winners.get(&group.id) {
-            Some(current) if group.updated_at <= current.updated_at => {}
-            _ => {
-                winners.insert(group.id.clone(), group.clone());
-            }
-        }
-    }
-    winners.into_values().collect()
-}
-
-fn merge_members(local: &[SyncedMember], remote: &[SyncedMember]) -> Vec<SyncedMember> {
-    let mut winners: BTreeMap<(String, String), SyncedMember> = BTreeMap::new();
-    for member in local.iter().chain(remote.iter()) {
-        if validate_content_hash(&member.content_hash).is_err()
-            || is_reserved_group(&member.group_id)
-        {
-            continue;
-        }
-        let key = (member.group_id.clone(), member.content_hash.clone());
-        match winners.get(&key) {
-            Some(current) if member.updated_at <= current.updated_at => {}
-            _ => {
-                winners.insert(key, member.clone());
-            }
-        }
-    }
-    winners.into_values().collect()
-}
-
-fn hashes_by_item_id(item_hashes: &[ItemHash]) -> HashMap<String, String> {
-    let mut hashes = HashMap::new();
-    for item in item_hashes {
-        if validate_content_hash(&item.content_hash).is_ok() && !item.item_id.trim().is_empty() {
-            hashes
-                .entry(item.item_id.clone())
-                .or_insert_with(|| item.content_hash.clone());
-        }
-    }
-    hashes
-}
-
-fn compute_local_item_hash(connection: &rusqlite::Connection, item_id: &str) -> Option<String> {
-    let path = connection
-        .query_row(
-            "SELECT local_path FROM library_items WHERE id=?1",
-            params![item_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .flatten()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())?;
-    let bytes = fs::read(path).ok()?;
-    let hash = crate::asset::content_hash_hex(&bytes);
-    validate_content_hash(&hash).ok().map(str::to_string)
-}
-
-fn resolve_member_content_hash(
-    connection: &rusqlite::Connection,
-    item_id: &str,
-    stored: Option<&str>,
-    hashes_by_item: &HashMap<String, String>,
-) -> Option<String> {
-    if let Some(hash) = stored.filter(|hash| validate_content_hash(hash).is_ok()) {
-        return Some(hash.to_string());
-    }
-    if let Some(hash) = hashes_by_item.get(item_id) {
-        if validate_content_hash(hash).is_ok() {
-            return Some(hash.clone());
-        }
-    }
-    compute_local_item_hash(connection, item_id)
-}
-
-fn persist_member_content_hash(
-    connection: &rusqlite::Connection,
-    group_id: &str,
-    item_id: &str,
-    content_hash: &str,
-) -> Result<(), String> {
-    connection
-        .execute(
-            "UPDATE library_group_members SET content_hash=?3
-             WHERE group_id=?1 AND item_id=?2",
-            params![group_id, item_id, content_hash],
-        )
-        .map_err(|error| format!("无法写入分组成员哈希: {error}"))?;
-    Ok(())
-}
-
-fn collect_local_document(
-    directory: &Path,
-    progress: &BTreeMap<String, SyncedProgress>,
-    item_hashes: &[ItemHash],
-    last: Option<&SyncDocument>,
-) -> Result<SyncDocument, RemoteError> {
-    let mut document = SyncDocument {
-        version: SYNC_DOCUMENT_VERSION,
-        progress: progress
-            .iter()
-            .filter(|(hash, _)| validate_content_hash(hash).is_ok())
-            .map(|(hash, value)| (hash.clone(), value.clone()))
-            .collect(),
-        annotations: BTreeMap::new(),
-        groups: Vec::new(),
-        members: Vec::new(),
-    };
-    for (hash, json) in list_annotations_by_hash(directory)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?
-    {
-        if json.trim().is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str(&json) {
-            document.annotations.insert(hash, value);
-        }
-    }
-    let connection = open_database_at(directory)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?;
-    document.groups = list_library_groups(&connection)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?
-        .into_iter()
-        .filter(|group| !is_reserved_group(&group.id))
-        .map(synced_group_from_library)
-        .collect();
-    let hashes_by_item = hashes_by_item_id(item_hashes);
-    document.members = list_library_group_members(&connection, None)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?
-        .into_iter()
-        .filter_map(|member| {
-            if is_reserved_group(&member.group_id) {
-                return None;
-            }
-            let content_hash = resolve_member_content_hash(
-                &connection,
-                &member.item_id,
-                member.content_hash.as_deref(),
-                &hashes_by_item,
-            )?;
-            if member.content_hash.as_deref() != Some(content_hash.as_str()) {
-                let _ = persist_member_content_hash(
-                    &connection,
-                    &member.group_id,
-                    &member.item_id,
-                    &content_hash,
-                );
-            }
-            Some(SyncedMember {
-                group_id: member.group_id,
-                content_hash,
-                updated_at: member.updated_at,
-                removed: false,
-            })
-        })
-        .collect();
-    if let Some(last) = last {
-        document
-            .groups
-            .extend(tombstone_groups(&document.groups, &last.groups));
-        let known_hashes =
-            locally_known_hashes(&connection, item_hashes, &document.members);
-        document
-            .members
-            .extend(tombstone_members(&document.members, &last.members, &known_hashes));
-    }
-    Ok(sanitize_document(document))
-}
-
-fn synced_group_from_library(group: LibraryGroup) -> SyncedGroup {
-    SyncedGroup {
-        id: group.id,
-        parent_id: group.parent_id,
-        name: group.name,
-        source: group.source,
-        smart_key: group.smart_key,
-        created_at: group.created_at,
-        updated_at: group.updated_at,
-        removed: false,
-    }
-}
-
-fn tombstone_groups(current: &[SyncedGroup], last: &[SyncedGroup]) -> Vec<SyncedGroup> {
-    let current_ids = current
-        .iter()
-        .map(|group| group.id.as_str())
-        .collect::<HashSet<_>>();
-    let now = library::now_ms();
-    last.iter()
-        .filter(|group| !group.removed && !current_ids.contains(group.id.as_str()))
-        .map(|group| SyncedGroup {
-            updated_at: now.max(group.updated_at),
-            removed: true,
-            ..group.clone()
-        })
-        .collect()
-}
-
-fn locally_known_hashes(
-    connection: &rusqlite::Connection,
-    item_hashes: &[ItemHash],
-    current_members: &[SyncedMember],
-) -> HashSet<String> {
-    let mut hashes = HashSet::new();
-    for item in item_hashes {
-        if validate_content_hash(&item.content_hash).is_ok() {
-            hashes.insert(item.content_hash.clone());
-        }
-    }
-    for member in current_members {
-        hashes.insert(member.content_hash.clone());
-    }
-    let mut items_by_hash = HashMap::new();
-    if index_local_item_hashes(connection, &mut items_by_hash).is_ok() {
-        hashes.extend(items_by_hash.into_keys());
-    }
-    hashes
-}
-
-fn tombstone_members(
-    current: &[SyncedMember],
-    last: &[SyncedMember],
-    known_hashes: &HashSet<String>,
-) -> Vec<SyncedMember> {
-    let current_keys = current
-        .iter()
-        .map(|member| (member.group_id.as_str(), member.content_hash.as_str()))
-        .collect::<HashSet<_>>();
-    let now = library::now_ms();
-    last.iter()
-        .filter(|member| {
-            !current_keys.contains(&(member.group_id.as_str(), member.content_hash.as_str()))
-        })
-        .map(|member| {
-            if !member.removed && known_hashes.contains(&member.content_hash) {
-                SyncedMember {
-                    updated_at: now.max(member.updated_at),
-                    removed: true,
-                    ..member.clone()
-                }
-            } else {
-                member.clone()
-            }
-        })
-        .collect()
-}
-
-fn apply_merged_document(
-    directory: &Path,
-    document: &SyncDocument,
-    item_hashes: &[ItemHash],
-) -> Result<(), RemoteError> {
-    for (hash, value) in &document.annotations {
-        let remote_json = value.to_string();
-        merge_remote_annotations_impl(directory, hash, &remote_json)
-            .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?;
-    }
-    let connection = open_database_at(directory)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?;
-    apply_groups(&connection, &document.groups)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?;
-    apply_members(&connection, &document.members, item_hashes)
-        .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?;
-    Ok(())
-}
-
-fn apply_groups(connection: &rusqlite::Connection, groups: &[SyncedGroup]) -> Result<(), String> {
-    for group in groups.iter().filter(|group| group.removed) {
-        let _ = remove_library_group(connection, &group.id);
-    }
-    let mut pending = groups
-        .iter()
-        .filter(|group| !group.removed)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut applied = list_library_groups(connection)?
-        .into_iter()
-        .map(|group| group.id)
-        .collect::<HashSet<_>>();
-    for _ in 0..64 {
-        if pending.is_empty() {
-            break;
-        }
-        let mut deferred = Vec::new();
-        let mut progressed = false;
-        for group in pending {
-            let parent_ready = group
-                .parent_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map_or(true, |parent| applied.contains(parent));
-            if !parent_ready {
-                deferred.push(group);
-                continue;
-            }
-            apply_one_group(connection, &group)?;
-            applied.insert(group.id.clone());
-            progressed = true;
-        }
-        if !progressed {
-            for mut group in deferred {
-                group.parent_id = None;
-                apply_one_group(connection, &group)?;
-            }
-            break;
-        }
-        pending = deferred;
-    }
-    Ok(())
-}
-
-fn apply_one_group(connection: &rusqlite::Connection, group: &SyncedGroup) -> Result<(), String> {
-    if is_reserved_group(&group.id) {
-        return Ok(());
-    }
-    let exists = list_library_groups(connection)?
-        .iter()
-        .any(|existing| existing.id == group.id);
-    if exists {
-        upsert_library_group(
-            connection,
-            LibraryGroup {
-                id: group.id.clone(),
-                parent_id: group.parent_id.clone(),
-                name: group.name.clone(),
-                source: group.source.clone(),
-                smart_key: group.smart_key.clone(),
-                created_at: group.created_at,
-                updated_at: group.updated_at,
-            },
-        )?;
-        return Ok(());
-    }
-    let source = if group.source == "smart" {
-        "smart"
-    } else {
-        "user"
-    };
-    connection
-        .execute(
-            "INSERT INTO library_groups(id, parent_id, name, source, smart_key, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                group.id,
-                group.parent_id,
-                group.name,
-                source,
-                group.smart_key,
-                group.created_at,
-                group.updated_at
-            ],
-        )
-        .map_err(|error| format!("无法写入同步分组: {error}"))?;
-    Ok(())
-}
-
-fn index_local_item_hashes(
-    connection: &rusqlite::Connection,
-    items_by_hash: &mut HashMap<String, HashSet<String>>,
-) -> Result<(), String> {
-    let mut statement = connection
-        .prepare("SELECT id, local_path FROM library_items")
-        .map_err(|error| format!("无法读取书库条目: {error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .map_err(|error| format!("无法读取书库条目: {error}"))?;
-    for row in rows {
-        let (item_id, path) = row.map_err(|error| format!("无法读取书库条目: {error}"))?;
-        let Some(path) = path.filter(|value| !value.trim().is_empty()) else {
-            continue;
-        };
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let hash = crate::asset::content_hash_hex(&bytes);
-        if validate_content_hash(&hash).is_ok() {
-            items_by_hash.entry(hash).or_default().insert(item_id);
-        }
-    }
-    Ok(())
-}
-
-fn apply_members(
-    connection: &rusqlite::Connection,
-    members: &[SyncedMember],
-    item_hashes: &[ItemHash],
-) -> Result<(), String> {
-    let mut items_by_hash: HashMap<String, HashSet<String>> = HashMap::new();
-    for member in list_library_group_members(connection, None)? {
-        if let Some(hash) = member.content_hash {
-            if validate_content_hash(&hash).is_ok() {
-                items_by_hash
-                    .entry(hash)
-                    .or_default()
-                    .insert(member.item_id);
-            }
-        }
-    }
-    for item in item_hashes {
-        if validate_content_hash(&item.content_hash).is_ok() && !item.item_id.trim().is_empty() {
-            items_by_hash
-                .entry(item.content_hash.clone())
-                .or_default()
-                .insert(item.item_id.clone());
-        }
-    }
-    index_local_item_hashes(connection, &mut items_by_hash)?;
-    for member in members {
-        let Some(item_ids) = items_by_hash.get(&member.content_hash) else {
-            continue;
-        };
-        for item_id in item_ids {
-            if !library_item_exists(connection, item_id)? {
-                continue;
-            }
-            if member.removed {
-                let _ = remove_library_group_member(connection, &member.group_id, item_id);
-                continue;
-            }
-            if member_exists(connection, &member.group_id, item_id)? {
-                connection
-                    .execute(
-                        "UPDATE library_group_members
-                         SET content_hash=?3, updated_at=?4
-                         WHERE group_id=?1 AND item_id=?2",
-                        params![
-                            member.group_id,
-                            item_id,
-                            member.content_hash,
-                            member.updated_at
-                        ],
-                    )
-                    .map_err(|error| format!("无法更新分组成员: {error}"))?;
-            } else {
-                add_library_group_member(
-                    connection,
-                    &member.group_id,
-                    item_id,
-                    Some(member.content_hash.as_str()),
-                )?;
-                connection
-                    .execute(
-                        "UPDATE library_group_members SET updated_at=?3
-                         WHERE group_id=?1 AND item_id=?2",
-                        params![member.group_id, item_id, member.updated_at],
-                    )
-                    .map_err(|error| format!("无法更新分组成员时间: {error}"))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn library_item_exists(connection: &rusqlite::Connection, item_id: &str) -> Result<bool, String> {
-    connection
-        .query_row(
-            "SELECT 1 FROM library_items WHERE id=?1",
-            params![item_id],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|row| row.is_some())
-        .map_err(|error| format!("无法读取书库条目: {error}"))
-}
-
-fn member_exists(
-    connection: &rusqlite::Connection,
-    group_id: &str,
-    item_id: &str,
-) -> Result<bool, String> {
-    connection
-        .query_row(
-            "SELECT 1 FROM library_group_members WHERE group_id=?1 AND item_id=?2",
-            params![group_id, item_id],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|row| row.is_some())
-        .map_err(|error| format!("无法读取分组成员: {error}"))
-}
-
-async fn download_sync_document(
-    url: &Url,
-    credential: Option<&RemoteCredential>,
-    max_bytes: usize,
-) -> Result<String, RemoteError> {
-    let client = build_client(url, credential.is_some())?;
-    let response = apply_credential(client.get(url.clone()), credential)
-        .send()
-        .await
-        .map_err(|error| {
-            RemoteError::new("REMOTE_NETWORK_ERROR", format!("无法连接 WebDAV: {error}"))
-        })?;
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(String::new());
-    }
-    if let Some(error) = response_error(&response) {
-        return Err(error);
-    }
-    if !response.status().is_success() {
-        return Err(RemoteError::status(
-            "REMOTE_HTTP_ERROR",
-            format!("WebDAV 返回 HTTP {}", response.status().as_u16()),
-            response.status(),
+    if input.clear_credential.unwrap_or(false) && input.credential.is_some() {
+        return Err(WebDavError::new(
+            "SYNC_PROFILE_INVALID",
+            "不能同时清除和设置凭据",
         ));
     }
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| {
-            RemoteError::new("REMOTE_NETWORK_ERROR", format!("WebDAV 传输中断: {error}"))
-        })?;
-        if bytes.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(RemoteError::new(
-                "REMOTE_DOCUMENT_TOO_LARGE",
-                "同步文档超过大小限制",
+    let explicitly_persisted = if let Some(credential) = input.credential.as_ref() {
+        credential.validate()?;
+        if credential.kind() != input.auth_type {
+            return Err(WebDavError::new(
+                "SYNC_CREDENTIAL_INVALID",
+                "凭据类型与同步目标鉴权类型不匹配",
             ));
         }
-        bytes.extend_from_slice(&chunk);
+        let persisted = save_keyring_credential(&reference, credential);
+        if !persisted {
+            state
+                .session_credentials
+                .lock()
+                .map_err(|_| WebDavError::new("SYNC_STATE_UNAVAILABLE", "同步凭据状态不可用"))?
+                .insert(reference.clone(), credential.clone());
+        }
+        Some(persisted)
+    } else if input.clear_credential.unwrap_or(false) {
+        delete_keyring_credential(&reference);
+        state
+            .session_credentials
+            .lock()
+            .map_err(|_| WebDavError::new("SYNC_STATE_UNAVAILABLE", "同步凭据状态不可用"))?
+            .remove(&reference);
+        Some(false)
+    } else {
+        None
+    };
+    let has_persisted_credential = explicitly_persisted.unwrap_or_else(|| {
+        keyring_credential(&reference)
+            .is_some_and(|credential| credential.kind() == input.auth_type)
+    });
+    let profile = SyncProfile {
+        id: id.clone(),
+        name: input.name.trim().to_owned(),
+        url: url.to_string(),
+        auth_type: input.auth_type,
+        allow_http,
+        needs_credential: !has_persisted_credential,
+        updated_at: now_ms(),
+    };
+    persist_profile(
+        app,
+        &PersistedProfile {
+            profile: profile.clone(),
+            credential_ref: Some(reference),
+        },
+    )?;
+    if authentication_changed && input.credential.is_none() {
+        delete_keyring_credential(&credential_ref(&id));
+        state
+            .session_credentials
+            .lock()
+            .map_err(|_| WebDavError::new("SYNC_STATE_UNAVAILABLE", "同步凭据状态不可用"))?
+            .remove(&credential_ref(&id));
     }
-    String::from_utf8(bytes)
-        .map_err(|_| RemoteError::new("WEBDAV_DOCUMENT_INVALID", "同步文档不是有效的 UTF-8"))
+    if let Some(old) = previous.and_then(|value| value.credential_ref) {
+        if old != credential_ref(&id) {
+            delete_keyring_credential(&old);
+        }
+    }
+    Ok(profile)
 }
 
-async fn upload_sync_document(
-    url: &Url,
-    credential: Option<&RemoteCredential>,
-    body: &str,
-) -> Result<(), RemoteError> {
-    let client = build_client(url, credential.is_some())?;
-    let response = apply_credential(
-        client
-            .put(url.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .body(body.to_string()),
-        credential,
-    )
-    .send()
-    .await
-    .map_err(|error| {
-        RemoteError::new("REMOTE_NETWORK_ERROR", format!("无法写入 WebDAV: {error}"))
-    })?;
-    if let Some(error) = response_error(&response) {
-        return Err(error);
+#[tauri::command]
+pub async fn sync_test_profile(
+    app: AppHandle,
+    state: State<'_, WebDavState>,
+    input: SyncProfileInput,
+) -> Result<WebDavCapability, WebDavError> {
+    let profile = save_profile_value(&app, state.inner(), input)?;
+    let client = profile_with_credential(&app, state.inner(), &profile)?;
+    client.capability().await
+}
+
+#[tauri::command]
+pub fn sync_forget_profile(
+    app: AppHandle,
+    state: State<'_, WebDavState>,
+) -> Result<(), WebDavError> {
+    let persisted = load_persisted(&app)?;
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| {
+            WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法定位同步配置目录: {error}"),
+            )
+        })?
+        .join(CONFIG_FILE);
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(WebDavError::new(
+                "SYNC_STORAGE_ERROR",
+                format!("无法删除同步配置: {error}"),
+            ))
+        }
     }
-    if !response.status().is_success() {
-        return Err(RemoteError::status(
-            "REMOTE_HTTP_ERROR",
-            format!("WebDAV 返回 HTTP {}", response.status().as_u16()),
-            response.status(),
-        ));
+    if let Some(reference) = persisted.and_then(|value| value.credential_ref) {
+        delete_keyring_credential(&reference);
+        state
+            .session_credentials
+            .lock()
+            .map_err(|_| WebDavError::new("SYNC_STATE_UNAVAILABLE", "同步凭据状态不可用"))?
+            .remove(&reference);
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn sync_store_credential(
+    app: AppHandle,
+    state: State<'_, WebDavState>,
+    profile_id: String,
+    credential: SyncCredential,
+) -> Result<SyncCredentialResult, WebDavError> {
+    credential.validate()?;
+    let mut stored = load_persisted(&app)?
+        .ok_or_else(|| WebDavError::new("SYNC_PROFILE_MISSING", "尚未配置 WebDAV 同步目标"))?;
+    if stored.profile.id != profile_id {
+        return Err(WebDavError::new(
+            "SYNC_PROFILE_INVALID",
+            "凭据对应的同步目标不存在",
+        ));
+    }
+    if credential.kind() != stored.profile.auth_type {
+        return Err(WebDavError::new(
+            "SYNC_CREDENTIAL_INVALID",
+            "凭据类型与同步目标鉴权类型不匹配",
+        ));
+    }
+    let reference = credential_ref(&profile_id);
+    let persisted = save_keyring_credential(&reference, &credential);
+    let mut session_credentials = state
+        .session_credentials
+        .lock()
+        .map_err(|_| WebDavError::new("SYNC_STATE_UNAVAILABLE", "同步凭据状态不可用"))?;
+    if persisted {
+        session_credentials.remove(&reference);
+    } else {
+        session_credentials.insert(reference.clone(), credential);
+    }
+    drop(session_credentials);
+    // A session-only fallback works until shutdown, but the persisted profile
+    // must still tell a newly started device to request credentials again.
+    stored.profile.needs_credential = !persisted;
+    stored.profile.updated_at = now_ms();
+    stored.credential_ref = Some(reference.clone());
+    persist_profile(&app, &stored)?;
+    Ok(SyncCredentialResult {
+        credential_ref: reference,
+        persisted,
+        needs_credential: !persisted,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotations::write_annotations_impl;
 
-    const HASH_A: &str = "0123456789abcdef";
-    const HASH_B: &str = "fedcba9876543210";
-
-    fn progress(updated_at: i64, index: i64) -> SyncedProgress {
-        SyncedProgress {
-            version: 1,
-            kind: "flow".into(),
-            index,
-            ratio: 0.25,
-            updated_at,
-        }
-    }
-
-    fn group(id: &str, name: &str, updated_at: i64) -> SyncedGroup {
-        SyncedGroup {
-            id: id.into(),
-            parent_id: None,
-            name: name.into(),
-            source: "user".into(),
-            smart_key: None,
-            created_at: 1,
-            updated_at,
-            removed: false,
-        }
-    }
-
-    fn member(group_id: &str, hash: &str, updated_at: i64) -> SyncedMember {
-        SyncedMember {
-            group_id: group_id.into(),
-            content_hash: hash.into(),
-            updated_at,
-            removed: false,
-        }
-    }
-
-    fn annotation_file(id: &str, updated_at: i64) -> serde_json::Value {
-        serde_json::json!({
-            "version": 2,
-            "annotations": [{
-                "id": id,
-                "kind": "note",
-                "locator": { "format": "cbz", "page": 1 },
-                "createdAt": 1,
-                "updatedAt": updated_at
-            }]
-        })
+    #[test]
+    fn url_policy_rejects_credentials_and_http_by_default() {
+        assert!(validate_webdav_url("https://dav.example/remote", false).is_ok());
+        assert!(validate_webdav_url("http://192.168.1.2/dav", false).is_err());
+        assert!(validate_webdav_url("http://192.168.1.2/dav", true).is_ok());
+        assert!(validate_webdav_url("https://u:p@dav.example", false).is_err());
+        assert!(validate_webdav_url("https://dav.example/?token=x", false).is_err());
     }
 
     #[test]
-    fn webdav_keyring_service_is_independent_from_opds() {
-        assert_eq!(crate::remote::WEBDAV_KEYRING_SERVICE, "lightink.webdav");
-        assert_ne!(
-            crate::remote::WEBDAV_KEYRING_SERVICE,
-            crate::remote::OPDS_KEYRING_SERVICE
-        );
-    }
-
-    #[test]
-    fn http_webdav_url_is_rejected_until_allowed() {
-        let error = validate_remote_url("http://dav.example.test/sync", false).unwrap_err();
-        assert_eq!(error.code, "REMOTE_HTTP_NOT_ALLOWED");
-        assert!(validate_remote_url("https://dav.example.test/sync", false).is_ok());
-        assert!(validate_remote_url("http://192.168.1.8/sync", true).is_ok());
-    }
-
-    #[test]
-    fn sync_document_url_appends_json_name() {
-        let directory = Url::parse("https://dav.example.test/books/").unwrap();
+    fn path_and_blob_layout_are_confined() {
         assert_eq!(
-            sync_document_url(&directory).unwrap().as_str(),
-            "https://dav.example.test/books/lightink-sync.json"
+            remote_blob_path(&"a".repeat(64)).unwrap(),
+            format!("{WEBDAV_ROOT}/blobs/sha256/aa/{}", "a".repeat(64))
         );
-        let file = Url::parse("https://dav.example.test/books/custom.json").unwrap();
-        assert_eq!(sync_document_url(&file).unwrap().as_str(), file.as_str());
-    }
-
-    #[test]
-    fn merge_progress_keeps_newer_updated_at() {
-        let mut local = BTreeMap::new();
-        local.insert(HASH_A.into(), progress(10, 1));
-        local.insert(HASH_B.into(), progress(30, 4));
-        let mut remote = BTreeMap::new();
-        remote.insert(HASH_A.into(), progress(20, 2));
-        remote.insert(HASH_B.into(), progress(25, 3));
-        remote.insert("not-a-hash".into(), progress(99, 9));
-        let merged = merge_progress(&local, &remote);
-        assert_eq!(merged.get(HASH_A).unwrap().index, 2);
-        assert_eq!(merged.get(HASH_B).unwrap().index, 4);
-        assert!(!merged.contains_key("not-a-hash"));
-    }
-
-    #[test]
-    fn merge_annotations_use_record_updated_at() {
-        let mut local = BTreeMap::new();
-        local.insert(HASH_A.into(), annotation_file("n1", 10));
-        let mut remote = BTreeMap::new();
-        remote.insert(HASH_A.into(), annotation_file("n1", 20));
-        let merged = merge_annotations_map(&local, &remote);
-        assert_eq!(merged[HASH_A]["annotations"][0]["updatedAt"], 20);
-    }
-
-    #[test]
-    fn merge_groups_and_members_by_newer_clock() {
-        let local_groups = vec![group("user:a", "旧名", 10)];
-        let remote_groups = vec![group("user:a", "新名", 20), group("user:b", "另一组", 5)];
-        let merged_groups = merge_groups(&local_groups, &remote_groups);
-        let renamed = merged_groups
-            .iter()
-            .find(|group| group.id == "user:a")
-            .unwrap();
-        assert_eq!(renamed.name, "新名");
-        assert_eq!(merged_groups.len(), 2);
-
-        let local_members = vec![member("user:a", HASH_A, 40)];
-        let remote_members = vec![
-            member("user:a", HASH_A, 10),
-            SyncedMember {
-                removed: true,
-                ..member("user:a", HASH_B, 50)
-            },
-        ];
-        let merged_members = merge_members(&local_members, &remote_members);
-        let kept = merged_members
-            .iter()
-            .find(|member| member.content_hash == HASH_A)
-            .unwrap();
-        assert_eq!(kept.updated_at, 40);
-        assert!(!kept.removed);
-        let removed = merged_members
-            .iter()
-            .find(|member| member.content_hash == HASH_B)
-            .unwrap();
-        assert!(removed.removed);
-    }
-
-    #[test]
-    fn tombstone_members_keeps_unmapped_last_members() {
-        let last = vec![member("user:a", HASH_A, 8), member("user:b", HASH_B, 9)];
-        let current = vec![member("user:a", HASH_A, 8)];
-        let known = HashSet::from([HASH_B.to_string()]);
-        let extras = tombstone_members(&current, &last, &known);
-        assert!(extras.iter().any(|member| {
-            member.group_id == "user:b" && member.content_hash == HASH_B && member.removed
-        }));
-        let extras = tombstone_members(&current, &last, &HashSet::new());
-        assert!(extras.iter().any(|member| {
-            member.group_id == "user:b"
-                && member.content_hash == HASH_B
-                && !member.removed
-                && member.updated_at == 9
-        }));
-    }
-
-    #[test]
-    fn serialized_document_omits_secrets_and_ebook_bytes() {
-        let mut document = SyncDocument::default();
-        document.progress.insert(HASH_A.into(), progress(1, 0));
-        document
-            .annotations
-            .insert(HASH_A.into(), annotation_file("n1", 1));
-        document.groups.push(group("user:a", "组", 1));
-        document.members.push(member("user:a", HASH_A, 1));
-        let json = serialize_sync_document(&document).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["version"], 1);
-        assert!(value.get("password").is_none());
-        assert!(value.get("token").is_none());
-        assert!(value.get("credentialRef").is_none());
-        assert!(!json.contains("password"));
-        assert!(!json.contains("token"));
-        assert!(!json.contains("%PDF"));
-        assert!(!json.contains("PK\u{3}\u{4}"));
-        let keys: HashSet<&str> = value
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
+        assert!(validate_relative_path("../escape").is_err());
+        assert!(validate_relative_path("/absolute").is_err());
+        assert!(remote_blob_path("bad").is_err());
         assert_eq!(
-            keys,
-            HashSet::from(["version", "progress", "annotations", "groups", "members"])
+            remote_state_path("device.json").unwrap(),
+            "LightInk/v1/devices/device.json"
         );
+        assert!(remote_state_path("device").is_err());
+        assert_eq!(remote_profile_path().unwrap(), "LightInk/v1/profile.json");
     }
 
     #[test]
-    fn corrupt_remote_document_is_rejected() {
-        for payload in ["{not-json", "[]", "{\"version\":2}", "\"ebook\""] {
-            let error = parse_sync_document(payload).unwrap_err();
-            assert_eq!(error.code, "WEBDAV_DOCUMENT_INVALID", "{payload}");
+    fn authenticated_redirect_must_stay_on_origin_and_never_downgrade() {
+        let from = Url::parse("https://dav.example/root").unwrap();
+        assert!(redirect_allowed(
+            &from,
+            &Url::parse("https://dav.example/next").unwrap(),
+            true
+        ));
+        assert!(!redirect_allowed(
+            &from,
+            &Url::parse("https://other.example/next").unwrap(),
+            true
+        ));
+        assert!(!redirect_allowed(
+            &from,
+            &Url::parse("http://dav.example/next").unwrap(),
+            false
+        ));
+    }
+
+    #[test]
+    fn credential_kind_is_explicit() {
+        assert_eq!(
+            SyncCredential::Bearer { token: "x".into() }.kind(),
+            SyncAuthKind::Bearer
+        );
+        assert!(SyncCredential::Basic {
+            username: String::new(),
+            password: "x".into()
         }
-        assert_eq!(parse_sync_document("").unwrap(), SyncDocument::default());
-    }
-
-    #[test]
-    fn apply_merged_document_writes_annotations_and_hash_members() {
-        let directory = tempfile::tempdir().unwrap();
-        write_annotations_impl(
-            directory.path(),
-            HASH_A,
-            &annotation_file("n1", 5).to_string(),
-        )
-        .unwrap();
-        let connection = open_database_at(directory.path()).unwrap();
-        connection
-            .execute(
-                "INSERT INTO library_items(id, source_kind, title, authors_json, updated_at)
-                 VALUES ('book-1', 'local', '一书', '[]', 1)",
-                [],
-            )
-            .unwrap();
-        let mut document = SyncDocument::default();
-        document
-            .annotations
-            .insert(HASH_A.into(), annotation_file("n1", 9));
-        document.groups.push(group("user:series", "系列", 3));
-        document.members.push(member("user:series", HASH_A, 3));
-        apply_merged_document(
-            directory.path(),
-            &document,
-            &[ItemHash {
-                item_id: "book-1".into(),
-                content_hash: HASH_A.into(),
-            }],
-        )
-        .unwrap();
-        let stored = crate::annotations::read_annotations_impl(directory.path(), HASH_A).unwrap();
-        assert!(stored.contains("\"updatedAt\":9"));
-        let groups = list_library_groups(&connection).unwrap();
-        assert_eq!(groups[0].name, "系列");
-        let members = list_library_group_members(&connection, Some("user:series")).unwrap();
-        assert_eq!(members[0].item_id, "book-1");
-        assert_eq!(members[0].content_hash.as_deref(), Some(HASH_A));
-    }
-
-    #[test]
-    fn collect_local_document_attaches_missing_member_hashes() {
-        let directory = tempfile::tempdir().unwrap();
-        let book_path = directory.path().join("never-opened.epub");
-        fs::write(&book_path, b"local-epub-bytes").unwrap();
-        let computed = crate::asset::content_hash_hex(b"local-epub-bytes");
-        let connection = open_database_at(directory.path()).unwrap();
-        connection
-            .execute(
-                "INSERT INTO library_items(id, source_kind, title, authors_json, local_path, updated_at)
-                 VALUES ('book-alias', 'local', '已打开', '[]', NULL, 1),
-                        ('book-file', 'local', '未打开', '[]', ?1, 1)",
-                params![book_path.to_string_lossy()],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO library_groups(id, parent_id, name, source, smart_key, created_at, updated_at)
-                 VALUES ('user:a', NULL, '组', 'user', NULL, 1, 1)",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO library_group_members(group_id, item_id, content_hash, updated_at)
-                 VALUES ('user:a', 'book-alias', NULL, 4),
-                        ('user:a', 'book-file', NULL, 5)",
-                [],
-            )
-            .unwrap();
-        let document = collect_local_document(
-            directory.path(),
-            &BTreeMap::new(),
-            &[ItemHash {
-                item_id: "book-alias".into(),
-                content_hash: HASH_A.into(),
-            }],
-            None,
-        )
-        .unwrap();
-        let by_hash: HashMap<_, _> = document
-            .members
-            .iter()
-            .map(|member| (member.content_hash.as_str(), member.updated_at))
-            .collect();
-        assert_eq!(by_hash.get(HASH_A), Some(&4));
-        assert_eq!(by_hash.get(computed.as_str()), Some(&5));
-        let stored = list_library_group_members(&connection, Some("user:a")).unwrap();
-        assert!(stored.iter().any(|member| {
-            member.item_id == "book-alias" && member.content_hash.as_deref() == Some(HASH_A)
-        }));
-        assert!(stored.iter().any(|member| {
-            member.item_id == "book-file" && member.content_hash.as_deref() == Some(computed.as_str())
-        }));
-    }
-
-    #[test]
-    fn apply_members_resolves_wiped_local_books_by_file_hash() {
-        let directory = tempfile::tempdir().unwrap();
-        let book_path = directory.path().join("same-book.epub");
-        fs::write(&book_path, b"same-ebook-bytes").unwrap();
-        let hash = crate::asset::content_hash_hex(b"same-ebook-bytes");
-        let connection = open_database_at(directory.path()).unwrap();
-        connection
-            .execute(
-                "INSERT INTO library_items(id, source_kind, title, authors_json, local_path, updated_at)
-                 VALUES ('book-local', 'local', '未打开', '[]', ?1, 1)",
-                params![book_path.to_string_lossy()],
-            )
-            .unwrap();
-        let mut document = SyncDocument::default();
-        document.groups.push(group("user:series", "系列", 3));
-        document.members.push(member("user:series", &hash, 3));
-        apply_merged_document(directory.path(), &document, &[]).unwrap();
-        let members = list_library_group_members(&connection, Some("user:series")).unwrap();
-        assert_eq!(members.len(), 1);
-        assert_eq!(members[0].item_id, "book-local");
-        assert_eq!(members[0].content_hash.as_deref(), Some(hash.as_str()));
-    }
-
-    #[test]
-    fn public_config_reports_password_without_writing_secrets() {
-        let view = WebDavPublicConfig {
-            url: "https://dav.example.test/sync".into(),
-            username: "reader".into(),
-            has_password: true,
-            allow_http: false,
-        };
-        let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["hasPassword"], true);
-        assert_eq!(json["username"], "reader");
-        assert!(json.get("password").is_none());
-        assert!(json.get("credentialRef").is_none());
-
-        let directory = tempfile::tempdir().unwrap();
-        write_config(
-            directory.path(),
-            &WebDavConfig {
-                url: view.url.clone(),
-                username: Some("reader".into()),
-                allow_http: false,
-                credential_ref: "webdav-sync".into(),
-            },
-        )
-        .unwrap();
-        let disk = fs::read_to_string(directory.path().join(CONFIG_FILE)).unwrap();
-        assert!(!disk.contains("password"));
-        assert!(!disk.contains("hasPassword"));
-        let loaded = load_config(directory.path()).unwrap().unwrap();
-        assert_eq!(loaded.username.as_deref(), Some("reader"));
-        assert_eq!(loaded.credential_ref, "webdav-sync");
+        .validate()
+        .is_err());
     }
 }

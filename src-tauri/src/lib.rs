@@ -8,14 +8,18 @@ mod annotations;
 mod archive;
 mod asset;
 mod cli;
+mod documents;
 mod export;
 mod file;
+mod groups;
 mod identifiers;
 mod library;
+mod managed;
 mod opds;
 mod recents;
 mod remote;
 mod snapshot;
+mod sync;
 mod webdav;
 mod window_chrome;
 
@@ -50,6 +54,8 @@ pub fn run() {
         .manage(cli::PendingFile(std::sync::Mutex::new(first_file)))
         .manage(remote::RemoteState::default())
         .manage(archive::ArchiveState::default())
+        .manage(webdav::WebDavState::default())
+        .manage(sync::SyncTaskState::default())
         .invoke_handler(tauri::generate_handler![
             file::read_file,
             file::read_file_bytes,
@@ -62,6 +68,16 @@ pub fn run() {
             asset::save_asset,
             asset::save_document_as,
             asset::import_image_asset,
+            documents::managed_document_join,
+            documents::managed_document_read,
+            documents::managed_document_list,
+            documents::managed_document_create_version,
+            documents::managed_document_list_versions,
+            documents::managed_document_read_version,
+            documents::managed_document_save_draft,
+            documents::managed_document_list_drafts,
+            documents::managed_document_read_draft,
+            documents::managed_document_delete_draft,
             export::read_image_base64,
             export::print_webview_to_pdf,
             cli::take_pending_file,
@@ -76,21 +92,23 @@ pub fn run() {
             library::library_list_acquisition_links,
             library::library_upsert_item,
             library::library_update_comic_metadata,
+            library::library_set_offline_pinned,
             library::library_remove_item,
             library::library_clear_cache,
             library::library_set_cache_limit,
             library::library_cache_stats,
-            library::library_list_groups,
-            library::library_upsert_group,
-            library::library_remove_group,
-            library::library_list_group_members,
-            library::library_add_group_member,
-            library::library_remove_group_member,
-            library::library_organize_groups,
-            webdav::webdav_get_config,
-            webdav::webdav_save_config,
-            webdav::webdav_forget,
-            webdav::webdav_sync,
+            groups::library_list_groups,
+            groups::library_create_group,
+            groups::library_update_group,
+            groups::library_move_group,
+            groups::library_delete_group,
+            groups::library_list_group_memberships,
+            groups::library_set_group_member,
+            groups::library_set_item_groups,
+            managed::library_import_managed_book,
+            managed::library_preview_managed_migration,
+            managed::library_apply_managed_migration,
+            managed::library_materialize_item,
             remote::remote_open,
             remote::remote_info,
             remote::remote_read_range,
@@ -98,6 +116,22 @@ pub fn run() {
             remote::remote_cancel,
             remote::remote_store_credential,
             remote::remote_forget_credential,
+            webdav::sync_get_profile,
+            webdav::sync_save_profile,
+            webdav::sync_test_profile,
+            webdav::sync_forget_profile,
+            webdav::sync_store_credential,
+            sync::sync_device_id,
+            sync::sync_list_records,
+            sync::sync_write_record,
+            sync::sync_list_conflicts,
+            sync::sync_resolve_conflict,
+            sync::sync_status,
+            sync::sync_run,
+            sync::sync_cancel,
+            sync::sync_download_book,
+            sync::sync_download_document,
+            sync::sync_download_draft,
             archive::archive_open,
             archive::archive_open_nested,
             archive::archive_stage_nested,

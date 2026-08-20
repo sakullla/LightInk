@@ -52,6 +52,8 @@ export interface MarkdownTabState extends TabBase {
   readonly kind: 'markdown';
   /** 该标签独占的编辑器实例。 */
   readonly editor: EditorInstance;
+  /** Optional local identity for a document joined into the sync space. */
+  managedDocumentId?: string;
 }
 
 /**

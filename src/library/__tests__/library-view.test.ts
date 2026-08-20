@@ -12,13 +12,9 @@ import {
 import { classifyLibraryKind } from '../library-kind.js';
 import { createLibraryView, type LibraryViewDependencies } from '../library-view.js';
 import {
-  LibraryClient,
-  organizeHintForItem,
   type LibraryGroup,
-  type LibraryGroupInput,
-  type LibraryGroupMember,
+  type LibraryGroupMembership,
   type LibraryItem,
-  type LibraryOrganizeHint,
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
@@ -170,12 +166,11 @@ function collectionButton(host: ParentNode, name: string): HTMLButtonElement {
 
 function collectionRow(host: ParentNode, name: string): HTMLElement {
   const choose = collectionButton(host, name);
-  const row = choose.closest('.lightink-library-group-row');
+  const row =
+    choose.closest('.lightink-library-custom-group') ??
+    choose.closest('.lightink-library-custom-group-row') ??
+    choose.closest('.lightink-library-group-row');
   return row instanceof HTMLElement ? row : choose;
-}
-
-function collectionKind(button: HTMLElement): string | undefined {
-  return button.dataset.groupKind ?? button.dataset.groupSource;
 }
 
 function shownControl(host: ParentNode, label: string): HTMLButtonElement {
@@ -198,10 +193,8 @@ function sourceFormOf(host: ParentNode = document): HTMLFormElement {
 
 function groupFormOf(host: ParentNode = document): HTMLFormElement {
   const form =
-    host.querySelector<HTMLFormElement>('.lightink-library-group-modal .lightink-library-group-form') ??
-    document.querySelector<HTMLFormElement>(
-      '.lightink-library-group-modal .lightink-library-group-form',
-    );
+    host.querySelector<HTMLFormElement>('.lightink-library-group-editor') ??
+    document.querySelector<HTMLFormElement>('.lightink-library-group-editor');
   if (!form) throw new Error('group form not found');
   return form;
 }
@@ -218,12 +211,12 @@ async function submitGroupForm(
 ): Promise<void> {
   const form = groupFormOf(host);
   if (values.name !== undefined) {
-    const name = form.elements.namedItem('name');
+    const name = form.elements.namedItem('groupName') ?? form.elements.namedItem('name');
     if (!(name instanceof HTMLInputElement)) throw new Error('group name field not found');
     name.value = values.name;
   }
   if (values.parentId !== undefined) {
-    const parent = form.elements.namedItem('parentId');
+    const parent = form.elements.namedItem('groupParent') ?? form.elements.namedItem('parentId');
     if (!(parent instanceof HTMLSelectElement) && !(parent instanceof HTMLInputElement)) {
       throw new Error('group parent field not found');
     }
@@ -240,9 +233,7 @@ async function submitGroupForm(
   await settle();
 }
 
-async function organizeShelf(host: HTMLElement): Promise<void> {
-  const groups = host.querySelector('.lightink-library-groups') ?? host;
-  shownControl(groups, '整理').click();
+async function organizeShelf(_host: HTMLElement): Promise<void> {
   await settle();
 }
 
@@ -281,10 +272,8 @@ interface MutableGroup {
   id: string;
   parentId?: string;
   name: string;
-  source: LibraryGroup['source'];
-  smartKey?: string;
-  createdAt: number;
-  updatedAt: number;
+  kind: LibraryGroup['kind'];
+  sortOrder: number;
   itemIds: string[];
 }
 
@@ -293,19 +282,14 @@ function toLibraryGroup(group: MutableGroup): LibraryGroup {
     id: group.id,
     parentId: group.parentId,
     name: group.name,
-    source: group.source,
-    smartKey: group.smartKey,
-    createdAt: group.createdAt,
-    updatedAt: group.updatedAt,
+    kind: group.kind,
+    sortOrder: group.sortOrder,
   };
 }
 
-function createGroupStore(
-  items: () => readonly LibraryItem[],
-  seriesStemByItemId: Readonly<Record<string, string>> = {},
-) {
+function createGroupStore() {
   const state: MutableGroup[] = [];
-  const excluded = new Set<string>();
+  const memberships: LibraryGroupMembership[] = [];
   let seq = 0;
 
   const findIndex = (groupId: string): number => {
@@ -314,106 +298,53 @@ function createGroupStore(
     return index;
   };
 
-  const smartKeyFor = (kind: string, name: string): string => `${kind}:${name}`;
-
-  const ensureSmart = (kind: string, name: string): MutableGroup => {
-    const smartKey = smartKeyFor(kind, name);
-    const existing = state.find((group) => group.smartKey === smartKey);
-    if (existing) return existing;
-    const created: MutableGroup = {
-      id: `smart:${smartKey}`,
-      name,
-      source: 'smart',
-      smartKey,
-      itemIds: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    state.push(created);
-    return created;
-  };
-
-  const addUnlessExcluded = (group: MutableGroup, itemId: string): void => {
-    if (group.smartKey !== undefined && excluded.has(`${group.smartKey}:${itemId}`)) return;
-    if (group.itemIds.includes(itemId)) return;
-    group.itemIds.push(itemId);
-    group.updatedAt = Date.now();
-  };
-
   return {
     async listGroups(): Promise<LibraryGroup[]> {
       return state.map(toLibraryGroup);
     },
-    async listGroupMembers(groupId?: string): Promise<LibraryGroupMember[]> {
-      return state.flatMap((group) =>
-        groupId !== undefined && group.id !== groupId
-          ? []
-          : group.itemIds.map((itemId) => ({
-              groupId: group.id,
-              itemId,
-              updatedAt: group.updatedAt,
-            })),
-      );
+    async listGroupMemberships(): Promise<LibraryGroupMembership[]> {
+      return [...memberships];
     },
-    async createGroup(input: LibraryGroupInput): Promise<LibraryGroup> {
+    async createGroup(name: string, parentId?: string): Promise<LibraryGroup> {
       seq += 1;
-      const now = Date.now();
       const group: MutableGroup = {
         id: `group-${seq}`,
-        parentId: input.parentId,
-        name: input.name,
-        source: 'user',
+        parentId,
+        name,
+        kind: 'custom',
+        sortOrder: state.length,
         itemIds: [],
-        createdAt: now,
-        updatedAt: now,
       };
       state.push(group);
       return toLibraryGroup(group);
     },
-    async renameGroup(groupId: string, name: string): Promise<LibraryGroup> {
+    async updateGroup(groupId: string, name: string): Promise<LibraryGroup> {
       const group = state[findIndex(groupId)]!;
       group.name = name;
-      group.updatedAt = Date.now();
       return toLibraryGroup(group);
     },
-    async moveGroup(groupId: string, parentId?: string | null): Promise<LibraryGroup> {
+    async moveGroup(
+      groupId: string,
+      parentId: string | undefined,
+      sortOrder: number,
+    ): Promise<LibraryGroup> {
       const group = state[findIndex(groupId)]!;
-      group.parentId = parentId ?? undefined;
-      group.updatedAt = Date.now();
+      group.parentId = parentId;
+      group.sortOrder = sortOrder;
       return toLibraryGroup(group);
     },
     async deleteGroup(groupId: string): Promise<void> {
       state.splice(findIndex(groupId), 1);
-    },
-    async addItemToGroup(groupId: string, itemId: string): Promise<void> {
-      const group = state[findIndex(groupId)]!;
-      if (!group.itemIds.includes(itemId)) group.itemIds.push(itemId);
-      group.updatedAt = Date.now();
-    },
-    async removeItemFromGroup(groupId: string, itemId: string): Promise<void> {
-      const group = state[findIndex(groupId)]!;
-      if (group.source === 'smart' && group.smartKey !== undefined) {
-        excluded.add(`${group.smartKey}:${itemId}`);
+      for (let index = memberships.length - 1; index >= 0; index -= 1) {
+        if (memberships[index]?.groupId === groupId) memberships.splice(index, 1);
       }
-      group.itemIds = group.itemIds.filter((id) => id !== itemId);
-      group.updatedAt = Date.now();
     },
-    async organize(hints: readonly LibraryOrganizeHint[] = []): Promise<void> {
-      const provided = new Map(hints.map((hint) => [hint.itemId, hint]));
-      for (const item of items()) {
-        const hint = provided.get(item.id) ?? organizeHintForItem(item, {
-          seriesStem: seriesStemByItemId[item.id],
-        });
-        for (const author of hint.authors) {
-          if (author.trim() === '') continue;
-          addUnlessExcluded(ensureSmart('author', author), item.id);
-        }
-        if (hint.seriesStem !== undefined && hint.seriesStem !== '') {
-          addUnlessExcluded(ensureSmart('series', hint.seriesStem), item.id);
-        }
-        const kindName = hint.kind === 'comic' ? '漫画' : '文字书';
-        addUnlessExcluded(ensureSmart('kind', kindName), item.id);
-      }
+    async setGroupMember(groupId: string, itemId: string, present: boolean): Promise<void> {
+      const existing = memberships.findIndex(
+        (entry) => entry.groupId === groupId && entry.itemId === itemId,
+      );
+      if (present && existing < 0) memberships.push({ groupId, itemId });
+      if (!present && existing >= 0) memberships.splice(existing, 1);
     },
   };
 }
@@ -424,19 +355,19 @@ function collectionDependencies(options: {
   getProgress?: LibraryViewDependencies['getProgress'];
 }): { deps: LibraryViewDependencies; library: GroupLibrary } {
   const items = [...options.items];
-  const store = createGroupStore(() => items, options.seriesStemByItemId);
+  const store = createGroupStore();
   const groups = {
     listGroups: vi.fn(() => store.listGroups()),
-    listGroupMembers: vi.fn((groupId?: string) => store.listGroupMembers(groupId)),
-    createGroup: vi.fn((input: LibraryGroupInput) => store.createGroup(input)),
-    renameGroup: vi.fn((groupId: string, name: string) => store.renameGroup(groupId, name)),
-    moveGroup: vi.fn((groupId: string, parentId?: string) => store.moveGroup(groupId, parentId)),
-    deleteGroup: vi.fn((groupId: string) => store.deleteGroup(groupId)),
-    addItemToGroup: vi.fn((groupId: string, itemId: string) => store.addItemToGroup(groupId, itemId)),
-    removeItemFromGroup: vi.fn((groupId: string, itemId: string) =>
-      store.removeItemFromGroup(groupId, itemId),
+    listGroupMemberships: vi.fn(() => store.listGroupMemberships()),
+    createGroup: vi.fn((name: string, parentId?: string) => store.createGroup(name, parentId)),
+    updateGroup: vi.fn((groupId: string, name: string) => store.updateGroup(groupId, name)),
+    moveGroup: vi.fn((groupId: string, parentId: string | undefined, sortOrder: number) =>
+      store.moveGroup(groupId, parentId, sortOrder),
     ),
-    organize: vi.fn((hints?: readonly LibraryOrganizeHint[]) => store.organize(hints ?? [])),
+    deleteGroup: vi.fn((groupId: string) => store.deleteGroup(groupId)),
+    setGroupMember: vi.fn((groupId: string, itemId: string, present: boolean) =>
+      store.setGroupMember(groupId, itemId, present),
+    ),
   };
   const base = dependencies({
     getProgress: options.getProgress,
@@ -444,9 +375,6 @@ function collectionDependencies(options: {
       ...dependencies().library,
       listItems: vi.fn(async () => items),
       ...groups,
-      addGroupMember: groups.addItemToGroup,
-      removeGroupMember: groups.removeItemFromGroup,
-      organizeGroups: groups.organize,
     },
   });
   return { library: base.library, deps: base };
@@ -977,12 +905,9 @@ describe('LibraryView manage and catalog', () => {
     await view.show();
 
     await openManage(host);
-    shownControl(host, '添加书库源').click();
+    shownControl(host, '添加 OPDS 源').click();
     const form = sourceFormOf();
     expect(isShown(form)).toBe(true);
-    expect(document.querySelector('.lightink-library-source-modal')?.parentElement).toBe(
-      document.body,
-    );
     (form.elements.namedItem('title') as HTMLInputElement).value = added.title;
     (form.elements.namedItem('url') as HTMLInputElement).value = added.url;
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
@@ -1057,58 +982,6 @@ describe('LibraryView manage and catalog', () => {
     view.destroy();
   });
 
-  it('adds WebDAV from the source dialog instead of an inline panel', async () => {
-    const saveConfig = vi.fn(async (input: { url: string; username: string; allowHttp: boolean; password?: string }) => ({
-      url: input.url,
-      username: input.username,
-      allowHttp: input.allowHttp,
-      hasPassword: input.password !== undefined && input.password !== '',
-    }));
-    const deps = dependencies({
-      webdav: {
-        getConfig: vi.fn(async () => null),
-        saveConfig,
-        sync: vi.fn(async () => undefined),
-      },
-    });
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    const view = createLibraryView(host, deps);
-    await view.show();
-    await openManage(host);
-
-    expect(host.querySelector('.lightink-library-webdav')).toBeNull();
-    shownControl(host, '添加书库源').click();
-    const form = sourceFormOf();
-    const kind = form.elements.namedItem('sourceKind');
-    expect(kind).toBeInstanceOf(HTMLSelectElement);
-    (kind as HTMLSelectElement).value = 'webdav';
-    kind?.dispatchEvent(new Event('change', { bubbles: true }));
-    await settle();
-
-    const webdavForm = sourceFormOf();
-    expect(isShown(document.querySelector('.lightink-library-source-modal'))).toBe(true);
-    (webdavForm.elements.namedItem('webdavUrl') as HTMLInputElement).value =
-      'https://dav.example/lib';
-    (webdavForm.elements.namedItem('webdavUsername') as HTMLInputElement).value = 'ada';
-    (webdavForm.elements.namedItem('webdavPassword') as HTMLInputElement).value = 'secret';
-    webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
-    await settle();
-
-    expect(saveConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: 'https://dav.example/lib',
-        username: 'ada',
-        password: 'secret',
-      }),
-    );
-    expect(host.querySelector('[data-source-kind="webdav"]')?.textContent).toContain('WebDAV');
-    expect(document.querySelector('.lightink-library-source-modal')?.hasAttribute('hidden')).toBe(
-      true,
-    );
-    view.destroy();
-  });
-
   it('preserves an existing OPDS credential unless the user changes authentication', async () => {
     const authenticated = { ...source, credentialRef: 'credential-1' };
     const addSource = vi.fn(async () => authenticated);
@@ -1177,9 +1050,6 @@ describe('LibraryView manage and catalog', () => {
         clearCredential: true,
       }),
     );
-    expect(document.querySelector('.lightink-library-source-modal')?.hasAttribute('hidden')).toBe(
-      true,
-    );
     view.destroy();
   });
 
@@ -1227,6 +1097,56 @@ describe('LibraryView manage and catalog', () => {
       expect.anything(),
     );
     expect(view.visible).toBe(false);
+  });
+
+  it('renders OPDS 2 groups and opens grouped navigation entries', async () => {
+    const groupedBook: OpdsEntry = {
+      ...entry,
+      id: 'group-book',
+      itemId: 'group-book-item',
+      title: '分组内图书',
+    };
+    const groupedNavigation: OpdsEntry = {
+      id: 'group-navigation',
+      itemId: 'group-navigation-item',
+      title: '更多小说',
+      authors: [],
+      links: [],
+      kind: 'navigation',
+      navigationUrl: 'https://books.example/opds/fiction',
+    };
+    const browse = vi
+      .fn()
+      .mockResolvedValueOnce(
+        feed({
+          format: 'opds2',
+          groups: [
+            {
+              title: '小说',
+              publications: [groupedBook],
+              navigation: [groupedNavigation],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValue(feed());
+    const base = dependencies();
+    const deps = dependencies({ opds: { ...base.opds, browse } });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    expect(host.querySelector('.lightink-library-opds-group-title')?.textContent).toBe('小说');
+    expect(host.textContent).toContain('分组内图书');
+    itemRow(host, 'group-navigation-item').click();
+    await settle();
+    expect(browse).toHaveBeenLastCalledWith(
+      'source-1',
+      'https://books.example/opds/fiction',
+    );
+    view.destroy();
   });
 
   it('exposes a retry action after an offline browse failure', async () => {
@@ -1432,13 +1352,6 @@ describe('LibraryView shelf collections', () => {
       expect(document.querySelector('.lightink-context-menu')).toBeNull();
     }
 
-    const organize = shownControl(
-      host.querySelector('.lightink-library-groups') ?? host,
-      '整理',
-    );
-    expect(organize.classList.contains('lightink-library-organize')).toBe(true);
-    expect(organize.classList.contains('lightink-library-group')).toBe(false);
-
     expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
     expect(() => collectionButton(host, '系列')).toThrow(/collection button not found/);
     expect(() => collectionButton(host, '作者')).toThrow(/collection button not found/);
@@ -1475,12 +1388,11 @@ describe('LibraryView shelf collections', () => {
     }
 
     await startCreateGroup(host);
-    const overlay = document.querySelector('.lightink-library-group-modal');
-    expect(overlay).toBeInstanceOf(HTMLElement);
-    expect(libraryRoot(host).contains(overlay)).toBe(true);
-    expect(overlay?.hasAttribute('hidden')).toBe(false);
-    expect(isShown(overlay)).toBe(true);
-    expect(groupFormOf().elements.namedItem('name')).toBeInstanceOf(HTMLInputElement);
+    const editor = groupFormOf();
+    expect(libraryRoot(host).contains(editor)).toBe(true);
+    expect(editor.hidden).toBe(false);
+    expect(isShown(editor)).toBe(true);
+    expect(editor.elements.namedItem('groupName')).toBeInstanceOf(HTMLInputElement);
     view.destroy();
   });
 
@@ -1494,18 +1406,20 @@ describe('LibraryView shelf collections', () => {
 
     await startCreateGroup(host);
     await submitGroupForm(host, { name: '作者' });
-    expect(library.createGroup).toHaveBeenCalledWith({ name: '作者', parentId: undefined });
+    expect(library.createGroup).toHaveBeenCalledWith('作者', undefined);
     const parentId =
       collectionButton(host, '作者').dataset.libraryGroupId ??
       collectionButton(host, '作者').dataset.groupId;
 
     await startCreateGroup(host);
     await submitGroupForm(host, { name: '海猫', parentId });
-    expect(library.createGroup).toHaveBeenCalledWith({ name: '海猫', parentId });
+    expect(library.createGroup).toHaveBeenCalledWith('海猫', parentId);
     const listed = await library.listGroups!();
     expect(listed.find((group) => group.name === '海猫')?.parentId).toBe(parentId);
-    expect(Number.parseInt(collectionButton(host, '海猫').style.paddingLeft, 10)).toBeGreaterThan(
-      Number.parseInt(collectionButton(host, '作者').style.paddingLeft, 10),
+    const childWrap = collectionButton(host, '海猫').closest('.lightink-library-custom-group');
+    const parentWrap = collectionButton(host, '作者').closest('.lightink-library-custom-group');
+    expect(childWrap instanceof HTMLElement ? childWrap.dataset.groupDepth : undefined).not.toBe(
+      parentWrap instanceof HTMLElement ? parentWrap.dataset.groupDepth : undefined,
     );
 
     await startCreateGroup(host);
@@ -1521,8 +1435,8 @@ describe('LibraryView shelf collections', () => {
     const seriesGroupId =
       collectionButton(host, '某系列').dataset.libraryGroupId ??
       collectionButton(host, '某系列').dataset.groupId;
-    expect(library.addItemToGroup).toHaveBeenCalledWith(authorGroupId, novel.id);
-    expect(library.addItemToGroup).toHaveBeenCalledWith(seriesGroupId, novel.id);
+    expect(library.setGroupMember).toHaveBeenCalledWith(authorGroupId, novel.id, true);
+    expect(library.setGroupMember).toHaveBeenCalledWith(seriesGroupId, novel.id, true);
 
     collectionButton(host, '海猫').click();
     await settle();
@@ -1552,13 +1466,15 @@ describe('LibraryView shelf collections', () => {
     expect(menu.textContent).toContain('加入分组');
     contextMenuItem('加入分组').click();
     await waitForShown(
-      () =>
-        document.querySelector('.lightink-library-group-modal:not([hidden]) [name="name"]') !== null,
+      () => {
+        const editor = document.querySelector<HTMLFormElement>('.lightink-library-group-editor');
+        return editor !== null && !editor.hidden;
+      },
       'create-group form not found',
     );
     await submitGroupForm(host, { name: '稍后读' });
-    expect(library.createGroup).toHaveBeenCalledWith({ name: '稍后读', parentId: undefined });
-    expect(library.addItemToGroup).toHaveBeenCalled();
+    expect(library.createGroup).toHaveBeenCalledWith('稍后读', undefined);
+    expect(library.setGroupMember).toHaveBeenCalled();
     view.destroy();
   });
 
@@ -1580,7 +1496,9 @@ describe('LibraryView shelf collections', () => {
     const removedId =
       collectionButton(host, '临时组').dataset.libraryGroupId ??
       collectionButton(host, '临时组').dataset.groupId;
-    shownControl(collectionRow(host, '临时组'), '删除分组: 临时组').click();
+    shownControl(collectionRow(host, '临时组'), '分组操作: 临时组').click();
+    await settle();
+    shownControl(collectionRow(host, '临时组'), '删除分组').click();
     await settle();
 
     expect(library.deleteGroup).toHaveBeenCalledWith(removedId);
@@ -1595,9 +1513,9 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 
-  it('organizes imported books into author, filename-series, and kind smart collections', async () => {
+  it('does not show metadata smart groups in the sidebar', async () => {
     const novel = seriesNovel();
-    const { deps, library } = collectionDependencies({
+    const { deps } = collectionDependencies({
       items: [novel],
       seriesStemByItemId: { [novel.id]: seriesStem },
     });
@@ -1607,63 +1525,15 @@ describe('LibraryView shelf collections', () => {
     await view.show();
 
     expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
-    await organizeShelf(host);
-    expect(library.organize).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          itemId: novel.id,
-          authors: novel.authors,
-          seriesStem,
-          kind: 'text',
-        }),
-      ]),
-    );
-
-    const listed = await library.listGroups!();
-    expect(listed.find((group) => group.name === '海猫')).toMatchObject({ source: 'smart' });
-    expect(listed.find((group) => group.name === seriesStem)).toMatchObject({ source: 'smart' });
-    expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
     expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
-    expect(() => collectionButton(host, '文字书')).toThrow(/collection button not found/);
-
+    expect(host.querySelector('.lightink-library-smart-group')).toBeNull();
     groupButton(host, '文字书').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
     view.destroy();
   });
 
-  it('does not add a removed book back to a smart collection after organize', async () => {
-    const novel = seriesNovel();
-    const { deps, library } = collectionDependencies({
-      items: [novel],
-      seriesStemByItemId: { [novel.id]: seriesStem },
-    });
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    const view = createLibraryView(host, deps);
-    await view.show();
-    await organizeShelf(host);
-
-    const first = await library.listGroups!();
-    const authorGroup = first.find((group) => group.name === '海猫');
-    const seriesGroup = first.find((group) => group.name === seriesStem);
-    expect(authorGroup?.source).toBe('smart');
-    expect(seriesGroup?.source).toBe('smart');
-    const authorMembers = await library.listGroupMembers!(authorGroup!.id);
-    expect(authorMembers.some((member) => member.itemId === novel.id)).toBe(true);
-
-    await library.removeItemFromGroup!(authorGroup!.id, novel.id);
-    await organizeShelf(host);
-    expect(library.organize).toHaveBeenCalledTimes(2);
-
-    const remainingAuthors = await library.listGroupMembers!(authorGroup!.id);
-    const remainingSeries = await library.listGroupMembers!(seriesGroup!.id);
-    expect(remainingAuthors.some((member) => member.itemId === novel.id)).toBe(false);
-    expect(remainingSeries.some((member) => member.itemId === novel.id)).toBe(true);
-    view.destroy();
-  });
-
-  it('can rename a user collection and nest it under another user collection', async () => {
+  it('can rename a user collection', async () => {
     const novel = seriesNovel();
     const { deps, library } = collectionDependencies({
       items: [novel],
@@ -1674,29 +1544,23 @@ describe('LibraryView shelf collections', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    await startCreateGroup(host);
-    await submitGroupForm(host, { name: '收藏' });
-    const parentId =
-      collectionButton(host, '收藏').dataset.libraryGroupId ??
-      collectionButton(host, '收藏').dataset.groupId;
     await startCreateGroup(host);
     await submitGroupForm(host, { name: seriesStem });
     const seriesId =
       collectionButton(host, seriesStem).dataset.libraryGroupId ??
       collectionButton(host, seriesStem).dataset.groupId;
 
-    shownControl(collectionRow(host, seriesStem), `重命名分组: ${seriesStem}`).click();
+    shownControl(collectionRow(host, seriesStem), `分组操作: ${seriesStem}`).click();
     await settle();
-    await submitGroupForm(host, { name: '地狱系列', parentId });
-    expect(library.renameGroup).toHaveBeenCalledWith(seriesId, '地狱系列');
-    expect(library.moveGroup).toHaveBeenCalledWith(seriesId, parentId);
+    shownControl(collectionRow(host, seriesStem), '重命名分组').click();
+    await settle();
+    await submitGroupForm(host, { name: '地狱系列' });
+    expect(library.updateGroup).toHaveBeenCalledWith(seriesId, '地狱系列');
     const listed = await library.listGroups!();
     expect(listed.find((group) => group.id === seriesId)).toMatchObject({
       name: '地狱系列',
-      parentId,
-      source: 'user',
+      kind: 'custom',
     });
-    expect(collectionKind(collectionButton(host, '地狱系列'))).toBe('user');
     view.destroy();
   });
 
@@ -1725,64 +1589,5 @@ describe('LibraryView shelf collections', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
     view.destroy();
-  });
-});
-
-describe('LibraryClient.organizeGroups', () => {
-  const invokeStub = async <T>(command: string, listed: LibraryItem[]): Promise<T> => {
-    if (command === 'library_list_items') {
-      return listed as T;
-    }
-    return undefined as T;
-  };
-
-  it('is assignable to the shelf library dependency', () => {
-    const library: LibraryViewDependencies['library'] = new LibraryClient({
-      invoke: async <T>(): Promise<T> => undefined as T,
-    });
-    expect(library.organizeGroups).toBeTypeOf('function');
-  });
-
-  it('builds filename-series hints from listed items before invoke', async () => {
-    const item = localItem({
-      id: 'local:/ebook/hell-01.epub',
-      title: '地狱模式 - 01',
-      authors: ['海猫'],
-      localPath: '/ebook/文库版/地狱模式 - 01.epub',
-    });
-    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const client = new LibraryClient({
-      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-        calls.push({ command, args });
-        return invokeStub(command, [item]);
-      },
-    });
-    await client.organizeGroups();
-    expect(calls).toContainEqual({
-      command: 'library_organize_groups',
-      args: { hints: [organizeHintForItem(item)] },
-    });
-    expect(organizeHintForItem(item).seriesStem).toBe('地狱模式');
-    expect(item.series).toBeUndefined();
-  });
-
-  it('keeps an explicit hint over the filename parse for that item', async () => {
-    const item = localItem({
-      id: 'local:/ebook/hell-01.epub',
-      localPath: '/ebook/文库版/地狱模式 - 01.epub',
-    });
-    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const hint = organizeHintForItem(item, { seriesStem: '指定主干' });
-    const client = new LibraryClient({
-      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-        calls.push({ command, args });
-        return invokeStub(command, [item]);
-      },
-    });
-    await client.organizeGroups([hint]);
-    expect(calls).toContainEqual({
-      command: 'library_organize_groups',
-      args: { hints: [hint] },
-    });
   });
 });

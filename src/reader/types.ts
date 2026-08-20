@@ -78,6 +78,8 @@ export interface ReaderInstance {
   openSearch?(query?: string): void;
   /** 窗口拉伸结束后重算栏宽/高度并刷新可见页，避免文字糊掉。 */
   refreshViewport?(): void;
+  /** Re-read synchronized reader preferences and apply them to this open view. */
+  refreshPreferences?(): void;
   /**
    * 滚动模式：按上次保存的章节 + 章内比例跳回阅读位置。
    * 书架收起或标签切回后布局才稳定，调用方应再试一次。

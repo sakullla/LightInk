@@ -1,12 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 
-import { parseFilenameSeries } from './filename-series.js';
-import { classifyLibraryKind } from './library-kind.js';
-
 export interface LibraryItem {
   readonly id: string;
   readonly sourceId?: string;
-  readonly sourceKind: 'local' | 'opds' | 'remote';
+  readonly sourceKind: 'local' | 'managed' | 'opds' | 'remote' | 'webdav';
   readonly title: string;
   readonly authors: readonly string[];
   readonly coverUrl?: string;
@@ -23,7 +20,57 @@ export interface LibraryItem {
   readonly pageCount?: number;
   readonly readingDirection?: 'ltr' | 'rtl';
   readonly coverPage?: number;
+  readonly blobHash?: string;
+  readonly availability?: 'external' | 'local' | 'remote' | 'missing' | 'downloading';
+  readonly offlinePinned?: boolean;
+  readonly subjects?: readonly string[];
   readonly updatedAt: number;
+}
+
+export interface ManagedMigrationEntry {
+  readonly itemId: string;
+  readonly title: string;
+  readonly path: string;
+  readonly status: 'ready' | 'duplicate' | 'missing' | 'tooLarge' | 'unreadable' | 'failed';
+  readonly size?: number;
+  readonly blobHash?: string;
+  readonly error?: string;
+}
+
+export interface ManagedMigrationPreview {
+  readonly entries: readonly ManagedMigrationEntry[];
+}
+
+export interface LibraryItemAlias {
+  readonly aliasId: string;
+  readonly itemId: string;
+}
+
+export interface ManagedMigrationResult {
+  readonly migrated: number;
+  readonly duplicates: number;
+  readonly failed: readonly ManagedMigrationEntry[];
+  readonly aliases: readonly LibraryItemAlias[];
+}
+
+export interface ManagedItemLocation {
+  readonly itemId: string;
+  readonly path: string;
+  readonly availability: LibraryItem['availability'];
+}
+
+export interface LibraryGroup {
+  readonly id: string;
+  readonly parentId?: string;
+  readonly name: string;
+  readonly kind: 'custom' | 'smart';
+  readonly rule?: Readonly<Record<string, unknown>>;
+  readonly sortOrder: number;
+}
+
+export interface LibraryGroupMembership {
+  readonly groupId: string;
+  readonly itemId: string;
 }
 
 export interface LibraryComicMetadata {
@@ -50,80 +97,11 @@ export interface LibraryCacheStats {
   readonly limitBytes: number;
 }
 
-/** User-built or smart collection. The five shelf filters are not groups. */
-export type LibraryGroupSource = 'user' | 'smart';
-
-export interface LibraryGroup {
-  readonly id: string;
-  readonly parentId?: string;
-  readonly name: string;
-  readonly source: LibraryGroupSource;
-  readonly smartKey?: string;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
-
-export interface LibraryGroupInput {
-  readonly name: string;
-  readonly parentId?: string;
-}
-
-export interface LibraryGroupUpsert {
-  readonly id?: string;
-  readonly parentId?: string | null;
-  readonly name: string;
-  readonly source?: LibraryGroupSource;
-  readonly smartKey?: string;
-  readonly createdAt?: number;
-  readonly updatedAt?: number;
-}
-
-export interface LibraryGroupMember {
-  readonly groupId: string;
-  readonly itemId: string;
-  readonly contentHash?: string;
-  readonly updatedAt: number;
-}
-
-export interface LibraryOrganizeHint {
-  readonly itemId: string;
-  readonly authors: readonly string[];
-  readonly seriesStem?: string;
-  readonly kind?: 'text' | 'comic';
-  readonly contentHash?: string;
-}
-
 export interface LibraryClientInvoker {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
 const nativeInvoker: LibraryClientInvoker = { invoke };
-
-function emptyToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed === '' ? undefined : trimmed;
-}
-
-/**
- * Build an organize hint from a shelf item.
- * Filename series stems stay on the hint; they are never copied onto
- * `LibraryItem.series` (that field remains comic metadata).
- */
-export function organizeHintForItem(
-  item: LibraryItem,
-  options?: { readonly seriesStem?: string; readonly contentHash?: string },
-): LibraryOrganizeHint {
-  const parsed = item.localPath === undefined ? undefined : parseFilenameSeries(item.localPath);
-  const seriesStem =
-    emptyToUndefined(options?.seriesStem) ?? emptyToUndefined(parsed?.seriesStem);
-  return {
-    itemId: item.id,
-    authors: item.authors,
-    seriesStem: seriesStem !== undefined && [...seriesStem].length >= 2 ? seriesStem : undefined,
-    kind: classifyLibraryKind(item),
-    contentHash: emptyToUndefined(options?.contentHash),
-  };
-}
 
 export class LibraryClient {
   private readonly invoker: LibraryClientInvoker;
@@ -134,6 +112,63 @@ export class LibraryClient {
 
   listItems(sourceId?: string): Promise<LibraryItem[]> {
     return this.invoker.invoke<LibraryItem[]>('library_list_items', { sourceId });
+  }
+
+  importManagedBook(path: string): Promise<LibraryItem> {
+    return this.invoker.invoke<LibraryItem>('library_import_managed_book', { path });
+  }
+
+  previewManagedMigration(): Promise<ManagedMigrationPreview> {
+    return this.invoker.invoke<ManagedMigrationPreview>('library_preview_managed_migration');
+  }
+
+  applyManagedMigration(itemIds: readonly string[]): Promise<ManagedMigrationResult> {
+    return this.invoker.invoke<ManagedMigrationResult>('library_apply_managed_migration', {
+      itemIds: [...itemIds],
+    });
+  }
+
+  materializeItem(itemId: string): Promise<ManagedItemLocation> {
+    return this.invoker.invoke<ManagedItemLocation>('library_materialize_item', { itemId });
+  }
+
+  listGroups(): Promise<LibraryGroup[]> {
+    return this.invoker.invoke<LibraryGroup[]>('library_list_groups');
+  }
+
+  createGroup(name: string, parentId?: string): Promise<LibraryGroup> {
+    return this.invoker.invoke<LibraryGroup>('library_create_group', { name, parentId });
+  }
+
+  updateGroup(groupId: string, name: string): Promise<LibraryGroup> {
+    return this.invoker.invoke<LibraryGroup>('library_update_group', { groupId, name });
+  }
+
+  moveGroup(groupId: string, parentId: string | undefined, sortOrder: number): Promise<LibraryGroup> {
+    return this.invoker.invoke<LibraryGroup>('library_move_group', {
+      groupId,
+      parentId,
+      sortOrder,
+    });
+  }
+
+  deleteGroup(groupId: string): Promise<void> {
+    return this.invoker.invoke<void>('library_delete_group', { groupId });
+  }
+
+  listGroupMemberships(): Promise<LibraryGroupMembership[]> {
+    return this.invoker.invoke<LibraryGroupMembership[]>('library_list_group_memberships');
+  }
+
+  setGroupMember(groupId: string, itemId: string, present: boolean): Promise<void> {
+    return this.invoker.invoke<void>('library_set_group_member', { groupId, itemId, present });
+  }
+
+  setItemGroups(itemId: string, groupIds: readonly string[]): Promise<void> {
+    return this.invoker.invoke<void>('library_set_item_groups', {
+      itemId,
+      groupIds: [...groupIds],
+    });
   }
 
   listAcquisitionLinks(itemId: string): Promise<AcquisitionLink[]> {
@@ -148,72 +183,12 @@ export class LibraryClient {
     return this.invoker.invoke<void>('library_update_comic_metadata', { itemId, metadata });
   }
 
+  setOfflinePinned(itemId: string, pinned: boolean): Promise<void> {
+    return this.invoker.invoke<void>('library_set_offline_pinned', { itemId, pinned });
+  }
+
   removeItem(itemId: string): Promise<void> {
     return this.invoker.invoke<void>('library_remove_item', { itemId });
-  }
-
-  listGroups(): Promise<LibraryGroup[]> {
-    return this.invoker.invoke<LibraryGroup[]>('library_list_groups');
-  }
-
-  listGroupMembers(groupId?: string): Promise<LibraryGroupMember[]> {
-    return this.invoker.invoke<LibraryGroupMember[]>('library_list_group_members', { groupId });
-  }
-
-  upsertGroup(group: LibraryGroupUpsert): Promise<LibraryGroup> {
-    return this.invoker.invoke<LibraryGroup>('library_upsert_group', {
-      group: {
-        id: group.id ?? '',
-        parentId: group.parentId ?? undefined,
-        name: group.name,
-        source: group.source ?? 'user',
-        smartKey: group.smartKey,
-        createdAt: group.createdAt ?? 0,
-        updatedAt: group.updatedAt ?? 0,
-      },
-    });
-  }
-
-  createGroup(input: LibraryGroupInput): Promise<LibraryGroup> {
-    return this.upsertGroup({
-      name: input.name,
-      parentId: input.parentId,
-      source: 'user',
-    });
-  }
-
-  async renameGroup(groupId: string, name: string): Promise<LibraryGroup> {
-    const current = await this.requireGroup(groupId);
-    return this.upsertGroup({ ...current, name, updatedAt: 0 });
-  }
-
-  async moveGroup(groupId: string, parentId?: string | null): Promise<LibraryGroup> {
-    const current = await this.requireGroup(groupId);
-    return this.upsertGroup({ ...current, parentId: parentId ?? undefined, updatedAt: 0 });
-  }
-
-  deleteGroup(groupId: string): Promise<void> {
-    return this.invoker.invoke<void>('library_remove_group', { groupId });
-  }
-
-  addGroupMember(groupId: string, itemId: string, contentHash?: string): Promise<void> {
-    return this.invoker.invoke<void>('library_add_group_member', {
-      groupId,
-      itemId,
-      contentHash,
-    });
-  }
-
-  removeGroupMember(groupId: string, itemId: string): Promise<void> {
-    return this.invoker.invoke<void>('library_remove_group_member', { groupId, itemId });
-  }
-
-  async organizeGroups(hints: readonly LibraryOrganizeHint[] = []): Promise<void> {
-    const provided = new Map(hints.map((hint) => [hint.itemId, hint]));
-    const resolved = (await this.listItems()).map(
-      (item) => provided.get(item.id) ?? organizeHintForItem(item),
-    );
-    return this.invoker.invoke<void>('library_organize_groups', { hints: resolved });
   }
 
   clearCache(): Promise<void> {
@@ -226,15 +201,6 @@ export class LibraryClient {
 
   cacheStats(): Promise<LibraryCacheStats> {
     return this.invoker.invoke<LibraryCacheStats>('library_cache_stats');
-  }
-
-  private async requireGroup(groupId: string): Promise<LibraryGroup> {
-    const groups = await this.listGroups();
-    const found = groups.find((group) => group.id === groupId);
-    if (found === undefined) {
-      throw new Error('分组不存在');
-    }
-    return found;
   }
 }
 
