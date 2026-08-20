@@ -46,6 +46,16 @@ pub struct WebDavConfig {
     pub credential_ref: String,
 }
 
+/// Command-facing config. Secrets stay in the keyring; this only reports presence.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebDavPublicConfig {
+    pub url: String,
+    pub username: String,
+    pub has_password: bool,
+    pub allow_http: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebDavConfigInput {
@@ -141,8 +151,14 @@ pub struct WebDavSyncResult {
 }
 
 #[tauri::command]
-pub fn webdav_get_config(app: AppHandle) -> Result<Option<WebDavConfig>, RemoteError> {
-    load_config(&app_data_dir(&app)?)
+pub fn webdav_get_config(
+    app: AppHandle,
+    state: State<'_, RemoteState>,
+) -> Result<Option<WebDavPublicConfig>, RemoteError> {
+    let Some(config) = load_config(&app_data_dir(&app)?)? else {
+        return Ok(None);
+    };
+    Ok(Some(public_config(&config, state.inner())))
 }
 
 #[tauri::command]
@@ -150,7 +166,7 @@ pub fn webdav_save_config(
     app: AppHandle,
     state: State<'_, RemoteState>,
     config: WebDavConfigInput,
-) -> Result<WebDavConfig, RemoteError> {
+) -> Result<WebDavPublicConfig, RemoteError> {
     let allow_http = config.allow_http.unwrap_or(false);
     let url = validate_remote_url(&config.url, allow_http)?;
     if config.clear_credential.unwrap_or(false) && config.password.is_some() {
@@ -195,7 +211,16 @@ pub fn webdav_save_config(
         credential_ref,
     };
     write_config(&app_data_dir(&app)?, &saved)?;
-    Ok(saved)
+    Ok(public_config(&saved, state.inner()))
+}
+
+fn public_config(config: &WebDavConfig, state: &RemoteState) -> WebDavPublicConfig {
+    WebDavPublicConfig {
+        url: config.url.clone(),
+        username: config.username.clone().unwrap_or_default(),
+        has_password: webdav_load_credential(state, &config.credential_ref).is_some(),
+        allow_http: config.allow_http,
+    }
 }
 
 #[tauri::command]
@@ -1098,5 +1123,38 @@ mod tests {
         let members = list_library_group_members(&connection, Some("user:series")).unwrap();
         assert_eq!(members[0].item_id, "book-1");
         assert_eq!(members[0].content_hash.as_deref(), Some(HASH_A));
+    }
+
+    #[test]
+    fn public_config_reports_password_without_writing_secrets() {
+        let view = WebDavPublicConfig {
+            url: "https://dav.example.test/sync".into(),
+            username: "reader".into(),
+            has_password: true,
+            allow_http: false,
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["hasPassword"], true);
+        assert_eq!(json["username"], "reader");
+        assert!(json.get("password").is_none());
+        assert!(json.get("credentialRef").is_none());
+
+        let directory = tempfile::tempdir().unwrap();
+        write_config(
+            directory.path(),
+            &WebDavConfig {
+                url: view.url.clone(),
+                username: Some("reader".into()),
+                allow_http: false,
+                credential_ref: "webdav-sync".into(),
+            },
+        )
+        .unwrap();
+        let disk = fs::read_to_string(directory.path().join(CONFIG_FILE)).unwrap();
+        assert!(!disk.contains("password"));
+        assert!(!disk.contains("hasPassword"));
+        let loaded = load_config(directory.path()).unwrap().unwrap();
+        assert_eq!(loaded.username.as_deref(), Some("reader"));
+        assert_eq!(loaded.credential_ref, "webdav-sync");
     }
 }

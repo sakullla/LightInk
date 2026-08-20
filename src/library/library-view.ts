@@ -11,14 +11,19 @@ import {
 } from './library-client.js';
 import { classifyLibraryKind } from './library-kind.js';
 import { isShelfCoverUrl } from './local-book-meta.js';
-import type {
-  LibraryProgress,
-  LibraryProgressQuery,
-  ProjectLibraryProgressOptions,
+import {
+  LIBRARY_PROGRESS_ALIAS_PREFIX,
+  loadLibraryProgressAlias,
+  type LibraryProgress,
+  type LibraryProgressQuery,
+  type ProjectLibraryProgressOptions,
 } from './library-progress.js';
 import {
   applyReadingProgressByHash,
+  listAliasItemContentHashes,
+  listItemContentHashes,
   listReadingProgressByHash,
+  type ItemContentHash,
   type ProgressStorage,
   type ReadingProgressByHash,
 } from '../reader/reading-progress.js';
@@ -343,6 +348,7 @@ export interface WebDavSyncResult {
 
 export interface WebDavSyncInput {
   readonly progress?: ReadingProgressByHash;
+  readonly itemHashes?: readonly ItemContentHash[];
 }
 
 export interface WebDavClientInvoker {
@@ -370,7 +376,10 @@ export function createNativeWebDavClient(
     },
     sync(input) {
       return invoker.invoke<WebDavSyncResult | void>('webdav_sync', {
-        progress: input?.progress,
+        input: {
+          progress: input?.progress ?? {},
+          itemHashes: input?.itemHashes ?? [],
+        },
       });
     },
   };
@@ -965,6 +974,36 @@ export function createLibraryView(
     };
   }
 
+  async function collectWebDavItemHashes(
+    storage: ProgressStorage,
+  ): Promise<ItemContentHash[]> {
+    const candidates: Array<{ itemId: string; contentHash?: string | null }> = [];
+    try {
+      const members = await groupsApi().listGroupMembers?.();
+      if (members !== undefined) {
+        for (const member of members) {
+          candidates.push({ itemId: member.itemId, contentHash: member.contentHash });
+        }
+      }
+    } catch {
+      // Member hashes are optional; aliases can still map imported books.
+    }
+    try {
+      for (const item of await deps.library.listItems()) {
+        candidates.push({
+          itemId: item.id,
+          contentHash: loadLibraryProgressAlias(storage, item.id),
+        });
+      }
+    } catch {
+      // Keep alias-scan / member hashes.
+    }
+    return listItemContentHashes([
+      ...candidates,
+      ...listAliasItemContentHashes(storage, LIBRARY_PROGRESS_ALIAS_PREFIX),
+    ]);
+  }
+
   async function saveWebDavConfig(): Promise<boolean> {
     const api = webdavApi();
     const input = readWebDavInput();
@@ -1010,7 +1049,10 @@ export function createLibraryView(
     setStatus(labels().syncing);
     try {
       const storage = deps.progressStorage ?? window.localStorage;
-      const result = await api.sync({ progress: listReadingProgressByHash(storage) });
+      const result = await api.sync({
+        progress: listReadingProgressByHash(storage),
+        itemHashes: await collectWebDavItemHashes(storage),
+      });
       if (result != null && typeof result === 'object' && result.progress !== undefined) {
         applyReadingProgressByHash(storage, result.progress);
       }

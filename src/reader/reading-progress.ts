@@ -169,6 +169,56 @@ export function mergeReadingProgress(
 
 export type ReadingProgressByHash = Readonly<Record<string, ReadingProgress>>;
 
+export interface ItemContentHash {
+  readonly itemId: string;
+  readonly contentHash: string;
+}
+
+/** Keep valid itemId + 16-hex content hash pairs; later entries overwrite. */
+export function listItemContentHashes(
+  candidates: readonly { readonly itemId: string; readonly contentHash?: string | null }[],
+): ItemContentHash[] {
+  const unique = new Map<string, string>();
+  for (const candidate of candidates) {
+    const itemId = candidate.itemId.trim();
+    const hash = candidate.contentHash?.trim() ?? '';
+    if (itemId === '' || !isContentHashProgressId(hash)) {
+      continue;
+    }
+    unique.set(itemId, hash);
+  }
+  return [...unique.entries()].map(([itemId, contentHash]) => ({ itemId, contentHash }));
+}
+
+/** Scan alias keys (`prefix + itemId` → content hash) for sync membership mapping. */
+export function listAliasItemContentHashes(
+  storage: ProgressStorage | null | undefined,
+  aliasPrefix: string,
+): ItemContentHash[] {
+  if (storage == null || aliasPrefix === '') {
+    return [];
+  }
+  if (typeof storage.key !== 'function' || typeof storage.length !== 'number') {
+    return [];
+  }
+  const candidates: Array<{ itemId: string; contentHash: string | null }> = [];
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key === null || !key.startsWith(aliasPrefix)) {
+        continue;
+      }
+      candidates.push({
+        itemId: key.slice(aliasPrefix.length),
+        contentHash: storage.getItem(key),
+      });
+    }
+  } catch {
+    return [];
+  }
+  return listItemContentHashes(candidates);
+}
+
 /**
  * Merge progress maps keyed by content hash. Path keys and other non-hash ids
  * are skipped so they stay local-only.
