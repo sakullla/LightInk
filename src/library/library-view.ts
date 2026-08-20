@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 import {
   organizeHintForItem,
   type AcquisitionLink,
@@ -14,6 +16,12 @@ import type {
   LibraryProgressQuery,
   ProjectLibraryProgressOptions,
 } from './library-progress.js';
+import {
+  applyReadingProgressByHash,
+  listReadingProgressByHash,
+  type ProgressStorage,
+  type ReadingProgressByHash,
+} from '../reader/reading-progress.js';
 import type {
   OpdsClient,
   OpdsEntry,
@@ -121,6 +129,18 @@ interface Labels {
   readPercent: string;
   pageProgress: string;
   chapterProgress: string;
+  webdav: string;
+  webdavUrl: string;
+  syncNow: string;
+  syncing: string;
+  webdavSaved: string;
+  webdavSynced: string;
+  webdavNeedConfig: string;
+  passwordOnDevice: string;
+  httpNotAllowed: string;
+  urlInvalid: string;
+  urlHasUserInfo: string;
+  urlSchemeUnsupported: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
@@ -199,6 +219,18 @@ const LABELS: Record<Locale, Labels> = {
     readPercent: '{percent}% read',
     pageProgress: 'Page {current}',
     chapterProgress: 'Chapter {current}',
+    webdav: 'WebDAV',
+    webdavUrl: 'WebDAV URL',
+    syncNow: 'Sync now',
+    syncing: 'Syncing…',
+    webdavSaved: 'WebDAV settings saved',
+    webdavSynced: 'Progress, annotations, and collections synced',
+    webdavNeedConfig: 'Save WebDAV settings first',
+    passwordOnDevice: 'Saved on this device',
+    httpNotAllowed: 'HTTP sources must be explicitly allowed',
+    urlInvalid: 'Invalid URL',
+    urlHasUserInfo: 'Do not put a username or password in the URL',
+    urlSchemeUnsupported: 'Only HTTP(S) is supported',
   },
   'zh-CN': {
     library: '书库',
@@ -275,8 +307,101 @@ const LABELS: Record<Locale, Labels> = {
     readPercent: '已读 {percent}%',
     pageProgress: '第 {current} 页',
     chapterProgress: '第 {current} 章',
+    webdav: 'WebDAV',
+    webdavUrl: 'WebDAV 地址',
+    syncNow: '立即同步',
+    syncing: '正在同步…',
+    webdavSaved: 'WebDAV 设置已保存',
+    webdavSynced: '进度、标注与分组已同步',
+    webdavNeedConfig: '请先保存 WebDAV 设置',
+    passwordOnDevice: '已保存在本机',
+    httpNotAllowed: 'HTTP 源需要由用户明确允许',
+    urlInvalid: 'URL 格式无效',
+    urlHasUserInfo: 'URL 不能包含用户名或密码，请使用凭据配置',
+    urlSchemeUnsupported: '仅支持 HTTP(S) 远程资源',
   },
 };
+
+export interface WebDavConfig {
+  readonly url: string;
+  readonly username: string;
+  readonly hasPassword: boolean;
+  readonly allowHttp: boolean;
+}
+
+export interface WebDavConfigInput {
+  readonly url: string;
+  readonly username: string;
+  readonly password?: string;
+  readonly allowHttp: boolean;
+}
+
+export interface WebDavSyncResult {
+  readonly updatedAt?: number;
+  readonly progress?: ReadingProgressByHash;
+}
+
+export interface WebDavSyncInput {
+  readonly progress?: ReadingProgressByHash;
+}
+
+export interface WebDavClientInvoker {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+export interface WebDavClient {
+  getConfig(): Promise<WebDavConfig | null>;
+  saveConfig(input: WebDavConfigInput): Promise<WebDavConfig | void>;
+  sync(input?: WebDavSyncInput): Promise<WebDavSyncResult | void>;
+}
+
+const nativeWebDavInvoker: WebDavClientInvoker = { invoke };
+
+/** Typed facade for WebDAV commands. Credentials stay on this device. */
+export function createNativeWebDavClient(
+  invoker: WebDavClientInvoker = nativeWebDavInvoker,
+): WebDavClient {
+  return {
+    getConfig() {
+      return invoker.invoke<WebDavConfig | null>('webdav_get_config');
+    },
+    saveConfig(config) {
+      return invoker.invoke<WebDavConfig | void>('webdav_save_config', { config });
+    },
+    sync(input) {
+      return invoker.invoke<WebDavSyncResult | void>('webdav_sync', {
+        progress: input?.progress,
+      });
+    },
+  };
+}
+
+function isTauriRuntime(): boolean {
+  return typeof globalThis !== 'undefined' && '__TAURI_INTERNALS__' in globalThis;
+}
+
+function webDavUrlIssue(
+  raw: string,
+  allowHttp: boolean,
+):
+  | 'urlInvalid'
+  | 'urlHasUserInfo'
+  | 'httpNotAllowed'
+  | 'urlSchemeUnsupported'
+  | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return 'urlInvalid';
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return 'urlInvalid';
+  }
+  if (parsed.username !== '' || parsed.password !== '') return 'urlHasUserInfo';
+  if (parsed.protocol === 'https:') return null;
+  if (parsed.protocol === 'http:') return allowHttp ? null : 'httpNotAllowed';
+  return 'urlSchemeUnsupported';
+}
 
 export interface LibraryOpenRequest {
   readonly item: LibraryItem;
@@ -314,6 +439,10 @@ export interface LibraryViewDependencies {
   readonly workspaceTravel?: HTMLElement;
   /** Fill missing local EPUB/CBZ title and cover after import or cold start. */
   readonly enrichLocalItem?: (item: LibraryItem) => Promise<LibraryItem>;
+  /** Independent WebDAV credentials; omitted in tests, native invoke in the app. */
+  readonly webdav?: WebDavClient;
+  /** Progress store used when syncing hash-keyed reading positions. */
+  readonly progressStorage?: ProgressStorage;
 }
 
 export interface LibraryHideOptions {
@@ -592,7 +721,61 @@ export function createLibraryView(
   const sourceForm = doc.createElement('form');
   sourceForm.className = 'lightink-library-source-form';
   sourceForm.hidden = true;
-  sourcePane.append(sourceHeader, sourceList, sourceForm);
+  const webdavSection = doc.createElement('section');
+  webdavSection.className = 'lightink-library-webdav';
+  webdavSection.hidden = true;
+  const webdavHeader = doc.createElement('div');
+  webdavHeader.className = 'lightink-library-pane-heading';
+  const webdavTitle = doc.createElement('h2');
+  webdavHeader.append(webdavTitle);
+  const webdavForm = doc.createElement('form');
+  webdavForm.className = 'lightink-library-webdav-form';
+  const webdavUrl = doc.createElement('input');
+  webdavUrl.name = 'webdavUrl';
+  webdavUrl.type = 'url';
+  webdavUrl.required = true;
+  webdavUrl.autocomplete = 'url';
+  const webdavUsername = doc.createElement('input');
+  webdavUsername.name = 'webdavUsername';
+  webdavUsername.type = 'text';
+  webdavUsername.autocomplete = 'username';
+  const webdavPassword = doc.createElement('input');
+  webdavPassword.name = 'webdavPassword';
+  webdavPassword.type = 'password';
+  webdavPassword.autocomplete = 'current-password';
+  const webdavAllow = doc.createElement('input');
+  webdavAllow.type = 'checkbox';
+  webdavAllow.name = 'webdavAllowHttp';
+  const webdavUrlCaption = doc.createElement('span');
+  const webdavUrlLabel = doc.createElement('label');
+  webdavUrlLabel.className = 'lightink-library-field';
+  webdavUrlLabel.append(webdavUrlCaption, webdavUrl);
+  const webdavUsernameCaption = doc.createElement('span');
+  const webdavUsernameLabel = doc.createElement('label');
+  webdavUsernameLabel.className = 'lightink-library-field';
+  webdavUsernameLabel.append(webdavUsernameCaption, webdavUsername);
+  const webdavPasswordCaption = doc.createElement('span');
+  const webdavPasswordLabel = doc.createElement('label');
+  webdavPasswordLabel.className = 'lightink-library-field';
+  webdavPasswordLabel.append(webdavPasswordCaption, webdavPassword);
+  const webdavAllowText = doc.createTextNode('');
+  const webdavAllowLabel = doc.createElement('label');
+  webdavAllowLabel.append(webdavAllow, webdavAllowText);
+  const webdavActions = doc.createElement('div');
+  const webdavSave = button(doc, '', 'lightink-library-primary');
+  webdavSave.type = 'submit';
+  const webdavSync = button(doc, '');
+  webdavSync.type = 'button';
+  webdavActions.append(webdavSave, webdavSync);
+  webdavForm.append(
+    webdavUrlLabel,
+    webdavUsernameLabel,
+    webdavPasswordLabel,
+    webdavAllowLabel,
+    webdavActions,
+  );
+  webdavSection.append(webdavHeader, webdavForm);
+  sourcePane.append(sourceHeader, sourceList, sourceForm, webdavSection);
 
   const content = doc.createElement('main');
   content.className = 'lightink-library-content';
@@ -674,6 +857,11 @@ export function createLibraryView(
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
   const groupsApi = (): Partial<LibraryGroupCommands> => deps.library;
+  const webdavApi = (): WebDavClient | undefined => {
+    if (deps.webdav !== undefined) return deps.webdav;
+    return isTauriRuntime() ? createNativeWebDavClient() : undefined;
+  };
+  let webDavHasPassword = false;
 
   function addMemberCommand():
     | ((groupId: string, itemId: string) => Promise<void>)
@@ -716,6 +904,126 @@ export function createLibraryView(
         await api.organize();
       }
     };
+  }
+
+  function applyWebDavLabels(): void {
+    const l = labels();
+    webdavTitle.textContent = l.webdav;
+    webdavSection.setAttribute('aria-label', l.webdav);
+    webdavUrlCaption.textContent = l.webdavUrl;
+    webdavUrl.setAttribute('aria-label', l.webdavUrl);
+    webdavUrl.placeholder = l.webdavUrl;
+    webdavUsernameCaption.textContent = l.username;
+    webdavUsername.setAttribute('aria-label', l.username);
+    webdavUsername.placeholder = l.username;
+    webdavPasswordCaption.textContent = l.password;
+    webdavPassword.setAttribute('aria-label', l.password);
+    webdavPassword.placeholder = webDavHasPassword ? l.passwordOnDevice : l.password;
+    webdavAllowText.textContent = l.allowHttp;
+    webdavAllow.setAttribute('aria-label', l.allowHttp);
+    webdavSave.textContent = l.save;
+    webdavSync.textContent = l.syncNow;
+  }
+
+  function applyWebDavConfig(config: WebDavConfig | null | undefined): void {
+    webdavUrl.value = config?.url ?? '';
+    webdavUsername.value = config?.username ?? '';
+    webdavPassword.value = '';
+    webdavAllow.checked = config?.allowHttp === true;
+    webDavHasPassword = config?.hasPassword === true;
+    applyWebDavLabels();
+  }
+
+  async function hydrateWebDavForm(): Promise<void> {
+    const api = webdavApi();
+    if (api === undefined) {
+      applyWebDavConfig(null);
+      return;
+    }
+    try {
+      applyWebDavConfig(await api.getConfig());
+    } catch {
+      applyWebDavConfig(null);
+    }
+  }
+
+  function readWebDavInput(): WebDavConfigInput | null {
+    const url = webdavUrl.value.trim();
+    const username = webdavUsername.value.trim();
+    const password = webdavPassword.value;
+    const allowHttp = webdavAllow.checked;
+    const issue = webDavUrlIssue(url, allowHttp);
+    if (issue !== null) {
+      deps.notify(labels()[issue], 'error');
+      return null;
+    }
+    return {
+      url,
+      username,
+      allowHttp,
+      ...(password !== '' ? { password } : {}),
+    };
+  }
+
+  async function saveWebDavConfig(): Promise<boolean> {
+    const api = webdavApi();
+    const input = readWebDavInput();
+    if (input === null) return false;
+    if (api === undefined) {
+      deps.notify(labels().offline, 'error');
+      return false;
+    }
+    try {
+      const saved = await api.saveConfig(input);
+      if (saved != null && typeof saved === 'object') {
+        applyWebDavConfig(saved);
+      } else {
+        webDavHasPassword = webDavHasPassword || input.password !== undefined;
+        webdavPassword.value = '';
+        applyWebDavLabels();
+      }
+      setStatus(labels().webdavSaved);
+      return true;
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+      return false;
+    }
+  }
+
+  async function syncWebDav(): Promise<void> {
+    const api = webdavApi();
+    if (api === undefined) {
+      deps.notify(labels().offline, 'error');
+      return;
+    }
+    if (webdavUrl.value.trim() === '' && !webDavHasPassword) {
+      deps.notify(labels().webdavNeedConfig, 'error');
+      return;
+    }
+    if (webdavUrl.value.trim() !== '') {
+      const saved = await saveWebDavConfig();
+      if (!saved) return;
+    }
+    webdavSave.disabled = true;
+    webdavSync.disabled = true;
+    webdavSync.textContent = labels().syncing;
+    setStatus(labels().syncing);
+    try {
+      const storage = deps.progressStorage ?? window.localStorage;
+      const result = await api.sync({ progress: listReadingProgressByHash(storage) });
+      if (result != null && typeof result === 'object' && result.progress !== undefined) {
+        applyReadingProgressByHash(storage, result.progress);
+      }
+      await reloadCollections();
+      setStatus(labels().webdavSynced);
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+      setStatus('');
+    } finally {
+      webdavSave.disabled = false;
+      webdavSync.disabled = false;
+      webdavSync.textContent = labels().syncNow;
+    }
   }
 
   function selectedCollection(): LibraryGroup | undefined {
@@ -854,6 +1162,7 @@ export function createLibraryView(
     root.classList.toggle('lightink-library--manage', libraryPage === 'manage');
     root.classList.toggle('lightink-library--catalog', libraryPage === 'catalog');
     searchForm.hidden = libraryPage === 'manage';
+    webdavSection.hidden = libraryPage !== 'manage';
     if (libraryPage === 'my-books') {
       heading.textContent = labels().myBooks;
       toolbar.replaceChildren(manageButton, ...workspaceTravelSlot());
@@ -1798,6 +2107,7 @@ export function createLibraryView(
     syncPageChrome();
     renderSources();
     await updateCacheSummary();
+    await hydrateWebDavForm();
   }
 
   async function openCatalog(sourceId: string): Promise<void> {
@@ -2023,6 +2333,7 @@ export function createLibraryView(
         syncPageChrome();
         renderSources();
         await updateCacheSummary();
+        await hydrateWebDavForm();
         return;
       }
       libraryPage = 'my-books';
@@ -2055,6 +2366,7 @@ export function createLibraryView(
     cacheLimitSave.textContent = l.apply;
     addSourceButton.title = l.addSource;
     addSourceButton.setAttribute('aria-label', l.addSource);
+    applyWebDavLabels();
     previousButton.textContent = l.prev;
     nextButton.textContent = l.next;
     syncPageChrome();
@@ -2081,6 +2393,13 @@ export function createLibraryView(
   sourceForm.addEventListener('submit', (event) => {
     event.preventDefault();
     void saveSource();
+  });
+  webdavForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void saveWebDavConfig();
+  });
+  webdavSync.addEventListener('click', () => {
+    void syncWebDav();
   });
   importButton.addEventListener('click', async () => {
     const item = await deps.onImportLocal();
@@ -2221,4 +2540,6 @@ export const libraryViewInternals = {
   parentIdOf,
   flattenedCollections,
   descendantIds,
+  webDavUrlIssue,
+  isTauriRuntime,
 };

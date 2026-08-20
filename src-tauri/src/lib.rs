@@ -16,6 +16,7 @@ mod opds;
 mod recents;
 mod remote;
 mod snapshot;
+mod webdav;
 mod window_chrome;
 
 use tauri_plugin_opener::OpenerExt;
@@ -79,6 +80,17 @@ pub fn run() {
             library::library_clear_cache,
             library::library_set_cache_limit,
             library::library_cache_stats,
+            library::library_list_groups,
+            library::library_upsert_group,
+            library::library_remove_group,
+            library::library_list_group_members,
+            library::library_add_group_member,
+            library::library_remove_group_member,
+            library::library_organize_groups,
+            webdav::webdav_get_config,
+            webdav::webdav_save_config,
+            webdav::webdav_forget,
+            webdav::webdav_sync,
             remote::remote_open,
             remote::remote_info,
             remote::remote_read_range,

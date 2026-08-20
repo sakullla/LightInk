@@ -62,6 +62,8 @@ export interface Annotation {
   /** Optional highlight color; omitted records resolve to DEFAULT_ANNOTATION_COLOR. */
   readonly color?: AnnotationColor;
   readonly createdAt: number;
+  /** Last edit time for last-write-wins sync. Missing records use createdAt. */
+  readonly updatedAt?: number;
 }
 
 export interface AnnotationQuery {
@@ -128,6 +130,16 @@ function readColor(value: unknown): AnnotationColor | undefined {
   return ANNOTATION_COLOR_SET.has(normalized) ? (normalized as AnnotationColor) : undefined;
 }
 
+function readUpdatedAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+const CONTENT_HASH_PATTERN = /^[0-9a-f]{16}$/;
+
+function isContentHashKey(value: string): boolean {
+  return CONTENT_HASH_PATTERN.test(value);
+}
+
 /** Resolve a stored or missing color to the closed palette (illegal → default yellow). */
 export function resolveAnnotationColor(color: string | undefined): AnnotationColor {
   return readColor(color) ?? DEFAULT_ANNOTATION_COLOR;
@@ -177,6 +189,13 @@ export function filterAnnotations(
   });
 }
 
+/** Last-write-wins clock: explicit updatedAt, otherwise createdAt. */
+export function annotationUpdatedAt(annotation: Annotation): number {
+  return typeof annotation.updatedAt === 'number' && Number.isFinite(annotation.updatedAt)
+    ? annotation.updatedAt
+    : annotation.createdAt;
+}
+
 /** Replace the note on one record; unknown id leaves the collection unchanged. */
 export function updateAnnotationNote(
   annotations: readonly Annotation[],
@@ -184,7 +203,7 @@ export function updateAnnotationNote(
   note: string,
 ): Annotation[] {
   return annotations.map((annotation) =>
-    annotation.id === id ? { ...annotation, note } : annotation,
+    annotation.id === id ? { ...annotation, note, updatedAt: Date.now() } : annotation,
   );
 }
 
@@ -194,6 +213,67 @@ export function removeAnnotation(
   id: string,
 ): Annotation[] {
   return annotations.filter((annotation) => annotation.id !== id);
+}
+
+/**
+ * Merge two per-document annotation lists. Same id keeps the newer updatedAt
+ * (createdAt fallback); unique ids are unioned. Equal clocks keep the local row.
+ */
+export function mergeAnnotations(
+  local: readonly Annotation[],
+  remote: readonly Annotation[],
+): Annotation[] {
+  const winners = new Map<string, Annotation>();
+  for (const annotation of local) {
+    winners.set(annotation.id, annotation);
+  }
+  for (const annotation of remote) {
+    const current = winners.get(annotation.id);
+    if (current === undefined || annotationUpdatedAt(annotation) > annotationUpdatedAt(current)) {
+      winners.set(annotation.id, annotation);
+    }
+  }
+  const merged: Annotation[] = [];
+  const seen = new Set<string>();
+  for (const annotation of local) {
+    const winner = winners.get(annotation.id);
+    if (winner !== undefined) {
+      merged.push(winner);
+      seen.add(annotation.id);
+    }
+  }
+  for (const annotation of remote) {
+    if (seen.has(annotation.id)) {
+      continue;
+    }
+    const winner = winners.get(annotation.id);
+    if (winner !== undefined) {
+      merged.push(winner);
+      seen.add(annotation.id);
+    }
+  }
+  return merged;
+}
+
+export type AnnotationsByHash = Readonly<Record<string, readonly Annotation[]>>;
+
+/**
+ * Merge annotation maps keyed by content hash. Invalid hash keys are skipped so
+ * path-based identities never enter the sync document.
+ */
+export function mergeAnnotationsByHash(
+  local: AnnotationsByHash,
+  remote: AnnotationsByHash,
+): Record<string, Annotation[]> {
+  const merged: Record<string, Annotation[]> = {};
+  const hashes = new Set([...Object.keys(local), ...Object.keys(remote)]);
+  for (const hash of hashes) {
+    if (!isContentHashKey(hash)) {
+      continue;
+    }
+    merged[hash] = mergeAnnotations(local[hash] ?? [], remote[hash] ?? []);
+  }
+  return merged;
 }
 
 function isAnnotation(value: unknown): value is Annotation {
@@ -216,24 +296,17 @@ function isAnnotation(value: unknown): value is Annotation {
 
 function fromParsedAnnotation(annotation: Annotation): Annotation {
   const color = readColor(annotation.color);
-  return color === undefined
-    ? {
-        id: annotation.id,
-        kind: annotation.kind,
-        locator: annotation.locator,
-        quote: annotation.quote,
-        note: annotation.note,
-        createdAt: annotation.createdAt,
-      }
-    : {
-        id: annotation.id,
-        kind: annotation.kind,
-        locator: annotation.locator,
-        quote: annotation.quote,
-        note: annotation.note,
-        createdAt: annotation.createdAt,
-        color,
-      };
+  const updatedAt = readUpdatedAt(annotation.updatedAt);
+  return {
+    id: annotation.id,
+    kind: annotation.kind,
+    locator: annotation.locator,
+    quote: annotation.quote,
+    note: annotation.note,
+    createdAt: annotation.createdAt,
+    ...(color === undefined ? {} : { color }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
+  };
 }
 
 function migrateV1Locator(

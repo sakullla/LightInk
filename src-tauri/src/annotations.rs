@@ -5,16 +5,19 @@
 //! （R4：损坏/缺失不阻断阅读）；标注读写永不触碰源电子书文件。
 //!
 //! JSON 对 Rust 不透明：备注、颜色等字段由前端 schema 拥有；改备注或删除是
-//! 整文件覆写，不在此升跨书索引或「全部标注」目录。
+//! 整文件覆写，不在此升跨书索引或「全部标注」目录。同步合并按记录 `id` 比较
+//! `updatedAt`（缺失时回退 `createdAt`），较新覆盖。
 //!
 //! 内容哈希由本模块的 [`content_hash`] 命令在 Rust 侧计算（读字节 +
 //! [`crate::asset::content_hash_hex`]，FNV-1a 64-bit）；`read_annotations` /
 //! `write_annotations` 接收该哈希作为存储 key，只负责按 key 读写 JSON。
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use crate::identifiers::validate_content_hash;
+use serde_json::Value;
 
 const ANNOTATIONS_DIR: &str = "annotations";
 
@@ -53,6 +56,135 @@ fn resolve_base_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("lightink"))
+}
+
+fn parse_annotation_file(json: &str) -> Option<(u64, Vec<Value>)> {
+    if json.trim().is_empty() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_str(json).ok()?;
+    let object = parsed.as_object()?;
+    let version = object.get("version").and_then(Value::as_u64).unwrap_or(0);
+    let annotations = object.get("annotations")?.as_array()?.clone();
+    Some((version, annotations))
+}
+
+fn annotation_id(value: &Value) -> Option<&str> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn annotation_updated_at(value: &Value) -> f64 {
+    value
+        .get("updatedAt")
+        .and_then(Value::as_f64)
+        .or_else(|| value.get("createdAt").and_then(Value::as_f64))
+        .filter(|timestamp| timestamp.is_finite())
+        .unwrap_or(0.0)
+}
+
+fn merge_version(local: u64, remote: u64) -> u64 {
+    if local == 2 || remote == 2 {
+        2
+    } else if local == 1 || remote == 1 {
+        1
+    } else {
+        2
+    }
+}
+
+/// Merge two annotation documents by record id. The newer `updatedAt` wins;
+/// a missing `updatedAt` falls back to `createdAt`. Corrupt or empty input is
+/// treated as no records so a bad remote file cannot wipe local notes.
+pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
+    let local = parse_annotation_file(local_json);
+    let remote = parse_annotation_file(remote_json);
+    match (local, remote) {
+        (None, None) => String::new(),
+        (Some(_), None) => local_json.to_string(),
+        (None, Some(_)) => remote_json.to_string(),
+        (Some((local_version, local_items)), Some((remote_version, remote_items))) => {
+            let mut remote_by_id = HashMap::new();
+            for item in &remote_items {
+                if let Some(id) = annotation_id(item) {
+                    remote_by_id.insert(id, item);
+                }
+            }
+            let mut seen = HashSet::new();
+            let mut merged = Vec::new();
+            for item in &local_items {
+                let Some(id) = annotation_id(item) else {
+                    continue;
+                };
+                seen.insert(id);
+                if let Some(remote_item) = remote_by_id.get(id) {
+                    if annotation_updated_at(remote_item) > annotation_updated_at(item) {
+                        merged.push((*remote_item).clone());
+                    } else {
+                        merged.push(item.clone());
+                    }
+                } else {
+                    merged.push(item.clone());
+                }
+            }
+            for item in &remote_items {
+                if let Some(id) = annotation_id(item) {
+                    if seen.insert(id) {
+                        merged.push(item.clone());
+                    }
+                }
+            }
+            serde_json::json!({
+                "version": merge_version(local_version, remote_version),
+                "annotations": merged,
+            })
+            .to_string()
+        }
+    }
+}
+
+/// List locally stored annotation files keyed by content hash.
+pub fn list_annotations_by_hash(base_dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let dir = base_dir.join(ANNOTATIONS_DIR);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut listed = Vec::new();
+    let entries = fs::read_dir(&dir).map_err(|error| format!("无法读取标注目录: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("无法读取标注目录: {error}"))?;
+        let file_name = entry.file_name();
+        let Some(hash) = file_name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        if validate_content_hash(hash).is_err() {
+            continue;
+        }
+        let json = fs::read_to_string(entry.path()).unwrap_or_default();
+        listed.push((hash.to_string(), json));
+    }
+    listed.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(listed)
+}
+
+/// Read local annotations for a content hash, merge a remote document by
+/// `updatedAt`, and write only when the merged result differs.
+pub fn merge_remote_annotations_impl(
+    base_dir: &Path,
+    content_hash: &str,
+    remote_json: &str,
+) -> Result<String, String> {
+    let local_json = read_annotations_impl(base_dir, content_hash)?;
+    let merged = merge_annotations_json(&local_json, remote_json);
+    if merged != local_json {
+        write_annotations_impl(base_dir, content_hash, &merged)?;
+    }
+    Ok(merged)
 }
 
 #[tauri::command]
@@ -229,5 +361,119 @@ mod tests {
             .join(ANNOTATIONS_DIR)
             .join(format!("{hash}.json"))
             .exists());
+    }
+
+    fn annotation_ids(json: &str) -> Vec<String> {
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        parsed["annotations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn annotation_note(json: &str, id: &str) -> Option<String> {
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        parsed["annotations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|item| {
+                (item["id"].as_str() == Some(id))
+                    .then(|| {
+                        item.get("note")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten()
+            })
+    }
+
+    #[test]
+    fn webdav_annotation_merge_prefers_newer_updated_at() {
+        let local = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10},{"id":"n2","kind":"note","note":"只在本地","createdAt":2,"updatedAt":5}]}"#;
+        let remote = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20},{"id":"n3","kind":"note","note":"只在远端","createdAt":3,"updatedAt":8}]}"#;
+        let merged = merge_annotations_json(local, remote);
+        assert_eq!(annotation_ids(&merged), ["n1", "n2", "n3"]);
+        assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));
+        assert_eq!(annotation_note(&merged, "n2").as_deref(), Some("只在本地"));
+        assert_eq!(annotation_note(&merged, "n3").as_deref(), Some("只在远端"));
+    }
+
+    #[test]
+    fn webdav_annotation_merge_falls_back_to_created_at() {
+        let local =
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":10}]}"#;
+        let remote =
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":20}]}"#;
+        let merged = merge_annotations_json(local, remote);
+        assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));
+        let tied = merge_annotations_json(
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"本地","createdAt":5}]}"#,
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"远端","createdAt":5}]}"#,
+        );
+        assert_eq!(annotation_note(&tied, "n1").as_deref(), Some("本地"));
+    }
+
+    #[test]
+    fn webdav_annotation_merge_corrupt_remote_leaves_local() {
+        let local = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"留下","createdAt":1}]}"#;
+        assert_eq!(merge_annotations_json(local, "{not-json"), local);
+        assert_eq!(merge_annotations_json(local, ""), local);
+        assert!(merge_annotations_json("", "{not-json").is_empty());
+    }
+
+    #[test]
+    fn webdav_annotation_merge_does_not_keep_top_level_secrets() {
+        let local = r#"{"version":2,"password":"secret","annotations":[{"id":"n1","kind":"note","createdAt":1}]}"#;
+        let remote = r#"{"version":2,"token":"abc","annotations":[{"id":"n2","kind":"note","createdAt":2}]}"#;
+        let merged = merge_annotations_json(local, remote);
+        assert!(!merged.contains("secret"));
+        assert!(!merged.contains("abc"));
+        assert!(!merged.contains("password"));
+        assert!(!merged.contains("token"));
+        assert_eq!(annotation_ids(&merged), ["n1", "n2"]);
+    }
+
+    #[test]
+    fn webdav_list_and_apply_annotations_are_keyed_by_content_hash() {
+        let dir = temp_dir();
+        write_annotations_impl(
+            dir.path(),
+            HASH_A,
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10}]}"#,
+        )
+        .unwrap();
+        write_annotations_impl(
+            dir.path(),
+            HASH_B,
+            r#"{"version":2,"annotations":[{"id":"b1","kind":"note","note":"另一本","createdAt":1}]}"#,
+        )
+        .unwrap();
+        let listed = list_annotations_by_hash(dir.path()).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|(hash, _)| hash.as_str())
+                .collect::<Vec<_>>(),
+            [HASH_A, HASH_B]
+        );
+
+        let merged = merge_remote_annotations_impl(
+            dir.path(),
+            HASH_A,
+            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20}]}"#,
+        )
+        .unwrap();
+        assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));
+        assert_eq!(
+            annotation_note(&read_annotations_impl(dir.path(), HASH_A).unwrap(), "n1").as_deref(),
+            Some("新")
+        );
+        assert_eq!(
+            annotation_note(&read_annotations_impl(dir.path(), HASH_B).unwrap(), "b1").as_deref(),
+            Some("另一本")
+        );
     }
 }

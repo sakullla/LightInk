@@ -8,6 +8,13 @@ export const READING_PROGRESS_KEY_PREFIX = 'lightink.reader.progress.';
 /** R7：进度条数上限——超出时按最近使用（updatedAt 最旧）淘汰，防 localStorage 无限增长。 */
 export const READING_PROGRESS_MAX_ENTRIES = 50;
 
+const CONTENT_HASH_PATTERN = /^[0-9a-f]{16}$/;
+
+/** Content-hash progress ids match Rust `validate_content_hash` (16 lowercase hex). */
+export function isContentHashProgressId(id: string): boolean {
+  return CONTENT_HASH_PATTERN.test(id);
+}
+
 export interface ReadingProgress {
   readonly version: 1;
   readonly kind: 'flow' | 'page';
@@ -79,28 +86,44 @@ export function loadReadingProgress(
   }
 }
 
+interface StoredProgressEntry {
+  readonly key: string;
+  readonly id: string;
+  readonly progress: ReadingProgress | null;
+}
+
+function listStoredProgressEntries(storage: ProgressStorage): StoredProgressEntry[] {
+  if (typeof storage.key !== 'function' || typeof storage.length !== 'number') {
+    return [];
+  }
+  const entries: StoredProgressEntry[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const storageKey = storage.key(index);
+    if (storageKey === null || !storageKey.startsWith(READING_PROGRESS_KEY_PREFIX)) {
+      continue;
+    }
+    entries.push({
+      key: storageKey,
+      id: storageKey.slice(READING_PROGRESS_KEY_PREFIX.length),
+      progress: parseReadingProgress(storage.getItem(storageKey)),
+    });
+  }
+  return entries;
+}
+
 /**
  * R7：按最近使用淘汰进度条目（updatedAt 最旧的先删，无法解析的按 0 处理
  * 最先淘汰）。仅当存储具备枚举/删除能力（生产 localStorage）时执行。
  */
 function evictReadingProgress(storage: ProgressStorage): void {
-  if (
-    typeof storage.removeItem !== 'function' ||
-    typeof storage.key !== 'function' ||
-    typeof storage.length !== 'number'
-  ) {
+  if (typeof storage.removeItem !== 'function') {
     return;
   }
   try {
-    const entries: Array<{ key: string; updatedAt: number }> = [];
-    for (let index = 0; index < storage.length; index += 1) {
-      const storageKey = storage.key(index);
-      if (storageKey === null || !storageKey.startsWith(READING_PROGRESS_KEY_PREFIX)) {
-        continue;
-      }
-      const progress = parseReadingProgress(storage.getItem(storageKey));
-      entries.push({ key: storageKey, updatedAt: progress?.updatedAt ?? 0 });
-    }
+    const entries = listStoredProgressEntries(storage).map((entry) => ({
+      key: entry.key,
+      updatedAt: entry.progress?.updatedAt ?? 0,
+    }));
     const overflow = entries.length - READING_PROGRESS_MAX_ENTRIES;
     if (overflow <= 0) {
       return;
@@ -128,6 +151,87 @@ export function saveReadingProgress(
     // Quota / privacy mode must not interrupt reading.
   }
   evictReadingProgress(storage);
+}
+
+/** Same-book last-write-wins: newer updatedAt wins; equal clocks keep local. */
+export function mergeReadingProgress(
+  local: ReadingProgress | null | undefined,
+  remote: ReadingProgress | null | undefined,
+): ReadingProgress | null {
+  if (local == null) {
+    return remote ?? null;
+  }
+  if (remote == null) {
+    return local;
+  }
+  return remote.updatedAt > local.updatedAt ? remote : local;
+}
+
+export type ReadingProgressByHash = Readonly<Record<string, ReadingProgress>>;
+
+/**
+ * Merge progress maps keyed by content hash. Path keys and other non-hash ids
+ * are skipped so they stay local-only.
+ */
+export function mergeReadingProgressByHash(
+  local: ReadingProgressByHash,
+  remote: ReadingProgressByHash,
+): Record<string, ReadingProgress> {
+  const merged: Record<string, ReadingProgress> = {};
+  const hashes = new Set([...Object.keys(local), ...Object.keys(remote)]);
+  for (const hash of hashes) {
+    if (!isContentHashProgressId(hash)) {
+      continue;
+    }
+    const next = mergeReadingProgress(local[hash], remote[hash]);
+    if (next !== null) {
+      merged[hash] = next;
+    }
+  }
+  return merged;
+}
+
+/** Collect hash-keyed progress for a sync document. Path keys are omitted. */
+export function listReadingProgressByHash(
+  storage: ProgressStorage | null | undefined,
+): Record<string, ReadingProgress> {
+  const records: Record<string, ReadingProgress> = {};
+  if (storage == null) {
+    return records;
+  }
+  try {
+    for (const entry of listStoredProgressEntries(storage)) {
+      if (entry.progress === null || !isContentHashProgressId(entry.id)) {
+        continue;
+      }
+      records[entry.id] = entry.progress;
+    }
+  } catch {
+    return {};
+  }
+  return records;
+}
+
+/**
+ * Rehydrate hash-keyed progress from a sync document. Each key uses
+ * last-write-wins against the local copy; eviction still applies.
+ */
+export function applyReadingProgressByHash(
+  storage: ProgressStorage | null | undefined,
+  records: ReadingProgressByHash,
+): void {
+  if (storage == null) {
+    return;
+  }
+  for (const [id, incoming] of Object.entries(records)) {
+    if (!isContentHashProgressId(id)) {
+      continue;
+    }
+    const merged = mergeReadingProgress(loadReadingProgress(storage, id), incoming);
+    if (merged !== null) {
+      saveReadingProgress(storage, id, merged);
+    }
+  }
 }
 
 /** In-chapter progress 0..1 from a scroller's offset into a chapter box. */
