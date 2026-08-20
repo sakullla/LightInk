@@ -871,8 +871,8 @@ export function createFlowRenderer(
       scroller !== null &&
       advancePagedScroller(scroller, direction, step)
     ) {
+      if (frame !== null) delete frame.dataset.pagedRestore;
       snapPagedScroller(scroller, step);
-      scroller.scrollLeft = Math.round(scroller.scrollLeft / step) * step;
       hooks.syncState();
       hooks.dismissSelectionToolbar();
       return true;
@@ -887,18 +887,26 @@ export function createFlowRenderer(
     }
     setActiveChapter(current + direction);
     const nextFrame = next.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame');
+    if (nextFrame !== null) {
+      nextFrame.dataset.pagedRestore = direction < 0 ? 'end' : 'start';
+    }
+    void next.offsetWidth;
+    void nextFrame?.offsetWidth;
     const applyChapterPage = (): void => {
       const nextDoc = nextFrame?.contentDocument;
       if (nextFrame === null || nextDoc === undefined || nextDoc === null) {
         return;
       }
-      applyPaginatedDocument(nextFrame, nextDoc, { snap: false });
-      const nextScroller = readerPagedScroller(nextDoc);
-      scrollPagedScrollerToEdge(nextScroller, direction, pagedFrameStep(nextScroller));
+      applyPaginatedDocument(nextFrame, nextDoc, {
+        restoreRatio: direction < 0 ? 1 : 0,
+      });
     };
     applyChapterPage();
     if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(applyChapterPage);
+      requestAnimationFrame(() => {
+        applyChapterPage();
+        requestAnimationFrame(applyChapterPage);
+      });
     }
     hooks.syncState();
     hooks.dismissSelectionToolbar();
@@ -1046,9 +1054,22 @@ export function createFlowRenderer(
     frame.style.outline = 'none';
     frame.style.background = readerPaperColor(root);
     padFinalSpread(pageBox, frameDocument, columnWidth, columns, gap);
-    if (options?.restoreRatio !== undefined) {
-      applyPagedProgress(pageBox, options.restoreRatio, step);
-      snapPagedScroller(pageBox, step);
+    const restoreRatio =
+      options?.restoreRatio ??
+      (frame.dataset.pagedRestore === 'end'
+        ? 1
+        : frame.dataset.pagedRestore === 'start'
+          ? 0
+          : undefined);
+    if (restoreRatio !== undefined) {
+      applyPagedProgress(pageBox, restoreRatio, step);
+      if (restoreRatio >= 1) {
+        scrollPagedScrollerToEdge(pageBox, -1, step);
+      } else if (restoreRatio <= 0) {
+        scrollPagedScrollerToEdge(pageBox, 1, step);
+      } else {
+        snapPagedScroller(pageBox, step);
+      }
     } else if (options?.snap !== false) {
       snapPagedScroller(pageBox, step);
       if (pageBox.scrollLeft === 0 && previousRatio > 0) {

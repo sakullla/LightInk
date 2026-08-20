@@ -103,6 +103,17 @@ describe('paged navigation', () => {
     expect(scroller.scrollLeft).toBe(1120);
   });
 
+  it('keeps the short last page after a later layout pass grows scrollWidth', () => {
+    const scroller = { scrollLeft: 0, scrollWidth: 800, clientWidth: 800 };
+    scrollPagedScrollerToEdge(scroller, -1, 800);
+    expect(scroller.scrollLeft).toBe(0);
+    scroller.scrollWidth = 1920;
+    scrollPagedScrollerToEdge(scroller, -1, 800);
+    expect(scroller.scrollLeft).toBe(1120);
+    expect(Math.round(scroller.scrollLeft / 800) * 800).toBe(800);
+    expect(scroller.scrollLeft).toBe(1120);
+  });
+
   it('lands on the first page when crossing forward into a chapter', () => {
     const scroller = { scrollLeft: 1120, scrollWidth: 1920, clientWidth: 800 };
     scrollPagedScrollerToEdge(scroller, 1, 800);

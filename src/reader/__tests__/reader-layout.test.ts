@@ -271,6 +271,15 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]\s*\{[^}]*overflow-y:\s*auto/,
     );
   });
+
+  it('pins a backward chapter turn to the last page instead of rounding it away', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    const view = readFileSync(resolve(process.cwd(), 'src/reader/reader-view.ts'), 'utf-8');
+    expect(flow).toMatch(/dataset\.pagedRestore = direction < 0 \? 'end' : 'start'/);
+    expect(flow).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
+    expect(view).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
+    expect(view).toMatch(/flowRenderer\.advancePage\(direction\)/);
+  });
 });
 
 describe('readerFlowSpreadFromTypography', () => {

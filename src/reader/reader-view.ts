@@ -100,7 +100,6 @@ import {
   type ReadingProgress,
 } from './reading-progress.js';
 import {
-  advancePagedScroller,
   advanceScrolledScroller,
   applyPagedProgress,
   createCoalescedScrollHandler,
@@ -111,7 +110,6 @@ import {
   pagedProgressRatio,
   rafFrameScheduler,
   scrollToKeepViewportAnchor,
-  scrollPagedScrollerToEdge,
   snapPagedScroller,
   viewportAnchor,
 } from '../ui/reading-layout.js';
@@ -2282,47 +2280,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const advanceReadingContent = (direction: 1 | -1): boolean => {
-    const paginated = flowIsPaginated();
-    if (paginated) {
-      const frame = visibleFlowFrame();
-      const scroller =
-        frame?.contentDocument === undefined || frame.contentDocument === null
-          ? null
-          : readerPagedScroller(frame.contentDocument);
-      const step = scroller === null ? 0 : pagedFrameStep(scroller);
-      if (
-        scroller !== undefined &&
-        scroller !== null &&
-        advancePagedScroller(scroller, direction, step)
-      ) {
-        snapPagedScroller(scroller, step);
-        scroller.scrollLeft = Math.round(scroller.scrollLeft / step) * step;
+    if (flowIsPaginated()) {
+      const moved = flowRenderer.advancePage(direction);
+      if (moved) {
         schedulePersistReadingProgress();
-        return true;
       }
-      const chapter = firstVisibleChapter() + direction;
-      const next = scrollHost.querySelector<HTMLElement>(
-        `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
-      );
-      if (next === null) {
-        return false;
-      }
-      setActiveChapter(chapter);
-      const nextFrame = next.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame');
-      const applyChapterPage = (): void => {
-        const nextDoc = nextFrame?.contentDocument;
-        if (nextFrame === null || nextDoc === undefined || nextDoc === null) {
-          return;
-        }
-        applyPaginatedDocument(nextFrame, nextDoc, { snap: false });
-        const nextScroller = readerPagedScroller(nextDoc);
-        scrollPagedScrollerToEdge(nextScroller, direction, pagedFrameStep(nextScroller));
-      };
-      applyChapterPage();
-      requestAnimationFrame(applyChapterPage);
-      syncFlowState();
-      schedulePersistReadingProgress();
-      return true;
+      return moved;
     }
     if (advanceScrolledScroller(flowScrollContainer(), direction)) {
       schedulePersistReadingProgress();

@@ -316,10 +316,16 @@ export function snapPagedScroller(
 export function scrollPagedScrollerToEdge(
   scroller: { scrollLeft: number; scrollWidth: number; clientWidth: number },
   direction: 1 | -1,
-  stepSize?: number,
+  _stepSize?: number,
 ): void {
-  applyPagedProgress(scroller, direction < 0 ? 1 : 0, stepSize);
-  snapPagedScroller(scroller, stepSize);
+  const max = pagedScrollMax(scroller);
+  if (direction < 0) {
+    // Do not snap: a short last column is not a multiple of `step`, and
+    // rounding would hide the chapter ending (the page the reader just left).
+    scroller.scrollLeft = max;
+    return;
+  }
+  scroller.scrollLeft = 0;
 }
 
 export function advancePagedScroller(
