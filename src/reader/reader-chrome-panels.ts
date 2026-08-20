@@ -183,7 +183,7 @@ export function fillReaderTypographyPanel(
   sizeSection.appendChild(sizeRow);
   panel.appendChild(sizeSection);
 
-  const themeSection = section(copy.theme, 'theme', true);
+  const themeSection = section(copy.theme, 'theme');
   const swatches = document.createElement('div');
   swatches.className = 'lightink-reader-theme-swatches';
   swatches.setAttribute('role', 'radiogroup');
@@ -220,7 +220,7 @@ export function fillReaderTypographyPanel(
   themeSection.appendChild(swatches);
   panel.appendChild(themeSection);
 
-  const fontSection = section(copy.font, 'font', true);
+  const fontSection = section(copy.font, 'font');
   const fonts = document.createElement('div');
   fonts.className = 'lightink-reader-type-fonts';
   fonts.setAttribute('role', 'group');
@@ -250,7 +250,7 @@ export function fillReaderTypographyPanel(
   fontSection.appendChild(fonts);
   panel.appendChild(fontSection);
 
-  const layoutSection = section(copy.layout, 'layout', true);
+  const layoutSection = section(copy.layout, 'layout');
   const modes = document.createElement('div');
   modes.className = 'lightink-reader-type-modes';
   modes.setAttribute('role', 'group');

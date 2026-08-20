@@ -58,6 +58,23 @@ describe('reader chrome panels', () => {
     expect(panel.querySelector('[data-type-section="theme"]')).not.toBeNull();
     expect(panel.querySelector('[data-type-section="layout"]')).not.toBeNull();
     expect(panel.querySelectorAll('.lightink-reader-type-section').length).toBeGreaterThanOrEqual(5);
+    const visibleLabels: Array<[string, string]> = [
+      ['theme', '纸张'],
+      ['font', '字体'],
+      ['layout', '版式'],
+    ];
+    for (const [kind, text] of visibleLabels) {
+      const label = panel
+        .querySelector(`[data-type-section="${kind}"]`)!
+        .querySelector('.lightink-reader-type-label');
+      expect(label).not.toBeNull();
+      expect(label!.classList.contains('lightink-reader-type-label--hidden')).toBe(false);
+      expect(label!.textContent).toBe(text);
+    }
+    const sizeLabel = panel
+      .querySelector('[data-type-section="size"]')!
+      .querySelector('.lightink-reader-type-label');
+    expect(sizeLabel?.classList.contains('lightink-reader-type-label--hidden')).toBe(true);
     expect(panel.querySelectorAll('.lightink-reader-theme-swatch')).toHaveLength(4);
     expect(panel.querySelectorAll('.lightink-reader-theme-page')).toHaveLength(4);
     expect(panel.querySelector('.lightink-reader-theme-swatch-name')?.textContent).toBe('白纸');

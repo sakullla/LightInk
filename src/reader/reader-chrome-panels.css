@@ -1,0 +1,480 @@
+/**
+ * 阅读器 chrome 浮层（TOC + 排版面板）样式。
+ *
+ * 现代浮层卡片方向（参照 Apple Books / 微信读书）：圆角卡片、柔和分层阴影、
+ * 分组清晰、间距宽松。由 reader.css 顶部 @import 引入；选择器族从 reader.css
+ * 迁入（chrome-panel / chrome-popover / toc / theme-swatch / type-sheet）。
+ * 交互钩子（--lightink-reader-popover-arrow、--lightink-reader-hero-scale、
+ * --lightink-reader-swatch-page/-ink、--lightink-reader-track-fill）由
+ * reader-chrome-panels.ts 内联注入，机制保持不变。
+ */
+
+/* ===== 浮层容器（TOC 与排版面板共用） ===== */
+
+.lightink-reader-chrome-panel {
+  position: fixed;
+  z-index: 13;
+  box-sizing: border-box;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: min(68vh, 28rem);
+  overflow: visible;
+  color: var(--lightink-fg);
+  background: var(--lightink-bg-elevated);
+  border: 1px solid var(--lightink-border);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.06),
+    0 12px 32px rgba(0, 0, 0, 0.14);
+  font-size: 0.78rem;
+}
+
+/* popover 箭头机制保留：位置由 --lightink-reader-popover-arrow 内联驱动。 */
+.lightink-reader-chrome-popover::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: var(--lightink-reader-popover-arrow, 1.1rem);
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  background: var(--lightink-bg-elevated);
+  border-left: 1px solid var(--lightink-border);
+  border-top: 1px solid var(--lightink-border);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.lightink-reader-chrome-panel[hidden] {
+  display: none;
+}
+
+/* ===== TOC 面板（原样迁移，不重设计） ===== */
+
+.lightink-reader-chrome-toc {
+  top: 3.1rem;
+  left: 0.75rem;
+  width: min(19.5rem, calc(100% - 1.5rem));
+  padding: 0.35rem 0 0.4rem;
+}
+
+.lightink-reader-chrome-panel-title {
+  margin: 0;
+  padding: 0.45rem 0.75rem 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-chrome-panel-empty {
+  margin: 0;
+  padding: 0.4rem 1rem 1rem;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-toc-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.15rem 0 0.55rem;
+}
+
+.lightink-reader-toc-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.55rem 1rem 0.55rem calc(1rem + var(--lightink-reader-toc-level, 0) * 0.85rem);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.lightink-reader-toc-item:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-toc-item.is-current {
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  font-weight: 600;
+}
+
+/* ===== 排版浮层（现代浮层卡片重设计） ===== */
+
+.lightink-reader-chrome-typography {
+  top: 3.1rem;
+  left: 0.75rem;
+  right: auto;
+  width: min(19.5rem, calc(100% - 1.5rem));
+  padding: 1rem 1.05rem 1.1rem;
+  overflow: visible;
+}
+
+.lightink-reader-chrome-typography .lightink-reader-chrome-panel-title {
+  display: none;
+}
+
+.lightink-reader-type-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(64vh, 26rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* 分组间距约 14px，细分隔线淡化，保持分组清晰。 */
+.lightink-reader-type-section + .lightink-reader-type-section:not(.lightink-reader-type-slider),
+.lightink-reader-type-section:not(.lightink-reader-type-slider) + .lightink-reader-type-slider {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
+.lightink-reader-type-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--lightink-muted);
+}
+
+/* --hidden 变体：视觉隐藏但对辅助技术可访问。 */
+.lightink-reader-type-label--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 字号 hero：两侧圆形 A-/A+ 按钮，中央样字突出。 */
+.lightink-reader-type-hero {
+  display: grid;
+  grid-template-columns: 2.1rem 1fr 2.1rem;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 3rem;
+}
+
+.lightink-reader-type-hero-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.lightink-reader-type-hero-sample {
+  font-size: calc(1.3rem * var(--lightink-reader-hero-scale, 1));
+  line-height: 1;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+.lightink-reader-type-step-mark {
+  font-size: 0.68rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-type-step {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.lightink-reader-type-step--out {
+  font-size: 0.92rem;
+}
+
+.lightink-reader-type-step--in {
+  font-size: 1.35rem;
+  font-weight: 500;
+}
+
+.lightink-reader-type-step:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-reader-type-step:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+/* 主题 swatch：四列网格，页面卡片圆角，is-active 用主题 accent 描边。 */
+.lightink-reader-theme-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.lightink-reader-theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lightink-reader-theme-page {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  box-sizing: border-box;
+  width: 100%;
+  height: 2.55rem;
+  padding: 0.4rem 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, #111) 14%, transparent);
+  border-radius: 9px;
+  background: var(--lightink-reader-swatch-page, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.lightink-reader-theme-page i {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--lightink-reader-swatch-ink, #111);
+  opacity: 0.42;
+}
+
+.lightink-reader-theme-page i:nth-child(1) { width: 88%; }
+.lightink-reader-theme-page i:nth-child(2) { width: 72%; }
+.lightink-reader-theme-page i:nth-child(3) { width: 80%; }
+
+.lightink-reader-theme-swatch-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--lightink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-reader-theme-swatch.is-active .lightink-reader-theme-page {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
+}
+
+.lightink-reader-theme-swatch.is-active .lightink-reader-theme-swatch-name {
+  color: var(--lightink-fg);
+  font-weight: 600;
+}
+
+/* 字体与翻页模式：分段控件观感（容器浅底、is-active 项浮起卡片）。 */
+.lightink-reader-type-fonts,
+.lightink-reader-type-modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-reader-type-modes {
+  grid-template-columns: 1fr 1fr;
+}
+
+.lightink-reader-type-font,
+.lightink-reader-type-mode {
+  min-height: 1.9rem;
+  padding: 0.2rem 0.25rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.lightink-reader-type-font.is-active,
+.lightink-reader-type-mode.is-active {
+  background: var(--lightink-bg);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  font-weight: 600;
+}
+
+.lightink-reader-type-mode {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.lightink-reader-type-mode-art {
+  position: relative;
+  width: 0.95rem;
+  height: 0.8rem;
+  flex: 0 0 auto;
+}
+
+.lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i {
+  position: absolute;
+  width: 0.58rem;
+  height: 0.7rem;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+  background: var(--lightink-bg-elevated);
+}
+
+.lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i:first-child {
+  left: 0;
+  top: 0.12rem;
+}
+
+.lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i:last-child {
+  right: 0;
+  top: 0;
+}
+
+.lightink-reader-type-mode--scroll .lightink-reader-type-mode-art {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.22rem;
+}
+
+.lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i:nth-child(1) { width: 100%; }
+.lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i:nth-child(2) { width: 78%; }
+.lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i:nth-child(3) { width: 90%; }
+
+.lightink-reader-type-mode-name {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* 行距/行长滑块组：保留 track 轨道与 --lightink-reader-track-fill 填充机制。 */
+.lightink-reader-type-slider {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.lightink-reader-type-slider + .lightink-reader-type-slider {
+  margin-top: 0.55rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.lightink-reader-type-slider .lightink-reader-type-label {
+  margin: 0;
+  letter-spacing: 0.04em;
+}
+
+.lightink-reader-type-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 1.8rem;
+}
+
+.lightink-reader-type-track::before {
+  content: '';
+  position: absolute;
+  left: 0.45rem;
+  right: 0.45rem;
+  top: 50%;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  transform: translateY(-50%);
+}
+
+.lightink-reader-type-track::after {
+  content: '';
+  position: absolute;
+  left: 0.45rem;
+  top: 50%;
+  width: var(--lightink-reader-track-fill, 0%);
+  max-width: calc(100% - 0.9rem);
+  height: 3px;
+  border-radius: 999px;
+  background: var(--lightink-accent);
+  transform: translateY(-50%);
+}
+
+/* tick 圆点化：默认空心圆点，is-active 实心 accent 圆点。 */
+.lightink-reader-type-tick {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lightink-reader-type-tick .lightink-reader-type-glyph {
+  display: none;
+}
+
+.lightink-reader-type-tick::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--lightink-fg) 26%, transparent);
+}
+
+.lightink-reader-type-tick.is-active::before {
+  width: 0.8rem;
+  height: 0.8rem;
+  background: var(--lightink-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 18%, transparent);
+}
+
+.lightink-reader-type-choice {
+  color: inherit;
+  font: inherit;
+}
