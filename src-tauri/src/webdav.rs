@@ -647,9 +647,11 @@ fn collect_local_document(
         document
             .groups
             .extend(tombstone_groups(&document.groups, &last.groups));
+        let known_hashes =
+            locally_known_hashes(&connection, item_hashes, &document.members);
         document
             .members
-            .extend(tombstone_members(&document.members, &last.members));
+            .extend(tombstone_members(&document.members, &last.members, &known_hashes));
     }
     Ok(sanitize_document(document))
 }
@@ -683,7 +685,32 @@ fn tombstone_groups(current: &[SyncedGroup], last: &[SyncedGroup]) -> Vec<Synced
         .collect()
 }
 
-fn tombstone_members(current: &[SyncedMember], last: &[SyncedMember]) -> Vec<SyncedMember> {
+fn locally_known_hashes(
+    connection: &rusqlite::Connection,
+    item_hashes: &[ItemHash],
+    current_members: &[SyncedMember],
+) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    for item in item_hashes {
+        if validate_content_hash(&item.content_hash).is_ok() {
+            hashes.insert(item.content_hash.clone());
+        }
+    }
+    for member in current_members {
+        hashes.insert(member.content_hash.clone());
+    }
+    let mut items_by_hash = HashMap::new();
+    if index_local_item_hashes(connection, &mut items_by_hash).is_ok() {
+        hashes.extend(items_by_hash.into_keys());
+    }
+    hashes
+}
+
+fn tombstone_members(
+    current: &[SyncedMember],
+    last: &[SyncedMember],
+    known_hashes: &HashSet<String>,
+) -> Vec<SyncedMember> {
     let current_keys = current
         .iter()
         .map(|member| (member.group_id.as_str(), member.content_hash.as_str()))
@@ -691,13 +718,18 @@ fn tombstone_members(current: &[SyncedMember], last: &[SyncedMember]) -> Vec<Syn
     let now = library::now_ms();
     last.iter()
         .filter(|member| {
-            !member.removed
-                && !current_keys.contains(&(member.group_id.as_str(), member.content_hash.as_str()))
+            !current_keys.contains(&(member.group_id.as_str(), member.content_hash.as_str()))
         })
-        .map(|member| SyncedMember {
-            updated_at: now.max(member.updated_at),
-            removed: true,
-            ..member.clone()
+        .map(|member| {
+            if !member.removed && known_hashes.contains(&member.content_hash) {
+                SyncedMember {
+                    updated_at: now.max(member.updated_at),
+                    removed: true,
+                    ..member.clone()
+                }
+            } else {
+                member.clone()
+            }
         })
         .collect()
 }
@@ -1152,6 +1184,24 @@ mod tests {
             .find(|member| member.content_hash == HASH_B)
             .unwrap();
         assert!(removed.removed);
+    }
+
+    #[test]
+    fn tombstone_members_keeps_unmapped_last_members() {
+        let last = vec![member("user:a", HASH_A, 8), member("user:b", HASH_B, 9)];
+        let current = vec![member("user:a", HASH_A, 8)];
+        let known = HashSet::from([HASH_B.to_string()]);
+        let extras = tombstone_members(&current, &last, &known);
+        assert!(extras.iter().any(|member| {
+            member.group_id == "user:b" && member.content_hash == HASH_B && member.removed
+        }));
+        let extras = tombstone_members(&current, &last, &HashSet::new());
+        assert!(extras.iter().any(|member| {
+            member.group_id == "user:b"
+                && member.content_hash == HASH_B
+                && !member.removed
+                && member.updated_at == 9
+        }));
     }
 
     #[test]
