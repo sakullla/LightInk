@@ -880,7 +880,13 @@ export function createLibraryView(
     const secondary = api.addItemToGroup;
     if (primary === undefined) return undefined;
     return async (groupId, itemId) => {
-      await primary(groupId, itemId);
+      const storage = deps.progressStorage ?? window.localStorage;
+      const contentHash = loadLibraryProgressAlias(storage, itemId) ?? undefined;
+      if (contentHash === undefined) {
+        await primary(groupId, itemId);
+      } else {
+        await primary(groupId, itemId, contentHash);
+      }
       if (secondary !== undefined && secondary !== primary) {
         await secondary(groupId, itemId);
       }
@@ -906,7 +912,12 @@ export function createLibraryView(
     const api = groupsApi();
     if (api.organizeGroups === undefined && api.organize === undefined) return undefined;
     return async () => {
-      const hints = (await deps.library.listItems()).map((item) => organizeHintForItem(item));
+      const storage = deps.progressStorage ?? window.localStorage;
+      const hints = (await deps.library.listItems()).map((item) =>
+        organizeHintForItem(item, {
+          contentHash: loadLibraryProgressAlias(storage, item.id) ?? undefined,
+        }),
+      );
       if (api.organizeGroups !== undefined) {
         await api.organizeGroups(hints);
       } else if (api.organize !== undefined) {

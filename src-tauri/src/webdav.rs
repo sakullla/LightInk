@@ -250,7 +250,12 @@ pub async fn webdav_sync(
         download_sync_document(&document_url, credential.as_ref(), MAX_SYNC_BYTES).await?;
     let remote = parse_sync_document(&remote_text)?;
     let last = load_last_sync(&directory)?;
-    let local = collect_local_document(&directory, &input.progress, last.as_ref())?;
+    let local = collect_local_document(
+        &directory,
+        &input.progress,
+        &input.item_hashes,
+        last.as_ref(),
+    )?;
     let merged = merge_sync_documents(&local, &remote);
     let body = serialize_sync_document(&merged)?;
     upload_sync_document(&document_url, credential.as_ref(), &body).await?;
@@ -510,9 +515,73 @@ fn merge_members(local: &[SyncedMember], remote: &[SyncedMember]) -> Vec<SyncedM
     winners.into_values().collect()
 }
 
+fn hashes_by_item_id(item_hashes: &[ItemHash]) -> HashMap<String, String> {
+    let mut hashes = HashMap::new();
+    for item in item_hashes {
+        if validate_content_hash(&item.content_hash).is_ok() && !item.item_id.trim().is_empty() {
+            hashes
+                .entry(item.item_id.clone())
+                .or_insert_with(|| item.content_hash.clone());
+        }
+    }
+    hashes
+}
+
+fn compute_local_item_hash(connection: &rusqlite::Connection, item_id: &str) -> Option<String> {
+    let path = connection
+        .query_row(
+            "SELECT local_path FROM library_items WHERE id=?1",
+            params![item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    let bytes = fs::read(path).ok()?;
+    let hash = crate::asset::content_hash_hex(&bytes);
+    validate_content_hash(&hash).ok().map(str::to_string)
+}
+
+fn resolve_member_content_hash(
+    connection: &rusqlite::Connection,
+    item_id: &str,
+    stored: Option<&str>,
+    hashes_by_item: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(hash) = stored.filter(|hash| validate_content_hash(hash).is_ok()) {
+        return Some(hash.to_string());
+    }
+    if let Some(hash) = hashes_by_item.get(item_id) {
+        if validate_content_hash(hash).is_ok() {
+            return Some(hash.clone());
+        }
+    }
+    compute_local_item_hash(connection, item_id)
+}
+
+fn persist_member_content_hash(
+    connection: &rusqlite::Connection,
+    group_id: &str,
+    item_id: &str,
+    content_hash: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE library_group_members SET content_hash=?3
+             WHERE group_id=?1 AND item_id=?2",
+            params![group_id, item_id, content_hash],
+        )
+        .map_err(|error| format!("无法写入分组成员哈希: {error}"))?;
+    Ok(())
+}
+
 fn collect_local_document(
     directory: &Path,
     progress: &BTreeMap<String, SyncedProgress>,
+    item_hashes: &[ItemHash],
     last: Option<&SyncDocument>,
 ) -> Result<SyncDocument, RemoteError> {
     let mut document = SyncDocument {
@@ -544,15 +613,27 @@ fn collect_local_document(
         .filter(|group| !is_reserved_group(&group.id))
         .map(synced_group_from_library)
         .collect();
+    let hashes_by_item = hashes_by_item_id(item_hashes);
     document.members = list_library_group_members(&connection, None)
         .map_err(|message| RemoteError::new("WEBDAV_STORAGE_ERROR", message))?
         .into_iter()
         .filter_map(|member| {
-            let content_hash = member
-                .content_hash
-                .filter(|hash| validate_content_hash(hash).is_ok())?;
             if is_reserved_group(&member.group_id) {
                 return None;
+            }
+            let content_hash = resolve_member_content_hash(
+                &connection,
+                &member.item_id,
+                member.content_hash.as_deref(),
+                &hashes_by_item,
+            )?;
+            if member.content_hash.as_deref() != Some(content_hash.as_str()) {
+                let _ = persist_member_content_hash(
+                    &connection,
+                    &member.group_id,
+                    &member.item_id,
+                    &content_hash,
+                );
             }
             Some(SyncedMember {
                 group_id: member.group_id,
@@ -1123,6 +1204,62 @@ mod tests {
         let members = list_library_group_members(&connection, Some("user:series")).unwrap();
         assert_eq!(members[0].item_id, "book-1");
         assert_eq!(members[0].content_hash.as_deref(), Some(HASH_A));
+    }
+
+    #[test]
+    fn collect_local_document_attaches_missing_member_hashes() {
+        let directory = tempfile::tempdir().unwrap();
+        let book_path = directory.path().join("never-opened.epub");
+        fs::write(&book_path, b"local-epub-bytes").unwrap();
+        let computed = crate::asset::content_hash_hex(b"local-epub-bytes");
+        let connection = open_database_at(directory.path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_items(id, source_kind, title, authors_json, local_path, updated_at)
+                 VALUES ('book-alias', 'local', '已打开', '[]', NULL, 1),
+                        ('book-file', 'local', '未打开', '[]', ?1, 1)",
+                params![book_path.to_string_lossy()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_groups(id, parent_id, name, source, smart_key, created_at, updated_at)
+                 VALUES ('user:a', NULL, '组', 'user', NULL, 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_group_members(group_id, item_id, content_hash, updated_at)
+                 VALUES ('user:a', 'book-alias', NULL, 4),
+                        ('user:a', 'book-file', NULL, 5)",
+                [],
+            )
+            .unwrap();
+        let document = collect_local_document(
+            directory.path(),
+            &BTreeMap::new(),
+            &[ItemHash {
+                item_id: "book-alias".into(),
+                content_hash: HASH_A.into(),
+            }],
+            None,
+        )
+        .unwrap();
+        let by_hash: HashMap<_, _> = document
+            .members
+            .iter()
+            .map(|member| (member.content_hash.as_str(), member.updated_at))
+            .collect();
+        assert_eq!(by_hash.get(HASH_A), Some(&4));
+        assert_eq!(by_hash.get(computed.as_str()), Some(&5));
+        let stored = list_library_group_members(&connection, Some("user:a")).unwrap();
+        assert!(stored.iter().any(|member| {
+            member.item_id == "book-alias" && member.content_hash.as_deref() == Some(HASH_A)
+        }));
+        assert!(stored.iter().any(|member| {
+            member.item_id == "book-file" && member.content_hash.as_deref() == Some(computed.as_str())
+        }));
     }
 
     #[test]
