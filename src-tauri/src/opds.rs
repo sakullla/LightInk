@@ -1,4 +1,4 @@
-//! OPDS 1.x Atom feed parsing and authenticated browsing.
+//! OPDS 1.x Atom and 2.0 JSON feed parsing and authenticated browsing.
 
 use crate::library::{self, OpdsSource};
 use crate::remote::{
@@ -456,6 +456,449 @@ pub fn parse_opds_feed(xml: &str, base_url: &Url) -> Result<OpdsFeed, RemoteErro
     Ok(feed)
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct Opds2Metadata {
+    title: Option<serde_json::Value>,
+    identifier: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    modified: Option<String>,
+    updated: Option<String>,
+    description: Option<serde_json::Value>,
+    author: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Opds2LinkObject {
+    href: String,
+    #[serde(default)]
+    rel: serde_json::Value,
+    #[serde(rename = "type")]
+    media_type: Option<String>,
+    title: Option<String>,
+    #[serde(default)]
+    templated: bool,
+    properties: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Opds2Publication {
+    #[serde(default)]
+    metadata: Opds2Metadata,
+    #[serde(default)]
+    links: Vec<Opds2LinkObject>,
+    #[serde(default)]
+    images: Vec<Opds2LinkObject>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Opds2Group {
+    #[serde(default)]
+    publications: Vec<Opds2Publication>,
+    #[serde(default)]
+    navigation: Vec<Opds2LinkObject>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Opds2FeedDocument {
+    #[serde(default)]
+    metadata: Opds2Metadata,
+    #[serde(default)]
+    links: Vec<Opds2LinkObject>,
+    #[serde(default)]
+    publications: Vec<Opds2Publication>,
+    #[serde(default)]
+    navigation: Vec<Opds2LinkObject>,
+    #[serde(default)]
+    groups: Vec<Opds2Group>,
+}
+
+fn looks_like_json(body: &str) -> bool {
+    matches!(body.trim_start().as_bytes().first(), Some(b'{' | b'['))
+}
+
+fn looks_like_opds_json(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.contains_key("metadata")
+        && (object.contains_key("publications")
+            || object.contains_key("navigation")
+            || object.contains_key("groups"))
+}
+
+fn json_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_string())
+        }
+        serde_json::Value::Object(map) => {
+            const PREFERRED: &[&str] = &["und", "", "en", "zh", "zh-CN", "zh-Hans", "zh-Hant"];
+            for key in PREFERRED {
+                if let Some(serde_json::Value::String(text)) = map.get(*key) {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        return Some(text.to_string());
+                    }
+                }
+            }
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                if let serde_json::Value::String(text) = &map[key] {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        return Some(text.to_string());
+                    }
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(json_text),
+        _ => None,
+    }
+}
+
+fn contributor_names(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::String(name) => {
+            let name = name.trim();
+            if name.is_empty() {
+                Vec::new()
+            } else {
+                vec![name.to_string()]
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(name) = map.get("name") {
+                return contributor_names(name);
+            }
+            json_text(value).into_iter().collect()
+        }
+        serde_json::Value::Array(items) => items.iter().flat_map(contributor_names).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn rel_tokens(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(rel) => rel.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => "alternate".into(),
+    }
+}
+
+fn json_link_size(properties: Option<&serde_json::Value>) -> Option<u64> {
+    let object = properties?.as_object()?;
+    object
+        .get("filesize")
+        .or_else(|| object.get("fileSize"))
+        .or_else(|| object.get("length"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|size| u64::try_from(size).ok()))
+        })
+}
+
+fn is_json_acquisition_rel(rel: &str) -> bool {
+    rel.split_ascii_whitespace().any(|token| {
+        token.contains("opds-spec.org/acquisition")
+            || matches!(
+                token,
+                "acquisition" | "download" | "borrow" | "buy" | "subscribe"
+            )
+    })
+}
+
+fn is_json_search_template(href: &str) -> bool {
+    href.contains("{searchTerms}") || href.contains("{query}") || href.contains("{?query")
+}
+
+fn resolve_templated_href(base: &Url, href: &str) -> Result<String, RemoteError> {
+    let Some(template_at) = href.find('{') else {
+        return resolve_link_url(base, href);
+    };
+    let (prefix, template) = href.split_at(template_at);
+    if prefix.is_empty() {
+        return Err(RemoteError::new("OPDS_LINK_INVALID", "OPDS 搜索模板无效"));
+    }
+    let resolved = resolve_link_url(base, prefix)?;
+    Ok(format!("{resolved}{template}"))
+}
+
+fn expand_uri_query_var(template: &str, name: &str, value: &str) -> Option<String> {
+    for (token, joiner) in [("{?", "?"), ("{&", "&")] {
+        let Some(start) = template.find(token) else {
+            continue;
+        };
+        let Some(end) = template[start..].find('}').map(|offset| start + offset) else {
+            continue;
+        };
+        let names = &template[start + token.len()..end];
+        if names.split(',').any(|part| part.trim() == name) {
+            return Some(format!(
+                "{}{joiner}{name}={value}{}",
+                &template[..start],
+                &template[end + 1..]
+            ));
+        }
+    }
+    None
+}
+
+fn expand_search_template(template: &str, query: &str) -> Result<String, RemoteError> {
+    let encoded = url::form_urlencoded::byte_serialize(query.trim().as_bytes()).collect::<String>();
+    if template.contains("{searchTerms}") {
+        return Ok(template.replace("{searchTerms}", &encoded));
+    }
+    if let Some(expanded) = expand_uri_query_var(template, "query", &encoded) {
+        return Ok(expanded);
+    }
+    if template.contains("{query}") {
+        return Ok(template.replace("{query}", &encoded));
+    }
+    Err(RemoteError::new(
+        "OPDS_SEARCH_UNSUPPORTED",
+        "该 OPDS 源未提供搜索模板",
+    ))
+}
+
+fn parse_json_link(
+    link: &Opds2LinkObject,
+    base: &Url,
+    allow_acquisition: bool,
+) -> Result<OpdsLink, RemoteError> {
+    let rel = rel_tokens(&link.rel);
+    let href = if link.templated || link.href.contains('{') {
+        resolve_templated_href(base, &link.href)?
+    } else {
+        resolve_link_url(base, &link.href)?
+    };
+    let extension = extension_from_media_type(link.media_type.as_deref(), &href);
+    let acquisition = allow_acquisition
+        && is_json_acquisition_rel(&rel)
+        && supported_extension(extension.as_deref());
+    Ok(OpdsLink {
+        href,
+        rel,
+        media_type: link.media_type.clone(),
+        title: link.title.clone(),
+        size: json_link_size(link.properties.as_ref()),
+        extension,
+        acquisition,
+    })
+}
+
+fn is_cover_rel(rel: &str) -> bool {
+    rel.split_ascii_whitespace().any(|token| {
+        token.ends_with("/image") || token.ends_with("/image/thumbnail") || token == "cover"
+    })
+}
+
+fn entry_from_publication(
+    publication: &Opds2Publication,
+    base: &Url,
+) -> Result<OpdsEntry, RemoteError> {
+    let title = publication
+        .metadata
+        .title
+        .as_ref()
+        .and_then(json_text)
+        .ok_or_else(|| RemoteError::new("OPDS_ENTRY_INVALID", "OPDS 条目缺少 id 或 title"))?;
+    let mut links = Vec::new();
+    let mut cover_url = None;
+    for image in &publication.images {
+        let link = parse_json_link(image, base, false)?;
+        cover_url.get_or_insert_with(|| link.href.clone());
+        links.push(link);
+    }
+    for raw in &publication.links {
+        let link = parse_json_link(raw, base, true)?;
+        if cover_url.is_none() && is_cover_rel(&link.rel) {
+            cover_url = Some(link.href.clone());
+        }
+        links.push(link);
+    }
+    let id = publication
+        .metadata
+        .identifier
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            publication
+                .metadata
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            links
+                .iter()
+                .find(|link| link.rel.split_ascii_whitespace().any(|rel| rel == "self"))
+                .map(|link| link.href.clone())
+        })
+        .unwrap_or_else(|| title.clone());
+    Ok(OpdsEntry {
+        id,
+        item_id: None,
+        title,
+        authors: publication
+            .metadata
+            .author
+            .as_ref()
+            .map(contributor_names)
+            .unwrap_or_default(),
+        updated: publication
+            .metadata
+            .modified
+            .as_deref()
+            .or(publication.metadata.updated.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        summary: publication
+            .metadata
+            .description
+            .as_ref()
+            .and_then(json_text),
+        cover_url,
+        links,
+    })
+}
+
+fn entry_from_navigation(
+    link: &Opds2LinkObject,
+    base: &Url,
+) -> Result<Option<OpdsEntry>, RemoteError> {
+    let Some(title) = link
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let parsed = parse_json_link(link, base, false)?;
+    Ok(Some(OpdsEntry {
+        id: parsed.href.clone(),
+        item_id: None,
+        title,
+        authors: Vec::new(),
+        updated: None,
+        summary: None,
+        cover_url: None,
+        links: vec![parsed],
+    }))
+}
+
+fn apply_json_feed_links(feed: &mut OpdsFeed) {
+    for link in &feed.links {
+        let rels = link.rel.split_ascii_whitespace().collect::<Vec<_>>();
+        if rels.contains(&"next") {
+            feed.next_url = Some(link.href.clone());
+        }
+        if rels.contains(&"previous") || rels.contains(&"prev") {
+            feed.previous_url = Some(link.href.clone());
+        }
+        if rels.contains(&"search") && is_json_search_template(&link.href) {
+            feed.search_template = Some(link.href.clone());
+        }
+    }
+}
+
+fn map_opds2_document(
+    document: Opds2FeedDocument,
+    base_url: &Url,
+) -> Result<OpdsFeed, RemoteError> {
+    let title = document
+        .metadata
+        .title
+        .as_ref()
+        .and_then(json_text)
+        .ok_or_else(|| RemoteError::new("OPDS_FEED_INVALID", "OPDS Feed 缺少标题"))?;
+    let mut feed = OpdsFeed {
+        id: document
+            .metadata
+            .identifier
+            .as_deref()
+            .or(document.metadata.id.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        title,
+        updated: document
+            .metadata
+            .modified
+            .as_deref()
+            .or(document.metadata.updated.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        entries: Vec::new(),
+        links: Vec::new(),
+        next_url: None,
+        previous_url: None,
+        search_template: None,
+        source_url: base_url.to_string(),
+    };
+    for link in &document.links {
+        feed.links.push(parse_json_link(link, base_url, false)?);
+    }
+    for link in &document.navigation {
+        if let Some(entry) = entry_from_navigation(link, base_url)? {
+            feed.entries.push(entry);
+        }
+    }
+    for publication in &document.publications {
+        feed.entries
+            .push(entry_from_publication(publication, base_url)?);
+    }
+    for group in &document.groups {
+        for link in &group.navigation {
+            if let Some(entry) = entry_from_navigation(link, base_url)? {
+                feed.entries.push(entry);
+            }
+        }
+        for publication in &group.publications {
+            feed.entries
+                .push(entry_from_publication(publication, base_url)?);
+        }
+    }
+    apply_json_feed_links(&mut feed);
+    Ok(feed)
+}
+
+fn parse_catalog(body: &str, base_url: &Url) -> Result<OpdsFeed, RemoteError> {
+    if looks_like_json(body) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+            if looks_like_opds_json(&value) {
+                let document: Opds2FeedDocument =
+                    serde_json::from_value(value).map_err(|error| {
+                        RemoteError::new("OPDS_JSON_INVALID", format!("OPDS JSON 损坏: {error}"))
+                    })?;
+                return map_opds2_document(document, base_url);
+            }
+            return parse_opds_feed(body, base_url).map_err(|_| {
+                RemoteError::new("OPDS_JSON_INVALID", "响应不是有效的 OPDS 2.0 目录")
+            });
+        }
+        return parse_opds_feed(body, base_url)
+            .map_err(|_| RemoteError::new("OPDS_JSON_INVALID", "OPDS JSON 损坏"));
+    }
+    parse_opds_feed(body, base_url)
+}
+
 fn stable_source_id(url: &Url) -> String {
     let digest = Sha256::digest(url.as_str().as_bytes());
     format!(
@@ -669,7 +1112,7 @@ async fn browse_url(
     let credential_ref = same_origin(&source_url, &target_url)
         .then_some(source.credential_ref.as_deref())
         .flatten();
-    let (final_url, xml) = fetch_remote_text(
+    let (final_url, body) = fetch_remote_text(
         state,
         target_url.as_str(),
         source.allow_http,
@@ -677,7 +1120,7 @@ async fn browse_url(
         MAX_OPDS_FEED_BYTES,
     )
     .await?;
-    let mut feed = parse_opds_feed(&xml, &final_url)?;
+    let mut feed = parse_catalog(&body, &final_url)?;
     for entry in &mut feed.entries {
         entry.item_id = Some(item_id(&source.id, &entry.id));
     }
@@ -712,8 +1155,7 @@ pub async fn opds_search(
     let template = root
         .search_template
         .ok_or_else(|| RemoteError::new("OPDS_SEARCH_UNSUPPORTED", "该 OPDS 源未提供搜索模板"))?;
-    let encoded = url::form_urlencoded::byte_serialize(query.trim().as_bytes()).collect::<String>();
-    let url = template.replace("{searchTerms}", &encoded);
+    let url = expand_search_template(&template, &query)?;
     browse_url(&app, &state, &source, &url).await
 }
 
@@ -839,5 +1281,173 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(downgrade.code, "OPDS_LINK_INVALID");
+    }
+
+    const JSON_FEED: &str = r#"{
+      "metadata": {"title": "测试书库", "modified": "2026-01-01T00:00:00Z"},
+      "links": [
+        {"rel": "self", "href": "https://example.test/opds", "type": "application/opds+json"},
+        {"rel": "next", "href": "?page=2", "type": "application/opds+json"},
+        {"rel": ["first", "previous"], "href": "?page=1", "type": "application/opds+json"},
+        {"rel": "search", "href": "search{?query}", "type": "application/opds+json", "templated": true}
+      ],
+      "publications": [
+        {
+          "metadata": {
+            "title": "Book 10",
+            "author": {"name": "Alice"},
+            "identifier": "book-1",
+            "modified": "2026-01-01T00:00:00Z",
+            "description": "A comic"
+          },
+          "links": [
+            {"rel": "self", "href": "pub.json", "type": "application/opds-publication+json"},
+            {"rel": "download", "href": "books/a.cbz", "type": "application/vnd.comicbook+zip"}
+          ],
+          "images": [
+            {"href": "covers/a.jpg", "type": "image/jpeg"}
+          ]
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn parses_opds2_json_publications_pagination_search_and_cover() {
+        let base = Url::parse("https://example.test/opds/index.json").unwrap();
+        let feed = parse_catalog(JSON_FEED, &base).unwrap();
+        assert_eq!(feed.title, "测试书库");
+        assert_eq!(
+            feed.next_url.as_deref(),
+            Some("https://example.test/opds/index.json?page=2")
+        );
+        assert_eq!(
+            feed.previous_url.as_deref(),
+            Some("https://example.test/opds/index.json?page=1")
+        );
+        assert_eq!(
+            feed.search_template.as_deref(),
+            Some("https://example.test/opds/search{?query}")
+        );
+        assert_eq!(feed.entries[0].id, "book-1");
+        assert_eq!(feed.entries[0].authors, vec!["Alice"]);
+        assert_eq!(
+            feed.entries[0].cover_url.as_deref(),
+            Some("https://example.test/opds/covers/a.jpg")
+        );
+        assert!(feed.entries[0].links.iter().any(|link| link.acquisition));
+        assert_eq!(
+            feed.entries[0]
+                .links
+                .iter()
+                .find(|link| link.acquisition)
+                .and_then(|link| link.extension.as_deref()),
+            Some("cbz")
+        );
+    }
+
+    #[test]
+    fn maps_opds2_navigation_and_groups_to_entries() {
+        let base = Url::parse("https://example.test/opds/").unwrap();
+        let feed = parse_catalog(
+            r#"{
+              "metadata": {"title": "目录"},
+              "links": [{"rel": "self", "href": "/", "type": "application/opds+json"}],
+              "groups": [
+                {
+                  "metadata": {"title": "Main"},
+                  "navigation": [
+                    {"href": "new", "title": "新书", "type": "application/opds+json"}
+                  ]
+                },
+                {
+                  "metadata": {"title": "Featured"},
+                  "publications": [
+                    {
+                      "metadata": {"title": {"en": "Moby-Dick", "zh": "白鲸"}, "author": ["Herman", {"name": "Melville"}]},
+                      "links": [
+                        {"rel": "http://opds-spec.org/acquisition", "href": "moby.epub", "type": "application/epub+zip"}
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }"#,
+            &base,
+        )
+        .unwrap();
+        assert_eq!(feed.entries.len(), 2);
+        assert_eq!(feed.entries[0].title, "新书");
+        assert_eq!(feed.entries[0].id, "https://example.test/opds/new");
+        assert!(!feed.entries[0].links[0].acquisition);
+        assert_eq!(feed.entries[1].title, "Moby-Dick");
+        assert_eq!(feed.entries[1].authors, vec!["Herman", "Melville"]);
+        assert!(feed.entries[1].links[0].acquisition);
+    }
+
+    #[test]
+    fn catalog_keeps_atom_path_when_body_is_not_json() {
+        let base = Url::parse("https://example.test/opds/index.xml").unwrap();
+        let feed = parse_catalog(FEED, &base).unwrap();
+        assert_eq!(feed.title, "测试书库");
+        assert_eq!(
+            feed.search_template.as_deref(),
+            Some("https://example.test/opds/search?q={searchTerms}")
+        );
+        assert!(feed.entries[0].links[0].acquisition);
+    }
+
+    #[test]
+    fn rejects_invalid_opds2_json_without_using_atom_codes() {
+        let base = Url::parse("https://example.test/opds").unwrap();
+        assert_eq!(
+            parse_catalog("{not-json", &base).unwrap_err().code,
+            "OPDS_JSON_INVALID"
+        );
+        assert_eq!(
+            parse_catalog(r#"{"title":"not a catalog"}"#, &base)
+                .unwrap_err()
+                .code,
+            "OPDS_JSON_INVALID"
+        );
+        assert_eq!(
+            parse_catalog(r#"{"metadata":{},"publications":[]}"#, &base)
+                .unwrap_err()
+                .code,
+            "OPDS_FEED_INVALID"
+        );
+    }
+
+    #[test]
+    fn rejects_non_http_and_https_downgrade_in_opds2_links() {
+        let base = Url::parse("https://example.test/opds").unwrap();
+        let error = parse_catalog(
+            r#"{"metadata":{"title":"safe"},"links":[{"rel":"next","href":"file:///tmp/feed.json"}],"publications":[]}"#,
+            &base,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "OPDS_LINK_INVALID");
+
+        let downgrade = parse_catalog(
+            r#"{"metadata":{"title":"safe"},"links":[{"rel":"next","href":"http://example.test/feed.json"}],"publications":[]}"#,
+            &base,
+        )
+        .unwrap_err();
+        assert_eq!(downgrade.code, "OPDS_LINK_INVALID");
+    }
+
+    #[test]
+    fn expands_opensearch_and_opds2_search_templates() {
+        assert_eq!(
+            expand_search_template("https://example.test/search?q={searchTerms}", "三体").unwrap(),
+            "https://example.test/search?q=%E4%B8%89%E4%BD%93"
+        );
+        assert_eq!(
+            expand_search_template("https://example.test/search{?query,title}", "三体").unwrap(),
+            "https://example.test/search?query=%E4%B8%89%E4%BD%93"
+        );
+        assert_eq!(
+            expand_search_template("https://example.test/find?q={query}", "a b").unwrap(),
+            "https://example.test/find?q=a+b"
+        );
     }
 }
