@@ -206,8 +206,12 @@ export class LibraryClient {
     return this.invoker.invoke<void>('library_remove_group_member', { groupId, itemId });
   }
 
-  organizeGroups(hints: readonly LibraryOrganizeHint[] = []): Promise<void> {
-    return this.invoker.invoke<void>('library_organize_groups', { hints });
+  async organizeGroups(hints: readonly LibraryOrganizeHint[] = []): Promise<void> {
+    const provided = new Map(hints.map((hint) => [hint.itemId, hint]));
+    const resolved = (await this.listItems()).map(
+      (item) => provided.get(item.id) ?? organizeHintForItem(item),
+    );
+    return this.invoker.invoke<void>('library_organize_groups', { hints: resolved });
   }
 
   clearCache(): Promise<void> {

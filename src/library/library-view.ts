@@ -1,9 +1,11 @@
-import type {
-  AcquisitionLink,
-  LibraryClient,
-  LibraryGroup,
-  LibraryGroupMember,
-  LibraryItem,
+import {
+  organizeHintForItem,
+  type AcquisitionLink,
+  type LibraryClient,
+  type LibraryGroup,
+  type LibraryGroupMember,
+  type LibraryItem,
+  type LibraryOrganizeHint,
 } from './library-client.js';
 import { classifyLibraryKind } from './library-kind.js';
 import { isShelfCoverUrl } from './local-book-meta.js';
@@ -33,15 +35,15 @@ export interface LibraryGroupCommands {
   listGroups(): Promise<readonly LibraryGroup[]>;
   listGroupMembers(groupId?: string): Promise<readonly LibraryGroupMember[]>;
   createGroup(input: { name: string; parentId?: string }): Promise<LibraryGroup>;
-  renameGroup(groupId: string, name: string): Promise<void>;
-  moveGroup(groupId: string, parentId?: string): Promise<void>;
+  renameGroup(groupId: string, name: string): Promise<LibraryGroup | void>;
+  moveGroup(groupId: string, parentId?: string | null): Promise<LibraryGroup | void>;
   deleteGroup(groupId: string): Promise<void>;
   addItemToGroup(groupId: string, itemId: string): Promise<void>;
   removeItemFromGroup(groupId: string, itemId: string): Promise<void>;
   organize(): Promise<void>;
-  addGroupMember?(groupId: string, itemId: string): Promise<void>;
+  addGroupMember?(groupId: string, itemId: string, contentHash?: string): Promise<void>;
   removeGroupMember?(groupId: string, itemId: string): Promise<void>;
-  organizeGroups?(): Promise<void>;
+  organizeGroups?(hints?: readonly LibraryOrganizeHint[]): Promise<void>;
 }
 
 interface Labels {
@@ -705,13 +707,13 @@ export function createLibraryView(
 
   function organizeCommand(): (() => Promise<void>) | undefined {
     const api = groupsApi();
-    const primary = api.organizeGroups ?? api.organize;
-    const secondary = api.organize;
-    if (primary === undefined) return undefined;
+    if (api.organizeGroups === undefined && api.organize === undefined) return undefined;
     return async () => {
-      await primary();
-      if (secondary !== undefined && secondary !== primary) {
-        await secondary();
+      const hints = (await deps.library.listItems()).map((item) => organizeHintForItem(item));
+      if (api.organizeGroups !== undefined) {
+        await api.organizeGroups(hints);
+      } else if (api.organize !== undefined) {
+        await api.organize();
       }
     };
   }
@@ -954,7 +956,7 @@ export function createLibraryView(
       collections = [...(await api.listGroups())];
       membersByGroup.clear();
       for (const group of collections) {
-        membersByGroup.set(group.id, new Set(group.itemIds ?? []));
+        membersByGroup.set(group.id, new Set());
       }
       if (api.listGroupMembers !== undefined) {
         let members: readonly LibraryGroupMember[] = [];
@@ -987,7 +989,7 @@ export function createLibraryView(
     }
   }
 
-  async function mutateCollections(action: () => Promise<void>): Promise<void> {
+  async function mutateCollections(action: () => Promise<unknown>): Promise<void> {
     try {
       await action();
       closeGroupForm();
@@ -1206,8 +1208,8 @@ export function createLibraryView(
       const row = button(doc, group.name, 'lightink-library-group');
       row.dataset.libraryGroupId = group.id;
       row.dataset.groupId = group.id;
-      row.dataset.groupKind = group.kind;
-      row.dataset.groupSource = group.kind;
+      row.dataset.groupKind = group.source;
+      row.dataset.groupSource = group.source;
       const parentId = parentIdOf(group);
       if (parentId !== undefined) row.dataset.parentId = parentId;
       else delete row.dataset.parentId;

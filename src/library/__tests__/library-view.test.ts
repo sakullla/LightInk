@@ -11,11 +11,14 @@ import {
 } from '../library-progress.js';
 import { classifyLibraryKind } from '../library-kind.js';
 import { createLibraryView, type LibraryViewDependencies } from '../library-view.js';
-import type {
-  LibraryGroup,
-  LibraryGroupInput,
-  LibraryGroupMember,
-  LibraryItem,
+import {
+  LibraryClient,
+  organizeHintForItem,
+  type LibraryGroup,
+  type LibraryGroupInput,
+  type LibraryGroupMember,
+  type LibraryItem,
+  type LibraryOrganizeHint,
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
@@ -264,9 +267,27 @@ async function addItemToCollection(
   await settle();
 }
 
-interface MutableGroup extends LibraryGroup {
-  kind: LibraryGroup['source'];
+interface MutableGroup {
+  id: string;
+  parentId?: string;
+  name: string;
+  source: LibraryGroup['source'];
+  smartKey?: string;
+  createdAt: number;
+  updatedAt: number;
   itemIds: string[];
+}
+
+function toLibraryGroup(group: MutableGroup): LibraryGroup {
+  return {
+    id: group.id,
+    parentId: group.parentId,
+    name: group.name,
+    source: group.source,
+    smartKey: group.smartKey,
+    createdAt: group.createdAt,
+    updatedAt: group.updatedAt,
+  };
 }
 
 function createGroupStore(
@@ -276,9 +297,6 @@ function createGroupStore(
   const state: MutableGroup[] = [];
   const excluded = new Set<string>();
   let seq = 0;
-
-  const snapshot = (): LibraryGroup[] =>
-    state.map((group) => ({ ...group, itemIds: [...group.itemIds] }));
 
   const findIndex = (groupId: string): number => {
     const index = state.findIndex((group) => group.id === groupId);
@@ -296,7 +314,6 @@ function createGroupStore(
       id: `smart:${smartKey}`,
       name,
       source: 'smart',
-      kind: 'smart',
       smartKey,
       itemIds: [],
       createdAt: Date.now(),
@@ -315,7 +332,7 @@ function createGroupStore(
 
   return {
     async listGroups(): Promise<LibraryGroup[]> {
-      return snapshot();
+      return state.map(toLibraryGroup);
     },
     async listGroupMembers(groupId?: string): Promise<LibraryGroupMember[]> {
       return state.flatMap((group) =>
@@ -336,22 +353,24 @@ function createGroupStore(
         parentId: input.parentId,
         name: input.name,
         source: 'user',
-        kind: 'user',
         itemIds: [],
         createdAt: now,
         updatedAt: now,
       };
       state.push(group);
-      return { ...group, itemIds: [] };
+      return toLibraryGroup(group);
     },
-    async renameGroup(groupId: string, name: string): Promise<void> {
-      state[findIndex(groupId)]!.name = name;
-      state[findIndex(groupId)]!.updatedAt = Date.now();
-    },
-    async moveGroup(groupId: string, parentId?: string): Promise<void> {
+    async renameGroup(groupId: string, name: string): Promise<LibraryGroup> {
       const group = state[findIndex(groupId)]!;
-      group.parentId = parentId;
+      group.name = name;
       group.updatedAt = Date.now();
+      return toLibraryGroup(group);
+    },
+    async moveGroup(groupId: string, parentId?: string | null): Promise<LibraryGroup> {
+      const group = state[findIndex(groupId)]!;
+      group.parentId = parentId ?? undefined;
+      group.updatedAt = Date.now();
+      return toLibraryGroup(group);
     },
     async deleteGroup(groupId: string): Promise<void> {
       state.splice(findIndex(groupId), 1);
@@ -363,23 +382,26 @@ function createGroupStore(
     },
     async removeItemFromGroup(groupId: string, itemId: string): Promise<void> {
       const group = state[findIndex(groupId)]!;
-      if ((group.source === 'smart' || group.kind === 'smart') && group.smartKey !== undefined) {
+      if (group.source === 'smart' && group.smartKey !== undefined) {
         excluded.add(`${group.smartKey}:${itemId}`);
       }
       group.itemIds = group.itemIds.filter((id) => id !== itemId);
       group.updatedAt = Date.now();
     },
-    async organize(): Promise<void> {
+    async organize(hints: readonly LibraryOrganizeHint[] = []): Promise<void> {
+      const provided = new Map(hints.map((hint) => [hint.itemId, hint]));
       for (const item of items()) {
-        for (const author of item.authors) {
+        const hint = provided.get(item.id) ?? organizeHintForItem(item, {
+          seriesStem: seriesStemByItemId[item.id],
+        });
+        for (const author of hint.authors) {
           if (author.trim() === '') continue;
           addUnlessExcluded(ensureSmart('author', author), item.id);
         }
-        const stem = seriesStemByItemId[item.id];
-        if (stem !== undefined && stem !== '') {
-          addUnlessExcluded(ensureSmart('series', stem), item.id);
+        if (hint.seriesStem !== undefined && hint.seriesStem !== '') {
+          addUnlessExcluded(ensureSmart('series', hint.seriesStem), item.id);
         }
-        const kindName = classifyLibraryKind(item) === 'comic' ? '漫画' : '文字书';
+        const kindName = hint.kind === 'comic' ? '漫画' : '文字书';
         addUnlessExcluded(ensureSmart('kind', kindName), item.id);
       }
     },
@@ -404,7 +426,7 @@ function collectionDependencies(options: {
     removeItemFromGroup: vi.fn((groupId: string, itemId: string) =>
       store.removeItemFromGroup(groupId, itemId),
     ),
-    organize: vi.fn(() => store.organize()),
+    organize: vi.fn((hints?: readonly LibraryOrganizeHint[]) => store.organize(hints ?? [])),
   };
   const base = dependencies({
     getProgress: options.getProgress,
@@ -1301,7 +1323,7 @@ describe('LibraryView shelf collections', () => {
     await startCreateGroup(host);
     await submitGroupForm(host, { name: '海猫', parentId });
     expect(library.createGroup).toHaveBeenCalledWith({ name: '海猫', parentId });
-    const listed = await library.listGroups();
+    const listed = await library.listGroups!();
     expect(listed.find((group) => group.name === '海猫')?.parentId).toBe(parentId);
     expect(Number.parseInt(collectionButton(host, '海猫').style.paddingLeft, 10)).toBeGreaterThan(
       Number.parseInt(collectionButton(host, '作者').style.paddingLeft, 10),
@@ -1377,7 +1399,16 @@ describe('LibraryView shelf collections', () => {
 
     expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
     await organizeShelf(host);
-    expect(library.organize).toHaveBeenCalled();
+    expect(library.organize).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          itemId: novel.id,
+          authors: novel.authors,
+          seriesStem,
+          kind: 'text',
+        }),
+      ]),
+    );
 
     expect(collectionKind(collectionButton(host, '海猫'))).toBe('smart');
     expect(collectionKind(collectionButton(host, seriesStem))).toBe('smart');
@@ -1461,7 +1492,7 @@ describe('LibraryView shelf collections', () => {
     await submitGroupForm(host, { name: '地狱系列', parentId });
     expect(library.renameGroup).toHaveBeenCalledWith(seriesId, '地狱系列');
     expect(library.moveGroup).toHaveBeenCalledWith(seriesId, parentId);
-    const listed = await library.listGroups();
+    const listed = await library.listGroups!();
     expect(listed.find((group) => group.id === seriesId)).toMatchObject({
       name: '地狱系列',
       parentId,
@@ -1498,5 +1529,64 @@ describe('LibraryView shelf collections', () => {
     await settle();
     expect(itemRow(host, novel.id).dataset.bookKind).toBe('text');
     view.destroy();
+  });
+});
+
+describe('LibraryClient.organizeGroups', () => {
+  const invokeStub = async <T>(command: string, listed: LibraryItem[]): Promise<T> => {
+    if (command === 'library_list_items') {
+      return listed as T;
+    }
+    return undefined as T;
+  };
+
+  it('is assignable to the shelf library dependency', () => {
+    const library: LibraryViewDependencies['library'] = new LibraryClient({
+      invoke: async <T>(): Promise<T> => undefined as T,
+    });
+    expect(library.organizeGroups).toBeTypeOf('function');
+  });
+
+  it('builds filename-series hints from listed items before invoke', async () => {
+    const item = localItem({
+      id: 'local:/ebook/hell-01.epub',
+      title: '地狱模式 - 01',
+      authors: ['海猫'],
+      localPath: '/ebook/文库版/地狱模式 - 01.epub',
+    });
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const client = new LibraryClient({
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ command, args });
+        return invokeStub(command, [item]);
+      },
+    });
+    await client.organizeGroups();
+    expect(calls).toContainEqual({
+      command: 'library_organize_groups',
+      args: { hints: [organizeHintForItem(item)] },
+    });
+    expect(organizeHintForItem(item).seriesStem).toBe('地狱模式');
+    expect(item.series).toBeUndefined();
+  });
+
+  it('keeps an explicit hint over the filename parse for that item', async () => {
+    const item = localItem({
+      id: 'local:/ebook/hell-01.epub',
+      localPath: '/ebook/文库版/地狱模式 - 01.epub',
+    });
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const hint = organizeHintForItem(item, { seriesStem: '指定主干' });
+    const client = new LibraryClient({
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ command, args });
+        return invokeStub(command, [item]);
+      },
+    });
+    await client.organizeGroups([hint]);
+    expect(calls).toContainEqual({
+      command: 'library_organize_groups',
+      args: { hints: [hint] },
+    });
   });
 });
