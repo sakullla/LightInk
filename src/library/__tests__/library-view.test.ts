@@ -9,11 +9,19 @@ import {
   saveLibraryProgressAlias,
   type LibraryProgressQuery,
 } from '../library-progress.js';
+import { classifyLibraryKind } from '../library-kind.js';
 import { createLibraryView, type LibraryViewDependencies } from '../library-view.js';
-import type { LibraryItem } from '../library-client.js';
+import type {
+  LibraryGroup,
+  LibraryGroupInput,
+  LibraryGroupMember,
+  LibraryItem,
+} from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
 import '../library.css';
+
+type GroupLibrary = NonNullable<LibraryViewDependencies['library']>;
 
 const source: OpdsSource = {
   id: 'source-1',
@@ -104,6 +112,14 @@ async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+async function waitForShown(predicate: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (predicate()) return;
+    await settle();
+  }
+  throw new Error(message);
+}
+
 function libraryRoot(host: ParentNode): HTMLElement {
   const root = host.querySelector<HTMLElement>('.lightink-library');
   if (!root) throw new Error('library root not found');
@@ -131,7 +147,277 @@ function shownButtonWithText(root: ParentNode, text: string): HTMLButtonElement 
 
 function groupButton(host: ParentNode, label: string): HTMLButtonElement {
   const groups = host.querySelector('.lightink-library-groups') ?? host;
+  const shelf = Array.from(groups.querySelectorAll<HTMLButtonElement>('[data-shelf-group]')).find(
+    (button) => button.textContent === label && isShown(button),
+  );
+  if (shelf) return shelf;
   return shownButtonWithText(groups, label);
+}
+
+function collectionButton(host: ParentNode, name: string): HTMLButtonElement {
+  const groups = host.querySelector('.lightink-library-groups') ?? host;
+  const candidate = Array.from(
+    groups.querySelectorAll<HTMLButtonElement>('[data-library-group-id], [data-group-id]'),
+  ).find((button) => button.textContent?.trim() === name && isShown(button));
+  if (!(candidate instanceof HTMLButtonElement)) {
+    throw new Error(`collection button not found: ${name}`);
+  }
+  return candidate;
+}
+
+function collectionRow(host: ParentNode, name: string): HTMLElement {
+  const choose = collectionButton(host, name);
+  const row = choose.closest('.lightink-library-group-row');
+  return row instanceof HTMLElement ? row : choose;
+}
+
+function collectionKind(button: HTMLElement): string | undefined {
+  return button.dataset.groupKind ?? button.dataset.groupSource;
+}
+
+function shownControl(host: ParentNode, label: string): HTMLButtonElement {
+  const labeled = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+  if (labeled instanceof HTMLButtonElement && isShown(labeled)) return labeled;
+  return shownButtonWithText(host, label);
+}
+
+function groupFormOf(host: ParentNode): HTMLFormElement {
+  const form = host.querySelector<HTMLFormElement>(
+    '.lightink-library-groups .lightink-library-source-form',
+  );
+  if (!form) throw new Error('group form not found');
+  return form;
+}
+
+async function startCreateGroup(host: HTMLElement): Promise<void> {
+  const groups = host.querySelector('.lightink-library-groups') ?? host;
+  shownControl(groups, '新建分组').click();
+  await settle();
+}
+
+async function submitGroupForm(
+  host: HTMLElement,
+  values: { name?: string; parentId?: string; groupId?: string },
+): Promise<void> {
+  const form = groupFormOf(host);
+  if (values.name !== undefined) {
+    const name = form.elements.namedItem('name');
+    if (!(name instanceof HTMLInputElement)) throw new Error('group name field not found');
+    name.value = values.name;
+  }
+  if (values.parentId !== undefined) {
+    const parent = form.elements.namedItem('parentId');
+    if (!(parent instanceof HTMLSelectElement) && !(parent instanceof HTMLInputElement)) {
+      throw new Error('group parent field not found');
+    }
+    parent.value = values.parentId;
+  }
+  if (values.groupId !== undefined) {
+    const group = form.elements.namedItem('groupId');
+    if (!(group instanceof HTMLSelectElement) && !(group instanceof HTMLInputElement)) {
+      throw new Error('group picker field not found');
+    }
+    group.value = values.groupId;
+  }
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+  await settle();
+}
+
+async function organizeShelf(host: HTMLElement): Promise<void> {
+  const groups = host.querySelector('.lightink-library-groups') ?? host;
+  shownControl(groups, '整理').click();
+  await waitForShown(
+    () => host.querySelector('[data-library-group-id]') !== null,
+    'organized collections did not appear',
+  );
+}
+
+async function addItemToCollection(
+  host: HTMLElement,
+  itemId: string,
+  groupName: string,
+): Promise<void> {
+  const card = itemCard(host, itemId);
+  shownControl(card, '加入分组').click();
+  await waitForShown(
+    () =>
+      card.querySelector('.lightink-library-group-picker') !== null ||
+      host.querySelector('.lightink-library-group-picker') !== null ||
+      host.querySelector('.lightink-library-groups [name="groupId"]') !== null,
+    'group picker not found',
+  );
+  const picker =
+    card.querySelector('.lightink-library-group-picker') ??
+    host.querySelector('.lightink-library-group-picker');
+  if (picker instanceof HTMLElement) {
+    shownButtonWithText(picker, groupName).click();
+    await settle();
+    return;
+  }
+  const form = groupFormOf(host);
+  const select = form.elements.namedItem('groupId');
+  if (!(select instanceof HTMLSelectElement)) throw new Error('group picker field not found');
+  const option = Array.from(select.options).find((entry) => entry.textContent === groupName);
+  if (option === undefined) throw new Error(`group option not found: ${groupName}`);
+  select.value = option.value;
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+  await settle();
+}
+
+interface MutableGroup extends LibraryGroup {
+  kind: LibraryGroup['source'];
+  itemIds: string[];
+}
+
+function createGroupStore(
+  items: () => readonly LibraryItem[],
+  seriesStemByItemId: Readonly<Record<string, string>> = {},
+) {
+  const state: MutableGroup[] = [];
+  const excluded = new Set<string>();
+  let seq = 0;
+
+  const snapshot = (): LibraryGroup[] =>
+    state.map((group) => ({ ...group, itemIds: [...group.itemIds] }));
+
+  const findIndex = (groupId: string): number => {
+    const index = state.findIndex((group) => group.id === groupId);
+    if (index < 0) throw new Error(`group not found: ${groupId}`);
+    return index;
+  };
+
+  const smartKeyFor = (kind: string, name: string): string => `${kind}:${name}`;
+
+  const ensureSmart = (kind: string, name: string): MutableGroup => {
+    const smartKey = smartKeyFor(kind, name);
+    const existing = state.find((group) => group.smartKey === smartKey);
+    if (existing) return existing;
+    const created: MutableGroup = {
+      id: `smart:${smartKey}`,
+      name,
+      source: 'smart',
+      kind: 'smart',
+      smartKey,
+      itemIds: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.push(created);
+    return created;
+  };
+
+  const addUnlessExcluded = (group: MutableGroup, itemId: string): void => {
+    if (group.smartKey !== undefined && excluded.has(`${group.smartKey}:${itemId}`)) return;
+    if (group.itemIds.includes(itemId)) return;
+    group.itemIds.push(itemId);
+    group.updatedAt = Date.now();
+  };
+
+  return {
+    async listGroups(): Promise<LibraryGroup[]> {
+      return snapshot();
+    },
+    async listGroupMembers(groupId?: string): Promise<LibraryGroupMember[]> {
+      return state.flatMap((group) =>
+        groupId !== undefined && group.id !== groupId
+          ? []
+          : group.itemIds.map((itemId) => ({
+              groupId: group.id,
+              itemId,
+              updatedAt: group.updatedAt,
+            })),
+      );
+    },
+    async createGroup(input: LibraryGroupInput): Promise<LibraryGroup> {
+      seq += 1;
+      const now = Date.now();
+      const group: MutableGroup = {
+        id: `group-${seq}`,
+        parentId: input.parentId,
+        name: input.name,
+        source: 'user',
+        kind: 'user',
+        itemIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.push(group);
+      return { ...group, itemIds: [] };
+    },
+    async renameGroup(groupId: string, name: string): Promise<void> {
+      state[findIndex(groupId)]!.name = name;
+      state[findIndex(groupId)]!.updatedAt = Date.now();
+    },
+    async moveGroup(groupId: string, parentId?: string): Promise<void> {
+      const group = state[findIndex(groupId)]!;
+      group.parentId = parentId;
+      group.updatedAt = Date.now();
+    },
+    async deleteGroup(groupId: string): Promise<void> {
+      state.splice(findIndex(groupId), 1);
+    },
+    async addItemToGroup(groupId: string, itemId: string): Promise<void> {
+      const group = state[findIndex(groupId)]!;
+      if (!group.itemIds.includes(itemId)) group.itemIds.push(itemId);
+      group.updatedAt = Date.now();
+    },
+    async removeItemFromGroup(groupId: string, itemId: string): Promise<void> {
+      const group = state[findIndex(groupId)]!;
+      if ((group.source === 'smart' || group.kind === 'smart') && group.smartKey !== undefined) {
+        excluded.add(`${group.smartKey}:${itemId}`);
+      }
+      group.itemIds = group.itemIds.filter((id) => id !== itemId);
+      group.updatedAt = Date.now();
+    },
+    async organize(): Promise<void> {
+      for (const item of items()) {
+        for (const author of item.authors) {
+          if (author.trim() === '') continue;
+          addUnlessExcluded(ensureSmart('author', author), item.id);
+        }
+        const stem = seriesStemByItemId[item.id];
+        if (stem !== undefined && stem !== '') {
+          addUnlessExcluded(ensureSmart('series', stem), item.id);
+        }
+        const kindName = classifyLibraryKind(item) === 'comic' ? '漫画' : '文字书';
+        addUnlessExcluded(ensureSmart('kind', kindName), item.id);
+      }
+    },
+  };
+}
+
+function collectionDependencies(options: {
+  items: LibraryItem[];
+  seriesStemByItemId?: Readonly<Record<string, string>>;
+  getProgress?: LibraryViewDependencies['getProgress'];
+}): { deps: LibraryViewDependencies; library: GroupLibrary } {
+  const items = [...options.items];
+  const store = createGroupStore(() => items, options.seriesStemByItemId);
+  const groups = {
+    listGroups: vi.fn(() => store.listGroups()),
+    listGroupMembers: vi.fn((groupId?: string) => store.listGroupMembers(groupId)),
+    createGroup: vi.fn((input: LibraryGroupInput) => store.createGroup(input)),
+    renameGroup: vi.fn((groupId: string, name: string) => store.renameGroup(groupId, name)),
+    moveGroup: vi.fn((groupId: string, parentId?: string) => store.moveGroup(groupId, parentId)),
+    deleteGroup: vi.fn((groupId: string) => store.deleteGroup(groupId)),
+    addItemToGroup: vi.fn((groupId: string, itemId: string) => store.addItemToGroup(groupId, itemId)),
+    removeItemFromGroup: vi.fn((groupId: string, itemId: string) =>
+      store.removeItemFromGroup(groupId, itemId),
+    ),
+    organize: vi.fn(() => store.organize()),
+  };
+  const base = dependencies({
+    getProgress: options.getProgress,
+    library: {
+      ...dependencies().library,
+      listItems: vi.fn(async () => items),
+      ...groups,
+      addGroupMember: groups.addItemToGroup,
+      removeGroupMember: groups.removeItemFromGroup,
+      organizeGroups: groups.organize,
+    },
+  });
+  return { library: base.library, deps: base };
 }
 
 async function openManage(host: HTMLElement): Promise<void> {
@@ -163,9 +449,18 @@ async function openCatalog(host: HTMLElement, sourceTitle = '测试书库'): Pro
 }
 
 function itemRow(host: ParentNode, itemId: string): HTMLButtonElement {
-  const row = host.querySelector<HTMLButtonElement>(`[data-item-id="${itemId}"]`);
-  if (!row) throw new Error(`item not found: ${itemId}`);
+  const row =
+    host.querySelector<HTMLButtonElement>(`.lightink-library-item[data-item-id="${itemId}"]`) ??
+    host.querySelector<HTMLButtonElement>(`[data-item-id="${itemId}"]`);
+  if (!(row instanceof HTMLButtonElement)) throw new Error(`item not found: ${itemId}`);
   return row;
+}
+
+function itemCard(host: ParentNode, itemId: string): HTMLElement {
+  const shell = host.querySelector<HTMLElement>(
+    `.lightink-library-item-shell[data-item-id="${itemId}"]`,
+  );
+  return shell ?? itemRow(host, itemId);
 }
 
 afterEach(() => {
@@ -923,6 +1218,285 @@ describe('LibraryView manage and catalog', () => {
     expect(
       host.querySelector<HTMLElement>('[data-item-id="item-1"]')?.dataset.progressStatus,
     ).toBeUndefined();
+    view.destroy();
+  });
+});
+
+describe('LibraryView shelf collections', () => {
+  const seriesStem = '地狱模式';
+
+  function seriesNovel(overrides: Partial<LibraryItem> = {}): LibraryItem {
+    return localItem({
+      id: 'local:/ebook/hell-01.epub',
+      title: `${seriesStem} - 01`,
+      authors: ['海猫'],
+      localPath: '/ebook/文库版/地狱模式 - 01.epub',
+      extension: 'epub',
+      ...overrides,
+    });
+  }
+
+  it('keeps the five shelf filters as non-editable filters when collections exist', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await organizeShelf(host);
+
+    for (const [label, shelfGroup] of [
+      ['全部', 'all'],
+      ['在读', 'in-progress'],
+      ['未读', 'unread'],
+      ['文字书', 'text'],
+      ['漫画', 'comic'],
+    ] as const) {
+      const filter = groupButton(host, label);
+      expect(filter.dataset.shelfGroup).toBe(shelfGroup);
+      expect(filter.dataset.libraryGroupId).toBeUndefined();
+      filter.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+      );
+      await settle();
+      expect(document.querySelector('.lightink-context-menu')).toBeNull();
+    }
+
+    expect(collectionKind(collectionButton(host, '海猫'))).toBe('smart');
+    expect(
+      collectionRow(host, '海猫').querySelector('[aria-label="重命名分组: 海猫"]'),
+    ).toBeTruthy();
+    expect(collectionRow(host, '海猫').querySelector('[aria-label="删除分组: 海猫"]')).toBeTruthy();
+
+    groupButton(host, '文字书').click();
+    await settle();
+    expect(itemRow(host, novel.id).textContent).toContain(`${seriesStem} - 01`);
+    groupButton(host, '漫画').click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    groupButton(host, '未读').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('creates a nested user collection and keeps a book in more than one collection', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '作者' });
+    expect(library.createGroup).toHaveBeenCalledWith({ name: '作者', parentId: undefined });
+    const parentId =
+      collectionButton(host, '作者').dataset.libraryGroupId ??
+      collectionButton(host, '作者').dataset.groupId;
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '海猫', parentId });
+    expect(library.createGroup).toHaveBeenCalledWith({ name: '海猫', parentId });
+    const listed = await library.listGroups();
+    expect(listed.find((group) => group.name === '海猫')?.parentId).toBe(parentId);
+    expect(Number.parseInt(collectionButton(host, '海猫').style.paddingLeft, 10)).toBeGreaterThan(
+      Number.parseInt(collectionButton(host, '作者').style.paddingLeft, 10),
+    );
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '某系列' });
+
+    await addItemToCollection(host, novel.id, '海猫');
+    await addItemToCollection(host, novel.id, '某系列');
+
+    const authorGroupId =
+      collectionButton(host, '海猫').dataset.libraryGroupId ??
+      collectionButton(host, '海猫').dataset.groupId;
+    const seriesGroupId =
+      collectionButton(host, '某系列').dataset.libraryGroupId ??
+      collectionButton(host, '某系列').dataset.groupId;
+    expect(library.addItemToGroup).toHaveBeenCalledWith(authorGroupId, novel.id);
+    expect(library.addItemToGroup).toHaveBeenCalledWith(seriesGroupId, novel.id);
+
+    collectionButton(host, '海猫').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    collectionButton(host, '某系列').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('keeps the book on the cover wall after a collection is deleted', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '临时组' });
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '保留组' });
+    await addItemToCollection(host, novel.id, '临时组');
+    await addItemToCollection(host, novel.id, '保留组');
+
+    const removedId =
+      collectionButton(host, '临时组').dataset.libraryGroupId ??
+      collectionButton(host, '临时组').dataset.groupId;
+    shownControl(collectionRow(host, '临时组'), '删除分组: 临时组').click();
+    await settle();
+
+    expect(library.deleteGroup).toHaveBeenCalledWith(removedId);
+    expect(library.removeItem).not.toHaveBeenCalled();
+    expect(() => collectionButton(host, '临时组')).toThrow(/collection button not found/);
+    groupButton(host, '全部').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    collectionButton(host, '保留组').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('organizes imported books into author, filename-series, and kind smart collections', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
+    await organizeShelf(host);
+    expect(library.organize).toHaveBeenCalled();
+
+    expect(collectionKind(collectionButton(host, '海猫'))).toBe('smart');
+    expect(collectionKind(collectionButton(host, seriesStem))).toBe('smart');
+    expect(collectionKind(collectionButton(host, '文字书'))).toBe('smart');
+
+    collectionButton(host, '海猫').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    collectionButton(host, seriesStem).click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    collectionButton(host, '文字书').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('does not add a removed book back to a smart collection after organize', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await organizeShelf(host);
+
+    collectionButton(host, '海猫').click();
+    await waitForShown(
+      () => collectionButton(host, '海猫').getAttribute('aria-current') === 'true',
+      'author collection was not selected',
+    );
+    const authorGroupId =
+      collectionButton(host, '海猫').dataset.libraryGroupId ??
+      collectionButton(host, '海猫').dataset.groupId;
+    await waitForShown(
+      () => isShown(itemCard(host, novel.id).querySelector('[aria-label="从本组移出"]')),
+      'remove-from-collection control not shown',
+    );
+    shownControl(itemCard(host, novel.id), '从本组移出').click();
+    await settle();
+    expect(library.removeItemFromGroup).toHaveBeenCalledWith(authorGroupId, novel.id);
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+
+    await organizeShelf(host);
+    expect(library.organize).toHaveBeenCalledTimes(2);
+    collectionButton(host, '海猫').click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    collectionButton(host, seriesStem).click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('can rename a smart collection and nest it under a user collection', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await organizeShelf(host);
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '收藏' });
+    const parentId =
+      collectionButton(host, '收藏').dataset.libraryGroupId ??
+      collectionButton(host, '收藏').dataset.groupId;
+    const seriesId =
+      collectionButton(host, seriesStem).dataset.libraryGroupId ??
+      collectionButton(host, seriesStem).dataset.groupId;
+
+    shownControl(collectionRow(host, seriesStem), `重命名分组: ${seriesStem}`).click();
+    await settle();
+    await submitGroupForm(host, { name: '地狱系列', parentId });
+    expect(library.renameGroup).toHaveBeenCalledWith(seriesId, '地狱系列');
+    expect(library.moveGroup).toHaveBeenCalledWith(seriesId, parentId);
+    const listed = await library.listGroups();
+    expect(listed.find((group) => group.id === seriesId)).toMatchObject({
+      name: '地狱系列',
+      parentId,
+      source: 'smart',
+    });
+    expect(collectionKind(collectionButton(host, '地狱系列'))).toBe('smart');
+    view.destroy();
+  });
+
+  it('does not treat a filename series as comic metadata on the cover wall', async () => {
+    const novel = seriesNovel();
+    expect(novel.series).toBeUndefined();
+    expect(classifyLibraryKind(novel)).toBe('text');
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await organizeShelf(host);
+
+    const row = itemRow(host, novel.id);
+    expect(row.dataset.bookKind).toBe('text');
+    expect(row.textContent).toContain(`${seriesStem} - 01`);
+    groupButton(host, '文字书').click();
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    groupButton(host, '漫画').click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    collectionButton(host, seriesStem).click();
+    await settle();
+    expect(itemRow(host, novel.id).dataset.bookKind).toBe('text');
     view.destroy();
   });
 });

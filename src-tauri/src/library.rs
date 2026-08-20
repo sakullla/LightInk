@@ -15,8 +15,13 @@ use tauri::{AppHandle, Manager};
 pub const DATABASE_FILE: &str = "library.sqlite3";
 pub const CACHE_DIRECTORY: &str = "remote-cache";
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const CACHE_LIMIT_KEY: &str = "cache_limit_bytes";
+const RESERVED_SHELF_FILTERS: &[&str] = &["all", "in-progress", "unread", "text", "comic"];
+const SMART_KEY_AUTHORS_ROOT: &str = "root:authors";
+const SMART_KEY_SERIES_ROOT: &str = "root:series";
+const SMART_KEY_KIND_TEXT: &str = "kind:text";
+const SMART_KEY_KIND_COMIC: &str = "kind:comic";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +87,37 @@ pub struct AcquisitionLink {
 pub struct LibraryCacheStats {
     pub bytes_cached: u64,
     pub limit_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryGroup {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub source: String,
+    pub smart_key: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryGroupMember {
+    pub group_id: String,
+    pub item_id: String,
+    pub content_hash: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryOrganizeHint {
+    pub item_id: String,
+    pub authors: Vec<String>,
+    pub series_stem: Option<String>,
+    pub kind: Option<String>,
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,6 +196,55 @@ fn table_has_column(connection: &Connection, table: &str, column: &str) -> bool 
             Ok(rows.flatten().any(|name| name == column))
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn table_exists(connection: &Connection, table: &str) -> bool {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            params![table],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+fn ensure_group_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS library_groups (
+              id TEXT PRIMARY KEY NOT NULL,
+              parent_id TEXT REFERENCES library_groups(id) ON DELETE SET NULL,
+              name TEXT NOT NULL,
+              source TEXT NOT NULL CHECK(source IN ('user', 'smart')),
+              smart_key TEXT UNIQUE,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS library_groups_parent_idx
+              ON library_groups(parent_id, name COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS library_group_members (
+              group_id TEXT NOT NULL REFERENCES library_groups(id) ON DELETE CASCADE,
+              item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+              content_hash TEXT,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY(group_id, item_id)
+            );
+            CREATE INDEX IF NOT EXISTS library_group_members_item_idx
+              ON library_group_members(item_id);
+            CREATE TABLE IF NOT EXISTS library_smart_exclusions (
+              smart_key TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              content_hash TEXT,
+              PRIMARY KEY(smart_key, item_id)
+            );
+            ",
+        )
+        .map_err(|error| format!("无法迁移书库分组表: {error}"))
 }
 
 pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String> {
@@ -246,6 +331,32 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
             );
             CREATE INDEX IF NOT EXISTS library_items_source_idx
               ON library_items(source_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS library_groups (
+              id TEXT PRIMARY KEY NOT NULL,
+              parent_id TEXT REFERENCES library_groups(id) ON DELETE SET NULL,
+              name TEXT NOT NULL,
+              source TEXT NOT NULL CHECK(source IN ('user', 'smart')),
+              smart_key TEXT UNIQUE,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS library_groups_parent_idx
+              ON library_groups(parent_id, name COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS library_group_members (
+              group_id TEXT NOT NULL REFERENCES library_groups(id) ON DELETE CASCADE,
+              item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+              content_hash TEXT,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY(group_id, item_id)
+            );
+            CREATE INDEX IF NOT EXISTS library_group_members_item_idx
+              ON library_group_members(item_id);
+            CREATE TABLE IF NOT EXISTS library_smart_exclusions (
+              smart_key TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              content_hash TEXT,
+              PRIMARY KEY(smart_key, item_id)
+            );
             CREATE TABLE IF NOT EXISTS acquisition_links (
               item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
               href TEXT NOT NULL,
@@ -275,7 +386,7 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
             );
             CREATE INDEX IF NOT EXISTS cache_ranges_lookup_idx
               ON cache_ranges(object_id, start, end);
-            INSERT INTO schema_meta(key, value) VALUES ('version', '4')
+            INSERT INTO schema_meta(key, value) VALUES ('version', '5')
               ON CONFLICT(key) DO NOTHING;
             INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', '2147483648')
               ON CONFLICT(key) DO NOTHING;
@@ -325,6 +436,7 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
                 params![DEFAULT_CACHE_LIMIT_BYTES as i64],
             )
             .map_err(|error| format!("无法迁移书库数据库: {error}"))?;
+        ensure_group_schema(&transaction)?;
         transaction
             .execute(
                 "UPDATE schema_meta SET value=?1 WHERE key='version'",
@@ -608,6 +720,649 @@ pub fn library_remove_item(app: AppHandle, item_id: String) -> Result<(), String
         .map_err(|error| format!("无法删除书库条目: {error}"))?;
     Ok(())
 }
+
+fn is_reserved_shelf_filter(id: &str) -> bool {
+    RESERVED_SHELF_FILTERS.contains(&id)
+}
+
+fn reject_reserved_shelf_filter(id: &str) -> Result<(), String> {
+    if is_reserved_shelf_filter(id) {
+        return Err("五个筛选项不能当作用户组改名或删除".to_string());
+    }
+    Ok(())
+}
+
+fn map_group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryGroup> {
+    Ok(LibraryGroup {
+        id: row.get(0)?,
+        parent_id: row.get(1)?,
+        name: row.get(2)?,
+        source: row.get(3)?,
+        smart_key: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn load_library_group(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<Option<LibraryGroup>, String> {
+    connection
+        .query_row(
+            "SELECT id, parent_id, name, source, smart_key, created_at, updated_at
+             FROM library_groups WHERE id=?1",
+            params![group_id],
+            map_group_row,
+        )
+        .optional()
+        .map_err(|error| format!("无法读取分组: {error}"))
+}
+
+fn load_group_by_smart_key(
+    connection: &Connection,
+    smart_key: &str,
+) -> Result<Option<LibraryGroup>, String> {
+    connection
+        .query_row(
+            "SELECT id, parent_id, name, source, smart_key, created_at, updated_at
+             FROM library_groups WHERE smart_key=?1",
+            params![smart_key],
+            map_group_row,
+        )
+        .optional()
+        .map_err(|error| format!("无法读取智能组: {error}"))
+}
+
+fn library_item_exists(connection: &Connection, item_id: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM library_items WHERE id=?1",
+            params![item_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(|error| format!("无法读取书库条目: {error}"))
+}
+
+fn would_create_group_cycle(
+    connection: &Connection,
+    group_id: &str,
+    parent_id: &str,
+) -> Result<bool, String> {
+    if group_id == parent_id {
+        return Ok(true);
+    }
+    let mut current = Some(parent_id.to_string());
+    for _ in 0..64 {
+        let Some(id) = current else {
+            return Ok(false);
+        };
+        if id == group_id {
+            return Ok(true);
+        }
+        current = connection
+            .query_row(
+                "SELECT parent_id FROM library_groups WHERE id=?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|error| format!("无法检查分组嵌套: {error}"))?
+            .flatten();
+    }
+    Err("分组嵌套过深".to_string())
+}
+
+fn validate_group_parent(
+    connection: &Connection,
+    group_id: &str,
+    parent_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(parent_id) = parent_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(());
+    };
+    reject_reserved_shelf_filter(parent_id)?;
+    if load_library_group(connection, parent_id)?.is_none() {
+        return Err("父分组不存在".to_string());
+    }
+    if would_create_group_cycle(connection, group_id, parent_id)? {
+        return Err("不能把分组挂到自己下面".to_string());
+    }
+    Ok(())
+}
+
+fn classify_library_kind(item: &LibraryItem) -> &'static str {
+    let extension = item
+        .extension
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "cbz" | "cbr" | "cb7") {
+        return "comic";
+    }
+    let media_type = item
+        .media_type
+        .as_deref()
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if media_type.contains("comic")
+        || matches!(
+            media_type.as_str(),
+            "application/zip"
+                | "application/x-zip"
+                | "application/x-zip-compressed"
+                | "application/x-cbz"
+                | "application/x-cbr"
+                | "application/x-cb7"
+        )
+    {
+        return "comic";
+    }
+    let has_text =
+        |value: &Option<String>| value.as_deref().is_some_and(|text| !text.trim().is_empty());
+    if has_text(&item.series)
+        || has_text(&item.number)
+        || has_text(&item.volume)
+        || item.page_count.is_some_and(|pages| pages > 0)
+        || matches!(item.reading_direction.as_deref(), Some("ltr" | "rtl"))
+        || item.cover_page.is_some()
+    {
+        return "comic";
+    }
+    "text"
+}
+
+fn load_all_library_items(connection: &Connection) -> Result<Vec<LibraryItem>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, source_id, source_kind, title, authors_json, cover_url,
+                    local_path, acquisition_url, media_type, extension, size,
+                    etag, last_modified, series, number, volume, page_count,
+                    reading_direction, cover_page, updated_at
+             FROM library_items
+             ORDER BY updated_at DESC, title COLLATE NOCASE, id",
+        )
+        .map_err(|error| format!("无法读取书库条目: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            let authors_json: String = row.get(4)?;
+            let authors = serde_json::from_str(&authors_json).unwrap_or_default();
+            Ok(LibraryItem {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                source_kind: row.get(2)?,
+                title: row.get(3)?,
+                authors,
+                cover_url: row.get(5)?,
+                local_path: row.get(6)?,
+                acquisition_url: row.get(7)?,
+                media_type: row.get(8)?,
+                extension: row.get(9)?,
+                size: row.get(10)?,
+                etag: row.get(11)?,
+                last_modified: row.get(12)?,
+                series: row.get(13)?,
+                number: row.get(14)?,
+                volume: row.get(15)?,
+                page_count: row.get(16)?,
+                reading_direction: row.get(17)?,
+                cover_page: row.get(18)?,
+                updated_at: row.get(19)?,
+            })
+        })
+        .map_err(|error| format!("无法读取书库条目: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析书库条目: {error}"))
+}
+
+fn is_smart_excluded(
+    connection: &Connection,
+    smart_key: &str,
+    item_id: &str,
+    content_hash: Option<&str>,
+) -> Result<bool, String> {
+    let by_item: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM library_smart_exclusions WHERE smart_key=?1 AND item_id=?2",
+            params![smart_key, item_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法读取智能组移出记录: {error}"))?;
+    if by_item > 0 {
+        return Ok(true);
+    }
+    let Some(content_hash) = content_hash.filter(|value| !value.trim().is_empty()) else {
+        return Ok(false);
+    };
+    let by_hash: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM library_smart_exclusions WHERE smart_key=?1 AND content_hash=?2",
+            params![smart_key, content_hash],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法读取智能组移出记录: {error}"))?;
+    Ok(by_hash > 0)
+}
+
+fn clear_smart_exclusion(
+    connection: &Connection,
+    smart_key: &str,
+    item_id: &str,
+    content_hash: Option<&str>,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM library_smart_exclusions
+             WHERE smart_key=?1 AND (item_id=?2 OR (?3 IS NOT NULL AND content_hash=?3))",
+            params![smart_key, item_id, content_hash],
+        )
+        .map_err(|error| format!("无法更新智能组移出记录: {error}"))?;
+    Ok(())
+}
+
+fn record_smart_exclusion(
+    connection: &Connection,
+    smart_key: &str,
+    item_id: &str,
+    content_hash: Option<&str>,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO library_smart_exclusions(smart_key, item_id, content_hash)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(smart_key, item_id) DO UPDATE SET
+               content_hash=COALESCE(excluded.content_hash, library_smart_exclusions.content_hash)",
+            params![smart_key, item_id, content_hash],
+        )
+        .map_err(|error| format!("无法保存智能组移出记录: {error}"))?;
+    Ok(())
+}
+
+fn insert_group_member(
+    connection: &Connection,
+    group_id: &str,
+    item_id: &str,
+    content_hash: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO library_group_members(group_id, item_id, content_hash, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(group_id, item_id) DO UPDATE SET
+               content_hash=COALESCE(excluded.content_hash, library_group_members.content_hash),
+               updated_at=excluded.updated_at",
+            params![group_id, item_id, content_hash, now],
+        )
+        .map_err(|error| format!("无法加入分组: {error}"))?;
+    Ok(())
+}
+
+fn ensure_smart_group(
+    connection: &Connection,
+    smart_key: &str,
+    name: &str,
+    parent_id: Option<&str>,
+    now: i64,
+) -> Result<LibraryGroup, String> {
+    if let Some(existing) = load_group_by_smart_key(connection, smart_key)? {
+        return Ok(existing);
+    }
+    let id = format!("smart:{smart_key}");
+    reject_reserved_shelf_filter(&id)?;
+    connection
+        .execute(
+            "INSERT INTO library_groups(id, parent_id, name, source, smart_key, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'smart', ?4, ?5, ?5)
+             ON CONFLICT(id) DO NOTHING",
+            params![id, parent_id, name, smart_key, now],
+        )
+        .map_err(|error| format!("无法创建智能组: {error}"))?;
+    load_library_group(connection, &id)?.ok_or_else(|| "无法创建智能组".to_string())
+}
+
+fn add_to_smart_group_if_allowed(
+    connection: &Connection,
+    smart_key: &str,
+    name: &str,
+    parent_id: Option<&str>,
+    item_id: &str,
+    content_hash: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    if is_smart_excluded(connection, smart_key, item_id, content_hash)? {
+        return Ok(());
+    }
+    let group = ensure_smart_group(connection, smart_key, name, parent_id, now)?;
+    insert_group_member(connection, &group.id, item_id, content_hash, now)
+}
+
+fn non_empty_labels(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+pub(crate) fn list_library_groups(connection: &Connection) -> Result<Vec<LibraryGroup>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, parent_id, name, source, smart_key, created_at, updated_at
+             FROM library_groups
+             ORDER BY parent_id IS NOT NULL, name COLLATE NOCASE, id",
+        )
+        .map_err(|error| format!("无法读取分组: {error}"))?;
+    let rows = statement
+        .query_map([], map_group_row)
+        .map_err(|error| format!("无法读取分组: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析分组: {error}"))
+}
+
+pub(crate) fn upsert_library_group(
+    connection: &Connection,
+    group: LibraryGroup,
+) -> Result<LibraryGroup, String> {
+    let name = group.name.trim();
+    if name.is_empty() {
+        return Err("分组缺少必要字段".to_string());
+    }
+    let now = if group.updated_at > 0 {
+        group.updated_at
+    } else {
+        now_ms()
+    };
+    let created_at = if group.created_at > 0 {
+        group.created_at
+    } else {
+        now
+    };
+    let parent_id = group
+        .parent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let existing = if group.id.trim().is_empty() {
+        None
+    } else {
+        reject_reserved_shelf_filter(group.id.trim())?;
+        load_library_group(connection, group.id.trim())?
+    };
+    let id = if let Some(existing) = existing.as_ref() {
+        existing.id.clone()
+    } else if group.id.trim().is_empty() {
+        format!("user:{now}")
+    } else {
+        reject_reserved_shelf_filter(group.id.trim())?;
+        group.id.trim().to_string()
+    };
+    validate_group_parent(connection, &id, parent_id.as_deref())?;
+    let (source, smart_key, created_at) = if let Some(existing) = existing {
+        (existing.source, existing.smart_key, existing.created_at)
+    } else {
+        ("user".to_string(), None, created_at)
+    };
+    connection
+        .execute(
+            "INSERT INTO library_groups(id, parent_id, name, source, smart_key, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+               parent_id=excluded.parent_id, name=excluded.name, updated_at=excluded.updated_at",
+            params![id, parent_id, name, source, smart_key, created_at, now],
+        )
+        .map_err(|error| format!("无法保存分组: {error}"))?;
+    load_library_group(connection, &id)?.ok_or_else(|| "无法保存分组".to_string())
+}
+
+pub(crate) fn remove_library_group(connection: &Connection, group_id: &str) -> Result<(), String> {
+    reject_reserved_shelf_filter(group_id)?;
+    connection
+        .execute("DELETE FROM library_groups WHERE id=?1", params![group_id])
+        .map_err(|error| format!("无法删除分组: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn list_library_group_members(
+    connection: &Connection,
+    group_id: Option<&str>,
+) -> Result<Vec<LibraryGroupMember>, String> {
+    if let Some(group_id) = group_id.filter(|value| !value.trim().is_empty()) {
+        reject_reserved_shelf_filter(group_id)?;
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT group_id, item_id, content_hash, updated_at
+             FROM library_group_members
+             WHERE (?1 IS NULL OR group_id=?1)
+             ORDER BY group_id, item_id",
+        )
+        .map_err(|error| format!("无法读取分组成员: {error}"))?;
+    let rows = statement
+        .query_map(params![group_id], |row| {
+            Ok(LibraryGroupMember {
+                group_id: row.get(0)?,
+                item_id: row.get(1)?,
+                content_hash: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("无法读取分组成员: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析分组成员: {error}"))
+}
+
+pub(crate) fn add_library_group_member(
+    connection: &Connection,
+    group_id: &str,
+    item_id: &str,
+    content_hash: Option<&str>,
+) -> Result<(), String> {
+    reject_reserved_shelf_filter(group_id)?;
+    let group =
+        load_library_group(connection, group_id)?.ok_or_else(|| "分组不存在".to_string())?;
+    if !library_item_exists(connection, item_id)? {
+        return Err("书库条目不存在".to_string());
+    }
+    insert_group_member(connection, group_id, item_id, content_hash, now_ms())?;
+    if group.source == "smart" {
+        if let Some(smart_key) = group.smart_key.as_deref() {
+            clear_smart_exclusion(connection, smart_key, item_id, content_hash)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_library_group_member(
+    connection: &Connection,
+    group_id: &str,
+    item_id: &str,
+) -> Result<(), String> {
+    reject_reserved_shelf_filter(group_id)?;
+    let group = load_library_group(connection, group_id)?;
+    let content_hash = connection
+        .query_row(
+            "SELECT content_hash FROM library_group_members WHERE group_id=?1 AND item_id=?2",
+            params![group_id, item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("无法读取分组成员: {error}"))?
+        .flatten();
+    connection
+        .execute(
+            "DELETE FROM library_group_members WHERE group_id=?1 AND item_id=?2",
+            params![group_id, item_id],
+        )
+        .map_err(|error| format!("无法移出分组: {error}"))?;
+    if let Some(group) = group {
+        if group.source == "smart" {
+            if let Some(smart_key) = group.smart_key.as_deref() {
+                record_smart_exclusion(connection, smart_key, item_id, content_hash.as_deref())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn organize_library_groups(
+    connection: &Connection,
+    hints: &[LibraryOrganizeHint],
+) -> Result<(), String> {
+    let now = now_ms();
+    let authors_root = ensure_smart_group(connection, SMART_KEY_AUTHORS_ROOT, "作者", None, now)?;
+    let series_root = ensure_smart_group(connection, SMART_KEY_SERIES_ROOT, "系列", None, now)?;
+    let items = load_all_library_items(connection)?;
+    for item in items {
+        let hint = hints.iter().find(|hint| hint.item_id == item.id);
+        let authors = hint
+            .map(|hint| non_empty_labels(&hint.authors))
+            .filter(|authors| !authors.is_empty())
+            .unwrap_or_else(|| non_empty_labels(&item.authors));
+        let series_stem = hint
+            .and_then(|hint| hint.series_stem.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let kind = hint
+            .and_then(|hint| hint.kind.as_deref())
+            .map(str::trim)
+            .filter(|value| matches!(*value, "text" | "comic"))
+            .unwrap_or_else(|| classify_library_kind(&item));
+        let content_hash = hint
+            .and_then(|hint| hint.content_hash.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        for author in authors {
+            add_to_smart_group_if_allowed(
+                connection,
+                &format!("author:{author}"),
+                &author,
+                Some(&authors_root.id),
+                &item.id,
+                content_hash,
+                now,
+            )?;
+        }
+        if let Some(series_stem) = series_stem {
+            add_to_smart_group_if_allowed(
+                connection,
+                &format!("series:{series_stem}"),
+                series_stem,
+                Some(&series_root.id),
+                &item.id,
+                content_hash,
+                now,
+            )?;
+        }
+        let (kind_key, kind_name) = if kind == "comic" {
+            (SMART_KEY_KIND_COMIC, "漫画")
+        } else {
+            (SMART_KEY_KIND_TEXT, "文字书")
+        };
+        add_to_smart_group_if_allowed(
+            connection,
+            kind_key,
+            kind_name,
+            None,
+            &item.id,
+            content_hash,
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn library_list_groups(app: AppHandle) -> Result<Vec<LibraryGroup>, String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    list_library_groups(&connection)
+}
+
+#[tauri::command]
+pub fn library_upsert_group(app: AppHandle, group: LibraryGroup) -> Result<LibraryGroup, String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    upsert_library_group(&connection, group)
+}
+
+#[tauri::command]
+pub fn library_remove_group(app: AppHandle, group_id: String) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    remove_library_group(&connection, &group_id)
+}
+
+#[tauri::command]
+pub fn library_list_group_members(
+    app: AppHandle,
+    group_id: Option<String>,
+) -> Result<Vec<LibraryGroupMember>, String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    list_library_group_members(&connection, group_id.as_deref())
+}
+
+#[tauri::command]
+pub fn library_add_group_member(
+    app: AppHandle,
+    group_id: String,
+    item_id: String,
+    content_hash: Option<String>,
+) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    add_library_group_member(&connection, &group_id, &item_id, content_hash.as_deref())
+}
+
+#[tauri::command]
+pub fn library_remove_group_member(
+    app: AppHandle,
+    group_id: String,
+    item_id: String,
+) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    remove_library_group_member(&connection, &group_id, &item_id)
+}
+
+#[tauri::command]
+pub fn library_organize_groups(
+    app: AppHandle,
+    hints: Vec<LibraryOrganizeHint>,
+) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(&app)?)?;
+    organize_library_groups(&connection, &hints)
+}
+
+/// Names and function pointers for `generate_handler` in `lib.rs`.
+/// Kept referenced so an unregistered split assignment does not trip clippy.
+pub fn library_group_command_ids() -> &'static [&'static str] {
+    let _ = (
+        library_list_groups as *const () as usize,
+        library_upsert_group as *const () as usize,
+        library_remove_group as *const () as usize,
+        library_list_group_members as *const () as usize,
+        library_add_group_member as *const () as usize,
+        library_remove_group_member as *const () as usize,
+        library_organize_groups as *const () as usize,
+    );
+    &[
+        "library_list_groups",
+        "library_upsert_group",
+        "library_remove_group",
+        "library_list_group_members",
+        "library_add_group_member",
+        "library_remove_group_member",
+        "library_organize_groups",
+    ]
+}
+
+#[used]
+static LIBRARY_GROUP_COMMAND_IDS: fn() -> &'static [&'static str] = library_group_command_ids;
 
 #[tauri::command]
 pub fn library_clear_cache(app: AppHandle) -> Result<(), String> {
@@ -973,8 +1728,335 @@ mod tests {
                 )
                 .unwrap(),
         );
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(title, "旧漫画");
+        assert!(table_exists(&migrated, "library_groups"));
+        assert!(table_exists(&migrated, "library_group_members"));
+        assert!(table_exists(&migrated, "library_smart_exclusions"));
+    }
+
+    fn seed_item(
+        connection: &Connection,
+        id: &str,
+        title: &str,
+        authors: &[&str],
+        extension: &str,
+        series: Option<&str>,
+    ) {
+        let authors_json = serde_json::to_string(authors).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_items(
+                   id, source_kind, title, authors_json, extension, series, updated_at
+                 ) VALUES (?1, 'local', ?2, ?3, ?4, ?5, 1)",
+                params![id, title, authors_json, extension, series],
+            )
+            .unwrap();
+    }
+
+    fn member_ids(connection: &Connection, group_id: &str) -> Vec<String> {
+        let mut ids = list_library_group_members(connection, Some(group_id))
+            .unwrap()
+            .into_iter()
+            .map(|member| member.item_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    fn group_by_smart_key<'a>(groups: &'a [LibraryGroup], smart_key: &str) -> &'a LibraryGroup {
+        groups
+            .iter()
+            .find(|group| group.smart_key.as_deref() == Some(smart_key))
+            .unwrap_or_else(|| panic!("missing smart group {smart_key}"))
+    }
+
+    #[test]
+    fn migrates_v4_library_to_groups_without_data_loss() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '4');
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  source_id TEXT,
+                  source_kind TEXT NOT NULL, title TEXT NOT NULL, authors_json TEXT NOT NULL,
+                  cover_url TEXT, local_path TEXT, acquisition_url TEXT, media_type TEXT,
+                  extension TEXT, size INTEGER, etag TEXT, last_modified TEXT,
+                  series TEXT, number TEXT, volume TEXT, page_count INTEGER,
+                  reading_direction TEXT, cover_page INTEGER,
+                  updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(
+                  id, source_kind, title, authors_json, extension, updated_at
+                ) VALUES ('local:/kept.epub', 'local', '保留', '[]', 'epub', 1);
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        let (version, title): (i64, String) = (
+            migrated
+                .query_row(
+                    "SELECT CAST(value AS INTEGER) FROM schema_meta WHERE key='version'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+            migrated
+                .query_row(
+                    "SELECT title FROM library_items WHERE id='local:/kept.epub'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+        );
+        assert_eq!(version, 5);
+        assert_eq!(title, "保留");
+        assert!(table_exists(&migrated, "library_groups"));
+    }
+
+    #[test]
+    fn nested_user_groups_keep_one_book_in_many_groups_and_delete_does_not_remove_books() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        seed_item(&connection, "book-1", "一书", &["甲"], "epub", None);
+        let authors = upsert_library_group(
+            &connection,
+            LibraryGroup {
+                id: "user:authors".into(),
+                parent_id: None,
+                name: "作者".into(),
+                source: "user".into(),
+                smart_key: None,
+                created_at: 1,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        let author = upsert_library_group(
+            &connection,
+            LibraryGroup {
+                id: "user:author-a".into(),
+                parent_id: Some(authors.id.clone()),
+                name: "甲".into(),
+                source: "user".into(),
+                smart_key: None,
+                created_at: 1,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        let series = upsert_library_group(
+            &connection,
+            LibraryGroup {
+                id: "user:series-a".into(),
+                parent_id: None,
+                name: "某系列".into(),
+                source: "user".into(),
+                smart_key: None,
+                created_at: 1,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        add_library_group_member(&connection, &author.id, "book-1", None).unwrap();
+        add_library_group_member(&connection, &series.id, "book-1", None).unwrap();
+        assert_eq!(member_ids(&connection, &author.id), vec!["book-1"]);
+        assert_eq!(member_ids(&connection, &series.id), vec!["book-1"]);
+
+        remove_library_group(&connection, &series.id).unwrap();
+        let groups = list_library_groups(&connection).unwrap();
+        assert!(groups.iter().all(|group| group.id != series.id));
+        assert!(library_item_exists(&connection, "book-1").unwrap());
+        assert_eq!(member_ids(&connection, &author.id), vec!["book-1"]);
+        assert_eq!(author.parent_id.as_deref(), Some("user:authors"));
+    }
+
+    #[test]
+    fn reserved_shelf_filters_cannot_be_renamed_or_deleted_as_user_groups() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        for id in RESERVED_SHELF_FILTERS {
+            let error = upsert_library_group(
+                &connection,
+                LibraryGroup {
+                    id: (*id).into(),
+                    parent_id: None,
+                    name: "改名".into(),
+                    source: "user".into(),
+                    smart_key: None,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("筛选项"), "{id}: {error}");
+            assert!(remove_library_group(&connection, id).is_err());
+            assert!(add_library_group_member(&connection, id, "book-1", None).is_err());
+        }
+        assert!(list_library_groups(&connection).unwrap().is_empty());
+    }
+
+    #[test]
+    fn organize_creates_author_filename_series_and_kind_groups_without_writing_item_series() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        seed_item(
+            &connection,
+            "text-1",
+            "地狱模式 - 01",
+            &["某作者"],
+            "epub",
+            None,
+        );
+        seed_item(&connection, "comic-1", "画集", &[], "cbz", None);
+        organize_library_groups(
+            &connection,
+            &[LibraryOrganizeHint {
+                item_id: "text-1".into(),
+                authors: vec!["某作者".into()],
+                series_stem: Some("地狱模式".into()),
+                kind: Some("text".into()),
+                content_hash: None,
+            }],
+        )
+        .unwrap();
+
+        let groups = list_library_groups(&connection).unwrap();
+        let authors_root = group_by_smart_key(&groups, SMART_KEY_AUTHORS_ROOT);
+        let series_root = group_by_smart_key(&groups, SMART_KEY_SERIES_ROOT);
+        let author = group_by_smart_key(&groups, "author:某作者");
+        let series = group_by_smart_key(&groups, "series:地狱模式");
+        let text = group_by_smart_key(&groups, SMART_KEY_KIND_TEXT);
+        let comic = group_by_smart_key(&groups, SMART_KEY_KIND_COMIC);
+        assert_eq!(author.parent_id.as_deref(), Some(authors_root.id.as_str()));
+        assert_eq!(series.parent_id.as_deref(), Some(series_root.id.as_str()));
+        assert_eq!(member_ids(&connection, &author.id), vec!["text-1"]);
+        assert_eq!(member_ids(&connection, &series.id), vec!["text-1"]);
+        assert_eq!(member_ids(&connection, &text.id), vec!["text-1"]);
+        assert_eq!(member_ids(&connection, &comic.id), vec!["comic-1"]);
+
+        let stored_series: Option<String> = connection
+            .query_row(
+                "SELECT series FROM library_items WHERE id='text-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_series, None);
+        let comic_item = load_all_library_items(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == "comic-1")
+            .unwrap();
+        assert_eq!(classify_library_kind(&comic_item), "comic");
+        let text_item = load_all_library_items(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == "text-1")
+            .unwrap();
+        assert_eq!(classify_library_kind(&text_item), "text");
+    }
+
+    #[test]
+    fn organize_does_not_use_item_series_as_filename_series_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        seed_item(
+            &connection,
+            "text-1",
+            "散文",
+            &["作者"],
+            "epub",
+            Some("漫画元数据系列"),
+        );
+        organize_library_groups(&connection, &[]).unwrap();
+        let groups = list_library_groups(&connection).unwrap();
+        assert!(groups
+            .iter()
+            .all(|group| group.smart_key.as_deref() != Some("series:漫画元数据系列")));
+        let comic = group_by_smart_key(&groups, SMART_KEY_KIND_COMIC);
+        assert_eq!(member_ids(&connection, &comic.id), vec!["text-1"]);
+    }
+
+    #[test]
+    fn organize_does_not_readd_a_book_removed_from_a_smart_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        seed_item(&connection, "book-1", "一书", &["甲", "乙"], "epub", None);
+        let hints = [LibraryOrganizeHint {
+            item_id: "book-1".into(),
+            authors: vec!["甲".into(), "乙".into()],
+            series_stem: Some("一书".into()),
+            kind: Some("text".into()),
+            content_hash: None,
+        }];
+        organize_library_groups(&connection, &hints).unwrap();
+        let groups = list_library_groups(&connection).unwrap();
+        let author_a = group_by_smart_key(&groups, "author:甲").id.clone();
+        let author_b = group_by_smart_key(&groups, "author:乙").id.clone();
+        let series = group_by_smart_key(&groups, "series:一书").id.clone();
+        remove_library_group_member(&connection, &author_a, "book-1").unwrap();
+        organize_library_groups(&connection, &hints).unwrap();
+        assert!(member_ids(&connection, &author_a).is_empty());
+        assert_eq!(member_ids(&connection, &author_b), vec!["book-1"]);
+        assert_eq!(member_ids(&connection, &series), vec!["book-1"]);
+        assert!(library_item_exists(&connection, "book-1").unwrap());
+    }
+
+    #[test]
+    fn renaming_or_nesting_a_smart_group_keeps_its_stable_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        seed_item(&connection, "book-1", "一书", &["甲"], "epub", None);
+        organize_library_groups(
+            &connection,
+            &[LibraryOrganizeHint {
+                item_id: "book-1".into(),
+                authors: vec!["甲".into()],
+                series_stem: None,
+                kind: Some("text".into()),
+                content_hash: None,
+            }],
+        )
+        .unwrap();
+        let groups = list_library_groups(&connection).unwrap();
+        let author = group_by_smart_key(&groups, "author:甲").clone();
+        let folder = upsert_library_group(
+            &connection,
+            LibraryGroup {
+                id: "user:folder".into(),
+                parent_id: None,
+                name: "手建".into(),
+                source: "user".into(),
+                smart_key: None,
+                created_at: 1,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        let renamed = upsert_library_group(
+            &connection,
+            LibraryGroup {
+                id: author.id.clone(),
+                parent_id: Some(folder.id.clone()),
+                name: "改名作者".into(),
+                source: "user".into(),
+                smart_key: None,
+                created_at: 99,
+                updated_at: 99,
+            },
+        )
+        .unwrap();
+        assert_eq!(renamed.name, "改名作者");
+        assert_eq!(renamed.source, "smart");
+        assert_eq!(renamed.smart_key.as_deref(), Some("author:甲"));
+        assert_eq!(renamed.parent_id.as_deref(), Some(folder.id.as_str()));
     }
 
     #[test]

@@ -86,4 +86,37 @@ describe('classifyLibraryKind', () => {
       }),
     ).toBe('comic');
   });
+
+  it.each([
+    {
+      extension: 'epub',
+      mediaType: 'application/epub+zip',
+      seriesStem: '地狱模式',
+      seriesVolume: '01',
+    },
+    { extension: 'txt', seriesStem: '地狱模式', seriesVolume: '01' },
+    { extension: 'html', seriesStem: '地狱模式' },
+    {
+      extension: 'pdf',
+      mediaType: 'application/pdf',
+      seriesStem: '地狱模式',
+      seriesVolume: '01',
+    },
+  ])(
+    'keeps a text format as text when filename series is not written to LibraryItem.series (%s)',
+    (query) => {
+      expect(classifyLibraryKind(query)).toBe('text');
+    },
+  );
+
+  it.each([
+    { extension: 'epub', series: '地狱模式' },
+    { extension: 'txt', volume: '01' },
+    { extension: 'html', number: '2' },
+  ])(
+    'classifies a text format as comic if the filename stem is copied onto LibraryItem comic fields (%s)',
+    (query) => {
+      expect(classifyLibraryKind(query)).toBe('comic');
+    },
+  );
 });

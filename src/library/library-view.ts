@@ -1,4 +1,10 @@
-import type { AcquisitionLink, LibraryClient, LibraryItem } from './library-client.js';
+import type {
+  AcquisitionLink,
+  LibraryClient,
+  LibraryGroup,
+  LibraryGroupMember,
+  LibraryItem,
+} from './library-client.js';
 import { classifyLibraryKind } from './library-kind.js';
 import { isShelfCoverUrl } from './local-book-meta.js';
 import type {
@@ -14,10 +20,29 @@ import type {
   OpdsSource,
   OpdsSourceInput,
 } from './opds-client.js';
+import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibraryPage = 'my-books' | 'manage' | 'catalog';
 type ShelfGroup = 'all' | 'in-progress' | 'unread' | 'text' | 'comic';
+type GroupFormMode = 'create' | 'edit';
+
+export type { LibraryGroup, LibraryGroupMember };
+
+export interface LibraryGroupCommands {
+  listGroups(): Promise<readonly LibraryGroup[]>;
+  listGroupMembers(groupId?: string): Promise<readonly LibraryGroupMember[]>;
+  createGroup(input: { name: string; parentId?: string }): Promise<LibraryGroup>;
+  renameGroup(groupId: string, name: string): Promise<void>;
+  moveGroup(groupId: string, parentId?: string): Promise<void>;
+  deleteGroup(groupId: string): Promise<void>;
+  addItemToGroup(groupId: string, itemId: string): Promise<void>;
+  removeItemFromGroup(groupId: string, itemId: string): Promise<void>;
+  organize(): Promise<void>;
+  addGroupMember?(groupId: string, itemId: string): Promise<void>;
+  removeGroupMember?(groupId: string, itemId: string): Promise<void>;
+  organizeGroups?(): Promise<void>;
+}
 
 interface Labels {
   library: string;
@@ -30,6 +55,16 @@ interface Labels {
   unread: string;
   textBooks: string;
   comics: string;
+  organize: string;
+  newGroup: string;
+  newChildGroup: string;
+  renameGroup: string;
+  deleteGroup: string;
+  addToGroup: string;
+  removeFromGroup: string;
+  groupName: string;
+  parentGroup: string;
+  rootGroup: string;
   allBooks: string;
   sources: string;
   addSource: string;
@@ -98,6 +133,16 @@ const LABELS: Record<Locale, Labels> = {
     unread: 'Unread',
     textBooks: 'Text',
     comics: 'Comics',
+    organize: 'Organize',
+    newGroup: 'New collection',
+    newChildGroup: 'New nested collection',
+    renameGroup: 'Rename collection',
+    deleteGroup: 'Delete collection',
+    addToGroup: 'Add to collection',
+    removeFromGroup: 'Remove from this collection',
+    groupName: 'Collection name',
+    parentGroup: 'Parent collection',
+    rootGroup: 'Top level',
     allBooks: 'All books',
     sources: 'Sources',
     addSource: 'Add OPDS source',
@@ -164,6 +209,16 @@ const LABELS: Record<Locale, Labels> = {
     unread: '未读',
     textBooks: '文字书',
     comics: '漫画',
+    organize: '整理',
+    newGroup: '新建分组',
+    newChildGroup: '新建子组',
+    renameGroup: '重命名分组',
+    deleteGroup: '删除分组',
+    addToGroup: '加入分组',
+    removeFromGroup: '从本组移出',
+    groupName: '分组名称',
+    parentGroup: '上级分组',
+    rootGroup: '顶层',
     allBooks: '全部作品',
     sources: '书库源',
     addSource: '添加 OPDS 源',
@@ -240,7 +295,8 @@ export interface LibraryViewDependencies {
     | 'clearCache'
     | 'setCacheLimit'
     | 'cacheStats'
-  >;
+  > &
+    Partial<LibraryGroupCommands>;
   readonly getLocale: () => Locale;
   readonly onOpen: (request: LibraryOpenRequest, signal?: AbortSignal) => Promise<void>;
   readonly onCache: (request: LibraryOpenRequest, signal?: AbortSignal) => Promise<void>;
@@ -416,6 +472,57 @@ function groupLabel(labels: Labels, group: ShelfGroup): string {
   }
 }
 
+function parentIdOf(group: Pick<LibraryGroup, 'parentId'>): string | undefined {
+  const value = group.parentId;
+  return value === null || value === undefined || value === '' ? undefined : value;
+}
+
+function collectionChildren(
+  collections: readonly LibraryGroup[],
+  parentId: string | undefined,
+): LibraryGroup[] {
+  return collections
+    .filter((group) => parentIdOf(group) === parentId)
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+}
+
+function flattenedCollections(collections: readonly LibraryGroup[]): Array<{
+  readonly group: LibraryGroup;
+  readonly depth: number;
+}> {
+  const out: Array<{ group: LibraryGroup; depth: number }> = [];
+  const seen = new Set<string>();
+  const visit = (parentId: string | undefined, depth: number): void => {
+    for (const group of collectionChildren(collections, parentId)) {
+      if (seen.has(group.id)) continue;
+      seen.add(group.id);
+      out.push({ group, depth });
+      visit(group.id, depth + 1);
+    }
+  };
+  visit(undefined, 0);
+  for (const group of collections) {
+    if (seen.has(group.id)) continue;
+    seen.add(group.id);
+    out.push({ group, depth: 0 });
+  }
+  return out;
+}
+
+function descendantIds(collections: readonly LibraryGroup[], rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  const visit = (parentId: string): void => {
+    for (const group of collections) {
+      if (parentIdOf(group) !== parentId || ids.has(group.id)) continue;
+      ids.add(group.id);
+      visit(group.id);
+    }
+  };
+  visit(rootId);
+  return ids;
+}
+
 export function createLibraryView(
   host: HTMLElement,
   deps: LibraryViewDependencies,
@@ -460,7 +567,17 @@ export function createLibraryView(
   groupHeader.append(groupTitle);
   const groupList = doc.createElement('nav');
   groupList.className = 'lightink-library-group-list';
-  groupPane.append(groupHeader, groupList);
+  const groupActions = doc.createElement('div');
+  groupActions.className = 'lightink-library-group-actions';
+  const organizeButton = button(doc, '', 'lightink-library-group');
+  organizeButton.dataset.libraryGroupAction = 'organize';
+  const newGroupButton = button(doc, '', 'lightink-library-group');
+  newGroupButton.dataset.libraryGroupAction = 'create';
+  groupActions.append(organizeButton, newGroupButton);
+  const groupForm = doc.createElement('form');
+  groupForm.className = 'lightink-library-source-form';
+  groupForm.hidden = true;
+  groupPane.append(groupHeader, groupList, groupActions, groupForm);
   const sourcePane = doc.createElement('aside');
   sourcePane.className = 'lightink-library-sources';
   const sourceHeader = doc.createElement('div');
@@ -533,7 +650,12 @@ export function createLibraryView(
   host.appendChild(root);
 
   let libraryPage: LibraryPage = 'my-books';
-  let selectedGroup: ShelfGroup = 'all';
+  let selectedFilter: ShelfGroup = 'all';
+  let selectedGroupId: string | null = null;
+  let collections: LibraryGroup[] = [];
+  const membersByGroup = new Map<string, Set<string>>();
+  let groupFormMode: GroupFormMode = 'create';
+  let editingGroupId: string | null = null;
   let sources: OpdsSource[] = [];
   let selectedSourceId: string | null = null;
   let editingSourceId: string | null = null;
@@ -549,6 +671,61 @@ export function createLibraryView(
   const labels = (): Labels => LABELS[deps.getLocale()];
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
+  const groupsApi = (): Partial<LibraryGroupCommands> => deps.library;
+
+  function addMemberCommand():
+    | ((groupId: string, itemId: string) => Promise<void>)
+    | undefined {
+    const api = groupsApi();
+    const primary = api.addGroupMember ?? api.addItemToGroup;
+    const secondary = api.addItemToGroup;
+    if (primary === undefined) return undefined;
+    return async (groupId, itemId) => {
+      await primary(groupId, itemId);
+      if (secondary !== undefined && secondary !== primary) {
+        await secondary(groupId, itemId);
+      }
+    };
+  }
+
+  function removeMemberCommand():
+    | ((groupId: string, itemId: string) => Promise<void>)
+    | undefined {
+    const api = groupsApi();
+    const primary = api.removeGroupMember ?? api.removeItemFromGroup;
+    const secondary = api.removeItemFromGroup;
+    if (primary === undefined) return undefined;
+    return async (groupId, itemId) => {
+      await primary(groupId, itemId);
+      if (secondary !== undefined && secondary !== primary) {
+        await secondary(groupId, itemId);
+      }
+    };
+  }
+
+  function organizeCommand(): (() => Promise<void>) | undefined {
+    const api = groupsApi();
+    const primary = api.organizeGroups ?? api.organize;
+    const secondary = api.organize;
+    if (primary === undefined) return undefined;
+    return async () => {
+      await primary();
+      if (secondary !== undefined && secondary !== primary) {
+        await secondary();
+      }
+    };
+  }
+
+  function selectedCollection(): LibraryGroup | undefined {
+    return selectedGroupId === null
+      ? undefined
+      : collections.find((group) => group.id === selectedGroupId);
+  }
+
+  function isInSelectedCollection(itemId: string): boolean {
+    if (selectedGroupId === null) return true;
+    return membersByGroup.get(selectedGroupId)?.has(itemId) === true;
+  }
 
   function progressFor(display: DisplayItem): LibraryProgress | null {
     const catalogEntry = display.entry !== undefined;
@@ -586,9 +763,12 @@ export function createLibraryView(
   }
 
   function matchesGroup(display: DisplayItem): boolean {
+    if (selectedGroupId !== null) {
+      return isInSelectedCollection(display.item.id);
+    }
     const progress = progressFor(display);
     const kind = classifyLibraryKind(display.item);
-    switch (selectedGroup) {
+    switch (selectedFilter) {
       case 'all':
         return true;
       case 'in-progress':
@@ -698,26 +878,370 @@ export function createLibraryView(
     }
   }
 
+  function closeGroupForm(): void {
+    editingGroupId = null;
+    groupFormMode = 'create';
+    groupForm.reset();
+    delete groupForm.dataset.addItemId;
+    groupForm.hidden = true;
+    newGroupButton.classList.remove('is-open');
+  }
+
+  function renderGroupForm(group?: LibraryGroup, parentId?: string): void {
+    groupForm.replaceChildren();
+    const name = doc.createElement('input');
+    name.name = 'name';
+    name.type = 'text';
+    name.required = true;
+    name.value = group?.name ?? '';
+    const parent = doc.createElement('select');
+    parent.name = 'parentId';
+    parent.setAttribute('aria-label', labels().parentGroup);
+    const rootOption = doc.createElement('option');
+    rootOption.value = '';
+    rootOption.textContent = labels().rootGroup;
+    parent.appendChild(rootOption);
+    const blocked = group === undefined ? new Set<string>() : descendantIds(collections, group.id);
+    for (const { group: candidate } of flattenedCollections(collections)) {
+      if (blocked.has(candidate.id)) continue;
+      const option = doc.createElement('option');
+      option.value = candidate.id;
+      option.textContent = candidate.name;
+      parent.appendChild(option);
+    }
+    parent.value = parentIdOf(group ?? { parentId }) ?? parentId ?? '';
+    const labeled = (field: HTMLElement, text: string): HTMLLabelElement => {
+      const wrap = doc.createElement('label');
+      wrap.className = 'lightink-library-field';
+      const caption = doc.createElement('span');
+      caption.textContent = text;
+      wrap.append(caption, field);
+      return wrap;
+    };
+    const actions = doc.createElement('div');
+    const save = button(doc, labels().save, 'lightink-library-primary');
+    save.type = 'submit';
+    const cancel = button(doc, labels().cancel);
+    cancel.addEventListener('click', () => closeGroupForm());
+    actions.append(save, cancel);
+    groupForm.setAttribute('role', 'dialog');
+    groupForm.setAttribute(
+      'aria-label',
+      groupFormMode === 'edit' ? labels().renameGroup : labels().newGroup,
+    );
+    groupForm.append(labeled(name, labels().groupName), labeled(parent, labels().parentGroup), actions);
+  }
+
+  function openGroupForm(mode: GroupFormMode, group?: LibraryGroup, parentId?: string): void {
+    if (groupsApi().createGroup === undefined && mode === 'create') return;
+    if (mode === 'edit' && (groupsApi().renameGroup === undefined || group === undefined)) return;
+    groupFormMode = mode;
+    editingGroupId = group?.id ?? null;
+    renderGroupForm(group, parentId);
+    groupForm.hidden = false;
+    newGroupButton.classList.toggle('is-open', mode === 'create' && group === undefined);
+    groupForm.querySelector<HTMLInputElement>('input')?.focus();
+  }
+
+  async function reloadCollections(): Promise<void> {
+    const api = groupsApi();
+    if (api.listGroups === undefined) {
+      collections = [];
+      membersByGroup.clear();
+      return;
+    }
+    try {
+      collections = [...(await api.listGroups())];
+      membersByGroup.clear();
+      for (const group of collections) {
+        membersByGroup.set(group.id, new Set(group.itemIds ?? []));
+      }
+      if (api.listGroupMembers !== undefined) {
+        let members: readonly LibraryGroupMember[] = [];
+        try {
+          members = await api.listGroupMembers();
+        } catch {
+          const loaded: LibraryGroupMember[] = [];
+          for (const group of collections) {
+            loaded.push(...(await api.listGroupMembers(group.id)));
+          }
+          members = loaded;
+        }
+        for (const member of members) {
+          let set = membersByGroup.get(member.groupId);
+          if (set === undefined) {
+            set = new Set();
+            membersByGroup.set(member.groupId, set);
+          }
+          set.add(member.itemId);
+        }
+      }
+    } catch (error) {
+      collections = [];
+      membersByGroup.clear();
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+    if (selectedGroupId !== null && !collections.some((group) => group.id === selectedGroupId)) {
+      selectedGroupId = null;
+      selectedFilter = 'all';
+    }
+  }
+
+  async function mutateCollections(action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+      closeGroupForm();
+      await reloadCollections();
+      renderGroups();
+      renderContinueBar();
+      renderItems();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+  }
+
+  async function saveGroupForm(): Promise<void> {
+    const data = new FormData(groupForm);
+    const addItemId = groupForm.dataset.addItemId;
+    if (addItemId !== undefined && addItemId !== '') {
+      const groupId = String(data.get('groupId') ?? '');
+      const add = addMemberCommand();
+      if (groupId === '' || add === undefined) return;
+      await mutateCollections(() => add(groupId, addItemId));
+      return;
+    }
+    const name = String(data.get('name') ?? '').trim();
+    const parentId = String(data.get('parentId') ?? '').trim() || undefined;
+    if (groupFormMode === 'create') {
+      if (name === '' || groupsApi().createGroup === undefined) return;
+      await mutateCollections(() => groupsApi().createGroup!({ name, parentId }));
+      return;
+    }
+    if (editingGroupId === null) return;
+    const groupId = editingGroupId;
+    await mutateCollections(async () => {
+      if (name !== '' && groupsApi().renameGroup !== undefined) {
+        await groupsApi().renameGroup!(groupId, name);
+      }
+      if (groupsApi().moveGroup !== undefined) {
+        await groupsApi().moveGroup!(groupId, parentId);
+      }
+    });
+  }
+
+  async function organizeShelf(): Promise<void> {
+    const organize = organizeCommand();
+    if (organize === undefined) return;
+    await mutateCollections(async () => {
+      await organize();
+      const loaded = await deps.library.listItems();
+      items = loaded.map((item) => ({ item, links: [] }));
+    });
+  }
+
+  function bindDropTarget(
+    row: HTMLElement,
+    options: {
+      readonly groupId?: string;
+      readonly acceptGroup: boolean;
+      readonly acceptItem: boolean;
+    },
+  ): void {
+    row.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      row.classList.add('is-active');
+    });
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('is-active');
+    });
+    row.addEventListener('drop', (event) => {
+      event.preventDefault();
+      row.classList.remove('is-active');
+      const itemId = event.dataTransfer?.getData('application/x-lightink-item');
+      const draggedGroupId = event.dataTransfer?.getData('application/x-lightink-group');
+      if (itemId !== undefined && itemId !== '' && options.acceptItem && options.groupId !== undefined) {
+        const add = addMemberCommand();
+        if (add === undefined) return;
+        void mutateCollections(() => add(options.groupId!, itemId));
+        return;
+      }
+      if (
+        draggedGroupId !== undefined &&
+        draggedGroupId !== '' &&
+        options.acceptGroup &&
+        groupsApi().moveGroup !== undefined
+      ) {
+        if (options.groupId !== undefined && descendantIds(collections, draggedGroupId).has(options.groupId)) {
+          return;
+        }
+        void mutateCollections(() => groupsApi().moveGroup!(draggedGroupId, options.groupId));
+      }
+    });
+  }
+
+  function openCollectionMenu(group: LibraryGroup, event: MouseEvent): void {
+    const items: MenuItem[] = [];
+    if (groupsApi().createGroup !== undefined) {
+      items.push({
+        id: 'child',
+        label: labels().newChildGroup,
+        action: () => openGroupForm('create', undefined, group.id),
+      });
+    }
+    if (groupsApi().renameGroup !== undefined || groupsApi().moveGroup !== undefined) {
+      items.push({
+        id: 'edit',
+        label: labels().renameGroup,
+        action: () => openGroupForm('edit', group),
+      });
+    }
+    if (groupsApi().deleteGroup !== undefined) {
+      items.push({
+        id: 'delete',
+        label: labels().deleteGroup,
+        action: () => void mutateCollections(() => groupsApi().deleteGroup!(group.id)),
+      });
+    }
+    if (items.length === 0) return;
+    event.preventDefault();
+    createContextMenu(items, { x: event.clientX, y: event.clientY }, doc);
+  }
+
+  function openItemCollectionMenu(display: DisplayItem, event: MouseEvent): void {
+    const items: MenuItem[] = [];
+    if (collections.length > 0 && addMemberCommand() !== undefined) {
+      items.push({
+        id: 'add',
+        label: labels().addToGroup,
+        action: () => {
+          groupFormMode = 'create';
+          editingGroupId = null;
+          groupForm.replaceChildren();
+          const select = doc.createElement('select');
+          select.name = 'groupId';
+          select.required = true;
+          for (const { group } of flattenedCollections(collections)) {
+            const option = doc.createElement('option');
+            option.value = group.id;
+            option.textContent = group.name;
+            select.appendChild(option);
+          }
+          const actions = doc.createElement('div');
+          const save = button(doc, labels().save, 'lightink-library-primary');
+          save.type = 'submit';
+          const cancel = button(doc, labels().cancel);
+          cancel.addEventListener('click', () => closeGroupForm());
+          actions.append(save, cancel);
+          const wrap = doc.createElement('label');
+          wrap.className = 'lightink-library-field';
+          const caption = doc.createElement('span');
+          caption.textContent = labels().addToGroup;
+          wrap.append(caption, select);
+          groupForm.setAttribute('role', 'dialog');
+          groupForm.setAttribute('aria-label', labels().addToGroup);
+          groupForm.append(wrap, actions);
+          groupForm.dataset.addItemId = display.item.id;
+          groupForm.hidden = false;
+        },
+      });
+    }
+    const current = selectedCollection();
+    const remove = removeMemberCommand();
+    if (current !== undefined && remove !== undefined) {
+      items.push({
+        id: 'remove',
+        label: labels().removeFromGroup,
+        action: () => void mutateCollections(() => remove(current.id, display.item.id)),
+      });
+    }
+    if (items.length === 0) return;
+    event.preventDefault();
+    createContextMenu(items, { x: event.clientX, y: event.clientY }, doc);
+  }
+
+  function selectFilter(group: ShelfGroup): void {
+    selectedFilter = group;
+    selectedGroupId = null;
+    renderGroups();
+    renderContinueBar();
+    renderItems();
+  }
+
+  function selectCollection(groupId: string): void {
+    selectedGroupId = groupId;
+    renderGroups();
+    renderContinueBar();
+    renderItems();
+  }
+
   function renderGroups(): void {
     groupList.replaceChildren();
     groupTitle.textContent = labels().groups;
     groupPane.setAttribute('aria-label', labels().groups);
+    organizeButton.textContent = labels().organize;
+    organizeButton.title = labels().organize;
+    organizeButton.setAttribute('aria-label', labels().organize);
+    newGroupButton.textContent = labels().newGroup;
+    newGroupButton.title = labels().newGroup;
+    newGroupButton.setAttribute('aria-label', labels().newGroup);
+    groupActions.hidden = false;
+    organizeButton.hidden = false;
+    newGroupButton.hidden = false;
     for (const group of SHELF_GROUPS) {
       const row = button(doc, groupLabel(labels(), group), 'lightink-library-group');
       row.dataset.shelfGroup = group;
-      row.classList.toggle('is-active', selectedGroup === group);
-      if (selectedGroup === group) {
-        row.setAttribute('aria-current', 'true');
-      } else {
-        row.removeAttribute('aria-current');
+      const active = selectedGroupId === null && selectedFilter === group;
+      row.classList.toggle('is-active', active);
+      if (active) row.setAttribute('aria-current', 'true');
+      else row.removeAttribute('aria-current');
+      row.addEventListener('click', () => selectFilter(group));
+      if (group === 'all') {
+        bindDropTarget(row, { acceptGroup: true, acceptItem: false });
       }
-      row.addEventListener('click', () => {
-        selectedGroup = group;
-        renderGroups();
-        renderContinueBar();
-        renderItems();
-      });
       groupList.appendChild(row);
+    }
+    for (const { group, depth } of flattenedCollections(collections)) {
+      const wrap = doc.createElement('div');
+      wrap.className = 'lightink-library-group-row';
+      const row = button(doc, group.name, 'lightink-library-group');
+      row.dataset.libraryGroupId = group.id;
+      row.dataset.groupId = group.id;
+      row.dataset.groupKind = group.kind;
+      row.dataset.groupSource = group.kind;
+      const parentId = parentIdOf(group);
+      if (parentId !== undefined) row.dataset.parentId = parentId;
+      else delete row.dataset.parentId;
+      row.style.paddingLeft = `${10 + depth * 14}px`;
+      const active = selectedGroupId === group.id;
+      row.classList.toggle('is-active', active);
+      if (active) row.setAttribute('aria-current', 'true');
+      else row.removeAttribute('aria-current');
+      row.draggable = groupsApi().moveGroup !== undefined;
+      row.addEventListener('click', () => selectCollection(group.id));
+      row.addEventListener('contextmenu', (event) => openCollectionMenu(group, event));
+      row.addEventListener('dragstart', (event) => {
+        event.dataTransfer?.setData('application/x-lightink-group', group.id);
+        event.dataTransfer?.setData('text/plain', group.id);
+      });
+      bindDropTarget(row, { groupId: group.id, acceptGroup: true, acceptItem: true });
+      wrap.appendChild(row);
+      const rename = button(doc, '', 'lightink-library-icon-button');
+      rename.setAttribute('aria-label', `${labels().renameGroup}: ${group.name}`);
+      rename.title = labels().renameGroup;
+      rename.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openGroupForm('edit', group);
+      });
+      const remove = button(doc, '', 'lightink-library-icon-button');
+      remove.setAttribute('aria-label', `${labels().deleteGroup}: ${group.name}`);
+      remove.title = labels().deleteGroup;
+      remove.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (groupsApi().deleteGroup === undefined) return;
+        void mutateCollections(() => groupsApi().deleteGroup!(group.id));
+      });
+      wrap.append(rename, remove);
+      groupList.appendChild(wrap);
     }
   }
 
@@ -821,7 +1345,35 @@ export function createLibraryView(
     }
   }
 
-  function renderCoverCard(display: DisplayItem): HTMLButtonElement {
+  function closeGroupPicker(): void {
+    root.querySelectorAll('.lightink-library-group-picker').forEach((node) => node.remove());
+  }
+
+  function openGroupPicker(display: DisplayItem, hostEl: HTMLElement): void {
+    closeGroupPicker();
+    const picker = doc.createElement('div');
+    picker.className = 'lightink-library-group-picker';
+    picker.setAttribute('role', 'menu');
+    for (const { group } of flattenedCollections(collections)) {
+      const choice = button(doc, group.name);
+      choice.setAttribute('role', 'menuitem');
+      choice.addEventListener('click', (event) => {
+        event.stopPropagation();
+        closeGroupPicker();
+        const add = addMemberCommand();
+        if (add === undefined) return;
+        void mutateCollections(() => add(group.id, display.item.id));
+      });
+      picker.appendChild(choice);
+    }
+    hostEl.appendChild(picker);
+  }
+
+  function renderCoverCard(display: DisplayItem): HTMLElement {
+    const shell = doc.createElement('div');
+    shell.className = 'lightink-library-item-shell';
+    shell.dataset.itemId = display.item.id;
+    shell.dataset.bookKind = classifyLibraryKind(display.item);
     const row = button(doc, '', 'lightink-library-item lightink-library-item--cover');
     row.dataset.itemId = display.item.id;
     row.dataset.bookKind = classifyLibraryKind(display.item);
@@ -843,10 +1395,38 @@ export function createLibraryView(
       meta.textContent = metaParts.join(' · ');
       text.appendChild(meta);
     }
-    appendImportedProgress(row, text, display, { continueCue: false });
+    appendImportedProgress(shell, text, display, { continueCue: false });
+    if (shell.dataset.progressStatus !== undefined) {
+      row.dataset.progressStatus = shell.dataset.progressStatus;
+    }
     row.append(cover, text);
+    row.draggable = true;
+    row.addEventListener('dragstart', (event) => {
+      event.dataTransfer?.setData('application/x-lightink-item', display.item.id);
+      event.dataTransfer?.setData('text/plain', display.item.id);
+    });
     row.addEventListener('click', () => void openSelected(display));
-    return row;
+    shell.addEventListener('contextmenu', (event) => openItemCollectionMenu(display, event));
+    const add = button(doc, labels().addToGroup);
+    add.setAttribute('aria-label', labels().addToGroup);
+    add.hidden = addMemberCommand() === undefined || collections.length === 0;
+    add.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openGroupPicker(display, shell);
+    });
+    const remove = button(doc, labels().removeFromGroup);
+    remove.setAttribute('aria-label', labels().removeFromGroup);
+    const selected = selectedCollection();
+    remove.hidden = selected === undefined || removeMemberCommand() === undefined;
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const current = selectedCollection();
+      const removeFn = removeMemberCommand();
+      if (current === undefined || removeFn === undefined) return;
+      void mutateCollections(() => removeFn(current.id, display.item.id));
+    });
+    shell.append(row, add, remove);
+    return shell;
   }
 
   function renderCatalogRow(display: DisplayItem): HTMLButtonElement {
@@ -881,7 +1461,12 @@ export function createLibraryView(
 
   function renderContinueBar(): void {
     continueHost.replaceChildren();
-    if (libraryPage !== 'my-books' || selectedGroup !== 'all' || searchInput.value.trim() !== '') {
+    if (
+      libraryPage !== 'my-books' ||
+      selectedGroupId !== null ||
+      selectedFilter !== 'all' ||
+      searchInput.value.trim() !== ''
+    ) {
       continueHost.hidden = true;
       return;
     }
@@ -1144,7 +1729,10 @@ export function createLibraryView(
       feed = null;
       currentUrl = undefined;
       trail.splice(0);
+      await reloadCollections();
+      if (generation !== requestGeneration) return;
       setStatus('');
+      renderGroups();
       renderContinueBar();
       renderItems();
       void hydrateLocalCovers(generation);
@@ -1494,7 +2082,28 @@ export function createLibraryView(
   });
   importButton.addEventListener('click', async () => {
     const item = await deps.onImportLocal();
-    if (item !== null) await showMyBooks();
+    if (item === null) return;
+    const organize = organizeCommand();
+    if (organize !== undefined) {
+      try {
+        await organize();
+      } catch (error) {
+        deps.notify(errorText(error, labels().offline), 'error');
+      }
+    }
+    await showMyBooks();
+  });
+  organizeButton.addEventListener('click', () => void organizeShelf());
+  newGroupButton.addEventListener('click', () => {
+    if (groupForm.hidden || editingGroupId !== null || groupForm.dataset.addItemId !== undefined) {
+      openGroupForm('create');
+    } else {
+      closeGroupForm();
+    }
+  });
+  groupForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void saveGroupForm();
   });
   clearCacheButton.addEventListener('click', async () => {
     try {
@@ -1581,7 +2190,8 @@ export function createLibraryView(
       root.hidden = false;
       deps.onVisibilityChange?.(true);
       libraryPage = 'my-books';
-      selectedGroup = 'all';
+      selectedFilter = 'all';
+      selectedGroupId = null;
       searchInput.value = '';
       await initialLoad();
       searchInput.focus();
@@ -1603,4 +2213,10 @@ export function createLibraryView(
   };
 }
 
-export const libraryViewInternals = { bytesLabel, itemFromEntry };
+export const libraryViewInternals = {
+  bytesLabel,
+  itemFromEntry,
+  parentIdOf,
+  flattenedCollections,
+  descendantIds,
+};
