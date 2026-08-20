@@ -11,6 +11,12 @@ export interface OpdsLink {
   readonly acquisition: boolean;
 }
 
+export interface OpdsGroup {
+  readonly title?: string;
+  readonly publications?: readonly OpdsEntry[];
+  readonly navigation: readonly OpdsEntry[];
+}
+
 export interface OpdsEntry {
   readonly id: string;
   readonly itemId?: string;
@@ -20,6 +26,10 @@ export interface OpdsEntry {
   readonly summary?: string;
   readonly coverUrl?: string;
   readonly links: readonly OpdsLink[];
+  readonly kind?: 'publication' | 'navigation';
+  readonly navigationUrl?: string;
+  readonly subjects?: readonly string[];
+  readonly series?: string;
 }
 
 export interface OpdsFeed {
@@ -32,6 +42,8 @@ export interface OpdsFeed {
   readonly previousUrl?: string;
   readonly searchTemplate?: string;
   readonly sourceUrl: string;
+  readonly format?: 'opds1' | 'opds2';
+  readonly groups?: readonly OpdsGroup[];
 }
 
 export interface OpdsSource {

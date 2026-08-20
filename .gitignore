@@ -16,4 +16,5 @@ docs/*
 !docs/requirements/
 docs/requirements/*
 !docs/requirements/opds-streaming-archives.md
+!docs/requirements/webdav-sync-groups-opds2.md
 /.idea/

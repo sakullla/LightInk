@@ -7,7 +7,7 @@
  * Alias writes belong to the open-book path (`main.ts` / `reader-view`).
  */
 
-import type { LibraryItem } from './library-client.js';
+import type { LibraryItem, LibraryItemAlias } from './library-client.js';
 import {
   loadReadingProgress,
   type ProgressStorage,
@@ -82,6 +82,21 @@ export function saveLibraryProgressAlias(
   }
 }
 
+/** Preserve a book's reader identity when a legacy shelf row becomes managed. */
+export function migrateLibraryProgressAliases(
+  storage: ProgressStorage | null | undefined,
+  aliases: readonly LibraryItemAlias[],
+  fallbackProgressIds: ReadonlyMap<string, string> = new Map(),
+): void {
+  for (const alias of aliases) {
+    const progressId =
+      loadLibraryProgressAlias(storage, alias.aliasId) ?? fallbackProgressIds.get(alias.aliasId);
+    if (progressId !== undefined && progressId !== null && progressId !== '') {
+      saveLibraryProgressAlias(storage, alias.itemId, progressId);
+    }
+  }
+}
+
 function resolveProgressId(
   storage: ProgressStorage | null | undefined,
   query: LibraryProgressQuery,
@@ -90,7 +105,7 @@ function resolveProgressId(
   if (alias !== null) {
     return alias;
   }
-  if (query.localPath !== undefined && query.localPath !== '') {
+  if (query.localPath != null && query.localPath !== '') {
     return query.localPath;
   }
   return null;

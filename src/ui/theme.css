@@ -2765,6 +2765,105 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   outline-offset: 2px;
 }
 
+.lightink-sync-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(90vh, 820px);
+  overflow: auto;
+}
+
+.lightink-sync-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lightink-sync-field,
+.lightink-sync-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lightink-sync-field {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.lightink-sync-field span {
+  color: var(--lightink-muted);
+  font-size: 0.82rem;
+}
+
+.lightink-sync-field input,
+.lightink-sync-field select {
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+}
+
+.lightink-sync-credentials,
+.lightink-sync-checkbox,
+.lightink-sync-message,
+.lightink-sync-status,
+.lightink-sync-conflicts,
+.lightink-sync-migration-list,
+.lightink-sync-migration-actions {
+  grid-column: 1 / -1;
+}
+
+.lightink-sync-credentials {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lightink-sync-message,
+.lightink-sync-status {
+  min-height: 1.4em;
+  color: var(--lightink-muted);
+  white-space: pre-line;
+}
+
+.lightink-sync-conflicts,
+.lightink-sync-migration-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.lightink-sync-conflict,
+.lightink-sync-migration-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+}
+
+.lightink-sync-migration-row {
+  justify-content: flex-start;
+}
+
+.lightink-sync-migration-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .lightink-sync-form,
+  .lightink-sync-credentials {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

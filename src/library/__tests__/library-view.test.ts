@@ -769,6 +769,56 @@ describe('LibraryView manage and catalog', () => {
     expect(view.visible).toBe(false);
   });
 
+  it('renders OPDS 2 groups and opens grouped navigation entries', async () => {
+    const groupedBook: OpdsEntry = {
+      ...entry,
+      id: 'group-book',
+      itemId: 'group-book-item',
+      title: '分组内图书',
+    };
+    const groupedNavigation: OpdsEntry = {
+      id: 'group-navigation',
+      itemId: 'group-navigation-item',
+      title: '更多小说',
+      authors: [],
+      links: [],
+      kind: 'navigation',
+      navigationUrl: 'https://books.example/opds/fiction',
+    };
+    const browse = vi
+      .fn()
+      .mockResolvedValueOnce(
+        feed({
+          format: 'opds2',
+          groups: [
+            {
+              title: '小说',
+              publications: [groupedBook],
+              navigation: [groupedNavigation],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValue(feed());
+    const base = dependencies();
+    const deps = dependencies({ opds: { ...base.opds, browse } });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    expect(host.querySelector('.lightink-library-opds-group-title')?.textContent).toBe('小说');
+    expect(host.textContent).toContain('分组内图书');
+    itemRow(host, 'group-navigation-item').click();
+    await settle();
+    expect(browse).toHaveBeenLastCalledWith(
+      'source-1',
+      'https://books.example/opds/fiction',
+    );
+    view.destroy();
+  });
+
   it('exposes a retry action after an offline browse failure', async () => {
     const browse = vi
       .fn()

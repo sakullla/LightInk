@@ -464,7 +464,7 @@ pub(crate) async fn fetch_remote_text(
     allow_http: bool,
     credential_ref: Option<&str>,
     max_bytes: usize,
-) -> Result<(Url, String), RemoteError> {
+) -> Result<(Url, Option<String>, String), RemoteError> {
     let url = validate_remote_url(raw_url, allow_http)?;
     let credential = credential_ref.and_then(|reference| load_credential(state, reference));
     let client = build_client(&url, credential.is_some())?;
@@ -494,6 +494,7 @@ pub(crate) async fn fetch_remote_text(
         ));
     }
     let final_url = response.url().clone();
+    let content_type = header_string(response.headers(), reqwest::header::CONTENT_TYPE);
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -510,7 +511,7 @@ pub(crate) async fn fetch_remote_text(
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| RemoteError::new("REMOTE_TEXT_ENCODING", "远程目录不是有效的 UTF-8 XML"))?;
-    Ok((final_url, text))
+    Ok((final_url, content_type, text))
 }
 
 async fn open_cache_file(path: &Path, size: u64) -> Result<tokio::fs::File, RemoteError> {

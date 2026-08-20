@@ -60,8 +60,20 @@ import type {
   ExportServiceDeps,
   ExportTabSnapshot,
 } from './export/export-service.js';
-import { readFile, writeFile } from './file/file-service.js';
-import { createOutlineView, type OutlineView } from './outline/outline-view.js';
+import {
+  clearSnapshot as clearCrashSnapshot,
+  listUntitledDrafts as listCrashDrafts,
+  readFile,
+  writeFile,
+  writeSnapshot as writeCrashSnapshot,
+  type UntitledDraft,
+} from './file/file-service.js';
+import {
+  createOutlineView,
+  OUTLINE_WIDTH_DEFAULT,
+  readStoredOutlineWidth,
+  type OutlineView,
+} from './outline/outline-view.js';
 import {
   createMarkdownAnnotationHost,
   type MarkdownAnnotationHost,
@@ -71,8 +83,12 @@ import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js
 import { readerLoadErrorDetail } from './reader/error-message.js';
 import { loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
-import { TabManager, fileNameOf, isMarkdownTab } from './tabs/tab-manager.js';
-import { createAutosave, type AutosaveController } from './tabs/autosave.js';
+import { TabManager, isMarkdownTab } from './tabs/tab-manager.js';
+import {
+  createAutosave,
+  loadAutosaveEnabled,
+  type AutosaveController,
+} from './tabs/autosave.js';
 import type { CloseChoice, MarkdownTabState, ReaderTabState, TabState } from './tabs/types.js';
 import { createStyleTagSlot, ThemeService } from './theme/theme-service.js';
 import type { CheatBinding } from './ui/help-cheatsheet.js';
@@ -95,12 +111,13 @@ import { showExitConfirmation } from './ui/exit-confirmation.js';
 import {
   createStatusBar,
   cursorPositionFromOffset,
+  loadStatusBarVisible,
   type StatusBar,
   type StatusBarSnapshot,
 } from './ui/status-bar.js';
-import { createI18n } from './i18n/i18n.js';
+import { createI18n, loadLocale } from './i18n/i18n.js';
 import { installDisplayScale } from './ui/display-scale.js';
-import { installFontScale, type FontScaleHandle } from './ui/font-scale.js';
+import { installFontScale, loadFontScale, type FontScaleHandle } from './ui/font-scale.js';
 import { installWheelZoom } from './ui/wheel-zoom.js';
 import {
   advancePagedScroller,
@@ -118,13 +135,15 @@ import {
   type ReadingLayout,
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
+import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
 import { setNativeCaptionColors, setNativeTheme, setNativeTitleBar, toggleFullscreen } from './ui/window-chrome.js';
 import { formatDocumentTitle } from './ui/window-title.js';
 import { installWindowCloseProtection } from './ui/window-lifecycle.js';
-import { libraryClient } from './library/library-client.js';
+import { libraryClient, type ManagedItemLocation } from './library/library-client.js';
 import {
   bindLibraryProgress,
+  migrateLibraryProgressAliases,
   saveLibraryProgressAlias,
 } from './library/library-progress.js';
 import {
@@ -133,6 +152,12 @@ import {
   type LibraryView,
 } from './library/library-view.js';
 import { credentialRefForResource, opdsClient } from './library/opds-client.js';
+import { createSyncableStorage } from './storage/syncable-storage.js';
+import { documentClient } from './sync/document-client.js';
+import { syncRecordClient } from './sync/sync-client.js';
+import { currentSyncRecords, ApplicationStateSync } from './sync/app-state-sync.js';
+import { webDavClient } from './sync/webdav-client.js';
+import { showSyncPanel } from './sync/sync-panel.js';
 import {
   createBoundVersionActions,
   showVersionsModal,
@@ -147,11 +172,21 @@ if (app === null) {
   throw new Error('LightInk: #app root container not found in index.html');
 }
 
+let applicationStateSync: ApplicationStateSync | undefined;
+const syncableStorage = createSyncableStorage(window.localStorage, {
+  onChange: (key, value) => {
+    window.dispatchEvent(
+      new CustomEvent('lightink:syncable-storage-change', { detail: { key, value } }),
+    );
+    applicationStateSync?.notifyStorageChange(key, value);
+  },
+});
+
 // 1080p / 2K / 4K layout tier → html[data-display]; theme.css scales tokens.
 const displayScale = installDisplayScale(document.documentElement, window);
 
 // Reading font zoom (body/code) over tier baselines; persists lightink.fontScale.
-const fontScale = installFontScale(document.documentElement, window.localStorage);
+const fontScale = installFontScale(document.documentElement, syncableStorage);
 
 // R5：Ctrl/Cmd + 滚轮字号缩放（与 Ctrl+=/- 同档位）。阅读工作区走阅读排版键。
 const readingZoomHandle: FontScaleHandle = {
@@ -169,7 +204,7 @@ const readingZoomHandle: FontScaleHandle = {
 };
 const wheelZoom = installWheelZoom(document, readingZoomHandle);
 
-let readingLayout = loadReadingLayout(window.localStorage);
+let readingLayout = loadReadingLayout(syncableStorage);
 applyReadingLayout(document.documentElement, readingLayout);
 
 function readingSurfaceWidth(): number {
@@ -212,7 +247,7 @@ function scheduleReadingColumnSync(): void {
 
 function setReadingLayout(next: ReadingLayout): void {
   readingLayout = next;
-  saveReadingLayout(window.localStorage, next);
+  saveReadingLayout(syncableStorage, next);
   applyReadingLayout(document.documentElement, next);
   syncReadingColumns();
 }
@@ -223,7 +258,7 @@ function toggleReadingLayoutMode(): void {
 }
 
 // UI language (en / zh-CN) + macOS shortcut labels.
-const i18n = createI18n(window.localStorage);
+const i18n = createI18n(syncableStorage);
 const isMac = isMacPlatform();
 
 type RecentMutationCommand = 'add_recent' | 'remove_recent' | 'clear_recents';
@@ -293,12 +328,25 @@ function applyLocaleChrome(): void {
 }
 applyLocaleChrome();
 
+function refreshLocalizedSurfaces(revealMenu = false): void {
+  applyLocaleChrome();
+  shell?.rebuildMenus();
+  if (revealMenu) shell?.revealMenu();
+  outline?.retranslate();
+  libraryView?.retranslate();
+  statusBar?.refresh(getActiveStatusSnapshot);
+  const tab = manager?.activeTab ?? null;
+  document.title = formatDocumentTitle(
+    tab === null ? null : { title: tab.title, dirty: tab.dirty },
+  );
+}
+
 // 主题服务：首次启动默认 warm-light，恢复上次选择；自定义主题走 <style> 注入槽。
 // R3：主题切换同步原生窗口明暗（Tauri setTheme → 原生标题栏颜色）。
 const themeService = new ThemeService({
   root: document.documentElement,
   customStyleSlot: createStyleTagSlot(document),
-  storage: window.localStorage,
+  storage: syncableStorage,
   readFile,
   syncNativeTheme: (dark) => void setNativeTheme(dark),
   onThemeChange: () => {
@@ -647,7 +695,7 @@ workspace.subscribe((state) => {
 
 function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot()): void {
   if (state.surface === 'reader') {
-    const chrome = readerNativeWindowChrome(loadReaderTheme(window.localStorage));
+    const chrome = readerNativeWindowChrome(loadReaderTheme(syncableStorage));
     void setNativeTheme(chrome.dark);
     void setNativeCaptionColors({ caption: chrome.caption, text: chrome.text });
     return;
@@ -661,11 +709,124 @@ document.addEventListener('lightink:reader-theme', () => {
 });
 
 function libraryItemIdForTarget(target: ReaderTarget): string {
-  return target.kind === 'remote' ? target.itemId : target.identity.id;
+  return target.kind === 'remote'
+    ? target.itemId
+    : (managedItemIdsByPath.get(target.path) ?? target.identity.id);
 }
 
+const managedItemIdsByPath = new Map<string, string>();
+
 function bindOpenedBookProgress(progressId: string, target: ReaderTarget): void {
-  saveLibraryProgressAlias(window.localStorage, libraryItemIdForTarget(target), progressId);
+  saveLibraryProgressAlias(syncableStorage, libraryItemIdForTarget(target), progressId);
+}
+
+function rememberManagedRecent(documentId: string): void {
+  if (documentId.trim() === '') return;
+  let ids: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(syncableStorage.getItem('lightink.recent.managed') ?? '[]');
+    if (Array.isArray(parsed)) ids = parsed.filter((value): value is string => typeof value === 'string');
+  } catch {
+    ids = [];
+  }
+  ids = [documentId, ...ids.filter((id) => id !== documentId)].slice(0, 20);
+  syncableStorage.setItem('lightink.recent.managed', JSON.stringify(ids));
+}
+
+async function applyManagedRecents(records: readonly import('./sync/sync-client.js').SyncRecord[]): Promise<void> {
+  const record = currentSyncRecords(records, 'app-state').find(
+    (candidate) => candidate.field === 'lightink.recent.managed',
+  );
+  if (record === undefined || record.tombstone || typeof record.value !== 'string') return;
+  let ids: string[];
+  try {
+    const parsed: unknown = JSON.parse(record.value);
+    if (!Array.isArray(parsed)) return;
+    ids = parsed.filter((value): value is string => typeof value === 'string').slice(0, 20);
+  } catch {
+    return;
+  }
+  const documents = await documentClient.list().catch(() => []);
+  for (const id of ids) {
+    const document = documents.find((candidate) => candidate.id === id && candidate.localPath);
+    if (document?.localPath != null && document.localPath !== '') {
+      await persistRecentMutation('add_recent', { path: document.localPath });
+    }
+  }
+}
+
+const synchronizedDraftIdsByKey = new Map<string, string>();
+const offeredDraftKeys = new Set<string>();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUntitledSnapshotKey(key: string): boolean {
+  return /^untitled-[A-Za-z0-9-]{1,96}$/.test(key);
+}
+
+function embeddedDraftId(key: string): string | undefined {
+  const candidate = key.slice('untitled-'.length);
+  return UUID_PATTERN.test(candidate) ? candidate : undefined;
+}
+
+async function writeSynchronizedSnapshot(key: string, content: string): Promise<void> {
+  await writeCrashSnapshot(key, content);
+  if (!isUntitledSnapshotKey(key)) return;
+  const deviceId = await syncRecordClient.deviceId();
+  const draft = await documentClient.saveDraft(
+    undefined,
+    key,
+    deviceId,
+    content,
+    synchronizedDraftIdsByKey.get(key) ?? embeddedDraftId(key),
+  );
+  synchronizedDraftIdsByKey.set(key, draft.id);
+  applicationStateSync?.schedule();
+}
+
+async function clearSynchronizedSnapshot(key: string): Promise<void> {
+  await clearCrashSnapshot(key);
+  if (!isUntitledSnapshotKey(key)) return;
+  const draftId = synchronizedDraftIdsByKey.get(key) ?? embeddedDraftId(key);
+  synchronizedDraftIdsByKey.delete(key);
+  if (draftId !== undefined) {
+    await documentClient.deleteDraft(draftId);
+    applicationStateSync?.schedule();
+  }
+}
+
+async function listRecoverableDrafts(): Promise<UntitledDraft[]> {
+  const localDrafts = await listCrashDrafts().catch(() => []);
+  const available = new Map(localDrafts.map((draft) => [draft.key, draft]));
+  const synchronized = await documentClient.listDrafts().catch(() => []);
+  for (const draft of synchronized) {
+    if (draft.documentId !== undefined) continue;
+    const storedKey = draft.title;
+    const key =
+      storedKey !== undefined && isUntitledSnapshotKey(storedKey)
+        ? storedKey
+        : `untitled-sync-${draft.id}`;
+    synchronizedDraftIdsByKey.set(key, draft.id);
+    if (available.has(key) || offeredDraftKeys.has(key)) continue;
+    const content = await documentClient
+      .readDraft(draft.id)
+      .catch(() => syncRecordClient.downloadDraft(draft.id))
+      .catch(() => null);
+    if (content !== null) available.set(key, { key, content });
+  }
+  const drafts = [...available.values()].filter((draft) => !offeredDraftKeys.has(draft.key));
+  for (const draft of drafts) offeredDraftKeys.add(draft.key);
+  return drafts;
+}
+
+let draftRecoveryQueue: Promise<void> = Promise.resolve();
+
+function recoverAvailableDrafts(): Promise<void> {
+  const recover = async (): Promise<void> => {
+    await manager.recoverUntitledDrafts();
+  };
+  const task = draftRecoveryQueue.then(recover, recover);
+  draftRecoveryQueue = task.catch(() => undefined);
+  return task;
 }
 
 function remoteExtension(item: LibraryOpenRequest['item'], acquisition: NonNullable<LibraryOpenRequest['acquisition']>): string {
@@ -726,11 +887,23 @@ async function openLibraryItem(
   signal?: AbortSignal,
 ): Promise<void> {
   const { item } = request;
-  if (item.sourceKind === 'local') {
-    if (item.localPath === undefined || item.localPath === '') {
-      throw new Error('本地书籍路径不可用');
+  if (item.sourceKind === 'local' || item.sourceKind === 'managed') {
+    let location: ManagedItemLocation;
+    try {
+      location = await libraryClient.materializeItem(item.id);
+    } catch (error) {
+      // A synced managed row may have metadata but no local body yet. Opening
+      // it is the same user action as pressing the explicit download button.
+      if (item.sourceKind !== 'managed' || item.blobHash == null || item.blobHash === '') throw error;
+      throwIfOperationAborted(signal);
+      const path = await syncRecordClient.downloadBook(item.id);
+      throwIfOperationAborted(signal);
+      location = { itemId: item.id, path, availability: 'local' as const };
     }
-    const tab = await openPathByKind(item.localPath);
+    if (item.sourceKind === 'managed') {
+      managedItemIdsByPath.set(location.path, location.itemId);
+    }
+    const tab = await openPathByKind(location.path);
     if (tab === null) {
       throw new Error(i18n.t('reader.loadFailed', { detail: item.title }));
     }
@@ -792,7 +965,9 @@ async function cacheLibraryItem(
   signal?: AbortSignal,
 ): Promise<void> {
   const { item, acquisition } = request;
-  if (item.sourceKind === 'local' || acquisition === undefined) return;
+  if (item.sourceKind === 'local' || item.sourceKind === 'managed' || acquisition === undefined) {
+    return;
+  }
   let opened: RemoteOpenResult;
   try {
     opened = await openLibraryRemote(request, signal);
@@ -833,7 +1008,10 @@ async function cacheLibraryItem(
 async function enrichLocalLibraryItem(
   item: import('./library/library-client.js').LibraryItem,
 ): Promise<import('./library/library-client.js').LibraryItem> {
-  if (item.sourceKind !== 'local' || item.localPath === undefined) {
+  if (
+    (item.sourceKind !== 'local' && item.sourceKind !== 'managed') ||
+    item.localPath == null || item.localPath === ''
+  ) {
     return item;
   }
   const extension = (item.extension ?? '').toLowerCase();
@@ -872,16 +1050,7 @@ async function importLocalLibraryItem(): Promise<import('./library/library-clien
     return null;
   }
   if (selected === null) return null;
-  const extension = extOfPath(selected);
-  const item = {
-    id: `local:${selected}`,
-    sourceKind: 'local' as const,
-    title: fileNameOf(selected),
-    authors: [] as string[],
-    localPath: selected,
-    extension,
-    updatedAt: Date.now(),
-  };
+  const item = await libraryClient.importManagedBook(selected);
   const enriched = await enrichLocalLibraryItem(item);
   await libraryClient.upsertItem(enriched);
   return enriched;
@@ -914,6 +1083,58 @@ function saveActiveAs(): void {
   const id = manager.activeTabId;
   if (id !== null) {
     void manager.saveTabAs(id);
+  }
+}
+
+/** 将当前已保存的 Markdown 复制到应用数据目录并把标签切换到受管副本。 */
+async function joinActiveMarkdownToSyncSpace(): Promise<void> {
+  commitActiveSourceMode();
+  const tab = activeMarkdownTab();
+  if (tab === null || tab.filePath === null || tab.managedDocumentId !== undefined) {
+    return;
+  }
+  if (tab.dirty) {
+    const choice = await showConfirmDialog(document, {
+      title: i18n.locale === 'en' ? 'Save before joining' : '加入同步空间前保存',
+      message:
+        i18n.locale === 'en'
+          ? 'The source Markdown must be saved before it can be copied into the sync space.'
+          : '加入同步空间前需要先保存当前 Markdown，原文件不会被移动或删除。',
+      buttons: [
+        {
+          id: 'save',
+          label: i18n.locale === 'en' ? 'Save and continue' : '保存并继续',
+          kind: 'primary',
+        },
+        { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
+      ],
+      cancelId: 'cancel',
+    });
+    if (choice !== 'save') return;
+    if (!(await manager.saveTab(tab.id))) return;
+  }
+  try {
+    const result = await documentClient.join(tab.filePath);
+    const adopted = await manager.adoptManagedDocument(
+      tab.id,
+      result.document.id,
+      result.managedPath,
+      result.content,
+    );
+    if (!adopted) return;
+    rememberManagedRecent(result.document.id);
+    if (result.warnings.length > 0) {
+      void dialogMessage(result.warnings.join('\n'), {
+        title: i18n.locale === 'en' ? 'Sync space warnings' : '同步空间提示',
+        kind: 'warning',
+      });
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error ?? '');
+    void dialogMessage(
+      `${i18n.locale === 'en' ? 'Could not join the sync space' : '加入同步空间失败'}\n${detail}`,
+      { title: i18n.t('app.name'), kind: 'error' },
+    );
   }
 }
 
@@ -1400,6 +1621,42 @@ shell = createAppShell(
       commitActiveSourceMode();
       void saveActiveAs();
     },
+    onJoinSyncSpace: () => {
+      void joinActiveMarkdownToSyncSpace();
+    },
+    canJoinSyncSpace: () => {
+      const tab = activeMarkdownTab();
+      return tab?.filePath !== null && tab?.filePath !== undefined && tab.managedDocumentId === undefined;
+    },
+    onOpenSyncPanel: () => {
+      showSyncPanel({
+        doc: document,
+        webdav: webDavClient,
+        sync: syncRecordClient,
+        syncNow: () => applicationStateSync?.syncNow() ?? syncRecordClient.run(),
+        migration: {
+          preview: () => libraryClient.previewManagedMigration(),
+          apply: async (itemIds) => {
+            const selected = new Set(itemIds);
+            const legacyPaths = new Map<string, string>();
+            const currentItems = await libraryClient.listItems().catch(() => []);
+            for (const item of currentItems) {
+              if (selected.has(item.id) && item.localPath != null && item.localPath !== '') {
+                legacyPaths.set(item.id, item.localPath);
+              }
+            }
+            const result = await libraryClient.applyManagedMigration(itemIds);
+            migrateLibraryProgressAliases(syncableStorage, result.aliases, legacyPaths);
+            for (const alias of result.aliases) {
+              const path = legacyPaths.get(alias.aliasId);
+              if (path !== undefined) managedItemIdsByPath.set(path, alias.itemId);
+            }
+            return result;
+          },
+        },
+        locale: i18n.locale,
+      });
+    },
     // R14：自动保存开关（文件菜单勾选项；autosave 在 TabManager 后创建，
     // 菜单动作经 ?. 短路，菜单打开时 isAutosaveEnabled 重算勾选态）。
     isAutosaveEnabled: () => autosave?.isEnabled() === true,
@@ -1495,28 +1752,11 @@ shell = createAppShell(
     getLocale: () => i18n.locale,
     setLocale: (locale) => {
       i18n.setLocale(locale);
-      applyLocaleChrome();
-      if (shell !== undefined) {
-        shell.rebuildMenus();
-        // Keep menu chrome visible so the user sees the new language immediately.
-        shell.revealMenu();
-      }
-      // Outline chrome (title / toggle tooltips / empty states).
-      if (outline !== undefined) {
-        outline.retranslate();
-      }
-      libraryView?.retranslate();
-      statusBar?.refresh(getActiveStatusSnapshot);
-      // Refresh window title with localized app name.
-      const tab = manager?.activeTab ?? null;
-      if (tab !== null) {
-        document.title = formatDocumentTitle({ title: tab.title, dirty: tab.dirty });
-      } else {
-        document.title = formatDocumentTitle(null);
-      }
+      // Keep menu chrome visible so the user sees the new language immediately.
+      refreshLocalizedSurfaces(true);
     },
   },
-  { shortcutBindings: getShortcutBindings },
+  { shortcutBindings: getShortcutBindings, storage: syncableStorage },
 );
 
 /**
@@ -1545,6 +1785,39 @@ function toggleChromePinnedWithOutline(): void {
     outline.setVisibility(outlineVisibilityBeforeImmersive);
     outlineVisibilityBeforeImmersive = null;
   }
+  scheduleReadingColumnSync();
+}
+
+function applySynchronizedPreferences(): void {
+  themeService.refreshFromStorage();
+
+  i18n.setLocale(loadLocale(syncableStorage));
+  refreshLocalizedSurfaces();
+
+  fontScale.setScale(loadFontScale(syncableStorage));
+  setReadingLayout(loadReadingLayout(syncableStorage));
+  shell.refreshReaderPreferences();
+  for (const tab of manager.tabList) {
+    if (tab.kind === 'reader') tab.reader.refreshPreferences?.();
+  }
+
+  autosave?.setEnabled(loadAutosaveEnabled(syncableStorage));
+  statusBar?.setVisible(loadStatusBarVisible(syncableStorage));
+  outline?.setWidth(readStoredOutlineWidth(syncableStorage) ?? OUTLINE_WIDTH_DEFAULT);
+
+  const chrome = loadChromePinPrefs(syncableStorage);
+  const pinned = chrome.menu && chrome.tabs;
+  if (shell.isChromePinned() !== pinned) {
+    shell.setChromePinned(pinned);
+    if (!pinned && outline.visibility !== 'hidden') {
+      outlineVisibilityBeforeImmersive = outline.visibility;
+      outline.setVisibility('hidden');
+    } else if (pinned && outlineVisibilityBeforeImmersive !== null) {
+      outline.setVisibility(outlineVisibilityBeforeImmersive);
+      outlineVisibilityBeforeImmersive = null;
+    }
+  }
+  syncNativeWindowChrome();
   scheduleReadingColumnSync();
 }
 
@@ -1667,6 +1940,70 @@ function pruneSourceViews(): void {
   }
 }
 
+async function writeSyncedAnnotations(contentHash: string, json: string): Promise<void> {
+  await invoke<void>('write_annotations', { contentHash, json });
+  // Annotation records are independent fields. A failed sync-record write must
+  // never make the local annotation save appear to fail.
+  await syncRecordClient
+    .writeRecord(`annotation:${contentHash}`, 'json', json)
+    .catch(() => undefined);
+  applicationStateSync?.schedule();
+}
+
+async function applySyncedAnnotations(records: readonly import('./sync/sync-client.js').SyncRecord[]): Promise<void> {
+  for (const objectId of new Set(records.map((record) => record.objectId).filter((id) => id.startsWith('annotation:')))) {
+    const hash = objectId.slice('annotation:'.length);
+    if (!/^[0-9a-f]{16,64}$/i.test(hash)) continue;
+    const record = currentSyncRecords(records, objectId).find((candidate) => candidate.field === 'json');
+    if (record?.tombstone || typeof record?.value !== 'string') continue;
+    await invoke<void>('write_annotations', { contentHash: hash, json: record.value }).catch(() => undefined);
+  }
+}
+
+async function applyPortableOpdsSources(
+  records: readonly import('./sync/sync-client.js').SyncRecord[],
+): Promise<void> {
+  const record = currentSyncRecords(records, 'app-state').find(
+    (candidate) => candidate.field === 'lightink.opds.sources',
+  );
+  if (record === undefined || record.tombstone || typeof record.value !== 'string') return;
+  let remote: PortableOpdsSource[];
+  try {
+    const parsed: unknown = JSON.parse(record.value);
+    if (!Array.isArray(parsed)) return;
+    remote = parsed.filter(
+      (source): source is PortableOpdsSource =>
+        typeof source === 'object' &&
+        source !== null &&
+        typeof (source as Record<string, unknown>).id === 'string' &&
+        typeof (source as Record<string, unknown>).title === 'string' &&
+        typeof (source as Record<string, unknown>).url === 'string' &&
+        typeof (source as Record<string, unknown>).allowHttp === 'boolean',
+    );
+  } catch {
+    return;
+  }
+  const local = await opdsClient.listSources().catch(() => []);
+  const remoteIds = new Set(remote.map((source) => source.id));
+  for (const source of local) {
+    if (!remoteIds.has(source.id)) await opdsClient.removeSource(source.id).catch(() => undefined);
+  }
+  for (const source of remote) {
+    const existing = local.find((candidate) => candidate.id === source.id);
+    await opdsClient
+      .addSource({
+        id: source.id,
+        title: source.title,
+        url: source.url,
+        allowHttp: source.allowHttp,
+        // Keep a credential reference already present on this device, but
+        // never serialize it into the portable record sent to another device.
+        credentialRef: existing?.credentialRef,
+      })
+      .catch(() => undefined);
+  }
+}
+
 function annotationHostFor(tab: MarkdownTabState): MarkdownAnnotationHost {
   let host = markdownAnnotations.get(tab.id);
   if (host === undefined) {
@@ -1674,7 +2011,7 @@ function annotationHostFor(tab: MarkdownTabState): MarkdownAnnotationHost {
       t: (key, vars) => i18n.t(key, vars),
       getContentHash: (path) => invoke<string>('content_hash', { path }),
       readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),
-      writeAnnotations: (contentHash, json) => invoke('write_annotations', { contentHash, json }),
+      writeAnnotations: writeSyncedAnnotations,
       notify: (message) => {
         void dialogMessage(message, { title: i18n.t('app.name'), kind: 'warning' });
       },
@@ -1719,6 +2056,9 @@ manager = new TabManager({
   formatUntitledTitle: (n) => i18n.t('app.untitled', { n: String(n) }),
   formatUntitledRestoredTitle: (n) => i18n.t('app.untitledRestored', { n: String(n) }),
   remoteImageLoadLabel: i18n.t('reader.remoteImageLoad'),
+  writeSnapshot: writeSynchronizedSnapshot,
+  clearSnapshot: clearSynchronizedSnapshot,
+  listUntitledDrafts: listRecoverableDrafts,
   mountEditor,
   mountReader: async (host) => {
     host.classList.add('lightink-tab-host--reader');
@@ -1731,7 +2071,7 @@ manager = new TabManager({
       getContentHash: (path) => invoke<string>('content_hash', { path }),
       readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),
       writeAnnotations: (contentHash, json) =>
-        invoke('write_annotations', { contentHash, json }),
+        writeSyncedAnnotations(contentHash, json),
       notify: (message) => {
         void dialogMessage(message, { title: i18n.t('app.name'), kind: 'warning' });
       },
@@ -1741,19 +2081,20 @@ manager = new TabManager({
           retry,
           t: (key, vars) => i18n.t(key, vars),
         }),
-      onComicMetadata: (target, metadata) =>
-        libraryClient.updateComicMetadata(
-          target.kind === 'remote' ? target.itemId : target.identity.id,
-          {
-            series: metadata.series,
-            number: metadata.number,
-            volume: metadata.volume,
-            pageCount: metadata.pageCount,
-            readingDirection: metadata.readingDirection,
-            coverPage: metadata.coverPage,
-          },
-        ),
+      onComicMetadata: async (target, metadata) => {
+        await libraryClient.updateComicMetadata(libraryItemIdForTarget(target), {
+          series: metadata.series,
+          number: metadata.number,
+          volume: metadata.volume,
+          pageCount: metadata.pageCount,
+          readingDirection: metadata.readingDirection,
+          coverPage: metadata.coverPage,
+        });
+        applicationStateSync?.schedule();
+      },
       onProgressBound: bindOpenedBookProgress,
+      progressStorage: syncableStorage,
+      preferenceStorage: syncableStorage,
       onReturnToShelf: () => workspace.returnToShelf(),
     });
     reader.subscribeState(() => {
@@ -1856,6 +2197,12 @@ manager = new TabManager({
   },
   onFileOpened: (filePath) => {
     void persistRecentMutation('add_recent', { path: filePath });
+    const opened = manager?.tabList.find(
+      (candidate) => candidate.kind === 'markdown' && candidate.filePath === filePath,
+    );
+    if (opened?.kind === 'markdown' && opened.managedDocumentId !== undefined) {
+      rememberManagedRecent(opened.managedDocumentId);
+    }
   },
   onFileSaved: (filePath, content) => {
     // R13：每次成功保存自动生成一份版本快照。
@@ -1864,6 +2211,13 @@ manager = new TabManager({
     if (tab !== undefined && tab.kind === 'markdown') {
       markdownAnnotations.get(tab.id)?.syncIdentity(tab.filePath, tab.syntheticId);
     }
+  },
+  onManagedDocumentSaved: (documentId, content) => {
+    void syncRecordClient
+      .deviceId()
+      .then((deviceId) => documentClient.createVersion(documentId, content, deviceId))
+      .catch(() => undefined);
+    applicationStateSync?.schedule();
   },
   onLinkNavigate: (href) => handleLinkNavigation(href),
   // R13：轮询发现活动文件被删/不可读时的一次性可见提示（TabManager 按不可读期去重）。
@@ -1926,6 +2280,7 @@ setSlashImageHandler(() => insertImageFromFile());
 // T7：大纲侧栏。闭包读取活动标签的宿主/markdown；刷新由 TabManager 的
 // onActiveContentChanged 回调防抖驱动（切换标签/活动标签内容变化）。
 outline = createOutlineView({
+  storage: syncableStorage,
   getActiveHost: () => manager.activeTab?.hostElement ?? null,
   getActiveMarkdown: () => {
     const tab = activeMarkdownTab();
@@ -1959,8 +2314,7 @@ shell.outlineSidebar.appendChild(outline.root);
 // debounced; save/conflict transitions refresh immediately.
 // 标签闭包现读 locale，语言切换后下次刷新即用新文案。
 statusBar = createStatusBar(document, shell.statusBarHost, {
-  storage: window.localStorage,
-  initiallyVisible: false,
+  storage: syncableStorage,
   labels: () => ({
     words: i18n.t('status.words'),
     characters: i18n.t('status.characters'),
@@ -1991,22 +2345,100 @@ statusBar = createStatusBar(document, shell.statusBarHost, {
   }),
 });
 
+type PortableOpdsSource = {
+  id: string;
+  title: string;
+  url: string;
+  allowHttp: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+async function persistPortableOpdsSources(): Promise<void> {
+  const sources = await opdsClient.listSources();
+  const portable: PortableOpdsSource[] = sources.map((source) => ({
+    id: source.id,
+    title: source.title,
+    url: source.url,
+    allowHttp: source.allowHttp,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  }));
+  syncableStorage.setItem('lightink.opds.sources', JSON.stringify(portable));
+}
+
+const syncedOpdsClient = {
+  addSource: async (input: Parameters<typeof opdsClient.addSource>[0]) => {
+    const source = await opdsClient.addSource(input);
+    await persistPortableOpdsSources().catch(() => undefined);
+    return source;
+  },
+  listSources: () => opdsClient.listSources(),
+  removeSource: async (sourceId: string) => {
+    await opdsClient.removeSource(sourceId);
+    await persistPortableOpdsSources().catch(() => undefined);
+  },
+  browse: (sourceId: string, url?: string) => opdsClient.browse(sourceId, url),
+  search: (sourceId: string, query: string) => opdsClient.search(sourceId, query),
+};
+
 libraryView = createLibraryView(shell.editorArea, {
-  opds: opdsClient,
+  opds: syncedOpdsClient,
   library: libraryClient,
   getLocale: () => i18n.locale,
-  getProgress: bindLibraryProgress(window.localStorage),
+  getProgress: bindLibraryProgress(syncableStorage),
   workspaceTravel: shell.enterEditorButton,
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,
+  onDownload: async (item, signal) => {
+    throwIfOperationAborted(signal);
+    const path = await syncRecordClient.downloadBook(item.id);
+    throwIfOperationAborted(signal);
+    return path;
+  },
   onImportLocal: importLocalLibraryItem,
+  onLocalChange: () => applicationStateSync?.schedule(),
   notify: (message, kind = 'warning') => {
     void dialogMessage(message, { title: i18n.t('app.name'), kind });
   },
+  confirmGroupDelete: async (_group, message) =>
+    (await showConfirmDialog(document, {
+      title: i18n.t('app.name'),
+      message,
+      buttons: [
+        { id: 'delete', label: i18n.t('dialog.discard'), kind: 'danger' },
+        { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
+      ],
+      cancelId: 'cancel',
+    })) === 'delete',
   onVisibilityChange: onLibraryVisibilityChange,
 });
 applyWorkspaceState();
+
+applicationStateSync = new ApplicationStateSync({
+  storage: syncableStorage,
+  records: syncRecordClient,
+  getProfile: () => webDavClient.getProfile(),
+  eventTarget: window,
+  onStorageApplied: () => {
+    applySynchronizedPreferences();
+  },
+  onRecordsApplied: async (records) => {
+    await applySyncedAnnotations(records);
+    await applyPortableOpdsSources(records);
+    await applyManagedRecents(records);
+    void recoverAvailableDrafts().catch((error: unknown) => {
+      console.warn('[lightink/sync] synchronized draft recovery failed', error);
+    });
+  },
+  onError: (error) => {
+    // Automatic sync is intentionally quiet; the sync status surface can
+    // present the backend error without interrupting editing.
+    console.warn('[lightink/sync] automatic state sync failed', error);
+  },
+});
+applicationStateSync.start();
 
 /** R8：状态栏 Markdown 序列化缓存——按内容版本去重，避免光标移动时重复全量序列化。 */
 let statusMarkdownCache: { tabId: string; revision: number; markdown: string } | null = null;
@@ -2020,7 +2452,7 @@ function getActiveStatusSnapshot(): StatusBarSnapshot {
       kind: 'reader',
       state: tab.reader.state,
       displayScale:
-        tab.reader.state.scale * loadReaderTypography(window.localStorage).fontScaleStep,
+        tab.reader.state.scale * loadReaderTypography(syncableStorage).fontScaleStep,
     };
   }
   try {
@@ -2063,7 +2495,7 @@ function isReaderZoomContext(): boolean {
 function changeReadingScale(action: 'in' | 'out' | 'reset'): number {
   if (isReaderZoomContext()) {
     const fontScaleStep = nextReaderFontScaleStep(
-      loadReaderTypography(window.localStorage).fontScaleStep,
+      loadReaderTypography(syncableStorage).fontScaleStep,
       action,
     );
     shell?.setReaderTypography({ fontScaleStep });
@@ -2094,7 +2526,7 @@ document.addEventListener('selectionchange', () => {
 // 活动标签的源码态编辑（与手动保存同口径），再扫全部有路径脏 tab 走同一保存流
 // （含 R13 保存前 mtime 闸门；冲突由既有对话框分派，不静默覆盖）。
 autosave = createAutosave({
-  storage: window.localStorage,
+  storage: syncableStorage,
   tick: () => {
     commitActiveSourceMode();
     return manager.autosaveDirtyTabs();
@@ -3021,6 +3453,7 @@ function shutdown(): void {
     externalChangeTimer = null;
   }
   autosave?.dispose();
+  applicationStateSync?.dispose();
   displayScale.dispose();
   wheelZoom.dispose();
 }
@@ -3058,7 +3491,7 @@ void (async () => {
 
 async function bootstrap(): Promise<void> {
   // 先恢复崩溃遗留的未命名草稿（其副作用：为每个恢复草稿开标签）。
-  await manager.recoverUntitledDrafts();
+  await recoverAvailableDrafts();
   // R1：先注册单实例 open-file 监听，再取首实例 pending——监听就绪前到达的第二实例
   // 文件由随后的初始 take_pending_file 抽干槽兜底，避免启动竞态内事件被孤立。
   // Runtime association/second-instance opens restore the window and notify;

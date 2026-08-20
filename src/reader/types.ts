@@ -78,6 +78,8 @@ export interface ReaderInstance {
   openSearch?(query?: string): void;
   /** 窗口拉伸结束后重算栏宽/高度并刷新可见页，避免文字糊掉。 */
   refreshViewport?(): void;
+  /** Re-read synchronized reader preferences and apply them to this open view. */
+  refreshPreferences?(): void;
   /**
    * 窗口级翻页（方向键/空格/滚轮）：翻页模式走分栏步进，滚动模式走视口高度。
    * 与 Markdown 的 R1 对齐——悬停大纲/chrome/空白区也应翻正文，不限中间章节容器。

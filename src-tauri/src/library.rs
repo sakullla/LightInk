@@ -5,6 +5,7 @@
 //! here. The pure range helpers are kept independent from Tauri so they can be
 //! tested without a running application.
 
+use crate::sync;
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -15,7 +16,7 @@ use tauri::{AppHandle, Manager};
 pub const DATABASE_FILE: &str = "library.sqlite3";
 pub const CACHE_DIRECTORY: &str = "remote-cache";
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 const CACHE_LIMIT_KEY: &str = "cache_limit_bytes";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,7 +53,19 @@ pub struct LibraryItem {
     pub page_count: Option<i64>,
     pub reading_direction: Option<String>,
     pub cover_page: Option<i64>,
+    #[serde(default)]
+    pub blob_hash: Option<String>,
+    #[serde(default = "default_library_availability")]
+    pub availability: String,
+    #[serde(default)]
+    pub offline_pinned: bool,
+    #[serde(default)]
+    pub subjects: Vec<String>,
     pub updated_at: i64,
+}
+
+fn default_library_availability() -> String {
+    "external".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,6 +173,496 @@ fn table_has_column(connection: &Connection, table: &str, column: &str) -> bool 
             Ok(rows.flatten().any(|name| name == column))
         })
         .unwrap_or(false)
+}
+
+fn schema_version(connection: &Connection) -> Result<i64, String> {
+    connection
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM schema_meta WHERE key='version'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法读取书库数据库版本: {error}"))
+}
+
+fn managed_assets_use_path_identity(connection: &Connection) -> bool {
+    connection
+        .prepare("PRAGMA table_info(managed_assets)")
+        .and_then(|mut statement| {
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+            })?;
+            let columns = rows.collect::<Result<Vec<_>, _>>()?;
+            Ok(columns
+                .iter()
+                .any(|(name, primary_key)| name == "relative_path" && *primary_key == 1)
+                && columns
+                    .iter()
+                    .any(|(name, primary_key)| name == "hash" && *primary_key == 0))
+        })
+        .unwrap_or(false)
+}
+
+fn table_exists(connection: &Connection, table: &str) -> bool {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1
+             )",
+            params![table],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
+}
+
+/// The first v8 implementation made `content_hash` unique.  That is not a
+/// valid identity for a managed document: two files with the same contents
+/// still need independent stable UUIDs.  SQLite cannot drop an inline UNIQUE
+/// constraint, so rebuild the parent and its known foreign-key children when
+/// opening a database created by that implementation.
+fn managed_documents_use_content_hash_identity(connection: &Connection) -> bool {
+    let Ok(mut statement) = connection.prepare("PRAGMA index_list(managed_documents)") else {
+        return false;
+    };
+    let indexes = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? != 0))
+        })
+        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>());
+    let Ok(indexes) = indexes else {
+        return false;
+    };
+    indexes.into_iter().any(|(name, unique)| {
+        if !unique {
+            return false;
+        }
+        let escaped = name.replace('\'', "''");
+        let pragma = format!("PRAGMA index_info('{escaped}')");
+        let Ok(mut info) = connection.prepare(&pragma) else {
+            return false;
+        };
+        let columns = info
+            .query_map([], |row| row.get::<_, String>(2))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .unwrap_or_default();
+        columns.len() == 1 && columns[0] == "content_hash"
+    })
+}
+
+fn ensure_managed_document_schema(connection: &mut Connection) -> Result<(), String> {
+    if !managed_documents_use_content_hash_identity(connection) {
+        return Ok(());
+    }
+
+    // Foreign-key enforcement must be disabled while the old parent table is
+    // replaced.  The operation itself remains one SQLite transaction; the
+    // pragma is restored on every exit path below.
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .map_err(|error| format!("无法暂时关闭文档外键约束: {error}"))?;
+    let has_versions = table_exists(connection, "document_versions");
+    let has_drafts = table_exists(connection, "document_drafts");
+    let result = (|| {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("无法开启文档表修复事务: {error}"))?;
+
+        for (table, index) in [
+            ("managed_documents", "managed_documents_updated_idx"),
+            ("managed_documents", "managed_documents_content_hash_idx"),
+            ("document_versions", "document_versions_document_idx"),
+            ("document_drafts", "document_drafts_document_idx"),
+        ] {
+            transaction
+                .execute(&format!("DROP INDEX IF EXISTS {index}"), [])
+                .map_err(|error| format!("无法移除旧文档索引 {table}/{index}: {error}"))?;
+        }
+
+        if has_versions {
+            transaction
+                .execute(
+                    "ALTER TABLE document_versions RENAME TO document_versions_v8_old",
+                    [],
+                )
+                .map_err(|error| format!("无法暂存旧文档版本表: {error}"))?;
+        }
+        if has_drafts {
+            transaction
+                .execute(
+                    "ALTER TABLE document_drafts RENAME TO document_drafts_v8_old",
+                    [],
+                )
+                .map_err(|error| format!("无法暂存旧文档草稿表: {error}"))?;
+        }
+        transaction
+            .execute(
+                "ALTER TABLE managed_documents RENAME TO managed_documents_v8_old",
+                [],
+            )
+            .map_err(|error| format!("无法暂存旧受管文档表: {error}"))?;
+        transaction
+            .execute_batch(
+                "CREATE TABLE managed_documents (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   content_hash TEXT NOT NULL,
+                   title TEXT NOT NULL,
+                   local_path TEXT,
+                   availability TEXT NOT NULL DEFAULT 'local',
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO managed_documents(
+                   id,content_hash,title,local_path,availability,created_at,updated_at
+                 ) SELECT id,content_hash,title,local_path,availability,created_at,updated_at
+                   FROM managed_documents_v8_old;
+                 DROP TABLE managed_documents_v8_old;",
+            )
+            .map_err(|error| format!("无法重建受管文档表: {error}"))?;
+
+        if has_versions {
+            transaction
+                .execute_batch(
+                    "CREATE TABLE document_versions (
+                       id TEXT PRIMARY KEY NOT NULL,
+                       document_id TEXT NOT NULL REFERENCES managed_documents(id) ON DELETE CASCADE,
+                       blob_hash TEXT NOT NULL,
+                       size INTEGER NOT NULL CHECK(size >= 0),
+                       device_id TEXT,
+                       created_at INTEGER NOT NULL,
+                       is_current INTEGER NOT NULL DEFAULT 0 CHECK(is_current IN (0,1))
+                     );
+                     INSERT INTO document_versions(
+                       id,document_id,blob_hash,size,device_id,created_at,is_current
+                     ) SELECT id,document_id,blob_hash,size,device_id,created_at,is_current
+                       FROM document_versions_v8_old;
+                     DROP TABLE document_versions_v8_old;
+                     CREATE INDEX document_versions_document_idx
+                       ON document_versions(document_id,created_at DESC);",
+                )
+                .map_err(|error| format!("无法重建文档版本表: {error}"))?;
+        }
+        if has_drafts {
+            transaction
+                .execute_batch(
+                    "CREATE TABLE document_drafts (
+                       id TEXT PRIMARY KEY NOT NULL,
+                       document_id TEXT REFERENCES managed_documents(id) ON DELETE CASCADE,
+                       blob_hash TEXT NOT NULL,
+                       title TEXT,
+                       device_id TEXT NOT NULL,
+                       created_at INTEGER NOT NULL,
+                       updated_at INTEGER NOT NULL
+                     );
+                     INSERT INTO document_drafts(
+                       id,document_id,blob_hash,title,device_id,created_at,updated_at
+                     ) SELECT id,document_id,blob_hash,title,device_id,created_at,updated_at
+                       FROM document_drafts_v8_old;
+                     DROP TABLE document_drafts_v8_old;
+                     CREATE INDEX document_drafts_document_idx
+                       ON document_drafts(document_id,updated_at DESC);",
+                )
+                .map_err(|error| format!("无法重建文档草稿表: {error}"))?;
+        }
+        transaction
+            .execute_batch(
+                "CREATE INDEX managed_documents_updated_idx
+                   ON managed_documents(updated_at DESC);
+                 CREATE INDEX managed_documents_content_hash_idx
+                   ON managed_documents(content_hash);",
+            )
+            .map_err(|error| format!("无法重建受管文档索引: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交受管文档表修复: {error}"))
+    })();
+    let restore = connection.pragma_update(None, "foreign_keys", "ON");
+    result.and_then(|_| {
+        restore.map_err(|error| format!("无法恢复文档外键约束: {error}"))?;
+        Ok(())
+    })
+}
+
+fn ensure_managed_asset_schema(connection: &mut Connection) -> Result<(), String> {
+    if !table_exists(connection, "managed_assets") {
+        connection
+            .execute_batch(
+                "CREATE TABLE managed_assets (
+                   relative_path TEXT PRIMARY KEY NOT NULL,
+                   hash TEXT NOT NULL,
+                   size INTEGER NOT NULL CHECK(size >= 0),
+                   media_type TEXT,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX managed_assets_hash_idx ON managed_assets(hash);",
+            )
+            .map_err(|error| format!("无法补建受管资源表: {error}"))?;
+        return Ok(());
+    }
+    if managed_assets_use_path_identity(connection) {
+        connection
+            .execute(
+                "CREATE INDEX IF NOT EXISTS managed_assets_hash_idx ON managed_assets(hash)",
+                [],
+            )
+            .map_err(|error| format!("无法创建受管资源哈希索引: {error}"))?;
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开启受管资源表修复事务: {error}"))?;
+    transaction
+        .execute_batch(
+            "DROP TABLE IF EXISTS managed_assets_v8_rebuild;
+             CREATE TABLE managed_assets_v8_rebuild (
+               relative_path TEXT PRIMARY KEY NOT NULL,
+               hash TEXT NOT NULL,
+               size INTEGER NOT NULL CHECK(size >= 0),
+               media_type TEXT,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );
+             INSERT INTO managed_assets_v8_rebuild(
+               relative_path,hash,size,media_type,created_at,updated_at
+             ) SELECT relative_path,hash,size,media_type,created_at,updated_at
+               FROM managed_assets;
+             DROP TABLE managed_assets;
+             ALTER TABLE managed_assets_v8_rebuild RENAME TO managed_assets;
+             CREATE INDEX managed_assets_hash_idx ON managed_assets(hash);",
+        )
+        .map_err(|error| format!("无法修复受管资源表: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交受管资源表修复: {error}"))
+}
+
+fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
+    let mut version = schema_version(connection)?;
+    if version > SCHEMA_VERSION {
+        return Err(format!(
+            "书库数据库版本 {version} 高于当前支持的版本 {SCHEMA_VERSION}"
+        ));
+    }
+    while version < SCHEMA_VERSION {
+        let target = version + 1;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("无法开启书库迁移事务: {error}"))?;
+        match target {
+            2 => {
+                if !table_has_column(&transaction, "opds_sources", "allow_http") {
+                    transaction
+                        .execute(
+                            "ALTER TABLE opds_sources ADD COLUMN allow_http INTEGER NOT NULL DEFAULT 0",
+                            [],
+                        )
+                        .map_err(|error| format!("无法迁移 OPDS 源协议设置: {error}"))?;
+                }
+            }
+            3 => {
+                transaction
+                    .execute(
+                        "INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', ?1)
+                         ON CONFLICT(key) DO NOTHING",
+                        params![DEFAULT_CACHE_LIMIT_BYTES as i64],
+                    )
+                    .map_err(|error| format!("无法迁移书库缓存设置: {error}"))?;
+            }
+            4 => {
+                for (column, definition) in [
+                    ("series", "series TEXT"),
+                    ("number", "number TEXT"),
+                    ("volume", "volume TEXT"),
+                    ("page_count", "page_count INTEGER"),
+                    ("reading_direction", "reading_direction TEXT"),
+                    ("cover_page", "cover_page INTEGER"),
+                ] {
+                    if !table_has_column(&transaction, "library_items", column) {
+                        transaction
+                            .execute(
+                                &format!("ALTER TABLE library_items ADD COLUMN {definition}"),
+                                [],
+                            )
+                            .map_err(|error| format!("无法迁移漫画元数据列 {column}: {error}"))?;
+                    }
+                }
+            }
+            5 => {
+                for (column, definition) in [
+                    ("blob_hash", "blob_hash TEXT"),
+                    (
+                        "availability",
+                        "availability TEXT NOT NULL DEFAULT 'external'",
+                    ),
+                    (
+                        "offline_pinned",
+                        "offline_pinned INTEGER NOT NULL DEFAULT 0",
+                    ),
+                    ("subjects_json", "subjects_json TEXT NOT NULL DEFAULT '[]'"),
+                ] {
+                    if !table_has_column(&transaction, "library_items", column) {
+                        transaction
+                            .execute(
+                                &format!("ALTER TABLE library_items ADD COLUMN {definition}"),
+                                [],
+                            )
+                            .map_err(|error| format!("无法迁移受管书籍字段 {column}: {error}"))?;
+                    }
+                }
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS managed_blobs (
+                           hash TEXT PRIMARY KEY NOT NULL,
+                           relative_path TEXT NOT NULL UNIQUE,
+                           size INTEGER NOT NULL CHECK(size >= 0),
+                           created_at INTEGER NOT NULL,
+                           last_verified_at INTEGER NOT NULL
+                         );
+                         CREATE TABLE IF NOT EXISTS library_item_aliases (
+                           alias_id TEXT PRIMARY KEY NOT NULL,
+                           item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE
+                         );
+                         CREATE INDEX IF NOT EXISTS library_items_blob_idx
+                           ON library_items(blob_hash);",
+                    )
+                    .map_err(|error| format!("无法创建受管内容表: {error}"))?;
+                transaction
+                    .execute(
+                        "UPDATE library_items SET availability =
+                           CASE WHEN source_kind='local' THEN 'external' ELSE 'remote' END
+                         WHERE blob_hash IS NULL",
+                        [],
+                    )
+                    .map_err(|error| format!("无法迁移书籍可用状态: {error}"))?;
+            }
+            6 => {
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS library_groups (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           parent_id TEXT REFERENCES library_groups(id) ON DELETE SET NULL,
+                           name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
+                           kind TEXT NOT NULL CHECK(kind IN ('custom', 'smart')),
+                           rule_json TEXT,
+                           sort_order INTEGER NOT NULL CHECK(sort_order >= 0),
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS library_groups_parent_idx
+                           ON library_groups(parent_id, sort_order, id);
+                         CREATE TABLE IF NOT EXISTS library_group_members (
+                           group_id TEXT NOT NULL REFERENCES library_groups(id) ON DELETE CASCADE,
+                           item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                           created_at INTEGER NOT NULL,
+                           PRIMARY KEY(group_id, item_id)
+                         );
+                         CREATE INDEX IF NOT EXISTS library_group_members_item_idx
+                           ON library_group_members(item_id, group_id);",
+                    )
+                    .map_err(|error| format!("无法创建书架分组表: {error}"))?;
+            }
+            7 => {
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS sync_records (
+                           record_id TEXT PRIMARY KEY NOT NULL,
+                           object_id TEXT NOT NULL,
+                           field TEXT NOT NULL,
+                           value_json TEXT,
+                           device_id TEXT NOT NULL,
+                           version INTEGER NOT NULL CHECK(version >= 0),
+                           context_json TEXT NOT NULL DEFAULT '{}',
+                           modified_at INTEGER NOT NULL,
+                           tombstone INTEGER NOT NULL DEFAULT 0 CHECK(tombstone IN (0,1)),
+                           UNIQUE(object_id, field, device_id)
+                         );
+                         CREATE INDEX IF NOT EXISTS sync_records_object_idx
+                           ON sync_records(object_id, field, modified_at DESC);
+                         CREATE TABLE IF NOT EXISTS sync_conflicts (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           object_id TEXT NOT NULL,
+                           field TEXT NOT NULL,
+                           winner_json TEXT,
+                           loser_json TEXT,
+                           winner_device_id TEXT NOT NULL,
+                           loser_device_id TEXT NOT NULL,
+                           created_at INTEGER NOT NULL,
+                           resolved_at INTEGER
+                         );
+                         CREATE INDEX IF NOT EXISTS sync_conflicts_open_idx
+                           ON sync_conflicts(resolved_at, created_at DESC);
+                         CREATE TABLE IF NOT EXISTS sync_meta (
+                           key TEXT PRIMARY KEY NOT NULL,
+                           value TEXT NOT NULL
+                         );",
+                    )
+                    .map_err(|error| format!("无法创建同步记录表: {error}"))?;
+            }
+            8 => {
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS managed_documents (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           content_hash TEXT NOT NULL,
+                           title TEXT NOT NULL,
+                           local_path TEXT,
+                           availability TEXT NOT NULL DEFAULT 'local',
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS managed_documents_updated_idx
+                           ON managed_documents(updated_at DESC);
+                         CREATE INDEX IF NOT EXISTS managed_documents_content_hash_idx
+                           ON managed_documents(content_hash);
+                         CREATE TABLE IF NOT EXISTS managed_assets (
+                           relative_path TEXT PRIMARY KEY NOT NULL,
+                           hash TEXT NOT NULL,
+                           size INTEGER NOT NULL CHECK(size >= 0),
+                           media_type TEXT,
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS managed_assets_hash_idx
+                           ON managed_assets(hash);
+                         CREATE TABLE IF NOT EXISTS document_versions (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           document_id TEXT NOT NULL REFERENCES managed_documents(id) ON DELETE CASCADE,
+                           blob_hash TEXT NOT NULL,
+                           size INTEGER NOT NULL CHECK(size >= 0),
+                           device_id TEXT,
+                           created_at INTEGER NOT NULL,
+                           is_current INTEGER NOT NULL DEFAULT 0 CHECK(is_current IN (0,1))
+                         );
+                         CREATE INDEX IF NOT EXISTS document_versions_document_idx
+                           ON document_versions(document_id, created_at DESC);
+                         CREATE TABLE IF NOT EXISTS document_drafts (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           document_id TEXT REFERENCES managed_documents(id) ON DELETE CASCADE,
+                           blob_hash TEXT NOT NULL,
+                           title TEXT,
+                           device_id TEXT NOT NULL,
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS document_drafts_document_idx
+                           ON document_drafts(document_id, updated_at DESC);",
+                    )
+                    .map_err(|error| format!("无法创建受管文档表: {error}"))?;
+            }
+            _ => return Err(format!("缺少书库数据库 v{target} 迁移实现")),
+        }
+        transaction
+            .execute(
+                "UPDATE schema_meta SET value=?1 WHERE key='version'",
+                params![target.to_string()],
+            )
+            .map_err(|error| format!("无法更新书库数据库版本: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交书库 v{target} 迁移事务: {error}"))?;
+        version = target;
+    }
+    Ok(())
 }
 
 pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String> {
@@ -275,6 +778,7 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
             );
             CREATE INDEX IF NOT EXISTS cache_ranges_lookup_idx
               ON cache_ranges(object_id, start, end);
+            -- 新数据库先建立 v4 基线，再与已有 v4 数据库走同一条迁移链。
             INSERT INTO schema_meta(key, value) VALUES ('version', '4')
               ON CONFLICT(key) DO NOTHING;
             INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', '2147483648')
@@ -282,59 +786,16 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
             ",
         )
         .map_err(|error| format!("无法初始化书库数据库: {error}"))?;
-    let version: i64 = connection
-        .query_row(
-            "SELECT CAST(value AS INTEGER) FROM schema_meta WHERE key='version'",
+    migrate_schema(&mut connection)?;
+    ensure_managed_asset_schema(&mut connection)?;
+    ensure_managed_document_schema(&mut connection)?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS library_items_blob_idx ON library_items(blob_hash)",
             [],
-            |row| row.get(0),
         )
-        .unwrap_or(1);
-    if version < SCHEMA_VERSION {
-        let transaction = connection
-            .transaction()
-            .map_err(|error| format!("无法开启书库迁移事务: {error}"))?;
-        if !table_has_column(&transaction, "opds_sources", "allow_http") {
-            transaction
-                .execute(
-                    "ALTER TABLE opds_sources ADD COLUMN allow_http INTEGER NOT NULL DEFAULT 0",
-                    [],
-                )
-                .map_err(|error| format!("无法迁移 OPDS 源协议设置: {error}"))?;
-        }
-        for (column, definition) in [
-            ("series", "series TEXT"),
-            ("number", "number TEXT"),
-            ("volume", "volume TEXT"),
-            ("page_count", "page_count INTEGER"),
-            ("reading_direction", "reading_direction TEXT"),
-            ("cover_page", "cover_page INTEGER"),
-        ] {
-            if !table_has_column(&transaction, "library_items", column) {
-                transaction
-                    .execute(
-                        &format!("ALTER TABLE library_items ADD COLUMN {definition}"),
-                        [],
-                    )
-                    .map_err(|error| format!("无法迁移漫画元数据列 {column}: {error}"))?;
-            }
-        }
-        transaction
-            .execute(
-                "INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', ?1)
-                 ON CONFLICT(key) DO NOTHING",
-                params![DEFAULT_CACHE_LIMIT_BYTES as i64],
-            )
-            .map_err(|error| format!("无法迁移书库数据库: {error}"))?;
-        transaction
-            .execute(
-                "UPDATE schema_meta SET value=?1 WHERE key='version'",
-                params![SCHEMA_VERSION.to_string()],
-            )
-            .map_err(|error| format!("无法更新书库数据库版本: {error}"))?;
-        transaction
-            .commit()
-            .map_err(|error| format!("无法提交书库迁移事务: {error}"))?;
-    }
+        .map_err(|error| format!("无法创建受管内容索引: {error}"))?;
+    crate::groups::ensure_smart_groups(&connection)?;
     Ok(connection)
 }
 
@@ -414,11 +875,41 @@ pub fn library_upsert_source(app: AppHandle, source: OpdsSource) -> Result<(), S
 
 #[tauri::command]
 pub fn library_remove_source(app: AppHandle, source_id: String) -> Result<(), String> {
-    let connection = open_database_at(&app_data_dir(&app)?)?;
-    connection
-        .execute("DELETE FROM opds_sources WHERE id = ?1", params![source_id])
+    let mut connection = open_database_at(&app_data_dir(&app)?)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开启 OPDS 源删除事务: {error}"))?;
+    let item_ids = transaction
+        .prepare("SELECT id FROM library_items WHERE source_id=?1 ORDER BY id")
+        .and_then(|mut statement| {
+            let rows = statement.query_map(params![&source_id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| format!("无法读取 OPDS 源书籍: {error}"))?;
+    for item_id in &item_ids {
+        let group_ids = transaction
+            .prepare(
+                "SELECT group_id FROM library_group_members WHERE item_id=?1 ORDER BY group_id",
+            )
+            .and_then(|mut statement| {
+                let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|error| format!("无法读取 OPDS 源书籍分组: {error}"))?;
+        for group_id in group_ids {
+            sync::write_membership_record_at(&transaction, &group_id, item_id, false)?;
+        }
+        sync::write_library_item_record_at(&transaction, item_id, false)?;
+    }
+    transaction
+        .execute(
+            "DELETE FROM opds_sources WHERE id = ?1",
+            params![&source_id],
+        )
         .map_err(|error| format!("无法删除 OPDS 源: {error}"))?;
-    Ok(())
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交 OPDS 源删除: {error}"))
 }
 
 #[tauri::command]
@@ -432,7 +923,8 @@ pub fn library_list_items(
             "SELECT id, source_id, source_kind, title, authors_json, cover_url,
                     local_path, acquisition_url, media_type, extension, size,
                     etag, last_modified, series, number, volume, page_count,
-                    reading_direction, cover_page, updated_at
+                    reading_direction, cover_page, blob_hash, availability,
+                    offline_pinned, subjects_json, updated_at
              FROM library_items
              WHERE (?1 IS NULL OR source_id = ?1)
              ORDER BY updated_at DESC, title COLLATE NOCASE, id",
@@ -442,6 +934,8 @@ pub fn library_list_items(
         .query_map(params![source_id], |row| {
             let authors_json: String = row.get(4)?;
             let authors = serde_json::from_str(&authors_json).unwrap_or_default();
+            let subjects_json: String = row.get(22)?;
+            let subjects = serde_json::from_str(&subjects_json).unwrap_or_default();
             Ok(LibraryItem {
                 id: row.get(0)?,
                 source_id: row.get(1)?,
@@ -462,7 +956,11 @@ pub fn library_list_items(
                 page_count: row.get(16)?,
                 reading_direction: row.get(17)?,
                 cover_page: row.get(18)?,
-                updated_at: row.get(19)?,
+                blob_hash: row.get(19)?,
+                availability: row.get(20)?,
+                offline_pinned: row.get::<_, i64>(21)? != 0,
+                subjects,
+                updated_at: row.get(23)?,
             })
         })
         .map_err(|error| format!("无法读取书库条目: {error}"))?;
@@ -506,6 +1004,8 @@ pub fn library_upsert_item(app: AppHandle, item: LibraryItem) -> Result<(), Stri
     }
     let authors_json = serde_json::to_string(&item.authors)
         .map_err(|error| format!("无法序列化作者信息: {error}"))?;
+    let subjects_json = serde_json::to_string(&item.subjects)
+        .map_err(|error| format!("无法序列化主题信息: {error}"))?;
     let connection = open_database_at(&app_data_dir(&app)?)?;
     let transaction = connection
         .unchecked_transaction()
@@ -516,9 +1016,10 @@ pub fn library_upsert_item(app: AppHandle, item: LibraryItem) -> Result<(), Stri
                id, source_id, source_kind, title, authors_json, cover_url,
                local_path, acquisition_url, media_type, extension, size,
                etag, last_modified, series, number, volume, page_count,
-               reading_direction, cover_page, updated_at
+               reading_direction, cover_page, blob_hash, availability,
+               offline_pinned, subjects_json, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                       ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                       ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              ON CONFLICT(id) DO UPDATE SET
                source_id=?2, source_kind=?3, title=?4, authors_json=?5,
                cover_url=?6, local_path=?7, acquisition_url=?8, media_type=?9,
@@ -526,9 +1027,10 @@ pub fn library_upsert_item(app: AppHandle, item: LibraryItem) -> Result<(), Stri
                series=COALESCE(?14, series), number=COALESCE(?15, number),
                volume=COALESCE(?16, volume), page_count=COALESCE(?17, page_count),
                reading_direction=COALESCE(?18, reading_direction),
-               cover_page=COALESCE(?19, cover_page), updated_at=?20",
+               cover_page=COALESCE(?19, cover_page), blob_hash=COALESCE(?20, blob_hash),
+               availability=?21, offline_pinned=?22, subjects_json=?23, updated_at=?24",
             params![
-                item.id,
+                item.id.clone(),
                 item.source_id,
                 item.source_kind,
                 item.title,
@@ -547,10 +1049,16 @@ pub fn library_upsert_item(app: AppHandle, item: LibraryItem) -> Result<(), Stri
                 item.page_count,
                 item.reading_direction,
                 item.cover_page,
+                item.blob_hash,
+                item.availability,
+                i64::from(item.offline_pinned),
+                subjects_json,
                 item.updated_at,
             ],
         )
         .map_err(|error| format!("无法保存书库条目: {error}"))?;
+    sync::write_library_item_record_at(&transaction, &item.id, true)?;
+    sync::write_library_item_offline_pinned_record_at(&transaction, &item.id, item.offline_pinned)?;
     transaction
         .commit()
         .map_err(|error| format!("无法提交书库事务: {error}"))?;
@@ -578,15 +1086,27 @@ pub fn library_update_comic_metadata(
     {
         return Err("漫画阅读方向无效".to_string());
     }
-    let connection = open_database_at(&app_data_dir(&app)?)?;
-    connection
+    let mut connection = open_database_at(&app_data_dir(&app)?)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开启漫画元数据事务: {error}"))?;
+    let resolved_id = transaction
+        .query_row(
+            "SELECT item_id FROM library_item_aliases WHERE alias_id=?1",
+            params![item_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("无法解析书籍标识: {error}"))?
+        .unwrap_or_else(|| item_id.clone());
+    let changed = transaction
         .execute(
             "UPDATE library_items SET
                series=?2, number=?3, volume=?4, page_count=?5,
                reading_direction=?6, cover_page=?7, updated_at=?8
              WHERE id=?1",
             params![
-                item_id,
+                resolved_id,
                 metadata.series,
                 metadata.number,
                 metadata.volume,
@@ -597,16 +1117,82 @@ pub fn library_update_comic_metadata(
             ],
         )
         .map_err(|error| format!("无法更新漫画元数据: {error}"))?;
-    Ok(())
+    if changed == 0 {
+        return Err("书籍不存在".to_string());
+    }
+    sync::write_library_item_record_at(&transaction, &resolved_id, true)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交漫画元数据: {error}"))
+}
+
+#[tauri::command]
+pub fn library_set_offline_pinned(
+    app: AppHandle,
+    item_id: String,
+    pinned: bool,
+) -> Result<(), String> {
+    let mut connection = open_database_at(&app_data_dir(&app)?)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开启离线保留事务: {error}"))?;
+    let resolved_id = transaction
+        .query_row(
+            "SELECT item_id FROM library_item_aliases WHERE alias_id=?1",
+            params![item_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("无法解析书籍标识: {error}"))?
+        .unwrap_or_else(|| item_id.clone());
+    let changed = transaction
+        .execute(
+            "UPDATE library_items SET offline_pinned=?1,updated_at=?2 WHERE id=?3",
+            params![i64::from(pinned), now_ms(), &resolved_id],
+        )
+        .map_err(|error| format!("无法更新离线保留设置: {error}"))?;
+    if changed == 0 {
+        return Err("书籍不存在".to_string());
+    }
+    sync::write_library_item_offline_pinned_record_at(&transaction, &resolved_id, pinned)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交离线保留设置: {error}"))
 }
 
 #[tauri::command]
 pub fn library_remove_item(app: AppHandle, item_id: String) -> Result<(), String> {
-    let connection = open_database_at(&app_data_dir(&app)?)?;
-    connection
+    let mut connection = open_database_at(&app_data_dir(&app)?)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开启书籍删除事务: {error}"))?;
+    let exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM library_items WHERE id=?1)",
+            params![item_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法检查书籍: {error}"))?;
+    if !exists {
+        return Err("书籍不存在".to_string());
+    }
+    let memberships = transaction
+        .prepare("SELECT group_id FROM library_group_members WHERE item_id=?1")
+        .and_then(|mut statement| {
+            let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| format!("无法读取书籍分组: {error}"))?;
+    sync::write_library_item_record_at(&transaction, &item_id, false)?;
+    for group_id in memberships {
+        sync::write_membership_record_at(&transaction, &group_id, &item_id, false)?;
+    }
+    transaction
         .execute("DELETE FROM library_items WHERE id = ?1", params![item_id])
         .map_err(|error| format!("无法删除书库条目: {error}"))?;
-    Ok(())
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交书籍删除: {error}"))
 }
 
 #[tauri::command]
@@ -917,6 +1503,86 @@ mod tests {
     }
 
     #[test]
+    fn repairs_the_early_v8_document_hash_unique_constraint() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = database_for_tests(directory.path()).unwrap();
+        let hash = "a".repeat(64);
+        legacy.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        legacy
+            .execute_batch(
+                "
+                DROP TABLE document_versions;
+                DROP TABLE document_drafts;
+                DROP TABLE managed_documents;
+                CREATE TABLE managed_documents (
+                  id TEXT PRIMARY KEY NOT NULL, content_hash TEXT NOT NULL UNIQUE,
+                  title TEXT NOT NULL, local_path TEXT,
+                  availability TEXT NOT NULL DEFAULT 'local',
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE document_versions (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  document_id TEXT NOT NULL REFERENCES managed_documents(id) ON DELETE CASCADE,
+                  blob_hash TEXT NOT NULL, size INTEGER NOT NULL,
+                  device_id TEXT, created_at INTEGER NOT NULL, is_current INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE document_drafts (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  document_id TEXT REFERENCES managed_documents(id) ON DELETE CASCADE,
+                  blob_hash TEXT NOT NULL, title TEXT, device_id TEXT NOT NULL,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO managed_documents(
+                   id,content_hash,title,created_at,updated_at
+                 ) VALUES (?1,?2,'one',1,1)",
+                params!["11111111-1111-4111-8111-111111111111", &hash],
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO document_versions(
+                   id,document_id,blob_hash,size,created_at,is_current
+                 ) VALUES (?1,?2,?3,3,1,1)",
+                params![
+                    "22222222-2222-4222-8222-222222222222",
+                    "11111111-1111-4111-8111-111111111111",
+                    &hash
+                ],
+            )
+            .unwrap();
+        drop(legacy);
+
+        let repaired = database_for_tests(directory.path()).unwrap();
+        repaired
+            .execute(
+                "INSERT INTO managed_documents(
+                   id,content_hash,title,created_at,updated_at
+                ) VALUES (?1,?2,'two',2,2)",
+                params!["33333333-3333-4333-8333-333333333333", &hash],
+            )
+            .unwrap();
+        let version_count: i64 = repaired
+            .query_row("SELECT COUNT(*) FROM document_versions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version_count, 1);
+        assert!(repaired
+            .query_row(
+                "SELECT 1 FROM document_versions WHERE document_id=?1",
+                params!["11111111-1111-4111-8111-111111111111"],
+                |_| Ok(1),
+            )
+            .is_ok());
+        assert!(!managed_documents_use_content_hash_identity(&repaired));
+    }
+
+    #[test]
     fn migrates_v3_library_items_to_comic_metadata_without_data_loss() {
         let directory = tempfile::tempdir().unwrap();
         let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
@@ -973,8 +1639,194 @@ mod tests {
                 )
                 .unwrap(),
         );
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(title, "旧漫画");
+    }
+
+    #[test]
+    fn migrates_each_schema_version_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '1');
+                CREATE TABLE opds_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, cover_url TEXT,
+                  local_path TEXT, acquisition_url TEXT, media_type TEXT, extension TEXT,
+                  size INTEGER, etag TEXT, last_modified TEXT, updated_at INTEGER NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_has_column(&migrated, "opds_sources", "allow_http"));
+        assert!(table_has_column(&migrated, "library_items", "cover_page"));
+        let cache_limit: i64 = migrated
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM schema_meta WHERE key='cache_limit_bytes'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cache_limit, DEFAULT_CACHE_LIMIT_BYTES as i64);
+    }
+
+    #[test]
+    fn migrates_v6_to_sync_record_schema_without_losing_library_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '6');
+                CREATE TABLE opds_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, allow_http INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, cover_url TEXT,
+                  local_path TEXT, acquisition_url TEXT, media_type TEXT, extension TEXT,
+                  size INTEGER, etag TEXT, last_modified TEXT, series TEXT, number TEXT,
+                  volume TEXT, page_count INTEGER, reading_direction TEXT, cover_page INTEGER,
+                  blob_hash TEXT, availability TEXT NOT NULL DEFAULT 'external',
+                  offline_pinned INTEGER NOT NULL DEFAULT 0,
+                  subjects_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(id,source_kind,title,authors_json,updated_at)
+                  VALUES ('managed:old','managed','旧书','[]',1);
+                CREATE TABLE managed_blobs (
+                  hash TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+                  size INTEGER NOT NULL, created_at INTEGER NOT NULL,last_verified_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_item_aliases (alias_id TEXT PRIMARY KEY NOT NULL,item_id TEXT NOT NULL);
+                CREATE TABLE library_groups (
+                  id TEXT PRIMARY KEY NOT NULL,parent_id TEXT,name TEXT NOT NULL,kind TEXT NOT NULL,
+                  rule_json TEXT,sort_order INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_group_members (
+                  group_id TEXT NOT NULL,item_id TEXT NOT NULL,created_at INTEGER NOT NULL,
+                  PRIMARY KEY(group_id,item_id)
+                );
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_has_column(&migrated, "sync_records", "context_json"));
+        assert!(table_has_column(
+            &migrated,
+            "sync_conflicts",
+            "winner_device_id"
+        ));
+        assert!(table_has_column(
+            &migrated,
+            "managed_documents",
+            "content_hash"
+        ));
+        let title: String = migrated
+            .query_row(
+                "SELECT title FROM library_items WHERE id='managed:old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "旧书");
+    }
+
+    #[test]
+    fn managed_assets_allow_the_same_blob_at_multiple_document_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        let hash = "a".repeat(64);
+        for path in [
+            "managed-documents/11111111-1111-4111-8111-111111111111/assets/cover.png",
+            "managed-documents/22222222-2222-4222-8222-222222222222/assets/cover.png",
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO managed_assets(relative_path,hash,size,created_at,updated_at)
+                     VALUES (?1,?2,1,1,1)",
+                    params![path, hash],
+                )
+                .unwrap();
+        }
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM managed_assets WHERE hash=?1",
+                params![hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn repairs_the_early_v8_asset_hash_primary_key_idempotently() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut connection = database_for_tests(directory.path()).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE managed_assets;
+                 CREATE TABLE managed_assets (
+                   hash TEXT PRIMARY KEY NOT NULL,
+                   relative_path TEXT NOT NULL UNIQUE,
+                   size INTEGER NOT NULL,
+                   media_type TEXT,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO managed_assets VALUES (
+                   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                   'managed-documents/11111111-1111-4111-8111-111111111111/assets/a.png',
+                   1,NULL,1,1
+                 );",
+            )
+            .unwrap();
+
+        ensure_managed_asset_schema(&mut connection).unwrap();
+        ensure_managed_asset_schema(&mut connection).unwrap();
+        assert!(managed_assets_use_path_identity(&connection));
+        connection
+            .execute(
+                "INSERT INTO managed_assets(relative_path,hash,size,created_at,updated_at)
+                 VALUES (?1,?2,1,1,1)",
+                params![
+                    "managed-documents/22222222-2222-4222-8222-222222222222/assets/a.png",
+                    "a".repeat(64)
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn refuses_a_schema_newer_than_the_application() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        connection
+            .execute(
+                "UPDATE schema_meta SET value=?1 WHERE key='version'",
+                params![(SCHEMA_VERSION + 1).to_string()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = database_for_tests(directory.path()).unwrap_err();
+        assert!(error.contains("高于当前支持的版本"), "{error}");
     }
 
     #[test]

@@ -131,6 +131,7 @@ import {
 } from './sources/native-archive.js';
 import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
+import { loadComicPreferences } from './comic-preferences.js';
 import { createReaderChrome, type ReaderChrome } from './reader-chrome.js';
 import {
   fillReaderTocPanel,
@@ -284,6 +285,11 @@ export interface ReaderViewDeps {
   requestArchivePassword?: ArchivePasswordProvider;
   /** Injectable progress storage; production uses localStorage. */
   progressStorage?: ProgressStorage | null;
+  /** Portable preference storage (falls back to browser localStorage). */
+  preferenceStorage?: {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+  } | null;
   /** Persist normalized ComicInfo metadata for an existing library item. */
   onComicMetadata?: (target: ReaderTarget, metadata: ComicMetadata) => void | Promise<void>;
   /**
@@ -301,6 +307,7 @@ export interface ReaderViewDeps {
  */
 export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): ReaderInstance {
   const t = deps.t ?? ((key: MessageKey) => key);
+  const preferenceStorage = deps.preferenceStorage ?? typographyStorage();
   const root = document.createElement('div');
   root.className = 'lightink-reader';
   root.setAttribute('role', 'document');
@@ -332,8 +339,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   status.hidden = true;
 
   root.append(scrollHost, pageHost, status);
-  applyReaderLayout(root, loadReaderLayout(typographyStorage()));
-  const initialTheme = loadReaderTheme(typographyStorage());
+  applyReaderLayout(root, loadReaderLayout(preferenceStorage));
+  const initialTheme = loadReaderTheme(preferenceStorage);
   applyReaderTheme(root, initialTheme);
   const editorPane = host.closest?.('#lightink-editor-area');
   if (editorPane instanceof HTMLElement) {
@@ -2049,6 +2056,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       : source;
     if (archiveSource === null) throw new ParseError('漫画归档字节源不可用');
     const cbz = await renderCbzInto(archiveSource, stagedHost, signal, {
+      preferenceStorage,
       requestPassword: deps.requestArchivePassword,
       labels: {
         previous: t('reader.comic.previous'),
@@ -2540,7 +2548,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const applyTypographyPatch = (patch: Partial<ReaderTypography>): void => {
-    const next = saveReaderTypography(typographyStorage(), patch);
+    const next = saveReaderTypography(preferenceStorage, patch);
     dispatchReaderTypographyPref(next);
     refreshViewport();
     renderTypographyPanel();
@@ -2548,7 +2556,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const applyFlowLayout = (layout: ReaderFlowLayout): void => {
     const next = parseReaderLayout(layout);
-    saveReaderLayout(typographyStorage(), next);
+    saveReaderLayout(preferenceStorage, next);
     applyReaderLayout(root, next);
     if (typeof document !== 'undefined') {
       applyReaderDocumentLayout(document.documentElement, 'reader', next);
@@ -2561,7 +2569,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const applyPaperTheme = (theme: ReaderThemeId): void => {
-    const next = saveReaderTheme(typographyStorage(), theme);
+    const next = saveReaderTheme(preferenceStorage, theme);
     applyReaderTheme(root, next);
     const pane = closestPane();
     if (pane !== null) {
@@ -2629,11 +2637,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const renderTypographyPanel = (): void => {
-    const current = loadReaderTypography(typographyStorage());
+    const current = loadReaderTypography(preferenceStorage);
     fillReaderTypographyPanel(
       typePanel,
       current,
-      loadReaderTheme(typographyStorage()),
+      loadReaderTheme(preferenceStorage),
       readerPanelCopy(),
       applyTypographyPatch,
       applyPaperTheme,
@@ -2641,7 +2649,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         applyTypographyPatch({
           fontScaleStep: nextReaderFontScaleStep(current.fontScaleStep, direction),
         }),
-      loadReaderLayout(typographyStorage()),
+      loadReaderLayout(preferenceStorage),
       applyFlowLayout,
     );
   };
@@ -3015,6 +3023,19 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     isSidebarVisible: () => sidebarVisible,
     openSearch,
     refreshViewport,
+    refreshPreferences: () => {
+      applyTypographyPatch(loadReaderTypography(preferenceStorage));
+      applyFlowLayout(loadReaderLayout(preferenceStorage));
+      applyPaperTheme(loadReaderTheme(preferenceStorage));
+      if (cbzHandle !== null) {
+        cbzHandle.setPreferences(
+          loadComicPreferences(
+            preferenceStorage,
+            cbzHandle.metadata.readingDirection ?? 'ltr',
+          ),
+        );
+      }
+    },
     advanceReading,
     getOutline: () => readerOutline,
     jumpToOutlineItem,

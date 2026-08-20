@@ -214,10 +214,11 @@ fn apply_linux_caption_color(
     let css = linux_caption_css(caption, text);
     let tinted = !css.is_empty();
     let window = window.clone();
+    let callback_window = window.clone();
     window
         .clone()
         .run_on_main_thread(move || {
-            let Ok(gtk_window) = window.gtk_window() else {
+            let Ok(gtk_window) = callback_window.gtk_window() else {
                 return;
             };
             with_linux_caption_provider(|provider| {

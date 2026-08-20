@@ -70,7 +70,7 @@ export function isMarkdownTab(tab: TabState): tab is MarkdownTabState {
 function newUntitledToken(): string {
   const c = globalThis.crypto;
   if (c !== undefined && typeof c.randomUUID === 'function') {
-    return c.randomUUID().slice(0, 8);
+    return c.randomUUID();
   }
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -149,6 +149,8 @@ export interface TabManagerDeps {
    * 仅在写入磁盘成功时触发。
    */
   onFileSaved?: (filePath: string, content: string) => void;
+  /** 成功保存受管 Markdown 后生成同步版本。 */
+  onManagedDocumentSaved?: (documentId: string, content: string) => void;
   /**
    * R14：Ctrl/Cmd+点击文档内链接时回调（main.ts 分类后跳转）。经 mountEditor 选项注入。
    */
@@ -205,6 +207,7 @@ type TabManagerOptionalUi =
   | 'onSaveStatusChanged'
   | 'onFileOpened'
   | 'onFileSaved'
+  | 'onManagedDocumentSaved'
   | 'onLinkNavigate'
   | 'confirmLinkOpen'
   | 'onFoldChanged'
@@ -276,6 +279,7 @@ export class TabManager {
       onSaveStatusChanged: deps.onSaveStatusChanged,
       onFileOpened: deps.onFileOpened,
       onFileSaved: deps.onFileSaved,
+      onManagedDocumentSaved: deps.onManagedDocumentSaved,
       onLinkNavigate: deps.onLinkNavigate,
       confirmLinkOpen: deps.confirmLinkOpen,
       onFoldChanged: deps.onFoldChanged,
@@ -416,6 +420,48 @@ export class TabManager {
   }
 
   /**
+   * 将已打开的 Markdown 标签切换到受管副本。调用方应先完成普通文件保存，
+   * 这样加入同步空间不会静默丢弃编辑器中的未保存内容；原文件路径不会被移动。
+   */
+  async adoptManagedDocument(
+    id: string,
+    documentId: string,
+    managedPath: string,
+    content: string,
+  ): Promise<boolean> {
+    if (this.closingAll !== null || this.closingTabs.has(id) || managedPath.trim() === '') {
+      return false;
+    }
+    return this.enqueueSave(id, async () => {
+      const tab = this.requireTab(id);
+      if (tab.kind !== 'markdown') {
+        return false;
+      }
+      const current = this.readMarkdown(tab);
+      if (current === null || (tab.dirty && current !== content)) {
+        throw new Error('加入同步空间前请先保存当前 Markdown');
+      }
+      this.cancelPendingSnapshot(id);
+      await this.waitForSnapshotQueue(id);
+      const oldKey = snapshotKeyOf(tab);
+      tab.filePath = managedPath;
+      tab.managedDocumentId = documentId;
+      tab.title = fileNameOf(managedPath);
+      if (current !== content) {
+        tab.editor.setMarkdown(content);
+      }
+      tab.lastSavedMarkdown = content;
+      tab.dirty = false;
+      await this.recordBaseline(tab);
+      await this.clearSnapshotKeys(id, [oldKey]);
+      this.notifyChanged();
+      this.notifyActiveContentChanged();
+      this.setSaveStatus(id, 'saved');
+      return true;
+    });
+  }
+
+  /**
    * 打开只读阅读标签（PDF/EPUB/...）。不挂编辑器、不记录 dirty / 快照 / 外部
    * 变更基线；同路径已打开的 reader 标签直接切换。文件字节读取与格式渲染由
    * 后续任务经 mountReader 注入；本方法只负责 reader 标签的生命周期与可写
@@ -547,6 +593,9 @@ export class TabManager {
     const oldKey = snapshotKeyOf(tab);
     tab.filePath = newPath;
     tab.title = fileNameOf(newPath);
+    // 另存为产生的是外部副本，原受管文档仍由同步空间管理；后续保存不应
+    // 把外部副本的内容写回受管版本历史。
+    tab.managedDocumentId = undefined;
     return this.finalizeSuccessfulSave(tab, newPath, content, [newPath, oldKey]);
   }
 
@@ -560,6 +609,9 @@ export class TabManager {
     // R13：自写（原子 persist）后必须更新基线，避免下次轮询误报自身保存为外部变更。
     await this.recordBaseline(tab);
     this.deps.onFileSaved?.(savedPath, content);
+    if (tab.managedDocumentId !== undefined) {
+      this.deps.onManagedDocumentSaved?.(tab.managedDocumentId, content);
+    }
 
     const current = this.readMarkdown(tab);
     tab.dirty = current === null || current !== content;

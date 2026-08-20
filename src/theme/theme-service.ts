@@ -44,6 +44,8 @@ export const DEFAULT_THEME_ID: BuiltinThemeId = 'warm-light';
 export const THEME_STORAGE_KEY = 'lightink.theme';
 /** localStorage 键：自定义主题 CSS 文件路径（供重载/下次启动恢复）。 */
 export const CUSTOM_THEME_PATH_KEY = 'lightink.theme.customPath';
+/** Managed CSS text used for sync; unlike the path, this is portable. */
+export const CUSTOM_THEME_CSS_KEY = 'lightink.theme.customCss';
 /** 自定义主题激活时的 currentThemeId。 */
 export const CUSTOM_THEME_ID = 'custom';
 
@@ -121,7 +123,8 @@ export class ThemeService {
     this.deps = deps;
     const saved = deps.storage?.getItem(THEME_STORAGE_KEY) ?? null;
     this.customPath = deps.storage?.getItem(CUSTOM_THEME_PATH_KEY) ?? null;
-    const savedCustom = saved === CUSTOM_THEME_ID && this.customPath !== null;
+    const savedCss = deps.storage?.getItem(CUSTOM_THEME_CSS_KEY) ?? null;
+    const savedCustom = saved === CUSTOM_THEME_ID && (savedCss !== null || this.customPath !== null);
     // Custom CSS is injected asynchronously by restorePersistedCustomTheme.
     this.current = savedCustom
       ? CUSTOM_THEME_ID
@@ -182,6 +185,7 @@ export class ThemeService {
     this.deps.customStyleSlot.set(cssText);
     this.deps.root.setAttribute('data-theme', CUSTOM_THEME_ID);
     this.deps.storage?.setItem(THEME_STORAGE_KEY, CUSTOM_THEME_ID);
+    this.deps.storage?.setItem(CUSTOM_THEME_CSS_KEY, cssText);
     if (this.customPath !== null) {
       this.deps.storage?.setItem(CUSTOM_THEME_PATH_KEY, this.customPath);
     }
@@ -205,13 +209,15 @@ export class ThemeService {
 
   /** Restore a persisted custom file after startup dependency construction. */
   async restorePersistedCustomTheme(): Promise<boolean> {
-    if (
-      this.current !== CUSTOM_THEME_ID ||
-      this.customPath === null ||
-      this.deps.readFile === undefined
-    ) {
+    if (this.current !== CUSTOM_THEME_ID) {
       return false;
     }
+    const storedCss = this.deps.storage?.getItem(CUSTOM_THEME_CSS_KEY) ?? null;
+    if (storedCss !== null) {
+      this.loadCustomTheme(storedCss, this.customPath ?? undefined);
+      return true;
+    }
+    if (this.customPath === null || this.deps.readFile === undefined) return false;
     try {
       const cssText = await this.deps.readFile(this.customPath);
       this.loadCustomTheme(cssText, this.customPath);
@@ -223,11 +229,29 @@ export class ThemeService {
     }
   }
 
+  /** Re-apply portable theme fields after a remote storage merge. */
+  refreshFromStorage(): void {
+    const saved = this.deps.storage?.getItem(THEME_STORAGE_KEY) ?? null;
+    if (saved === CUSTOM_THEME_ID) {
+      const cssText = this.deps.storage?.getItem(CUSTOM_THEME_CSS_KEY) ?? null;
+      if (cssText !== null) {
+        this.current = CUSTOM_THEME_ID;
+        this.customCss = cssText;
+        this.deps.customStyleSlot.set(cssText);
+        this.deps.root.setAttribute('data-theme', CUSTOM_THEME_ID);
+        this.notifyNativeTheme();
+        return;
+      }
+    }
+    this.apply(isBuiltinThemeId(saved) ? saved : DEFAULT_THEME_ID);
+  }
+
   /** 移除自定义主题并回到默认护眼浅色。 */
   resetCustomTheme(): void {
     this.customPath = null;
     this.customCss = null;
     this.deps.storage?.removeItem?.(CUSTOM_THEME_PATH_KEY);
+    this.deps.storage?.removeItem?.(CUSTOM_THEME_CSS_KEY);
     this.apply(DEFAULT_THEME_ID);
   }
 
