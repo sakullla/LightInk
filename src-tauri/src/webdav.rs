@@ -812,6 +812,34 @@ fn apply_one_group(connection: &rusqlite::Connection, group: &SyncedGroup) -> Re
     Ok(())
 }
 
+fn index_local_item_hashes(
+    connection: &rusqlite::Connection,
+    items_by_hash: &mut HashMap<String, HashSet<String>>,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("SELECT id, local_path FROM library_items")
+        .map_err(|error| format!("无法读取书库条目: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| format!("无法读取书库条目: {error}"))?;
+    for row in rows {
+        let (item_id, path) = row.map_err(|error| format!("无法读取书库条目: {error}"))?;
+        let Some(path) = path.filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let hash = crate::asset::content_hash_hex(&bytes);
+        if validate_content_hash(&hash).is_ok() {
+            items_by_hash.entry(hash).or_default().insert(item_id);
+        }
+    }
+    Ok(())
+}
+
 fn apply_members(
     connection: &rusqlite::Connection,
     members: &[SyncedMember],
@@ -836,6 +864,7 @@ fn apply_members(
                 .insert(item.item_id.clone());
         }
     }
+    index_local_item_hashes(connection, &mut items_by_hash)?;
     for member in members {
         let Some(item_ids) = items_by_hash.get(&member.content_hash) else {
             continue;
@@ -1260,6 +1289,30 @@ mod tests {
         assert!(stored.iter().any(|member| {
             member.item_id == "book-file" && member.content_hash.as_deref() == Some(computed.as_str())
         }));
+    }
+
+    #[test]
+    fn apply_members_resolves_wiped_local_books_by_file_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let book_path = directory.path().join("same-book.epub");
+        fs::write(&book_path, b"same-ebook-bytes").unwrap();
+        let hash = crate::asset::content_hash_hex(b"same-ebook-bytes");
+        let connection = open_database_at(directory.path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_items(id, source_kind, title, authors_json, local_path, updated_at)
+                 VALUES ('book-local', 'local', '未打开', '[]', ?1, 1)",
+                params![book_path.to_string_lossy()],
+            )
+            .unwrap();
+        let mut document = SyncDocument::default();
+        document.groups.push(group("user:series", "系列", 3));
+        document.members.push(member("user:series", &hash, 3));
+        apply_merged_document(directory.path(), &document, &[]).unwrap();
+        let members = list_library_group_members(&connection, Some("user:series")).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].item_id, "book-local");
+        assert_eq!(members[0].content_hash.as_deref(), Some(hash.as_str()));
     }
 
     #[test]
