@@ -112,6 +112,18 @@ describe('annotation-sidebar 重做', () => {
     expect(locations[1]).toBe(t('reader.chapter', { n: '3' }));
     // txt 无章节定位：不显示 location
     expect(locations).toHaveLength(2);
+
+    // 内联样式迁移锁定：备注搜索框边框改由 CSS 承接
+    expect(
+      sidebar.element.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')
+        ?.style.border,
+    ).toBe('');
+    // 颜色 swatch 仍由内联设置背景色，且带 data-color 钩子
+    const swatch = sidebar.element.querySelector<HTMLElement>(
+      '[data-annotation-id="h1"] .lightink-reader-sidebar-color',
+    )!;
+    expect(swatch.style.backgroundColor).not.toBe('');
+    expect(swatch.dataset.color).toBe(DEFAULT_ANNOTATION_COLOR);
   });
 
   it('按类型筛选只显示对应标注', () => {

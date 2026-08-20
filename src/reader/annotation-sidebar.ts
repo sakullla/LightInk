@@ -85,12 +85,63 @@ function locationText(
 
 function styleSwatch(element: HTMLElement, color: string): void {
   element.style.backgroundColor = color;
-  element.style.width = '0.85rem';
-  element.style.height = '0.85rem';
-  element.style.padding = '0';
-  element.style.borderRadius = '50%';
-  element.style.flex = '0 0 auto';
-  element.style.boxSizing = 'border-box';
+}
+
+/** 行操作按钮：jump/edit/remove 的同构装配。 */
+function createActionButton(
+  className: string,
+  label: string,
+  onClick: () => void,
+  ariaLabel?: string,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = label;
+  if (ariaLabel !== undefined) {
+    button.setAttribute('aria-label', ariaLabel);
+  }
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+interface FilterButtonOptions {
+  className: string;
+  dataset: { kindFilter?: string; color?: string };
+  text?: string;
+  ariaLabel?: string;
+  title?: string;
+  swatchColor?: string;
+}
+
+/** 筛选按钮：类型筛选与颜色筛选的同构装配。 */
+function createFilterButton(
+  options: FilterButtonOptions,
+  onClick: () => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = options.className;
+  if (options.dataset.kindFilter !== undefined) {
+    button.dataset.kindFilter = options.dataset.kindFilter;
+  }
+  if (options.dataset.color !== undefined) {
+    button.dataset.color = options.dataset.color;
+  }
+  if (options.text !== undefined) {
+    button.textContent = options.text;
+  }
+  if (options.ariaLabel !== undefined) {
+    button.setAttribute('aria-label', options.ariaLabel);
+  }
+  if (options.title !== undefined) {
+    button.setAttribute('title', options.title);
+  }
+  if (options.swatchColor !== undefined) {
+    styleSwatch(button, options.swatchColor);
+  }
+  button.addEventListener('click', onClick);
+  return button;
 }
 
 /**
@@ -125,14 +176,6 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   noteSearchInput.placeholder = deps.t('annotation.search.placeholder');
   noteSearchInput.autocomplete = 'off';
   noteSearchInput.spellcheck = false;
-  noteSearchInput.style.flex = '1 1 auto';
-  noteSearchInput.style.minWidth = '0';
-  noteSearchInput.style.border = '1px solid var(--lightink-border)';
-  noteSearchInput.style.borderRadius = '4px';
-  noteSearchInput.style.padding = '0.3rem 0.45rem';
-  noteSearchInput.style.background = 'var(--lightink-bg)';
-  noteSearchInput.style.color = 'var(--lightink-fg)';
-  noteSearchInput.style.font = 'inherit';
   noteField.appendChild(noteSearchInput);
 
   // 类型筛选：all + 三种 kind，aria-pressed 表达当前筛选。
@@ -169,47 +212,53 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   for (const filter of FILTERS) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'lightink-reader-sidebar-filter';
-    button.dataset.kindFilter = filter;
-    button.textContent = deps.t(filterLabelKey(filter));
-    button.addEventListener('click', () => {
-      currentFilter = filter;
-      applyFilter();
-      renderList(lastAnnotations);
-    });
+    const button = createFilterButton(
+      {
+        className: 'lightink-reader-sidebar-filter',
+        dataset: { kindFilter: filter },
+        text: deps.t(filterLabelKey(filter)),
+      },
+      () => {
+        currentFilter = filter;
+        applyFilter();
+        renderList(lastAnnotations);
+      },
+    );
     filterButtons.set(filter, button);
     filters.appendChild(button);
   }
 
-  const allColor = document.createElement('button');
-  allColor.type = 'button';
-  allColor.className = 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter';
-  allColor.dataset.color = 'all';
-  allColor.textContent = deps.t('annotation.filter.all');
-  allColor.setAttribute('aria-label', deps.t('annotation.filter.all'));
-  allColor.addEventListener('click', () => {
-    currentColor = 'all';
-    applyFilter();
-    renderList(lastAnnotations);
-  });
+  const allColor = createFilterButton(
+    {
+      className: 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter',
+      dataset: { color: 'all' },
+      text: deps.t('annotation.filter.all'),
+      ariaLabel: deps.t('annotation.filter.all'),
+    },
+    () => {
+      currentColor = 'all';
+      applyFilter();
+      renderList(lastAnnotations);
+    },
+  );
   colorButtons.set('all', allColor);
   colors.appendChild(allColor);
 
   for (const color of ANNOTATION_COLORS) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter';
-    button.dataset.color = color;
-    button.setAttribute('aria-label', color);
-    button.setAttribute('title', color);
-    styleSwatch(button, color);
-    button.addEventListener('click', () => {
-      currentColor = color;
-      applyFilter();
-      renderList(lastAnnotations);
-    });
+    const button = createFilterButton(
+      {
+        className: 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter',
+        dataset: { color },
+        ariaLabel: color,
+        title: color,
+        swatchColor: color,
+      },
+      () => {
+        currentColor = color;
+        applyFilter();
+        renderList(lastAnnotations);
+      },
+    );
     colorButtons.set(color, button);
     colors.appendChild(button);
   }
@@ -364,29 +413,29 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     const actions = document.createElement('div');
     actions.className = 'lightink-reader-sidebar-actions';
 
-    const jump = document.createElement('button');
-    jump.type = 'button';
-    jump.className = 'lightink-reader-sidebar-jump';
-    jump.textContent = deps.t('annotation.jump');
-    jump.addEventListener('click', () => deps.onJump(annotation));
+    const jump = createActionButton(
+      'lightink-reader-sidebar-jump',
+      deps.t('annotation.jump'),
+      () => deps.onJump(annotation),
+    );
     actions.appendChild(jump);
 
     if (annotation.kind === 'note' && deps.onEditNote !== undefined) {
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'lightink-reader-sidebar-edit';
-      edit.textContent = deps.t('annotation.edit');
-      edit.addEventListener('click', () => deps.onEditNote?.(annotation));
+      const edit = createActionButton(
+        'lightink-reader-sidebar-edit',
+        deps.t('annotation.edit'),
+        () => deps.onEditNote?.(annotation),
+      );
       actions.appendChild(edit);
     }
 
     if (deps.onRemove !== undefined) {
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'lightink-reader-sidebar-remove';
-      remove.textContent = deps.t('annotation.remove');
-      remove.setAttribute('aria-label', deps.t('annotation.remove'));
-      remove.addEventListener('click', () => deps.onRemove?.(annotation));
+      const remove = createActionButton(
+        'lightink-reader-sidebar-remove',
+        deps.t('annotation.remove'),
+        () => deps.onRemove?.(annotation),
+        deps.t('annotation.remove'),
+      );
       actions.appendChild(remove);
     }
     li.appendChild(actions);

@@ -1,0 +1,409 @@
+/**
+ * 标注侧边面板样式。
+ *
+ * 与排版浮层（reader-chrome-panels.css）统一的现代卡片语言：圆角卡片、
+ * 柔和阴影、宽松间距、accent 激活态。选择器族从 reader.css 迁入
+ * （原 :678-905 主块、:1045-1050 窄窗抽屉媒体查询、:1101-1166 搜索栈块），
+ * 类名与 data 钩子全部保留；`@media (forced-colors: active)` 块整体留在
+ * reader.css，未迁移。
+ * 颜色圆点背景与搜索框等部分表现仍由 annotation-sidebar.ts 内联 style 驱动，
+ * 本文件只承接尺寸/边框等结构性样式，不写死颜色。
+ */
+
+/* ===== 侧栏容器（覆盖阅读区右侧，不挤占正文宽度） ===== */
+
+.lightink-reader-sidebar {
+  position: absolute;
+  inset: 0 0 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(20rem, calc(100% - 2.5rem));
+  max-width: 22rem;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  color: var(--lightink-fg);
+  background: var(--lightink-bg-elevated);
+  border-left: 1px solid var(--lightink-border);
+  box-shadow:
+    -2px 0 6px rgba(0, 0, 0, 0.05),
+    -12px 0 32px rgba(0, 0, 0, 0.12);
+  padding: 0;
+  padding-top: env(titlebar-area-height, 0px);
+  font-size: var(--lightink-font-size-ui, 0.8rem);
+  z-index: 14;
+}
+
+/* Scroll mode grows the reader with the book. Keep the notebook on the
+   visible pane (JS sets fixed top/right/bottom from the editor area). */
+.lightink-reader[data-reading-layout='scroll'] .lightink-reader-sidebar {
+  position: fixed;
+  inset: auto 0 0 auto;
+  top: 0;
+  height: auto;
+}
+
+#lightink-main:not(.lightink-reader--sidebar) > .lightink-reader-sidebar,
+.lightink-reader:not(.lightink-reader--sidebar) > .lightink-reader-sidebar,
+.lightink-tab-host:not(.lightink-reader--sidebar) > .lightink-reader-sidebar,
+#lightink-editor-area:not(.lightink-reader--sidebar) > .lightink-reader-sidebar {
+  display: none;
+}
+
+/* ===== 头部与关闭按钮 ===== */
+
+.lightink-reader-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  padding: 0.9rem 0.9rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+  font-weight: 600;
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-close {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--lightink-muted);
+  background: transparent;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.lightink-reader-sidebar-close:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-close:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
+/* ===== 搜索行 ===== */
+
+.lightink-reader-sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
+.lightink-reader-sidebar-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--lightink-border);
+  border-radius: 8px;
+  padding: 0.3rem 0.45rem;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+}
+
+.lightink-reader-sidebar-search-input:focus {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+/* 笔记搜索输入框：原内联样式迁入，radius 由 4px 升级为 8px。 */
+.lightink-reader-sidebar-note-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--lightink-border);
+  border-radius: 8px;
+  padding: 0.3rem 0.45rem;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+}
+
+.lightink-reader-sidebar-note-search-input:focus {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-reader-sidebar-search-status {
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+  font-size: 0.8rem;
+}
+
+.lightink-reader-sidebar.is-searching .lightink-reader-sidebar-filters {
+  display: none;
+}
+
+.lightink-reader-sidebar-hit.is-current {
+  border-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
+}
+
+.lightink-reader-sidebar-backdrop {
+  display: none;
+}
+
+/* ===== 标注列表：卡片化列表项 ===== */
+
+.lightink-reader-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.6rem 0.65rem 0.9rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lightink-reader-sidebar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem 0.7rem;
+  margin-bottom: 0.5rem;
+  background: var(--lightink-bg);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.lightink-reader-sidebar-item:hover {
+  border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.lightink-reader-sidebar-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* kind 徽章：小胶囊样式。 */
+.lightink-reader-sidebar-kind {
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  font-size: 0.68em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.5;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-sidebar-kind--highlight {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-sidebar-kind--note {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-sidebar-text {
+  color: var(--lightink-fg);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.lightink-reader-sidebar-quote {
+  color: var(--lightink-muted);
+  font-size: 0.9em;
+  line-height: 1.45;
+  word-break: break-word;
+  border-left: 2px solid color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-border));
+  padding-left: 0.45rem;
+}
+
+/* 定位信息（页码/章节）：muted 小字。 */
+.lightink-reader-sidebar-location {
+  font-size: 0.75em;
+  color: var(--lightink-muted);
+  white-space: nowrap;
+}
+
+/* ===== 筛选 chips：分段控件观感，激活态用 accent ===== */
+
+.lightink-reader-sidebar-filters {
+  display: flex;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  margin: 0.5rem 0.65rem;
+  padding: 0.2rem;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-reader-sidebar-filter {
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.8em;
+  line-height: 1.4;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-sidebar-filter:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-filter--active {
+  background: var(--lightink-bg);
+  border-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 0 0 2px color-mix(in srgb, var(--lightink-accent) 18%, transparent);
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+/* 颜色圆点：尺寸/形状由本规则承接，background-color 仍由内联 style 设置。 */
+.lightink-reader-sidebar-color,
+.lightink-reader-sidebar-color-filter {
+  width: 0.85rem;
+  height: 0.85rem;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 14%, transparent);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+}
+
+/* 颜色圆点激活态：accent 环（背景色由内联 style 提供，此处不覆盖）。 */
+.lightink-reader-sidebar-color-filter.lightink-reader-sidebar-filter--active {
+  border-color: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
+  box-shadow:
+    0 0 0 2px var(--lightink-bg-elevated),
+    0 0 0 4px var(--lightink-accent);
+}
+
+/* ===== 行操作按钮：统一文本按钮样式 ===== */
+
+.lightink-reader-sidebar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.lightink-reader-sidebar-jump,
+.lightink-reader-sidebar-edit,
+.lightink-reader-sidebar-remove {
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.8em;
+  line-height: 1.5;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-sidebar-jump:hover,
+.lightink-reader-sidebar-edit:hover {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-sidebar-remove {
+  margin-left: auto;
+  color: var(--lightink-danger);
+}
+
+.lightink-reader-sidebar-remove:hover {
+  background: color-mix(in srgb, var(--lightink-danger) 12%, transparent);
+}
+
+.lightink-reader-sidebar-jump:focus-visible,
+.lightink-reader-sidebar-edit:focus-visible,
+.lightink-reader-sidebar-remove:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
+/* ===== 空态：居中 muted 引导文案 ===== */
+
+.lightink-reader-sidebar-empty {
+  padding: 1.6rem 0.75rem;
+  color: var(--lightink-muted);
+  font-size: 0.85em;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ===== 搜索栈（笔记搜索 + 全文搜索分组） ===== */
+
+.lightink-reader-sidebar-search-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem 0.6rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
+.lightink-reader-sidebar:not(.is-searching) .lightink-reader-sidebar-search-mode--document {
+  display: none;
+}
+
+.lightink-reader-sidebar.is-searching .lightink-reader-sidebar-search-mode--notes {
+  display: none;
+}
+
+.lightink-reader-sidebar-search-stack .lightink-reader-sidebar-search,
+.lightink-reader-sidebar-search-stack .lightink-reader-sidebar-note-search {
+  padding: 0;
+  border: 0;
+}
+
+.lightink-reader-sidebar-search-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+  color: var(--lightink-muted);
+}
+
+/* ===== 窄窗抽屉 ===== */
+
+@media (max-width: 700px) {
+  .lightink-reader-sidebar {
+    width: min(20rem, calc(100% - 2.5rem));
+    max-width: calc(100% - 2.5rem);
+  }
+
+  .lightink-reader--sidebar .lightink-reader-sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.36);
+    cursor: default;
+  }
+}
