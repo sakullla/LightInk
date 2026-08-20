@@ -358,7 +358,7 @@ describe('flow host wheel', () => {
     renderer.clear();
   });
 
-  it('does not preventDefault when the active flow cannot turn a page', () => {
+  it('consumes a paginated wheel even when the chapter cannot turn', () => {
     const { root, scrollHost } = mountFlowRoot();
     const renderer = createFlowRenderer(
       scrollHost,
@@ -367,7 +367,29 @@ describe('flow host wheel', () => {
     );
     const event = new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true });
     document.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
+
+  it('swallows a gated paginated burst so a second listener cannot turn again', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    let turns = 0;
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: () => {
+          turns += 1;
+          return true;
+        },
+      }),
+    );
+    const first = new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true });
+    const second = new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true });
+    document.dispatchEvent(first);
+    document.dispatchEvent(second);
+    expect(turns).toBe(1);
+    expect(second.defaultPrevented).toBe(true);
     renderer.clear();
   });
 

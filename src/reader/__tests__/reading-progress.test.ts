@@ -19,6 +19,11 @@ describe('parseReadingProgress', () => {
     expect(
       parseReadingProgress(JSON.stringify({ version: 1, kind: 'page', index: 7, ratio: 0 })),
     ).toMatchObject({ kind: 'page', index: 7, ratio: 0 });
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 1, kind: 'flow', index: 3, ratio: 0.2, total: 12, updatedAt: 1 }),
+      ),
+    ).toMatchObject({ index: 3, total: 12 });
   });
 
   it('rejects corrupt or unknown records', () => {

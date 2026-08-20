@@ -24,6 +24,7 @@ import {
   applyPagedPageStep,
   applyPagedProgress,
   applyPagedSpreadVars,
+  scrollPagedScrollerToEdge,
   clearPagedSpreadVars,
   createPagedWheelGate,
   isReadingNavKey,
@@ -832,6 +833,9 @@ export function createFlowRenderer(
     if (columns <= 1) {
       return;
     }
+    // Remove-then-measure must flush: a stale scrollWidth still includes the
+    // old pad and looks like an even spread, so the last page is left short.
+    void html.offsetWidth;
     // scrollWidth = K*columnWidth + (K-1)*gap，反解总列数 K。
     const totalColumns = totalColumnCount(html.scrollWidth, columnWidth, gap);
     if (totalColumns % columns === 0) {
@@ -847,6 +851,7 @@ export function createFlowRenderer(
     pad.style.breakBefore = 'column';
     pad.style.breakInside = 'avoid';
     html.appendChild(pad);
+    void html.offsetWidth;
   };
 
   const gatePagedWheel = createPagedWheelGate();
@@ -889,8 +894,7 @@ export function createFlowRenderer(
       }
       applyPaginatedDocument(nextFrame, nextDoc, { snap: false });
       const nextScroller = readerPagedScroller(nextDoc);
-      nextScroller.scrollLeft =
-        direction < 0 ? Math.max(0, nextScroller.scrollWidth - nextScroller.clientWidth) : 0;
+      scrollPagedScrollerToEdge(nextScroller, direction, pagedFrameStep(nextScroller));
     };
     applyChapterPage();
     if (typeof requestAnimationFrame === 'function') {
@@ -1545,7 +1549,9 @@ export function createFlowRenderer(
     const moved = gatePagedWheel(delta > 0 ? 1 : -1, (direction) =>
       hooks.advancePagedWheel(direction),
     );
-    if (moved) {
+    // Paginated flow always consumes the wheel. A gated burst must not leak
+    // to the window listener, which has its own gate and would turn again.
+    if (moved || isFlowPaginated(root)) {
       event.preventDefault();
       event.stopPropagation();
     }

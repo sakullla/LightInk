@@ -115,19 +115,42 @@ function progressPercent(
   progress: ReadingProgress,
   pageCount: number | undefined,
 ): number | undefined {
-  if (
-    progress.kind !== 'page' ||
-    pageCount === undefined ||
-    !Number.isFinite(pageCount) ||
-    pageCount <= 0
-  ) {
+  if (progress.kind === 'flow') {
+    const total = progress.total;
+    if (total === undefined || !Number.isFinite(total) || total <= 0) {
+      return undefined;
+    }
+    const position = Math.max(0, progress.index) + Math.min(1, Math.max(0, progress.ratio));
+    const raw = Math.round((position / total) * 100);
+    if (raw <= 0) {
+      return undefined;
+    }
+    return Math.min(100, raw);
+  }
+  const pages =
+    pageCount !== undefined && Number.isFinite(pageCount) && pageCount > 0
+      ? pageCount
+      : progress.total;
+  if (pages === undefined || !Number.isFinite(pages) || pages <= 0) {
     return undefined;
   }
-  const raw = Math.round((progress.index / pageCount) * 100);
+  const raw = Math.round((progress.index / pages) * 100);
   if (raw <= 0) {
     return undefined;
   }
   return Math.min(100, raw);
+}
+
+/** Cover-bar width 1..100 when a real overall percent is known. */
+export function coverProgressFillPercent(progress: LibraryProgress): number | null {
+  if (progress.status !== 'in-progress' || !isFinitePercent(progress.percent)) {
+    return null;
+  }
+  return Math.min(100, Math.max(1, Math.round(progress.percent)));
+}
+
+function isFinitePercent(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value > 0;
 }
 
 function projectRecord(

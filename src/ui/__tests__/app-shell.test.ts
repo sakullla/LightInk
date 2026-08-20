@@ -401,6 +401,7 @@ describe('createAppShell immersive chrome', () => {
     const chromeHost = fakeRoot.querySelector('#lightink-chrome-host');
     const tabsHost = fakeRoot.querySelector('#lightink-tabs-host');
     const readerShell = fakeRoot.querySelector('#lightink-reader-shell');
+    const statusHost = fakeRoot.querySelector('#lightink-status-bar-host');
 
     expect(chromeHost?.hidden).toBe(true);
     expect(chromeHost?.inert).toBe(true);
@@ -408,17 +409,21 @@ describe('createAppShell immersive chrome', () => {
     expect(tabsHost?.inert).toBe(true);
     expect(readerShell?.hidden).toBe(false);
     expect(readerShell?.inert).toBe(false);
+    expect(statusHost?.hidden).toBe(true);
+    expect(statusHost?.inert).toBe(true);
 
     shell.applyWorkspace({ mode: 'editor', surface: 'editor' });
     expect(chromeHost?.hidden).toBe(false);
     expect(chromeHost?.inert).toBe(false);
     expect(tabsHost?.hidden).toBe(false);
     expect(readerShell?.hidden).toBe(true);
+    expect(statusHost?.hidden).toBe(false);
 
     shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
     expect(chromeHost?.hidden).toBe(true);
     expect(tabsHost?.hidden).toBe(true);
     expect(readerShell?.hidden).toBe(true);
+    expect(statusHost?.hidden).toBe(false);
   });
 
   it('round-trips via labeled 编辑 and 阅读/书架 without sharing one chrome set', () => {

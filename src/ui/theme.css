@@ -156,6 +156,10 @@ html[data-display='xuhd'] {
   height: 100vh;
 }
 
+#lightink-status-bar-host[hidden] {
+  display: none;
+}
+
 .lightink-status-bar {
   display: flex;
   align-items: center;

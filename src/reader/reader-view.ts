@@ -111,6 +111,7 @@ import {
   pagedProgressRatio,
   rafFrameScheduler,
   scrollToKeepViewportAnchor,
+  scrollPagedScrollerToEdge,
   snapPagedScroller,
   viewportAnchor,
 } from '../ui/reading-layout.js';
@@ -550,11 +551,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (page < 1) {
         return null;
       }
+      const total = pdfHandle?.controller.totalPages ?? cbzHandle?.totalPages ?? 0;
       return {
         version: 1,
         kind: 'page',
         index: page,
         ratio: 0,
+        ...(total > 0 ? { total } : {}),
         updatedAt: Date.now(),
       };
     }
@@ -571,6 +574,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         kind: 'flow',
         index: chapterIndex,
         ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
+        total,
         updatedAt: Date.now(),
       };
     }
@@ -589,6 +593,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           articleOffsetInScroller(article, scroller),
           chapterHeight,
         ),
+        total,
         updatedAt: Date.now(),
       };
     }
@@ -598,6 +603,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       kind: 'flow',
       index: chapterIndex,
       ratio: maxScroll === 0 ? 0 : Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)),
+      total,
       updatedAt: Date.now(),
     };
   };
@@ -2310,8 +2316,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
         applyPaginatedDocument(nextFrame, nextDoc, { snap: false });
         const nextScroller = readerPagedScroller(nextDoc);
-        nextScroller.scrollLeft =
-          direction < 0 ? Math.max(0, nextScroller.scrollWidth - nextScroller.clientWidth) : 0;
+        scrollPagedScrollerToEdge(nextScroller, direction, pagedFrameStep(nextScroller));
       };
       applyChapterPage();
       requestAnimationFrame(applyChapterPage);

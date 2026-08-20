@@ -15,7 +15,7 @@
   --lightink-shelf-pad-x: 32px;
   --lightink-shelf-pad-y: 20px;
   --lightink-shelf-rail: 168px;
-  --lightink-shelf-cover-min: 148px;
+  --lightink-shelf-cover-min: 160px;
   --lightink-shelf-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
   position: absolute;
   inset: 0;
@@ -105,11 +105,15 @@
 
 .lightink-library-header h1 {
   margin: 0;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: 26px;
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lightink-library-search {
@@ -120,7 +124,7 @@
   max-width: 260px;
   min-width: 160px;
   margin-left: auto;
-  padding: 0 12px 0 32px;
+  padding: 0 30px 0 32px;
   border: none;
   border-radius: 10px;
   background: var(--lightink-shelf-soft);
@@ -171,6 +175,18 @@
   color: var(--lightink-shelf-muted);
 }
 
+.lightink-library-search-clear {
+  position: absolute;
+  right: 2px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  color: var(--lightink-shelf-muted);
+  font-size: 18px !important;
+  line-height: 1;
+}
+
 .lightink-library-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -209,35 +225,9 @@
   background: transparent;
 }
 
-.lightink-library--my-books .lightink-library-manage-entry,
-.lightink-library--my-books .lightink-library-edit.lightink-workspace-travel {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  overflow: hidden;
-  font-size: 0;
+.lightink-library--my-books .lightink-library-manage-entry {
   color: var(--lightink-shelf-muted);
-}
-
-.lightink-library--my-books .lightink-library-manage-entry::before,
-.lightink-library--my-books .lightink-library-edit.lightink-workspace-travel::before {
-  display: block;
-  width: 18px;
-  height: 18px;
-  margin: 8px auto;
-  background: currentColor;
-  content: '';
-}
-
-.lightink-library--my-books .lightink-library-manage-entry::before {
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.81 8.48a.5.5 0 0 0 .12.64L4.96 10.7c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z'/></svg>") center / contain no-repeat;
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.81 8.48a.5.5 0 0 0 .12.64L4.96 10.7c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z'/></svg>") center / contain no-repeat;
-}
-
-.lightink-library--my-books .lightink-library-edit.lightink-workspace-travel::before {
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm17.71-10.04a1 1 0 0 0 0-1.41l-2.51-2.51a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 2-1.66Z'/></svg>") center / contain no-repeat;
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm17.71-10.04a1 1 0 0 0 0-1.41l-2.51-2.51a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 2-1.66Z'/></svg>") center / contain no-repeat;
+  font-size: 13px;
 }
 
 .lightink-library-primary {
@@ -419,7 +409,7 @@
 
 .lightink-library-source-url {
   overflow: hidden;
-  padding: 0 10px;
+  padding: 0;
   color: var(--lightink-shelf-muted);
   font-size: 12px;
   text-overflow: ellipsis;
@@ -596,9 +586,9 @@
 }
 
 .lightink-library-group {
-  min-height: 36px;
-  padding: 7px 10px;
-  border-radius: 999px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
   color: var(--lightink-shelf-ink);
 }
 
@@ -820,6 +810,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .lightink-library-breadcrumbs,
@@ -867,6 +858,12 @@
   text-align: center;
 }
 
+.lightink-library-empty--filtered {
+  min-height: 18vh;
+  padding: 28px 16px;
+  font-size: 14px;
+}
+
 .lightink-library-status button {
   min-height: 32px;
   padding: 4px 14px;
@@ -879,12 +876,18 @@
   display: none;
 }
 
+.lightink-library--my-books .lightink-library-status[data-status='loading'] {
+  min-height: 0;
+  padding: 8px 24px;
+  font-size: 13px;
+}
+
 .lightink-library-continue {
   display: flex;
   align-items: center;
   gap: 8px;
   width: auto;
-  margin: 8px var(--lightink-shelf-pad-x) 4px 8px;
+  margin: 4px var(--lightink-shelf-pad-x) 8px;
   padding: 6px;
   border: none;
   border-radius: 14px;
@@ -933,9 +936,12 @@
 
 .lightink-library-continue .lightink-library-cover {
   display: grid;
-  flex: 0 0 44px;
-  width: 44px;
-  font-size: 16px;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 52px;
+  aspect-ratio: auto;
+  border-radius: 3px;
+  font-size: 14px;
   box-shadow: none;
 }
 
@@ -971,13 +977,15 @@
 
 .lightink-library-items {
   display: grid;
-  grid-template-columns: repeat(auto-fill, var(--lightink-shelf-cover-min));
+  flex: 1 1 auto;
+  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-shelf-cover-min), 196px));
   justify-content: start;
   align-content: start;
   gap: 24px 20px;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 8px var(--lightink-shelf-pad-x) 48px 8px;
+  padding: 16px var(--lightink-shelf-pad-x) 56px;
 }
 
 .lightink-library-items .lightink-library-empty {
@@ -1039,14 +1047,42 @@
   object-fit: cover;
 }
 
-.lightink-library-item[data-progress-status='in-progress'] .lightink-library-cover::after {
+.lightink-library-item[data-progress-fill] .lightink-library-cover::before,
+.lightink-library-item[data-progress-fill] .lightink-library-cover::after {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 3px;
-  background: var(--lightink-shelf-progress);
+  bottom: 6px;
+  left: 6px;
+  height: 4px;
+  border-radius: 999px;
+  pointer-events: none;
   content: '';
+}
+
+.lightink-library-item[data-progress-fill] .lightink-library-cover::before {
+  right: 6px;
+  background: color-mix(in srgb, var(--lightink-fg) 28%, transparent);
+}
+
+.lightink-library-item[data-progress-fill] .lightink-library-cover::after {
+  width: var(--lightink-shelf-progress-fill, 0%);
+  min-width: 6px;
+  max-width: calc(100% - 12px);
+  background: var(--lightink-shelf-progress);
+}
+
+.lightink-library-item--row[data-progress-fill] .lightink-library-cover::before,
+.lightink-library-item--row[data-progress-fill] .lightink-library-cover::after {
+  bottom: 3px;
+  left: 3px;
+  height: 3px;
+}
+
+.lightink-library-item--row[data-progress-fill] .lightink-library-cover::before {
+  right: 3px;
+}
+
+.lightink-library-item--row[data-progress-fill] .lightink-library-cover::after {
+  max-width: calc(100% - 6px);
 }
 
 .lightink-library-item-text {
@@ -1253,6 +1289,8 @@
 .lightink-library-item--row .lightink-library-cover {
   flex: 0 0 40px;
   width: 40px;
+  height: 56px;
+  aspect-ratio: auto;
   font-size: 14px;
   box-shadow: none;
   transform: none;
@@ -1266,7 +1304,12 @@
 
 .lightink-library[data-library-page='my-books'] .lightink-library-items,
 .lightink-library--my-books .lightink-library-items {
-  padding: 12px var(--lightink-shelf-pad-x) 56px 8px;
+  padding: 16px var(--lightink-shelf-pad-x) 56px;
+}
+
+.lightink-library--manage .lightink-library-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .lightink-library[data-library-page='my-books'] .lightink-library-sources,

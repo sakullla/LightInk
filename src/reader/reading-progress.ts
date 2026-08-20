@@ -22,6 +22,8 @@ export interface ReadingProgress {
   readonly index: number;
   /** Document scroll ratio 0..1 for flow; unused for page. */
   readonly ratio: number;
+  /** Chapter count for flow, page count for pdf/cbz. Used by the shelf bar. */
+  readonly total?: number;
   readonly updatedAt: number;
 }
 
@@ -54,11 +56,16 @@ export function parseReadingProgress(raw: string | null | undefined): ReadingPro
     if (typeof parsed.ratio !== 'number' || !Number.isFinite(parsed.ratio)) {
       return null;
     }
+    const total =
+      parsed.total !== undefined && Number.isSafeInteger(parsed.total) && parsed.total >= 1
+        ? parsed.total
+        : undefined;
     return {
       version: 1,
       kind: parsed.kind,
       index,
       ratio: Math.min(1, Math.max(0, parsed.ratio)),
+      ...(total === undefined ? {} : { total }),
       updatedAt: typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
         ? parsed.updatedAt
         : 0,

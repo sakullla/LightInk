@@ -1187,6 +1187,7 @@ export function createAppShell(
     setChromeSetVisible(chromeHost, editorChrome);
     setChromeSetVisible(tabsHost, editorChrome);
     setChromeSetVisible(readerShell, shelfChrome);
+    setChromeSetVisible(statusBarHost, !shelfChrome);
     if (!editorChrome) {
       menuBar.closeAll();
     }

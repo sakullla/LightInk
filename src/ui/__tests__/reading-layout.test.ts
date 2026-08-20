@@ -23,6 +23,7 @@ import {
   readingNavDirection,
   rafFrameScheduler,
   saveReadingLayout,
+  scrollPagedScrollerToEdge,
   scrollToKeepViewportAnchor,
   snapPagedScroller,
   viewportAnchor,
@@ -88,6 +89,24 @@ describe('paged navigation', () => {
     const scroller = { scrollLeft: 430, scrollWidth: 1600, clientWidth: 800 };
     snapPagedScroller(scroller);
     expect(scroller.scrollLeft).toBe(800);
+  });
+
+  it('does not snap a short last page back to the previous whole page', () => {
+    const scroller = { scrollLeft: 1120, scrollWidth: 1920, clientWidth: 800 };
+    snapPagedScroller(scroller, 800);
+    expect(scroller.scrollLeft).toBe(1120);
+  });
+
+  it('lands on the last page when crossing backward into a chapter', () => {
+    const scroller = { scrollLeft: 0, scrollWidth: 1920, clientWidth: 800 };
+    scrollPagedScrollerToEdge(scroller, -1, 800);
+    expect(scroller.scrollLeft).toBe(1120);
+  });
+
+  it('lands on the first page when crossing forward into a chapter', () => {
+    const scroller = { scrollLeft: 1120, scrollWidth: 1920, clientWidth: 800 };
+    scrollPagedScrollerToEdge(scroller, 1, 800);
+    expect(scroller.scrollLeft).toBe(0);
   });
 
   it('does not treat width:100% as a 100px page step', () => {

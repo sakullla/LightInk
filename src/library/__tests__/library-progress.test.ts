@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   bindLibraryProgress,
+  coverProgressFillPercent,
   libraryProgressAliasKey,
   loadLibraryProgressAlias,
   migrateLibraryProgressAliases,
@@ -56,6 +57,30 @@ describe('projectLibraryProgress', () => {
     expect(
       projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
     ).toEqual({ status: 'not-started' });
+  });
+
+  it('derives an overall percent for flow progress when the chapter total is known', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ index: 3, ratio: 0.5, total: 10 }));
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
+    ).toEqual({
+      status: 'in-progress',
+      unit: 'chapter',
+      index: 3,
+      ratio: 0.5,
+      percent: 35,
+    });
+    expect(
+      coverProgressFillPercent({
+        status: 'in-progress',
+        unit: 'chapter',
+        index: 3,
+        ratio: 0.5,
+        percent: 35,
+      }),
+    ).toBe(35);
+    expect(coverProgressFillPercent({ status: 'not-started' })).toBeNull();
   });
 
   it('joins a previously read local book by localPath when no alias exists', () => {

@@ -302,7 +302,24 @@ export function snapPagedScroller(
     return;
   }
   const page = Math.round(scroller.scrollLeft / step);
-  scroller.scrollLeft = Math.min(max, Math.max(0, page * step));
+  const snapped = Math.min(max, Math.max(0, page * step));
+  // A short last column is not a multiple of `step`. Rounding it would jump
+  // back a whole page when returning to the previous chapter.
+  if (Math.abs(max - scroller.scrollLeft) <= Math.abs(snapped - scroller.scrollLeft)) {
+    scroller.scrollLeft = max;
+    return;
+  }
+  scroller.scrollLeft = snapped;
+}
+
+/** First or last page of a columnized chapter (used when crossing chapters). */
+export function scrollPagedScrollerToEdge(
+  scroller: { scrollLeft: number; scrollWidth: number; clientWidth: number },
+  direction: 1 | -1,
+  stepSize?: number,
+): void {
+  applyPagedProgress(scroller, direction < 0 ? 1 : 0, stepSize);
+  snapPagedScroller(scroller, stepSize);
 }
 
 export function advancePagedScroller(

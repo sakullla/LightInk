@@ -647,6 +647,7 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
       activeReaderTab()?.reader.restoreReadingProgress?.();
     }
     appliedWorkspaceSurface = state.surface;
+    statusBar?.refresh(getActiveStatusSnapshot);
     syncNativeWindowChrome(state);
     if (manager !== undefined) {
       const shelf = state.surface === 'shelf';
@@ -1588,6 +1589,36 @@ async function runActiveExport(kind: 'html' | 'pdf'): Promise<void> {
   }
 }
 
+function openWebDavSyncPanel(): void {
+  showSyncPanel({
+    doc: document,
+    webdav: webDavClient,
+    sync: syncRecordClient,
+    syncNow: () => applicationStateSync?.syncNow() ?? syncRecordClient.run(),
+    migration: {
+      preview: () => libraryClient.previewManagedMigration(),
+      apply: async (itemIds) => {
+        const selected = new Set(itemIds);
+        const legacyPaths = new Map<string, string>();
+        const currentItems = await libraryClient.listItems().catch(() => []);
+        for (const item of currentItems) {
+          if (selected.has(item.id) && item.localPath != null && item.localPath !== '') {
+            legacyPaths.set(item.id, item.localPath);
+          }
+        }
+        const result = await libraryClient.applyManagedMigration(itemIds);
+        migrateLibraryProgressAliases(syncableStorage, result.aliases, legacyPaths);
+        for (const alias of result.aliases) {
+          const path = legacyPaths.get(alias.aliasId);
+          if (path !== undefined) managedItemIdsByPath.set(path, alias.itemId);
+        }
+        return result;
+      },
+    },
+    locale: i18n.locale,
+  });
+}
+
 shell = createAppShell(
   app,
   {
@@ -1640,35 +1671,7 @@ shell = createAppShell(
       const tab = activeMarkdownTab();
       return tab?.filePath !== null && tab?.filePath !== undefined && tab.managedDocumentId === undefined;
     },
-    onOpenSyncPanel: () => {
-      showSyncPanel({
-        doc: document,
-        webdav: webDavClient,
-        sync: syncRecordClient,
-        syncNow: () => applicationStateSync?.syncNow() ?? syncRecordClient.run(),
-        migration: {
-          preview: () => libraryClient.previewManagedMigration(),
-          apply: async (itemIds) => {
-            const selected = new Set(itemIds);
-            const legacyPaths = new Map<string, string>();
-            const currentItems = await libraryClient.listItems().catch(() => []);
-            for (const item of currentItems) {
-              if (selected.has(item.id) && item.localPath != null && item.localPath !== '') {
-                legacyPaths.set(item.id, item.localPath);
-              }
-            }
-            const result = await libraryClient.applyManagedMigration(itemIds);
-            migrateLibraryProgressAliases(syncableStorage, result.aliases, legacyPaths);
-            for (const alias of result.aliases) {
-              const path = legacyPaths.get(alias.aliasId);
-              if (path !== undefined) managedItemIdsByPath.set(path, alias.itemId);
-            }
-            return result;
-          },
-        },
-        locale: i18n.locale,
-      });
-    },
+    onOpenSyncPanel: openWebDavSyncPanel,
     // R14：自动保存开关（文件菜单勾选项；autosave 在 TabManager 后创建，
     // 菜单动作经 ?. 短路，菜单打开时 isAutosaveEnabled 重算勾选态）。
     isAutosaveEnabled: () => autosave?.isEnabled() === true,
@@ -2408,6 +2411,8 @@ libraryView = createLibraryView(shell.editorArea, {
   getProgress: bindLibraryProgress(syncableStorage),
   workspaceTravel: shell.enterEditorButton,
   onEnterEditor: () => workspace.enterEditor(),
+  webdav: webDavClient,
+  onOpenSyncPanel: openWebDavSyncPanel,
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,
@@ -2465,6 +2470,7 @@ let statusMarkdownCache: { tabId: string; revision: number; markdown: string } |
 
 /** Build the active editor or Reader status from its owning instance. */
 function getActiveStatusSnapshot(): StatusBarSnapshot {
+  if (workspace.surface === 'shelf') return null;
   const tab = manager.activeTab;
   if (tab === null) return null;
   if (tab.kind === 'reader') {

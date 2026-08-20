@@ -665,6 +665,127 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Local builds briefly shipped `SCHEMA_VERSION = 5` as the grouping tables,
+/// while current v5 adds `blob_hash`. A database already stamped 5 therefore
+/// skips the managed-item migration and later fails creating the blob index.
+fn ensure_library_item_managed_columns(connection: &Connection) -> Result<(), String> {
+    for (column, definition) in [
+        ("blob_hash", "blob_hash TEXT"),
+        (
+            "availability",
+            "availability TEXT NOT NULL DEFAULT 'external'",
+        ),
+        (
+            "offline_pinned",
+            "offline_pinned INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("subjects_json", "subjects_json TEXT NOT NULL DEFAULT '[]'"),
+    ] {
+        if table_has_column(connection, "library_items", column) {
+            continue;
+        }
+        connection
+            .execute(
+                &format!("ALTER TABLE library_items ADD COLUMN {definition}"),
+                [],
+            )
+            .map_err(|error| format!("无法补齐受管书籍字段 {column}: {error}"))?;
+    }
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS managed_blobs (
+               hash TEXT PRIMARY KEY NOT NULL,
+               relative_path TEXT NOT NULL UNIQUE,
+               size INTEGER NOT NULL CHECK(size >= 0),
+               created_at INTEGER NOT NULL,
+               last_verified_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS library_item_aliases (
+               alias_id TEXT PRIMARY KEY NOT NULL,
+               item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE
+             );
+             CREATE INDEX IF NOT EXISTS library_items_blob_idx
+               ON library_items(blob_hash);",
+        )
+        .map_err(|error| format!("无法创建受管内容索引: {error}"))?;
+    Ok(())
+}
+
+/// The same local v5 stamp used `source`/`smart_key` groups. Rebuild those
+/// tables onto `kind`/`rule_json`/`sort_order` so later opens can seed smart groups.
+fn ensure_legacy_group_schema(connection: &mut Connection) -> Result<(), String> {
+    if !table_exists(connection, "library_groups")
+        || !table_has_column(connection, "library_groups", "source")
+        || table_has_column(connection, "library_groups", "kind")
+    {
+        return Ok(());
+    }
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .map_err(|error| format!("无法暂时关闭分组外键约束: {error}"))?;
+    let result = (|| {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("无法开启分组表修复事务: {error}"))?;
+        transaction
+            .execute_batch(
+                "CREATE TABLE library_groups_rebuild (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   parent_id TEXT REFERENCES library_groups_rebuild(id) ON DELETE SET NULL,
+                   name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
+                   kind TEXT NOT NULL CHECK(kind IN ('custom', 'smart')),
+                   rule_json TEXT,
+                   sort_order INTEGER NOT NULL CHECK(sort_order >= 0),
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO library_groups_rebuild(
+                   id,parent_id,name,kind,rule_json,sort_order,created_at,updated_at
+                 )
+                 SELECT
+                   groups.id,
+                   CASE WHEN parent.source = 'user' THEN groups.parent_id END,
+                   groups.name,
+                   'custom',
+                   NULL,
+                   0,
+                   groups.created_at,
+                   groups.updated_at
+                 FROM library_groups AS groups
+                 LEFT JOIN library_groups AS parent ON parent.id = groups.parent_id
+                 WHERE groups.source = 'user';
+                 CREATE TABLE library_group_members_rebuild (
+                   group_id TEXT NOT NULL REFERENCES library_groups_rebuild(id) ON DELETE CASCADE,
+                   item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                   created_at INTEGER NOT NULL,
+                   PRIMARY KEY(group_id, item_id)
+                 );
+                 INSERT OR IGNORE INTO library_group_members_rebuild(group_id,item_id,created_at)
+                 SELECT members.group_id, members.item_id, COALESCE(members.updated_at, 0)
+                   FROM library_group_members AS members
+                   INNER JOIN library_groups_rebuild AS groups ON groups.id = members.group_id;
+                 DROP TABLE IF EXISTS library_group_members;
+                 DROP TABLE IF EXISTS library_smart_exclusions;
+                 DROP TABLE library_groups;
+                 ALTER TABLE library_groups_rebuild RENAME TO library_groups;
+                 ALTER TABLE library_group_members_rebuild RENAME TO library_group_members;
+                 CREATE INDEX IF NOT EXISTS library_groups_parent_idx
+                   ON library_groups(parent_id, sort_order, id);
+                 CREATE INDEX IF NOT EXISTS library_group_members_item_idx
+                   ON library_group_members(item_id, group_id);",
+            )
+            .map_err(|error| format!("无法重建书架分组表: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交分组表修复: {error}"))
+    })();
+    let restore = connection.pragma_update(None, "foreign_keys", "ON");
+    result.and_then(|_| {
+        restore.map_err(|error| format!("无法恢复分组外键约束: {error}"))?;
+        Ok(())
+    })
+}
+
 pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String> {
     fs::create_dir_all(app_data_dir).map_err(|error| format!("无法创建书库数据目录: {error}"))?;
     let path = app_data_dir.join(DATABASE_FILE);
@@ -786,15 +907,11 @@ pub(crate) fn open_database_at(app_data_dir: &Path) -> Result<Connection, String
             ",
         )
         .map_err(|error| format!("无法初始化书库数据库: {error}"))?;
+    ensure_library_item_managed_columns(&connection)?;
+    ensure_legacy_group_schema(&mut connection)?;
     migrate_schema(&mut connection)?;
     ensure_managed_asset_schema(&mut connection)?;
     ensure_managed_document_schema(&mut connection)?;
-    connection
-        .execute(
-            "CREATE INDEX IF NOT EXISTS library_items_blob_idx ON library_items(blob_hash)",
-            [],
-        )
-        .map_err(|error| format!("无法创建受管内容索引: {error}"))?;
     crate::groups::ensure_smart_groups(&connection)?;
     Ok(connection)
 }
@@ -1679,6 +1796,89 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cache_limit, DEFAULT_CACHE_LIMIT_BYTES as i64);
+    }
+
+    #[test]
+    fn repairs_local_v5_group_schema_missing_blob_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '5');
+                CREATE TABLE opds_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, allow_http INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, cover_url TEXT,
+                  local_path TEXT, acquisition_url TEXT, media_type TEXT, extension TEXT,
+                  size INTEGER, etag TEXT, last_modified TEXT, series TEXT, number TEXT,
+                  volume TEXT, page_count INTEGER, reading_direction TEXT, cover_page INTEGER,
+                  updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(id,source_kind,title,authors_json,updated_at)
+                  VALUES ('local:/novel.epub','local','旧小说','[]',1);
+                CREATE TABLE library_groups (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  parent_id TEXT REFERENCES library_groups(id) ON DELETE SET NULL,
+                  name TEXT NOT NULL,
+                  source TEXT NOT NULL CHECK(source IN ('user', 'smart')),
+                  smart_key TEXT UNIQUE,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_group_members (
+                  group_id TEXT NOT NULL REFERENCES library_groups(id) ON DELETE CASCADE,
+                  item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                  content_hash TEXT,
+                  updated_at INTEGER NOT NULL,
+                  PRIMARY KEY(group_id, item_id)
+                );
+                INSERT INTO library_groups(id,name,source,created_at,updated_at)
+                  VALUES ('group-later','稍后读','user',1,1);
+                INSERT INTO library_groups(id,name,source,smart_key,created_at,updated_at)
+                  VALUES ('smart:author:海猫','海猫','smart','author:海猫',1,1);
+                INSERT INTO library_group_members(group_id,item_id,updated_at)
+                  VALUES ('group-later','local:/novel.epub',1);
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_has_column(&migrated, "library_items", "blob_hash"));
+        assert!(table_has_column(&migrated, "library_groups", "kind"));
+        assert!(!table_has_column(&migrated, "library_groups", "source"));
+        let (kind, name): (String, String) = migrated
+            .query_row(
+                "SELECT kind, name FROM library_groups WHERE id='group-later'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "custom");
+        assert_eq!(name, "稍后读");
+        let smart_left: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM library_groups WHERE id='smart:author:海猫'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(smart_left, 0);
+        let members: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM library_group_members WHERE group_id='group-later'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(members, 1);
     }
 
     #[test]

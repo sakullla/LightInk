@@ -23,10 +23,11 @@ import {
 } from './library-smart-groups.js';
 import { classifyLibraryKind } from './library-kind.js';
 import { isShelfCoverUrl } from './local-book-meta.js';
-import type {
-  LibraryProgress,
-  LibraryProgressQuery,
-  ProjectLibraryProgressOptions,
+import {
+  coverProgressFillPercent,
+  type LibraryProgress,
+  type LibraryProgressQuery,
+  type ProjectLibraryProgressOptions,
 } from './library-progress.js';
 import type {
   OpdsClient,
@@ -38,6 +39,7 @@ import type {
 } from './opds-client.js';
 import type { ProgressStorage } from '../reader/reading-progress.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
+import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibraryPage = 'my-books' | 'manage' | 'catalog';
@@ -58,11 +60,20 @@ interface Labels {
   sources: string;
   addSource: string;
   editSource: string;
+  sourceKind: string;
+  opdsSource: string;
+  webdavSource: string;
+  webdavUrl: string;
+  webdavSync: string;
+  webdavSaved: string;
+  editWebDav: string;
   importLocal: string;
   search: string;
   searchPlaceholder: string;
   clear: string;
   empty: string;
+  emptySearch: string;
+  emptyFilter: string;
   emptySources: string;
   loading: string;
   retry: string;
@@ -159,13 +170,22 @@ const LABELS: Record<Locale, Labels> = {
     comics: 'Comics',
     allBooks: 'All books',
     sources: 'Sources',
-    addSource: 'Add OPDS source',
+    addSource: 'Add library source',
     editSource: 'Edit OPDS source',
+    sourceKind: 'Source type',
+    opdsSource: 'OPDS',
+    webdavSource: 'WebDAV',
+    webdavUrl: 'WebDAV URL',
+    webdavSync: 'WebDAV sync',
+    webdavSaved: 'WebDAV settings saved',
+    editWebDav: 'Edit WebDAV',
     importLocal: 'Import local book',
     search: 'Search',
     searchPlaceholder: 'Search this library',
     clear: 'Clear',
     empty: 'No books found',
+    emptySearch: 'No matching books',
+    emptyFilter: 'Nothing in this view',
     emptySources: 'No library sources yet. Use + to add one.',
     loading: 'Loading…',
     retry: 'Retry',
@@ -260,13 +280,22 @@ const LABELS: Record<Locale, Labels> = {
     comics: '漫画',
     allBooks: '全部作品',
     sources: '书库源',
-    addSource: '添加 OPDS 源',
+    addSource: '添加书库源',
     editSource: '编辑 OPDS 源',
+    sourceKind: '源类型',
+    opdsSource: 'OPDS',
+    webdavSource: 'WebDAV',
+    webdavUrl: 'WebDAV 地址',
+    webdavSync: 'WebDAV 同步',
+    webdavSaved: 'WebDAV 设置已保存',
+    editWebDav: '编辑 WebDAV',
     importLocal: '导入本地书籍',
     search: '搜索',
     searchPlaceholder: '搜索当前书库',
     clear: '清除',
     empty: '暂无作品',
+    emptySearch: '没有匹配的作品',
+    emptyFilter: '这一组还没有作品',
     emptySources: '还没有书库源，点 + 添加。',
     loading: '正在加载…',
     retry: '重试',
@@ -408,6 +437,8 @@ export interface LibraryViewDependencies {
   readonly progressStorage?: ProgressStorage | null;
   /** Open the Markdown editor from Manage. */
   readonly onEnterEditor?: () => void;
+  readonly webdav?: Pick<WebDavClient, 'getProfile' | 'saveProfile' | 'forgetProfile'>;
+  readonly onOpenSyncPanel?: () => void;
 }
 
 export const CONTINUE_DISMISS_KEY = 'lightink.library.continueDismissed';
@@ -631,13 +662,17 @@ export function createLibraryView(
   searchButton.type = 'submit';
   searchButton.tabIndex = -1;
   searchButton.setAttribute('aria-hidden', 'true');
-  searchForm.append(searchInput, searchButton);
+  const searchClear = button(doc, '×', 'lightink-library-icon-button lightink-library-search-clear');
+  searchClear.type = 'button';
+  searchClear.hidden = true;
+  searchForm.append(searchInput, searchClear, searchButton);
   const toolbar = doc.createElement('div');
   toolbar.className = 'lightink-library-toolbar';
   const manageButton = button(doc, '', 'lightink-library-manage-entry');
   const importButton = button(doc, '');
   const clearCacheButton = button(doc, '');
   const editorButton = button(doc, '', 'lightink-library-editor-entry');
+  const syncButton = button(doc, '', 'lightink-library-sync-entry');
   const backButton = button(doc, '', 'lightink-library-home');
   header.append(heading, searchForm, toolbar);
 
@@ -654,28 +689,39 @@ export function createLibraryView(
   groupHeader.append(groupTitle, addGroupButton);
   const groupList = doc.createElement('nav');
   groupList.className = 'lightink-library-group-list';
+  groupPane.append(filterList, groupHeader, groupList);
+  const groupOverlay = doc.createElement('div');
+  groupOverlay.className = 'lightink-modal-overlay lightink-library-group-modal';
+  groupOverlay.hidden = true;
+  const groupDialog = doc.createElement('div');
+  groupDialog.className = 'lightink-modal-dialog';
+  groupDialog.setAttribute('role', 'dialog');
+  groupDialog.setAttribute('aria-modal', 'true');
   const groupEditor = doc.createElement('form');
-  groupEditor.className = 'lightink-library-group-editor';
-  groupEditor.hidden = true;
+  groupEditor.className = 'lightink-library-group-form';
   const groupNameLabel = doc.createElement('label');
+  groupNameLabel.className = 'lightink-library-field';
   const groupNameLabelText = doc.createElement('span');
   const groupNameInput = doc.createElement('input');
-  groupNameInput.name = 'groupName';
+  groupNameInput.name = 'name';
   groupNameInput.maxLength = 80;
   groupNameInput.required = true;
   groupNameLabel.append(groupNameLabelText, groupNameInput);
   const groupParentLabel = doc.createElement('label');
+  groupParentLabel.className = 'lightink-library-field';
   const groupParentLabelText = doc.createElement('span');
   const groupParentSelect = doc.createElement('select');
-  groupParentSelect.name = 'groupParent';
+  groupParentSelect.name = 'parentId';
   groupParentLabel.append(groupParentLabelText, groupParentSelect);
   const groupEditorActions = doc.createElement('div');
+  groupEditorActions.className = 'lightink-library-group-form-actions';
   const groupEditorSave = button(doc, '', 'lightink-library-primary');
   groupEditorSave.type = 'submit';
   const groupEditorCancel = button(doc, '');
   groupEditorActions.append(groupEditorSave, groupEditorCancel);
   groupEditor.append(groupNameLabel, groupParentLabel, groupEditorActions);
-  groupPane.append(filterList, groupHeader, groupList, groupEditor);
+  groupDialog.appendChild(groupEditor);
+  groupOverlay.appendChild(groupDialog);
   const sourcePane = doc.createElement('aside');
   sourcePane.className = 'lightink-library-sources';
   const sourceHeader = doc.createElement('div');
@@ -685,10 +731,18 @@ export function createLibraryView(
   sourceHeader.append(sourceTitle, addSourceButton);
   const sourceList = doc.createElement('nav');
   sourceList.className = 'lightink-library-source-list';
+  sourcePane.append(sourceHeader, sourceList);
+  const sourceOverlay = doc.createElement('div');
+  sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
+  sourceOverlay.hidden = true;
+  const sourceDialog = doc.createElement('div');
+  sourceDialog.className = 'lightink-modal-dialog';
+  sourceDialog.setAttribute('role', 'dialog');
+  sourceDialog.setAttribute('aria-modal', 'true');
   const sourceForm = doc.createElement('form');
   sourceForm.className = 'lightink-library-source-form';
-  sourceForm.hidden = true;
-  sourcePane.append(sourceHeader, sourceList, sourceForm);
+  sourceDialog.appendChild(sourceForm);
+  sourceOverlay.appendChild(sourceDialog);
 
   const content = doc.createElement('main');
   content.className = 'lightink-library-content';
@@ -728,6 +782,7 @@ export function createLibraryView(
   const status = doc.createElement('div');
   status.className = 'lightink-library-status';
   status.setAttribute('role', 'status');
+  status.hidden = true;
   const retryButton = button(doc, '');
   retryButton.hidden = true;
   status.append(retryButton);
@@ -762,7 +817,7 @@ export function createLibraryView(
   membershipActions.append(membershipSave, membershipCancel);
   membershipForm.append(membershipTitle, membershipOptions, membershipActions);
   membershipOverlay.appendChild(membershipForm);
-  root.append(header, body, membershipOverlay);
+  root.append(header, body, membershipOverlay, groupOverlay, sourceOverlay);
   host.appendChild(root);
 
   let libraryPage: LibraryPage = 'my-books';
@@ -780,9 +835,13 @@ export function createLibraryView(
   let groupActionsId: string | null = null;
   let membershipItemId: string | null = null;
   let pendingAddItemId: string | null = null;
+  let ignoreGroupBackdrop = false;
+  let ignoreSourceBackdrop = false;
   let sources: OpdsSource[] = [];
   let selectedSourceId: string | null = null;
   let editingSourceId: string | null = null;
+  let editingWebDav = false;
+  let webDavProfile: SyncProfile | null = null;
   let selected: DisplayItem | null = null;
   let items: DisplayItem[] = [];
   let feed: OpdsFeed | null = null;
@@ -947,6 +1006,14 @@ export function createLibraryView(
     retryButton.hidden = !retry;
     if (retry) status.appendChild(retryButton);
     status.hidden = message === '' && !retry;
+    if (retry) status.dataset.status = 'error';
+    else if (message !== '') status.dataset.status = 'loading';
+    else delete status.dataset.status;
+  }
+
+  function beginBlockingLoad(): void {
+    if (libraryPage === 'my-books' && items.length > 0) return;
+    setStatus(labels().loading);
   }
 
   async function updateCacheSummary(): Promise<void> {
@@ -999,6 +1066,7 @@ export function createLibraryView(
         importButton,
         clearCacheButton,
         cacheSummary,
+        ...(deps.onOpenSyncPanel === undefined ? [] : [syncButton]),
         ...(deps.onEnterEditor === undefined ? [] : [editorButton]),
         backButton,
       );
@@ -1016,11 +1084,23 @@ export function createLibraryView(
     }
   }
 
+  function showGroupOverlay(): void {
+    ignoreGroupBackdrop = true;
+    addGroupButton.classList.add('is-open');
+    groupOverlay.hidden = false;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        ignoreGroupBackdrop = false;
+      });
+    });
+  }
+
   function closeGroupEditor(): void {
     groupEditorMode = null;
     pendingAddItemId = null;
-    groupEditor.hidden = true;
+    groupOverlay.hidden = true;
     groupNameInput.value = '';
+    addGroupButton.classList.remove('is-open');
   }
 
   function flattenedCustomGroups(): Array<{ readonly group: LibraryGroup; readonly depth: number }> {
@@ -1037,7 +1117,8 @@ export function createLibraryView(
 
   function renderGroupEditor(): void {
     if (groupEditorMode === null) {
-      groupEditor.hidden = true;
+      groupOverlay.hidden = true;
+      addGroupButton.classList.remove('is-open');
       return;
     }
     const mode = groupEditorMode;
@@ -1049,7 +1130,11 @@ export function createLibraryView(
       closeGroupEditor();
       return;
     }
-    groupEditor.hidden = false;
+    groupDialog.setAttribute(
+      'aria-label',
+      mode.kind === 'rename' ? labels().renameGroup : labels().newGroup,
+    );
+    showGroupOverlay();
     groupNameInput.value = editing?.name ?? '';
     groupParentSelect.replaceChildren();
     const rootOption = doc.createElement('option');
@@ -1362,7 +1447,7 @@ export function createLibraryView(
 
   function renderSources(): void {
     sourceList.replaceChildren();
-    if (sources.length === 0) {
+    if (sources.length === 0 && webDavProfile === null) {
       const empty = doc.createElement('p');
       empty.className = 'lightink-library-source-empty';
       empty.textContent = labels().emptySources;
@@ -1394,6 +1479,35 @@ export function createLibraryView(
       remove.title = labels().deleteSource;
       remove.setAttribute('aria-label', `${labels().deleteSource}: ${source.title}`);
       remove.addEventListener('click', () => void removeSource(source));
+      row.append(stack, edit, remove);
+      sourceList.appendChild(row);
+    }
+    if (webDavProfile !== null) {
+      const profile = webDavProfile;
+      const row = doc.createElement('div');
+      row.className = 'lightink-library-source-row';
+      row.dataset.sourceKind = 'webdav';
+      const stack = doc.createElement('div');
+      stack.className = 'lightink-library-source-stack';
+      const choose = button(doc, profile.name, 'lightink-library-source');
+      choose.dataset.sourceKind = 'webdav';
+      choose.title = profile.url;
+      choose.addEventListener('click', () => {
+        if (deps.onOpenSyncPanel !== undefined) deps.onOpenSyncPanel();
+        else openWebDavForm();
+      });
+      const url = doc.createElement('span');
+      url.className = 'lightink-library-source-url';
+      url.textContent = profile.url;
+      stack.append(choose, url);
+      const edit = button(doc, '', 'lightink-library-icon-button lightink-library-source-edit');
+      edit.title = labels().editWebDav;
+      edit.setAttribute('aria-label', `${labels().editWebDav}: ${profile.name}`);
+      edit.addEventListener('click', () => openWebDavForm());
+      const remove = button(doc, '', 'lightink-library-icon-button lightink-library-source-remove');
+      remove.title = labels().deleteSource;
+      remove.setAttribute('aria-label', `${labels().deleteSource}: ${profile.name}`);
+      remove.addEventListener('click', () => void removeWebDav());
       row.append(stack, edit, remove);
       sourceList.appendChild(row);
     }
@@ -1432,6 +1546,11 @@ export function createLibraryView(
       image.alt = '';
       image.loading = 'lazy';
       image.referrerPolicy = 'no-referrer';
+      image.addEventListener('error', () => {
+        image.remove();
+        const initial = itemTitle(display.item).slice(0, 1);
+        cover.textContent = initial === '' ? '?' : initial.toUpperCase();
+      });
       cover.appendChild(image);
     } else {
       const initial = itemTitle(display.item).slice(0, 1);
@@ -1448,6 +1567,11 @@ export function createLibraryView(
     const shelfProgress = progressFor(display);
     if (shelfProgress === null) return;
     row.dataset.progressStatus = shelfProgress.status;
+    const fill = coverProgressFillPercent(shelfProgress);
+    if (fill !== null) {
+      row.dataset.progressFill = String(fill);
+      row.style.setProperty('--lightink-shelf-progress-fill', `${fill}%`);
+    }
     const progress = doc.createElement('span');
     progress.className = 'lightink-library-item-progress';
     progress.textContent = progressLabel(shelfProgress);
@@ -1704,7 +1828,10 @@ export function createLibraryView(
       meta.textContent = progressLabel(progress);
       text.appendChild(meta);
     }
-    open.append(cover, text);
+    const cue = doc.createElement('span');
+    cue.className = 'lightink-library-continue-cue';
+    cue.textContent = labels().continueReading;
+    open.append(cover, text, cue);
     open.addEventListener('click', () => void openSelected(latest));
     const dismiss = button(doc, '×', 'lightink-library-icon-button lightink-library-continue-dismiss');
     dismiss.setAttribute('aria-label', labels().dismissContinue);
@@ -1720,15 +1847,24 @@ export function createLibraryView(
   }
 
   function renderItems(): void {
+    const shown = visibleItems();
     itemList.replaceChildren();
-    if (!status.hidden) {
+    if (!status.hidden && shown.length === 0) {
       return;
     }
-    const shown = visibleItems();
     if (shown.length === 0) {
       const empty = doc.createElement('div');
       empty.className = 'lightink-library-empty';
-      empty.textContent = labels().empty;
+      const query = searchInput.value.trim();
+      const filtered =
+        query !== '' ||
+        selectedGroup !== 'all' ||
+        selectedCustomGroupId !== null ||
+        selectedSmartGroupId !== null;
+      if (query !== '') empty.textContent = labels().emptySearch;
+      else if (filtered) empty.textContent = labels().emptyFilter;
+      else empty.textContent = labels().empty;
+      if (filtered) empty.classList.add('lightink-library-empty--filtered');
       itemList.appendChild(empty);
       detail.hidden = true;
       return;
@@ -2043,7 +2179,7 @@ export function createLibraryView(
 
   async function loadPersistedItems(): Promise<void> {
     const generation = ++requestGeneration;
-    setStatus(labels().loading);
+    beginBlockingLoad();
     lastAction = loadPersistedItems;
     try {
       const [loaded, loadedGroups, loadedMemberships] = await Promise.all([
@@ -2122,9 +2258,11 @@ export function createLibraryView(
     currentUrl = undefined;
     trail.splice(0);
     searchInput.value = '';
+    syncSearchClear();
     closeSourceForm();
     setStatus('');
     syncPageChrome();
+    await refreshWebDavProfile();
     renderSources();
     await updateCacheSummary();
   }
@@ -2133,6 +2271,7 @@ export function createLibraryView(
     libraryPage = 'catalog';
     selectedSourceId = sourceId;
     searchInput.value = '';
+    syncSearchClear();
     trail.splice(0);
     syncPageChrome();
     renderSources();
@@ -2186,7 +2325,19 @@ export function createLibraryView(
     }
   }
 
-  function renderSourceForm(source?: OpdsSource): void {
+  async function refreshWebDavProfile(): Promise<void> {
+    if (deps.webdav === undefined) {
+      webDavProfile = null;
+      return;
+    }
+    try {
+      webDavProfile = await deps.webdav.getProfile();
+    } catch {
+      webDavProfile = null;
+    }
+  }
+
+  function renderSourceForm(source?: OpdsSource, kind: 'opds' | 'webdav' = 'opds'): void {
     sourceForm.replaceChildren();
     const makeInput = (name: string, type = 'text'): HTMLInputElement => {
       const input = doc.createElement('input');
@@ -2204,23 +2355,38 @@ export function createLibraryView(
       wrap.append(caption, field);
       return wrap;
     };
+    const actions = doc.createElement('div');
+    const save = button(doc, labels().save, 'lightink-library-primary');
+    save.type = 'submit';
+    const cancel = button(doc, labels().cancel);
+    cancel.addEventListener('click', () => {
+      closeSourceForm();
+    });
+    actions.append(save, cancel);
+    const fields: HTMLElement[] = [];
+    if (source === undefined && deps.webdav !== undefined) {
+      const kindSelect = doc.createElement('select');
+      kindSelect.name = 'kind';
+      kindSelect.setAttribute('aria-label', labels().sourceKind);
+      for (const value of ['opds', 'webdav'] as const) {
+        const option = doc.createElement('option');
+        option.value = value;
+        option.textContent = value === 'opds' ? labels().opdsSource : labels().webdavSource;
+        kindSelect.appendChild(option);
+      }
+      kindSelect.value = kind;
+      kindSelect.addEventListener('change', () => {
+        editingWebDav = kindSelect.value === 'webdav';
+        renderSourceForm(undefined, kindSelect.value === 'webdav' ? 'webdav' : 'opds');
+        sourceForm.querySelector<HTMLInputElement>('input')?.focus();
+      });
+      fields.push(labeled(kindSelect, labels().sourceKind));
+    }
     const title = makeInput('title');
     const url = makeInput('url', 'url');
     const auth = doc.createElement('select');
     auth.name = 'auth';
     auth.setAttribute('aria-label', labels().auth);
-    if (source?.credentialRef !== undefined) {
-      const option = doc.createElement('option');
-      option.value = 'keep';
-      option.textContent = labels().keepAuth;
-      auth.appendChild(option);
-    }
-    for (const value of ['none', 'basic', 'bearer'] as const) {
-      const option = doc.createElement('option');
-      option.value = value;
-      option.textContent = labels()[value];
-      auth.appendChild(option);
-    }
     const username = makeInput('username');
     const password = makeInput('password', 'password');
     const token = makeInput('token', 'password');
@@ -2233,17 +2399,64 @@ export function createLibraryView(
     allow.type = 'checkbox';
     allow.name = 'allowHttp';
     allowLabel.append(allow, doc.createTextNode(labels().allowHttp));
-    const actions = doc.createElement('div');
-    const save = button(doc, labels().save, 'lightink-library-primary');
-    save.type = 'submit';
-    const cancel = button(doc, labels().cancel);
-    cancel.addEventListener('click', () => {
-      closeSourceForm();
+    auth.addEventListener('change', () => {
+      username.hidden = password.hidden = auth.value !== 'basic';
+      token.hidden = auth.value !== 'bearer';
+      username.required = password.required = auth.value === 'basic';
+      token.required = auth.value === 'bearer';
     });
-    actions.append(save, cancel);
-    sourceForm.setAttribute('role', 'dialog');
+    if (kind === 'webdav') {
+      editingWebDav = true;
+      if (webDavProfile !== null && !webDavProfile.needsCredential) {
+        const option = doc.createElement('option');
+        option.value = 'keep';
+        option.textContent = labels().keepAuth;
+        auth.appendChild(option);
+      }
+      for (const value of ['basic', 'bearer'] as const) {
+        const option = doc.createElement('option');
+        option.value = value;
+        option.textContent = labels()[value];
+        auth.appendChild(option);
+      }
+      sourceForm.setAttribute('aria-label', webDavProfile === null ? labels().addSource : labels().editWebDav);
+      sourceForm.append(
+        ...fields,
+        labeled(title, labels().title),
+        labeled(url, labels().webdavUrl),
+        labeled(auth, labels().auth),
+        username,
+        password,
+        token,
+        allowLabel,
+        actions,
+      );
+      title.value = webDavProfile?.name ?? '';
+      url.value = webDavProfile?.url ?? '';
+      allow.checked = webDavProfile?.allowHttp ?? false;
+      auth.value =
+        webDavProfile !== null && !webDavProfile.needsCredential
+          ? 'keep'
+          : (webDavProfile?.authType ?? 'basic');
+      auth.dispatchEvent(new Event('change'));
+      return;
+    }
+    editingWebDav = false;
+    if (source?.credentialRef !== undefined) {
+      const option = doc.createElement('option');
+      option.value = 'keep';
+      option.textContent = labels().keepAuth;
+      auth.appendChild(option);
+    }
+    for (const value of ['none', 'basic', 'bearer'] as const) {
+      const option = doc.createElement('option');
+      option.value = value;
+      option.textContent = labels()[value];
+      auth.appendChild(option);
+    }
     sourceForm.setAttribute('aria-label', source === undefined ? labels().addSource : labels().editSource);
     sourceForm.append(
+      ...fields,
       labeled(title, labels().title),
       labeled(url, labels().url),
       labeled(auth, labels().auth),
@@ -2253,36 +2466,88 @@ export function createLibraryView(
       allowLabel,
       actions,
     );
-    auth.addEventListener('change', () => {
-      username.hidden = password.hidden = auth.value !== 'basic';
-      token.hidden = auth.value !== 'bearer';
-      username.required = password.required = auth.value === 'basic';
-      token.required = auth.value === 'bearer';
-    });
     title.value = source?.title ?? '';
     url.value = source?.url ?? '';
     allow.checked = source?.allowHttp ?? false;
     auth.value = source?.credentialRef === undefined ? 'none' : 'keep';
   }
 
+  function showSourceOverlay(): void {
+    ignoreSourceBackdrop = true;
+    addSourceButton.classList.add('is-open');
+    sourceOverlay.hidden = false;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        ignoreSourceBackdrop = false;
+      });
+    });
+  }
+
   function closeSourceForm(): void {
     editingSourceId = null;
+    editingWebDav = false;
     sourceForm.reset();
-    sourceForm.hidden = true;
+    sourceOverlay.hidden = true;
     addSourceButton.classList.remove('is-open');
+    if (!sourceOverlay.contains(doc.activeElement)) return;
     addSourceButton.focus();
   }
 
   function openSourceForm(source?: OpdsSource): void {
     editingSourceId = source?.id ?? null;
+    editingWebDav = false;
     renderSourceForm(source);
-    sourceForm.hidden = false;
-    addSourceButton.classList.add('is-open');
+    showSourceOverlay();
     sourceForm.querySelector<HTMLInputElement>('input')?.focus();
+  }
+
+  function openWebDavForm(): void {
+    editingSourceId = null;
+    editingWebDav = true;
+    renderSourceForm(undefined, 'webdav');
+    showSourceOverlay();
+    sourceForm.querySelector<HTMLInputElement>('input')?.focus();
+  }
+
+  async function saveWebDav(): Promise<void> {
+    if (deps.webdav === undefined) return;
+    const data = new FormData(sourceForm);
+    const auth = String(data.get('auth') ?? 'basic');
+    const authType =
+      auth === 'bearer' || auth === 'basic'
+        ? auth
+        : (webDavProfile?.authType ?? 'basic');
+    try {
+      webDavProfile = await deps.webdav.saveProfile({
+        id: webDavProfile?.id,
+        name: String(data.get('title') ?? ''),
+        url: String(data.get('url') ?? ''),
+        authType,
+        allowHttp: data.get('allowHttp') === 'on',
+        credential:
+          auth === 'basic'
+            ? {
+                kind: 'basic',
+                username: String(data.get('username') ?? ''),
+                password: String(data.get('password') ?? ''),
+              }
+            : auth === 'bearer'
+              ? { kind: 'bearer', token: String(data.get('token') ?? '') }
+              : undefined,
+      });
+      closeSourceForm();
+      renderSources();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
   }
 
   async function saveSource(): Promise<void> {
     const data = new FormData(sourceForm);
+    if (editingWebDav || String(data.get('kind') ?? '') === 'webdav') {
+      await saveWebDav();
+      return;
+    }
     const auth = String(data.get('auth') ?? 'none');
     const editing = sources.find((source) => source.id === editingSourceId);
     const input: OpdsSourceInput = {
@@ -2309,6 +2574,18 @@ export function createLibraryView(
       sources = await deps.opds.listSources();
       closeSourceForm();
       await showMyBooks();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+  }
+
+  async function removeWebDav(): Promise<void> {
+    if (deps.webdav === undefined) return;
+    try {
+      await deps.webdav.forgetProfile();
+      webDavProfile = null;
+      if (editingWebDav) closeSourceForm();
+      renderSources();
     } catch (error) {
       deps.notify(errorText(error, labels().offline), 'error');
     }
@@ -2341,7 +2618,7 @@ export function createLibraryView(
 
   async function initialLoad(): Promise<void> {
     const generation = ++requestGeneration;
-    setStatus(labels().loading);
+    beginBlockingLoad();
     try {
       sources = await deps.opds.listSources();
       if (generation !== requestGeneration) return;
@@ -2353,6 +2630,7 @@ export function createLibraryView(
       }
       if (libraryPage === 'manage') {
         syncPageChrome();
+        await refreshWebDavProfile();
         renderSources();
         await updateCacheSummary();
         return;
@@ -2377,10 +2655,15 @@ export function createLibraryView(
     editorButton.textContent = l.markdownEditor;
     editorButton.title = l.markdownEditor;
     editorButton.setAttribute('aria-label', l.markdownEditor);
+    syncButton.textContent = l.webdavSync;
+    syncButton.title = l.webdavSync;
+    syncButton.setAttribute('aria-label', l.webdavSync);
     backButton.textContent = l.backToShelf;
     sourceTitle.textContent = l.sources;
     searchInput.placeholder = l.searchPlaceholder;
     searchInput.setAttribute('aria-label', l.searchPlaceholder);
+    searchClear.title = l.clear;
+    searchClear.setAttribute('aria-label', l.clear);
     searchButton.textContent = l.search;
     importButton.textContent = l.importLocal;
     clearCacheButton.textContent = l.clearCache;
@@ -2399,14 +2682,30 @@ export function createLibraryView(
     renderContinueBar();
     renderItems();
     if (libraryPage === 'catalog') renderDetail();
-    renderSourceForm(sources.find((source) => source.id === editingSourceId));
+    if (editingWebDav) renderSourceForm(undefined, 'webdav');
+    else renderSourceForm(sources.find((source) => source.id === editingSourceId));
     if (membershipItemId !== null) openMembershipEditor(membershipItemId);
     void updateCacheSummary();
   }
 
+  function syncSearchClear(): void {
+    searchClear.hidden = searchInput.value.trim() === '';
+  }
+
+  searchInput.addEventListener('input', () => {
+    syncSearchClear();
+    if (libraryPage === 'catalog') return;
+    void search();
+  });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    syncSearchClear();
+    void search();
+  });
   searchForm.addEventListener('submit', (event) => {
     event.preventDefault();
     void search();
+    syncSearchClear();
   });
   addGroupButton.addEventListener('click', () => {
     openGroupEditor({ kind: 'create' });
@@ -2443,6 +2742,10 @@ export function createLibraryView(
     }
   });
   groupEditorCancel.addEventListener('click', () => closeGroupEditor());
+  groupOverlay.addEventListener('click', (event) => {
+    if (ignoreGroupBackdrop || event.target !== groupOverlay) return;
+    closeGroupEditor();
+  });
   groupList.addEventListener('dragover', (event) => {
     if (event.dataTransfer?.types !== undefined) event.preventDefault();
   });
@@ -2486,21 +2789,36 @@ export function createLibraryView(
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
   root.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !groupOverlay.hidden) {
+      event.preventDefault();
+      closeGroupEditor();
+      return;
+    }
     if (event.key === 'Escape' && !membershipOverlay.hidden) {
       event.preventDefault();
       closeMembershipEditor();
+      return;
+    }
+    if (event.key === 'Escape' && !sourceOverlay.hidden) {
+      event.preventDefault();
+      closeSourceForm();
     }
   });
   manageButton.addEventListener('click', () => void showManage());
   editorButton.addEventListener('click', () => deps.onEnterEditor?.());
+  syncButton.addEventListener('click', () => deps.onOpenSyncPanel?.());
   backButton.addEventListener('click', () => void showMyBooks());
   root.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     event.stopPropagation();
   });
   addSourceButton.addEventListener('click', () => {
-    if (sourceForm.hidden || editingSourceId !== null) openSourceForm();
+    if (sourceOverlay.hidden || editingSourceId !== null || editingWebDav) openSourceForm();
     else closeSourceForm();
+  });
+  sourceOverlay.addEventListener('click', (event) => {
+    if (ignoreSourceBackdrop || event.target !== sourceOverlay) return;
+    closeSourceForm();
   });
   sourceForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -2606,6 +2924,7 @@ export function createLibraryView(
       selectedSmartGroupId = null;
       selectedCustomGroupId = null;
       searchInput.value = '';
+      syncSearchClear();
       await initialLoad();
       searchInput.focus();
     },

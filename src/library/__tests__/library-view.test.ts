@@ -193,8 +193,10 @@ function sourceFormOf(host: ParentNode = document): HTMLFormElement {
 
 function groupFormOf(host: ParentNode = document): HTMLFormElement {
   const form =
-    host.querySelector<HTMLFormElement>('.lightink-library-group-editor') ??
-    document.querySelector<HTMLFormElement>('.lightink-library-group-editor');
+    host.querySelector<HTMLFormElement>('.lightink-library-group-modal .lightink-library-group-form') ??
+    document.querySelector<HTMLFormElement>(
+      '.lightink-library-group-modal .lightink-library-group-form',
+    );
   if (!form) throw new Error('group form not found');
   return form;
 }
@@ -463,6 +465,9 @@ describe('LibraryView my-books home', () => {
     expect(unreadRow.textContent).toContain('未开始');
     expect(unreadRow.textContent).not.toContain('0%');
     expect(comicRow.dataset.progressStatus).toBe('in-progress');
+    expect(comicRow.dataset.progressFill).toBe('37');
+    expect(comicRow.style.getPropertyValue('--lightink-shelf-progress-fill')).toBe('37%');
+    expect(unreadRow.dataset.progressFill).toBeUndefined();
     expect(comicRow.textContent).toContain('第 12 页');
     expect(comicRow.textContent).toContain('已读 37%');
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
@@ -493,7 +498,62 @@ describe('LibraryView my-books home', () => {
     ).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-groups'))).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-manage-entry'))).toBe(true);
+    expect(host.querySelector('.lightink-library-manage-entry')?.textContent).toBe('管理');
     expect(host.querySelector('.lightink-library-search')).not.toBeNull();
+    view.destroy();
+  });
+
+  it('filters the cover wall as the user types and can clear the query', async () => {
+    const novel = localItem({ title: '续读小说' });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '河山记',
+      localPath: '/books/other.epub',
+    });
+    const deps = dependencies({
+      library: { ...dependencies().library, listItems: vi.fn(async () => [novel, other]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河山';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    expect(host.querySelector<HTMLButtonElement>('.lightink-library-search-clear')?.hidden).toBe(
+      false,
+    );
+
+    shownControl(host, '清除').click();
+    await settle();
+    expect(input.value).toBe('');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    expect(host.querySelector<HTMLButtonElement>('.lightink-library-search-clear')?.hidden).toBe(
+      true,
+    );
+    view.destroy();
+  });
+
+  it('explains an empty filter instead of pretending the library has no books', async () => {
+    const unread = localItem();
+    const deps = dependencies({
+      getProgress: () => ({ status: 'not-started' as const }),
+      library: { ...dependencies().library, listItems: vi.fn(async () => [unread]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    groupButton(host, '在读').click();
+    await settle();
+    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     view.destroy();
   });
 
@@ -563,6 +623,43 @@ describe('LibraryView my-books home', () => {
 
     expect(itemRow(host, broken.id)).toBeTruthy();
     expect(host.querySelector('.lightink-library-status')?.textContent).toBe('');
+    view.destroy();
+  });
+
+  it('keeps the painted cover wall while the shelf reloads', async () => {
+    const book = localItem();
+    let resolveReload: ((items: LibraryItem[]) => void) | undefined;
+    const listItems = vi
+      .fn()
+      .mockResolvedValueOnce([book])
+      .mockImplementationOnce(
+        () =>
+          new Promise<LibraryItem[]>((resolve) => {
+            resolveReload = resolve;
+          }),
+      );
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-status'))).toBe(false);
+
+    const reloading = view.show();
+    await settle();
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-status'))).toBe(false);
+    expect(host.textContent).not.toContain('正在加载…');
+
+    resolveReload?.([book]);
+    await reloading;
+    expect(isShown(host.querySelector('.lightink-library-status'))).toBe(false);
+    expect(itemRow(host, book.id)).toBeTruthy();
     view.destroy();
   });
 
@@ -675,6 +772,7 @@ describe('LibraryView my-books home', () => {
 
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('续读小说');
+    expect(host.querySelector('.lightink-library-continue-cue')?.textContent).toBe('继续阅读');
     expect(host.textContent).toContain('第 4 章');
     expect(host.textContent).not.toContain('0%');
     shownControl(host.querySelector('.lightink-library-continue')!, '继续阅读').click();
@@ -905,7 +1003,7 @@ describe('LibraryView manage and catalog', () => {
     await view.show();
 
     await openManage(host);
-    shownControl(host, '添加 OPDS 源').click();
+    shownControl(host, '添加书库源').click();
     const form = sourceFormOf();
     expect(isShown(form)).toBe(true);
     (form.elements.namedItem('title') as HTMLInputElement).value = added.title;
@@ -979,6 +1077,82 @@ describe('LibraryView manage and catalog', () => {
     expect(host.querySelector('.lightink-library-toolbar')?.contains(editor)).toBe(true);
     editor.click();
     expect(onEnterEditor).toHaveBeenCalledTimes(1);
+    view.destroy();
+  });
+
+  it('adds WebDAV from the source dialog and lists it beside OPDS sources', async () => {
+    const profile = {
+      id: 'p1',
+      name: 'Nextcloud',
+      url: 'https://dav.example/remote.php/dav',
+      authType: 'basic' as const,
+      allowHttp: false,
+      needsCredential: false,
+      updatedAt: 1,
+    };
+    const saveProfile = vi.fn(async () => profile);
+    const getProfile = vi.fn(async () => null);
+    const onOpenSyncPanel = vi.fn();
+    const deps = dependencies({
+      webdav: {
+        getProfile,
+        saveProfile,
+        forgetProfile: vi.fn(async () => undefined),
+      },
+      onOpenSyncPanel,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openManage(host);
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf(host);
+    const kind = form.elements.namedItem('kind') as HTMLSelectElement;
+    expect(kind).toBeInstanceOf(HTMLSelectElement);
+    kind.value = 'webdav';
+    kind.dispatchEvent(new Event('change', { bubbles: true }));
+    const webdavForm = sourceFormOf(host);
+    expect(isShown(webdavForm)).toBe(true);
+    (webdavForm.elements.namedItem('title') as HTMLInputElement).value = profile.name;
+    (webdavForm.elements.namedItem('url') as HTMLInputElement).value = profile.url;
+    (webdavForm.elements.namedItem('username') as HTMLInputElement).value = 'user';
+    (webdavForm.elements.namedItem('password') as HTMLInputElement).value = 'pass';
+    webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(saveProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: profile.name,
+        url: profile.url,
+        authType: 'basic',
+        credential: { kind: 'basic', username: 'user', password: 'pass' },
+      }),
+    );
+    expect(libraryPage(host)).toBe('manage');
+    const webdavRow = host.querySelector<HTMLElement>('[data-source-kind="webdav"]');
+    expect(webdavRow).not.toBeNull();
+    expect(webdavRow?.textContent).toContain('Nextcloud');
+    shownButtonWithText(host, 'Nextcloud').click();
+    expect(onOpenSyncPanel).toHaveBeenCalledTimes(1);
+    view.destroy();
+  });
+
+  it('offers a WebDAV sync action on the manage toolbar', async () => {
+    const onOpenSyncPanel = vi.fn();
+    const deps = dependencies({ onOpenSyncPanel });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(isShown(host.querySelector('.lightink-library-sync-entry'))).toBe(false);
+    await openManage(host);
+    const sync = shownButtonWithText(host, 'WebDAV 同步');
+    expect(host.querySelector('.lightink-library-toolbar')?.contains(sync)).toBe(true);
+    sync.click();
+    expect(onOpenSyncPanel).toHaveBeenCalledTimes(1);
     view.destroy();
   });
 
@@ -1388,11 +1562,12 @@ describe('LibraryView shelf collections', () => {
     }
 
     await startCreateGroup(host);
-    const editor = groupFormOf();
-    expect(libraryRoot(host).contains(editor)).toBe(true);
-    expect(editor.hidden).toBe(false);
-    expect(isShown(editor)).toBe(true);
-    expect(editor.elements.namedItem('groupName')).toBeInstanceOf(HTMLInputElement);
+    const overlay = document.querySelector('.lightink-library-group-modal');
+    expect(overlay).toBeInstanceOf(HTMLElement);
+    expect(libraryRoot(host).contains(overlay)).toBe(true);
+    expect(overlay?.hasAttribute('hidden')).toBe(false);
+    expect(isShown(overlay)).toBe(true);
+    expect(groupFormOf().elements.namedItem('name')).toBeInstanceOf(HTMLInputElement);
     view.destroy();
   });
 
@@ -1466,10 +1641,8 @@ describe('LibraryView shelf collections', () => {
     expect(menu.textContent).toContain('加入分组');
     contextMenuItem('加入分组').click();
     await waitForShown(
-      () => {
-        const editor = document.querySelector<HTMLFormElement>('.lightink-library-group-editor');
-        return editor !== null && !editor.hidden;
-      },
+      () =>
+        document.querySelector('.lightink-library-group-modal:not([hidden]) [name="name"]') !== null,
       'create-group form not found',
     );
     await submitGroupForm(host, { name: '稍后读' });
