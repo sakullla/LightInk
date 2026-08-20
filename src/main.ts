@@ -485,6 +485,7 @@ async function openPathByKind(path: string): Promise<TabState | null> {
   // the library. Markdown opened from the shelf must enter the editor.
   if (tab?.kind === 'reader') {
     workspace.openBook();
+    tab.reader.restoreReadingProgress?.();
   } else if (tab !== null && isMarkdownTab(tab)) {
     workspace.enterEditor();
   }
@@ -595,6 +596,7 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
       }
     } else if (state.surface === 'reader') {
       revealReaderBookTab();
+      activeReaderTab()?.reader.restoreReadingProgress?.();
     }
     appliedWorkspaceSurface = state.surface;
     syncNativeWindowChrome(state);
@@ -775,10 +777,12 @@ async function openLibraryItem(
     if (tab.target.kind !== 'remote' || tab.target.resourceId !== opened.resourceId) {
       await invoke<void>('remote_close', { resourceId: opened.resourceId }).catch(() => undefined);
       workspace.openBook();
+      tab.reader.restoreReadingProgress?.();
       return;
     }
     await tab.reader.load(target);
     workspace.openBook();
+    tab.reader.restoreReadingProgress?.();
   } catch (error) {
     await invoke<void>('remote_close', { resourceId: opened.resourceId }).catch(() => undefined);
     throw new Error(localizedReaderError(error));
@@ -1840,7 +1844,14 @@ manager = new TabManager({
         item.reader.setTabActive(item === tab);
       }
     }
-    if (tab === null || tab.kind !== 'markdown') {
+    if (tab === null) {
+      return;
+    }
+    if (tab.kind === 'reader') {
+      tab.reader.restoreReadingProgress?.();
+      return;
+    }
+    if (tab.kind !== 'markdown') {
       return;
     }
     editorScroller.scrollTop = manager.getScrollPosition(tab.id);
@@ -2005,6 +2016,7 @@ libraryView = createLibraryView(shell.editorArea, {
   getLocale: () => i18n.locale,
   getProgress: bindLibraryProgress(window.localStorage),
   workspaceTravel: shell.enterEditorButton,
+  onEnterEditor: () => workspace.enterEditor(),
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,

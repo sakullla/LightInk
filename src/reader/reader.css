@@ -29,6 +29,8 @@
   position: absolute;
   inset: 0;
   min-height: 0;
+  /* 默认 row 会把 height:0 的顶栏挤到左侧，CJK 标签按字竖排并压住正文。 */
+  flex-direction: column;
 }
 
 .lightink-reader:not([data-reading-layout='scroll']):not(:has(.lightink-reader-pages[data-reader-active='true'])) {
@@ -46,6 +48,8 @@
   top: 0;
   z-index: 12;
   flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
   height: 0;
   margin: 0;
   overflow: visible;
@@ -67,6 +71,7 @@
 }
 
 .lightink-reader-chrome-action {
+  flex: 0 0 auto;
   min-height: 1.75rem;
   padding: 0.15rem 0.55rem;
   border: 0;
@@ -74,6 +79,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
+  white-space: nowrap;
   cursor: pointer;
 }
 

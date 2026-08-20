@@ -114,10 +114,12 @@ export function organizeHintForItem(
   options?: { readonly seriesStem?: string; readonly contentHash?: string },
 ): LibraryOrganizeHint {
   const parsed = item.localPath === undefined ? undefined : parseFilenameSeries(item.localPath);
+  const seriesStem =
+    emptyToUndefined(options?.seriesStem) ?? emptyToUndefined(parsed?.seriesStem);
   return {
     itemId: item.id,
     authors: item.authors,
-    seriesStem: emptyToUndefined(options?.seriesStem) ?? emptyToUndefined(parsed?.seriesStem),
+    seriesStem: seriesStem !== undefined && [...seriesStem].length >= 2 ? seriesStem : undefined,
     kind: classifyLibraryKind(item),
     contentHash: emptyToUndefined(options?.contentHash),
   };

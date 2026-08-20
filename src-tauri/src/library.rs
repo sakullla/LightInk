@@ -1231,7 +1231,7 @@ pub(crate) fn organize_library_groups(
         let series_stem = hint
             .and_then(|hint| hint.series_stem.as_deref())
             .map(str::trim)
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty() && value.chars().count() >= 2);
         let kind = hint
             .and_then(|hint| hint.kind.as_deref())
             .map(str::trim)

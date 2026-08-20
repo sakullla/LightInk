@@ -184,10 +184,24 @@ function shownControl(host: ParentNode, label: string): HTMLButtonElement {
   return shownButtonWithText(host, label);
 }
 
-function groupFormOf(host: ParentNode): HTMLFormElement {
-  const form = host.querySelector<HTMLFormElement>(
-    '.lightink-library-groups .lightink-library-source-form',
-  );
+function sourceFormOf(host: ParentNode = document): HTMLFormElement {
+  const form =
+    host.querySelector<HTMLFormElement>('.lightink-library-source-modal .lightink-library-source-form') ??
+    document.querySelector<HTMLFormElement>(
+      '.lightink-library-source-modal .lightink-library-source-form',
+    ) ??
+    host.querySelector<HTMLFormElement>('.lightink-library-source-form') ??
+    document.querySelector<HTMLFormElement>('.lightink-library-source-form');
+  if (!form) throw new Error('source form not found');
+  return form;
+}
+
+function groupFormOf(host: ParentNode = document): HTMLFormElement {
+  const form =
+    host.querySelector<HTMLFormElement>('.lightink-library-group-modal .lightink-library-group-form') ??
+    document.querySelector<HTMLFormElement>(
+      '.lightink-library-group-modal .lightink-library-group-form',
+    );
   if (!form) throw new Error('group form not found');
   return form;
 }
@@ -229,10 +243,28 @@ async function submitGroupForm(
 async function organizeShelf(host: HTMLElement): Promise<void> {
   const groups = host.querySelector('.lightink-library-groups') ?? host;
   shownControl(groups, '整理').click();
-  await waitForShown(
-    () => host.querySelector('[data-library-group-id]') !== null,
-    'organized collections did not appear',
+  await settle();
+}
+
+function contextMenuItem(label: string): HTMLButtonElement {
+  const menu = document.querySelector('.lightink-context-menu');
+  if (!(menu instanceof HTMLElement)) throw new Error('context menu not found');
+  const item = Array.from(menu.querySelectorAll('button')).find((button) =>
+    (button.textContent ?? '').includes(label),
   );
+  if (!(item instanceof HTMLButtonElement)) throw new Error(`menu item not found: ${label}`);
+  return item;
+}
+
+async function openItemMenu(host: HTMLElement, itemId: string): Promise<HTMLElement> {
+  const card = itemCard(host, itemId);
+  card.dispatchEvent(
+    new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+  );
+  await settle();
+  const menu = document.querySelector('.lightink-context-menu');
+  if (!(menu instanceof HTMLElement)) throw new Error('context menu not found');
+  return menu;
 }
 
 async function addItemToCollection(
@@ -240,30 +272,8 @@ async function addItemToCollection(
   itemId: string,
   groupName: string,
 ): Promise<void> {
-  const card = itemCard(host, itemId);
-  shownControl(card, '加入分组').click();
-  await waitForShown(
-    () =>
-      card.querySelector('.lightink-library-group-picker') !== null ||
-      host.querySelector('.lightink-library-group-picker') !== null ||
-      host.querySelector('.lightink-library-groups [name="groupId"]') !== null,
-    'group picker not found',
-  );
-  const picker =
-    card.querySelector('.lightink-library-group-picker') ??
-    host.querySelector('.lightink-library-group-picker');
-  if (picker instanceof HTMLElement) {
-    shownButtonWithText(picker, groupName).click();
-    await settle();
-    return;
-  }
-  const form = groupFormOf(host);
-  const select = form.elements.namedItem('groupId');
-  if (!(select instanceof HTMLSelectElement)) throw new Error('group picker field not found');
-  const option = Array.from(select.options).find((entry) => entry.textContent === groupName);
-  if (option === undefined) throw new Error(`group option not found: ${groupName}`);
-  select.value = option.value;
-  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+  await openItemMenu(host, itemId);
+  contextMenuItem(groupName).click();
   await settle();
 }
 
@@ -576,7 +586,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('places the workspace travel control in the my-books header with 管理', async () => {
+  it('keeps the workspace travel control hidden on the shelf', async () => {
     const travel = document.createElement('button');
     travel.type = 'button';
     travel.id = 'lightink-enter-editor';
@@ -589,9 +599,9 @@ describe('LibraryView my-books home', () => {
     await view.show();
 
     const toolbar = host.querySelector('.lightink-library-toolbar');
-    expect(toolbar?.contains(travel)).toBe(true);
+    expect(toolbar?.contains(travel)).toBe(false);
     expect(travel.classList.contains('lightink-library-edit')).toBe(true);
-    expect(isShown(travel)).toBe(true);
+    expect(isShown(travel)).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-manage-entry'))).toBe(true);
 
     await openManage(host);
@@ -602,6 +612,7 @@ describe('LibraryView my-books home', () => {
         (button) => button.textContent === '编辑' && isShown(button),
       ),
     ).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-editor-entry'))).toBe(false);
     view.destroy();
     expect(travel.isConnected).toBe(false);
   });
@@ -738,12 +749,70 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('续读小说');
     expect(host.textContent).toContain('第 4 章');
     expect(host.textContent).not.toContain('0%');
-    shownButtonWithText(host, '继续阅读').click();
+    shownControl(host.querySelector('.lightink-library-continue')!, '继续阅读').click();
     await settle();
     expect(deps.onOpen).toHaveBeenCalledWith(
       expect.objectContaining({ item: expect.objectContaining({ id: novel.id }) }),
       expect.anything(),
     );
+    view.destroy();
+  });
+
+  it('dismisses 继续阅读 until that book’s progress changes', async () => {
+    const novel = localItem({
+      id: 'local:/books/dismiss.epub',
+      title: '可关闭续读',
+      localPath: '/books/dismiss.epub',
+    });
+    const progress = {
+      status: 'in-progress' as const,
+      unit: 'chapter' as const,
+      index: 2,
+      ratio: 0.25,
+      percent: 40,
+    };
+    const getProgress = vi.fn(() => progress);
+    const store: Record<string, string> = {};
+    const deps = dependencies({
+      getProgress,
+      progressStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+        removeItem: (key) => {
+          delete store[key];
+        },
+      },
+      library: { ...dependencies().library, listItems: vi.fn(async () => [novel]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const bar = host.querySelector<HTMLElement>('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    shownControl(bar!, '关闭').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    groupButton(host, '在读').click();
+    await settle();
+    groupButton(host, '全部').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    getProgress.mockReturnValue({
+      status: 'in-progress',
+      unit: 'chapter',
+      index: 3,
+      ratio: 0.1,
+      percent: 55,
+    });
+    await view.refresh();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('可关闭续读');
     view.destroy();
   });
 
@@ -908,9 +977,12 @@ describe('LibraryView manage and catalog', () => {
     await view.show();
 
     await openManage(host);
-    host.querySelector<HTMLButtonElement>('[aria-label="添加 OPDS 源"]')!.click();
-    const form = host.querySelector<HTMLFormElement>('.lightink-library-source-form')!;
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf();
     expect(isShown(form)).toBe(true);
+    expect(document.querySelector('.lightink-library-source-modal')?.parentElement).toBe(
+      document.body,
+    );
     (form.elements.namedItem('title') as HTMLInputElement).value = added.title;
     (form.elements.namedItem('url') as HTMLInputElement).value = added.url;
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
@@ -968,6 +1040,75 @@ describe('LibraryView manage and catalog', () => {
     view.destroy();
   });
 
+  it('offers a Markdown editor link on the manage toolbar', async () => {
+    const onEnterEditor = vi.fn();
+    const deps = dependencies({ onEnterEditor });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(isShown(host.querySelector('.lightink-library-editor-entry'))).toBe(false);
+    await openManage(host);
+    const editor = shownButtonWithText(host, 'Markdown 编辑');
+    expect(host.querySelector('.lightink-library-toolbar')?.contains(editor)).toBe(true);
+    editor.click();
+    expect(onEnterEditor).toHaveBeenCalledTimes(1);
+    view.destroy();
+  });
+
+  it('adds WebDAV from the source dialog instead of an inline panel', async () => {
+    const saveConfig = vi.fn(async (input: { url: string; username: string; allowHttp: boolean; password?: string }) => ({
+      url: input.url,
+      username: input.username,
+      allowHttp: input.allowHttp,
+      hasPassword: input.password !== undefined && input.password !== '',
+    }));
+    const deps = dependencies({
+      webdav: {
+        getConfig: vi.fn(async () => null),
+        saveConfig,
+        sync: vi.fn(async () => undefined),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await openManage(host);
+
+    expect(host.querySelector('.lightink-library-webdav')).toBeNull();
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf();
+    const kind = form.elements.namedItem('sourceKind');
+    expect(kind).toBeInstanceOf(HTMLSelectElement);
+    (kind as HTMLSelectElement).value = 'webdav';
+    kind?.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+
+    const webdavForm = sourceFormOf();
+    expect(isShown(document.querySelector('.lightink-library-source-modal'))).toBe(true);
+    (webdavForm.elements.namedItem('webdavUrl') as HTMLInputElement).value =
+      'https://dav.example/lib';
+    (webdavForm.elements.namedItem('webdavUsername') as HTMLInputElement).value = 'ada';
+    (webdavForm.elements.namedItem('webdavPassword') as HTMLInputElement).value = 'secret';
+    webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://dav.example/lib',
+        username: 'ada',
+        password: 'secret',
+      }),
+    );
+    expect(host.querySelector('[data-source-kind="webdav"]')?.textContent).toContain('WebDAV');
+    expect(document.querySelector('.lightink-library-source-modal')?.hasAttribute('hidden')).toBe(
+      true,
+    );
+    view.destroy();
+  });
+
   it('preserves an existing OPDS credential unless the user changes authentication', async () => {
     const authenticated = { ...source, credentialRef: 'credential-1' };
     const addSource = vi.fn(async () => authenticated);
@@ -983,7 +1124,7 @@ describe('LibraryView manage and catalog', () => {
 
     await openManage(host);
     host.querySelector<HTMLButtonElement>('[aria-label^="编辑 OPDS 源"]')!.click();
-    const form = host.querySelector<HTMLFormElement>('.lightink-library-source-form')!;
+    const form = sourceFormOf();
     expect((form.elements.namedItem('auth') as HTMLSelectElement).value).toBe('keep');
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
@@ -1022,7 +1163,7 @@ describe('LibraryView manage and catalog', () => {
 
     await openManage(host);
     host.querySelector<HTMLButtonElement>('[aria-label^="编辑 OPDS 源"]')!.click();
-    const form = host.querySelector<HTMLFormElement>('.lightink-library-source-form')!;
+    const form = sourceFormOf();
     (form.elements.namedItem('title') as HTMLInputElement).value = '更新后的书库';
     (form.elements.namedItem('auth') as HTMLSelectElement).value = 'none';
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
@@ -1036,7 +1177,9 @@ describe('LibraryView manage and catalog', () => {
         clearCredential: true,
       }),
     );
-    expect(form.hidden).toBe(true);
+    expect(document.querySelector('.lightink-library-source-modal')?.hasAttribute('hidden')).toBe(
+      true,
+    );
     view.destroy();
   });
 
@@ -1280,6 +1423,8 @@ describe('LibraryView shelf collections', () => {
       const filter = groupButton(host, label);
       expect(filter.dataset.shelfGroup).toBe(shelfGroup);
       expect(filter.dataset.libraryGroupId).toBeUndefined();
+      expect(filter.closest('.lightink-library-filter-list')).not.toBeNull();
+      expect(filter.closest('.lightink-library-group-list')).toBeNull();
       filter.dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
       );
@@ -1287,11 +1432,16 @@ describe('LibraryView shelf collections', () => {
       expect(document.querySelector('.lightink-context-menu')).toBeNull();
     }
 
-    expect(collectionKind(collectionButton(host, '海猫'))).toBe('smart');
-    expect(
-      collectionRow(host, '海猫').querySelector('[aria-label="重命名分组: 海猫"]'),
-    ).toBeTruthy();
-    expect(collectionRow(host, '海猫').querySelector('[aria-label="删除分组: 海猫"]')).toBeTruthy();
+    const organize = shownControl(
+      host.querySelector('.lightink-library-groups') ?? host,
+      '整理',
+    );
+    expect(organize.classList.contains('lightink-library-organize')).toBe(true);
+    expect(organize.classList.contains('lightink-library-group')).toBe(false);
+
+    expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
+    expect(() => collectionButton(host, '系列')).toThrow(/collection button not found/);
+    expect(() => collectionButton(host, '作者')).toThrow(/collection button not found/);
 
     groupButton(host, '文字书').click();
     await settle();
@@ -1302,6 +1452,35 @@ describe('LibraryView shelf collections', () => {
     groupButton(host, '未读').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('hides metadata smart groups and opens a page-level new-group dialog', async () => {
+    const novel = seriesNovel({
+      authors: ['ハム男', '藻'],
+      localPath: '/ebook/藻 - 01.epub',
+    });
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: '藻' },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await organizeShelf(host);
+
+    for (const name of ['藻', 'ハム男', '系列', '作者', '文字书']) {
+      expect(() => collectionButton(host, name)).toThrow(/collection button not found/);
+    }
+
+    await startCreateGroup(host);
+    const overlay = document.querySelector('.lightink-library-group-modal');
+    expect(overlay).toBeInstanceOf(HTMLElement);
+    expect(libraryRoot(host).contains(overlay)).toBe(true);
+    expect(overlay?.hasAttribute('hidden')).toBe(false);
+    expect(isShown(overlay)).toBe(true);
+    expect(groupFormOf().elements.namedItem('name')).toBeInstanceOf(HTMLInputElement);
     view.destroy();
   });
 
@@ -1332,6 +1511,7 @@ describe('LibraryView shelf collections', () => {
     await startCreateGroup(host);
     await submitGroupForm(host, { name: '某系列' });
 
+    expect(itemCard(host, novel.id).textContent).not.toContain('加入分组');
     await addItemToCollection(host, novel.id, '海猫');
     await addItemToCollection(host, novel.id, '某系列');
 
@@ -1350,6 +1530,35 @@ describe('LibraryView shelf collections', () => {
     collectionButton(host, '某系列').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
+
+    const menu = await openItemMenu(host, novel.id);
+    expect(menu.textContent).toContain('✓ 海猫');
+    expect(menu.textContent).toContain('✓ 某系列');
+    expect(menu.textContent).toContain('新建分组');
+    expect(itemCard(host, novel.id).textContent).not.toContain('加入分组');
+    view.destroy();
+  });
+
+  it('creates a collection from the cover context menu when none exist', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(itemCard(host, novel.id).textContent).not.toContain('加入分组');
+    const menu = await openItemMenu(host, novel.id);
+    expect(menu.textContent).toContain('加入分组');
+    contextMenuItem('加入分组').click();
+    await waitForShown(
+      () =>
+        document.querySelector('.lightink-library-group-modal:not([hidden]) [name="name"]') !== null,
+      'create-group form not found',
+    );
+    await submitGroupForm(host, { name: '稍后读' });
+    expect(library.createGroup).toHaveBeenCalledWith({ name: '稍后读', parentId: undefined });
+    expect(library.addItemToGroup).toHaveBeenCalled();
     view.destroy();
   });
 
@@ -1410,17 +1619,14 @@ describe('LibraryView shelf collections', () => {
       ]),
     );
 
-    expect(collectionKind(collectionButton(host, '海猫'))).toBe('smart');
-    expect(collectionKind(collectionButton(host, seriesStem))).toBe('smart');
-    expect(collectionKind(collectionButton(host, '文字书'))).toBe('smart');
+    const listed = await library.listGroups!();
+    expect(listed.find((group) => group.name === '海猫')).toMatchObject({ source: 'smart' });
+    expect(listed.find((group) => group.name === seriesStem)).toMatchObject({ source: 'smart' });
+    expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
+    expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
+    expect(() => collectionButton(host, '文字书')).toThrow(/collection button not found/);
 
-    collectionButton(host, '海猫').click();
-    await settle();
-    expect(itemRow(host, novel.id)).toBeTruthy();
-    collectionButton(host, seriesStem).click();
-    await settle();
-    expect(itemRow(host, novel.id)).toBeTruthy();
-    collectionButton(host, '文字书').click();
+    groupButton(host, '文字书').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
     view.destroy();
@@ -1438,35 +1644,26 @@ describe('LibraryView shelf collections', () => {
     await view.show();
     await organizeShelf(host);
 
-    collectionButton(host, '海猫').click();
-    await waitForShown(
-      () => collectionButton(host, '海猫').getAttribute('aria-current') === 'true',
-      'author collection was not selected',
-    );
-    const authorGroupId =
-      collectionButton(host, '海猫').dataset.libraryGroupId ??
-      collectionButton(host, '海猫').dataset.groupId;
-    await waitForShown(
-      () => isShown(itemCard(host, novel.id).querySelector('[aria-label="从本组移出"]')),
-      'remove-from-collection control not shown',
-    );
-    shownControl(itemCard(host, novel.id), '从本组移出').click();
-    await settle();
-    expect(library.removeItemFromGroup).toHaveBeenCalledWith(authorGroupId, novel.id);
-    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    const first = await library.listGroups!();
+    const authorGroup = first.find((group) => group.name === '海猫');
+    const seriesGroup = first.find((group) => group.name === seriesStem);
+    expect(authorGroup?.source).toBe('smart');
+    expect(seriesGroup?.source).toBe('smart');
+    const authorMembers = await library.listGroupMembers!(authorGroup!.id);
+    expect(authorMembers.some((member) => member.itemId === novel.id)).toBe(true);
 
+    await library.removeItemFromGroup!(authorGroup!.id, novel.id);
     await organizeShelf(host);
     expect(library.organize).toHaveBeenCalledTimes(2);
-    collectionButton(host, '海猫').click();
-    await settle();
-    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
-    collectionButton(host, seriesStem).click();
-    await settle();
-    expect(itemRow(host, novel.id)).toBeTruthy();
+
+    const remainingAuthors = await library.listGroupMembers!(authorGroup!.id);
+    const remainingSeries = await library.listGroupMembers!(seriesGroup!.id);
+    expect(remainingAuthors.some((member) => member.itemId === novel.id)).toBe(false);
+    expect(remainingSeries.some((member) => member.itemId === novel.id)).toBe(true);
     view.destroy();
   });
 
-  it('can rename a smart collection and nest it under a user collection', async () => {
+  it('can rename a user collection and nest it under another user collection', async () => {
     const novel = seriesNovel();
     const { deps, library } = collectionDependencies({
       items: [novel],
@@ -1476,13 +1673,14 @@ describe('LibraryView shelf collections', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    await organizeShelf(host);
 
     await startCreateGroup(host);
     await submitGroupForm(host, { name: '收藏' });
     const parentId =
       collectionButton(host, '收藏').dataset.libraryGroupId ??
       collectionButton(host, '收藏').dataset.groupId;
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: seriesStem });
     const seriesId =
       collectionButton(host, seriesStem).dataset.libraryGroupId ??
       collectionButton(host, seriesStem).dataset.groupId;
@@ -1496,9 +1694,9 @@ describe('LibraryView shelf collections', () => {
     expect(listed.find((group) => group.id === seriesId)).toMatchObject({
       name: '地狱系列',
       parentId,
-      source: 'smart',
+      source: 'user',
     });
-    expect(collectionKind(collectionButton(host, '地狱系列'))).toBe('smart');
+    expect(collectionKind(collectionButton(host, '地狱系列'))).toBe('user');
     view.destroy();
   });
 
@@ -1525,9 +1723,7 @@ describe('LibraryView shelf collections', () => {
     groupButton(host, '漫画').click();
     await settle();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
-    collectionButton(host, seriesStem).click();
-    await settle();
-    expect(itemRow(host, novel.id).dataset.bookKind).toBe('text');
+    expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
     view.destroy();
   });
 });

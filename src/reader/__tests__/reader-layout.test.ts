@@ -248,6 +248,15 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).toMatch(/\.lightink-reader-chrome\s*\{[^}]*position:\s*sticky/);
   });
 
+  it('keeps paginated chrome a full-width row so CJK labels do not stack', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\)\s*\{[^}]*flex-direction:\s*column/,
+    );
+    expect(css).toMatch(/\.lightink-reader-chrome\s*\{[^}]*width:\s*100%/);
+    expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*white-space:\s*nowrap/);
+  });
+
   it('overrides the editor measure after .lightink-tab-host so an open book can fill the pane', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     const measure = css.indexOf('max-width: var(--lightink-measure, 48rem);');

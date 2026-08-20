@@ -379,6 +379,10 @@ html[data-display='xuhd'] {
   outline-offset: 1px;
 }
 
+.lightink-workspace-travel[hidden] {
+  display: none !important;
+}
+
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */
 #lightink-reader-shell.lightink-reader-shell {
   flex: 0 0 0;
@@ -1865,6 +1869,8 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
    柔和投影；菜单项整行 hover 高亮，快捷键提示右对齐弱化显示。 */
 .lightink-context-menu {
   min-width: 200px;
+  max-height: min(360px, calc(100vh - 16px));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   padding: 5px;

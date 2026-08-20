@@ -161,7 +161,7 @@ function applyOverlayLayout(element: HTMLElement): void {
   element.style.right = '0';
   element.style.top = '0';
   element.style.bottom = 'auto';
-  element.style.width = 'auto';
+  element.style.width = '100%';
   element.style.height = '0';
   element.style.margin = '0';
   element.style.padding = '0';
@@ -182,6 +182,8 @@ function applyBarLayout(bar: HTMLElement): void {
 
 function applyButtonLayout(button: HTMLButtonElement): void {
   button.style.pointerEvents = 'auto';
+  button.style.whiteSpace = 'nowrap';
+  button.style.flex = '0 0 auto';
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {

@@ -448,7 +448,7 @@ describe('createAppShell immersive chrome', () => {
     const readBtn = fakeRoot.querySelector('#lightink-enter-reader-home');
 
     expect(editBtn?.textContent).toBe('编辑');
-    expect(editBtn?.hidden).toBe(false);
+    expect(editBtn?.hidden).toBe(true);
     expect(fakeRoot.querySelector('#lightink-chrome-host')?.hidden).toBe(true);
     editBtn?.click();
     expect(calls).toEqual(['editor']);
@@ -458,6 +458,7 @@ describe('createAppShell immersive chrome', () => {
     expect(fakeRoot.querySelector('#lightink-tabs-host')?.hidden).toBe(false);
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(true);
     expect(readBtn?.textContent).toBe('阅读/书架');
+    expect(readBtn?.hidden).toBe(true);
     expect(readBtn?.className).toContain('lightink-workspace-travel');
     expect(fakeRoot.querySelector('#lightink-toolbar')?.contains(readBtn)).toBe(true);
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');

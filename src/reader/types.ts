@@ -79,6 +79,11 @@ export interface ReaderInstance {
   /** 窗口拉伸结束后重算栏宽/高度并刷新可见页，避免文字糊掉。 */
   refreshViewport?(): void;
   /**
+   * 滚动模式：按上次保存的章节 + 章内比例跳回阅读位置。
+   * 书架收起或标签切回后布局才稳定，调用方应再试一次。
+   */
+  restoreReadingProgress?(): void;
+  /**
    * 窗口级翻页（方向键/空格/滚轮）：翻页模式走分栏步进，滚动模式走视口高度。
    * 与 Markdown 的 R1 对齐——悬停大纲/chrome/空白区也应翻正文，不限中间章节容器。
    */

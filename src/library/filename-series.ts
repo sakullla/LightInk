@@ -202,6 +202,11 @@ function isOnlyDigits(text: string): boolean {
   return ONLY_DIGITS_RE.test(toAsciiDigits(text).trim());
 }
 
+/** One-character leftovers (illustrator tokens, noise) are not series names. */
+function isUsefulSeriesStem(text: string): boolean {
+  return text.trim() !== '' && [...text.trim()].length >= 2;
+}
+
 /**
  * Parse a local book path or basename into a shelf title and optional series.
  *
@@ -219,7 +224,7 @@ export function parseFilenameSeries(path: string): FilenameSeriesParse {
   const hit = findFirstVolume(working);
   if (hit !== undefined) {
     const stem = cleanStem(working.slice(0, hit.index));
-    if (stem !== '') {
+    if (isUsefulSeriesStem(stem)) {
       return { informative: true, title, seriesStem: stem, volume: hit.volume };
     }
     const after = cleanStem(working.slice(hit.index + hit.length));

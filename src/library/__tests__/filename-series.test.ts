@@ -136,6 +136,13 @@ describe('parseFilenameSeries', () => {
     });
   });
 
+  it('rejects a one-character leftover as a series stem', () => {
+    expect(parseFilenameSeries('藻 - 01.epub')).toEqual({
+      informative: false,
+      title: '藻 - 01',
+    });
+  });
+
   it('accepts a basename without a directory and a .EPUB suffix', () => {
     const parsed = parseFilenameSeries(`${HELL_STEM} - 01.EPUB`);
     expect(parsed.informative).toBe(true);

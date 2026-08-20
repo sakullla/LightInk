@@ -1065,6 +1065,8 @@ export function createAppShell(
   enterReaderHomeBtn.type = 'button';
   enterReaderHomeBtn.id = 'lightink-enter-reader-home';
   enterReaderHomeBtn.className = 'lightink-workspace-travel';
+  enterReaderHomeBtn.hidden = true;
+  enterReaderHomeBtn.setAttribute('aria-hidden', 'true');
   enterReaderHomeBtn.addEventListener('click', () => enterReaderHomeWorkspace(actions));
 
   const readerShell = document.createElement('div');
@@ -1075,6 +1077,8 @@ export function createAppShell(
   enterEditorBtn.type = 'button';
   enterEditorBtn.id = 'lightink-enter-editor';
   enterEditorBtn.className = 'lightink-workspace-travel';
+  enterEditorBtn.hidden = true;
+  enterEditorBtn.setAttribute('aria-hidden', 'true');
   enterEditorBtn.addEventListener('click', () => enterEditorWorkspace(actions));
   readerShell.appendChild(enterEditorBtn);
 

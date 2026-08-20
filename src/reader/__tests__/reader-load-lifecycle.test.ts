@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
 import {
+  chapterScrollTop,
   loadReadingProgress,
   READING_PROGRESS_KEY_PREFIX,
   READING_PROGRESS_MAX_ENTRIES,
@@ -66,6 +67,27 @@ function useReaderScrollLayout(host: HTMLElement): void {
   if (reader !== null) {
     reader.dataset.readingLayout = 'scroll';
   }
+}
+
+function mockChapterScrollLayout(
+  scroller: HTMLElement,
+  chapters: ReadonlyArray<HTMLElement>,
+  options: { scrollTop: number; clientHeight: number; chapterHeight: number },
+): void {
+  const { scrollTop, clientHeight, chapterHeight } = options;
+  Object.defineProperty(scroller, 'scrollHeight', {
+    configurable: true,
+    value: chapters.length * chapterHeight,
+  });
+  Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: clientHeight });
+  scroller.scrollTop = scrollTop;
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+  chapters.forEach((chapter, index) => {
+    Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: chapterHeight });
+    vi.spyOn(chapter, 'getBoundingClientRect').mockReturnValue({
+      top: index * chapterHeight - scrollTop,
+    } as DOMRect);
+  });
 }
 
 function frameSource(host: HTMLElement): string {
@@ -558,14 +580,8 @@ describe('Reader load lifecycle', () => {
       { title: 'One', html: '<p>one</p>' },
       { title: 'Two', html: '<p>two</p>' },
     ];
-    const mockScrollMetrics = (root: HTMLElement): void => {
-      const scroll = root.querySelector<HTMLElement>('.lightink-reader-scroll');
-      if (scroll === null) {
-        return;
-      }
-      Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 1000 });
-      Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 250 });
-    };
+    const layout = { scrollTop: 1200, clientHeight: 400, chapterHeight: 800 };
+    const expectedTop = chapterScrollTop(layout.chapterHeight, layout.chapterHeight, 0.5);
     const host = document.createElement('div');
     document.body.appendChild(host);
     const first = createReaderView(host, {
@@ -575,51 +591,125 @@ describe('Reader load lifecycle', () => {
     });
     await first.load('resume.epub');
     useReaderScrollLayout(host);
-    mockScrollMetrics(host);
 
     const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
-    const chapterEls = scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter');
-    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
-    vi.spyOn(chapterEls[0]!, 'getBoundingClientRect').mockReturnValue({ top: -400 } as DOMRect);
-    vi.spyOn(chapterEls[1]!, 'getBoundingClientRect').mockReturnValue({ top: 10 } as DOMRect);
-    scroll.scrollTop = 375;
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(scroll, chapterEls, layout);
     scroll.dispatchEvent(new Event('scroll'));
     await vi.advanceTimersByTimeAsync(400);
     await first.destroy();
 
     const host2 = document.createElement('div');
     document.body.appendChild(host2);
-    const defineMetrics = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-    const defineClient = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
-      configurable: true,
-      get() {
-        return (this as HTMLElement).classList.contains('lightink-reader-scroll') ? 1000 : 0;
-      },
+    const second = createReaderView(host2, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters }),
+      progressStorage,
     });
-    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
-      configurable: true,
-      get() {
-        return (this as HTMLElement).classList.contains('lightink-reader-scroll') ? 250 : 0;
+    useReaderScrollLayout(host2);
+    await second.load('resume.epub');
+    const restored = host2.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const restoredChapters = [...restored.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(restored, restoredChapters, { ...layout, scrollTop: 0 });
+    second.restoreReadingProgress?.();
+    expect(restored.scrollTop).toBe(expectedTop);
+    await second.destroy();
+  });
+
+  it('does not consume scroll progress before chapter height is ready', async () => {
+    const store: Record<string, string> = {};
+    const progressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
       },
+    };
+    saveReadingProgress(progressStorage, 'resume-wait.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      updatedAt: 1,
     });
-    try {
-      const second = createReaderView(host2, {
-        readBytes: async () => bytes('unused'),
-        parseContent: async () => ({ chapters }),
-        progressStorage,
-      });
-      useReaderScrollLayout(host2);
-      await second.load('resume.epub');
-      const restored = host2.querySelector<HTMLElement>('.lightink-reader-scroll')!;
-      expect(restored.scrollTop).toBe(375);
-      await second.destroy();
-    } finally {
-      if (defineMetrics === undefined) Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight');
-      else Object.defineProperty(HTMLElement.prototype, 'scrollHeight', defineMetrics);
-      if (defineClient === undefined) Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight');
-      else Object.defineProperty(HTMLElement.prototype, 'clientHeight', defineClient);
+    const chapters = [
+      { title: 'One', html: '<p>one</p>' },
+      { title: 'Two', html: '<p>two</p>' },
+    ];
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters }),
+      progressStorage,
+    });
+    useReaderScrollLayout(host);
+    await view.load('resume-wait.epub');
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 1600 });
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 400 });
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    for (const chapter of chapterEls) {
+      Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 0 });
     }
+    view.restoreReadingProgress?.();
+    expect(scroll.scrollTop).toBe(0);
+
+    mockChapterScrollLayout(scroll, chapterEls, {
+      scrollTop: 0,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    view.restoreReadingProgress?.();
+    expect(scroll.scrollTop).toBe(chapterScrollTop(800, 800, 0.5));
+    await view.destroy();
+  });
+
+  it('restores scroll progress onto the editor pane, not the inner chapter host', async () => {
+    const store: Record<string, string> = {};
+    const progressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    saveReadingProgress(progressStorage, 'resume-pane.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      updatedAt: 1,
+    });
+    const pane = document.createElement('div');
+    pane.id = 'lightink-editor-area';
+    document.body.appendChild(pane);
+    const host = document.createElement('div');
+    pane.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      progressStorage,
+    });
+    useReaderScrollLayout(host);
+    await view.load('resume-pane.epub');
+    const inner = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const chapterEls = [...host.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(pane, chapterEls, {
+      scrollTop: 0,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    Object.defineProperty(inner, 'scrollHeight', { configurable: true, value: 1600 });
+    Object.defineProperty(inner, 'clientHeight', { configurable: true, value: 400 });
+    inner.scrollTop = 0;
+    view.restoreReadingProgress?.();
+    expect(pane.scrollTop).toBe(chapterScrollTop(800, 800, 0.5));
+    expect(inner.scrollTop).toBe(0);
+    await view.destroy();
   });
 
   it('exposes a visible failure state for real load errors', async () => {

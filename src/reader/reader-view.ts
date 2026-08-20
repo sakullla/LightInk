@@ -410,7 +410,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   let pendingRestore: ReadingProgress | null = null;
   let lastFlowProgress: ReadingProgress | null = null;
   let restoreAttempts = 0;
+  let restoreRetryFrame: number | null = null;
   let progressSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 滚动恢复：等章节高度量出来再落点；过早按整本比例会停在开头。 */
+  const FLOW_RESTORE_MAX_ATTEMPTS = 12;
   let layoutSwitching = false;
   /**
    * T6 缩放性能：字号档位变更 settle 后仍待补分栏的离屏章索引（翻页模式
@@ -428,8 +431,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     remoteImagePolicy,
     syncState: () => syncFlowState(),
     applyPendingRestore: () => {
-      if (pendingRestore !== null) {
-        applySavedProgress();
+      if (pendingRestore !== null && !applySavedProgress()) {
+        scheduleRestoreRetry();
       }
     },
     renderHighlights: () => {
@@ -619,6 +622,41 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }, 400);
   };
 
+  const cancelRestoreRetry = (): void => {
+    if (restoreRetryFrame !== null) {
+      cancelAnimationFrame(restoreRetryFrame);
+      restoreRetryFrame = null;
+    }
+  };
+
+  const scheduleRestoreRetry = (): void => {
+    if (destroyed || pendingRestore === null || restoreRetryFrame !== null) {
+      return;
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      return;
+    }
+    restoreRetryFrame = requestAnimationFrame(() => {
+      restoreRetryFrame = null;
+      if (destroyed || pendingRestore === null) {
+        return;
+      }
+      if (!applySavedProgress()) {
+        scheduleRestoreRetry();
+      }
+    });
+  };
+
+  const flowChaptersReady = (chapters: NodeListOf<Element>, targetIndex: number): boolean => {
+    for (let i = 0; i <= targetIndex; i += 1) {
+      const chapter = chapters[i];
+      if (!(chapter instanceof HTMLElement) || chapter.offsetHeight <= 1) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   const applySavedProgress = (): boolean => {
     const saved = pendingRestore;
     if (saved === null) {
@@ -663,26 +701,51 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return true;
     }
     const scroller = flowScrollContainer();
+    const targetIndex = Math.min(saved.index, chapters.length - 1);
+    const article = chapters[targetIndex];
+    const scrollerReady = scroller.clientHeight > 1;
+    const chaptersReady = flowChaptersReady(chapters, targetIndex);
     const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    if (maxScroll <= 0 && restoreAttempts < 8) {
+    if ((!scrollerReady || !chaptersReady) && restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS) {
       restoreAttempts += 1;
+      scheduleRestoreRetry();
       return false;
     }
-    const article = chapters[Math.min(saved.index, chapters.length - 1)] as HTMLElement | undefined;
-    if (article !== undefined && article.offsetHeight > 0) {
-      scroller.scrollTop = Math.min(
-        maxScroll,
-        chapterScrollTop(
-          articleOffsetInScroller(article, scroller),
-          article.offsetHeight,
-          saved.ratio,
-        ),
+    if (article instanceof HTMLElement && article.offsetHeight > 1) {
+      const targetTop = chapterScrollTop(
+        articleOffsetInScroller(article, scroller),
+        article.offsetHeight,
+        saved.ratio,
       );
-    } else {
+      if (targetTop > 0 && maxScroll <= 0 && restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS) {
+        restoreAttempts += 1;
+        scheduleRestoreRetry();
+        return false;
+      }
+      scroller.scrollTop = Math.min(maxScroll, targetTop);
+    } else if (maxScroll > 0) {
       scroller.scrollTop = Math.min(maxScroll, Math.round(saved.ratio * maxScroll));
     }
+    lastFlowProgress = saved;
     pendingRestore = null;
     return true;
+  };
+
+  const restoreReadingProgress = (): void => {
+    if (destroyed || readerState.phase !== 'ready') {
+      return;
+    }
+    if (pendingRestore === null) {
+      pendingRestore = lastFlowProgress ?? loadReadingProgress(progressStorage, progressId);
+    }
+    if (pendingRestore === null) {
+      return;
+    }
+    restoreAttempts = 0;
+    cancelRestoreRetry();
+    if (!applySavedProgress()) {
+      scheduleRestoreRetry();
+    }
   };
 
   const applyStateToDom = (state: ReaderState): void => {
@@ -1307,6 +1370,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       closeChromePanel();
       readerChrome?.dismiss();
       syncChromeRevealAttr();
+      return;
+    }
+    if (pendingRestore !== null) {
+      restoreAttempts = 0;
+      cancelRestoreRetry();
+      if (!applySavedProgress()) {
+        scheduleRestoreRetry();
+      }
     }
   }
 
@@ -2393,7 +2464,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     stalePaginatedChapters = null; // 布局切换重测/重分栏全部帧，作废缩放惰性标记
-    const saved = lastFlowProgress ?? currentProgressSnapshot();
+    const saved = pendingRestore ?? lastFlowProgress ?? currentProgressSnapshot();
     if (saved !== null && progressId !== '') {
       saveReadingProgress(progressStorage, progressId, saved);
     }
@@ -2450,6 +2521,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     refreshOpenSearch();
     syncFlowState();
+    if (pendingRestore !== null) {
+      restoreAttempts = 0;
+      if (!applySavedProgress()) {
+        scheduleRestoreRetry();
+      }
+    }
     pinSidebarOverlay();
     if (chromePanel !== null) {
       const panel = chromePanel === 'toc' ? tocPanel : typePanel;
@@ -2737,6 +2814,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       progressId = '';
       pendingRestore = null;
       restoreAttempts = 0;
+      cancelRestoreRetry();
       readerOutline = [];
       exportChapters = [];
       exportStylesheet = '';
@@ -2890,8 +2968,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             (target.kind === 'remote' ? readerIdentityKey(target.identity) : filePath);
           pendingRestore = loadReadingProgress(progressStorage, progressId);
           restoreAttempts = 0;
+          cancelRestoreRetry();
           setReaderPhase('ready');
-          applySavedProgress();
+          if (!applySavedProgress()) {
+            scheduleRestoreRetry();
+          }
           if (PAGE_EXTS.has(loadedExt)) {
             syncPageState();
           } else {
@@ -2935,6 +3016,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         clearTimeout(progressSaveTimer);
         progressSaveTimer = null;
       }
+      cancelRestoreRetry();
       destroyed = true;
       loadGeneration += 1;
       activeLoadController?.abort();
@@ -3015,6 +3097,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     isSidebarVisible: () => sidebarVisible,
     openSearch,
     refreshViewport,
+    restoreReadingProgress,
     advanceReading,
     getOutline: () => readerOutline,
     jumpToOutlineItem,
