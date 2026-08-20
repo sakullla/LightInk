@@ -743,7 +743,7 @@ export function createLibraryView(
   webdavUrl.name = 'webdavUrl';
   webdavUrl.type = 'url';
   webdavUrl.required = true;
-  webdavUrl.autocomplete = 'url';
+  webdavUrl.autocomplete = 'off';
   const webdavUsername = doc.createElement('input');
   webdavUsername.name = 'webdavUsername';
   webdavUsername.type = 'text';
