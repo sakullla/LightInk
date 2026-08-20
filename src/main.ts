@@ -847,9 +847,17 @@ async function enrichLocalLibraryItem(
   try {
     const bytes = await readReaderBytes(item.localPath);
     const meta = await extractLocalBookMeta(item.localPath, bytes);
+    let title = meta.title !== undefined && meta.title !== '' ? meta.title : item.title;
+    if (extension === 'epub') {
+      const { resolveLocalEpubTitle } = await import('./library/filename-series.js');
+      const resolved = resolveLocalEpubTitle(item.localPath, meta.title);
+      if (resolved !== '') {
+        title = resolved;
+      }
+    }
     const next = {
       ...item,
-      title: meta.title !== undefined && meta.title !== '' ? meta.title : item.title,
+      title,
       authors: meta.authors.length > 0 ? meta.authors : item.authors,
       coverUrl: meta.coverUrl ?? item.coverUrl,
       updatedAt: Date.now(),

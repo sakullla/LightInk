@@ -1,12 +1,17 @@
 /**
  * Shelf metadata for a local book. EPUB covers stay in the package until
  * import; this module reads title / authors / cover without opening the reader.
+ *
+ * Informative local EPUB filenames win over `dc:title`. Series stem and
+ * volume stay on this object for later smart groups; they are not
+ * `LibraryItem.series`.
  */
 
 import { bytesToBase64 } from '../asset/asset-service.js';
 import { extOfPath } from '../file/path-ext.js';
 import { openSafeArchive } from '../reader/formats/safe-archive.js';
 import { SAFE_READER_IMAGE_MIME_TYPES } from '../reader/formats/resource-limits.js';
+import { parseFilenameSeries } from './filename-series.js';
 
 export const MAX_SHELF_COVER_BYTES = 1_500_000;
 
@@ -14,6 +19,10 @@ export interface LocalBookMeta {
   readonly title?: string;
   readonly authors: readonly string[];
   readonly coverUrl?: string;
+  /** Filename series stem. Omit when the basename is uninformative. */
+  readonly seriesStem?: string;
+  /** First filename volume token. Omit when the basename is uninformative. */
+  readonly seriesVolume?: string;
 }
 
 function attr(tag: string, name: string): string | null {
@@ -229,13 +238,31 @@ export function isShelfCoverUrl(value: string | null | undefined): boolean {
   }
 }
 
+function applyFilenameSeries(path: string, pack: LocalBookMeta): LocalBookMeta {
+  const parsed = parseFilenameSeries(path);
+  if (!parsed.informative) {
+    return {
+      title: pack.title,
+      authors: pack.authors,
+      coverUrl: pack.coverUrl,
+    };
+  }
+  return {
+    title: parsed.title !== '' ? parsed.title : pack.title,
+    authors: pack.authors,
+    coverUrl: pack.coverUrl,
+    ...(parsed.seriesStem !== undefined ? { seriesStem: parsed.seriesStem } : {}),
+    ...(parsed.volume !== undefined ? { seriesVolume: parsed.volume } : {}),
+  };
+}
+
 export async function extractLocalBookMeta(
   path: string,
   bytes: Uint8Array,
 ): Promise<LocalBookMeta> {
   const extension = extOfPath(path);
   if (extension === 'epub') {
-    return extractEpubMeta(bytes);
+    return applyFilenameSeries(path, await extractEpubMeta(bytes));
   }
   if (extension === 'cbz') {
     return extractCbzCover(bytes);
