@@ -2481,6 +2481,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (cbzHandle !== null || PAGE_EXTS.has(loadedExt)) {
       return;
     }
+    // 未加载文档时没有可重排的内容（也避免骨架/空宿主上的无效重排）。
+    if (readerState.phase !== 'ready') {
+      return;
+    }
+    // 排版/版式变化会触发重排（分栏或重测高），先快照当前位置，重排后恢复，
+    // 与 syncPaginatedChapter 的缩放路径同一机制，避免跳回书的开头。
+    const saved = pendingRestore ?? lastFlowProgress ?? currentProgressSnapshot();
     layoutSwitching = true;
     try {
       if (flowIsPaginated()) {
@@ -2497,7 +2504,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     refreshOpenSearch();
     syncFlowState();
-    if (pendingRestore !== null) {
+    if (saved !== null) {
+      pendingRestore = saved;
       restoreAttempts = 0;
       if (!applySavedProgress()) {
         scheduleRestoreRetry();

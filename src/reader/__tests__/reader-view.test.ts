@@ -1142,6 +1142,42 @@ describe('缩放性能（T6：档位合并去抖 + 仅可见章分栏 + 流式�
     expect(scroll.scrollTop).toBe(300);
     await view.destroy();
   });
+
+  it('排版刷新（refreshViewport）后恢复滚动位置：重排丢失 scrollTop 时按快照还原', async () => {
+    // 回归：排版面板调行距/行长/翻页模式走 refreshViewport，旧实现只重排不恢复，
+    // 真实 WebView 重测帧高时 scrollTop 被钳回 0，用户看到“跳回书的第一页”。
+    vi.useFakeTimers();
+    globalThis.localStorage?.clear();
+    document.documentElement.dataset.readingLayout = 'scroll';
+    const { host, view, scroll, chapters } = await loadFlowBook(2);
+    host.querySelector<HTMLElement>('.lightink-reader')!.dataset.readingLayout = 'scroll';
+
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 500 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 1600 });
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue(rect(0, 500));
+    // 两章各 800 高；rect 随当前 scrollTop 变化，保证快照与恢复读到的几何一致。
+    chapters.forEach((chapter, index) => {
+      Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 800 });
+      vi.spyOn(chapter, 'getBoundingClientRect').mockImplementation(() =>
+        rect(index * 800 - scroll.scrollTop, 800),
+      );
+    });
+
+    // 用户读到章 0 的 50%（scrollTop 400）：滚动事件经 rAF 记录 lastFlowProgress。
+    scroll.scrollTop = 400;
+    scroll.dispatchEvent(new Event('scroll'));
+    await vi.advanceTimersByTimeAsync(16);
+
+    // 模拟浏览器在重排过程中把 scrollTop 钳回 0（jsdom 不会自发重置，显式模拟）。
+    scroll.scrollTop = 0;
+
+    window.dispatchEvent(new Event('resize'));
+    await vi.advanceTimersByTimeAsync(200); // createResizeSettle 默认 180ms
+
+    // 修复前：scrollTop 停留在 0（跳回书的第一页）；修复后：按快照恢复到 400。
+    expect(scroll.scrollTop).toBe(400);
+    await view.destroy();
+  });
 });
 
 describe('主题切换刷新（R4）', () => {
