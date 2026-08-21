@@ -42,7 +42,7 @@ import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
 
 type Locale = 'en' | 'zh-CN';
-type LibraryPage = 'my-books' | 'manage' | 'catalog';
+type LibrarySection = 'shelf' | 'sources' | 'manage';
 type ShelfGroup = 'all' | 'in-progress' | 'unread' | 'text' | 'comic';
 
 interface Labels {
@@ -646,7 +646,7 @@ export function createLibraryView(
   root.className = 'lightink-library lightink-library--workspace';
   root.hidden = true;
   root.dataset.workspaceHome = 'true';
-  root.dataset.libraryPage = 'my-books';
+  root.dataset.libraryNav = 'shelf';
   root.setAttribute('aria-label', LABELS[deps.getLocale()].library);
 
   const header = doc.createElement('header');
@@ -668,18 +668,25 @@ export function createLibraryView(
   searchForm.append(searchInput, searchClear, searchButton);
   const toolbar = doc.createElement('div');
   toolbar.className = 'lightink-library-toolbar';
-  const manageButton = button(doc, '', 'lightink-library-manage-entry');
   const importButton = button(doc, '');
   const clearCacheButton = button(doc, '');
   const editorButton = button(doc, '', 'lightink-library-editor-entry');
   const syncButton = button(doc, '', 'lightink-library-sync-entry');
-  const backButton = button(doc, '', 'lightink-library-home');
+  const manageNavButton = button(doc, '', 'lightink-library-nav-item lightink-library-manage-entry');
+  manageNavButton.dataset.libraryNavItem = 'manage';
+  const myBooksButton = button(doc, '', 'lightink-library-nav-item lightink-library-home');
+  myBooksButton.dataset.libraryNavItem = 'my-books';
   header.append(heading, searchForm, toolbar);
 
   const body = doc.createElement('div');
   body.className = 'lightink-library-body';
-  const groupPane = doc.createElement('aside');
-  groupPane.className = 'lightink-library-groups';
+  const navPane = doc.createElement('aside');
+  navPane.className = 'lightink-library-nav';
+  const groupPane = doc.createElement('section');
+  groupPane.className = 'lightink-library-groups lightink-library-nav-section';
+  groupPane.dataset.navSection = 'shelf';
+  const shelfHeading = doc.createElement('h2');
+  shelfHeading.className = 'lightink-library-nav-heading';
   const filterList = doc.createElement('nav');
   filterList.className = 'lightink-library-filter-list';
   const groupHeader = doc.createElement('div');
@@ -689,7 +696,21 @@ export function createLibraryView(
   groupHeader.append(groupTitle, addGroupButton);
   const groupList = doc.createElement('nav');
   groupList.className = 'lightink-library-group-list';
-  groupPane.append(filterList, groupHeader, groupList);
+  const smartGroupHeader = doc.createElement('div');
+  smartGroupHeader.className = 'lightink-library-pane-heading';
+  const smartGroupTitle = doc.createElement('h3');
+  smartGroupHeader.append(smartGroupTitle);
+  const smartGroupList = doc.createElement('nav');
+  smartGroupList.className = 'lightink-library-smart-group-list';
+  groupPane.append(
+    shelfHeading,
+    myBooksButton,
+    filterList,
+    groupHeader,
+    groupList,
+    smartGroupHeader,
+    smartGroupList,
+  );
   const groupOverlay = doc.createElement('div');
   groupOverlay.className = 'lightink-modal-overlay lightink-library-group-modal';
   groupOverlay.hidden = true;
@@ -722,8 +743,9 @@ export function createLibraryView(
   groupEditor.append(groupNameLabel, groupParentLabel, groupEditorActions);
   groupDialog.appendChild(groupEditor);
   groupOverlay.appendChild(groupDialog);
-  const sourcePane = doc.createElement('aside');
-  sourcePane.className = 'lightink-library-sources';
+  const sourcePane = doc.createElement('section');
+  sourcePane.className = 'lightink-library-sources lightink-library-nav-section';
+  sourcePane.dataset.navSection = 'sources';
   const sourceHeader = doc.createElement('div');
   sourceHeader.className = 'lightink-library-pane-heading';
   const sourceTitle = doc.createElement('h2');
@@ -732,6 +754,14 @@ export function createLibraryView(
   const sourceList = doc.createElement('nav');
   sourceList.className = 'lightink-library-source-list';
   sourcePane.append(sourceHeader, sourceList);
+  const managePane = doc.createElement('section');
+  managePane.className = 'lightink-library-manage lightink-library-nav-section';
+  managePane.dataset.navSection = 'manage';
+  const manageNav = doc.createElement('nav');
+  manageNav.className = 'lightink-library-manage-nav';
+  manageNav.append(manageNavButton);
+  managePane.append(manageNav);
+  navPane.append(groupPane, sourcePane, managePane);
   const sourceOverlay = doc.createElement('div');
   sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
   sourceOverlay.hidden = true;
@@ -799,6 +829,16 @@ export function createLibraryView(
   detail.className = 'lightink-library-detail';
   detail.hidden = true;
   workArea.append(itemList, detail);
+  const managePanel = doc.createElement('div');
+  managePanel.className = 'lightink-library-manage-panel';
+  managePanel.append(
+    importButton,
+    clearCacheButton,
+    cacheSummary,
+    ...(deps.onOpenSyncPanel === undefined ? [] : [syncButton]),
+    ...(deps.onEnterEditor === undefined ? [] : [editorButton]),
+  );
+  body.append(navPane, content);
   const membershipOverlay = doc.createElement('div');
   membershipOverlay.className = 'lightink-library-membership-overlay';
   membershipOverlay.hidden = true;
@@ -820,7 +860,7 @@ export function createLibraryView(
   root.append(header, body, membershipOverlay, groupOverlay, sourceOverlay);
   host.appendChild(root);
 
-  let libraryPage: LibraryPage = 'my-books';
+  let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
   let selectedCustomGroupId: string | null = null;
   let groups: LibraryGroup[] = [];
@@ -854,6 +894,15 @@ export function createLibraryView(
   const labels = (): Labels => LABELS[deps.getLocale()];
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
+  const catalogActive = (): boolean => activeSection === 'sources' && selectedSourceId !== null;
+
+  function smartGroupName(group: SmartGroupDefinition): string {
+    const l = labels();
+    if (group.rule.type === 'author') return l.authorGroup.replace('{name}', group.rule.value);
+    if (group.rule.type === 'series') return l.seriesGroup.replace('{name}', group.rule.value);
+    const keyed = (l as unknown as Record<string, string>)[group.nameKey];
+    return keyed ?? group.nameKey;
+  }
 
   function refreshSmartGroups(): void {
     const persisted = groups
@@ -981,7 +1030,7 @@ export function createLibraryView(
   }
 
   function visibleItems(): DisplayItem[] {
-    return libraryPage === 'my-books' ? items.filter(matchesGroup) : items;
+    return activeSection === 'shelf' ? items.filter(matchesGroup) : items;
   }
 
   function latestInProgress(): DisplayItem | null {
@@ -1012,12 +1061,12 @@ export function createLibraryView(
   }
 
   function beginBlockingLoad(): void {
-    if (libraryPage === 'my-books' && items.length > 0) return;
+    if (activeSection === 'shelf' && items.length > 0) return;
     setStatus(labels().loading);
   }
 
   async function updateCacheSummary(): Promise<void> {
-    if (libraryPage !== 'manage') {
+    if (activeSection !== 'manage') {
       cacheUsage.textContent = '';
       return;
     }
@@ -1045,43 +1094,38 @@ export function createLibraryView(
   }
 
   function syncPageChrome(): void {
-    root.dataset.libraryPage = libraryPage;
-    root.classList.toggle('lightink-library--my-books', libraryPage === 'my-books');
-    root.classList.toggle('lightink-library--manage', libraryPage === 'manage');
-    root.classList.toggle('lightink-library--catalog', libraryPage === 'catalog');
-    searchForm.hidden = libraryPage === 'manage';
-    if (libraryPage === 'my-books') {
+    const inCatalog = catalogActive();
+    root.dataset.libraryNav =
+      activeSection === 'sources' ? (inCatalog ? 'catalog' : 'sources') : activeSection;
+    searchForm.hidden = activeSection !== 'shelf' && !inCatalog;
+    parkWorkspaceTravel();
+    manageNavButton.classList.toggle('is-active', activeSection === 'manage');
+    if (activeSection === 'shelf') {
       heading.textContent = labels().myBooks;
-      parkWorkspaceTravel();
-      toolbar.replaceChildren(manageButton);
+      toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       content.replaceChildren(continueHost, status, itemList);
-      body.replaceChildren(groupPane, content);
       detail.hidden = true;
       selected = null;
-    } else if (libraryPage === 'manage') {
+    } else if (activeSection === 'manage') {
       heading.textContent = labels().manage;
-      parkWorkspaceTravel();
-      toolbar.replaceChildren(
-        importButton,
-        clearCacheButton,
-        cacheSummary,
-        ...(deps.onOpenSyncPanel === undefined ? [] : [syncButton]),
-        ...(deps.onEnterEditor === undefined ? [] : [editorButton]),
-        backButton,
-      );
+      toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
-      content.replaceChildren(status);
-      body.replaceChildren(sourcePane, content);
-    } else {
+      content.replaceChildren(status, managePanel);
+    } else if (inCatalog) {
       heading.textContent = selectedSource()?.title ?? labels().library;
-      parkWorkspaceTravel();
-      toolbar.replaceChildren(backButton);
+      toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
       workArea.replaceChildren(itemList, detail);
       content.replaceChildren(navigation, status, workArea);
-      body.replaceChildren(content);
+    } else {
+      heading.textContent = labels().sources;
+      toolbar.replaceChildren();
+      itemList.classList.remove('lightink-library-cover-wall');
+      content.replaceChildren(status);
     }
+    renderGroups();
+    renderSources();
   }
 
   function showGroupOverlay(): void {
@@ -1285,14 +1329,13 @@ export function createLibraryView(
     const choose = button(doc, node.group.name, 'lightink-library-group');
     choose.dataset.customGroupId = node.group.id;
     choose.dataset.libraryGroupId = node.group.id;
-    choose.classList.toggle('is-active', selectedCustomGroupId === node.group.id);
-    if (selectedCustomGroupId === node.group.id) choose.setAttribute('aria-current', 'true');
+    const chosen = activeSection === 'shelf' && selectedCustomGroupId === node.group.id;
+    choose.classList.toggle('is-active', chosen);
+    if (chosen) choose.setAttribute('aria-current', 'true');
     choose.addEventListener('click', () => {
       selectedCustomGroupId = node.group.id;
       selectedSmartGroupId = null;
-      renderGroups();
-      renderContinueBar();
-      renderItems();
+      void activateShelf();
     });
     choose.addEventListener('keydown', (event) => {
       if (event.key === 'F2') {
@@ -1418,31 +1461,62 @@ export function createLibraryView(
   function renderGroups(): void {
     filterList.replaceChildren();
     groupList.replaceChildren();
+    shelfHeading.textContent = labels().library;
     groupTitle.textContent = labels().groups;
     groupPane.setAttribute('aria-label', labels().groups);
     addGroupButton.title = labels().newGroup;
     addGroupButton.setAttribute('aria-label', labels().newGroup);
+    myBooksButton.textContent = labels().myBooks;
+    const shelfActive = activeSection === 'shelf';
+    const myBooksActive =
+      shelfActive &&
+      selectedGroup === 'all' &&
+      selectedCustomGroupId === null &&
+      selectedSmartGroupId === null;
+    myBooksButton.classList.toggle('is-active', myBooksActive);
+    if (myBooksActive) myBooksButton.setAttribute('aria-current', 'true');
+    else myBooksButton.removeAttribute('aria-current');
     for (const group of SHELF_GROUPS) {
       const row = button(doc, groupLabel(labels(), group), 'lightink-library-group');
       row.dataset.shelfGroup = group;
       const active =
-        selectedCustomGroupId === null && selectedSmartGroupId === null && selectedGroup === group;
+        shelfActive &&
+        selectedCustomGroupId === null &&
+        selectedSmartGroupId === null &&
+        selectedGroup === group;
       row.classList.toggle('is-active', active);
       if (active) row.setAttribute('aria-current', 'true');
       row.addEventListener('click', () => {
         selectedGroup = group;
         selectedCustomGroupId = null;
         selectedSmartGroupId = null;
-        renderGroups();
-        renderContinueBar();
-        renderItems();
+        void activateShelf();
       });
       filterList.appendChild(row);
     }
     for (const node of customGroupTree(groups)) {
       appendCustomGroupNode(node);
     }
+    renderSmartGroups();
     renderGroupEditor();
+  }
+
+  function renderSmartGroups(): void {
+    smartGroupList.replaceChildren();
+    smartGroupTitle.textContent = labels().smartGroups;
+    for (const group of smartGroups) {
+      const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
+      item.dataset.smartGroupId = group.id;
+      const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
+      item.classList.toggle('is-active', active);
+      if (active) item.setAttribute('aria-current', 'true');
+      item.addEventListener('click', () => {
+        selectedSmartGroupId = group.id;
+        selectedCustomGroupId = null;
+        void activateShelf();
+      });
+      smartGroupList.appendChild(item);
+    }
   }
 
   function renderSources(): void {
@@ -1516,21 +1590,26 @@ export function createLibraryView(
   function renderBreadcrumbs(): void {
     breadcrumbs.replaceChildren();
     const source = selectedSource();
-    if (trail.length > 0) {
-      const rootCrumb = button(doc, source?.title ?? labels().allBooks);
-      rootCrumb.addEventListener('click', () => {
-        if (source !== undefined) void openCatalog(source.id);
-      });
-      breadcrumbs.appendChild(rootCrumb);
-      for (const [index, crumb] of trail.entries()) {
-        const separator = doc.createElement('span');
-        separator.textContent = '/';
-        const crumbButton = button(doc, crumb.title);
-        crumbButton.addEventListener('click', () => {
-          trail.splice(index + 1);
-          void loadFeed(crumb.url, false);
-        });
-        breadcrumbs.append(separator, crumbButton);
+    if (source !== undefined) {
+      const listCrumb = button(doc, labels().sources);
+      listCrumb.addEventListener('click', () => closeCatalog());
+      breadcrumbs.appendChild(listCrumb);
+      if (trail.length > 0) {
+        const rootSeparator = doc.createElement('span');
+        rootSeparator.textContent = '/';
+        const rootCrumb = button(doc, source.title);
+        rootCrumb.addEventListener('click', () => void openCatalog(source.id));
+        breadcrumbs.append(rootSeparator, rootCrumb);
+        for (const [index, crumb] of trail.entries()) {
+          const separator = doc.createElement('span');
+          separator.textContent = '/';
+          const crumbButton = button(doc, crumb.title);
+          crumbButton.addEventListener('click', () => {
+            trail.splice(index + 1);
+            void loadFeed(crumb.url, false);
+          });
+          breadcrumbs.append(separator, crumbButton);
+        }
       }
     }
     previousButton.disabled = feed?.previousUrl == null || feed.previousUrl === '';
@@ -1796,7 +1875,7 @@ export function createLibraryView(
   function renderContinueBar(): void {
     continueHost.replaceChildren();
     if (
-      libraryPage !== 'my-books' ||
+      activeSection !== 'shelf' ||
       selectedGroup !== 'all' ||
       selectedCustomGroupId !== null ||
       selectedSmartGroupId !== null ||
@@ -1872,7 +1951,7 @@ export function createLibraryView(
     let renderedCatalogGroup: string | undefined;
     for (const display of shown) {
       if (
-        libraryPage === 'catalog' &&
+        catalogActive() &&
         display.catalogGroupKey !== undefined &&
         display.catalogGroupKey !== renderedCatalogGroup
       ) {
@@ -1885,7 +1964,7 @@ export function createLibraryView(
         }
       }
       itemList.appendChild(
-        libraryPage === 'my-books' ? renderCoverCard(display) : renderCatalogRow(display),
+        activeSection === 'shelf' ? renderCoverCard(display) : renderCatalogRow(display),
       );
     }
   }
@@ -2239,7 +2318,7 @@ export function createLibraryView(
   }
 
   async function showMyBooks(): Promise<void> {
-    libraryPage = 'my-books';
+    activeSection = 'shelf';
     selectedSourceId = null;
     selected = null;
     feed = null;
@@ -2250,8 +2329,18 @@ export function createLibraryView(
     await loadPersistedItems();
   }
 
+  async function activateShelf(): Promise<void> {
+    if (activeSection === 'shelf') {
+      syncPageChrome();
+      renderContinueBar();
+      renderItems();
+      return;
+    }
+    await showMyBooks();
+  }
+
   async function showManage(): Promise<void> {
-    libraryPage = 'manage';
+    activeSection = 'manage';
     selectedSourceId = null;
     selected = null;
     feed = null;
@@ -2267,8 +2356,19 @@ export function createLibraryView(
     await updateCacheSummary();
   }
 
+  function closeCatalog(): void {
+    selectedSourceId = null;
+    selected = null;
+    feed = null;
+    currentUrl = undefined;
+    trail.splice(0);
+    syncPageChrome();
+    renderSources();
+    renderBreadcrumbs();
+  }
+
   async function openCatalog(sourceId: string): Promise<void> {
-    libraryPage = 'catalog';
+    activeSection = 'sources';
     selectedSourceId = sourceId;
     searchInput.value = '';
     syncSearchClear();
@@ -2282,14 +2382,14 @@ export function createLibraryView(
   async function search(): Promise<void> {
     const query = searchInput.value.trim();
     if (query === '') {
-      if (libraryPage === 'catalog' && selectedSourceId !== null) {
+      if (catalogActive() && selectedSourceId !== null) {
         await openCatalog(selectedSourceId);
         return;
       }
       await showMyBooks();
       return;
     }
-    if (libraryPage !== 'catalog' || selectedSourceId === null) {
+    if (!catalogActive() || selectedSourceId === null) {
       const lowered = query.toLocaleLowerCase();
       const loaded = await deps.library.listItems();
       items = loaded
@@ -2596,7 +2696,7 @@ export function createLibraryView(
       await deps.opds.removeSource(source.id);
       sources = sources.filter((candidate) => candidate.id !== source.id);
       if (editingSourceId === source.id) closeSourceForm();
-      if (selectedSourceId === source.id || libraryPage === 'catalog') await showManage();
+      if (selectedSourceId === source.id) closeCatalog();
       else renderSources();
     } catch (error) {
       deps.notify(errorText(error, labels().offline), 'error');
@@ -2622,20 +2722,26 @@ export function createLibraryView(
     try {
       sources = await deps.opds.listSources();
       if (generation !== requestGeneration) return;
-      if (libraryPage === 'catalog' && selectedSourceId !== null) {
+      if (catalogActive()) {
         syncPageChrome();
         renderSources();
         await loadFeed(currentUrl, false);
         return;
       }
-      if (libraryPage === 'manage') {
+      if (activeSection === 'sources') {
+        syncPageChrome();
+        await refreshWebDavProfile();
+        renderSources();
+        return;
+      }
+      if (activeSection === 'manage') {
         syncPageChrome();
         await refreshWebDavProfile();
         renderSources();
         await updateCacheSummary();
         return;
       }
-      libraryPage = 'my-books';
+      activeSection = 'shelf';
       selectedSourceId = null;
       syncPageChrome();
       renderGroups();
@@ -2649,16 +2755,13 @@ export function createLibraryView(
   function retranslate(): void {
     const l = labels();
     root.setAttribute('aria-label', l.library);
-    manageButton.textContent = l.manage;
-    manageButton.title = l.manage;
-    manageButton.setAttribute('aria-label', l.manage);
+    manageNavButton.textContent = l.manage;
     editorButton.textContent = l.markdownEditor;
     editorButton.title = l.markdownEditor;
     editorButton.setAttribute('aria-label', l.markdownEditor);
     syncButton.textContent = l.webdavSync;
     syncButton.title = l.webdavSync;
     syncButton.setAttribute('aria-label', l.webdavSync);
-    backButton.textContent = l.backToShelf;
     sourceTitle.textContent = l.sources;
     searchInput.placeholder = l.searchPlaceholder;
     searchInput.setAttribute('aria-label', l.searchPlaceholder);
@@ -2681,7 +2784,7 @@ export function createLibraryView(
     renderBreadcrumbs();
     renderContinueBar();
     renderItems();
-    if (libraryPage === 'catalog') renderDetail();
+    if (catalogActive()) renderDetail();
     if (editingWebDav) renderSourceForm(undefined, 'webdav');
     else renderSourceForm(sources.find((source) => source.id === editingSourceId));
     if (membershipItemId !== null) openMembershipEditor(membershipItemId);
@@ -2694,7 +2797,7 @@ export function createLibraryView(
 
   searchInput.addEventListener('input', () => {
     syncSearchClear();
-    if (libraryPage === 'catalog') return;
+    if (catalogActive()) return;
     void search();
   });
   searchClear.addEventListener('click', () => {
@@ -2804,10 +2907,15 @@ export function createLibraryView(
       closeSourceForm();
     }
   });
-  manageButton.addEventListener('click', () => void showManage());
+  myBooksButton.addEventListener('click', () => {
+    selectedGroup = 'all';
+    selectedCustomGroupId = null;
+    selectedSmartGroupId = null;
+    void activateShelf();
+  });
+  manageNavButton.addEventListener('click', () => void showManage());
   editorButton.addEventListener('click', () => deps.onEnterEditor?.());
   syncButton.addEventListener('click', () => deps.onOpenSyncPanel?.());
-  backButton.addEventListener('click', () => void showMyBooks());
   root.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2881,12 +2989,12 @@ export function createLibraryView(
     const current = doc.activeElement instanceof HTMLButtonElement ? rows.indexOf(doc.activeElement) : -1;
     const horizontal = event.key === 'ArrowRight' || event.key === 'ArrowLeft';
     const vertical = event.key === 'ArrowDown' || event.key === 'ArrowUp';
-    if (vertical || (horizontal && libraryPage === 'my-books')) {
+    if (vertical || (horizontal && activeSection === 'shelf')) {
       event.preventDefault();
       const delta = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1;
       const next = Math.max(0, Math.min(rows.length - 1, current + delta));
       rows[next]?.focus();
-      if (libraryPage === 'catalog') {
+      if (catalogActive()) {
         const display = shown.find((candidate) => candidate.item.id === rows[next]?.dataset.itemId);
         if (display !== undefined) void selectItem(display);
       }
@@ -2919,7 +3027,7 @@ export function createLibraryView(
     async show() {
       root.hidden = false;
       deps.onVisibilityChange?.(true);
-      libraryPage = 'my-books';
+      activeSection = 'shelf';
       selectedGroup = 'all';
       selectedSmartGroupId = null;
       selectedCustomGroupId = null;

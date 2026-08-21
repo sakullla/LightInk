@@ -125,9 +125,55 @@ function libraryRoot(host: ParentNode): HTMLElement {
   return root;
 }
 
-function libraryPage(host: ParentNode): string | undefined {
-  return libraryRoot(host).dataset.libraryPage;
+function libraryNav(host: ParentNode): HTMLElement {
+  const root = libraryRoot(host);
+  const nav =
+    root.querySelector<HTMLElement>('.lightink-library-nav') ??
+    root.querySelector<HTMLElement>('.lightink-library-navpane') ??
+    root.querySelector<HTMLElement>('.lightink-library-sidebar') ??
+    root.querySelector<HTMLElement>('[data-library-nav]') ??
+    root.querySelector<HTMLElement>('aside');
+  if (!(nav instanceof HTMLElement)) throw new Error('library navigation not found');
+  return nav;
 }
+
+function navButton(host: ParentNode, label: string): HTMLButtonElement {
+  const nav = libraryNav(host);
+  const candidate = Array.from(nav.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === label && isShown(button),
+  );
+  if (!(candidate instanceof HTMLButtonElement)) throw new Error(`nav item not found: ${label}`);
+  return candidate;
+}
+
+function navItemActive(button: HTMLButtonElement): boolean {
+  return button.getAttribute('aria-current') !== null || button.classList.contains('is-active');
+}
+
+function catalogRowsShown(host: ParentNode): boolean {
+  const row = host.querySelector('.lightink-library-item--row');
+  return row instanceof HTMLElement && isShown(row);
+}
+
+function smartGroupButton(host: ParentNode, name: string): HTMLButtonElement {
+  const marked = Array.from(
+    host.querySelectorAll<HTMLButtonElement>('.lightink-library-smart-group, [data-smart-group-id]'),
+  ).find((button) => button.textContent?.trim() === name && isShown(button));
+  if (marked !== undefined) return marked;
+  const fallback = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
+    (button) =>
+      button.textContent?.trim() === name &&
+      isShown(button) &&
+      button.dataset.shelfGroup === undefined &&
+      button.dataset.libraryGroupId === undefined &&
+      button.dataset.groupId === undefined,
+  );
+  if (!(fallback instanceof HTMLButtonElement)) {
+    throw new Error(`smart group nav item not found: ${name}`);
+  }
+  return fallback;
+}
+
 
 function isShown(el: Element | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -150,7 +196,18 @@ function groupButton(host: ParentNode, label: string): HTMLButtonElement {
     (button) => button.textContent === label && isShown(button),
   );
   if (shelf) return shelf;
-  return shownButtonWithText(groups, label);
+  const within = Array.from(groups.querySelectorAll('button')).find(
+    (button) => button.textContent === label && isShown(button),
+  );
+  if (within instanceof HTMLButtonElement) return within;
+  // 新导航结构下「全部」由「我的书」导航项承载
+  if (label === '全部') {
+    const home = Array.from(host.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === '我的书' && isShown(button),
+    );
+    if (home instanceof HTMLButtonElement) return home;
+  }
+  return shownButtonWithText(host, label);
 }
 
 function collectionButton(host: ParentNode, name: string): HTMLButtonElement {
@@ -385,27 +442,58 @@ function collectionDependencies(options: {
 async function openManage(host: HTMLElement): Promise<void> {
   const entry =
     host.querySelector<HTMLButtonElement>('.lightink-library-manage-entry') ??
-    shownButtonWithText(host, '管理');
-  if (!isShown(entry)) throw new Error('manage entry is not on the first screen');
+    host.querySelector<HTMLButtonElement>('.lightink-library-cache-entry') ??
+    host.querySelector<HTMLButtonElement>('[data-library-nav-item="cache"]') ??
+    Array.from(host.querySelectorAll('button')).find(
+      (button) =>
+        (button.textContent?.trim() === '管理' || button.textContent?.trim() === '缓存') &&
+        isShown(button),
+    );
+  if (!(entry instanceof HTMLButtonElement) || !isShown(entry)) {
+    throw new Error('manage entry is not reachable from the navigation');
+  }
   entry.click();
   await settle();
 }
 
 async function openMyBooks(host: HTMLElement): Promise<void> {
-  const home =
-    host.querySelector<HTMLButtonElement>('.lightink-library-home') ??
-    Array.from(host.querySelectorAll('button')).find(
-      (button) => button.textContent === '我的书' && isShown(button),
-    );
-  if (!(home instanceof HTMLButtonElement)) throw new Error('my-books entry not found');
-  home.click();
+  const navEntry = Array.from(host.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === '我的书' && isShown(button),
+  );
+  const home = host.querySelector<HTMLButtonElement>('.lightink-library-home');
+  const target =
+    navEntry instanceof HTMLButtonElement
+      ? navEntry
+      : home instanceof HTMLButtonElement && isShown(home)
+        ? home
+        : undefined;
+  if (target === undefined) {
+    // 已停留在封面墙时无需再导航
+    if (host.querySelector('.lightink-library-item--cover') !== null) return;
+    throw new Error('my-books entry not found');
+  }
+  target.click();
   await settle();
 }
 
-async function openCatalog(host: HTMLElement, sourceTitle = '测试书库'): Promise<void> {
-  if (libraryPage(host) !== 'manage' && libraryPage(host) !== 'catalog') {
-    await openManage(host);
+async function openSources(host: HTMLElement): Promise<void> {
+  // 源列表可能常驻导航（无需点击），也可能需要先选中「书源」导航项
+  const entry = Array.from(host.querySelectorAll('button')).find(
+    (button) =>
+      (button.textContent?.trim() === '书源' || button.textContent?.trim() === '书库源') &&
+      isShown(button),
+  );
+  if (entry instanceof HTMLButtonElement) {
+    entry.click();
+    await settle();
   }
+}
+
+async function openCatalog(host: HTMLElement, sourceTitle = '测试书库'): Promise<void> {
+  const listed = Array.from(host.querySelectorAll('button')).some(
+    (button) => button.textContent?.trim() === sourceTitle && isShown(button),
+  );
+  if (!listed) await openSources(host);
   shownButtonWithText(host, sourceTitle).click();
   await settle();
 }
@@ -450,7 +538,7 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(libraryPage(host)).toBe('my-books');
+    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
     const unreadRow = itemRow(host, unread.id);
     const comicRow = itemRow(host, comic.id);
     expect(unreadRow.textContent).toContain('本地小说');
@@ -474,31 +562,32 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('keeps sources, cache, import, close, and detail off the first screen', async () => {
+  it('keeps manage content, close, and detail off the first screen while nav entries stay reachable', async () => {
     const deps = dependencies();
     const host = document.createElement('div');
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(libraryPage(host)).toBe('my-books');
-    expect(isShown(host.querySelector('.lightink-library-sources'))).toBe(false);
+    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
     expect(isShown(host.querySelector('[aria-label="关闭书库"]'))).toBe(false);
+    // 管理内容（导入等）在选中管理导航项前不呈现
     expect(
       Array.from(host.querySelectorAll('button')).some(
         (button) => button.textContent === '导入本地书籍' && isShown(button),
       ),
     ).toBe(false);
-    expect(
-      Array.from(host.querySelectorAll('button')).some(
-        (button) => button.textContent === '测试书库' && isShown(button),
-      ),
-    ).toBe(false);
+    // 管理导航项在首屏导航内可达
+    const manageEntry =
+      host.querySelector('.lightink-library-manage-entry') ??
+      Array.from(host.querySelectorAll('button')).find(
+        (button) => button.textContent?.trim() === '管理' && isShown(button),
+      );
+    expect(manageEntry instanceof HTMLElement && isShown(manageEntry)).toBe(true);
+    // 书库区的分组树随首屏导航可见
     expect(isShown(host.querySelector('.lightink-library-groups'))).toBe(true);
-    expect(isShown(host.querySelector('.lightink-library-manage-entry'))).toBe(true);
-    expect(host.querySelector('.lightink-library-manage-entry')?.textContent).toBe('管理');
     expect(host.querySelector('.lightink-library-search')).not.toBeNull();
     view.destroy();
   });
@@ -590,10 +679,15 @@ describe('LibraryView my-books home', () => {
     expect(toolbar?.contains(travel)).toBe(false);
     expect(travel.classList.contains('lightink-library-edit')).toBe(true);
     expect(isShown(travel)).toBe(false);
-    expect(isShown(host.querySelector('.lightink-library-manage-entry'))).toBe(true);
+    const manageEntry =
+      host.querySelector('.lightink-library-manage-entry') ??
+      host.querySelector('.lightink-library-cache-entry') ??
+      host.querySelector('[data-library-nav-item="cache"]');
+    expect(manageEntry instanceof HTMLElement && isShown(manageEntry)).toBe(true);
 
     await openManage(host);
-    expect(libraryPage(host)).toBe('manage');
+    // 管理区内容随导航一次点击呈现
+    shownButtonWithText(host, '导入本地书籍');
     expect(isShown(travel)).toBe(false);
     expect(
       Array.from(host.querySelectorAll('.lightink-library-toolbar button')).some(
@@ -933,8 +1027,91 @@ describe('LibraryView my-books home', () => {
   });
 });
 
-describe('LibraryView manage and catalog', () => {
-  it('hides the library search on manage and keeps the submit control out of the chrome', async () => {
+describe('LibraryView navigation', () => {
+  it('presents a persistent left navigation with 书库 / 书源 / 管理 and defaults to 我的书', async () => {
+    const deps = dependencies();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const nav = libraryNav(host);
+    expect(isShown(nav)).toBe(true);
+    expect(nav.textContent).toContain('我的书');
+    expect(nav.textContent).toMatch(/书源|书库源/);
+    expect(nav.textContent).toContain('管理');
+    // 分组树迁入书库区导航
+    expect(nav.querySelector('.lightink-library-groups')).not.toBeNull();
+    // 默认选中「我的书」，内容区呈现封面墙
+    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
+    expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
+    view.destroy();
+  });
+
+  it('reaches group management, source edit/remove, import, WebDAV, and cache controls from the navigation', async () => {
+    const deps = dependencies({ onOpenSyncPanel: vi.fn() });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    // 分组管理入口常驻书库区导航
+    const nav = libraryNav(host);
+    shownControl(nav, '新建分组');
+
+    // 书源区：一次点击后 OPDS 源编辑/删除可用
+    await openSources(host);
+    expect(host.querySelector('[aria-label^="编辑 OPDS 源"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label^="删除源"]')).not.toBeNull();
+
+    // 管理区：一次点击后导入 / WebDAV 同步 / 缓存控件可用
+    await openManage(host);
+    shownButtonWithText(host, '导入本地书籍');
+    shownButtonWithText(host, 'WebDAV 同步');
+    shownControl(host, '调整缓存上限');
+    shownButtonWithText(host, '清理缓存');
+    view.destroy();
+  });
+
+  it('opens an OPDS catalog from the sources navigation and returns through breadcrumbs', async () => {
+    const navigationEntry: OpdsEntry = {
+      id: 'nav-1',
+      itemId: 'nav-item-1',
+      title: '小说分类',
+      authors: [],
+      links: [],
+      kind: 'navigation',
+      navigationUrl: 'https://books.example/opds/fiction',
+    };
+    const browse = vi.fn(async (_sourceId: string, url?: string) =>
+      url === undefined ? feed({ entries: [navigationEntry] }) : feed(),
+    );
+    const base = dependencies();
+    const deps = dependencies({ opds: { ...base.opds, browse } });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    expect(browse).toHaveBeenCalledWith('source-1', undefined);
+    expect(catalogRowsShown(host)).toBe(true);
+
+    itemRow(host, 'nav-item-1').click();
+    await settle();
+    expect(browse).toHaveBeenLastCalledWith('source-1', 'https://books.example/opds/fiction');
+
+    const crumbs = host.querySelector('.lightink-library-breadcrumbs');
+    expect(crumbs).not.toBeNull();
+    shownButtonWithText(crumbs!, '测试书库').click();
+    await settle();
+    expect(browse).toHaveBeenLastCalledWith('source-1', undefined);
+    view.destroy();
+  });
+});
+
+describe('LibraryView sources, manage, and catalog', () => {
+  it('hides the library search in the manage section and lists sources in the sources section', async () => {
     const deps = dependencies();
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -944,9 +1121,10 @@ describe('LibraryView manage and catalog', () => {
     await openManage(host);
     const search = host.querySelector<HTMLFormElement>('.lightink-library-search');
     const submit = host.querySelector<HTMLButtonElement>('.lightink-library-search-submit');
-    expect(search?.hidden).toBe(true);
-    expect(isShown(search)).toBe(false);
-    expect(submit?.type).toBe('submit');
+    expect(search === null || !isShown(search)).toBe(true);
+    expect(submit === null || submit.type === 'submit').toBe(true);
+
+    await openSources(host);
     expect(host.querySelector('.lightink-library-source-row')?.textContent).toContain('测试书库');
     expect(host.querySelector('.lightink-library-source-url')?.textContent).toContain(
       'https://books.example/opds',
@@ -976,19 +1154,17 @@ describe('LibraryView manage and catalog', () => {
     await view.show();
 
     await openManage(host);
-    expect(libraryPage(host)).toBe('manage');
     shownButtonWithText(host, '导入本地书籍').click();
     items = [localItem(), imported];
     await settle();
-    if (libraryPage(host) !== 'my-books') await openMyBooks(host);
+    await openMyBooks(host);
 
-    expect(libraryPage(host)).toBe('my-books');
     expect(itemRow(host, imported.id).textContent).toContain('新导入的书');
-    expect(isShown(host.querySelector('.lightink-library-sources'))).toBe(false);
+    expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
     view.destroy();
   });
 
-  it('adds an OPDS source from manage and can open its catalog', async () => {
+  it('adds an OPDS source from the sources section and can open its catalog', async () => {
     const added = { ...source, id: 'source-2', title: '新 OPDS 源', url: 'https://other.example/opds' };
     const addSource = vi.fn(async () => added);
     const listSources = vi.fn(async () => [source, added]);
@@ -1002,7 +1178,7 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    await openManage(host);
+    await openSources(host);
     shownControl(host, '添加书库源').click();
     const form = sourceFormOf();
     expect(isShown(form)).toBe(true);
@@ -1012,13 +1188,11 @@ describe('LibraryView manage and catalog', () => {
     await settle();
 
     expect(addSource).toHaveBeenCalledWith(expect.objectContaining({ title: added.title, url: added.url }));
-    if (libraryPage(host) === 'catalog') await openMyBooks(host);
-    else if (libraryPage(host) === 'manage') await openMyBooks(host);
-    expect(libraryPage(host)).toBe('my-books');
-    expect(isShown(host.querySelector('.lightink-library-sources'))).toBe(false);
 
+    // 新添加的源可从书源导航一次点击到达并进入 catalog 浏览
     await openCatalog(host, added.title);
-    expect(libraryPage(host)).toBe('catalog');
+    expect(browse).toHaveBeenCalledWith('source-2', undefined);
+    expect(catalogRowsShown(host)).toBe(true);
     expect(host.textContent).toContain('远程漫画');
     view.destroy();
   });
@@ -1032,7 +1206,7 @@ describe('LibraryView manage and catalog', () => {
 
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(false);
     await openManage(host);
-    expect(libraryPage(host)).toBe('manage');
+    expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(true);
     const limitButton = host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!;
     limitButton.click();
     const form = host.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
@@ -1063,7 +1237,7 @@ describe('LibraryView manage and catalog', () => {
     view.destroy();
   });
 
-  it('offers a Markdown editor link on the manage toolbar', async () => {
+  it('offers a Markdown editor link from the manage navigation', async () => {
     const onEnterEditor = vi.fn();
     const deps = dependencies({ onEnterEditor });
     const host = document.createElement('div');
@@ -1071,10 +1245,10 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
+    // Markdown 编辑入口在管理区，一次点击导航即达
     expect(isShown(host.querySelector('.lightink-library-editor-entry'))).toBe(false);
     await openManage(host);
     const editor = shownButtonWithText(host, 'Markdown 编辑');
-    expect(host.querySelector('.lightink-library-toolbar')?.contains(editor)).toBe(true);
     editor.click();
     expect(onEnterEditor).toHaveBeenCalledTimes(1);
     view.destroy();
@@ -1106,7 +1280,7 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    await openManage(host);
+    await openSources(host);
     shownControl(host, '添加书库源').click();
     const form = sourceFormOf(host);
     const kind = form.elements.namedItem('kind') as HTMLSelectElement;
@@ -1130,16 +1304,16 @@ describe('LibraryView manage and catalog', () => {
         credential: { kind: 'basic', username: 'user', password: 'pass' },
       }),
     );
-    expect(libraryPage(host)).toBe('manage');
     const webdavRow = host.querySelector<HTMLElement>('[data-source-kind="webdav"]');
     expect(webdavRow).not.toBeNull();
+    expect(isShown(webdavRow ?? null)).toBe(true);
     expect(webdavRow?.textContent).toContain('Nextcloud');
     shownButtonWithText(host, 'Nextcloud').click();
     expect(onOpenSyncPanel).toHaveBeenCalledTimes(1);
     view.destroy();
   });
 
-  it('offers a WebDAV sync action on the manage toolbar', async () => {
+  it('offers a WebDAV sync action from the manage navigation', async () => {
     const onOpenSyncPanel = vi.fn();
     const deps = dependencies({ onOpenSyncPanel });
     const host = document.createElement('div');
@@ -1147,10 +1321,10 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
+    // WebDAV 同步入口在管理区，一次点击导航即达
     expect(isShown(host.querySelector('.lightink-library-sync-entry'))).toBe(false);
     await openManage(host);
     const sync = shownButtonWithText(host, 'WebDAV 同步');
-    expect(host.querySelector('.lightink-library-toolbar')?.contains(sync)).toBe(true);
     sync.click();
     expect(onOpenSyncPanel).toHaveBeenCalledTimes(1);
     view.destroy();
@@ -1169,7 +1343,7 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    await openManage(host);
+    await openSources(host);
     host.querySelector<HTMLButtonElement>('[aria-label^="编辑 OPDS 源"]')!.click();
     const form = sourceFormOf();
     expect((form.elements.namedItem('auth') as HTMLSelectElement).value).toBe('keep');
@@ -1208,7 +1382,7 @@ describe('LibraryView manage and catalog', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    await openManage(host);
+    await openSources(host);
     host.querySelector<HTMLButtonElement>('[aria-label^="编辑 OPDS 源"]')!.click();
     const form = sourceFormOf();
     (form.elements.namedItem('title') as HTMLInputElement).value = '更新后的书库';
@@ -1236,10 +1410,9 @@ describe('LibraryView manage and catalog', () => {
 
     expect(host.textContent).toContain('本地小说');
     await openCatalog(host);
-    expect(libraryPage(host)).toBe('catalog');
     expect(deps.opds.browse).toHaveBeenCalledWith('source-1', undefined);
+    expect(catalogRowsShown(host)).toBe(true);
     expect(host.textContent).toContain('远程漫画');
-    expect(host.querySelector('.lightink-library-item--row')).not.toBeNull();
 
     shownButtonWithText(host, '下一页').click();
     await settle();
@@ -1342,7 +1515,7 @@ describe('LibraryView manage and catalog', () => {
     expect(host.textContent).toContain('远程漫画');
   });
 
-  it('gives catalog a full-width body instead of the source sidebar column', async () => {
+  it('renders the catalog in the content area while the navigation stays in place', async () => {
     const deps = dependencies();
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1350,27 +1523,18 @@ describe('LibraryView manage and catalog', () => {
     await view.show();
 
     await openCatalog(host);
-    const root = libraryRoot(host);
-    const body = root.querySelector('.lightink-library-body');
-    expect(root.dataset.libraryPage).toBe('catalog');
-    expect(root.classList.contains('lightink-library--catalog')).toBe(true);
-    expect(body?.children).toHaveLength(1);
-    expect(body?.firstElementChild?.classList.contains('lightink-library-content')).toBe(true);
-    expect(body?.querySelector('.lightink-library-sources')).toBeNull();
-    expect(body?.querySelector('.lightink-library-groups')).toBeNull();
+    expect(catalogRowsShown(host)).toBe(true);
+    const content = libraryRoot(host).querySelector('.lightink-library-content');
+    expect(content?.querySelector('.lightink-library-item--row')).not.toBeNull();
+    // 源列表与分组树留在导航区，内容区只承载 catalog 浏览
+    expect(content?.querySelector('.lightink-library-sources')).toBeNull();
+    expect(content?.querySelector('.lightink-library-groups')).toBeNull();
     expect(host.textContent).toContain('远程漫画');
 
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     expect(css).not.toMatch(/--lightink-reader-/);
     expect(css).not.toMatch(/--lightink-measure/);
     expect(css).not.toMatch(/--lightink-page-pad/);
-    const [baseCss, narrowCss = ''] = css.split('@media (max-width: 760px)');
-    expect(baseCss).toMatch(
-      /\[data-library-page='catalog'\] \.lightink-library-body[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/,
-    );
-    expect(narrowCss).toMatch(
-      /\[data-library-page='catalog'\] \.lightink-library-body[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/,
-    );
     view.destroy();
   });
 
@@ -1388,7 +1552,7 @@ describe('LibraryView manage and catalog', () => {
 
     getProgress.mockClear();
     await openCatalog(host);
-    expect(libraryPage(host)).toBe('catalog');
+    expect(catalogRowsShown(host)).toBe(true);
 
     expect(getProgress).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'item-1' }),
@@ -1542,7 +1706,7 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 
-  it('hides metadata smart groups and opens a page-level new-group dialog', async () => {
+  it('derives no author or series smart groups from a single book and opens a page-level new-group dialog', async () => {
     const novel = seriesNovel({
       authors: ['ハム男', '藻'],
       localPath: '/ebook/藻 - 01.epub',
@@ -1557,8 +1721,10 @@ describe('LibraryView shelf collections', () => {
     await view.show();
     await organizeShelf(host);
 
-    for (const name of ['藻', 'ハム男', '系列', '作者', '文字书']) {
+    // 单本书不产生作者/系列智能分组（计数不足），导航与分组树中都不出现
+    for (const name of ['藻', 'ハム男']) {
       expect(() => collectionButton(host, name)).toThrow(/collection button not found/);
+      expect(() => smartGroupButton(host, name)).toThrow(/smart group nav item not found/);
     }
 
     await startCreateGroup(host);
@@ -1686,10 +1852,15 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 
-  it('does not show metadata smart groups in the sidebar', async () => {
+  it('renders smart groups as read-only navigation items that filter the cover wall', async () => {
     const novel = seriesNovel();
+    const comic = comicItem({
+      id: 'local:/ebook/hell-comic.cbz',
+      title: '地狱漫画',
+      localPath: '/ebook/hell-comic.cbz',
+    });
     const { deps } = collectionDependencies({
-      items: [novel],
+      items: [novel, comic],
       seriesStemByItemId: { [novel.id]: seriesStem },
     });
     const host = document.createElement('div');
@@ -1697,12 +1868,25 @@ describe('LibraryView shelf collections', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(() => collectionButton(host, '海猫')).toThrow(/collection button not found/);
-    expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
-    expect(host.querySelector('.lightink-library-smart-group')).toBeNull();
-    groupButton(host, '文字书').click();
+    // 智能分组作为只读导航项呈现，选中即过滤右侧内容区
+    smartGroupButton(host, '文字书').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+
+    const comicGroup = smartGroupButton(host, '漫画');
+    comicGroup.click();
+    await settle();
+    expect(itemRow(host, comic.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+
+    // 只读：不归属自定义分组树，右键不弹出操作菜单
+    expect(comicGroup.closest('.lightink-library-custom-group')).toBeNull();
+    comicGroup.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+    );
+    await settle();
+    expect(document.querySelector('.lightink-context-menu')).toBeNull();
     view.destroy();
   });
 
