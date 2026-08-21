@@ -105,34 +105,38 @@
 .lightink-reader-sidebar-search-input {
   flex: 1 1 auto;
   min-width: 0;
-  border: 1px solid var(--lightink-border);
-  border-radius: 8px;
-  padding: 0.3rem 0.45rem;
-  background: var(--lightink-bg);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 10px;
+  padding: 0.4rem 0.6rem;
+  background: color-mix(in srgb, var(--lightink-fg) 4%, var(--lightink-bg));
   color: var(--lightink-fg);
   font: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .lightink-reader-sidebar-search-input:focus {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 1px;
+  outline: 0;
+  border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
 }
 
-/* 笔记搜索输入框：原内联样式迁入，radius 由 4px 升级为 8px。 */
+/* 笔记搜索输入框：原内联样式迁入，现代化圆角与聚焦态。 */
 .lightink-reader-sidebar-note-search-input {
   flex: 1 1 auto;
   min-width: 0;
-  border: 1px solid var(--lightink-border);
-  border-radius: 8px;
-  padding: 0.3rem 0.45rem;
-  background: var(--lightink-bg);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 10px;
+  padding: 0.4rem 0.6rem;
+  background: color-mix(in srgb, var(--lightink-fg) 4%, var(--lightink-bg));
   color: var(--lightink-fg);
   font: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .lightink-reader-sidebar-note-search-input:focus {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 1px;
+  outline: 0;
+  border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
 }
 
 .lightink-reader-sidebar-search-status {
@@ -169,22 +173,23 @@
 .lightink-reader-sidebar-item {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.6rem 0.7rem;
-  margin-bottom: 0.5rem;
+  gap: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.55rem;
   background: var(--lightink-bg);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   cursor: pointer;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
 .lightink-reader-sidebar-item:hover {
   border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 4px 12px rgba(0, 0, 0, 0.08);
+    0 2px 4px rgba(0, 0, 0, 0.07),
+    0 8px 18px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
 }
 
 .lightink-reader-sidebar-item-meta {
@@ -243,60 +248,68 @@
 
 .lightink-reader-sidebar-filters {
   display: flex;
-  gap: 0.2rem;
+  align-items: center;
+  gap: 0.25rem;
   flex-wrap: wrap;
   flex: 0 0 auto;
-  margin: 0.5rem 0.65rem;
-  padding: 0.2rem;
+  margin: 0.55rem 0.65rem;
+  padding: 0.25rem;
   border: 0;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
 }
 
 .lightink-reader-sidebar-filter {
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  padding: 0.22rem 0.65rem;
   font-size: 0.8em;
   line-height: 1.4;
   color: var(--lightink-muted);
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 
 .lightink-reader-sidebar-filter:hover {
-  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
   color: var(--lightink-fg);
 }
 
 .lightink-reader-sidebar-filter--active {
-  background: var(--lightink-bg);
-  border-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  background: var(--lightink-bg-elevated);
+  border-color: transparent;
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.08),
-    0 0 0 2px color-mix(in srgb, var(--lightink-accent) 18%, transparent);
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 0 0 1px color-mix(in srgb, var(--lightink-accent) 30%, transparent);
   color: var(--lightink-accent);
   font-weight: 600;
 }
 
-/* 颜色圆点：尺寸/形状由本规则承接，background-color 仍由内联 style 设置。 */
+/* 颜色圆点：尺寸/形状由本规则承接，background-color 仍由内联 style 设置。
+   「全部」chip（data-color='all'）是文字按钮，不适用圆点几何。 */
 .lightink-reader-sidebar-color,
-.lightink-reader-sidebar-color-filter {
-  width: 0.85rem;
-  height: 0.85rem;
+.lightink-reader-sidebar-color-filter:not([data-color='all']) {
+  width: 1rem;
+  height: 1rem;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 14%, transparent);
   border-radius: 50%;
   flex: 0 0 auto;
   box-sizing: border-box;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-/* 颜色圆点激活态：accent 环（背景色由内联 style 提供，此处不覆盖）。 */
-.lightink-reader-sidebar-color-filter.lightink-reader-sidebar-filter--active {
+.lightink-reader-sidebar-color-filter:not([data-color='all']):hover {
+  transform: scale(1.15);
+}
+
+/* 颜色圆点激活态：accent 环（背景色由内联 style 提供，此处不覆盖）；「全部」chip 走通用 chip 激活态。 */
+.lightink-reader-sidebar-color-filter:not([data-color='all']).lightink-reader-sidebar-filter--active {
   border-color: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
   box-shadow:
     0 0 0 2px var(--lightink-bg-elevated),
     0 0 0 4px var(--lightink-accent);
+  transform: scale(1.1);
 }
 
 /* ===== 行操作按钮：统一文本按钮样式 ===== */
@@ -314,11 +327,13 @@
   cursor: pointer;
   background: transparent;
   border: 0;
-  border-radius: 6px;
-  padding: 0.15rem 0.45rem;
-  font-size: 0.8em;
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.78em;
+  font-weight: 500;
   line-height: 1.5;
   color: var(--lightink-muted);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .lightink-reader-sidebar-jump:hover,
