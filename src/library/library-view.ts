@@ -1649,7 +1649,7 @@ export function createLibraryView(
     const fill = coverProgressFillPercent(shelfProgress);
     if (fill !== null) {
       row.dataset.progressFill = String(fill);
-      row.style.setProperty('--lightink-shelf-progress-fill', `${fill}%`);
+      row.style.setProperty('--lightink-library-progress-fill', `${fill}%`);
     }
     const progress = doc.createElement('span');
     progress.className = 'lightink-library-item-progress';

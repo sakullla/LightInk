@@ -554,7 +554,7 @@ describe('LibraryView my-books home', () => {
     expect(unreadRow.textContent).not.toContain('0%');
     expect(comicRow.dataset.progressStatus).toBe('in-progress');
     expect(comicRow.dataset.progressFill).toBe('37');
-    expect(comicRow.style.getPropertyValue('--lightink-shelf-progress-fill')).toBe('37%');
+    expect(comicRow.style.getPropertyValue('--lightink-library-progress-fill')).toBe('37%');
     expect(unreadRow.dataset.progressFill).toBeUndefined();
     expect(comicRow.textContent).toContain('第 12 页');
     expect(comicRow.textContent).toContain('已读 37%');
