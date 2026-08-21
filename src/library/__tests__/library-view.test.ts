@@ -1218,14 +1218,19 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(apply?.textContent).toBe('应用');
     expect(apply?.type).toBe('submit');
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
-    expect(css).toMatch(
-      /\.lightink-library-cache-limit-form\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+    // 缓存上限表单保持单列堆叠布局：grid 容器，列模板要么省略（默认单列），要么显式 minmax(0, 1fr)
+    const cacheFormRule = css.match(/\.lightink-library-cache-limit-form\s*\{([^}]*)\}/);
+    expect(cacheFormRule).not.toBeNull();
+    expect(cacheFormRule![1]).toMatch(/display:\s*grid/);
+    const cacheFormColumns = cacheFormRule![1].match(/grid-template-columns:\s*([^;]+);/);
+    if (cacheFormColumns) {
+      expect(cacheFormColumns[1].replace(/\s+/g, ' ')).toContain('minmax(0, 1fr)');
+    }
+    expect(css).not.toMatch(
+      /\.lightink-library-cache-limit-form\s*\{[^}]*grid-template-columns:\s*minmax\(150px/,
     );
     expect(css).toMatch(
       /\.lightink-library-cache-limit-form[^{]*\.lightink-library-primary\s*\{[^}]*white-space:\s*nowrap/,
-    );
-    expect(css).not.toMatch(
-      /\.lightink-library-cache-limit-form\s*\{[^}]*grid-template-columns:\s*minmax\(150px/,
     );
     input.value = '3.5';
     form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
@@ -1532,10 +1537,46 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(host.textContent).toContain('远程漫画');
 
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 书架不消费 reader 内部令牌
     expect(css).not.toMatch(/--lightink-reader-/);
     expect(css).not.toMatch(/--lightink-measure/);
     expect(css).not.toMatch(/--lightink-page-pad/);
+    // 新契约：data-library-page 页面契约已移除，由 data-library-nav 导航状态契约取代
+    expect(css).not.toContain('data-library-page');
+    expect(css).toMatch(/\[data-library-nav/);
+    // 导航 + 内容区存在明确的两栏 grid 布局
+    const bodyRule = css.match(/\.lightink-library-body\s*\{([^}]*)\}/);
+    expect(bodyRule).not.toBeNull();
+    expect(bodyRule![1]).toMatch(/display:\s*grid/);
+    expect(bodyRule![1]).toMatch(/grid-template-columns/);
+    // catalog 内容区存在明确的 grid/flex 布局规则（等价于原 data-library-page='catalog' 断言）
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?catalog['"]?\][^{]*\{[^}]*(display:\s*(grid|flex)|grid-template-columns|flex-direction)/,
+    );
+    // 内容区列表（catalog 行式）与封面墙（网格）均有明确布局规则
+    const itemsRule = css.match(/\.lightink-library-items\s*\{([^}]*)\}/);
+    expect(itemsRule).not.toBeNull();
+    expect(itemsRule![1]).toMatch(/display:\s*flex/);
+    expect(itemsRule![1]).toMatch(/flex-direction:\s*column/);
+    expect(css).toMatch(
+      /\.lightink-library-cover-wall\s*\{[^}]*display:\s*grid[^}]*grid-template-columns/,
+    );
     view.destroy();
+  });
+
+  it('drops the hardcoded shelf palette and consumes main theme tokens', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 不再定义 --lightink-shelf-* 私有自定义属性（色板与尺寸令牌全部移除）
+    expect(css).not.toMatch(/--lightink-shelf-[a-z0-9-]*\s*:/i);
+    // 不再有 rgba( 硬编码颜色
+    expect(css).not.toMatch(/rgba\(/i);
+    // 颜色经 var(--lightink-*) 主令牌消费：抽样根节点与封面墙关键规则
+    const rootRule = css.match(/\.lightink-library\s*\{([^}]*)\}/);
+    expect(rootRule).not.toBeNull();
+    expect(rootRule![1]).toMatch(/background:\s*var\(--lightink-bg/);
+    expect(rootRule![1]).toMatch(/color:\s*var\(--lightink-fg/);
+    expect(css).toMatch(/var\(--lightink-(muted|border|accent)/);
+    expect(css).toMatch(/\.lightink-library-cover\s*\{[^}]*var\(--lightink-/);
   });
 
   it('does not project progress onto unopened OPDS catalog entries', async () => {
@@ -1721,11 +1762,18 @@ describe('LibraryView shelf collections', () => {
     await view.show();
     await organizeShelf(host);
 
-    // 单本书不产生作者/系列智能分组（计数不足），导航与分组树中都不出现
+    // 单本书不产生作者/系列智能分组（计数不足）：带前缀的完整智能组标签在导航与分组树中都不出现，
+    // 裸名断言无法锁定该行为（真实标签为「作者：{name}」「系列：{name}」）
     for (const name of ['藻', 'ハム男']) {
       expect(() => collectionButton(host, name)).toThrow(/collection button not found/);
-      expect(() => smartGroupButton(host, name)).toThrow(/smart group nav item not found/);
     }
+    for (const label of ['作者：藻', '作者：ハム男', '系列：藻']) {
+      expect(() => smartGroupButton(host, label)).toThrow(/smart group nav item not found/);
+    }
+    const navText = libraryNav(host).textContent ?? '';
+    expect(navText).not.toContain('作者：藻');
+    expect(navText).not.toContain('作者：ハム男');
+    expect(navText).not.toContain('系列：藻');
 
     await startCreateGroup(host);
     const overlay = document.querySelector('.lightink-library-group-modal');
