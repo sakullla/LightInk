@@ -157,3 +157,80 @@ describe('openDocumentViaSaf SAF 回落形状', () => {
     await expect(openDocumentViaSaf(host)).resolves.toBe('/cache/a.pdf');
   });
 });
+
+describe('openDocumentViaSaf 并发结算（requestId→resolver 映射）', () => {
+  it('并发请求按 requestId 各自 settle，逆序回传不互相覆盖', async () => {
+    const host: SafBridgeHost = {};
+    const requestIds: string[] = [];
+    installSafBridge(host, (requestId) => {
+      requestIds.push(requestId);
+    });
+    const first = openDocumentViaSaf(host);
+    const second = openDocumentViaSaf(host);
+    expect(requestIds).toHaveLength(2);
+    // 后发起的先完成：验证按 requestId 分发而非单一全局槽被覆盖。
+    host.__lightinkSafResolve?.(requestIds[1], { status: 'ok', path: '/cache/b.pdf' });
+    host.__lightinkSafResolve?.(requestIds[0], { status: 'ok', path: '/cache/a.pdf' });
+    await expect(first).resolves.toBe('/cache/a.pdf');
+    await expect(second).resolves.toBe('/cache/b.pdf');
+  });
+
+  it('Kotlin 单飞拒绝只结算被回绝的请求，先发起的请求不受影响', async () => {
+    const host: SafBridgeHost = {};
+    const requestIds: string[] = [];
+    installSafBridge(host, (requestId) => {
+      requestIds.push(requestId);
+    });
+    const first = openDocumentViaSaf(host);
+    const second = openDocumentViaSaf(host);
+    host.__lightinkSafResolve?.(requestIds[1], {
+      status: 'error',
+      message: 'Another file pick is already in progress',
+    });
+    host.__lightinkSafResolve?.(requestIds[0], { status: 'ok', path: '/cache/a.pdf' });
+    await expect(second).rejects.toThrow('Another file pick is already in progress');
+    await expect(first).resolves.toBe('/cache/a.pdf');
+  });
+
+  it('已 settle 的请求再次回传被忽略（resolver 已从映射删除）', async () => {
+    const host: SafBridgeHost = {};
+    installSafBridge(host, (requestId) => {
+      host.__lightinkSafResolve?.(requestId, { status: 'ok', path: '/cache/a.pdf' });
+      host.__lightinkSafResolve?.(requestId, {
+        status: 'error',
+        message: 'late duplicate must be ignored',
+      });
+    });
+    await expect(openDocumentViaSaf(host)).resolves.toBe('/cache/a.pdf');
+  });
+
+  it('openDocument 同步抛错时清理映射条目', async () => {
+    const host: SafBridgeHost = {};
+    const requestIds: string[] = [];
+    installSafBridge(host, (requestId) => {
+      requestIds.push(requestId);
+      throw new Error('Activity destroyed');
+    });
+    await expect(openDocumentViaSaf(host)).rejects.toThrow('Activity destroyed');
+    // 抛错后的 requestId 回传不得触发任何 resolver（条目已清理，不悬挂不泄漏）。
+    expect(() =>
+      host.__lightinkSafResolve?.(requestIds[0], { status: 'ok', path: '/cache/a.pdf' }),
+    ).not.toThrow();
+  });
+});
+
+describe('SAF 缓存路径契约（Kotlin 侧 copyToImportCache 的 JS 可观测面）', () => {
+  it('Unicode 文件名（CJK + 空格）的每请求子目录路径原样透传', async () => {
+    // Kotlin 修复后路径形状为 import-cache/<requestId>/<干净显示名>，
+    // 显示名保留 Unicode 字母（书架标题直接取自它）；JS 侧必须不改动地透传。
+    const host: SafBridgeHost = {};
+    installSafBridge(host, (requestId) => {
+      host.__lightinkSafResolve?.(requestId, {
+        status: 'ok',
+        path: `/data/cache/import-cache/${requestId}/三体 全集.mobi`,
+      });
+    });
+    const path = await openDocumentViaSaf(host);
+    expect(path).toMatch(/^\/data\/cache\/import-cache\/saf-open-[^/]+\/三体 全集\.mobi$/);
+  });
+});

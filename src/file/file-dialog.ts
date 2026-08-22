@@ -17,7 +17,9 @@
  *     requestId, mimeTypesJson)`，启动 ACTION_OPEN_DOCUMENT（单飞：
  *     一次只允许一个进行中的选择）。
  *   - Kotlin → JS：Kotlin 将选中的 content:// 流复制到应用私有缓存目录
- *     （cacheDir/import-cache/），随后经 `WebView.evaluateJavascript` 调用
+ *     （cacheDir/import-cache/<requestId>/<显示名>，每请求一个子目录，
+ *     文件名保持干净显示名——书架标题直接取自它），随后经
+ *     `WebView.evaluateJavascript` 调用
  *     `window.__lightinkSafResolve(requestId, result)`。
  *   - result 形状：`{ status: 'ok', path }`（真实缓存文件路径，交给
  *     library_import_managed_book，契约不变）| `{ status: 'cancelled' }`
@@ -105,6 +107,35 @@ export const SAF_OPEN_MIME_TYPES: readonly string[] = [
 
 let safRequestCounter = 0;
 
+/** 单个 SAF 请求的结算回调（由 requestId→resolver 映射分发）。 */
+type SafResolver = (result: SafPickResult) => void;
+
+/**
+ * 每宿主一份 requestId→resolver 映射。`__lightinkSafResolve` 是全局单槽，
+ * 每次调用直接覆盖会让先注册的 Promise 悬挂；改为安装一个按 requestId
+ * 分发的 dispatcher，使并发请求各自 settle（Kotlin 侧单飞拒绝也只会
+ * 结算被回绝的那个请求）。
+ */
+const safResolversByHost = new WeakMap<SafBridgeHost, Map<string, SafResolver>>();
+
+function safResolversFor(host: SafBridgeHost): Map<string, SafResolver> {
+  let resolvers = safResolversByHost.get(host);
+  if (resolvers === undefined) {
+    resolvers = new Map();
+    safResolversByHost.set(host, resolvers);
+  }
+  // 每次（幂等）安装 dispatcher：闭包捕获同一映射，重挂不影响在途请求。
+  host.__lightinkSafResolve = (requestId: string, result: SafPickResult) => {
+    const resolver = resolvers.get(requestId);
+    if (resolver === undefined) {
+      return;
+    }
+    resolvers.delete(requestId);
+    resolver(result);
+  };
+  return resolvers;
+}
+
 function defaultSafHost(): SafBridgeHost | null {
   if (typeof window === 'undefined') {
     return null;
@@ -116,8 +147,9 @@ function defaultSafHost(): SafBridgeHost | null {
  * Android SAF 路径：经 MainActivity 的 LightInkSafBridge 启动
  * ACTION_OPEN_DOCUMENT，Kotlin 把 content:// 复制为应用私有缓存文件后回传
  * 真实路径。用户取消返回 null；桥缺失 / 复制失败 / 并发占用一律 reject
- * 明确错误（调用方负责把错误呈现给用户，绝不静默）。单飞：同时进行多个
- * 选择时后注册的 resolve 会覆盖前一个，Kotlin 侧也以并发占用错误拒绝。
+ * 明确错误（调用方负责把错误呈现给用户，绝不静默）。回传经 requestId→
+ * resolver 映射分发，并发请求各自 settle；Kotlin 侧仍为单飞，后发起的
+ * 请求会以并发占用 error 被回绝。
  */
 export async function openDocumentViaSaf(
   host: SafBridgeHost | null = defaultSafHost(),
@@ -127,11 +159,9 @@ export async function openDocumentViaSaf(
     throw new Error('Android file picker bridge is unavailable (SAF bridge not initialized)');
   }
   const requestId = `saf-open-${Date.now()}-${++safRequestCounter}`;
+  const resolvers = safResolversFor(host);
   return new Promise<string | null>((resolve, reject) => {
-    host.__lightinkSafResolve = (id: string, result: SafPickResult) => {
-      if (id !== requestId) {
-        return;
-      }
+    resolvers.set(requestId, (result: SafPickResult) => {
       if (result.status === 'ok' && typeof result.path === 'string' && result.path !== '') {
         resolve(result.path);
         return;
@@ -147,10 +177,11 @@ export async function openDocumentViaSaf(
             : 'Android file picker failed',
         ),
       );
-    };
+    });
     try {
       bridge.openDocument(requestId, JSON.stringify(SAF_OPEN_MIME_TYPES));
     } catch (error) {
+      resolvers.delete(requestId);
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });

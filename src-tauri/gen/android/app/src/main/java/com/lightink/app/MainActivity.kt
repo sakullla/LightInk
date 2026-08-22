@@ -42,8 +42,10 @@ import org.json.JSONObject
  *   addJavascriptInterface 方法运行在 WebView 私有 Binder 线程，因此一律
  *   runOnUiThread 后再操作 ActivityResultLauncher。
  * - Kotlin → JS：选中的 content:// 流在单线程 executor 上复制到应用私有
- *   缓存目录 cacheDir/import-cache/（文件名带 requestId 前缀避免并发/重名
- *   冲突），随后 evaluateJavascript 调用
+ *   缓存目录 cacheDir/import-cache/<requestId>/ 下（每请求一个子目录避免
+ *   并发/重名冲突，文件名保持干净的显示名——书架标题直接取自该文件名，
+ *   见 src-tauri/src/managed.rs insert_managed_item），随后
+ *   evaluateJavascript 调用
  *   `window.__lightinkSafResolve(requestId, result)`；result 形状
  *   `{status:'ok',path}` / `{status:'cancelled'}` / `{status:'error',message}`。
  * - WebView 已销毁时回传丢失，前端 Promise 悬挂；该窗口仅在 Activity
@@ -115,6 +117,9 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    // 清空 webView 引用：销毁后完成的后台复制会走 resolveSaf 的 null-guard
+    // 直接 no-op，避免对已销毁 WebView 调 evaluateJavascript。
+    webView = null
     safCopyExecutor.shutdown()
     super.onDestroy()
   }
@@ -166,14 +171,20 @@ class MainActivity : TauriActivity() {
     view.evaluateJavascript(script, null)
   }
 
-  /** 把 content:// 流复制到应用私有缓存目录，返回真实文件路径。 */
+  /**
+   * 把 content:// 流复制到应用私有缓存目录，返回真实文件路径。
+   * 每请求一个子目录（import-cache/<requestId>/<displayName>）：文件名保持
+   * 干净的显示名——library_import_managed_book 的书架标题直接取自源文件名
+   * （src-tauri/src/managed.rs insert_managed_item），不能用 requestId 前缀
+   * 污染；子目录本身承担并发/重名隔离。
+   */
   private fun copyToImportCache(uri: Uri, requestId: String): String {
     val displayName = sanitizeFileName(queryDisplayName(uri)) ?: "import.bin"
-    val dir = File(cacheDir, "import-cache")
+    val dir = File(File(cacheDir, "import-cache"), requestId)
     if (!dir.exists() && !dir.mkdirs()) {
       throw java.io.IOException("Failed to create import cache directory")
     }
-    val target = File(dir, "$requestId-$displayName")
+    val target = File(dir, displayName)
     contentResolver.openInputStream(uri)?.use { input ->
       target.outputStream().use { output -> input.copyTo(output) }
     } ?: throw java.io.IOException("Failed to open selected document stream")
@@ -191,7 +202,13 @@ class MainActivity : TauriActivity() {
     if (name.isNullOrBlank()) {
       return null
     }
-    val sanitized = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    // 保留 Unicode 字母/数字（CJK 书名等）：书架标题直接取自该文件名，
+    // 不能把它们抹成 '_'。仅替换真正不安全的字符（路径分隔符、控制符等）。
+    val sanitized = name.replace(Regex("[^\\p{L}\\p{N}._-]"), "_")
+    // 拒绝仅由点组成的名字（"." / ".." 路径穿越风险），回落默认名。
+    if (sanitized.all { it == '.' }) {
+      return null
+    }
     return sanitized.ifBlank { null }
   }
 
