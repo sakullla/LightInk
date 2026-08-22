@@ -21,6 +21,8 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 主窗口 label，与 `tauri.conf.json` `app.windows[0].label` 一致。
+/// 仅桌面窗口恢复路径与单测使用；移动端窗口恢复为 no-op，故非桌面目标允许 dead_code。
+#[cfg_attr(not(desktop), allow(dead_code))]
 const MAIN_WINDOW_LABEL: &str = "main";
 
 /// 待打开文件槽（单值，取出即清空）。
@@ -46,6 +48,8 @@ pub fn enqueue_pending_file(app: &AppHandle, path: String) {
 
 /// 对已有主窗口执行 unminimize → show → set_focus。
 /// 窗口不存在时静默跳过；任一步失败仍尝试后续步骤（最小化窗口可能拒绝 focus）。
+/// `unminimize` 为 desktop-only API，移动端没有任务栏最小化概念，整体跳过窗口恢复。
+#[cfg(desktop)]
 fn bring_main_window_forward(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return;
@@ -54,6 +58,10 @@ fn bring_main_window_forward(app: &AppHandle) {
     let _ = window.show();
     let _ = window.set_focus();
 }
+
+/// 移动端无窗口最小化/前台聚焦语义，窗口恢复为 no-op。
+#[cfg(not(desktop))]
+fn bring_main_window_forward(_app: &AppHandle) {}
 
 /// 扫描 argv（含程序路径，索引 0 跳过），返回首个可打开文件参数
 /// （`.md`/`.markdown` 开 markdown 标签，或电子书扩展名开 reader 标签）。
