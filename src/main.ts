@@ -138,6 +138,7 @@ import {
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
 import { isAndroidApp, isTouchPrimary } from './ui/mobile-platform.js';
+import { registerAndroidBackNavigation } from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
 import {
@@ -3255,18 +3256,36 @@ shortcuts.attach(document);
 
 // Reader-owned Escape: overlay handlers preventDefault first; leftover Escape
 // on an open book returns to the shelf. Shelf Escape is a no-op.
+/**
+ * Escape 与 Android 系统返回共用的文档级分层判定（02 D4）：overlay 层已在
+ * 各自 keydown 监听中消费（preventDefault），剩余事件到达此处——阅读器
+ * 打开书 → returnToShelf 并消费；书架 → 不消费（桌面 Escape no-op，
+ * Android 由 Kotlin 回落系统默认）。Android 返回经 ui/back-navigation.ts
+ * 的合成 Escape 走同一监听链，不复制分层逻辑。
+ */
+function consumeLayeredEscapeLeftover(): boolean {
+  if (workspace.mode !== 'reader') {
+    return false;
+  }
+  if (!workspace.hasOpenBook) {
+    return false;
+  }
+  workspace.returnToShelf();
+  return true;
+}
+
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || event.defaultPrevented) {
     return;
   }
-  if (workspace.mode !== 'reader') {
-    return;
-  }
-  if (workspace.hasOpenBook) {
-    workspace.returnToShelf();
+  if (consumeLayeredEscapeLeftover()) {
     event.preventDefault();
   }
 });
+
+// R5：Android 系统返回键桥——注册 window.__lightinkAndroidBackPress，
+// Kotlin MainActivity 经 evaluateJavascript 同步查询消费标记；非 Android no-op。
+registerAndroidBackNavigation();
 
 const gateMarkdownPagedWheel = createPagedWheelGate();
 
