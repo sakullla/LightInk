@@ -480,6 +480,159 @@ describe('flow host wheel', () => {
   });
 });
 
+describe('flow host touch paging', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+    delete document.documentElement.dataset.workspaceMode;
+  });
+
+  function mountFlowRoot(layout: 'paginated' | 'scroll' = 'paginated'): {
+    root: HTMLElement;
+    scrollHost: HTMLElement;
+  } {
+    const shell = document.createElement('div');
+    shell.dataset.workspaceMode = 'reader';
+    shell.dataset.workspaceSurface = 'reader';
+    const root = document.createElement('div');
+    root.className = 'lightink-reader';
+    root.dataset.readingLayout = layout;
+    const scrollHost = document.createElement('div');
+    // jsdom 无布局：点按热区判定需要视口宽度。
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 400 });
+    root.appendChild(scrollHost);
+    shell.appendChild(root);
+    document.body.appendChild(shell);
+    return { root, scrollHost };
+  }
+
+  function touchEvent(type: string, point: { clientX: number; clientY: number } | null): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    const points = point === null ? [] : [point];
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : points });
+    Object.defineProperty(event, 'changedTouches', { value: points });
+    return event;
+  }
+
+  it('delegates a right-edge tap to advancePagedWheel (same entry as wheel)', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    const end = touchEvent('touchend', { clientX: 390, clientY: 100 });
+    scrollHost.dispatchEvent(end);
+    expect(dirs).toEqual([1]);
+    expect(end.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
+
+  it('delegates a left-edge tap and a horizontal swipe', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 8, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 8, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 320, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 140, clientY: 108 }));
+    expect(dirs).toEqual([-1, 1]);
+    renderer.clear();
+  });
+
+  it('does not page on a center tap (chrome toggle click path preserved)', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 200, clientY: 100 }));
+    const end = touchEvent('touchend', { clientX: 200, clientY: 100 });
+    scrollHost.dispatchEvent(end);
+    expect(dirs).toEqual([]);
+    expect(end.defaultPrevented).toBe(false);
+    renderer.clear();
+  });
+
+  it('does not page in scroll layout or on a hidden host', () => {
+    const scrolled = mountFlowRoot('scroll');
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrolled.scrollHost,
+      scrolled.root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    scrolled.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    scrolled.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    expect(dirs).toEqual([]);
+    renderer.clear();
+
+    const hidden = mountFlowRoot();
+    hidden.root.parentElement!.style.display = 'none';
+    const hiddenRenderer = createFlowRenderer(
+      hidden.scrollHost,
+      hidden.root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    hidden.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    hidden.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    expect(dirs).toEqual([]);
+    hiddenRenderer.clear();
+  });
+
+  it('stops paging after clear', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    renderer.clear();
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    expect(dirs).toEqual([]);
+  });
+});
+
 function stubShellActions(overrides: Partial<AppShellActions> = {}): AppShellActions {
   const noop = (): void => undefined;
   return {

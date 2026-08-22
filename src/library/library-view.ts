@@ -39,6 +39,7 @@ import type {
 } from './opds-client.js';
 import type { ProgressStorage } from '../reader/reading-progress.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
+import { bindLongPress } from '../ui/touch/long-press.js';
 import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
 import {
   applyLibraryTheme,
@@ -1669,6 +1670,71 @@ export function createLibraryView(
     return walk(nodes);
   }
 
+  /**
+   * 分组管理动作（与「...」内联菜单同一动作集）构建为上下文菜单模型：
+   * 长按分组行走既有 createContextMenu 渲染入口，纯触控可达全部管理动作。
+   */
+  function buildGroupMenuItems(node: LibraryGroupNode): MenuItem[] {
+    const up = keyboardGroupPlacement(groups, node.group.id, 'up');
+    const down = keyboardGroupPlacement(groups, node.group.id, 'down');
+    const outdent = keyboardGroupPlacement(groups, node.group.id, 'outdent');
+    const indent = keyboardGroupPlacement(groups, node.group.id, 'indent');
+    const memberIds = itemIdsForGroup(groups, memberships, node.group.id);
+    const managedMembers = items
+      .map((display) => display.item)
+      .filter((item) => memberIds.has(item.id) && isManagedItem(item));
+    const groupPinned =
+      managedMembers.length > 0 && managedMembers.every((item) => item.offlinePinned === true);
+    return [
+      {
+        id: 'add-child',
+        label: labels().addChildGroup,
+        action: () => openGroupEditor({ kind: 'create', parentId: node.group.id }),
+      },
+      {
+        id: 'rename',
+        label: labels().renameGroup,
+        action: () => openGroupEditor({ kind: 'rename', groupId: node.group.id }),
+      },
+      {
+        id: 'move-up',
+        label: labels().moveUp,
+        action: () => void keyboardMoveGroup(node.group.id, 'up'),
+        enabled: () => up !== null,
+      },
+      {
+        id: 'move-down',
+        label: labels().moveDown,
+        action: () => void keyboardMoveGroup(node.group.id, 'down'),
+        enabled: () => down !== null,
+      },
+      {
+        id: 'outdent',
+        label: labels().outdent,
+        action: () => void keyboardMoveGroup(node.group.id, 'outdent'),
+        enabled: () => outdent !== null,
+      },
+      {
+        id: 'indent',
+        label: labels().indent,
+        action: () => void keyboardMoveGroup(node.group.id, 'indent'),
+        enabled: () => indent !== null,
+      },
+      {
+        id: 'offline',
+        label: groupPinned ? labels().removeGroupOffline : labels().keepGroupOffline,
+        action: () => void setGroupOffline(node.group.id, !groupPinned),
+        enabled: () => managedMembers.length > 0 && deps.library.setOfflinePinned !== undefined,
+      },
+      { separator: true, id: 'sep-delete', label: '', action: () => undefined },
+      {
+        id: 'delete',
+        label: labels().deleteGroup,
+        action: () => void deleteCustomGroup(node.group),
+      },
+    ];
+  }
+
   function appendCustomGroupNode(node: LibraryGroupNode): void {
     const wrapper = doc.createElement('div');
     wrapper.className = 'lightink-library-custom-group';
@@ -1676,6 +1742,13 @@ export function createLibraryView(
     wrapper.dataset.groupDepth = String(node.depth + 1);
     wrapper.style.setProperty('--lightink-group-depth', String(node.depth));
     wrapper.draggable = true;
+    // 长按分组行 → 既有 createContextMenu 渲染入口（管理动作纯触控可达）；
+    // 先于子按钮 click 绑定，触发后吞掉紧随的合成 click（避免误选中分组）。
+    bindLongPress(wrapper, {
+      onLongPress: (position) => {
+        createContextMenu(buildGroupMenuItems(node), position, doc);
+      },
+    });
     const row = doc.createElement('div');
     row.className = 'lightink-library-custom-group-row';
     const toggle = button(doc, '', 'lightink-library-group-toggle');
@@ -2102,9 +2175,7 @@ export function createLibraryView(
     }
   }
 
-  function openItemCollectionMenu(display: DisplayItem, event: MouseEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
+  function openItemCollectionMenu(display: DisplayItem, position: { x: number; y: number }): void {
     const custom = flattenedCustomGroups();
     const items: MenuItem[] = [];
     if (custom.length === 0) {
@@ -2147,7 +2218,7 @@ export function createLibraryView(
         },
       });
     }
-    createContextMenu(items, { x: event.clientX, y: event.clientY }, doc);
+    createContextMenu(items, position, doc);
   }
 
   function closeMembershipEditor(): void {
@@ -2233,9 +2304,16 @@ export function createLibraryView(
     }
     appendImportedProgress(row, text, display, { continueCue: false });
     row.append(cover, text);
+    // 长按先于 click/contextmenu 绑定：触发后吞掉紧随的合成 click/原生
+    // contextmenu（at-target 阶段按注册顺序派发），避免误打开书或菜单双开。
+    bindLongPress(row, {
+      onLongPress: (position) => openItemCollectionMenu(display, position),
+    });
     row.addEventListener('click', () => void openSelected(display));
     row.addEventListener('contextmenu', (event) => {
-      openItemCollectionMenu(display, event);
+      event.preventDefault();
+      event.stopPropagation();
+      openItemCollectionMenu(display, { x: event.clientX, y: event.clientY });
     });
     row.addEventListener('keydown', (event) => {
       if (event.key.toLocaleLowerCase() === 'g' && !event.ctrlKey && !event.metaKey) {
@@ -2277,6 +2355,10 @@ export function createLibraryView(
     text.append(title, meta);
     appendImportedProgress(row, text, display, { continueCue: false });
     row.append(cover, text);
+    // 目录行（列表态）无右键菜单，长按提供同一分组管理菜单（纯触控可达）。
+    bindLongPress(row, {
+      onLongPress: (position) => openItemCollectionMenu(display, position),
+    });
     row.addEventListener('click', () =>
       display.entry?.kind === 'navigation' ? void openSelected(display) : void selectItem(display),
     );

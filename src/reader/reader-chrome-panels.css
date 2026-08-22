@@ -512,3 +512,34 @@
   color: inherit;
   font: inherit;
 }
+
+/* ===== 360dp 竖屏与触屏（追加档，不改既有断点语义） ===== */
+
+/* 360dp 竖屏：排版/目录面板贴边不溢出，内容可滚动。 */
+@media (max-width: 480px) {
+  .lightink-reader-chrome-panel {
+    max-width: calc(100vw - 16px);
+    max-height: min(76vh, 100vh - 16px);
+    overflow-y: auto;
+  }
+
+  .lightink-reader-chrome-toc,
+  .lightink-reader-type-sheet {
+    width: calc(100vw - 16px);
+  }
+}
+
+/* 触屏（粗指针）：排版设置全部控件 40px+ 点按目标，触屏可调。 */
+@media (pointer: coarse) {
+  .lightink-reader-toc-item,
+  .lightink-reader-type-choice,
+  .lightink-reader-type-step,
+  .lightink-reader-theme-swatch {
+    min-height: 44px;
+  }
+
+  .lightink-reader-type-step,
+  .lightink-reader-type-tick {
+    min-width: 44px;
+  }
+}

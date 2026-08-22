@@ -3079,3 +3079,45 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
     outline-color: Highlight;
   }
 }
+
+/* ===== 触控与 360dp 竖屏（追加档，不改既有断点语义） ===== */
+
+/* 触屏（粗指针）：更大点按目标；hover-only chrome reveal 由 JS 点按切换替代，
+   触发条在触屏下加高且 reveal 后保持可点按（桌面 reveal 后高度 0 不变）。 */
+@media (pointer: coarse) {
+  .lightink-chrome-trigger {
+    height: 24px;
+  }
+
+  .lightink-chrome-host.is-menu-revealed .lightink-chrome-trigger,
+  .lightink-tabs-host.is-tabs-revealed .lightink-chrome-trigger--tabs {
+    height: 8px;
+    overflow: hidden;
+  }
+
+  .lightink-menu-item,
+  .lightink-context-menu__item {
+    min-height: 40px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .lightink-modal-btn {
+    min-height: 40px;
+    padding: 8px 16px;
+  }
+}
+
+/* 360dp 竖屏：上下文菜单与模态不出屏、可滚动。 */
+@media (max-width: 480px) {
+  .lightink-context-menu {
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+  }
+
+  .lightink-menu-panel,
+  .lightink-menu-flyout {
+    max-width: calc(100vw - 16px);
+  }
+}

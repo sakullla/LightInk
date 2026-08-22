@@ -35,6 +35,7 @@ import {
   snapPagedScroller,
 } from '../ui/reading-layout.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
+import { bindTouchPaging } from '../ui/touch/reader-touch.js';
 import {
   applyReaderDocumentLayout,
   applyReaderLayout,
@@ -707,6 +708,7 @@ export function createFlowRenderer(
   const clear = (): void => {
     flowRenderGeneration += 1;
     unbindHostWheel();
+    unbindHostTouchPaging();
     resourceObserver?.disconnect();
     resourceObserver = null;
     const windows = resourceWindows;
@@ -1081,6 +1083,7 @@ export function createFlowRenderer(
   const render = (chapters: ReaderChapter[], stylesheet = ''): void => {
     clear();
     bindHostWheel();
+    bindHostTouchPaging();
     const renderGeneration = flowRenderGeneration;
     scrollHost.replaceChildren();
     // T8：视口窗口驱动物化/释放；rootMargin 预取一屏邻章。无 IO 环境（jsdom）
@@ -1377,6 +1380,13 @@ export function createFlowRenderer(
         // The same WheelEvent object is ignored the second time.
         frameWindow.addEventListener('wheel', onWheel, { passive: false, capture: true });
         frameDocument.addEventListener('wheel', onWheel, { passive: false, capture: true });
+        // 帧内触控翻页：点按左右热区/横向滑动 → 与滚轮同一 advanceFlowPage 入口；
+        // 中间区点按不翻页，click 仍走既有 chrome 切换/链接/划选路径。
+        const releaseFrameTouchPaging = bindTouchPaging(frameDocument, {
+          enabled: () => isFlowPaginated(root),
+          viewportWidth: () => frame.clientWidth,
+          page: (direction) => advanceFlowPage(direction),
+        });
         const releaseImages = bindBlockedRemoteImages(
           frameDocument.body,
           hooks.t('reader.remoteImageLoad'),
@@ -1421,6 +1431,7 @@ export function createFlowRenderer(
         releaseRemoteImages.push(() => {
           resizeObserver?.disconnect();
           releaseImages();
+          releaseFrameTouchPaging();
           frameDocument.removeEventListener('click', onClick);
           frameDocument.removeEventListener('mouseup', onMouseUp);
           frameDocument.removeEventListener('keydown', onKeyDown);
@@ -1580,6 +1591,26 @@ export function createFlowRenderer(
 
   let hostWheelBound = false;
 
+  // 宿主侧触控翻页（帧外空白/页边区）：与宿主滚轮同一 advancePagedWheel 入口，
+  // 同一 flowReaderHostActive 门控（仅可见翻页流式宿主；PDF/漫画宿主不接管）。
+  let releaseHostTouchPaging: (() => void) | null = null;
+
+  const bindHostTouchPaging = (): void => {
+    if (releaseHostTouchPaging !== null) {
+      return;
+    }
+    releaseHostTouchPaging = bindTouchPaging(scrollHost, {
+      enabled: () => flowReaderHostActive(root),
+      viewportWidth: () => scrollHost.clientWidth,
+      page: (direction) => hooks.advancePagedWheel(direction),
+    });
+  };
+
+  const unbindHostTouchPaging = (): void => {
+    releaseHostTouchPaging?.();
+    releaseHostTouchPaging = null;
+  };
+
   const bindHostWheel = (): void => {
     if (hostWheelBound) {
       return;
@@ -1623,6 +1654,7 @@ export function createFlowRenderer(
     document.addEventListener('lightink:reader-typography', onTypographyPref);
   }
   bindHostWheel();
+  bindHostTouchPaging();
 
   syncReaderDocumentLayout(root);
 

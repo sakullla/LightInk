@@ -137,7 +137,7 @@ import {
   type ReadingLayout,
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
-import { isAndroidApp } from './ui/mobile-platform.js';
+import { isAndroidApp, isTouchPrimary } from './ui/mobile-platform.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
 import {
@@ -3276,39 +3276,43 @@ function advanceMarkdownReading(direction: 1 | -1): boolean {
     : advanceScrolledScroller(editorScroller, direction);
 }
 
-document.addEventListener(
-  'keydown',
-  (event) => {
-    if (event.ctrlKey || event.metaKey || event.altKey || !isReadingNavKey(event.key)) {
-      return;
-    }
-    // 打开应用模态，或焦点在输入框/可编辑内容（正文 contenteditable、源码 textarea、
-    // 输入框）时不劫持翻页键：isReadingNavKey 含 Space 与方向键，放进翻页链会让
-    // 正文输入/光标移动被劫持成翻页。
-    if (pagingShouldIgnoreTarget(event.target)) {
-      return;
-    }
-    const direction = readingNavDirection(event.key, event.shiftKey);
-    if (direction === null) {
-      return;
-    }
-    const readerTab = activeReaderTab();
-    if (readerTab !== null) {
-      if (readerTab.reader.advanceReading(direction)) {
+// 触屏优先设备（pointer: coarse）不注册阅读翻页键全局劫持——无实体键盘时
+// 方向键/空格劫持只会拦截无障碍与遥控输入；桌面键鼠路径逐字节保持现状。
+if (!isTouchPrimary) {
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || !isReadingNavKey(event.key)) {
+        return;
+      }
+      // 打开应用模态，或焦点在输入框/可编辑内容（正文 contenteditable、源码 textarea、
+      // 输入框）时不劫持翻页键：isReadingNavKey 含 Space 与方向键，放进翻页链会让
+      // 正文输入/光标移动被劫持成翻页。
+      if (pagingShouldIgnoreTarget(event.target)) {
+        return;
+      }
+      const direction = readingNavDirection(event.key, event.shiftKey);
+      if (direction === null) {
+        return;
+      }
+      const readerTab = activeReaderTab();
+      if (readerTab !== null) {
+        if (readerTab.reader.advanceReading(direction)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      const tab = activeMarkdownTab();
+      if (tab === null) {
+        return;
+      }
+      if (advanceMarkdownReading(direction)) {
         event.preventDefault();
       }
-      return;
-    }
-    const tab = activeMarkdownTab();
-    if (tab === null) {
-      return;
-    }
-    if (advanceMarkdownReading(direction)) {
-      event.preventDefault();
-    }
-  },
-  true,
-);
+    },
+    true,
+  );
+}
 
 // R1：滚轮翻页提升到 window 级——窗口内任意位置（含正文、大纲侧栏、顶部菜单/标签
 // chrome 与空白区）滚动滚轮均按分页模式翻页正文；仅目标为表单控件（输入框/源码

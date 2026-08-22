@@ -383,3 +383,26 @@
     cursor: default;
   }
 }
+
+/* ===== 360dp 竖屏与触屏（追加档，不改既有断点语义） ===== */
+
+/* 360dp 竖屏：标注侧栏近乎全宽抽屉，不溢出视口。 */
+@media (max-width: 480px) {
+  .lightink-reader-sidebar {
+    width: calc(100% - 1rem);
+    max-width: calc(100% - 1rem);
+  }
+}
+
+/* 触屏（粗指针）：侧栏行与按钮更大点按目标。 */
+@media (pointer: coarse) {
+  .lightink-reader-sidebar-item,
+  .lightink-reader-sidebar-close {
+    min-height: 40px;
+  }
+
+  .lightink-reader-sidebar-note-search-input {
+    min-height: 40px;
+  }
+}
+

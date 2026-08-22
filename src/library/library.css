@@ -1937,3 +1937,58 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     transition: none;
   }
 }
+
+/* ===== 360dp 竖屏与触屏（追加档，不改既有断点语义） ===== */
+
+/* 360dp 竖屏：分组树/搜索/网格进一步收窄，封面墙至少两列不溢出。 */
+@media (max-width: 480px) {
+  html .lightink-library,
+  html[data-display] .lightink-library {
+    --lightink-library-pad-x: 12px;
+    --lightink-library-pad-y: 10px;
+    --lightink-library-nav-width: 120px;
+    --lightink-library-nav-min: 120px;
+    --lightink-library-cover-min: 96px;
+    --lightink-library-cover-gap-x: 10px;
+    --lightink-library-cover-gap-y: 12px;
+    --lightink-library-search-max: 100%;
+    --lightink-library-manage-max: 100%;
+  }
+
+  .lightink-library-nav {
+    padding: 6px 6px 12px;
+  }
+
+  .lightink-library-search {
+    flex: 1 1 100%;
+  }
+
+  .lightink-library-cover-wall {
+    padding: 10px;
+  }
+}
+
+/* 触屏（粗指针）：更大点按目标；条目禁文本选择以保证长按手势稳定
+   （桌面鼠标选择行为不变）。 */
+@media (pointer: coarse) {
+  .lightink-library-item {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .lightink-library-nav-item,
+  .lightink-library-group,
+  .lightink-library-source,
+  .lightink-library-smart-group,
+  .lightink-library-group-toggle,
+  .lightink-library-group-actions > button {
+    min-height: 40px;
+  }
+
+  .lightink-library-icon-button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+

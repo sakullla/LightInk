@@ -48,6 +48,7 @@ import { createMenuBar, type Menu, type MenuItem } from './menus.js';
 import { labelModal, mountModalFocus } from './modal-focus.js';
 import { matchEvent } from './shortcuts.js';
 import { createWindowTitlebar, type WindowTitlebar } from './window-titlebar.js';
+import { isTouchPrimary } from './mobile-platform.js';
 import {
   applyWorkspaceSurface,
   resolveWorkspaceSurface,
@@ -277,6 +278,12 @@ export interface AppShellOptions {
   storage?: StorageLike | null;
   /** Initial pin prefs override (tests); otherwise loaded from storage. */
   initialPinPrefs?: ChromePinPrefs;
+  /**
+   * 触屏优先（pointer: coarse）：hover reveal 不绑定，chrome 触发条改为点按
+   * 切换。默认取 mobile-platform 的 isTouchPrimary（前端唯一平台事实点），
+   * 测试可显式注入。
+   */
+  touchPrimary?: boolean;
 }
 
 export interface AppShell {
@@ -973,6 +980,7 @@ export function createAppShell(
   options: AppShellOptions,
 ): AppShell {
   const chrome = createChromeController();
+  const touchPrimary = options.touchPrimary ?? isTouchPrimary;
   const storage = resolveStorage(options);
   let fallbackReaderLayout = loadReaderLayout(storage);
   let fallbackReaderTypography = loadReaderTypography(storage);
@@ -1324,10 +1332,18 @@ export function createAppShell(
     }
   }
 
-  bindSurfacePointer('menu', [menuTrigger, toolbar], syncMenuChrome);
-  bindSurfacePointer('tabs', [tabsTrigger, tabBar], syncTabsChrome);
+  // 触屏下无稳定 hover：不绑定 pointerenter/pointerleave reveal，触发条改为
+  // 点按切换（见下方 click 处理）；桌面 hover 路径逐字节保持现状。
+  if (!touchPrimary) {
+    bindSurfacePointer('menu', [menuTrigger, toolbar], syncMenuChrome);
+    bindSurfacePointer('tabs', [tabsTrigger, tabBar], syncTabsChrome);
+  }
 
   menuTrigger.addEventListener('click', () => {
+    if (touchPrimary) {
+      toggleMenuChrome();
+      return;
+    }
     chrome.reveal('menu');
     syncMenuChrome();
   });
@@ -1340,6 +1356,10 @@ export function createAppShell(
   });
 
   tabsTrigger.addEventListener('click', () => {
+    if (touchPrimary) {
+      toggleTabsChrome();
+      return;
+    }
     chrome.reveal('tabs');
     syncTabsChrome();
   });

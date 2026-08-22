@@ -2353,3 +2353,102 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 });
+
+describe('LibraryView touch long-press', () => {
+  function touchEvent(type: string, point: { clientX: number; clientY: number } | null): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    const points = point === null ? [] : [point];
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : points });
+    Object.defineProperty(event, 'changedTouches', { value: points });
+    return event;
+  }
+
+  async function waitLongPress(): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, 550));
+  }
+
+  it('long-press on a cover card opens the same management context menu as right-click', async () => {
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = itemRow(host, novel.id);
+    card.dispatchEvent(touchEvent('touchstart', { clientX: 20, clientY: 20 }));
+    await waitLongPress();
+    card.dispatchEvent(touchEvent('touchend', null));
+    await settle();
+
+    expect(document.querySelector('.lightink-context-menu')).not.toBeNull();
+    // 管理动作纯触控可达：无自定义分组时菜单项直达新建分组编辑器。
+    contextMenuItem('加入分组').click();
+    await settle();
+    expect(groupFormOf(host)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('suppresses the trailing tap after a long-press (book is not opened)', async () => {
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = itemRow(host, novel.id);
+    card.dispatchEvent(touchEvent('touchstart', { clientX: 20, clientY: 20 }));
+    await waitLongPress();
+    card.dispatchEvent(touchEvent('touchend', null));
+    await settle();
+    expect(document.querySelector('.lightink-context-menu')).not.toBeNull();
+
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(deps.onOpen).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('keeps a plain tap opening the book (long-press not fired)', async () => {
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = itemRow(host, novel.id);
+    card.dispatchEvent(touchEvent('touchstart', { clientX: 20, clientY: 20 }));
+    card.dispatchEvent(touchEvent('touchend', null));
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalled();
+    expect(document.querySelector('.lightink-context-menu')).toBeNull();
+    view.destroy();
+  });
+
+  it('long-press on a custom group row opens the group management context menu', async () => {
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '测试组' });
+
+    const row = collectionRow(host, '测试组');
+    row.dispatchEvent(touchEvent('touchstart', { clientX: 20, clientY: 20 }));
+    await waitLongPress();
+    row.dispatchEvent(touchEvent('touchend', null));
+    await settle();
+
+    expect(document.querySelector('.lightink-context-menu')).not.toBeNull();
+    // 分组管理动作（重命名）纯触控可达。
+    contextMenuItem('重命名分组').click();
+    await settle();
+    expect(groupFormOf(host)).toBeTruthy();
+    view.destroy();
+  });
+});
