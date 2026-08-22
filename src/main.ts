@@ -53,7 +53,7 @@ import {
 } from './editor/insert-commands.js';
 import { fileNameStem, importImageAsset } from './asset/asset-service.js';
 import { isReaderPath, planDroppedFiles } from './file/file-drop.js';
-import { OPEN_FILTERS } from './file/file-dialog.js';
+import { OPEN_FILTERS, showOpenDialog } from './file/file-dialog.js';
 import { openDocumentPath } from './file/document-router.js';
 import { extOfPath } from './file/path-ext.js';
 import type {
@@ -1115,19 +1115,41 @@ async function enrichLocalLibraryItem(
   }
 }
 
+/**
+ * 本地导入失败的明确提示（R3：书架导入入口失败绝不静默）。
+ * i18n/messages 不在本任务 scope，沿用 joinActiveMarkdownToSyncSpace 的
+ * 内联 locale 判定惯例。
+ */
+function notifyLocalImportError(error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error ?? '');
+  void dialogMessage(
+    i18n.locale === 'en'
+      ? `Failed to import local book: ${detail}`
+      : `导入本地书籍失败：${detail}`,
+    { title: i18n.t('app.name'), kind: 'error' },
+  );
+}
+
 async function importLocalLibraryItem(): Promise<import('./library/library-client.js').LibraryItem | null> {
   let selected: string | null = null;
   try {
-    const result = await openDialog({ multiple: false, directory: false, filters: OPEN_FILTERS });
-    selected = typeof result === 'string' ? result : null;
-  } catch {
+    // 统一选择接口（file-dialog.ts）：桌面 plugin-dialog，Android SAF 桥。
+    selected = await showOpenDialog();
+  } catch (error) {
+    // 选择通道失败（Android SAF 桥缺失/复制失败等）：明确报错，不静默。
+    notifyLocalImportError(error);
     return null;
   }
   if (selected === null) return null;
-  const item = await libraryClient.importManagedBook(selected);
-  const enriched = await enrichLocalLibraryItem(item);
-  await libraryClient.upsertItem(enriched);
-  return enriched;
+  try {
+    const item = await libraryClient.importManagedBook(selected);
+    const enriched = await enrichLocalLibraryItem(item);
+    await libraryClient.upsertItem(enriched);
+    return enriched;
+  } catch (error) {
+    notifyLocalImportError(error);
+    return null;
+  }
 }
 
 /**

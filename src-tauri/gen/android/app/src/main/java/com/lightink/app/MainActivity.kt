@@ -1,14 +1,22 @@
 package com.lightink.app
 
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import java.util.concurrent.Executors
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * 系统返回键分层桥（02 D4 / R5，前端契约见 src/ui/back-navigation.ts）。
+ * MainActivity 前端桥（02 D4 系统返回 + 02 D6 SAF 导入）。
  *
- * 通道选择（文档化）：
+ * 系统返回键分层桥（前端契约见 src/ui/back-navigation.ts）：
  * - 不用 `onBackPressed()` 重写：targetSdk 36（Android 16）下预测性返回
  *   强制走 OnBackInvokedCallback，deprecated 的 onBackPressed 重写不会再被
  *   系统调用。改用 `onBackPressedDispatcher.addCallback`——与 wry 自带
@@ -21,9 +29,56 @@ import androidx.activity.enableEdgeToEdge
  * - evaluateJavascript 的回调异步返回，但“是否消费”由 JS 同步函数一次
  *   求值完毕，Kotlin 只在“未消费”分支补默认动作，因此不存在等待中的
  *   卡死窗口；桥丢失/无处理器时同样回落系统默认。
+ *
+ * SAF 本地导入桥（02 D6 / R3，前端契约见 src/file/file-dialog.ts，两侧
+ * 注释互相引用）：
+ * - 背景：@tauri-apps/plugin-dialog 2.7.2 的 Android showFilePicker
+ *   （DialogPlugin.kt）只能回传 content:// URI，不满足
+ *   library_import_managed_book 的真实文件路径契约，因此落地本桥。
+ * - JS → Kotlin：`addJavascriptInterface` 暴露
+ *   `window.LightInkSafBridge.openDocument(requestId, mimeTypesJson)`，
+ *   启动 ACTION_OPEN_DOCUMENT（registerForActivityResult，单飞：
+ *   pendingSafRequestId 非空时新请求立即以 error 回绝）。
+ *   addJavascriptInterface 方法运行在 WebView 私有 Binder 线程，因此一律
+ *   runOnUiThread 后再操作 ActivityResultLauncher。
+ * - Kotlin → JS：选中的 content:// 流在单线程 executor 上复制到应用私有
+ *   缓存目录 cacheDir/import-cache/（文件名带 requestId 前缀避免并发/重名
+ *   冲突），随后 evaluateJavascript 调用
+ *   `window.__lightinkSafResolve(requestId, result)`；result 形状
+ *   `{status:'ok',path}` / `{status:'cancelled'}` / `{status:'error',message}`。
+ * - WebView 已销毁时回传丢失，前端 Promise 悬挂；该窗口仅在 Activity
+ *   销毁期间出现，下一次选择会重新拉起，不做持久化重投。
  */
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
+
+  /** 进行中的 SAF 请求 id（单飞）；null 表示空闲。 */
+  private var pendingSafRequestId: String? = null
+  private val safCopyExecutor = Executors.newSingleThreadExecutor()
+
+  private val safOpenDocument =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      val requestId = pendingSafRequestId
+      pendingSafRequestId = null
+      if (requestId == null) {
+        return@registerForActivityResult
+      }
+      if (uri == null) {
+        resolveSaf(requestId, JSONObject().put("status", "cancelled"))
+        return@registerForActivityResult
+      }
+      // 大文件（漫画归档可达数百 MB）复制放后台线程，完成后回 UI 线程回传。
+      safCopyExecutor.execute {
+        val payload = try {
+          val path = copyToImportCache(uri, requestId)
+          JSONObject().put("status", "ok").put("path", path)
+        } catch (ex: Exception) {
+          JSONObject().put("status", "error")
+            .put("message", ex.message ?: "Failed to copy selected file")
+        }
+        runOnUiThread { resolveSaf(requestId, payload) }
+      }
+    }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -55,6 +110,89 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     this.webView = webView
+    // 前端契约见 src/file/file-dialog.ts（SAF 桥通道）。
+    webView.addJavascriptInterface(SafBridgeJsInterface(), "LightInkSafBridge")
+  }
+
+  override fun onDestroy() {
+    safCopyExecutor.shutdown()
+    super.onDestroy()
+  }
+
+  /** JS 可见的 SAF 桥入口（运行在 WebView 私有线程，必须切回 UI 线程）。 */
+  private inner class SafBridgeJsInterface {
+    @JavascriptInterface
+    fun openDocument(requestId: String, mimeTypesJson: String) {
+      runOnUiThread {
+        if (pendingSafRequestId != null) {
+          resolveSaf(
+            requestId,
+            JSONObject().put("status", "error")
+              .put("message", "Another file pick is already in progress"),
+          )
+          return@runOnUiThread
+        }
+        val mimeTypes = try {
+          val array = JSONArray(mimeTypesJson)
+          Array(array.length()) { index -> array.getString(index) }
+        } catch (ex: Exception) {
+          resolveSaf(
+            requestId,
+            JSONObject().put("status", "error")
+              .put("message", "Invalid MIME types payload"),
+          )
+          return@runOnUiThread
+        }
+        pendingSafRequestId = requestId
+        try {
+          safOpenDocument.launch(mimeTypes)
+        } catch (ex: Exception) {
+          pendingSafRequestId = null
+          resolveSaf(
+            requestId,
+            JSONObject().put("status", "error")
+              .put("message", ex.message ?: "Failed to launch file picker"),
+          )
+        }
+      }
+    }
+  }
+
+  /** 经 evaluateJavascript 回传选择结果（前端全局函数名两侧保持同步）。 */
+  private fun resolveSaf(requestId: String, payload: JSONObject) {
+    val view = webView ?: return
+    val script = "window.__lightinkSafResolve && window.__lightinkSafResolve(" +
+      JSONObject.quote(requestId) + ", " + payload.toString() + ")"
+    view.evaluateJavascript(script, null)
+  }
+
+  /** 把 content:// 流复制到应用私有缓存目录，返回真实文件路径。 */
+  private fun copyToImportCache(uri: Uri, requestId: String): String {
+    val displayName = sanitizeFileName(queryDisplayName(uri)) ?: "import.bin"
+    val dir = File(cacheDir, "import-cache")
+    if (!dir.exists() && !dir.mkdirs()) {
+      throw java.io.IOException("Failed to create import cache directory")
+    }
+    val target = File(dir, "$requestId-$displayName")
+    contentResolver.openInputStream(uri)?.use { input ->
+      target.outputStream().use { output -> input.copyTo(output) }
+    } ?: throw java.io.IOException("Failed to open selected document stream")
+    return target.absolutePath
+  }
+
+  private fun queryDisplayName(uri: Uri): String? {
+    return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+      val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+      if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+    }
+  }
+
+  private fun sanitizeFileName(name: String?): String? {
+    if (name.isNullOrBlank()) {
+      return null
+    }
+    val sanitized = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    return sanitized.ifBlank { null }
   }
 
   companion object {
