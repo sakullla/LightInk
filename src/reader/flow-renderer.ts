@@ -682,6 +682,8 @@ export function createFlowRenderer(
   let resourceWindows: Array<ChapterResourceWindow | undefined> = [];
   let resourceObserver: IntersectionObserver | null = null;
   let ensureChapterMounted: ((index: number) => void) | null = null;
+  let chapterContinuationObserver: IntersectionObserver | null = null;
+  let chapterContinuationSentinel: HTMLElement | null = null;
 
   /** Inflate and attach one lazy EPUB chapter at most once. */
   const ensureChapterFrame = (win: ChapterResourceWindow): void => {
@@ -750,6 +752,10 @@ export function createFlowRenderer(
     unbindHostTouchPaging();
     resourceObserver?.disconnect();
     resourceObserver = null;
+    chapterContinuationObserver?.disconnect();
+    chapterContinuationObserver = null;
+    chapterContinuationSentinel?.remove();
+    chapterContinuationSentinel = null;
     ensureChapterMounted = null;
     const windows = resourceWindows;
     resourceWindows = [];
@@ -929,6 +935,7 @@ export function createFlowRenderer(
     }
     const active = scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
     const current = Number(active?.dataset.chapterIndex ?? 0);
+    ensureChapterMounted?.(current + direction);
     const next = scrollHost.querySelector<HTMLElement>(
       `.lightink-reader-chapter[data-chapter-index="${current + direction}"]`,
     );
@@ -1503,8 +1510,9 @@ export function createFlowRenderer(
       const following = Array.from(
         scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
       ).find((candidate) => Number(candidate.dataset.chapterIndex) > chapterIndex);
-      if (following === undefined) scrollHost.appendChild(article);
-      else scrollHost.insertBefore(article, following);
+      const insertionPoint = following ?? chapterContinuationSentinel;
+      if (insertionPoint === null || insertionPoint === undefined) scrollHost.appendChild(article);
+      else scrollHost.insertBefore(article, insertionPoint);
       if (chapterIndex === 0 || chapter.load === undefined || chapter.html !== '') {
         ensureChapterFrame(win);
       }
@@ -1514,10 +1522,11 @@ export function createFlowRenderer(
       if (chapter !== undefined) appendChapter(chapter, index);
     };
 
-    // A book with hundreds of spine items must become readable before every
-    // iframe browsing context exists. Mount a small first window synchronously,
-    // then yield between bounded batches so title chrome and chapter one are
-    // interactive within the initial load budget.
+    // Keep the initial browsing-context budget bounded. A timer-based background
+    // loop still creates every iframe and eventually blocks on large EPUBs, even
+    // when it yields between batches. Scroll mode extends this window only when
+    // the reader approaches its end; paginated mode mounts the requested chapter
+    // from setActiveChapter/advanceFlowPage.
     const initialCount = Math.min(chapters.length, 8);
     for (let index = 0; index < initialCount; index += 1) {
       appendChapter(chapters[index]!, index);
@@ -1532,12 +1541,37 @@ export function createFlowRenderer(
         appendChapter(chapters[nextChapter]!, nextChapter);
         nextChapter += 1;
       }
-      if (nextChapter < chapters.length) {
-        window.setTimeout(appendBatch, 16);
+      if (nextChapter >= chapters.length) {
+        chapterContinuationObserver?.disconnect();
+        chapterContinuationObserver = null;
+        chapterContinuationSentinel?.remove();
+        chapterContinuationSentinel = null;
+        return;
+      }
+      if (chapterContinuationObserver !== null && chapterContinuationSentinel !== null) {
+        chapterContinuationObserver.unobserve(chapterContinuationSentinel);
+        chapterContinuationObserver.observe(chapterContinuationSentinel);
       }
     };
-    if (nextChapter < chapters.length) {
-      window.setTimeout(appendBatch, 16);
+    if (nextChapter < chapters.length && typeof IntersectionObserver !== 'undefined') {
+      chapterContinuationSentinel = document.createElement('div');
+      chapterContinuationSentinel.className = 'lightink-reader-chapter-sentinel';
+      chapterContinuationSentinel.setAttribute('aria-hidden', 'true');
+      chapterContinuationSentinel.style.height = '1px';
+      scrollHost.appendChild(chapterContinuationSentinel);
+      chapterContinuationObserver = new IntersectionObserver(
+        (entries) => {
+          if (
+            renderGeneration === flowRenderGeneration &&
+            !isFlowPaginated(root) &&
+            entries.some((entry) => entry.isIntersecting)
+          ) {
+            appendBatch();
+          }
+        },
+        { root: hooks.scrollContainer(), rootMargin: '150% 0px' },
+      );
+      chapterContinuationObserver.observe(chapterContinuationSentinel);
     }
   };
 
@@ -1644,6 +1678,10 @@ export function createFlowRenderer(
       syncVisibleFrames();
     } else {
       remasureScrollFrames();
+      if (chapterContinuationObserver !== null && chapterContinuationSentinel !== null) {
+        chapterContinuationObserver.unobserve(chapterContinuationSentinel);
+        chapterContinuationObserver.observe(chapterContinuationSentinel);
+      }
     }
   };
 

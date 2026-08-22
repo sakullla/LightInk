@@ -404,6 +404,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   let activeLoadController: AbortController | null = null;
   let destroyed = false;
   let flowContentDispose: (() => void) | null = null;
+  /** Spine item count is metadata, independent from the bounded mounted iframe window. */
+  let flowChapterCount = 0;
   /** PDF 搜索状态（查询/命中/活动命中索引）；UI 在标注侧栏。 */
   let pdfSearch: { query: string; matches: PdfSearchMatch[]; active: number } | null = null;
   let flowSearch: {
@@ -567,7 +569,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         updatedAt: Date.now(),
       };
     }
-    const total = scrollHost.querySelectorAll('.lightink-reader-chapter').length;
+    const total = flowChapterCount;
     if (total === 0) {
       return null;
     }
@@ -666,16 +668,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     });
   };
 
-  const flowChaptersReady = (chapters: NodeListOf<Element>, targetIndex: number): boolean => {
-    for (let i = 0; i <= targetIndex; i += 1) {
-      const chapter = chapters[i];
-      if (!(chapter instanceof HTMLElement) || chapter.offsetHeight <= 1) {
-        return false;
-      }
-    }
-    return true;
-  };
-
   const applySavedProgress = (): boolean => {
     const saved = pendingRestore;
     if (saved === null) {
@@ -694,14 +686,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       return false;
     }
-    const chapters = scrollHost.querySelectorAll('.lightink-reader-chapter');
-    if (chapters.length === 0) {
+    if (flowChapterCount === 0) {
       return false;
     }
+    const targetIndex = Math.min(saved.index, flowChapterCount - 1);
+    setActiveChapter(targetIndex);
     if (flowIsPaginated()) {
-      setActiveChapter(Math.min(saved.index, chapters.length - 1));
       const frame = scrollHost.querySelector<HTMLIFrameElement>(
-        `.lightink-reader-chapter[data-chapter-index="${Math.min(saved.index, chapters.length - 1)}"] .lightink-reader-chapter-frame`,
+        `.lightink-reader-chapter[data-chapter-index="${targetIndex}"] .lightink-reader-chapter-frame`,
       );
       const doc = frame?.contentDocument;
       const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
@@ -720,17 +712,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return true;
     }
     const scroller = flowScrollContainer();
-    const targetIndex = Math.min(saved.index, chapters.length - 1);
-    const article = chapters[targetIndex];
+    const article = scrollHost.querySelector<HTMLElement>(
+      `.lightink-reader-chapter[data-chapter-index="${targetIndex}"]`,
+    );
     const scrollerReady = scroller.clientHeight > 1;
-    const chaptersReady = flowChaptersReady(chapters, targetIndex);
     const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    if ((!scrollerReady || !chaptersReady) && restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS) {
+    if (
+      (!scrollerReady || article === null || article.offsetHeight <= 1) &&
+      restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS
+    ) {
       restoreAttempts += 1;
       scheduleRestoreRetry();
       return false;
     }
-    if (article instanceof HTMLElement && article.offsetHeight > 1) {
+    if (article !== null && article.offsetHeight > 1) {
       const targetTop = chapterScrollTop(
         articleOffsetInScroller(article, scroller),
         article.offsetHeight,
@@ -1009,7 +1004,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const scroller = flowScrollContainer();
     const hostTop = scroller.getBoundingClientRect().top;
     const slotTops = Array.from(chapters, (chapter) => chapter.getBoundingClientRect().top);
-    return Math.max(0, nearestVisibleSlot(slotTops, hostTop));
+    const nearest = nearestVisibleSlot(slotTops, hostTop);
+    const chapterIndex = Number(chapters[Math.max(0, nearest)]?.dataset.chapterIndex ?? 0);
+    return Number.isSafeInteger(chapterIndex) ? chapterIndex : 0;
   };
 
   const firstVisibleChapter = (): number => {
@@ -1025,7 +1022,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (destroyed || pdfHandle !== null || cbzHandle !== null || PAGE_EXTS.has(loadedExt)) {
       return;
     }
-    const total = scrollHost.querySelectorAll('.lightink-reader-chapter').length;
+    const total = flowChapterCount;
     if (total === 0) {
       updateReaderState({ current: 0, total: 0, progress: 0, scale: 1, locationKind: null });
       return;
@@ -1044,8 +1041,19 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
     } else {
       const scroller = flowScrollContainer();
-      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      progress = maxScroll === 0 ? 1 : Math.min(1, Math.max(0, scroller.scrollTop / maxScroll));
+      const article = scrollHost.querySelector<HTMLElement>(
+        `.lightink-reader-chapter[data-chapter-index="${current - 1}"]`,
+      );
+      const chapterHeight = article?.offsetHeight ?? 0;
+      const localRatio =
+        article === null || chapterHeight <= 0
+          ? 0
+          : chapterScrollRatio(
+              scroller.scrollTop,
+              articleOffsetInScroller(article, scroller),
+              chapterHeight,
+            );
+      progress = Math.min(1, Math.max(0, (current - 1 + localRatio) / total));
     }
     updateReaderState({ current, total, progress, scale: 1, locationKind: 'chapter' });
   };
@@ -1313,31 +1321,29 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       return;
     }
-    if (flowIsPaginated()) {
-      const total = scrollHost.querySelectorAll('.lightink-reader-chapter').length;
-      if (total === 0) {
-        return;
-      }
+    if (flowChapterCount > 0) {
+      const total = flowChapterCount;
       const pos = clamped * total;
       const chapterIndex = Math.min(total - 1, Math.floor(pos));
       const pageRatio = Math.min(1, Math.max(0, pos - chapterIndex));
       setActiveChapter(chapterIndex);
-      const frame = scrollHost.querySelector<HTMLIFrameElement>(
-        `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"] .lightink-reader-chapter-frame`,
-      );
-      const doc = frame?.contentDocument;
-      if (doc !== undefined && doc !== null) {
-        applyPagedProgress(readerPagedScroller(doc), pageRatio);
+      if (flowIsPaginated()) {
+        const frame = scrollHost.querySelector<HTMLIFrameElement>(
+          `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"] .lightink-reader-chapter-frame`,
+        );
+        const doc = frame?.contentDocument;
+        if (doc !== undefined && doc !== null) {
+          applyPagedProgress(readerPagedScroller(doc), pageRatio);
+        }
+      } else {
+        scrollHost
+          .querySelector<HTMLElement>(`.lightink-reader-chapter[data-chapter-index="${chapterIndex}"]`)
+          ?.scrollIntoView({ block: 'start' });
       }
       syncFlowState();
       schedulePersistReadingProgress();
       return;
     }
-    const scroller = flowScrollContainer();
-    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    scroller.scrollTop = clamped * maxScroll;
-    syncFlowState();
-    schedulePersistReadingProgress();
   }
 
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
@@ -2128,8 +2134,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     if (item.chapter !== undefined) {
+      setActiveChapter(item.chapter);
       if (flowIsPaginated()) {
-        setActiveChapter(item.chapter);
         const frame = scrollHost.querySelector<HTMLIFrameElement>(
           `.lightink-reader-chapter[data-chapter-index="${item.chapter}"] .lightink-reader-chapter-frame`,
         );
@@ -2171,6 +2177,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     cancelFontScaleRefresh?.();
     cancelFontScaleRefresh = null;
     stalePaginatedChapters = null; // 新文档：帧 load 时各自应用分栏，无待补章
+    flowChapterCount = chapters.length;
     flowRenderer.render(chapters, stylesheet);
     setActiveChapter(0);
     syncFlowState();
@@ -2267,6 +2274,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     stalePaginatedChapters = null; // 切到页格式：流式惰性分栏标记随流式宿主一并作废
     const previousFlowDispose = flowContentDispose;
     flowContentDispose = null;
+    flowChapterCount = 0;
     const previousPdf = pdfHandle;
     const previousCbz = cbzHandle;
     pdfHandle = staged.pdf;
@@ -3020,6 +3028,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           const previousPdf = pdfHandle;
           const previousCbz = cbzHandle;
           const previousFlowDispose = flowContentDispose;
+          const previousFlowChapterCount = flowChapterCount;
           pdfHandle = null;
           cbzHandle = null;
           flowContentDispose = content.dispose ?? null;
@@ -3037,6 +3046,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           } catch (error) {
             flowContentDispose?.();
             flowContentDispose = previousFlowDispose;
+            flowChapterCount = previousFlowChapterCount;
             throw error;
           }
           void previousPdf?.destroy().catch(() => undefined);
@@ -3116,6 +3126,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pdfHandle = null;
       cbzHandle = null;
       flowContentDispose = null;
+      flowChapterCount = 0;
       sidebar?.destroy();
       sidebar = null;
       sidebarBackdrop?.remove();

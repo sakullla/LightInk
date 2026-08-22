@@ -759,10 +759,13 @@ const flowRendererHooks = (
 
 describe('大型流式书首次渲染预算', () => {
   afterEach(() => {
+    vi.useRealTimers();
     document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
   });
 
-  it('同步只挂载前八章，其余 iframe 分批让出事件循环', () => {
+  it('同步只挂载前八章，空闲计时器不会继续创建全书 iframe', async () => {
+    vi.useFakeTimers();
     const root = document.createElement('div');
     const scrollHost = document.createElement('div');
     root.appendChild(scrollHost);
@@ -777,6 +780,9 @@ describe('大型流式书首次渲染预算', () => {
 
     expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(8);
     expect(scrollHost.querySelectorAll('iframe')).toHaveLength(8);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(8);
+    expect(scrollHost.querySelectorAll('iframe')).toHaveLength(8);
     renderer.setActiveChapter(30);
     expect(
       scrollHost.querySelector<HTMLElement>('[data-chapter-index="30"]'),
@@ -786,6 +792,52 @@ describe('大型流式书首次渲染预算', () => {
         (chapter) => Number(chapter.dataset.chapterIndex),
       ),
     ).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 30]);
+    renderer.clear();
+  });
+
+  it('状态栏立即使用 spine 总数，不把已挂载 iframe 数当作总章节数', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 1_200 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>${index + 1}</p>`,
+        })),
+      }),
+    });
+
+    await view.load('large.epub');
+
+    expect(view.state).toMatchObject({ current: 1, total: 1_200, locationKind: 'chapter' });
+    expect(host.querySelectorAll('.lightink-reader-chapter')).toHaveLength(8);
+    await view.destroy();
+  });
+
+  it('翻页越过首批窗口时按需挂载下一章', () => {
+    document.documentElement.dataset.readingLayout = 'paginated';
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render(
+      Array.from({ length: 1_200 }, (_, index) => ({
+        title: `Chapter ${index + 1}`,
+        html: `<p>${index + 1}</p>`,
+      })),
+    );
+    renderer.setActiveChapter(7);
+
+    expect(renderer.advancePage(1)).toBe(true);
+    expect(
+      scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset
+        .chapterIndex,
+    ).toBe('8');
+    expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(9);
     renderer.clear();
   });
 });
