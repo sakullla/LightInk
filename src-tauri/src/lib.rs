@@ -156,6 +156,9 @@ pub fn run() {
             open_in_browser,
             open_path_default,
             reveal_path_in_files,
+            // 桌面专属：原生窗口标题栏染色。移动端无窗口标题栏概念，
+            // 编译期排除注册，消除未验证调用（02 D2）。
+            #[cfg(desktop)]
             window_chrome::set_window_caption_color,
         ])
         // 用 build + run 才能接 RunEvent::Opened（macOS/iOS/Android 文件关联）。

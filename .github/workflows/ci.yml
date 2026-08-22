@@ -92,3 +92,38 @@ jobs:
 
       - name: Check macOS target
         run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
+
+  rust-android:
+    name: Rust Android target check
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-workspace-crates: true
+          cache-bin: false
+
+      - name: Check Android target
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android

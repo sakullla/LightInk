@@ -6,6 +6,10 @@
 //!   window-manager bars (many KDE / XFCE / i3 setups) only follow light/dark.
 
 /// Parse `#rrggbb` into `(red, green, blue)`.
+///
+/// 仅桌面实现（与 `set_window_caption_color` 的 cfg(desktop) 注册对齐）与
+/// 单元测试使用；移动端编译期排除，避免死代码。
+#[cfg(any(desktop, test))]
 pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
     let hex = raw.strip_prefix('#')?;
     if hex.len() != 6 || !hex.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit()) {
@@ -74,6 +78,9 @@ window.{class} .title {{
     )
 }
 
+/// 桌面专属命令：lib.rs 中以 `#[cfg(desktop)]` 注册，此处同步门控，
+/// 移动端不生成该命令（无非桌面兜底调用的必要）。
+#[cfg(desktop)]
 #[tauri::command]
 pub fn set_window_caption_color(
     window: tauri::WebviewWindow,

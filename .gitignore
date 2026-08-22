@@ -6,7 +6,8 @@ dist
 
 # Rust / Tauri build artifacts
 src-tauri/target
-src-tauri/gen
+# gen/android 为受版本管理的脚手架；gen/schemas 由 tauri-build 本地生成，保持忽略。
+src-tauri/gen/schemas
 
 # Python cache (scripts/ perf tooling)
 __pycache__/
