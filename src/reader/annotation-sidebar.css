@@ -14,7 +14,7 @@
 
 .lightink-reader-sidebar {
   position: absolute;
-  inset: 0 0 0 auto;
+  inset: var(--lightink-titlebar-height, 36px) 0 0 auto;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -29,7 +29,6 @@
     -2px 0 6px rgba(0, 0, 0, 0.05),
     -12px 0 32px rgba(0, 0, 0, 0.12);
   padding: 0;
-  padding-top: env(titlebar-area-height, 0px);
   font-size: var(--lightink-font-size-ui, 0.8rem);
   z-index: 14;
 }

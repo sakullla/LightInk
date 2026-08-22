@@ -4,8 +4,9 @@
  * Contract for `src/reader/reader-chrome.ts` (T3 / R4 / R5):
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
- * First paint is hidden. A page click (center or upper) or a pointer near
- * the top/bottom edge reveals four text-labeled actions:
+ * First paint is hidden except a low-contrast chapter whisper. A page click
+ * or a pointer near the top/bottom edge reveals four text-labeled actions
+ * together with a progress footer:
  *   返回书架 · 目录 · 排版 · 本书标注
  * 「返回书架」 is the first control (start of the top bar). It is the only
  * path that calls injected `returnToShelf`. 目录 / 排版 / 本书标注 call
@@ -355,8 +356,56 @@ describe('createReaderChrome destroy', () => {
     chrome.destroy();
 
     expect(host.contains(chrome.element)).toBe(false);
+    expect(host.contains(chrome.footer)).toBe(false);
+    expect(host.contains(chrome.whisper)).toBe(false);
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(false);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+});
+
+describe('createReaderChrome footer and whisper', () => {
+  it('shows the whisper while chrome is hidden and the footer when revealed', () => {
+    const { chrome } = mount();
+    expect(chrome.footer.hidden).toBe(true);
+    expect(chrome.whisper.hidden).toBe(false);
+
+    chrome.reveal();
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
+
+    chrome.dismiss();
+    expect(chrome.footer.hidden).toBe(true);
+    expect(chrome.whisper.hidden).toBe(false);
+  });
+
+  it('writes chapter and location into both docks and seeks from the scrubber', () => {
+    const onSeekProgress = vi.fn();
+    const { chrome } = mount({ onSeekProgress });
+    chrome.setProgress({
+      chapterTitle: '第一章',
+      location: '2 / 10',
+      progress: 0.25,
+    });
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-chapter')?.textContent).toBe(
+      '第一章',
+    );
+    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-chapter')?.textContent).toBe(
+      '第一章',
+    );
+    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
+      '2 / 10 · 25%',
+    );
+    const slider = chrome.footer.querySelector<HTMLInputElement>('.lightink-reader-chrome-progress');
+    expect(slider?.value).toBe('250');
+    slider!.value = '500';
+    slider!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(onSeekProgress).toHaveBeenCalledWith(0.5);
+  });
+
+  it('reveals chrome when the whisper is clicked', () => {
+    const { chrome } = mount();
+    chrome.whisper.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(chrome.isRevealed()).toBe(true);
   });
 });

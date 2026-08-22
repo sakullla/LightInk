@@ -751,13 +751,18 @@ document.addEventListener('lightink:library-theme', () => {
   syncNativeWindowChrome();
 });
 
-/** 阅读排版「隐藏状态栏」偏好：仅阅读态强制隐藏底部状态栏，编辑器不受影响。 */
+/** 阅读态用阅读页底栏，不用编辑器状态栏。 */
 function syncReaderStatusBarVisibility(): void {
   if (shell === undefined) return;
-  if (workspace.snapshot().surface !== 'reader') return;
-  const hide = loadReaderTypography(syncableStorage).hideStatusBar;
-  shell.statusBarHost.hidden = hide;
-  shell.statusBarHost.toggleAttribute('inert', hide);
+  const surface = workspace.snapshot().surface;
+  if (surface === 'reader') {
+    shell.statusBarHost.hidden = true;
+    shell.statusBarHost.toggleAttribute('inert', true);
+    return;
+  }
+  if (surface !== 'editor') return;
+  shell.statusBarHost.hidden = false;
+  shell.statusBarHost.toggleAttribute('inert', false);
 }
 
 document.addEventListener('lightink:reader-typography', () => {

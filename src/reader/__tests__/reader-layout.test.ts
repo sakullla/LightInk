@@ -262,6 +262,19 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*-webkit-app-region:\s*no-drag/);
   });
 
+  it('keeps the annotation notebook below the titlebar so caption chips do not cover it', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-sidebar.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar\s*\{[^}]*inset:\s*var\(--lightink-titlebar-height/,
+    );
+  });
+
+  it('uses a short slide page-turn instead of a 3D curl', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(/@keyframes lightink-reader-page-next/);
+    expect(css).toMatch(/prefers-reduced-motion:\s*reduce/);
+  });
+
   it('overrides the editor measure after .lightink-tab-host so an open book can fill the pane', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     const measure = css.indexOf('max-width: var(--lightink-measure, 48rem);');

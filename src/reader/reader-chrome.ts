@@ -1,14 +1,13 @@
 /**
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
- * 拥有揭示/收起与四项带文字入口。默认无常驻顶栏：控件以绝对定位浮层叠在
- * 正文上，显隐不占文档流、不改变阅读区域高度。写作 `chrome-controller`
- * 不扩展到阅读表面。
+ * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
+ * 边缘时顶栏与底栏同时出现。顶栏是四项带文字入口；底栏是章节名 + 可拖进度。
+ * 收起后底部保留一行低对比章节名（whisper），不占文档流。
  *
- * 唤出：单击阅读表面（中部或上部），或指针靠近顶/底边缘。约 2.5s 无操作
- * 自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只退一步且永不
- * 调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 → 控件条。
- * 「返回书架」是顶栏起始侧唯一合书入口。
+ * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
+ * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
+ * 控件条。「返回书架」是顶栏起始侧唯一合书入口。
  */
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
@@ -20,6 +19,15 @@ export interface ReaderChromeLabels {
   readonly toc: string;
   readonly typography: string;
   readonly annotations: string;
+  readonly toolbar: string;
+  readonly progress: string;
+  readonly footer: string;
+}
+
+export interface ReaderChromeProgress {
+  readonly chapterTitle: string;
+  readonly location: string;
+  readonly progress: number;
 }
 
 export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
@@ -38,12 +46,18 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     toc: 'Contents',
     typography: 'Typography',
     annotations: 'Book notes',
+    toolbar: 'Reading controls',
+    progress: 'Reading progress',
+    footer: 'Reading progress',
   },
   'zh-CN': {
     backToShelf: '返回书架',
     toc: '目录',
     typography: '排版',
     annotations: '本书标注',
+    toolbar: '阅读控件',
+    progress: '阅读进度',
+    footer: '阅读进度',
   },
 };
 
@@ -71,15 +85,21 @@ export interface ReaderChromeDeps {
   hideSelectionToolbar?: () => void;
   /** When true, an already-revealed bar does not auto-hide (e.g. scroll at top). */
   stayRevealed?: () => boolean;
+  /** Drag the footer scrubber to a 0..1 book position. */
+  onSeekProgress?: (progress: number) => void;
 }
 
 export interface ReaderChrome {
   readonly element: HTMLElement;
   readonly bar: HTMLElement;
+  readonly footer: HTMLElement;
+  readonly whisper: HTMLElement;
   isRevealed(): boolean;
   reveal(): void;
   dismiss(): void;
   toggle(): void;
+  setProgress(snapshot: ReaderChromeProgress): void;
+  pinDocks(pane: { getBoundingClientRect(): DOMRect } | null, paginated: boolean): void;
   /** Re-apply stay-revealed (scroll at top) vs idle auto-hide. */
   syncStayRevealed(): void;
   /**
@@ -251,7 +271,7 @@ export function createReaderChrome(
   const bar = document.createElement('div');
   bar.className = 'lightink-reader-chrome-bar';
   bar.setAttribute('role', 'toolbar');
-  bar.setAttribute('aria-label', labels.backToShelf);
+  bar.setAttribute('aria-label', labels.toolbar);
   bar.setAttribute('data-tauri-drag-region', '');
   applyBarLayout(bar);
 
@@ -280,6 +300,36 @@ export function createReaderChrome(
   bar.append(backButton, tocButton, typographyButton, annotationsButton, drag);
   element.appendChild(bar);
 
+  const footer = document.createElement('div');
+  footer.className = 'lightink-reader-chrome-footer';
+  footer.setAttribute('role', 'group');
+  footer.setAttribute('aria-label', labels.footer);
+  const footerMeta = document.createElement('div');
+  footerMeta.className = 'lightink-reader-chrome-footer-meta';
+  const footerChapter = document.createElement('span');
+  footerChapter.className = 'lightink-reader-chrome-chapter';
+  const footerLocation = document.createElement('span');
+  footerLocation.className = 'lightink-reader-chrome-location';
+  footerMeta.append(footerChapter, footerLocation);
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'lightink-reader-chrome-progress';
+  slider.min = '0';
+  slider.max = '1000';
+  slider.step = '1';
+  slider.value = '0';
+  slider.setAttribute('aria-label', labels.progress);
+  footer.append(footerMeta, slider);
+
+  const whisper = document.createElement('div');
+  whisper.className = 'lightink-reader-chrome-whisper';
+  whisper.setAttribute('aria-live', 'polite');
+  const whisperChapter = document.createElement('span');
+  whisperChapter.className = 'lightink-reader-chrome-whisper-chapter';
+  const whisperProgress = document.createElement('span');
+  whisperProgress.className = 'lightink-reader-chrome-whisper-progress';
+  whisper.append(whisperChapter, whisperProgress);
+
   let revealed = false;
   let pointerInsideBar = false;
   let hideTimer: number | null = null;
@@ -304,9 +354,20 @@ export function createReaderChrome(
     bar.hidden = !revealed;
     bar.setAttribute('aria-hidden', revealed ? 'false' : 'true');
     bar.style.display = revealed ? 'flex' : 'none';
+    footer.hidden = !revealed;
+    footer.setAttribute('aria-hidden', revealed ? 'false' : 'true');
+    whisper.hidden = revealed;
+    whisper.setAttribute('aria-hidden', revealed ? 'true' : 'false');
     for (const button of [backButton, tocButton, typographyButton, annotationsButton]) {
       button.hidden = !revealed;
     }
+  };
+
+  const isChromeChrome = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Node)) {
+      return false;
+    }
+    return element.contains(target) || footer.contains(target) || whisper.contains(target);
   };
 
   const scheduleHide = (): void => {
@@ -389,7 +450,10 @@ export function createReaderChrome(
       return;
     }
     const target = event.target;
-    if (target instanceof Node && element.contains(target)) {
+    if (isChromeChrome(target)) {
+      if (target instanceof Node && whisper.contains(target) && !revealed) {
+        reveal();
+      }
       return;
     }
     if (
@@ -474,6 +538,12 @@ export function createReaderChrome(
     } else if (element.parentNode !== host) {
       host.appendChild(element);
     }
+    if (footer.parentNode !== host) {
+      host.appendChild(footer);
+    }
+    if (whisper.parentNode !== host) {
+      host.appendChild(whisper);
+    }
     host.addEventListener('click', onHostClick);
     host.addEventListener('pointermove', onHostPointerMove);
     host.addEventListener('pointerleave', onHostPointerLeave);
@@ -501,15 +571,90 @@ export function createReaderChrome(
     deps.toggleSidebar?.();
   });
 
-  bar.addEventListener('pointerenter', () => {
+  const onDockEnter = (): void => {
     pointerInsideBar = true;
     clearHideTimer();
     reveal();
-  });
-  bar.addEventListener('pointerleave', () => {
+  };
+  const onDockLeave = (): void => {
     pointerInsideBar = false;
     scheduleHide();
+  };
+  bar.addEventListener('pointerenter', onDockEnter);
+  bar.addEventListener('pointerleave', onDockLeave);
+  footer.addEventListener('pointerenter', onDockEnter);
+  footer.addEventListener('pointerleave', onDockLeave);
+  slider.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    pointerInsideBar = true;
+    clearHideTimer();
   });
+  slider.addEventListener('input', () => {
+    const value = Number.parseInt(slider.value, 10);
+    const progress = Number.isFinite(value) ? Math.min(1, Math.max(0, value / 1000)) : 0;
+    deps.onSeekProgress?.(progress);
+  });
+
+  const formatPercent = (progress: number): string => {
+    const normalized = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+    return `${Math.round(normalized * 100)}%`;
+  };
+
+  const setProgress = (snapshot: ReaderChromeProgress): void => {
+    const title = snapshot.chapterTitle.trim();
+    const location = snapshot.location.trim();
+    footerChapter.textContent = title;
+    footerLocation.textContent = location;
+    whisperChapter.textContent = title;
+    whisperProgress.textContent = location === '' ? formatPercent(snapshot.progress) : `${location} · ${formatPercent(snapshot.progress)}`;
+    if (typeof document === 'undefined' || document.activeElement !== slider) {
+      const value = Math.round(
+        (Number.isFinite(snapshot.progress) ? Math.min(1, Math.max(0, snapshot.progress)) : 0) *
+          1000,
+      );
+      slider.value = String(value);
+    }
+  };
+
+  const pinDocks = (
+    pane: { getBoundingClientRect(): DOMRect } | null,
+    paginated: boolean,
+  ): void => {
+    const clearPin = (dock: HTMLElement): void => {
+      const style = dock.style;
+      if (style === undefined || typeof style.removeProperty !== 'function') {
+        return;
+      }
+      style.removeProperty('position');
+      style.removeProperty('left');
+      style.removeProperty('right');
+      style.removeProperty('bottom');
+      style.removeProperty('width');
+    };
+    if (paginated || pane === null || typeof pane.getBoundingClientRect !== 'function') {
+      clearPin(footer);
+      clearPin(whisper);
+      return;
+    }
+    const box = pane.getBoundingClientRect();
+    const viewportWidth =
+      typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 0;
+    const viewportHeight =
+      typeof window !== 'undefined' && Number.isFinite(window.innerHeight)
+        ? window.innerHeight
+        : 0;
+    for (const dock of [footer, whisper]) {
+      const style = dock.style;
+      if (style === undefined) {
+        continue;
+      }
+      style.position = 'fixed';
+      style.left = `${Math.max(0, box.left)}px`;
+      style.width = `${Math.max(0, box.width)}px`;
+      style.right = `${Math.max(0, viewportWidth - box.right)}px`;
+      style.bottom = `${Math.max(0, viewportHeight - box.bottom)}px`;
+    }
+  };
 
   syncDom();
 
@@ -520,7 +665,11 @@ export function createReaderChrome(
   return {
     element,
     bar,
+    footer,
+    whisper,
     isRevealed: () => revealed,
+    setProgress,
+    pinDocks,
     reveal,
     syncStayRevealed: () => {
       if (stayRevealed()) {
@@ -548,6 +697,8 @@ export function createReaderChrome(
       clearHideTimer();
       detach();
       element.remove();
+      footer.remove();
+      whisper.remove();
       revealed = false;
       syncDom();
     },

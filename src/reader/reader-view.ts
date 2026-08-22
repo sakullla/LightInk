@@ -132,6 +132,11 @@ import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
 import { createReaderChrome, type ReaderChrome } from './reader-chrome.js';
+import {
+  formatReaderLocation,
+  playReaderPageTurn,
+  resolveReaderChapterTitle,
+} from './reader-progress-ui.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
   fillReaderTocPanel,
@@ -788,6 +793,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       readerState = Object.freeze({ ...next });
     }
     applyStateToDom(readerState);
+    syncChromeProgress();
     if (!changed) return;
     for (const listener of stateListeners) {
       try {
@@ -1063,6 +1069,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     readerChrome?.syncStayRevealed();
     syncChromeRevealAttr();
     pinSidebarOverlay();
+    pinChromeDocks();
     // 工具栏按视口坐标固定定位，滚动后指向失效——直接隐藏。
     if (selectionToolbar?.isVisible() === true) {
       hideSelectionToolbar();
@@ -1266,6 +1273,71 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pinFixedOverlay(sidebar.element, closestPane() ?? root);
   };
 
+  function pinChromeDocks(): void {
+    readerChrome?.pinDocks(closestPane() ?? root, flowIsPaginated());
+  }
+
+  function locationFallback(kind: 'chapter' | 'page', n: number): string {
+    return kind === 'page'
+      ? t('annotation.location.page', { page: String(n) })
+      : t('reader.chapter', { n: String(n) });
+  }
+
+  function syncChromeProgress(): void {
+    readerChrome?.setProgress({
+      chapterTitle: resolveReaderChapterTitle(readerState, readerOutline, locationFallback),
+      location: formatReaderLocation(readerState.current, readerState.total),
+      progress: readerState.progress,
+    });
+  }
+
+  function goToProgress(progress: number): void {
+    const clamped = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+    if (pdfHandle !== null) {
+      const total = pdfHandle.controller.totalPages;
+      if (total > 0) {
+        pdfHandle.scrollToPage(Math.max(1, Math.min(total, Math.round(clamped * total) || 1)));
+        syncPageState();
+        schedulePersistReadingProgress();
+      }
+      return;
+    }
+    if (cbzHandle !== null) {
+      const total = cbzHandle.totalPages;
+      if (total > 0) {
+        cbzHandle.scrollToPage(Math.max(1, Math.min(total, Math.round(clamped * total) || 1)));
+        syncPageState();
+        schedulePersistReadingProgress();
+      }
+      return;
+    }
+    if (flowIsPaginated()) {
+      const total = scrollHost.querySelectorAll('.lightink-reader-chapter').length;
+      if (total === 0) {
+        return;
+      }
+      const pos = clamped * total;
+      const chapterIndex = Math.min(total - 1, Math.floor(pos));
+      const pageRatio = Math.min(1, Math.max(0, pos - chapterIndex));
+      setActiveChapter(chapterIndex);
+      const frame = scrollHost.querySelector<HTMLIFrameElement>(
+        `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"] .lightink-reader-chapter-frame`,
+      );
+      const doc = frame?.contentDocument;
+      if (doc !== undefined && doc !== null) {
+        applyPagedProgress(readerPagedScroller(doc), pageRatio);
+      }
+      syncFlowState();
+      schedulePersistReadingProgress();
+      return;
+    }
+    const scroller = flowScrollContainer();
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    scroller.scrollTop = clamped * maxScroll;
+    syncFlowState();
+    schedulePersistReadingProgress();
+  }
+
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
   function syncSidebarOverlayDom(): void {
     const shown = sidebarVisible && tabActive;
@@ -1281,6 +1353,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       sidebarBackdrop.hidden = !shown;
     }
     pinSidebarOverlay();
+    pinChromeDocks();
   }
 
   /** 切换侧栏显隐，并让窄窗 drawer 获得或释放键盘焦点。 */
@@ -2266,6 +2339,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pdfHandle.scrollToPage(pdfHandle.controller.page + direction);
       syncPageState();
       schedulePersistReadingProgress();
+      playReaderPageTurn(root, direction);
       return true;
     }
     if (cbzHandle !== null) {
@@ -2273,11 +2347,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       else cbzHandle.previousPage();
       syncPageState();
       schedulePersistReadingProgress();
+      playReaderPageTurn(root, direction);
       return true;
     }
     const moved = advanceReadingContent(direction);
     if (moved) {
       hideSelectionToolbar();
+      playReaderPageTurn(root, direction);
     }
     return moved;
   };
@@ -2650,9 +2726,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     layout: t('reader.type.layout'),
     paginated: t('reader.type.paginated'),
     scroll: t('reader.type.scroll'),
-    statusBar: t('reader.type.statusBar'),
-    statusBarShow: t('reader.type.statusBar.show'),
-    statusBarHide: t('reader.type.statusBar.hide'),
     smaller: t('view.zoomOut'),
     larger: t('view.zoomIn'),
     fonts: {
@@ -2749,7 +2822,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       hideSelectionToolbar,
       stayRevealed: () =>
         !flowIsPaginated() && flowScrollContainer().scrollTop <= 16,
+      onSeekProgress: goToProgress,
     });
+    syncChromeProgress();
+    pinChromeDocks();
     root.append(tocPanel, typePanel);
     root.addEventListener('click', syncChromeRevealAttr);
     root.addEventListener('pointermove', syncChromeRevealAttr);
