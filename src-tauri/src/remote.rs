@@ -1,5 +1,6 @@
 //! Secure remote random-access resources backed by a bounded sparse cache.
 
+use crate::credential_store::{delete_credential, get_credential, set_credential};
 use crate::library::{
     self, cache_limit, cached_ranges, confined_cache_path, evict_cache, find_cache_object,
     record_cached_range, touch_cache_object, upsert_cache_object, ByteRange, CacheObject,
@@ -384,11 +385,9 @@ fn ensure_frontend_safe_size(size: u64) -> Result<u64, RemoteError> {
 }
 
 fn load_credential(state: &RemoteState, credential_ref: &str) -> Option<RemoteCredential> {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, credential_ref) {
-        if let Ok(value) = entry.get_password() {
-            if let Ok(credential) = serde_json::from_str(&value) {
-                return Some(credential);
-            }
+    if let Some(value) = get_credential(KEYRING_SERVICE, credential_ref) {
+        if let Ok(credential) = serde_json::from_str(&value) {
+            return Some(credential);
         }
     }
     state
@@ -411,9 +410,7 @@ pub(crate) fn store_credential_value(
     }
     let serialized = serde_json::to_string(&credential)
         .map_err(|_| RemoteError::new("REMOTE_CREDENTIAL_INVALID", "无法准备远程凭据"))?;
-    let persisted = keyring::Entry::new(KEYRING_SERVICE, &credential_ref)
-        .and_then(|entry| entry.set_password(&serialized))
-        .is_ok();
+    let persisted = set_credential(KEYRING_SERVICE, &credential_ref, &serialized);
     let mut session_credentials = state.session_credentials.lock().map_err(|_| lock_error())?;
     if persisted {
         session_credentials.remove(&credential_ref);
@@ -452,9 +449,7 @@ pub(crate) fn forget_credential_value(
         .lock()
         .map_err(|_| lock_error())?
         .remove(credential_ref);
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, credential_ref) {
-        let _ = entry.delete_credential();
-    }
+    delete_credential(KEYRING_SERVICE, credential_ref);
     Ok(())
 }
 

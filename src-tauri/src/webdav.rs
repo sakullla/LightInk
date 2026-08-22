@@ -165,9 +165,7 @@ fn credential_ref(profile_id: &str) -> String {
 }
 
 fn keyring_credential(reference: &str) -> Option<SyncCredential> {
-    keyring::Entry::new(KEYRING_SERVICE, reference)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
+    crate::credential_store::get_credential(KEYRING_SERVICE, reference)
         .and_then(|value| serde_json::from_str(&value).ok())
 }
 
@@ -175,15 +173,11 @@ fn save_keyring_credential(reference: &str, credential: &SyncCredential) -> bool
     let Ok(value) = serde_json::to_string(credential) else {
         return false;
     };
-    keyring::Entry::new(KEYRING_SERVICE, reference)
-        .and_then(|entry| entry.set_password(&value))
-        .is_ok()
+    crate::credential_store::set_credential(KEYRING_SERVICE, reference, &value)
 }
 
 fn delete_keyring_credential(reference: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, reference) {
-        let _ = entry.delete_credential();
-    }
+    crate::credential_store::delete_credential(KEYRING_SERVICE, reference);
 }
 
 fn load_persisted(app: &AppHandle) -> Result<Option<PersistedProfile>, WebDavError> {

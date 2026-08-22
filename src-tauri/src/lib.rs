@@ -8,6 +8,7 @@ mod annotations;
 mod archive;
 mod asset;
 mod cli;
+mod credential_store;
 mod documents;
 mod export;
 mod file;
@@ -56,6 +57,12 @@ pub fn run() {
         .manage(archive::ArchiveState::default())
         .manage(webdav::WebDavState::default())
         .manage(sync::SyncTaskState::default())
+        // 安装移动端凭据 base dir（D5）；desktop 上 init_mobile_store 为 no-op，
+        // 无条件调用即可保持桌面行为不变且无警告。
+        .setup(|app| {
+            credential_store::init_mobile_store(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             file::read_file,
             file::read_file_bytes,
