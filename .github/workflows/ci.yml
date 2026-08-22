@@ -118,6 +118,22 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Configure Android NDK toolchain
+        shell: bash
+        run: |
+          toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cc="$toolchain/aarch64-linux-android24-clang"
+          ar="$toolchain/llvm-ar"
+
+          test -x "$cc"
+          test -x "$ar"
+
+          {
+            echo "CC_aarch64_linux_android=$cc"
+            echo "AR_aarch64_linux_android=$ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$cc"
+          } >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
