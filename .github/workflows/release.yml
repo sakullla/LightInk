@@ -41,7 +41,9 @@ jobs:
             target: aarch64-linux-android
             rust-targets: aarch64-linux-android
             mobile: android
-            args: --target aarch64 --apk --verbose
+            # `--target` limits compilation; `--split-per-abi` makes Tauri emit
+            # an arm64-named APK instead of a universal-named package.
+            args: --target aarch64 --apk --split-per-abi --verbose
 
     runs-on: ${{ matrix.os }}
 
