@@ -19,11 +19,29 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            platform: windows
             target: x86_64-pc-windows-msvc
+            rust-targets: x86_64-pc-windows-msvc
+            mobile: ''
+            args: --target x86_64-pc-windows-msvc --verbose
           - os: macos-latest
+            platform: macos
             target: aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+            mobile: ''
+            args: --target aarch64-apple-darwin --verbose
           - os: ubuntu-22.04
+            platform: linux
             target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+            mobile: ''
+            args: --target x86_64-unknown-linux-gnu --verbose
+          - os: ubuntu-22.04
+            platform: android
+            target: aarch64-linux-android
+            rust-targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+            mobile: android
+            args: --apk --verbose
 
     runs-on: ${{ matrix.os }}
 
@@ -35,9 +53,17 @@ jobs:
           filter: blob:none  # 历史只取 commit/tree，当前版本文件按需下载
 
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.platform == 'linux'
         timeout-minutes: 10
         run: bash .github/scripts/install-linux-deps.sh
+
+      - name: Setup Java
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -48,7 +74,38 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Configure Android NDK toolchain
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ar="$toolchain/llvm-ar"
+
+          declare -A compilers=(
+            [aarch64_linux_android]="$toolchain/aarch64-linux-android24-clang"
+            [armv7_linux_androideabi]="$toolchain/armv7a-linux-androideabi24-clang"
+            [i686_linux_android]="$toolchain/i686-linux-android24-clang"
+            [x86_64_linux_android]="$toolchain/x86_64-linux-android24-clang"
+          )
+
+          test -x "$ar"
+          for compiler in "${compilers[@]}"; do
+            test -x "$compiler"
+          done
+
+          {
+            for target in "${!compilers[@]}"; do
+              echo "CC_${target}=${compilers[$target]}"
+              echo "AR_${target}=$ar"
+            done
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${compilers[aarch64_linux_android]}"
+            echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=${compilers[armv7_linux_androideabi]}"
+            echo "CARGO_TARGET_I686_LINUX_ANDROID_LINKER=${compilers[i686_linux_android]}"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${compilers[x86_64_linux_android]}"
+          } >> "$GITHUB_ENV"
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -60,6 +117,33 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Configure Android release signing
+        if: matrix.platform == 'android'
+        shell: bash
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_KEY_BASE64" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "::error::Android signing secrets are not configured"
+            exit 1
+          fi
+
+          keystore="$RUNNER_TEMP/lightink-release.jks"
+          printf '%s' "$ANDROID_KEY_BASE64" | base64 --decode > "$keystore"
+          {
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'password=%s\n' "$ANDROID_KEY_PASSWORD"
+            printf 'storeFile=%s\n' "$keystore"
+          } > src-tauri/gen/android/keystore.properties
+
+          keytool -list \
+            -keystore "$keystore" \
+            -storepass "$ANDROID_KEY_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" > /dev/null
 
       # 自动提取变更记录：取上一个 tag 到当前 tag 之间的提交，按
       # conventional commit 前缀分组（feat/fix/其他），注入 releaseBody。
@@ -88,7 +172,7 @@ jobs:
             if [ -n "$FIXES" ]; then echo "### 修复"; echo "$FIXES"; echo ""; fi
             if [ -n "$OTHERS" ]; then echo "### 其他"; echo "$OTHERS"; echo ""; fi
             echo "---"
-            echo "Windows: NSIS/MSI 安装包；macOS: DMG（Apple Silicon，ad-hoc 签名）；Linux: deb/AppImage。"
+            echo "Windows: NSIS/MSI 安装包；macOS: DMG（Apple Silicon，ad-hoc 签名）；Linux: deb/AppImage；Android: 已签名通用 APK。"
             echo ""
             echo "> macOS 包未经过 Apple 公证。首次启动如被 Gatekeeper 拦截，请在 Finder 中右键 LightInk.app 选择“打开”，或前往“系统设置 → 隐私与安全性”选择“仍要打开”。"
             echo "EOF"
@@ -105,11 +189,12 @@ jobs:
           releaseDraft: true
           prerelease: false
           retryAttempts: 3
+          mobile: ${{ matrix.mobile }}
           # `--verbose` exposes the underlying WiX LGHT/ICE error in Actions logs.
-          args: --target ${{ matrix.target }} --verbose
+          args: ${{ matrix.args }}
 
       - name: Verify macOS ad-hoc signature
-        if: matrix.os == 'macos-latest'
+        if: matrix.platform == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,6 +213,28 @@ jobs:
           fi
 
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Verify Android APK signature
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk \
+            -type f -name '*.apk' ! -name '*-unsigned.apk')
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one signed universal APK, found ${#APKS[@]}"
+            printf '%s\n' "${APKS[@]}"
+            exit 1
+          fi
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner \
+            | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner was not found in Android SDK build-tools"
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose --print-certs "${APKS[0]}"
 
   verify-release:
     name: Verify and publish release
@@ -162,7 +269,7 @@ jobs:
           ASSETS=$(jq -r '.assets[].name' <<< "$RELEASE_JSON")
           echo "$ASSETS"
 
-          for PATTERN in '\.msi$' '\.exe$' '\.dmg$' '\.deb$' '\.AppImage$'; do
+          for PATTERN in '\.msi$' '\.exe$' '\.dmg$' '\.deb$' '\.AppImage$' '\.apk$'; do
             if ! grep -Eq "$PATTERN" <<< "$ASSETS"; then
               echo "::error::Release ${GITHUB_REF_NAME} is missing an asset matching ${PATTERN}"
               exit 1
@@ -181,4 +288,3 @@ jobs:
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -F draft=false
           echo "Published release ${GITHUB_REF_NAME} (id=${RELEASE_ID})"
-
