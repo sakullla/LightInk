@@ -891,8 +891,20 @@
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-actions,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-group-body,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-smart-group-body,
-.lightink-library[data-library-nav-collapsed='true'] .lightink-library-source-body {
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-source-body,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-catalog-tree {
   display: none;
+}
+
+.lightink-library[data-library-nav-collapsed='true'][data-library-nav='catalog'] .lightink-library-back-to-shelf {
+  justify-content: center;
+  width: auto;
+  margin: 4px auto 0;
+  padding: 4px 2px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading {
@@ -1778,15 +1790,163 @@
   border-bottom: 1px solid var(--lightink-border);
 }
 
-.lightink-library[data-library-nav='catalog'] .lightink-library-items {
+/*
+ * Catalog workspace: left lazy tree + back-to-shelf, middle cover wall,
+ * right detail. Local 全部/在读/分组 and source URL cards are not the
+ * primary nav. Refresh must not displace a painted wall with the 42vh
+ * loading block.
+ */
+.lightink-library[data-library-nav='catalog'] .lightink-library-groups,
+.lightink-library[data-library-nav='catalog'] .lightink-library-manage,
+.lightink-library[data-library-nav='catalog'] .lightink-library-sources .lightink-library-pane-actions,
+.lightink-library[data-library-nav='catalog'] .lightink-library-sources .lightink-library-section-filter-wrap,
+.lightink-library[data-library-nav='catalog'] .lightink-library-source-url,
+.lightink-library[data-library-nav='catalog'] .lightink-library-source-edit,
+.lightink-library[data-library-nav='catalog'] .lightink-library-source-remove,
+.lightink-library[data-library-nav='catalog'] .lightink-library-source-list .lightink-library-source-row:not(:has(.lightink-library-source.is-active)) {
+  display: none;
+}
+
+.lightink-library-back-to-shelf {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin: 0 0 8px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-back-to-shelf {
+  display: inline-flex;
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-toolbar .lightink-library-back-to-shelf,
+.lightink-library[data-library-nav='catalog'] .lightink-library-header .lightink-library-back-to-shelf,
+.lightink-library[data-library-nav='catalog'] .lightink-library-navigation .lightink-library-back-to-shelf {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.lightink-library-catalog-tree {
+  display: none;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  padding: 1px 0 8px;
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-catalog-tree {
+  display: flex;
+}
+
+.lightink-library[data-library-nav-collapsed='true'][data-library-nav='catalog'] .lightink-library-catalog-tree {
+  display: none;
+}
+
+.lightink-library-catalog-node {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px var(--lightink-library-pad-x) 48px;
+  gap: 2px;
+  min-width: 0;
+  margin-left: calc(var(--lightink-catalog-depth, 0) * 14px);
+}
+
+.lightink-library-catalog-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 2px;
+}
+
+.lightink-library-catalog-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  overflow: hidden;
+  border: none !important;
+  border-radius: 8px;
+  background: transparent !important;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-catalog-label:hover,
+.lightink-library-catalog-node.is-active > .lightink-library-catalog-row .lightink-library-catalog-label {
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-library-catalog-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  min-height: 30px;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-catalog-toggle .lightink-library-collapse-chevron {
+  transition: transform 200ms ease;
+}
+
+.lightink-library-catalog-toggle.is-expanded .lightink-library-collapse-chevron,
+.lightink-library-catalog-toggle[aria-expanded='true'] .lightink-library-collapse-chevron {
+  transform: rotate(90deg);
+}
+
+.lightink-library-catalog-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-workarea {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
   grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-items,
+.lightink-library[data-library-nav='catalog'] .lightink-library-cover-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-library-cover-min), var(--lightink-library-cover-max)));
+  justify-content: start;
+  align-content: start;
+  gap: var(--lightink-library-cover-gap-y) var(--lightink-library-cover-gap-x);
+  padding: 8px var(--lightink-library-pad-x) 56px;
+}
+
+.lightink-library[data-library-nav='catalog']:has(.lightink-library-cover-wall .lightink-library-item) .lightink-library-status,
+.lightink-library[data-library-nav='catalog']:has(.lightink-library-items .lightink-library-item) .lightink-library-status {
+  min-height: 0;
+  padding: 8px 24px;
+  font-size: 13px;
+}
+
+.lightink-library[data-library-nav='catalog']:has(.lightink-library-cover-wall .lightink-library-item) .lightink-library-status[data-status='loading'],
+.lightink-library[data-library-nav='catalog']:has(.lightink-library-items .lightink-library-item) .lightink-library-status[data-status='loading'] {
+  display: none !important;
 }
 
 /*
@@ -2076,6 +2236,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   .lightink-library-source,
   .lightink-library-smart-group,
   .lightink-library-group-toggle,
+  .lightink-library-catalog-toggle,
+  .lightink-library-catalog-label,
+  .lightink-library-back-to-shelf,
   .lightink-library-group-actions > button {
     min-height: 40px;
   }

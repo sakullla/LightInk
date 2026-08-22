@@ -600,6 +600,41 @@ function itemsFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
   return displays;
 }
 
+function isNavigationDisplay(display: DisplayItem): boolean {
+  return display.entry?.kind === 'navigation';
+}
+
+function publicationsFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
+  return itemsFromFeed(sourceId, feed).filter((display) => !isNavigationDisplay(display));
+}
+
+function navigationFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
+  const seen = new Set<string>();
+  const navigations: DisplayItem[] = [];
+  for (const display of itemsFromFeed(sourceId, feed)) {
+    if (!isNavigationDisplay(display)) continue;
+    const url = display.entry?.navigationUrl;
+    if (url == null || url === '' || seen.has(url)) continue;
+    seen.add(url);
+    navigations.push(display);
+  }
+  return navigations;
+}
+
+interface CatalogTreeNode {
+  key: string;
+  title: string;
+  url: string | undefined;
+  children: CatalogTreeNode[];
+  publications: DisplayItem[];
+  loaded: boolean;
+  expanded: boolean;
+}
+
+function catalogNodeKey(url?: string): string {
+  return url ?? '';
+}
+
 function safeCoverUrl(item: LibraryItem, sources: readonly OpdsSource[]): string | undefined {
   if (!isShelfCoverUrl(item.coverUrl)) return undefined;
   if (item.coverUrl!.startsWith('data:image/') || item.coverUrl!.startsWith('blob:')) {
@@ -1053,6 +1088,17 @@ export function createLibraryView(
   sourceBody.className = 'lightink-library-source-body';
   sourceBody.append(sourceFilter.wrap, sourceList);
   sourcePane.append(sourceHeader, sourceBody);
+  const catalogPane = doc.createElement('section');
+  catalogPane.className = 'lightink-library-catalog-tree lightink-library-nav-section';
+  catalogPane.dataset.navSection = 'catalog';
+  catalogPane.hidden = true;
+  const catalogBack = button(doc, '', 'lightink-library-nav-item lightink-library-back-to-shelf');
+  const catalogHeading = doc.createElement('h2');
+  catalogHeading.className = 'lightink-library-nav-heading';
+  const catalogTree = doc.createElement('nav');
+  catalogTree.className = 'lightink-library-catalog-tree-list';
+  catalogTree.setAttribute('aria-label', 'Catalog');
+  catalogPane.append(catalogBack, catalogHeading, catalogTree);
   const managePane = doc.createElement('section');
   managePane.className = 'lightink-library-manage lightink-library-nav-section';
   managePane.dataset.navSection = 'manage';
@@ -1080,7 +1126,7 @@ export function createLibraryView(
   navResize.style.cursor = 'col-resize';
   navResize.style.touchAction = 'none';
   navResize.style.zIndex = '2';
-  navPane.append(groupPane, sourcePane, managePane, navCollapse, navResize);
+  navPane.append(groupPane, sourcePane, catalogPane, managePane, navCollapse, navResize);
   const sourceOverlay = doc.createElement('div');
   sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
   sourceOverlay.hidden = true;
@@ -1213,11 +1259,14 @@ export function createLibraryView(
   let ignoreSourceBackdrop = false;
   let sources: OpdsSource[] = [];
   let selectedSourceId: string | null = null;
+  let catalogRoot: CatalogTreeNode | null = null;
+  let selectedCatalogKey = '';
   let editingSourceId: string | null = null;
   let editingWebDav = false;
   let webDavProfile: SyncProfile | null = null;
   let selected: DisplayItem | null = null;
   let items: DisplayItem[] = [];
+  let shelfItems: DisplayItem[] = [];
   let feed: OpdsFeed | null = null;
   let currentUrl: string | undefined;
   let lastAction: (() => Promise<void>) | null = null;
@@ -1295,6 +1344,113 @@ export function createLibraryView(
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
   const catalogActive = (): boolean => activeSection === 'sources' && selectedSourceId !== null;
+
+  function resetCatalogTree(): void {
+    catalogRoot = null;
+    selectedCatalogKey = '';
+  }
+
+  function ensureCatalogRoot(source: OpdsSource): CatalogTreeNode {
+    if (catalogRoot !== null && catalogRoot.key === '') return catalogRoot;
+    catalogRoot = {
+      key: '',
+      title: source.title,
+      url: undefined,
+      children: [],
+      publications: [],
+      loaded: false,
+      expanded: true,
+    };
+    return catalogRoot;
+  }
+
+  function findCatalogNode(
+    key: string,
+    node: CatalogTreeNode | null = catalogRoot,
+  ): CatalogTreeNode | null {
+    if (node === null) return null;
+    if (node.key === key) return node;
+    for (const child of node.children) {
+      const found = findCatalogNode(key, child);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+
+  function catalogPathToSelection(): CatalogTreeNode[] {
+    const path: CatalogTreeNode[] = [];
+    const walk = (node: CatalogTreeNode, acc: CatalogTreeNode[]): boolean => {
+      acc.push(node);
+      if (node.key === selectedCatalogKey) {
+        path.push(...acc);
+        return true;
+      }
+      for (const child of node.children) {
+        if (walk(child, acc)) return true;
+      }
+      acc.pop();
+      return false;
+    };
+    if (catalogRoot !== null) walk(catalogRoot, []);
+    return path;
+  }
+
+  function syncCatalogTrail(): void {
+    const path = catalogPathToSelection();
+    trail.splice(
+      0,
+      trail.length,
+      ...path.slice(1).map((node) => ({ title: node.title, url: node.url })),
+    );
+  }
+
+  function mergeCatalogChildren(
+    node: CatalogTreeNode,
+    navigations: readonly DisplayItem[],
+  ): CatalogTreeNode[] {
+    const previous = new Map(node.children.map((child) => [child.key, child]));
+    return navigations.map((display) => {
+      const url = display.entry?.navigationUrl;
+      const key = catalogNodeKey(url);
+      const existing = previous.get(key);
+      if (existing !== undefined) {
+        existing.title = itemTitle(display.item);
+        return existing;
+      }
+      return {
+        key,
+        title: itemTitle(display.item),
+        url,
+        children: [],
+        publications: [],
+        loaded: false,
+        expanded: false,
+      };
+    });
+  }
+
+  function applyCatalogFeed(sourceId: string, loaded: OpdsFeed, url?: string): void {
+    feed = loaded;
+    const publications = publicationsFromFeed(sourceId, loaded);
+    const source = selectedSource();
+    if (source !== undefined) ensureCatalogRoot(source);
+    const node = findCatalogNode(catalogNodeKey(url));
+    if (node !== null) {
+      node.publications = publications;
+      node.loaded = true;
+      node.expanded = true;
+      node.children = mergeCatalogChildren(node, navigationFromFeed(sourceId, loaded));
+      selectedCatalogKey = node.key;
+      syncCatalogTrail();
+    }
+    items = publications;
+    currentUrl = url;
+    selected = null;
+  }
+
+  function catalogHasPaintedContent(): boolean {
+    return catalogRoot?.loaded === true || (catalogActive() && items.length > 0);
+  }
 
   function smartGroupName(group: SmartGroupDefinition): string {
     const l = labels();
@@ -1479,6 +1635,7 @@ export function createLibraryView(
 
   function beginBlockingLoad(): void {
     if (activeSection === 'shelf' && items.length > 0) return;
+    if (catalogHasPaintedContent()) return;
     setStatus(labels().loading);
   }
 
@@ -1518,6 +1675,9 @@ export function createLibraryView(
     searchForm.hidden = activeSection !== 'shelf' && !inCatalog;
     parkWorkspaceTravel();
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
+    groupPane.hidden = inCatalog;
+    sourcePane.hidden = inCatalog;
+    catalogPane.hidden = !inCatalog;
     if (activeSection === 'shelf') {
       heading.textContent = '';
       heading.hidden = true;
@@ -1536,7 +1696,7 @@ export function createLibraryView(
       heading.hidden = false;
       heading.textContent = selectedSource()?.title ?? labels().library;
       toolbar.replaceChildren();
-      itemList.classList.remove('lightink-library-cover-wall');
+      itemList.classList.add('lightink-library-cover-wall');
       workArea.replaceChildren(itemList, detail);
       content.replaceChildren(navigation, status, workArea);
     } else {
@@ -1548,6 +1708,7 @@ export function createLibraryView(
     }
     renderGroups();
     renderSources();
+    if (inCatalog) renderCatalogTree();
   }
 
   function showGroupOverlay(): void {
@@ -2116,29 +2277,109 @@ export function createLibraryView(
     }
   }
 
+  function renderCatalogTree(): void {
+    catalogTree.replaceChildren();
+    catalogBack.textContent = labels().backToShelf;
+    catalogBack.prepend(createNavIcon(doc, NAV_ICON_PATHS.library));
+    catalogBack.title = labels().backToShelf;
+    catalogBack.setAttribute('aria-label', labels().backToShelf);
+    catalogHeading.textContent = selectedSource()?.title ?? labels().library;
+    catalogPane.setAttribute('aria-label', catalogHeading.textContent);
+    if (catalogRoot === null) return;
+    const appendNode = (node: CatalogTreeNode, depth: number): void => {
+      const wrapper = doc.createElement('div');
+      wrapper.className = 'lightink-library-catalog-node lightink-library-custom-group';
+      wrapper.dataset.catalogKey = node.key;
+      wrapper.style.setProperty('--lightink-group-depth', String(depth));
+      const row = doc.createElement('div');
+      row.className = 'lightink-library-custom-group-row';
+      const toggle = button(doc, '', 'lightink-library-group-toggle');
+      toggle.appendChild(
+        createNavIcon(doc, NAV_ICON_PATHS.chevron, 'lightink-library-collapse-chevron'),
+      );
+      const expandable = !node.loaded || node.children.length > 0;
+      toggle.disabled = !expandable;
+      toggle.classList.toggle('is-expanded', node.expanded);
+      toggle.setAttribute('aria-label', node.title);
+      toggle.setAttribute('aria-expanded', String(node.expanded));
+      toggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void toggleCatalogNode(node);
+      });
+      const choose = button(doc, node.title, 'lightink-library-group');
+      choose.prepend(createNavIcon(doc, depth === 0 ? NAV_ICON_PATHS.source : NAV_ICON_PATHS.folder));
+      if (node.url !== undefined) choose.dataset.navigationUrl = node.url;
+      choose.dataset.catalogKey = node.key;
+      const active = selectedCatalogKey === node.key;
+      choose.classList.toggle('is-active', active);
+      if (active) choose.setAttribute('aria-current', 'true');
+      choose.addEventListener('click', () => void selectCatalogNode(node));
+      row.append(toggle, choose);
+      wrapper.appendChild(row);
+      catalogTree.appendChild(wrapper);
+      if (node.expanded) {
+        for (const child of node.children) appendNode(child, depth + 1);
+      }
+    };
+    appendNode(catalogRoot, 0);
+  }
+
+  async function selectCatalogNode(node: CatalogTreeNode): Promise<void> {
+    if (!node.loaded) {
+      await loadFeed(node.url);
+      return;
+    }
+    selectedCatalogKey = node.key;
+    currentUrl = node.url;
+    items = node.publications;
+    selected = null;
+    lastAction = () => loadFeed(node.url);
+    syncCatalogTrail();
+    renderCatalogTree();
+    renderBreadcrumbs();
+    renderItems();
+    renderDetail();
+  }
+
+  async function toggleCatalogNode(node: CatalogTreeNode): Promise<void> {
+    if (!node.loaded) {
+      await selectCatalogNode(node);
+      return;
+    }
+    if (node.children.length === 0) return;
+    node.expanded = !node.expanded;
+    renderCatalogTree();
+  }
+
   function renderBreadcrumbs(): void {
     breadcrumbs.replaceChildren();
     const source = selectedSource();
     if (source !== undefined) {
-      const listCrumb = button(doc, labels().sources);
-      listCrumb.addEventListener('click', () => closeCatalog());
-      breadcrumbs.appendChild(listCrumb);
-      if (trail.length > 0) {
-        const rootSeparator = doc.createElement('span');
-        rootSeparator.textContent = '/';
-        const rootCrumb = button(doc, source.title);
-        rootCrumb.addEventListener('click', () => void openCatalog(source.id));
-        breadcrumbs.append(rootSeparator, rootCrumb);
-        for (const [index, crumb] of trail.entries()) {
-          const separator = doc.createElement('span');
-          separator.textContent = '/';
-          const crumbButton = button(doc, crumb.title);
-          crumbButton.addEventListener('click', () => {
-            trail.splice(index + 1);
-            void loadFeed(crumb.url, false);
-          });
-          breadcrumbs.append(separator, crumbButton);
-        }
+      const backCrumb = button(doc, labels().backToShelf);
+      backCrumb.addEventListener('click', () => void showMyBooks());
+      breadcrumbs.appendChild(backCrumb);
+      const rootSeparator = doc.createElement('span');
+      rootSeparator.textContent = '/';
+      const rootCrumb = button(doc, source.title);
+      rootCrumb.addEventListener('click', () => {
+        if (catalogRoot !== null) void selectCatalogNode(catalogRoot);
+        else void openCatalog(source.id);
+      });
+      breadcrumbs.append(rootSeparator, rootCrumb);
+      for (const [index, crumb] of trail.entries()) {
+        const separator = doc.createElement('span');
+        separator.textContent = '/';
+        const crumbButton = button(doc, crumb.title);
+        crumbButton.addEventListener('click', () => {
+          const node = findCatalogNode(catalogNodeKey(crumb.url));
+          if (node !== null) {
+            void selectCatalogNode(node);
+            return;
+          }
+          trail.splice(index + 1);
+          void loadFeed(crumb.url);
+        });
+        breadcrumbs.append(separator, crumbButton);
       }
     }
     previousButton.disabled = feed?.previousUrl == null || feed.previousUrl === '';
@@ -2337,12 +2578,17 @@ export function createLibraryView(
     membershipOptions.querySelector<HTMLInputElement>('input')?.focus();
   }
 
-  function renderCoverCard(display: DisplayItem): HTMLButtonElement {
+  function renderCoverCard(
+    display: DisplayItem,
+    options: { readonly selectOnClick?: boolean } = {},
+  ): HTMLButtonElement {
     const row = button(doc, '', 'lightink-library-item lightink-library-item--cover');
     row.dataset.itemId = display.item.id;
     row.dataset.bookKind = classifyLibraryKind(display.item);
     row.setAttribute('role', 'option');
-    row.setAttribute('aria-selected', 'false');
+    const selectedHere = options.selectOnClick === true && selected?.item.id === display.item.id;
+    row.setAttribute('aria-selected', selectedHere ? 'true' : 'false');
+    row.classList.toggle('is-selected', selectedHere);
     row.setAttribute('aria-keyshortcuts', 'G');
     row.draggable = true;
     const cover = doc.createElement('div');
@@ -2368,7 +2614,12 @@ export function createLibraryView(
     bindLongPress(row, {
       onLongPress: (position) => openItemCollectionMenu(display, position),
     });
-    row.addEventListener('click', () => void openSelected(display));
+    if (options.selectOnClick === true) {
+      row.addEventListener('click', () => void selectItem(display));
+      row.addEventListener('dblclick', () => void openSelected(display));
+    } else {
+      row.addEventListener('click', () => void openSelected(display));
+    }
     row.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2386,42 +2637,6 @@ export function createLibraryView(
       event.dataTransfer?.setData('text/plain', display.item.title);
       if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'copy';
     });
-    return row;
-  }
-
-  function renderCatalogRow(display: DisplayItem): HTMLButtonElement {
-    const row = button(doc, '', 'lightink-library-item lightink-library-item--row');
-    row.dataset.itemId = display.item.id;
-    row.setAttribute('role', 'option');
-    row.setAttribute('aria-selected', selected?.item.id === display.item.id ? 'true' : 'false');
-    row.classList.toggle('is-selected', selected?.item.id === display.item.id);
-    const cover = doc.createElement('div');
-    cover.className = 'lightink-library-cover';
-    appendCover(cover, display);
-    const text = doc.createElement('span');
-    text.className = 'lightink-library-item-text';
-    const title = doc.createElement('strong');
-    title.textContent = itemTitle(display.item);
-    const meta = doc.createElement('span');
-    meta.textContent = [
-      itemAuthors(display.item).join(', '),
-      display.item.series,
-      display.item.extension?.toUpperCase(),
-      display.item.size === undefined ? undefined : bytesLabel(display.item.size),
-    ]
-      .filter((part): part is string => typeof part === 'string' && part !== '')
-      .join(' · ');
-    text.append(title, meta);
-    appendImportedProgress(row, text, display, { continueCue: false });
-    row.append(cover, text);
-    // 目录行（列表态）无右键菜单，长按提供同一分组管理菜单（纯触控可达）。
-    bindLongPress(row, {
-      onLongPress: (position) => openItemCollectionMenu(display, position),
-    });
-    row.addEventListener('click', () =>
-      display.entry?.kind === 'navigation' ? void openSelected(display) : void selectItem(display),
-    );
-    row.addEventListener('dblclick', () => void openSelected(display));
     return row;
   }
 
@@ -2517,9 +2732,12 @@ export function createLibraryView(
         }
       }
       itemList.appendChild(
-        activeSection === 'shelf' ? renderCoverCard(display) : renderCatalogRow(display),
+        catalogActive()
+          ? renderCoverCard(display, { selectOnClick: true })
+          : renderCoverCard(display),
       );
     }
+    if (selected === null) detail.hidden = true;
   }
 
   async function ensureLinks(display: DisplayItem): Promise<DisplayItem> {
@@ -2578,8 +2796,13 @@ export function createLibraryView(
       display.entry.navigationUrl != null &&
       display.entry.navigationUrl !== ''
     ) {
+      const node = findCatalogNode(catalogNodeKey(display.entry.navigationUrl));
+      if (node !== null) {
+        await selectCatalogNode(node);
+        return;
+      }
       trail.push({ title: display.item.title, url: display.entry.navigationUrl });
-      await loadFeed(display.entry.navigationUrl, false);
+      await loadFeed(display.entry.navigationUrl);
       return;
     }
     const request = requestFor(display);
@@ -2824,6 +3047,7 @@ export function createLibraryView(
       if (generation !== requestGeneration) return;
       rememberImportedItems(loaded);
       items = loaded.map((item) => ({ item, links: [] }));
+      shelfItems = items;
       groups = loadedGroups;
       memberships = loadedMemberships;
       refreshSmartGroups();
@@ -2846,30 +3070,35 @@ export function createLibraryView(
     }
   }
 
-  async function loadFeed(url?: string, pushTrail = false): Promise<void> {
+  async function loadFeed(url?: string): Promise<void> {
     const source = selectedSource();
     if (source === undefined) return;
     const generation = ++requestGeneration;
-    setStatus(labels().loading);
+    const painted = catalogHasPaintedContent();
+    if (!painted) {
+      setStatus(labels().loading);
+      itemList.replaceChildren();
+    }
     currentUrl = url;
-    lastAction = () => loadFeed(currentUrl, false);
+    lastAction = () => loadFeed(currentUrl);
     try {
       const loaded = await deps.opds.browse(source.id, url);
       if (generation !== requestGeneration) return;
-      feed = loaded;
-      items = itemsFromFeed(source.id, loaded);
+      applyCatalogFeed(source.id, loaded, url);
       refreshSmartGroups();
-      selected = null;
-      if (pushTrail) trail.push({ title: loaded.title, url: loaded.sourceUrl });
       setStatus('');
+      renderCatalogTree();
       renderBreadcrumbs();
       renderItems();
+      renderDetail();
     } catch (error) {
       if (generation !== requestGeneration) return;
-      items = [];
+      if (!painted) items = [];
       setStatus(errorText(error, labels().offline), true);
+      renderCatalogTree();
       renderBreadcrumbs();
       renderItems();
+      if (!painted) renderDetail();
     }
   }
 
@@ -2880,8 +3109,12 @@ export function createLibraryView(
     feed = null;
     currentUrl = undefined;
     trail.splice(0);
+    resetCatalogTree();
+    items = shelfItems;
     syncPageChrome();
     renderGroups();
+    renderContinueBar();
+    renderItems();
     await loadPersistedItems();
   }
 
@@ -2902,6 +3135,7 @@ export function createLibraryView(
     feed = null;
     currentUrl = undefined;
     trail.splice(0);
+    resetCatalogTree();
     searchInput.value = '';
     syncSearchClear();
     closeSourceForm();
@@ -2918,26 +3152,38 @@ export function createLibraryView(
     feed = null;
     currentUrl = undefined;
     trail.splice(0);
+    resetCatalogTree();
+    items = [];
     syncPageChrome();
     renderSources();
     renderBreadcrumbs();
   }
 
   async function openCatalog(sourceId: string): Promise<void> {
+    const sameSource = catalogActive() && selectedSourceId === sourceId && catalogRoot !== null;
     activeSection = 'sources';
     selectedSourceId = sourceId;
     searchInput.value = '';
     syncSearchClear();
-    trail.splice(0);
+    if (!sameSource) {
+      trail.splice(0);
+      items = [];
+      selected = null;
+      resetCatalogTree();
+      const source = selectedSource();
+      if (source !== undefined) ensureCatalogRoot(source);
+      itemList.replaceChildren();
+      detail.hidden = true;
+    }
     syncPageChrome();
-    renderSources();
+    renderCatalogTree();
     renderBreadcrumbs();
     try {
       rememberImportedItems(await deps.library.listItems());
     } catch {
       /* keep the last known imported set */
     }
-    await loadFeed(undefined, false);
+    await loadFeed(undefined);
   }
 
   async function search(): Promise<void> {
@@ -2966,22 +3212,28 @@ export function createLibraryView(
       return;
     }
     const generation = ++requestGeneration;
-    setStatus(labels().loading);
+    const painted = catalogHasPaintedContent();
+    if (!painted) {
+      setStatus(labels().loading);
+      itemList.replaceChildren();
+    }
     lastAction = search;
     try {
       const loaded = await deps.opds.search(selectedSourceId, query);
       if (generation !== requestGeneration) return;
       feed = loaded;
-      items = itemsFromFeed(selectedSourceId, loaded);
+      items = publicationsFromFeed(selectedSourceId, loaded);
       refreshSmartGroups();
       selected = null;
       trail.splice(0, trail.length, { title: `${labels().search}: ${query}`, url: loaded.sourceUrl });
       setStatus('');
+      renderCatalogTree();
       renderBreadcrumbs();
       renderItems();
+      renderDetail();
     } catch (error) {
       if (generation !== requestGeneration) return;
-      items = [];
+      if (!painted) items = [];
       setStatus(errorText(error, labels().offline), true);
       renderItems();
     }
@@ -3288,7 +3540,7 @@ export function createLibraryView(
       if (catalogActive()) {
         syncPageChrome();
         renderSources();
-        await loadFeed(currentUrl, false);
+        await loadFeed(currentUrl);
         return;
       }
       if (activeSection === 'sources') {
@@ -3729,15 +3981,16 @@ export function createLibraryView(
       deps.notify(errorText(error, labels().offline), 'error');
     }
   });
+  catalogBack.addEventListener('click', () => void showMyBooks());
   retryButton.addEventListener('click', () => void lastAction?.());
   previousButton.addEventListener('click', () => {
     if (feed?.previousUrl != null && feed.previousUrl !== '') {
-      void loadFeed(feed.previousUrl, false);
+      void loadFeed(feed.previousUrl);
     }
   });
   nextButton.addEventListener('click', () => {
     if (feed?.nextUrl != null && feed.nextUrl !== '') {
-      void loadFeed(feed.nextUrl, false);
+      void loadFeed(feed.nextUrl);
     }
   });
   itemList.addEventListener('keydown', (event) => {
@@ -3747,7 +4000,7 @@ export function createLibraryView(
     const current = doc.activeElement instanceof HTMLButtonElement ? rows.indexOf(doc.activeElement) : -1;
     const horizontal = event.key === 'ArrowRight' || event.key === 'ArrowLeft';
     const vertical = event.key === 'ArrowDown' || event.key === 'ArrowUp';
-    if (vertical || (horizontal && activeSection === 'shelf')) {
+    if (vertical || (horizontal && (activeSection === 'shelf' || catalogActive()))) {
       event.preventDefault();
       const delta = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1;
       const next = Math.max(0, Math.min(rows.length - 1, current + delta));
