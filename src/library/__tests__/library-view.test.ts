@@ -1679,6 +1679,95 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(css).not.toMatch(/--lightink-page-pad/);
   });
 
+  it('resolves the 480px tier as the effective cascade winner at 360dp (data-display=compact)', () => {
+    // display-scale.ts 在 <1280px 视口置 data-display='compact'，1279px 档的
+    // :not(qhd/uhd/xuhd) 链恒匹配（特异性 0,4,1）。480px 档只有特异性不低于
+    // 该档且源码序在其后，360dp 值才是有效值；本测试按 (特异性, 源码序)
+    // 重放层叠取胜者，而非仅断言声明存在。
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    );
+
+    // 配平括号抽取从 marker 开始的完整规则（含媒体块内嵌套规则）。
+    const blockAt = (marker: string): { text: string; index: number } => {
+      const index = css.indexOf(marker);
+      expect(index).toBeGreaterThan(-1);
+      const open = css.indexOf('{', index + marker.length);
+      let depth = 0;
+      for (let i = open; i < css.length; i += 1) {
+        if (css[i] === '{') depth += 1;
+        if (css[i] === '}') {
+          depth -= 1;
+          if (depth === 0) return { text: css.slice(index, i + 1), index };
+        }
+      }
+      throw new Error(`unbalanced block: ${marker}`);
+    };
+
+    // 简易特异性 (id, class+attr, element)；:not() 本身不计，其参数中的
+    // 属性选择器已由 attr 统计覆盖（本文件变量档无其他伪类）。
+    const specificity = (selector: string): [number, number, number] => {
+      const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+      const classes = (selector.match(/\.[\w-]+/g) ?? []).length;
+      const attrs = (selector.match(/\[[^\]]*\]/g) ?? []).length;
+      const rest = selector
+        .replace(/\[[^\]]*\]/g, ' ')
+        .replace(/:{1,2}[a-z-]+(\([^)]*\))?/gi, ' ')
+        .replace(/[.#][\w-]+/g, ' ')
+        .replace(/[>+~*]/g, ' ');
+      const elements = rest.split(/\s+/).filter((part) => /^[a-z][\w-]*$/i.test(part)).length;
+      return [ids, classes + attrs, elements];
+    };
+    const compareSpec = (a: [number, number, number], b: [number, number, number]): number =>
+      a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+    // 360dp + data-display='compact' 下同时命中的变量档。
+    const tiers = [
+      { marker: '.lightink-library {', name: 'base' },
+      { marker: "html[data-display='compact'] .lightink-library {", name: 'compact' },
+      { marker: '@media (max-width: 1279px)', name: '1279px' },
+      { marker: '@media (max-width: 760px)', name: '760px' },
+      { marker: '@media (max-width: 480px)', name: '480px' },
+    ].map(({ marker, name }) => {
+      const { text, index } = blockAt(marker);
+      const rule = text.match(/([^{}]*\.lightink-library)\s*\{([^}]*)\}/);
+      expect(rule, `${name} tier declares variables on .lightink-library`).not.toBeNull();
+      const declarations = new Map<string, string>();
+      for (const decl of rule![2].split(';')) {
+        const colon = decl.indexOf(':');
+        if (colon === -1) continue;
+        const key = decl.slice(0, colon).trim();
+        if (key.startsWith('--lightink-library-')) {
+          declarations.set(key, decl.slice(colon + 1).trim());
+        }
+      }
+      const spec = rule![1]
+        .split(',')
+        .map((part) => specificity(part))
+        .reduce((best, current) => (compareSpec(current, best) > 0 ? current : best));
+      return { name, declarations, spec, order: index };
+    });
+
+    const expected360: Record<string, string> = {
+      '--lightink-library-pad-x': '12px',
+      '--lightink-library-pad-y': '10px',
+      '--lightink-library-nav-width': '120px',
+      '--lightink-library-nav-min': '120px',
+      '--lightink-library-cover-min': '96px',
+      '--lightink-library-search-max': '100%',
+      '--lightink-library-manage-max': '100%',
+    };
+    for (const [token, value] of Object.entries(expected360)) {
+      const contenders = tiers
+        .filter((tier) => tier.declarations.has(token))
+        .sort((a, b) => compareSpec(a.spec, b.spec) || a.order - b.order);
+      const winner = contenders[contenders.length - 1];
+      expect(winner?.name, `${token} effective winner at 360dp`).toBe('480px');
+      expect(winner?.declarations.get(token)).toBe(value);
+    }
+  });
+
   it('does not project progress onto unopened OPDS catalog entries', async () => {
     const getProgress = vi.fn((_item, options) =>
       options?.catalogEntry === true

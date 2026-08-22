@@ -1820,45 +1820,12 @@ export function createLibraryView(
     if (groupActionsId === node.group.id) {
       const menu = doc.createElement('div');
       menu.className = 'lightink-library-group-actions';
-      const up = keyboardGroupPlacement(groups, node.group.id, 'up');
-      const down = keyboardGroupPlacement(groups, node.group.id, 'down');
-      const outdent = keyboardGroupPlacement(groups, node.group.id, 'outdent');
-      const indent = keyboardGroupPlacement(groups, node.group.id, 'indent');
-      const memberIds = itemIdsForGroup(groups, memberships, node.group.id);
-      const managedMembers = items
-        .map((display) => display.item)
-        .filter((item) => memberIds.has(item.id) && isManagedItem(item));
-      const groupPinned =
-        managedMembers.length > 0 && managedMembers.every((item) => item.offlinePinned === true);
+      // 与长按上下文菜单同一动作集：buildGroupMenuItems 为唯一事实点，
+      // 内联菜单仅将其映射为按钮（分隔线在内联形态下省略）。
       menu.append(
-        groupAction(labels().addChildGroup, () =>
-          openGroupEditor({ kind: 'create', parentId: node.group.id }),
-        ),
-        groupAction(labels().renameGroup, () =>
-          openGroupEditor({ kind: 'rename', groupId: node.group.id }),
-        ),
-        groupAction(labels().moveUp, () => void keyboardMoveGroup(node.group.id, 'up'), up === null),
-        groupAction(
-          labels().moveDown,
-          () => void keyboardMoveGroup(node.group.id, 'down'),
-          down === null,
-        ),
-        groupAction(
-          labels().outdent,
-          () => void keyboardMoveGroup(node.group.id, 'outdent'),
-          outdent === null,
-        ),
-        groupAction(
-          labels().indent,
-          () => void keyboardMoveGroup(node.group.id, 'indent'),
-          indent === null,
-        ),
-        groupAction(
-          groupPinned ? labels().removeGroupOffline : labels().keepGroupOffline,
-          () => void setGroupOffline(node.group.id, !groupPinned),
-          managedMembers.length === 0 || deps.library.setOfflinePinned === undefined,
-        ),
-        groupAction(labels().deleteGroup, () => void deleteCustomGroup(node.group)),
+        ...buildGroupMenuItems(node)
+          .filter((item) => item.separator !== true)
+          .map((item) => groupAction(item.label, item.action, item.enabled?.() === false)),
       );
       wrapper.appendChild(menu);
     }

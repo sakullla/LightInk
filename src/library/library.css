@@ -1942,7 +1942,11 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
 /* 360dp 竖屏：分组树/搜索/网格进一步收窄，封面墙至少两列不溢出。 */
 @media (max-width: 480px) {
-  html .lightink-library,
+  /* 与 1279px 档共用同一 :not 链（特异性持平 0,4,1）且源码序位于其后——
+     等特异性后者胜，360dp 变量值方能生效：<1280px 时 display-scale.ts 置
+     data-display='compact'，1279px 档的 :not 链恒匹配，低特异性选择器会被
+     其静默覆盖。 */
+  html:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd']) .lightink-library,
   html[data-display] .lightink-library {
     --lightink-library-pad-x: 12px;
     --lightink-library-pad-y: 10px;
@@ -1953,6 +1957,14 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     --lightink-library-cover-gap-y: 12px;
     --lightink-library-search-max: 100%;
     --lightink-library-manage-max: 100%;
+  }
+
+  /* 折叠态仍回指窄栏变量：特异性高于本档基线规则，避免折叠导航在 360dp
+     被 120px 撑开而与封面墙错位。 */
+  html:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd']) .lightink-library[data-library-nav-collapsed='true'],
+  html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
+    --lightink-library-nav-width: var(--lightink-library-nav-collapsed);
+    --lightink-library-nav-min: var(--lightink-library-nav-collapsed);
   }
 
   .lightink-library-nav {
