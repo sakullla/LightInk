@@ -472,6 +472,28 @@ describe('createAppShell immersive chrome', () => {
     expect(calls).toEqual(['editor', 'shelf']);
   });
 
+  it('R6：Android 阅读侧裁剪——「编辑」travel 按钮不挂载，阅读侧 chrome 正常', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'shelf' }),
+        getWorkspaceMode: () => 'reader',
+        isEditorEntrySuppressed: () => true,
+      },
+      { shortcutBindings: () => [], storage: null },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    expect(fakeRoot.querySelector('#lightink-enter-editor')).toBeNull();
+    // 按钮引用仍由 shell 暴露（id 稳定；桌面 main 接线给书架 manage 面板）。
+    expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
+    // 反向「阅读/书架」travel 按钮与书架 chrome 不受影响。
+    expect(fakeRoot.querySelector('#lightink-enter-reader-home')).not.toBeNull();
+    expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(false);
+  });
+
   it('setReaderTypography persists reader scale without writing lightink.fontScale', () => {
     installFakeDocument();
     const storage = {
@@ -692,6 +714,20 @@ describe('buildMenus 生产结构', () => {
     expect(readerLabel).toBe('阅读/书架');
     expect(editorLabel).not.toMatch(/模式/);
     expect(readerLabel).not.toMatch(/模式/);
+  });
+
+  it('R6：抑制编辑器入口时 View 菜单不渲染「编辑」项，阅读侧项保留', () => {
+    const view = buildMenus({
+      ...stubActions(),
+      isEditorEntrySuppressed: () => true,
+    }).find((m) => m.id === 'view');
+    expect(view?.items.some((i) => i.id === 'view-workspace-editor')).toBe(false);
+    expect(view?.items.some((i) => i.id === 'view-workspace-reader')).toBe(true);
+  });
+
+  it('缺省（桌面）View 菜单保留「编辑」入口项', () => {
+    const view = buildMenus(stubActions()).find((m) => m.id === 'view');
+    expect(view?.items.some((i) => i.id === 'view-workspace-editor')).toBe(true);
   });
 
   it('File→书库在书架上不把工作区切去编辑器', () => {

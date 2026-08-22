@@ -272,6 +272,63 @@ describe('createWorkspaceMode', () => {
   });
 });
 
+describe('createWorkspaceMode editorEnabled:false（Android 阅读侧裁剪 R6）', () => {
+  it('cold-starts as the shelf and enterEditor is a no-op', () => {
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    expect(workspace.snapshot()).toEqual({
+      mode: 'reader',
+      hasOpenBook: false,
+      surface: 'shelf',
+    });
+    expect(workspace.enterEditor()).toEqual({
+      mode: 'reader',
+      hasOpenBook: false,
+      surface: 'shelf',
+    });
+    expect(workspace.mode).toBe('reader');
+    expect(workspace.surface).toBe('shelf');
+  });
+
+  it('clamps setMode/toggleMode so the editor stays unreachable', () => {
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    expect(workspace.setMode('editor').mode).toBe('reader');
+    expect(workspace.toggleMode().mode).toBe('reader');
+    expect(workspace.toggleMode().surface).toBe('shelf');
+  });
+
+  it('keeps reader-side transitions working and never notifies on suppressed entries', () => {
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    const listener = vi.fn();
+    workspace.subscribe(listener);
+    workspace.enterEditor();
+    workspace.setMode('editor');
+    workspace.toggleMode();
+    expect(listener).not.toHaveBeenCalled();
+
+    expect(workspace.openBook()).toEqual({
+      mode: 'reader',
+      hasOpenBook: true,
+      surface: 'reader',
+    });
+    workspace.enterEditor();
+    expect(workspace.surface).toBe('reader');
+    expect(workspace.returnToShelf()).toEqual({
+      mode: 'reader',
+      hasOpenBook: false,
+      surface: 'shelf',
+    });
+    expect(workspace.enterReaderHome().surface).toBe('shelf');
+    expect(workspace.closeReaderTab().surface).toBe('shelf');
+  });
+
+  it('editorEnabled defaults to true (desktop behavior unchanged)', () => {
+    const workspace = createWorkspaceMode();
+    expect(workspace.enterEditor().surface).toBe('editor');
+    const explicit = createWorkspaceMode({ editorEnabled: true });
+    expect(explicit.enterEditor().surface).toBe('editor');
+  });
+});
+
 describe('applyWorkspaceSurface', () => {
   it('stamps mode and surface dataset plus exclusive surface classes', () => {
     const classNames = new Set<string>();

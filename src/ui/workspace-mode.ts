@@ -23,6 +23,15 @@ export type WorkspaceChrome = 'editor' | 'reader';
 
 export const DEFAULT_WORKSPACE_MODE: WorkspaceMode = 'reader';
 
+export interface WorkspaceModeOptions {
+  /**
+   * Android 阅读侧裁剪（R6）：false 时编辑器不可达——`enterEditor`、
+   * `setMode('editor')`、`toggleMode` 全部为空操作，工作区始终停留在
+   * reader（无打开书时默认 surface 即书架）。缺省 true，桌面行为不变。
+   */
+  editorEnabled?: boolean;
+}
+
 export interface WorkspaceSnapshot {
   readonly mode: WorkspaceMode;
   readonly hasOpenBook: boolean;
@@ -149,7 +158,8 @@ export function applyWorkspaceVisibility(
   }
 }
 
-export function createWorkspaceMode(): WorkspaceModeController {
+export function createWorkspaceMode(options?: WorkspaceModeOptions): WorkspaceModeController {
+  const editorEnabled = options?.editorEnabled ?? true;
   let mode: WorkspaceMode = DEFAULT_WORKSPACE_MODE;
   let hasOpenBook = false;
   const listeners = new Set<(state: WorkspaceSnapshot) => void>();
@@ -187,15 +197,22 @@ export function createWorkspaceMode(): WorkspaceModeController {
       return resolveWorkspaceSurface(mode, hasOpenBook);
     },
     setMode(next) {
-      return commit(parseWorkspaceMode(next), hasOpenBook);
+      const parsed = parseWorkspaceMode(next);
+      return commit(editorEnabled ? parsed : 'reader', hasOpenBook);
     },
     enterEditor() {
+      if (!editorEnabled) {
+        return snapshot();
+      }
       return commit('editor', hasOpenBook);
     },
     enterReader() {
       return commit('reader', hasOpenBook);
     },
     toggleMode() {
+      if (!editorEnabled) {
+        return snapshot();
+      }
       return commit(mode === 'editor' ? 'reader' : 'editor', hasOpenBook);
     },
     openBook() {

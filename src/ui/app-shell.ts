@@ -140,6 +140,12 @@ export interface AppShellActions {
   onSetWorkspaceMode?(mode: WorkspaceMode): void;
   /** Shelf labeled「编辑」: enter the editor workspace. */
   onEnterEditor?(): void;
+  /**
+   * Android 阅读侧裁剪（R6）：true 时抑制全部编辑器入口——View 菜单
+   * 「编辑」项不渲染、书架「编辑」travel 按钮不挂载。由 main 以
+   * `mobile-platform.isAndroidApp` 接线；缺省 false，桌面逐字节不变。
+   */
+  isEditorEntrySuppressed?(): boolean;
   /** Editor labeled「阅读/书架」: always land on the shelf cover wall. */
   onEnterReaderHome?(): void;
   /** True when reader workspace is showing an open book, not the shelf. */
@@ -843,13 +849,18 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       id: 'view',
       label: () => t('menu.view'),
       items: [
-        menuItem(
-          'view-workspace-editor',
-          () => workspaceTravelLabel('editor', actions.getLocale()),
-          () => enterEditorWorkspace(actions),
-          '',
-          () => actions.getWorkspaceMode?.() === 'reader',
-        ),
+        // R6：Android 阅读侧裁剪——编辑器入口项不渲染（桌面保留原顺序）。
+        ...(actions.isEditorEntrySuppressed?.() === true
+          ? []
+          : [
+              menuItem(
+                'view-workspace-editor',
+                () => workspaceTravelLabel('editor', actions.getLocale()),
+                () => enterEditorWorkspace(actions),
+                '',
+                () => actions.getWorkspaceMode?.() === 'reader',
+              ),
+            ]),
         menuItem(
           'view-workspace-reader',
           () => workspaceTravelLabel('readerHome', actions.getLocale()),
@@ -1102,7 +1113,11 @@ export function createAppShell(
   enterEditorBtn.hidden = true;
   enterEditorBtn.setAttribute('aria-hidden', 'true');
   enterEditorBtn.addEventListener('click', () => enterEditorWorkspace(actions));
-  readerShell.appendChild(enterEditorBtn);
+  // R6：Android 阅读侧裁剪——「编辑」travel 按钮不挂载（不渲染）。
+  // enterEditorButton 仍由 shell 暴露（桌面 main 将其接线给书架 manage 面板）。
+  if (actions.isEditorEntrySuppressed?.() !== true) {
+    readerShell.appendChild(enterEditorBtn);
+  }
 
   function syncTravelLabels(): void {
     const locale = actions.getLocale();

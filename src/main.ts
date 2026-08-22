@@ -137,6 +137,7 @@ import {
   type ReadingLayout,
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
+import { isAndroidApp } from './ui/mobile-platform.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
 import {
@@ -409,7 +410,8 @@ const markdownAnnotations = new Map<string, MarkdownAnnotationHost>();
 // R14：自动保存控制器在 TabManager 之后创建（见下），菜单回调用 ?. 短路。
 let autosave: AutosaveController;
 let libraryView: LibraryView | undefined;
-const workspace = createWorkspaceMode();
+// R6：Android 阅读侧裁剪——编辑器不可达，默认书架、enterEditor 空操作（桌面不变）。
+const workspace = createWorkspaceMode({ editorEnabled: !isAndroidApp });
 // Cold start is the reader cover wall, not the Markdown editor.
 workspace.enterReaderHome();
 let applyingWorkspaceSurfaces = false;
@@ -1687,6 +1689,7 @@ shell = createAppShell(
     getWorkspaceSnapshot: () => workspace.snapshot(),
     onSetWorkspaceMode,
     onEnterEditor: () => workspace.enterEditor(),
+    isEditorEntrySuppressed: () => isAndroidApp,
     onEnterReaderHome: () => workspace.enterReaderHome(),
     isReaderBookOpen: () => workspace.mode === 'reader' && workspace.hasOpenBook,
     listRecents: () => invoke<string[]>('list_recents'),
@@ -2471,8 +2474,14 @@ libraryView = createLibraryView(shell.editorArea, {
   library: libraryClient,
   getLocale: () => i18n.locale,
   getProgress: bindLibraryProgress(syncableStorage),
-  workspaceTravel: shell.enterEditorButton,
-  onEnterEditor: () => workspace.enterEditor(),
+  // R6：Android 不接线编辑器入口——书架 manage 面板「编辑」按钮与
+  // travel 按钮迁移同时缺席（library-view 以 deps 缺省抑制渲染）。
+  ...(isAndroidApp
+    ? {}
+    : {
+        workspaceTravel: shell.enterEditorButton,
+        onEnterEditor: () => workspace.enterEditor(),
+      }),
   webdav: webDavClient,
   onOpenSyncPanel: openWebDavSyncPanel,
   themeStorage: syncableStorage,
@@ -3180,9 +3189,9 @@ document.addEventListener(
 
 
 // 快捷键：捕获阶段注册，保存等操作在编辑器内同样生效。
+// R6：Android 阅读侧裁剪——编辑器专属快捷键（新建/打开/保存/插入/大纲/
+// 源码模式/标签切换/编辑器阅读布局）不注册；桌面注册表逐项保持现状。
 const shortcuts = new ShortcutRegistry({
-  new: () => void manager.newTab(),
-  open: () => void manager.openFile(),
   // T6/R9：编辑器关闭活动标签，复用 closeTab 的未保存确认（与点标签关闭按钮
   // 同路径：先提交源码态编辑，再 closeTab）。阅读器态：无打开书时空操作；
   // 有打开书时与合书一样只回书架。注：WebView2 可能由外壳吞掉 Ctrl+W。
@@ -3199,22 +3208,9 @@ const shortcuts = new ShortcutRegistry({
       void manager.closeTab(id);
     }
   },
-  save: () => {
-    commitActiveSourceMode();
-    void manager.saveActiveTab();
-  },
-  'save-as': () => {
-    commitActiveSourceMode();
-    void saveActiveAs();
-  },
   'toggle-theme': () => {
     themeService.toggle();
   },
-  // R5：插入链接/图片、大纲显隐（源码模式 Ctrl+/ 由 T7 注册）。
-  'insert-link': () => insertElement('link'),
-  'insert-image': () => insertElement('image'),
-  'toggle-outline': () => outline.toggleCollapse(),
-  'toggle-source-mode': () => toggleActiveSourceMode(),
   'toggle-menu-chrome': () => shell.toggleMenuChrome(),
   'toggle-tabs-chrome': () => shell.toggleTabsChrome(),
   'toggle-chrome-pin': () => {
@@ -3223,8 +3219,6 @@ const shortcuts = new ShortcutRegistry({
   'toggle-fullscreen': () => {
     void enterOrExitFullscreen();
   },
-  'next-tab': () => cycleActiveTab(1),
-  'prev-tab': () => cycleActiveTab(-1),
   'zoom-in': () => {
     changeReadingScale('in');
   },
@@ -3234,7 +3228,28 @@ const shortcuts = new ShortcutRegistry({
   'zoom-reset': () => {
     changeReadingScale('reset');
   },
-  'toggle-reading-layout': () => toggleReadingLayoutMode(),
+  ...(isAndroidApp
+    ? {}
+    : {
+        new: () => void manager.newTab(),
+        open: () => void manager.openFile(),
+        save: () => {
+          commitActiveSourceMode();
+          void manager.saveActiveTab();
+        },
+        'save-as': () => {
+          commitActiveSourceMode();
+          void saveActiveAs();
+        },
+        // R5：插入链接/图片、大纲显隐（源码模式 Ctrl+/ 由 T7 注册）。
+        'insert-link': () => insertElement('link'),
+        'insert-image': () => insertElement('image'),
+        'toggle-outline': () => outline.toggleCollapse(),
+        'toggle-source-mode': () => toggleActiveSourceMode(),
+        'next-tab': () => cycleActiveTab(1),
+        'prev-tab': () => cycleActiveTab(-1),
+        'toggle-reading-layout': () => toggleReadingLayoutMode(),
+      }),
 });
 shortcuts.attach(document);
 
