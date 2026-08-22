@@ -323,6 +323,100 @@ async function openItemMenu(host: HTMLElement, itemId: string): Promise<HTMLElem
   return menu;
 }
 
+function touchAt(type: string, point: { clientX: number; clientY: number } | null): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  const points = point === null ? [] : [point];
+  Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : points });
+  Object.defineProperty(event, 'changedTouches', { value: points });
+  return event;
+}
+
+async function waitLongPress(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 550));
+}
+
+async function tryOpenItemMenu(host: HTMLElement, itemId: string): Promise<HTMLElement | null> {
+  const card = itemCard(host, itemId);
+  card.dispatchEvent(
+    new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+  );
+  await settle();
+  const afterClick = document.querySelector('.lightink-context-menu');
+  if (afterClick instanceof HTMLElement) return afterClick;
+  card.dispatchEvent(touchAt('touchstart', { clientX: 20, clientY: 20 }));
+  await waitLongPress();
+  card.dispatchEvent(touchAt('touchend', null));
+  await settle();
+  const afterPress = document.querySelector('.lightink-context-menu');
+  return afterPress instanceof HTMLElement ? afterPress : null;
+}
+
+function detailShowsRemove(host: ParentNode): boolean {
+  const pane = host.querySelector('.lightink-library-detail');
+  if (!(pane instanceof HTMLElement) || !isShown(pane)) return false;
+  return Array.from(pane.querySelectorAll('button')).some(
+    (button) => (button.textContent ?? '').includes('移出书库') && isShown(button),
+  );
+}
+
+function navWidthToken(host: ParentNode): string {
+  return libraryRoot(host).style.getPropertyValue('--lightink-library-nav-width').trim();
+}
+
+function persistedNavWidth(store: Record<string, string>): string {
+  const preferred = store['lightink.library.navWidth'];
+  if (preferred !== undefined && preferred !== '') return preferred;
+  const fallback = Object.entries(store).find(
+    ([key, value]) => /navWidth|nav-width|sidebarWidth|navSize/i.test(key) && value !== '',
+  );
+  if (fallback === undefined) {
+    throw new Error('themeStorage did not record a nav width (expected lightink.library.navWidth)');
+  }
+  return fallback[1];
+}
+
+function resizeHandle(host: ParentNode): HTMLElement {
+  const handle = host.querySelector<HTMLElement>('.lightink-library-nav-resize');
+  if (!(handle instanceof HTMLElement)) throw new Error('nav resize handle not found');
+  return handle;
+}
+
+function pointerAt(type: string, clientX: number): PointerEvent {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    buttons: type === 'pointerup' ? 0 : 1,
+    clientX,
+    clientY: 40,
+    pointerId: 1,
+    pointerType: 'mouse',
+  });
+}
+
+function stubPointerCapture(handle: HTMLElement): void {
+  if (typeof handle.setPointerCapture !== 'function') {
+    Object.defineProperty(handle, 'setPointerCapture', { value: () => undefined, configurable: true });
+  } else {
+    handle.setPointerCapture = () => undefined;
+  }
+  if (typeof handle.releasePointerCapture !== 'function') {
+    Object.defineProperty(handle, 'releasePointerCapture', {
+      value: () => undefined,
+      configurable: true,
+    });
+  } else {
+    handle.releasePointerCapture = () => undefined;
+  }
+}
+
+function dragNavResize(handle: HTMLElement, fromX: number, toX: number): void {
+  stubPointerCapture(handle);
+  handle.dispatchEvent(pointerAt('pointerdown', fromX));
+  handle.dispatchEvent(pointerAt('pointermove', toX));
+  handle.dispatchEvent(pointerAt('pointerup', toX));
+}
+
 async function addItemToCollection(
   host: HTMLElement,
   itemId: string,
@@ -2443,6 +2537,172 @@ describe('LibraryView shelf collections', () => {
   });
 });
 
+describe('LibraryView remove from library', () => {
+  it('removes a local cover via 移出书库 using the same library.removeItem as the detail pane', async () => {
+    const keep = localItem();
+    const gone = localItem({
+      id: 'local:/books/remove.epub',
+      title: '待移出',
+      localPath: '/books/remove.epub',
+    });
+    let shelf = [keep, gone];
+    const removeItem = vi.fn(async (id: string) => {
+      shelf = shelf.filter((item) => item.id !== id);
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => shelf),
+        removeItem,
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const menu = await openItemMenu(host, gone.id);
+    expect(menu.textContent).toContain('移出书库');
+    contextMenuItem('移出书库').click();
+    await settle();
+
+    expect(removeItem).toHaveBeenCalledWith(gone.id);
+    expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
+    expect(itemRow(host, keep.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
+    view.destroy();
+  });
+
+  it('offers 移出书库 on a managed cover and on the detail pane of an already-imported catalog book', async () => {
+    const managed = localItem({
+      id: 'managed:book-1',
+      sourceKind: 'managed',
+      blobHash: 'hash-1',
+      title: '受管书',
+    });
+    const imported = localItem({ id: 'item-1', title: '已入库远程书' });
+    let shelf = [managed, imported];
+    const removeItem = vi.fn(async (id: string) => {
+      shelf = shelf.filter((item) => item.id !== id);
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => shelf),
+        removeItem,
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const coverMenu = await openItemMenu(host, managed.id);
+    expect(coverMenu.textContent).toContain('移出书库');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+
+    await openCatalog(host);
+    itemRow(host, 'item-1').click();
+    await settle();
+    const pane = host.querySelector('.lightink-library-detail');
+    expect(pane instanceof HTMLElement && isShown(pane)).toBe(true);
+    expect(detailShowsRemove(host)).toBe(true);
+    shownButtonWithText(pane!, '移出书库').click();
+    await settle();
+    expect(removeItem).toHaveBeenCalledWith('item-1');
+    expect(host.querySelector('[data-item-id="item-1"]')).toBeNull();
+    view.destroy();
+  });
+
+  it('hides 移出书库 on remote and navigation catalog menus and details', async () => {
+    const navigationEntry: OpdsEntry = {
+      id: 'nav-1',
+      itemId: 'nav-item-1',
+      title: '小说分类',
+      authors: [],
+      links: [],
+      kind: 'navigation',
+      navigationUrl: 'https://books.example/opds/fiction',
+    };
+    const browse = vi.fn(async (_sourceId: string, url?: string) =>
+      url === undefined ? feed({ entries: [entry, navigationEntry] }) : feed(),
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      opds: { ...base.opds, browse },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    itemRow(host, 'item-1').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(true);
+    expect(detailShowsRemove(host)).toBe(false);
+    expect(deps.library.removeItem).not.toHaveBeenCalled();
+
+    const remoteMenu = await tryOpenItemMenu(host, 'item-1');
+    expect(remoteMenu?.textContent ?? '').not.toContain('移出书库');
+
+    const navMenu = await tryOpenItemMenu(host, 'nav-item-1');
+    expect(navMenu?.textContent ?? '').not.toContain('移出书库');
+    expect(deps.library.removeItem).not.toHaveBeenCalled();
+    view.destroy();
+  });
+});
+
+describe('LibraryView sidebar width', () => {
+  it('drags the expanded sidebar, persists the width, and restores it after remount and collapse', async () => {
+    const store: Record<string, string> = {};
+    const themeStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ themeStorage }));
+    await view.show();
+
+    const root = libraryRoot(host);
+    expect(root.dataset.libraryNavCollapsed).toBe('false');
+    const handle = resizeHandle(host);
+    const before = navWidthToken(host);
+    dragNavResize(handle, 240, 360);
+    await settle();
+
+    const saved = navWidthToken(host);
+    expect(saved).not.toBe('');
+    expect(saved).not.toBe(before);
+    expect(saved.endsWith('px')).toBe(true);
+    const persisted = persistedNavWidth(store);
+    expect(persisted).toMatch(/\d/);
+    expect(store['lightink.library.navCollapsed']).toBeUndefined();
+
+    view.destroy();
+    const nextHost = document.createElement('div');
+    document.body.appendChild(nextHost);
+    const next = createLibraryView(nextHost, dependencies({ themeStorage }));
+    await next.show();
+    expect(navWidthToken(nextHost)).toBe(saved);
+    expect(libraryRoot(nextHost).dataset.libraryNavCollapsed).toBe('false');
+
+    const toggle = nextHost.querySelector<HTMLButtonElement>('.lightink-library-nav-collapse')!;
+    toggle.click();
+    expect(libraryRoot(nextHost).dataset.libraryNavCollapsed).toBe('true');
+    toggle.click();
+    expect(libraryRoot(nextHost).dataset.libraryNavCollapsed).toBe('false');
+    expect(navWidthToken(nextHost)).toBe(saved);
+    next.destroy();
+  });
+});
+
 describe('LibraryView touch long-press', () => {
   function touchEvent(type: string, point: { clientX: number; clientY: number } | null): Event {
     const event = new Event(type, { bubbles: true, cancelable: true });
@@ -2471,6 +2731,7 @@ describe('LibraryView touch long-press', () => {
     await settle();
 
     expect(document.querySelector('.lightink-context-menu')).not.toBeNull();
+    expect(document.querySelector('.lightink-context-menu')?.textContent).toContain('移出书库');
     // 管理动作纯触控可达：无自定义分组时菜单项直达新建分组编辑器。
     contextMenuItem('加入分组').click();
     await settle();

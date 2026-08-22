@@ -9,6 +9,7 @@
   --lightink-library-pad-y: 20px;
   --lightink-library-nav-width: 240px;
   --lightink-library-nav-min: 168px;
+  --lightink-library-nav-max: 420px;
   --lightink-library-nav-collapsed: 56px;
   --lightink-library-cover-min: 160px;
   --lightink-library-cover-max: 196px;
@@ -91,7 +92,11 @@
 
 .lightink-library-header {
   display: grid;
-  grid-template-columns: minmax(var(--lightink-library-nav-min), var(--lightink-library-nav-width)) minmax(0, 1fr);
+  grid-template-columns: minmax(
+      var(--lightink-library-nav-min),
+      min(var(--lightink-library-nav-width), var(--lightink-library-nav-max))
+    )
+    minmax(0, 1fr);
   align-items: center;
   column-gap: 0;
   min-height: var(--lightink-titlebar-height, 36px);
@@ -317,8 +322,13 @@
 
 /* Two-column shell: persistent left navigation + right content area. */
 .lightink-library-body {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(var(--lightink-library-nav-min), var(--lightink-library-nav-width)) minmax(0, 1fr);
+  grid-template-columns: minmax(
+      var(--lightink-library-nav-min),
+      min(var(--lightink-library-nav-width), var(--lightink-library-nav-max))
+    )
+    minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   transition: grid-template-columns 200ms ease;
@@ -326,6 +336,7 @@
 
 /* Left navigation pane: 书库 / 书源 / 管理 sections. */
 .lightink-library-nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -335,6 +346,77 @@
   overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--lightink-border);
+}
+
+/*
+ * Drag handle on the nav right edge. Append as a sibling of
+ * .lightink-library-nav inside .lightink-library-body so pane scroll
+ * does not move the hit target. JS writes --lightink-library-nav-width
+ * on .lightink-library and clamps with --lightink-library-nav-min /
+ * --lightink-library-nav-max. Folded rail does not resize.
+ */
+.lightink-library-nav-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  width: 8px;
+  min-width: 8px;
+  height: auto;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.lightink-library-body > .lightink-library-nav-resize {
+  right: auto;
+  left: calc(min(var(--lightink-library-nav-width), var(--lightink-library-nav-max)) - 4px);
+}
+
+.lightink-library-nav-resize::after {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  content: '';
+  pointer-events: none;
+}
+
+.lightink-library-nav-resize:hover:not(:disabled),
+.lightink-library-nav-resize:focus-visible {
+  background: transparent !important;
+  color: inherit;
+}
+
+.lightink-library-nav-resize:hover::after,
+.lightink-library-nav-resize:focus-visible::after,
+.lightink-library[data-library-nav-resizing='true'] .lightink-library-nav-resize::after {
+  background: var(--lightink-accent);
+}
+
+.lightink-library-nav-resize:focus-visible {
+  outline: none;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-resize {
+  display: none;
+}
+
+.lightink-library[data-library-nav-resizing='true'] {
+  cursor: col-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.lightink-library[data-library-nav-resizing='true'] .lightink-library-body {
+  transition: none;
 }
 
 .lightink-library-nav-section {
@@ -2001,6 +2083,15 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   .lightink-library-icon-button {
     min-width: 40px;
     min-height: 40px;
+  }
+
+  .lightink-library-nav-resize {
+    width: 16px;
+    min-width: 16px;
+  }
+
+  .lightink-library-body > .lightink-library-nav-resize {
+    left: calc(min(var(--lightink-library-nav-width), var(--lightink-library-nav-max)) - 8px);
   }
 }
 

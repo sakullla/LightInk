@@ -181,6 +181,7 @@ interface Labels {
   themeInk: string;
   collapseNav: string;
   expandNav: string;
+  resizeNav: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
@@ -311,6 +312,7 @@ const LABELS: Record<Locale, Labels> = {
     themeInk: 'Ink',
     collapseNav: 'Collapse sidebar',
     expandNav: 'Expand sidebar',
+    resizeNav: 'Resize sidebar',
   },
   'zh-CN': {
     library: '书库',
@@ -439,6 +441,7 @@ const LABELS: Record<Locale, Labels> = {
     themeInk: '墨黑',
     collapseNav: '收起导航',
     expandNav: '展开导航',
+    resizeNav: '调整侧栏宽度',
   },
 };
 
@@ -686,6 +689,9 @@ function isManagedBodyAvailable(item: LibraryItem): boolean {
 }
 
 const LIBRARY_NAV_COLLAPSED_KEY = 'lightink.library.navCollapsed';
+const LIBRARY_NAV_WIDTH_KEY = 'lightink.library.navWidth';
+const LIBRARY_NAV_WIDTH_MAX = 420;
+const LIBRARY_NAV_CONTENT_RESERVE = 240;
 
 function loadNavCollapsed(storage: LibraryThemeStorage | null | undefined): boolean {
   try {
@@ -701,6 +707,26 @@ function saveNavCollapsed(
 ): void {
   try {
     storage?.setItem(LIBRARY_NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Privacy mode / quota — keep the session value.
+  }
+}
+
+function loadNavWidth(storage: LibraryThemeStorage | null | undefined): number | null {
+  try {
+    const raw = storage?.getItem(LIBRARY_NAV_WIDTH_KEY);
+    if (raw == null || raw === '') return null;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.round(value);
+  } catch {
+    return null;
+  }
+}
+
+function saveNavWidth(storage: LibraryThemeStorage | null | undefined, width: number): void {
+  try {
+    storage?.setItem(LIBRARY_NAV_WIDTH_KEY, String(Math.round(width)));
   } catch {
     // Privacy mode / quota — keep the session value.
   }
@@ -1041,7 +1067,20 @@ export function createLibraryView(
   );
   navCollapse.appendChild(createNavIcon(doc, NAV_ICON_PATHS.chevron));
   navCollapse.setAttribute('aria-controls', navPane.id);
-  navPane.append(groupPane, sourcePane, managePane, navCollapse);
+  navPane.style.position = 'relative';
+  const navResize = doc.createElement('div');
+  navResize.className = 'lightink-library-nav-resize';
+  navResize.setAttribute('role', 'separator');
+  navResize.setAttribute('aria-orientation', 'vertical');
+  navResize.style.position = 'absolute';
+  navResize.style.top = '0';
+  navResize.style.right = '0';
+  navResize.style.bottom = '0';
+  navResize.style.width = '6px';
+  navResize.style.cursor = 'col-resize';
+  navResize.style.touchAction = 'none';
+  navResize.style.zIndex = '2';
+  navPane.append(groupPane, sourcePane, managePane, navCollapse, navResize);
   const sourceOverlay = doc.createElement('div');
   sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
   sourceOverlay.hidden = true;
@@ -1152,6 +1191,8 @@ export function createLibraryView(
   host.appendChild(root);
 
   let navRailCollapsed = loadNavCollapsed(deps.themeStorage);
+  let navWidthPx = loadNavWidth(deps.themeStorage);
+  const importedItemIds = new Set<string>();
   root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
   let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
@@ -1205,6 +1246,40 @@ export function createLibraryView(
   }
 
   const labels = (): Labels => LABELS[deps.getLocale()];
+
+  function rememberImportedItems(list: readonly LibraryItem[]): void {
+    importedItemIds.clear();
+    for (const item of list) importedItemIds.add(item.id);
+  }
+
+  function canRemoveFromLibrary(display: DisplayItem): boolean {
+    if (display.entry?.kind === 'navigation') return false;
+    return isLocalItem(display.item) || importedItemIds.has(display.item.id);
+  }
+
+  function navWidthBounds(): { min: number; max: number } {
+    const styles = doc.defaultView?.getComputedStyle(root);
+    const tokenMin = Number.parseFloat(styles?.getPropertyValue('--lightink-library-nav-min') ?? '');
+    const min = Number.isFinite(tokenMin) && tokenMin > 0 ? tokenMin : 168;
+    const available = body.getBoundingClientRect().width;
+    const reserved =
+      Number.isFinite(available) && available > 0
+        ? Math.max(min, available - LIBRARY_NAV_CONTENT_RESERVE)
+        : LIBRARY_NAV_WIDTH_MAX;
+    return { min, max: Math.min(LIBRARY_NAV_WIDTH_MAX, reserved) };
+  }
+
+  function applyNavWidth(width: number | null): void {
+    if (navRailCollapsed || width === null) {
+      root.style.removeProperty('--lightink-library-nav-width');
+      return;
+    }
+    const { min, max } = navWidthBounds();
+    const next = Math.min(max, Math.max(min, Math.round(width)));
+    navWidthPx = next;
+    root.style.setProperty('--lightink-library-nav-width', `${next}px`);
+  }
+
   const setNavRailCollapsed = (collapsed: boolean, persist = true): void => {
     navRailCollapsed = collapsed;
     root.dataset.libraryNavCollapsed = collapsed ? 'true' : 'false';
@@ -1212,6 +1287,8 @@ export function createLibraryView(
     const label = collapsed ? labels().expandNav : labels().collapseNav;
     navCollapse.title = label;
     navCollapse.setAttribute('aria-label', label);
+    navResize.hidden = collapsed;
+    applyNavWidth(collapsed ? null : navWidthPx);
     if (persist) saveNavCollapsed(deps.themeStorage, collapsed);
   };
   setNavRailCollapsed(navRailCollapsed, false);
@@ -2185,6 +2262,21 @@ export function createLibraryView(
         },
       });
     }
+    if (canRemoveFromLibrary(display)) {
+      items.push({
+        id: 'sep-remove',
+        label: '',
+        separator: true,
+        action: () => undefined,
+      });
+      items.push({
+        id: 'remove',
+        label: labels().remove,
+        action: () => {
+          void removeItem(display.item);
+        },
+      });
+    }
     createContextMenu(items, position, doc);
   }
 
@@ -2679,9 +2771,11 @@ export function createLibraryView(
       });
       actions.appendChild(cache);
     }
-    const remove = button(doc, labels().remove, 'lightink-library-danger');
-    remove.addEventListener('click', () => void removeItem(selected!.item));
-    actions.appendChild(remove);
+    if (canRemoveFromLibrary(selected)) {
+      const remove = button(doc, labels().remove, 'lightink-library-danger');
+      remove.addEventListener('click', () => void removeItem(selected!.item));
+      actions.appendChild(remove);
+    }
     detail.appendChild(actions);
   }
 
@@ -2728,6 +2822,7 @@ export function createLibraryView(
         deps.library.listGroupMemberships?.() ?? Promise.resolve([]),
       ]);
       if (generation !== requestGeneration) return;
+      rememberImportedItems(loaded);
       items = loaded.map((item) => ({ item, links: [] }));
       groups = loadedGroups;
       memberships = loadedMemberships;
@@ -2837,6 +2932,11 @@ export function createLibraryView(
     syncPageChrome();
     renderSources();
     renderBreadcrumbs();
+    try {
+      rememberImportedItems(await deps.library.listItems());
+    } catch {
+      /* keep the last known imported set */
+    }
     await loadFeed(undefined, false);
   }
 
@@ -2853,6 +2953,7 @@ export function createLibraryView(
     if (!catalogActive() || selectedSourceId === null) {
       const lowered = query.toLocaleLowerCase();
       const loaded = await deps.library.listItems();
+      rememberImportedItems(loaded);
       items = loaded
         .filter((item) =>
           `${itemTitle(item)}\n${itemAuthors(item).join('\n')}`.toLocaleLowerCase().includes(lowered),
@@ -3167,6 +3268,7 @@ export function createLibraryView(
   async function removeItem(item: LibraryItem): Promise<void> {
     try {
       await deps.library.removeItem(item.id);
+      importedItemIds.delete(item.id);
       items = items.filter((candidate) => candidate.item.id !== item.id);
       selected = null;
       renderItems();
@@ -3271,6 +3373,8 @@ export function createLibraryView(
     cacheLimitButton.setAttribute('aria-label', l.changeCacheLimit);
     cacheLimitLabelText.textContent = l.cacheLimit;
     cacheLimitSave.textContent = l.apply;
+    navResize.title = l.resizeNav;
+    navResize.setAttribute('aria-label', l.resizeNav);
     addSourceButton.title = l.addSource;
     addSourceButton.setAttribute('aria-label', l.addSource);
     previousButton.textContent = l.prev;
@@ -3317,6 +3421,36 @@ export function createLibraryView(
   navCollapse.addEventListener('click', () => {
     setNavRailCollapsed(!navRailCollapsed);
   });
+  let navResizePointerId: number | null = null;
+  let navResizeBodyTransition = '';
+  const finishNavResize = (event: PointerEvent): void => {
+    if (navResizePointerId !== event.pointerId) return;
+    navResizePointerId = null;
+    body.style.transition = navResizeBodyTransition;
+    try {
+      navResize.releasePointerCapture(event.pointerId);
+    } catch {
+      /* already released */
+    }
+    if (navWidthPx !== null) saveNavWidth(deps.themeStorage, navWidthPx);
+  };
+  navResize.addEventListener('pointerdown', (event) => {
+    if (navRailCollapsed || event.button !== 0) return;
+    event.preventDefault();
+    navResizePointerId = event.pointerId;
+    navResizeBodyTransition = body.style.transition;
+    body.style.transition = 'none';
+    navResize.setPointerCapture(event.pointerId);
+    applyNavWidth(event.clientX - navPane.getBoundingClientRect().left);
+    if (navWidthPx !== null) saveNavWidth(deps.themeStorage, navWidthPx);
+  });
+  navResize.addEventListener('pointermove', (event) => {
+    if (navResizePointerId !== event.pointerId) return;
+    applyNavWidth(event.clientX - navPane.getBoundingClientRect().left);
+    if (navWidthPx !== null) saveNavWidth(deps.themeStorage, navWidthPx);
+  });
+  navResize.addEventListener('pointerup', finishNavResize);
+  navResize.addEventListener('pointercancel', finishNavResize);
   addGroupButton.addEventListener('click', () => {
     openGroupEditor({ kind: 'create' });
   });
