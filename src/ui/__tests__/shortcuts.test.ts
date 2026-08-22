@@ -289,4 +289,21 @@ describe('ShortcutRegistry 派发', () => {
     expect(actions).toEqual(['new', 'open', 'save', 'save-as', 'toggle-theme']);
     expect(entries[0]).toEqual({ action: 'new', combo: 'Ctrl+N' });
   });
+
+  it('entries 顺序取 combos 声明序，与 handlers 注册键序解耦', () => {
+    // 注册端用条件展开把 editor 条目挪到尾部时，速查表顺序仍取声明序。
+    const handlers = {
+      'close-tab': vi.fn(),
+      'toggle-theme': vi.fn(),
+      new: vi.fn(),
+      open: vi.fn(),
+    };
+    const registry = new ShortcutRegistry(handlers);
+    expect(registry.entries().map((e) => e.action)).toEqual([
+      'new',
+      'open',
+      'close-tab',
+      'toggle-theme',
+    ]);
+  });
 });

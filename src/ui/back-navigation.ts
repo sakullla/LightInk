@@ -31,16 +31,28 @@ export interface BackPressDispatchTarget {
 }
 
 /**
- * 合成 Escape 的默认派发目标：与真实键盘 Escape 一致取焦点元素
- * （`document.activeElement`，无焦点时浏览器即 body）。不能直接以 document
- * 为目标——document 目标的 at-target 阶段按注册序运行监听（忽略 capture），
- * main.ts 启动期注册的文档级 leftover 监听会先于 overlay 打开时才注册的
- * document 捕获监听运行（reader+modal 一次返回被双重消费），且 reader/library
- * 根元素上的元素级监听根本看不到以 document 为目标的事件。以焦点子树中的
- * 元素为目标时，document 捕获监听在捕获阶段先运行，元素级监听在冒泡阶段参与，
- * 复现真实 Escape 传播。
+ * 若 target 是可访问同源 contentDocument 的 iframe 元素，返回其 Document；
+ * 普通元素或跨域 frame（访问抛错）返回 null。
  */
-export function resolveBackPressTarget(): BackPressDispatchTarget {
+function frameDocumentOf(target: BackPressDispatchTarget): Document | null {
+  const element = target as Element & { contentDocument?: Document | null };
+  if (typeof element.tagName !== 'string' || element.tagName !== 'IFRAME') {
+    return null;
+  }
+  try {
+    const doc = element.contentDocument ?? null;
+    return doc !== null && typeof doc.dispatchEvent === 'function' ? doc : null;
+  } catch {
+    // 跨域 frame 的 contentDocument 访问会抛错：按不可转发处理。
+    return null;
+  }
+}
+
+/**
+ * 父文档侧的派发目标（不下钻 frame）：`document.activeElement`（焦点位于
+ * 同源 frame 内时即 iframe 宿主元素），无焦点时为 body/documentElement。
+ */
+function parentDocumentFocusTarget(): BackPressDispatchTarget {
   return (
     document.activeElement ??
     document.body ??
@@ -50,14 +62,37 @@ export function resolveBackPressTarget(): BackPressDispatchTarget {
 }
 
 /**
- * 分层返回判定：合成一个与键盘 Escape 等价的 keydown，默认以焦点元素
- * （见 `resolveBackPressTarget`）为目标走完既有监听链；任一环节
- * `preventDefault()` 即视为已消费（返回 true），无人消费返回 false
- * （书架顶层 → 系统默认）。
+ * 合成 Escape 的默认派发目标：与真实键盘 Escape 一致取焦点元素
+ * （`document.activeElement`，无焦点时浏览器即 body）。焦点位于同源
+ * flow iframe 内时，父文档的 activeElement 是 iframe 宿主元素——继续
+ * 下钻到帧内焦点元素，使帧内 Escape 监听（如选择工具栏）优先消费；
+ * 跨域/不可访问的 frame 不下钻。不能直接以 document 为目标——
+ * document 目标的 at-target 阶段按注册序运行监听（忽略 capture），
+ * main.ts 启动期注册的文档级 leftover 监听会先于 overlay 打开时才注册的
+ * document 捕获监听运行（reader+modal 一次返回被双重消费），且 reader/library
+ * 根元素上的元素级监听根本看不到以 document 为目标的事件。以焦点子树中的
+ * 元素为目标时，document 捕获监听在捕获阶段先运行，元素级监听在冒泡阶段参与，
+ * 复现真实 Escape 传播。
  */
-export function dispatchLayeredBackPress(
-  target: BackPressDispatchTarget = resolveBackPressTarget(),
-): boolean {
+export function resolveBackPressTarget(): BackPressDispatchTarget {
+  let candidate: BackPressDispatchTarget = parentDocumentFocusTarget();
+  // 有界下钻嵌套 iframe（防循环引用），与真实焦点链一致。
+  for (let depth = 0; depth < 4; depth += 1) {
+    const doc = frameDocumentOf(candidate);
+    if (doc === null) {
+      break;
+    }
+    const inner: BackPressDispatchTarget =
+      doc.activeElement ?? doc.body ?? doc.documentElement ?? doc;
+    if (inner === candidate) {
+      break;
+    }
+    candidate = inner;
+  }
+  return candidate;
+}
+
+function dispatchEscape(target: BackPressDispatchTarget): boolean {
   const event = new KeyboardEvent('keydown', {
     key: 'Escape',
     code: 'Escape',
@@ -66,6 +101,31 @@ export function dispatchLayeredBackPress(
   });
   target.dispatchEvent(event);
   return event.defaultPrevented;
+}
+
+/**
+ * 分层返回判定：合成一个与键盘 Escape 等价的 keydown，默认以焦点元素
+ * （见 `resolveBackPressTarget`）为目标走完既有监听链；任一环节
+ * `preventDefault()` 即视为已消费（返回 true），无人消费返回 false
+ * （书架顶层 → 系统默认）。
+ *
+ * 焦点位于同源 flow iframe 内且帧内未消费时（如选择工具栏未打开），
+ * 再以父文档侧目标（iframe 宿主元素）派发一次走父文档分层链
+ * （overlay → returnToShelf → 书架）——真实键盘 Escape 不跨 frame
+ * 边界，但返回键若因此直接交还系统会退出应用，此处为返回键特意的
+ * 父侧兜底。
+ */
+export function dispatchLayeredBackPress(
+  target: BackPressDispatchTarget = resolveBackPressTarget(),
+): boolean {
+  if (dispatchEscape(target)) {
+    return true;
+  }
+  const hostSide = parentDocumentFocusTarget();
+  if (hostSide !== target && dispatchEscape(hostSide)) {
+    return true;
+  }
+  return false;
 }
 
 export interface AndroidBackNavigationOptions {

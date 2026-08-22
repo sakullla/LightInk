@@ -240,12 +240,15 @@ export class ShortcutRegistry {
     return this.combos[action];
   }
 
-  /** 列出已注册处理器对应的动作与组合键（供快捷键速查表 R5 使用）。 */
+  /**
+   * 列出已注册处理器对应的动作与组合键（供快捷键速查表 R5 使用）。
+   * 顺序取 `combos` 的声明序（DEFAULT_SHORTCUTS 与桌面基线一致），与
+   * handlers 对象的键序解耦——注册端用条件展开增删条目时速查表顺序不变。
+   */
   entries(): ReadonlyArray<{ action: ShortcutAction; combo: string }> {
-    return (Object.keys(this.handlers) as ShortcutAction[]).map((action) => ({
-      action,
-      combo: this.combos[action],
-    }));
+    return (Object.keys(this.combos) as ShortcutAction[])
+      .filter((action) => this.handlers[action] !== undefined)
+      .map((action) => ({ action, combo: this.combos[action] }));
   }
 
   /**

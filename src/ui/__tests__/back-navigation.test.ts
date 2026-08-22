@@ -173,6 +173,76 @@ describe('A2 回归：合成 Escape 复现真实键盘 Escape 传播序', () => 
   });
 });
 
+describe('焦点位于同源 flow iframe 时下钻帧内目标', () => {
+  function mountFocusedFrame(): {
+    frame: HTMLIFrameElement;
+    frameDoc: Document;
+  } {
+    const frame = document.createElement('iframe');
+    // tabindex 确保 jsdom 将焦点置于 iframe 宿主元素（生产 WebView 同样
+    // 将 activeElement 报告为 iframe 元素）。
+    frame.tabIndex = 0;
+    document.body.appendChild(frame);
+    const frameDoc = frame.contentDocument!;
+    expect(frameDoc).not.toBeNull();
+    cleanups.push(() => {
+      frame.remove();
+    });
+    return { frame, frameDoc };
+  }
+
+  it('帧内 Escape 监听消费返回键，父文档监听不触达（与真实 Escape 传播一致）', () => {
+    const { frame, frameDoc } = mountFocusedFrame();
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+
+    const parentSeen: string[] = [];
+    onDocumentKeyDown((event) => {
+      if (event.key === 'Escape') {
+        parentSeen.push('parent');
+      }
+    });
+
+    let frameConsumed = false;
+    const frameListener = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        frameConsumed = true;
+        event.preventDefault();
+      }
+    };
+    frameDoc.addEventListener('keydown', frameListener);
+    cleanups.push(() =>
+      frameDoc.removeEventListener('keydown', frameListener),
+    );
+
+    expect(dispatchLayeredBackPress()).toBe(true);
+    expect(frameConsumed).toBe(true);
+    expect(parentSeen).toEqual([]);
+  });
+
+  it('帧内无消费 → 回落父文档分层（returnToShelf），不因焦点滞留 frame 退出应用', () => {
+    const { frame } = mountFocusedFrame();
+    frame.focus();
+
+    const returnToShelf = vi.fn();
+    installLayeredChain({ mode: 'reader', hasOpenBook: true, returnToShelf });
+
+    expect(dispatchLayeredBackPress()).toBe(true);
+    expect(returnToShelf).toHaveBeenCalledTimes(1);
+  });
+
+  it('帧内无消费且处于书架 → false 交还系统默认', () => {
+    const { frame } = mountFocusedFrame();
+    frame.focus();
+
+    const returnToShelf = vi.fn();
+    installLayeredChain({ mode: 'shelf', hasOpenBook: false, returnToShelf });
+
+    expect(dispatchLayeredBackPress()).toBe(false);
+    expect(returnToShelf).not.toHaveBeenCalled();
+  });
+});
+
 describe('registerAndroidBackNavigation', () => {
   it('Android 下挂载全局桥函数，返回值即消费标记', () => {
     const host: Record<string, unknown> = {};
