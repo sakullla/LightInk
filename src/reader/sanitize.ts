@@ -177,3 +177,46 @@ export function sanitizeHtml(input: string): string {
   container.appendChild(fragment);
   return container.innerHTML;
 }
+
+/**
+ * Sanitize a detached element that was already parsed by the EPUB pipeline.
+ * DOMPurify's in-place mode avoids serializing and parsing every XHTML chapter
+ * a second time while preserving the exact same allowlist and URL hooks.
+ */
+export function sanitizeParsedHtml(input: HTMLElement): string {
+  // DOMPurify forbids sanitizing document roots such as <body> in place.
+  // Move the already-parsed nodes into an allowed detached wrapper; moving
+  // preserves the parsed DOM and still avoids a string reparse.
+  const container = input.ownerDocument.createElement('main');
+  container.append(...Array.from(input.childNodes));
+  readerPurifier().sanitize(container, {
+    ALLOWED_TAGS: [...READER_TAGS],
+    ALLOWED_ATTR: [...READER_ATTRIBUTES],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: true,
+    FORBID_TAGS: [
+      'applet',
+      'base',
+      'button',
+      'embed',
+      'form',
+      'iframe',
+      'input',
+      'link',
+      'math',
+      'meta',
+      'object',
+      'script',
+      'select',
+      'style',
+      'svg',
+      'template',
+      'textarea',
+    ],
+    FORBID_ATTR: ['style', 'srcset', 'ping', 'formaction', 'xlink:href'],
+    IN_PLACE: true,
+  });
+  makeRemoteImagesInert(container);
+  return container.innerHTML;
+}

@@ -12,6 +12,12 @@ export interface ReaderChapter {
   /** 已消毒的章节正文 HTML。 */
   html: string;
   /**
+   * Materialize a deferred chapter. Large EPUBs keep non-visible spine items
+   * compressed until the renderer, search, or export path needs them.
+   * Implementations update `title` and `html` before resolving and are idempotent.
+   */
+  load?: () => Promise<void>;
+  /**
    * 懒物化章节引用的打包资源（T8，如 EPUB 包内图片）：渲染方在章节帧进入
    * 视口/就绪时调用，把占位 src（包内路径）换成物化的 blob URL。幂等。
    */

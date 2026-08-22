@@ -757,6 +757,39 @@ const flowRendererHooks = (
   ...overrides,
 });
 
+describe('大型流式书首次渲染预算', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('同步只挂载前八章，其余 iframe 分批让出事件循环', () => {
+    const root = document.createElement('div');
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render(
+      Array.from({ length: 40 }, (_, index) => ({
+        title: `Chapter ${index + 1}`,
+        html: `<p>${index + 1}</p>`,
+      })),
+    );
+
+    expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(8);
+    expect(scrollHost.querySelectorAll('iframe')).toHaveLength(8);
+    renderer.setActiveChapter(30);
+    expect(
+      scrollHost.querySelector<HTMLElement>('[data-chapter-index="30"]'),
+    ).not.toBeNull();
+    expect(
+      Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
+        (chapter) => Number(chapter.dataset.chapterIndex),
+      ),
+    ).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 30]);
+    renderer.clear();
+  });
+});
+
 describe('滚动模式章节帧高度（末行裁切）', () => {
   afterEach(() => {
     document.body.replaceChildren();
@@ -1277,4 +1310,3 @@ describe('窗口级翻页（R1：不限中间章节容器）', () => {
     await view.destroy();
   });
 });
-

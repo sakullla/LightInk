@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
+import type { ReaderInputSource } from '../formats/index.js';
 import {
   chapterScrollTop,
   loadReadingProgress,
@@ -288,6 +289,40 @@ describe('Reader load lifecycle', () => {
       `${READING_PROGRESS_KEY_PREFIX}item-1@etag-1`,
       expect.any(String),
     );
+  });
+
+  it('loads a local EPUB through bounded random reads instead of copying the whole file', async () => {
+    const readBytes = vi.fn(async () => bytes('must not be read'));
+    const readSize = vi.fn(async () => 4096);
+    const readChunk = vi.fn(async (_path: string, offset: number, length: number) =>
+      new Uint8Array(length).fill(offset),
+    );
+    const parseContent = vi.fn(async (_path: string, input: ReaderInputSource) => {
+      expect('readRange' in input).toBe(true);
+      if (!('readRange' in input)) throw new Error('expected random source');
+      expect(input.size).toBe(4096);
+      expect(await input.readRange(12, 4)).toEqual(new Uint8Array([12, 12, 12, 12]));
+      return { chapters: [{ title: 'Local', html: '<p>local</p>' }] };
+    });
+    const host = document.createElement('div');
+    const view = createReaderView(host, {
+      readBytes,
+      readSize,
+      readChunk,
+      parseContent,
+    });
+
+    await view.load('/books/local.epub');
+
+    expect(readSize).toHaveBeenCalledWith('/books/local.epub', expect.any(AbortSignal));
+    expect(readChunk).toHaveBeenCalledWith(
+      '/books/local.epub',
+      12,
+      4,
+      expect.any(AbortSignal),
+    );
+    expect(readBytes).not.toHaveBeenCalled();
+    await view.destroy();
   });
 
   it('publishes immutable phase, chapter, progress, and scale snapshots', async () => {

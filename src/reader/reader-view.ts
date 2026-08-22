@@ -258,6 +258,8 @@ export interface ReaderViewDeps {
     length: number,
     signal?: AbortSignal,
   ) => Promise<Uint8Array>;
+  /** 读取本地阅读文件大小，不扫描或传输正文；用于 EPUB 随机读取源。 */
+  readSize?: (filePath: string, signal?: AbortSignal) => Promise<number>;
   /** 翻译 i18n key（生产为 i18n.t）。 */
   t?: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string;
   /** 文件内容哈希（Rust content_hash）；缺省则不启用标注。 */
@@ -2955,12 +2957,31 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             return;
           }
         } else {
-          // T8：txt 经分块字节源懒读（不整文件驻留）；无 readChunk 依赖时回退整读。
-          const readChunk = target.kind === 'local' && nextExt === 'txt' ? deps.readChunk : undefined;
+          // TXT 分块顺序读；EPUB 通过带 read-ahead 的 ZIP 随机源读取，避免先把
+          // 整本书跨 IPC 复制进 WebView。依赖缺失时保留整读回退供测试/浏览器使用。
+          const readChunk =
+            target.kind === 'local' && (nextExt === 'txt' || nextExt === 'epub')
+              ? deps.readChunk
+              : undefined;
+          const localEpubSource: RandomAccessSource | null =
+            target.kind === 'local' &&
+            nextExt === 'epub' &&
+            readChunk !== undefined &&
+            deps.readSize !== undefined
+              ? {
+                  size: await deps.readSize(filePath, controller.signal),
+                  identity: target.identity,
+                  readRange: (offset, length, readSignal) =>
+                    readChunk(filePath, offset, length, readSignal ?? controller.signal),
+                  close: async () => undefined,
+                }
+              : null;
           const source: ReaderInputSource =
             target.kind === 'remote'
               ? pendingRemoteSource!
-              : readChunk === undefined
+              : localEpubSource !== null
+                ? localEpubSource
+                : readChunk === undefined
                 ? await readBytes!(filePath, controller.signal)
                 : {
                     read: (offset, length, readSignal) =>
@@ -3195,6 +3216,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       const missing: string[] = [];
       const sections: string[] = [];
       for (const [index, chapter] of exportChapters.entries()) {
+        await chapter.load?.();
         // 阅读器 chrome 标题不能做成正文 h1（会和书里标题叠成两行）。
         // 封面/插图等无 heading 的章仍需一个隐藏 h1，否则 PDF 书签/目录会丢这些条目。
         const title = chapter.title.trim() || t('reader.chapter', { n: String(index + 1) });

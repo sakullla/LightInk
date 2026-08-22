@@ -12,7 +12,7 @@
  */
 
 import { bytesToBase64 } from '../../asset/asset-service.js';
-import { sanitizeHtml } from '../sanitize.js';
+import { sanitizeParsedHtml } from '../sanitize.js';
 import { sanitizeReaderCss } from '../sanitize-css.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
@@ -32,6 +32,9 @@ interface ManifestItem {
   href: string;
   mediaType: string;
 }
+
+const EPUB_EAGER_CHAPTER_LIMIT = 64;
+const EPUB_INITIAL_CHAPTERS = 2;
 
 /** 从标签字符串中取属性值。 */
 function attr(tag: string, name: string): string | null {
@@ -334,99 +337,127 @@ export async function parseEpub(
       }
     };
 
-    // 4. Read spine XHTML, resolve packaged images, and rewrite chapter links.
-    const chapters: ReaderContent['chapters'] = [];
-    for (let idx = 0; idx < spineItems.length; idx += 1) {
-      throwIfReaderLoadCancelled(signal);
-      const { reference } = spineItems[idx]!;
-      const fullPath = reference.path;
-      const file = archive.file(fullPath);
-      if (file === null) {
+    // Read NCX labels up front so a large lazy EPUB still exposes a useful
+    // outline without inflating every XHTML spine item during initial load.
+    const navigationTitles = new Map<string, string>();
+    for (const item of items.values()) {
+      if (item.mediaType.toLowerCase() !== 'application/x-dtbncx+xml') {
         continue;
       }
-      const xhtml = await file.readText(signal);
-      throwIfReaderLoadCancelled(signal);
-      const document = new DOMParser().parseFromString(xhtml, 'text/html');
-      const body = document.body;
-      let hasPackagedImages = false;
-
-      for (const image of body.querySelectorAll<HTMLImageElement>('img[src]')) {
-        const path = packagedImagePath(fullPath, image.getAttribute('src') ?? '');
-        if (path === null) {
-          image.removeAttribute('src');
-        } else {
-          // 占位 src = 包内规范路径：帧进入视口时由 resolveResources 物化为 blob URL。
-          image.setAttribute('src', path);
-          hasPackagedImages = true;
+      const ncxReference = resolveArchiveReference(opfPath, item.href);
+      const ncxFile = ncxReference === null ? null : archive.file(ncxReference.path);
+      if (ncxReference === null || ncxFile === null) {
+        continue;
+      }
+      const ncx = await ncxFile.readText(signal);
+      const pointRe = /<navLabel\b[^>]*>[\s\S]*?<text\b[^>]*>([\s\S]*?)<\/text>[\s\S]*?<content\b[^>]*\bsrc\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi;
+      let point: RegExpExecArray | null;
+      while ((point = pointRe.exec(ncx)) !== null) {
+        const reference = resolveArchiveReference(
+          ncxReference.path,
+          point[3] ?? point[4] ?? '',
+        );
+        const title = decodeXmlEntities((point[1] ?? '').replace(/<[^>]*>/g, '')).trim();
+        if (reference !== null && title !== '') {
+          navigationTitles.set(reference.path, title);
         }
       }
-      // 文库版 EPUB 常用 <svg><image xlink:href> 包位图；消毒会丢掉整个 svg。
-      for (const svg of [...body.querySelectorAll('svg')]) {
-        const replacements: HTMLImageElement[] = [];
-        for (const image of svg.querySelectorAll('image')) {
-          const path = packagedImagePath(fullPath, svgImageHref(image));
-          if (path === null) {
-            continue;
-          }
-          const img = document.createElement('img');
-          img.setAttribute('src', path);
-          hasPackagedImages = true;
-          const width = image.getAttribute('width');
-          const height = image.getAttribute('height');
-          if (width !== null && width !== '' && !width.includes('%')) {
-            img.setAttribute('width', width);
-          }
-          if (height !== null && height !== '' && !height.includes('%')) {
-            img.setAttribute('height', height);
-          }
-          const alt = image.getAttribute('alt') ?? '';
-          if (alt !== '') {
-            img.alt = alt;
-          }
-          replacements.push(img);
-        }
-        if (replacements.length === 0) {
-          svg.remove();
-        } else {
-          svg.replaceWith(...replacements);
-        }
-      }
-      for (const link of body.querySelectorAll<HTMLAnchorElement>('a[href]')) {
-        const href = link.getAttribute('href') ?? '';
-        if (href.startsWith('#')) {
-          continue;
-        }
-        const linkReference = resolveArchiveReference(fullPath, href);
-        if (linkReference === null) {
-          continue;
-        }
-        const targetChapter = chapterIndexByPath.get(linkReference.path);
-        if (targetChapter === undefined) {
-          link.removeAttribute('href');
-          continue;
-        }
-        const params = new URLSearchParams({ chapter: String(targetChapter) });
-        if (linkReference.fragment !== '') {
-          params.set('target', linkReference.fragment);
-        }
-        link.setAttribute('href', `#lightink-chapter?${params.toString()}`);
-      }
-      const sectionTitle = document.title.trim();
-      const title =
-        sectionTitle || (idx === 0 && bookTitle ? bookTitle : `Chapter ${idx + 1}`);
-      const chapter: ReaderContent['chapters'][number] = {
-        title,
-        html: sanitizeHtml(body.innerHTML),
-      };
-      if (hasPackagedImages) {
-        chapter.resolveResources = materializeImages;
-        chapter.releaseResources = releaseImages;
-      }
-      chapters.push(chapter);
     }
+
+    // 4. Materialize only the first chapters for large books. Remaining spine
+    // entries retain their compressed archive entry until the renderer asks.
+    const chapters: ReaderContent['chapters'] = spineItems
+      .map(({ reference }, idx) => ({ reference, idx }))
+      .filter(({ reference }) => archive.file(reference.path) !== null)
+      .map(({ reference, idx }) => {
+      const fullPath = reference.path;
+      const chapter: ReaderContent['chapters'][number] = {
+        title:
+          navigationTitles.get(fullPath) ??
+          (idx === 0 && bookTitle ? bookTitle : `Chapter ${idx + 1}`),
+        html: '',
+      };
+      let loading: Promise<void> | null = null;
+      chapter.load = (): Promise<void> => {
+        if (loading !== null) {
+          return loading;
+        }
+        loading = (async () => {
+          const file = archive.file(fullPath);
+          if (file === null) {
+            throw new ParseError('EPUB 章节文件缺失');
+          }
+          const xhtml = await file.readText(signal);
+          throwIfReaderLoadCancelled(signal);
+          const document = new DOMParser().parseFromString(xhtml, 'text/html');
+          const body = document.body;
+          let hasPackagedImages = false;
+
+          for (const image of body.querySelectorAll<HTMLImageElement>('img[src]')) {
+            const path = packagedImagePath(fullPath, image.getAttribute('src') ?? '');
+            if (path === null) {
+              image.removeAttribute('src');
+            } else {
+              image.setAttribute('src', path);
+              hasPackagedImages = true;
+            }
+          }
+          // 文库版 EPUB 常用 <svg><image xlink:href> 包位图；消毒会丢掉整个 svg。
+          for (const svg of [...body.querySelectorAll('svg')]) {
+            const replacements: HTMLImageElement[] = [];
+            for (const image of svg.querySelectorAll('image')) {
+              const path = packagedImagePath(fullPath, svgImageHref(image));
+              if (path === null) continue;
+              const img = document.createElement('img');
+              img.setAttribute('src', path);
+              hasPackagedImages = true;
+              const width = image.getAttribute('width');
+              const height = image.getAttribute('height');
+              if (width !== null && width !== '' && !width.includes('%')) img.setAttribute('width', width);
+              if (height !== null && height !== '' && !height.includes('%')) img.setAttribute('height', height);
+              const alt = image.getAttribute('alt') ?? '';
+              if (alt !== '') img.alt = alt;
+              replacements.push(img);
+            }
+            if (replacements.length === 0) svg.remove();
+            else svg.replaceWith(...replacements);
+          }
+          for (const link of body.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+            const href = link.getAttribute('href') ?? '';
+            if (href.startsWith('#')) continue;
+            const linkReference = resolveArchiveReference(fullPath, href);
+            if (linkReference === null) continue;
+            const targetChapter = chapterIndexByPath.get(linkReference.path);
+            if (targetChapter === undefined) {
+              link.removeAttribute('href');
+              continue;
+            }
+            const params = new URLSearchParams({ chapter: String(targetChapter) });
+            if (linkReference.fragment !== '') params.set('target', linkReference.fragment);
+            link.setAttribute('href', `#lightink-chapter?${params.toString()}`);
+          }
+          const sectionTitle = document.title.trim();
+          if (sectionTitle !== '') chapter.title = sectionTitle;
+          chapter.html = sanitizeParsedHtml(body);
+          if (hasPackagedImages) {
+            chapter.resolveResources = materializeImages;
+            chapter.releaseResources = releaseImages;
+          }
+        })();
+        return loading;
+      };
+      return chapter;
+    });
 
     if (chapters.length === 0) {
       throw new ParseError('EPUB 未找到可读章节内容');
+    }
+    const eagerCount =
+      chapters.length <= EPUB_EAGER_CHAPTER_LIMIT
+        ? chapters.length
+        : Math.min(EPUB_INITIAL_CHAPTERS, chapters.length);
+    for (let index = 0; index < eagerCount; index += 1) {
+      await chapters[index]!.load?.();
     }
 
     const stylesheetParts: string[] = [];

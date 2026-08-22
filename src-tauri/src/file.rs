@@ -181,6 +181,22 @@ pub fn read_file_chunk_impl(path: &Path, offset: u64, length: u64) -> Result<Vec
     Ok(bytes)
 }
 
+/// Return only the bounded reader file size. Unlike `stat_file`, this does not
+/// scan the complete file to compute an external-change fingerprint, so EPUB
+/// random access can start without a redundant full-file read.
+pub fn reader_file_size_impl(path: &Path) -> Result<u64, String> {
+    let size = fs::metadata(path)
+        .map_err(|e| format!("无法读取文件信息 {}: {}", path.display(), e))?
+        .len();
+    ensure_file_size(size, reader_limit_for_path(path))?;
+    Ok(size)
+}
+
+#[tauri::command]
+pub fn reader_file_size(path: String) -> Result<u64, String> {
+    reader_file_size_impl(Path::new(&path))
+}
+
 /// 读取文件字节并经 tauri raw IPC 返回（`InvokeResponseBody::Raw`，前端 `invoke`
 /// 直接得到 ArrayBuffer）。不再走 base64 字符串编码与前端 atob 逐字节解码：
 /// Rust 侧峰值从 N + 4N/3 降到 N，JS 侧从 ~10N/3 降到 N。128MB/32MB 上限与
@@ -212,6 +228,14 @@ mod tests {
 
     fn temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("create temp dir")
+    }
+
+    #[test]
+    fn reader_file_size_reports_bytes_without_reading_content() {
+        let dir = temp_dir();
+        let path = dir.path().join("book.epub");
+        fs::write(&path, [1_u8, 2, 3, 4]).expect("write");
+        assert_eq!(reader_file_size_impl(&path).expect("size"), 4);
     }
 
     #[test]

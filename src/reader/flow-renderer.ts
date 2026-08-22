@@ -668,15 +668,54 @@ export function createFlowRenderer(
   /** T8：章节资源物化窗口（EPUB 图片按视口可见性 resolve/release，配对 revoke）。 */
   interface ChapterResourceWindow {
     chapter: ReaderChapter;
+    heading: HTMLElement;
     frame: HTMLIFrameElement;
     generation: number;
     visible: boolean;
     ready: boolean;
+    sourceAssigned: boolean;
+    loadPromise: Promise<void> | null;
+    stylesheet: string;
     queue: Promise<void>;
     afterResolve: (() => void) | null;
   }
-  let resourceWindows: ChapterResourceWindow[] = [];
+  let resourceWindows: Array<ChapterResourceWindow | undefined> = [];
   let resourceObserver: IntersectionObserver | null = null;
+  let ensureChapterMounted: ((index: number) => void) | null = null;
+
+  /** Inflate and attach one lazy EPUB chapter at most once. */
+  const ensureChapterFrame = (win: ChapterResourceWindow): void => {
+    if (win.sourceAssigned || win.loadPromise !== null) {
+      return;
+    }
+    const assign = (): void => {
+      const fallback = hooks.t('reader.chapter', {
+        n: String(Number(win.frame.dataset.chapterIndex ?? '0') + 1),
+      });
+      const title = win.chapter.title || fallback;
+      win.heading.textContent = title;
+      win.frame.title = title;
+      win.sourceAssigned = true;
+      win.frame.srcdoc = flowFrameSource(win.chapter.html, win.stylesheet);
+    };
+    if (win.chapter.load === undefined || win.chapter.html !== '') {
+      assign();
+      return;
+    }
+    win.loadPromise = (async () => {
+      await win.chapter.load?.();
+      if (win.generation !== flowRenderGeneration) {
+        return;
+      }
+      assign();
+    })().catch(() => {
+      if (win.generation !== flowRenderGeneration) {
+        return;
+      }
+      win.sourceAssigned = true;
+      win.frame.srcdoc = flowFrameSource('<p>Chapter could not be loaded.</p>', '');
+    });
+  };
 
   /** 按窗口状态串行执行 resolve/release（每章一个 promise 链，避免快进快出竞态）。 */
   const syncChapterResources = (win: ChapterResourceWindow): void => {
@@ -711,11 +750,13 @@ export function createFlowRenderer(
     unbindHostTouchPaging();
     resourceObserver?.disconnect();
     resourceObserver = null;
+    ensureChapterMounted = null;
     const windows = resourceWindows;
     resourceWindows = [];
     releaseRemoteImages.splice(0).forEach((release) => release());
     // 卸载帧配对释放已物化资源（内容级 dispose 由编排壳兜底 revoke）。
     for (const win of windows) {
+      if (win === undefined) continue;
       const doc = win.frame.contentDocument;
       if (doc !== null) {
         win.chapter.releaseResources?.(doc);
@@ -724,10 +765,17 @@ export function createFlowRenderer(
   };
 
   const setActiveChapter = (index: number): void => {
+    ensureChapterMounted?.(index);
     const chapters = scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter');
     chapters.forEach((chapter) => {
       const current = Number(chapter.dataset.chapterIndex);
       chapter.classList.toggle('is-active', current === index);
+      const win = resourceWindows[current];
+      if (win !== undefined) {
+        win.visible = current === index;
+        if (win.visible) ensureChapterFrame(win);
+        syncChapterResources(win);
+      }
     });
   };
 
@@ -1100,13 +1148,18 @@ export function createFlowRenderer(
                   continue;
                 }
                 win.visible = entry.isIntersecting;
+                if (win.visible) ensureChapterFrame(win);
                 syncChapterResources(win);
               }
             },
             { root: scrollHost, rootMargin: '100% 0px' },
           );
-    let chapterIndex = 0;
-    for (const chapter of chapters) {
+    const renderedChapterIndexes = new Set<number>();
+    const appendChapter = (chapter: ReaderChapter, chapterIndex: number): void => {
+      if (renderedChapterIndexes.has(chapterIndex)) {
+        return;
+      }
+      renderedChapterIndexes.add(chapterIndex);
       const article = document.createElement('article');
       article.className = 'lightink-reader-chapter';
       article.dataset.chapterIndex = String(chapterIndex);
@@ -1129,14 +1182,18 @@ export function createFlowRenderer(
 
       const win: ChapterResourceWindow = {
         chapter,
+        heading,
         frame,
         generation: renderGeneration,
         visible: resourceObserver === null,
         ready: false,
+        sourceAssigned: false,
+        loadPromise: null,
+        stylesheet,
         queue: Promise.resolve(),
         afterResolve: null,
       };
-      resourceWindows.push(win);
+      resourceWindows[chapterIndex] = win;
       resourceObserver?.observe(article);
 
       const frameChapter = chapterIndex;
@@ -1442,10 +1499,45 @@ export function createFlowRenderer(
       };
       frame.addEventListener('load', onLoad, { once: true });
       releaseRemoteImages.push(() => frame.removeEventListener('load', onLoad));
-      frame.srcdoc = flowFrameSource(chapter.html, stylesheet);
       article.append(heading, frame);
-      scrollHost.appendChild(article);
-      chapterIndex += 1;
+      const following = Array.from(
+        scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
+      ).find((candidate) => Number(candidate.dataset.chapterIndex) > chapterIndex);
+      if (following === undefined) scrollHost.appendChild(article);
+      else scrollHost.insertBefore(article, following);
+      if (chapterIndex === 0 || chapter.load === undefined || chapter.html !== '') {
+        ensureChapterFrame(win);
+      }
+    };
+    ensureChapterMounted = (index): void => {
+      const chapter = chapters[index];
+      if (chapter !== undefined) appendChapter(chapter, index);
+    };
+
+    // A book with hundreds of spine items must become readable before every
+    // iframe browsing context exists. Mount a small first window synchronously,
+    // then yield between bounded batches so title chrome and chapter one are
+    // interactive within the initial load budget.
+    const initialCount = Math.min(chapters.length, 8);
+    for (let index = 0; index < initialCount; index += 1) {
+      appendChapter(chapters[index]!, index);
+    }
+    let nextChapter = initialCount;
+    const appendBatch = (): void => {
+      if (renderGeneration !== flowRenderGeneration) {
+        return;
+      }
+      const end = Math.min(chapters.length, nextChapter + 4);
+      while (nextChapter < end) {
+        appendChapter(chapters[nextChapter]!, nextChapter);
+        nextChapter += 1;
+      }
+      if (nextChapter < chapters.length) {
+        window.setTimeout(appendBatch, 16);
+      }
+    };
+    if (nextChapter < chapters.length) {
+      window.setTimeout(appendBatch, 16);
     }
   };
 

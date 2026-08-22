@@ -106,7 +106,7 @@ ad-hoc 签名不等于 Apple 公证。从浏览器下载后，Gatekeeper 仍可�
 
 ### 发布流程
 
-推送 `v*` tag 即触发 GitHub Actions 自动编译并发布三平台安装包（见 `.github/workflows/release.yml`），Release 说明从上个 tag 以来的提交记录自动提取（按 feat/fix/其他分组，基于 conventional commits）：
+推送 `v*` tag 即触发 GitHub Actions 自动编译并发布桌面三平台安装包与 Android ARM64-v8a APK（见 `.github/workflows/release.yml`），Release 说明从上个 tag 以来的提交记录自动提取（按 feat/fix/其他分组，基于 conventional commits）：
 
 ```bash
 # 1. 同步 package.json、package-lock.json、src-tauri/Cargo.toml、
@@ -116,7 +116,7 @@ npm test && npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-# 3. 打 tag 并推送 —— CI 自动构建 Windows(NSIS/MSI) + macOS(DMG, Apple Silicon) + Linux(deb/AppImage)，产出草稿 Release
+# 3. 打 tag 并推送 —— CI 自动构建 Windows(NSIS/MSI) + macOS(DMG, Apple Silicon) + Linux(deb/AppImage) + Android(ARM64-v8a APK)，产出草稿 Release
 git tag v0.1.0 && git push origin main v0.1.0
 # 4. 全部平台成功且资产校验完整后，CI 自动公开同一个 Release；失败时保持草稿
 ```

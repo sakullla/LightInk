@@ -128,6 +128,13 @@ export interface SafeArchiveOptions {
   readonly nativeInvoker?: NativeArchiveInvoker;
 }
 
+/**
+ * EPUB chapters are normally adjacent ZIP entries. An eight-megabyte sliding
+ * window turns hundreds of tiny backend/HTTP reads into a handful of bounded
+ * sequential reads while keeping the complete archive out of WebView memory.
+ */
+const ZIP_READ_AHEAD_BYTES = 8 * 1024 * 1024;
+
 function isRandomAccessSource(input: ArchiveInput): input is RandomAccessSource {
   return typeof (input as RandomAccessSource).readRange === 'function';
 }
@@ -149,6 +156,9 @@ export async function openSafeArchive(
    * materializing the complete archive in the WebView.
    */
   class SourceReader extends zip.Reader<RandomAccessSource> {
+    private cachedOffset = 0;
+    private cachedBytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
+
     constructor(private readonly randomSource: RandomAccessSource) {
       super(randomSource);
       this.size = randomSource.size;
@@ -158,8 +168,21 @@ export async function openSafeArchive(
       await super.init?.();
     }
 
-    override readUint8Array(index: number, length: number): Promise<Uint8Array> {
-      return this.randomSource.readRange(index, length, signal);
+    override async readUint8Array(index: number, length: number): Promise<Uint8Array> {
+      const cachedEnd = this.cachedOffset + this.cachedBytes.byteLength;
+      if (index >= this.cachedOffset && index + length <= cachedEnd) {
+        const start = index - this.cachedOffset;
+        return this.cachedBytes.slice(start, start + length);
+      }
+      const available = Math.max(0, this.randomSource.size - index);
+      const requested = Math.min(available, Math.max(length, ZIP_READ_AHEAD_BYTES));
+      const bytes = await this.randomSource.readRange(index, requested, signal);
+      if (bytes.byteLength < length) {
+        throw new Error('ZIP source returned an incomplete range');
+      }
+      this.cachedOffset = index;
+      this.cachedBytes = bytes;
+      return bytes.slice(0, length);
     }
   }
   const reader = new zip.ZipReader(new SourceReader(source));

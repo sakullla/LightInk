@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 
-import { sanitizeHtml } from '../sanitize.js';
+import { sanitizeHtml, sanitizeParsedHtml } from '../sanitize.js';
 import { parseEpub } from '../formats/epub.js';
 import { parseFb2 } from '../formats/fb2.js';
 import { parseMobi } from '../formats/mobi.js';
@@ -87,6 +87,17 @@ describe('sanitizeHtml', () => {
     expect(out).toContain('<strong>b</strong>');
     expect(out).toContain('<em>c</em>');
     expect(out).toContain('<blockquote>q</blockquote>');
+  });
+
+  it('原位消毒已解析的 EPUB 章节且保持同一安全策略', () => {
+    const parsed = document.createElement('main');
+    parsed.innerHTML =
+      '<p onclick="evil()">safe<script>evil()</script></p>' +
+      '<img src="https://remote.example/cover.jpg">';
+    const out = sanitizeParsedHtml(parsed);
+    expect(out).toContain('<p>safe</p>');
+    expect(out).not.toMatch(/onclick|script|<img[^>]*\ssrc="https:/i);
+    expect(out).toContain('data-lightink-remote-src="https://remote.example/cover.jpg"');
   });
 });
 
@@ -406,6 +417,53 @@ describe('parseEpub', () => {
     return zip.close();
   }
 
+  async function buildLargeEpub(chapterCount = 66): Promise<Uint8Array> {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc('<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'),
+      ),
+    );
+    const manifest = Array.from(
+      { length: chapterCount },
+      (_, index) => `<item id="c${index}" href="c${index}.xhtml" media-type="application/xhtml+xml"/>`,
+    ).join('');
+    const spine = Array.from(
+      { length: chapterCount },
+      (_, index) => `<itemref idref="c${index}"/>`,
+    ).join('');
+    await zip.add(
+      'OPS/book.opf',
+      new Uint8ArrayReader(
+        enc(
+          `<package><manifest>${manifest}` +
+            '<item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
+            `</manifest><spine>${spine}</spine></package>`,
+        ),
+      ),
+    );
+    const navigation = Array.from(
+      { length: chapterCount },
+      (_, index) =>
+        `<navPoint><navLabel><text>目录 ${index + 1}</text></navLabel>` +
+        `<content src="c${index}.xhtml"/></navPoint>`,
+    ).join('');
+    await zip.add(
+      'OPS/toc.ncx',
+      new Uint8ArrayReader(enc(`<ncx><navMap>${navigation}</navMap></ncx>`)),
+    );
+    for (let index = 0; index < chapterCount; index += 1) {
+      await zip.add(
+        `OPS/c${index}.xhtml`,
+        new Uint8ArrayReader(
+          enc(`<html><head><title>正文 ${index + 1}</title></head><body><p>${index + 1}</p></body></html>`),
+        ),
+      );
+    }
+    return zip.close();
+  }
+
   it('按 spine 顺序解析章节并消毒', async () => {
     const content = await parseEpub(await buildEpub());
     expect(content.chapters).toHaveLength(2);
@@ -415,7 +473,7 @@ describe('parseEpub', () => {
     expect(content.chapters[1]!.html).toContain('<p>乙</p>');
   });
 
-  it('通过随机读取源解析 EPUB，不先复制完整压缩包', async () => {
+  it('通过带有界预读的随机源解析 EPUB，并合并相邻 ZIP 读取', async () => {
     const bytes = await buildEpub(true, true);
     const reads: Array<{ offset: number; length: number }> = [];
     const source: RandomAccessSource = {
@@ -430,10 +488,26 @@ describe('parseEpub', () => {
     const content = await parseEpub(source);
     expect(content.chapters).toHaveLength(2);
     expect(reads.length).toBeGreaterThan(0);
-    expect(reads.every((read) => read.length < bytes.length)).toBe(true);
+    expect(reads.length).toBeLessThan(6);
+    expect(reads.every((read) => read.length <= Math.min(bytes.length, 8 * 1024 * 1024))).toBe(true);
     expect(reads.every((read) => read.offset >= 0 && read.offset + read.length <= bytes.length)).toBe(
       true,
     );
+    content.dispose?.();
+  });
+
+  it('大型 EPUB 首次只物化前两章，并保留 NCX 目录供按需章节使用', async () => {
+    const content = await parseEpub(await buildLargeEpub());
+    expect(content.chapters).toHaveLength(66);
+    expect(content.chapters[0]!.html).toContain('<p>1</p>');
+    expect(content.chapters[1]!.html).toContain('<p>2</p>');
+    expect(content.chapters[2]!.html).toBe('');
+    expect(content.chapters[65]!.title).toBe('目录 66');
+
+    await content.chapters[65]!.load?.();
+
+    expect(content.chapters[65]!.title).toBe('正文 66');
+    expect(content.chapters[65]!.html).toContain('<p>66</p>');
     content.dispose?.();
   });
 

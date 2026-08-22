@@ -521,6 +521,14 @@ async function readReaderChunk(
   }
 }
 
+/** Read bounded file metadata without hashing or transferring the EPUB body. */
+async function readReaderFileSize(filePath: string, signal?: AbortSignal): Promise<number> {
+  throwIfReaderReadCancelled(signal);
+  const size = await invoke<number>('reader_file_size', { path: filePath });
+  throwIfReaderReadCancelled(signal);
+  return size;
+}
+
 const localizedReaderError = (error: unknown): string =>
   readerLoadErrorDetail(error, (key, vars) => i18n.t(key, vars));
 
@@ -2170,6 +2178,7 @@ manager = new TabManager({
     const reader = createReaderView(host, {
       readBytes: readReaderBytes,
       readChunk: readReaderChunk,
+      readSize: readReaderFileSize,
       t: (key, vars) => i18n.t(key, vars),
       getContentHash: (path) => invoke<string>('content_hash', { path }),
       readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),

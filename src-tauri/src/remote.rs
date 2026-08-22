@@ -348,6 +348,22 @@ fn validator_key<'a>(etag: Option<&'a str>, last_modified: Option<&'a str>) -> O
     etag.or(last_modified)
 }
 
+/// Reconcile metadata from the cheap HEAD probe with the byte-range probe.
+/// Some OPDS servers synthesize validators from the request time, so their
+/// ETag/Last-Modified values change even while the resource bytes stay fixed.
+/// Such a validator cannot safely be sent as If-Range: the next request would
+/// fall back to a full 200 response and break random access. Returning None
+/// also selects the existing session-scoped cache key, avoiding cross-session
+/// reuse when the server cannot provide a stable content identity.
+fn stable_probe_validator(head: Option<String>, probe: Option<String>) -> Option<String> {
+    match (head, probe) {
+        (Some(head), Some(probe)) if head != probe => None,
+        (_, Some(probe)) => Some(probe),
+        (Some(head), None) => Some(head),
+        (None, None) => None,
+    }
+}
+
 fn resource_version(
     etag: Option<&str>,
     last_modified: Option<&str>,
@@ -877,8 +893,11 @@ pub async fn remote_open(
     if let Some(error) = response_error(&response) {
         return Err(error);
     }
-    etag = header_string(response.headers(), ETAG).or(etag);
-    last_modified = header_string(response.headers(), LAST_MODIFIED).or(last_modified);
+    etag = stable_probe_validator(etag, header_string(response.headers(), ETAG));
+    last_modified = stable_probe_validator(
+        last_modified,
+        header_string(response.headers(), LAST_MODIFIED),
+    );
     mime_type = header_string(response.headers(), CONTENT_TYPE).or(mime_type);
     let supports_ranges = response.status() == StatusCode::PARTIAL_CONTENT;
     let (size, object_id, cache_path, cache_complete) = if supports_ranges {
@@ -1239,6 +1258,26 @@ pub fn remote_close(state: State<'_, RemoteState>, resource_id: String) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unstable_probe_validators_are_ignored_for_range_requests() {
+        assert_eq!(
+            stable_probe_validator(Some("head".into()), Some("range".into())),
+            None
+        );
+        assert_eq!(
+            stable_probe_validator(Some("same".into()), Some("same".into())),
+            Some("same".into())
+        );
+        assert_eq!(
+            stable_probe_validator(None, Some("range".into())),
+            Some("range".into())
+        );
+        assert_eq!(
+            stable_probe_validator(Some("head".into()), None),
+            Some("head".into())
+        );
+    }
 
     #[test]
     fn url_policy_requires_explicit_http_and_blocks_other_schemes() {
