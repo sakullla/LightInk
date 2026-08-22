@@ -9,13 +9,15 @@
  * `evaluateJavascript` 的回调是异步的，因此“是否消费”必须由 JS 同步函数一次
  * 返回，不做 invoke/事件回传——不存在等待中的卡死窗口。
  *
- * 分层语义：不新建第二套判定。`dispatchLayeredBackPress` 向 document 派发
- * 合成 Escape keydown，与键盘 Escape 走完全相同的监听链——overlay 各自的
- * Escape 监听（modal-focus/context-menu/menus/library-view/reader overlay）
- * 先消费（preventDefault），剩余事件落到 main.ts 文档级共享判定
- * `consumeLayeredEscapeLeftover`（阅读器 returnToShelf）；书架无人消费，
- * 返回 false 交还系统默认。desktop 下 `registerAndroidBackNavigation` 为
- * no-op，桌面行为逐字节不变。
+ * 分层语义：不新建第二套判定。`dispatchLayeredBackPress` 以真实键盘 Escape
+ * 的派发目标（焦点元素，退化为 body/documentElement）派发合成 Escape
+ * keydown，与键盘 Escape 走完全相同的监听链——overlay 各自的 Escape 监听
+ * （modal-focus/context-menu 的 document 捕获监听在捕获阶段先于 main.ts
+ * 启动期注册的文档级冒泡监听运行；reader/library 根元素上的元素级监听在
+ * 焦点位于其子树时参与冒泡）先消费（preventDefault），剩余事件落到
+ * main.ts 文档级共享判定 `consumeLayeredEscapeLeftover`（阅读器
+ * returnToShelf）；书架无人消费，返回 false 交还系统默认。desktop 下
+ * `registerAndroidBackNavigation` 为 no-op，桌面行为逐字节不变。
  */
 
 import { isAndroidApp } from './mobile-platform.js';
@@ -29,12 +31,32 @@ export interface BackPressDispatchTarget {
 }
 
 /**
- * 分层返回判定：合成一个与键盘 Escape 等价的 keydown 走完 document 上的
- * 既有监听链；任一环节 `preventDefault()` 即视为已消费（返回 true），
- * 无人消费返回 false（书架顶层 → 系统默认）。
+ * 合成 Escape 的默认派发目标：与真实键盘 Escape 一致取焦点元素
+ * （`document.activeElement`，无焦点时浏览器即 body）。不能直接以 document
+ * 为目标——document 目标的 at-target 阶段按注册序运行监听（忽略 capture），
+ * main.ts 启动期注册的文档级 leftover 监听会先于 overlay 打开时才注册的
+ * document 捕获监听运行（reader+modal 一次返回被双重消费），且 reader/library
+ * 根元素上的元素级监听根本看不到以 document 为目标的事件。以焦点子树中的
+ * 元素为目标时，document 捕获监听在捕获阶段先运行，元素级监听在冒泡阶段参与，
+ * 复现真实 Escape 传播。
+ */
+export function resolveBackPressTarget(): BackPressDispatchTarget {
+  return (
+    document.activeElement ??
+    document.body ??
+    document.documentElement ??
+    document
+  );
+}
+
+/**
+ * 分层返回判定：合成一个与键盘 Escape 等价的 keydown，默认以焦点元素
+ * （见 `resolveBackPressTarget`）为目标走完既有监听链；任一环节
+ * `preventDefault()` 即视为已消费（返回 true），无人消费返回 false
+ * （书架顶层 → 系统默认）。
  */
 export function dispatchLayeredBackPress(
-  target: BackPressDispatchTarget = document,
+  target: BackPressDispatchTarget = resolveBackPressTarget(),
 ): boolean {
   const event = new KeyboardEvent('keydown', {
     key: 'Escape',
@@ -51,7 +73,7 @@ export interface AndroidBackNavigationOptions {
   readonly android?: boolean;
   /** 桥函数挂载宿主（默认 window）。 */
   readonly host?: Record<string, unknown>;
-  /** Escape 派发目标（默认 document）。 */
+  /** Escape 派发目标（默认按按下时的焦点元素实时解析，见 resolveBackPressTarget）。 */
   readonly target?: BackPressDispatchTarget;
 }
 
@@ -69,7 +91,9 @@ export function registerAndroidBackNavigation(
   }
   const host =
     options.host ?? (window as unknown as Record<string, unknown>);
-  const target = options.target ?? document;
+  // 不在注册时固化目标：默认目标在每次按下时按当前焦点实时解析，
+  // 复现真实键盘 Escape 的传播路径（见 resolveBackPressTarget）。
+  const target = options.target;
   host[ANDROID_BACK_BRIDGE_GLOBAL] = (): boolean => {
     try {
       return dispatchLayeredBackPress(target);
