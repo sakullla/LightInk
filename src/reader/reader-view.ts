@@ -132,6 +132,7 @@ import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
 import { createReaderChrome, type ReaderChrome } from './reader-chrome.js';
+import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
   fillReaderTocPanel,
   fillReaderTypographyPanel,
@@ -1314,11 +1315,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const syncChromeRevealAttr = (): void => {
     if (readerChrome === null) {
+      syncReaderTitlebarReveal(root, false);
       return;
     }
     const shown = readerChrome.isRevealed();
     readerChrome.element.hidden = !shown;
     readerChrome.element.setAttribute('aria-hidden', shown ? 'false' : 'true');
+    syncReaderTitlebarReveal(root, shown);
   };
 
   const syncChromeActionState = (): void => {
@@ -2647,6 +2650,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     layout: t('reader.type.layout'),
     paginated: t('reader.type.paginated'),
     scroll: t('reader.type.scroll'),
+    statusBar: t('reader.type.statusBar'),
+    statusBarShow: t('reader.type.statusBar.show'),
+    statusBarHide: t('reader.type.statusBar.hide'),
     smaller: t('view.zoomOut'),
     larger: t('view.zoomIn'),
     fonts: {
@@ -2755,7 +2761,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       try {
         chromeRevealObserver.observe(readerChrome.element, {
           attributes: true,
-          attributeFilter: ['data-reader-chrome-revealed', 'class'],
+          attributeFilter: ['data-reader-chrome-revealed', 'data-revealed', 'class'],
         });
       } catch {
         chromeRevealObserver = null;
@@ -3052,6 +3058,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       readerChrome?.destroy();
       readerChrome = null;
+      syncReaderTitlebarReveal(root, false);
       tocPanel.remove();
       typePanel.remove();
       textLayerObserver?.disconnect();

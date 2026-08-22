@@ -81,7 +81,9 @@ import {
 import type { RemoteOpenResult } from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
-import { loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
+import { applyReaderTheme, loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
+import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
+import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
 import { TabManager, isMarkdownTab } from './tabs/tab-manager.js';
 import {
@@ -137,7 +139,13 @@ import {
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
-import { setNativeCaptionColors, setNativeTheme, setNativeTitleBar, toggleFullscreen } from './ui/window-chrome.js';
+import {
+  getAppWindow,
+  setNativeCaptionColors,
+  setNativeTheme,
+  setNativeTitleBar,
+  toggleFullscreen,
+} from './ui/window-chrome.js';
 import { formatDocumentTitle } from './ui/window-title.js';
 import { installWindowCloseProtection } from './ui/window-lifecycle.js';
 import { libraryClient, type ManagedItemLocation } from './library/library-client.js';
@@ -165,6 +173,7 @@ import {
 } from './ui/versions.js';
 import './theme/tokens.css';
 import './ui/theme.css';
+import './ui/window-titlebar.css';
 import './library/library.css';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -184,6 +193,14 @@ const syncableStorage = createSyncableStorage(window.localStorage, {
 
 // 1080p / 2K / 4K layout tier → html[data-display]; theme.css scales tokens.
 const displayScale = installDisplayScale(document.documentElement, window);
+void getAppWindow().then((win) => {
+  if (win === null || typeof win.onResized !== 'function') {
+    return;
+  }
+  void win.onResized(() => {
+    displayScale.refresh();
+  });
+});
 
 // Reading font zoom (body/code) over tier baselines; persists lightink.fontScale.
 const fontScale = installFontScale(document.documentElement, syncableStorage);
@@ -647,6 +664,7 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
       activeReaderTab()?.reader.restoreReadingProgress?.();
     }
     appliedWorkspaceSurface = state.surface;
+    syncReaderStatusBarVisibility();
     statusBar?.refresh(getActiveStatusSnapshot);
     syncNativeWindowChrome(state);
     if (manager !== undefined) {
@@ -697,11 +715,29 @@ workspace.subscribe((state) => {
 });
 
 function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot()): void {
+  const titlebar = shell?.titlebar;
   if (state.surface === 'reader') {
-    const chrome = readerNativeWindowChrome(loadReaderTheme(syncableStorage));
+    const theme = loadReaderTheme(syncableStorage);
+    const chrome = readerNativeWindowChrome(theme);
+    if (titlebar !== undefined) {
+      applyReaderTheme(titlebar, theme);
+    }
     void setNativeTheme(chrome.dark);
     void setNativeCaptionColors({ caption: chrome.caption, text: chrome.text });
     return;
+  }
+  if (state.surface === 'shelf') {
+    const theme = loadLibraryTheme(syncableStorage);
+    const chrome = libraryNativeWindowChrome(theme);
+    if (titlebar !== undefined) {
+      applyLibraryTheme(titlebar, theme);
+    }
+    void setNativeTheme(chrome.dark);
+    void setNativeCaptionColors({ caption: chrome.caption, text: chrome.text });
+    return;
+  }
+  if (titlebar !== undefined) {
+    resetWindowTitlebarTheme(titlebar);
   }
   void setNativeCaptionColors(null);
   void setNativeTheme(themeService.isDark());
@@ -709,6 +745,23 @@ function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot())
 
 document.addEventListener('lightink:reader-theme', () => {
   syncNativeWindowChrome();
+});
+
+document.addEventListener('lightink:library-theme', () => {
+  syncNativeWindowChrome();
+});
+
+/** 阅读排版「隐藏状态栏」偏好：仅阅读态强制隐藏底部状态栏，编辑器不受影响。 */
+function syncReaderStatusBarVisibility(): void {
+  if (shell === undefined) return;
+  if (workspace.snapshot().surface !== 'reader') return;
+  const hide = loadReaderTypography(syncableStorage).hideStatusBar;
+  shell.statusBarHost.hidden = hide;
+  shell.statusBarHost.toggleAttribute('inert', hide);
+}
+
+document.addEventListener('lightink:reader-typography', () => {
+  syncReaderStatusBarVisibility();
 });
 
 function libraryItemIdForTarget(target: ReaderTarget): string {
@@ -1773,6 +1826,7 @@ shell = createAppShell(
   },
   { shortcutBindings: getShortcutBindings, storage: syncableStorage },
 );
+syncNativeWindowChrome();
 
 /**
  * Immersive chrome: unpinning hides menu + tabs; also fully hides the outline
@@ -1839,8 +1893,11 @@ function applySynchronizedPreferences(): void {
 /** Fullscreen also forces unpinned chrome + fully hidden outline for a clean canvas. */
 async function enterOrExitFullscreen(): Promise<void> {
   const next = await toggleFullscreen();
-  // R2：全屏隐藏原生标题栏，退出恢复（no-op 于非 Tauri / 无权限环境）。
-  await setNativeTitleBar(!next);
+  // Client title bar stays decorations:false; hide the strip in fullscreen.
+  await setNativeTitleBar(false);
+  if (shell !== undefined) {
+    shell.titlebar.hidden = next;
+  }
   if (next) {
     if (shell !== undefined && shell.isChromePinned()) {
       shell.setChromePinned(false);
@@ -2413,6 +2470,7 @@ libraryView = createLibraryView(shell.editorArea, {
   onEnterEditor: () => workspace.enterEditor(),
   webdav: webDavClient,
   onOpenSyncPanel: openWebDavSyncPanel,
+  themeStorage: syncableStorage,
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,

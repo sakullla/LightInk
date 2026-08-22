@@ -59,6 +59,10 @@ type Labels = {
   saved: string;
   failed: string;
   missingCapabilities: string;
+  connection: string;
+  dangerZone: string;
+  authHintBasic: string;
+  authHintBearer: string;
 };
 
 const LABELS: Record<'en' | 'zh-CN', Labels> = {
@@ -70,8 +74,8 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     basic: 'Basic',
     bearer: 'Bearer',
     username: 'Username',
-    password: 'Application password',
-    token: 'Token',
+    password: 'App password',
+    token: 'Access token',
     allowHttp: 'Allow HTTP/LAN',
     save: 'Save',
     test: 'Test connection',
@@ -92,6 +96,10 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     saved: 'Saved',
     failed: 'Operation failed',
     missingCapabilities: 'Server is missing required WebDAV capabilities',
+    connection: 'Connection',
+    dangerZone: 'Danger zone',
+    authHintBasic: 'Use the username plus an app-specific password from your provider — not the web login password.',
+    authHintBearer: 'Paste the access token only. Username and password are not used.',
   },
   'zh-CN': {
     title: 'WebDAV 同步',
@@ -102,7 +110,7 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     bearer: 'Bearer',
     username: '用户名',
     password: '应用密码',
-    token: '令牌',
+    token: '访问令牌',
     allowHttp: '允许 HTTP/LAN',
     save: '保存配置',
     test: '测试连接',
@@ -123,6 +131,10 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     saved: '已保存',
     failed: '操作失败',
     missingCapabilities: '服务器缺少同步所需的 WebDAV 能力',
+    connection: '连接',
+    dangerZone: '危险操作',
+    authHintBasic: '填写网盘用户名，以及单独生成的应用密码，不是网页登录密码。',
+    authHintBearer: '只需粘贴访问令牌，不用填写用户名和密码。',
   },
 };
 
@@ -136,6 +148,16 @@ function button(doc: Document, label: string, kind = 'plain'): HTMLButtonElement
   value.className = `lightink-modal-btn lightink-modal-btn--${kind}`;
   value.textContent = label;
   return value;
+}
+
+function section(doc: Document, titleText: string, extraClass = ''): HTMLElement {
+  const root = doc.createElement('section');
+  root.className = extraClass === '' ? 'lightink-sync-section' : `lightink-sync-section ${extraClass}`;
+  const heading = doc.createElement('h3');
+  heading.className = 'lightink-sync-section-title';
+  heading.textContent = titleText;
+  root.append(heading);
+  return root;
 }
 
 function field(doc: Document, label: string, type: string, value = ''): HTMLInputElement {
@@ -167,9 +189,12 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   dialog.className = 'lightink-modal-dialog lightink-sync-dialog';
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
+  const header = doc.createElement('header');
+  header.className = 'lightink-sync-header';
   const title = doc.createElement('div');
   title.className = 'lightink-modal-title';
   title.textContent = L.title;
+  header.append(title);
   labelModal(dialog, title);
 
   const form = doc.createElement('form');
@@ -177,7 +202,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   const name = field(doc, L.name, 'text');
   const url = field(doc, L.url, 'url');
   const authLabel = doc.createElement('label');
-  authLabel.className = 'lightink-sync-field';
+  authLabel.className = 'lightink-sync-field lightink-sync-field--span';
   const authCaption = doc.createElement('span');
   authCaption.textContent = L.auth;
   const auth = doc.createElement('select');
@@ -189,9 +214,14 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   bearer.textContent = L.bearer;
   auth.append(basic, bearer);
   authLabel.append(authCaption, auth);
+  const authHint = doc.createElement('p');
+  authHint.className = 'lightink-sync-auth-hint';
+  authHint.id = 'lightink-sync-auth-hint';
+  auth.setAttribute('aria-describedby', authHint.id);
   const username = field(doc, L.username, 'text');
   const password = field(doc, L.password, 'password');
   const token = field(doc, L.token, 'password');
+  token.parentElement!.classList.add('lightink-sync-field--span');
   const credentialFields = doc.createElement('div');
   credentialFields.className = 'lightink-sync-credentials';
   credentialFields.append(username.parentElement!, password.parentElement!, token.parentElement!);
@@ -200,29 +230,54 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   const allowHttp = doc.createElement('input');
   allowHttp.type = 'checkbox';
   httpLabel.append(allowHttp, doc.createTextNode(L.allowHttp));
-  form.append(name.parentElement!, url.parentElement!, authLabel, credentialFields, httpLabel);
+  const formActions = doc.createElement('div');
+  formActions.className = 'lightink-sync-form-actions';
+  const test = button(doc, L.test);
+  const save = button(doc, L.save, 'primary');
+  formActions.append(test, save);
+  form.append(
+    name.parentElement!,
+    url.parentElement!,
+    authLabel,
+    authHint,
+    credentialFields,
+    httpLabel,
+    formActions,
+  );
 
   const message = doc.createElement('div');
   message.className = 'lightink-sync-message';
   message.setAttribute('role', 'status');
+  message.hidden = true;
   const status = doc.createElement('div');
   status.className = 'lightink-sync-status';
-  const actions = doc.createElement('div');
-  actions.className = 'lightink-modal-actions';
-  const test = button(doc, L.test);
-  const save = button(doc, L.save, 'primary');
+  const statusMain = doc.createElement('div');
+  statusMain.className = 'lightink-sync-status-main';
+  const statusDot = doc.createElement('span');
+  statusDot.className = 'lightink-sync-status-dot';
+  statusDot.setAttribute('aria-hidden', 'true');
+  const statusState = doc.createElement('span');
+  statusState.className = 'lightink-sync-status-state';
+  statusMain.append(statusDot, statusState);
+  const metrics = doc.createElement('div');
+  metrics.className = 'lightink-sync-metrics';
+  const statusUploaded = doc.createElement('span');
+  statusUploaded.className = 'lightink-sync-metric';
+  const statusDownloaded = doc.createElement('span');
+  statusDownloaded.className = 'lightink-sync-metric';
+  const statusConflicts = doc.createElement('span');
+  statusConflicts.className = 'lightink-sync-metric';
+  metrics.append(statusUploaded, statusDownloaded, statusConflicts);
+  const statusActions = doc.createElement('div');
+  statusActions.className = 'lightink-sync-status-actions';
   const sync = button(doc, L.sync, 'primary');
   const cancelSync = button(doc, L.cancelSync, 'danger');
-  const forget = button(doc, L.forget, 'plain');
-  const close = button(doc, L.close, 'plain');
-  actions.append(test, save, sync, cancelSync, forget, close);
+  cancelSync.hidden = true;
+  statusActions.append(sync, cancelSync);
+  status.append(statusMain, metrics, statusActions);
 
-  const conflictsHeading = doc.createElement('h3');
-  conflictsHeading.textContent = L.conflicts;
   const conflicts = doc.createElement('div');
   conflicts.className = 'lightink-sync-conflicts';
-  const migrationHeading = doc.createElement('h3');
-  migrationHeading.textContent = L.migration;
   const migrationActions = doc.createElement('div');
   migrationActions.className = 'lightink-sync-migration-actions';
   const previewButton = button(doc, L.preview);
@@ -231,9 +286,36 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   migrationActions.append(previewButton, applyButton);
   const migrationList = doc.createElement('div');
   migrationList.className = 'lightink-sync-migration-list';
-  dialog.append(title, form, message, status, conflictsHeading, conflicts);
-  if (deps.migration !== undefined) dialog.append(migrationHeading, migrationActions, migrationList);
-  dialog.append(actions);
+  const forget = button(doc, L.forget, 'danger');
+  const close = button(doc, L.close, 'plain');
+  const footer = doc.createElement('footer');
+  footer.className = 'lightink-sync-footer lightink-modal-actions';
+  footer.append(close);
+
+  const connectionSection = section(doc, L.connection);
+  connectionSection.append(form);
+  const statusSection = section(doc, L.status);
+  statusSection.append(status);
+  const conflictsSection = section(doc, L.conflicts);
+  conflictsSection.append(conflicts);
+  const dangerSection = section(doc, L.dangerZone, 'lightink-sync-section--danger');
+  dangerSection.append(forget);
+
+  const body = doc.createElement('div');
+  body.className = 'lightink-sync-body';
+  body.append(message, connectionSection, statusSection, conflictsSection);
+  if (deps.migration !== undefined) {
+    const migrationSection = section(doc, L.migration);
+    const migrationHead = doc.createElement('div');
+    migrationHead.className = 'lightink-sync-section-head';
+    const migrationTitle = migrationSection.querySelector('.lightink-sync-section-title');
+    if (migrationTitle !== null) migrationHead.append(migrationTitle, migrationActions);
+    else migrationHead.append(migrationActions);
+    migrationSection.append(migrationHead, migrationList);
+    body.append(migrationSection);
+  }
+  body.append(dangerSection);
+  dialog.append(header, body, footer);
   overlay.appendChild(dialog);
   doc.body.appendChild(overlay);
 
@@ -253,11 +335,14 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     if (event.target === overlay) closePanel();
   });
   const updateCredentialVisibility = (): void => {
-    username.parentElement!.hidden = auth.value !== 'basic';
-    password.parentElement!.hidden = auth.value !== 'basic';
-    token.parentElement!.hidden = auth.value !== 'bearer';
+    const isBasic = auth.value === 'basic';
+    username.parentElement!.hidden = !isBasic;
+    password.parentElement!.hidden = !isBasic;
+    token.parentElement!.hidden = isBasic;
+    authHint.textContent = isBasic ? L.authHintBasic : L.authHintBearer;
   };
   auth.addEventListener('change', updateCredentialVisibility);
+  updateCredentialVisibility();
 
   const readInput = (): SyncProfileInput => {
     const authType = auth.value as SyncAuthType;
@@ -276,22 +361,39 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       credential,
     };
   };
+  const setMessage = (text: string, kind: 'info' | 'success' | 'error' = 'info'): void => {
+    message.textContent = text;
+    message.hidden = text === '';
+    message.dataset.kind = kind;
+  };
   const renderStatus = (value: SyncStatus): void => {
-    status.textContent = `${L.status}: ${value.state === 'running' ? L.running : L.ready} · ↑${value.uploaded} ↓${value.downloaded} ⚠${value.conflicts}`;
-    cancelSync.disabled = value.state !== 'running';
+    const running = value.state === 'running';
+    status.classList.toggle('is-running', running);
+    status.classList.toggle('is-error', false);
+    statusState.textContent = running ? L.running : L.ready;
+    statusUploaded.textContent = `↑${value.uploaded}`;
+    statusDownloaded.textContent = `↓${value.downloaded}`;
+    statusConflicts.textContent = `⚠${value.conflicts}`;
+    statusConflicts.classList.toggle('is-warn', value.conflicts > 0);
+    cancelSync.disabled = !running;
+    cancelSync.hidden = !running;
   };
   const refreshStatus = async (): Promise<void> => {
     try {
       renderStatus(await deps.sync.status());
     } catch {
-      status.textContent = L.failed;
+      statusState.textContent = L.failed;
+      status.classList.add('is-error');
     }
   };
   const renderConflicts = async (): Promise<void> => {
     conflicts.replaceChildren();
     const values = await deps.sync.listConflicts().catch(() => []);
     if (values.length === 0) {
-      conflicts.textContent = L.noConflicts;
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-sync-empty';
+      empty.textContent = L.noConflicts;
+      conflicts.append(empty);
       return;
     }
     for (const conflict of values) {
@@ -336,10 +438,10 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     save.disabled = true;
     try {
       profile = await deps.webdav.saveProfile(readInput());
-      message.textContent = profile.needsCredential ? L.needsCredential : L.saved;
+      setMessage(profile.needsCredential ? L.needsCredential : L.saved, profile.needsCredential ? 'info' : 'success');
       await refreshStatus();
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
     } finally {
       save.disabled = false;
     }
@@ -354,13 +456,15 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
         !capability.supportsMove && 'MOVE',
         !capability.supportsConditionalPut && 'If-None-Match',
       ].filter((value): value is string => typeof value === 'string');
-      message.textContent =
+      setMessage(
         missing.length === 0
           ? `${L.saved}: ${capability.finalUrl}`
-          : `${L.failed}: ${L.missingCapabilities} (${missing.join(', ')})`;
+          : `${L.failed}: ${L.missingCapabilities} (${missing.join(', ')})`,
+        missing.length === 0 ? 'success' : 'error',
+      );
       profile = await deps.webdav.getProfile();
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
     } finally {
       test.disabled = false;
     }
@@ -372,7 +476,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       if (result !== null) renderStatus(result);
       await renderConflicts();
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
       await refreshStatus();
     } finally {
       sync.disabled = false;
@@ -388,9 +492,9 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       profile = null;
       name.value = '';
       url.value = '';
-      message.textContent = L.saved;
+      setMessage(L.saved, 'success');
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
     } finally {
       forget.disabled = false;
     }
@@ -401,7 +505,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     try {
       renderMigration(await deps.migration.preview());
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
     } finally {
       previewButton.disabled = false;
     }
@@ -414,10 +518,10 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     applyButton.disabled = true;
     try {
       const result = await deps.migration.apply(ids);
-      message.textContent = `${L.saved}: ${result.migrated}`;
+      setMessage(`${L.saved}: ${result.migrated}`, 'success');
       await deps.migration.preview().then(renderMigration).catch(() => undefined);
     } catch (error) {
-      message.textContent = `${L.failed}: ${textOf(error)}`;
+      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
     } finally {
       applyButton.disabled =
         migrationList.querySelectorAll<HTMLInputElement>('input:checked').length === 0;
@@ -433,7 +537,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
         url.value = value.url;
         auth.value = value.authType;
         allowHttp.checked = value.allowHttp;
-        message.textContent = value.needsCredential ? L.needsCredential : '';
+        setMessage(value.needsCredential ? L.needsCredential : '');
       }
       updateCredentialVisibility();
       return Promise.all([refreshStatus(), renderConflicts()]);

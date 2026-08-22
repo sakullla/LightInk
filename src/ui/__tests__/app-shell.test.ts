@@ -264,6 +264,7 @@ describe('createAppShell immersive chrome', () => {
     );
     expect(fakeRoot.querySelector('#lightink-menu-trigger')).not.toBeNull();
     expect(fakeRoot.querySelector('#lightink-tabs-trigger')).not.toBeNull();
+    expect(fakeRoot.querySelector('#lightink-window-titlebar')).not.toBeNull();
   });
 
   it('toggleTabsChrome and setTabsHold sync is-tabs-revealed when unpinned', () => {

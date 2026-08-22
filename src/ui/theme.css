@@ -2776,9 +2776,53 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
 }
 
 .lightink-sync-dialog {
-  width: min(760px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 32px));
   max-height: min(90vh, 820px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.lightink-sync-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--lightink-border);
+}
+
+.lightink-sync-dialog .lightink-modal-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.lightink-sync-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  padding: 16px 20px;
   overflow: auto;
+}
+
+.lightink-sync-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lightink-sync-section-title {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.lightink-sync-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .lightink-sync-form {
@@ -2800,6 +2844,25 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   align-items: stretch;
 }
 
+.lightink-sync-field[hidden] {
+  display: none !important;
+}
+
+.lightink-sync-field--span,
+.lightink-sync-credentials,
+.lightink-sync-checkbox,
+.lightink-sync-form-actions,
+.lightink-sync-auth-hint {
+  grid-column: 1 / -1;
+}
+
+.lightink-sync-auth-hint {
+  margin: -2px 0 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .lightink-sync-field span {
   color: var(--lightink-muted);
   font-size: 0.82rem;
@@ -2808,21 +2871,11 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
 .lightink-sync-field input,
 .lightink-sync-field select {
   min-height: 34px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--lightink-border);
-  border-radius: 6px;
-  background: var(--lightink-bg-elevated);
+  border-radius: 8px;
+  background: var(--lightink-bg);
   color: var(--lightink-fg);
-}
-
-.lightink-sync-credentials,
-.lightink-sync-checkbox,
-.lightink-sync-message,
-.lightink-sync-status,
-.lightink-sync-conflicts,
-.lightink-sync-migration-list,
-.lightink-sync-migration-actions {
-  grid-column: 1 / -1;
 }
 
 .lightink-sync-credentials {
@@ -2831,20 +2884,106 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.lightink-sync-message,
-.lightink-sync-status {
-  min-height: 1.4em;
-  color: var(--lightink-muted);
+.lightink-sync-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.lightink-sync-message {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  color: var(--lightink-fg);
+  font-size: 13px;
+  line-height: 1.45;
   white-space: pre-line;
+}
+
+.lightink-sync-message[data-kind='success'] {
+  background: color-mix(in srgb, var(--lightink-accent) 12%, transparent);
+  color: var(--lightink-accent);
+}
+
+.lightink-sync-message[data-kind='error'] {
+  background: color-mix(in srgb, var(--lightink-danger) 12%, transparent);
+  color: var(--lightink-danger);
+}
+
+.lightink-sync-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 3%, var(--lightink-bg));
+}
+
+.lightink-sync-status-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 4.5rem;
+  font-weight: 600;
+}
+
+.lightink-sync-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lightink-muted);
+}
+
+.lightink-sync-status.is-running .lightink-sync-status-dot {
+  background: var(--lightink-accent);
+}
+
+.lightink-sync-status.is-error .lightink-sync-status-dot {
+  background: var(--lightink-danger);
+}
+
+.lightink-sync-metrics {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lightink-sync-metric {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  color: var(--lightink-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-sync-metric.is-warn {
+  background: color-mix(in srgb, var(--lightink-danger) 12%, transparent);
+  color: var(--lightink-danger);
+}
+
+.lightink-sync-status-actions {
+  display: flex;
+  margin-left: auto;
+  gap: 8px;
 }
 
 .lightink-sync-conflicts,
 .lightink-sync-migration-list {
   display: grid;
   gap: 6px;
-  max-height: 180px;
+  max-height: 160px;
   overflow: auto;
-  padding: 6px 0;
+}
+
+.lightink-sync-empty {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 13px;
 }
 
 .lightink-sync-conflict,
@@ -2853,9 +2992,9 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 7px 8px;
   border: 1px solid var(--lightink-border);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .lightink-sync-migration-row {
@@ -2867,10 +3006,36 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   gap: 8px;
 }
 
+.lightink-sync-section--danger {
+  padding-top: 4px;
+}
+
+.lightink-sync-section--danger .lightink-modal-btn {
+  align-self: flex-start;
+}
+
+.lightink-sync-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--lightink-border);
+}
+
 @media (max-width: 720px) {
   .lightink-sync-form,
   .lightink-sync-credentials {
     grid-template-columns: 1fr;
+  }
+
+  .lightink-sync-status-actions,
+  .lightink-sync-form-actions,
+  .lightink-sync-migration-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .lightink-sync-status-actions .lightink-modal-btn,
+  .lightink-sync-form-actions .lightink-modal-btn,
+  .lightink-sync-migration-actions .lightink-modal-btn {
+    flex: 1 1 auto;
   }
 }
 

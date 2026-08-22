@@ -255,6 +255,11 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     );
     expect(css).toMatch(/\.lightink-reader-chrome\s*\{[^}]*width:\s*100%/);
     expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*white-space:\s*nowrap/);
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-titlebar-caption/,
+    );
+    expect(css).toMatch(/\.lightink-reader-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
+    expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*-webkit-app-region:\s*no-drag/);
   });
 
   it('overrides the editor measure after .lightink-tab-host so an open book can fill the pane', () => {

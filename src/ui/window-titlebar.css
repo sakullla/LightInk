@@ -1,0 +1,162 @@
+/*
+ * Overlay caption chrome. App-like chips, not a Windows caption strip.
+ */
+
+html {
+  --lightink-titlebar-height: 36px;
+  --lightink-titlebar-caption: 36px;
+  --lightink-titlebar-icon: 16px;
+}
+
+html[data-display='compact'] {
+  --lightink-titlebar-height: 32px;
+  --lightink-titlebar-caption: 32px;
+  --lightink-titlebar-icon: 15px;
+}
+
+html[data-display='qhd'] {
+  --lightink-titlebar-height: 40px;
+  --lightink-titlebar-caption: 38px;
+  --lightink-titlebar-icon: 17px;
+}
+
+html[data-display='uhd'],
+html[data-display='xuhd'] {
+  --lightink-titlebar-height: 44px;
+  --lightink-titlebar-caption: 40px;
+  --lightink-titlebar-icon: 18px;
+}
+
+#app {
+  position: relative;
+}
+
+.lightink-window-titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: var(--lightink-titlebar-height);
+  min-height: var(--lightink-titlebar-height);
+  padding: 0 8px;
+  user-select: none;
+  pointer-events: none;
+  background: transparent;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+}
+
+.lightink-window-titlebar[hidden] {
+  display: none !important;
+}
+
+.lightink-window-titlebar-drag {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  pointer-events: auto;
+}
+
+.lightink-window-titlebar-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  pointer-events: auto;
+}
+
+#app.is-workspace-shelf .lightink-window-titlebar,
+#app.is-workspace-reader .lightink-window-titlebar {
+  left: auto;
+  width: auto;
+}
+
+#app.is-workspace-shelf .lightink-window-titlebar-drag,
+#app.is-workspace-reader .lightink-window-titlebar-drag {
+  display: none;
+}
+
+/* Immersive reader: keep caption chips out of the spread until chrome appears. */
+#app.is-workspace-reader .lightink-window-titlebar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+#app.is-workspace-reader.is-reader-chrome-revealed .lightink-window-titlebar,
+#app.is-workspace-reader .lightink-window-titlebar:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lightink-window-caption {
+  display: inline-grid;
+  place-items: center;
+  width: var(--lightink-titlebar-caption);
+  min-width: var(--lightink-titlebar-caption);
+  height: calc(var(--lightink-titlebar-height) - 6px);
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-muted);
+  cursor: default;
+}
+
+.lightink-window-caption > span {
+  display: block;
+  width: var(--lightink-titlebar-icon, 16px);
+  height: var(--lightink-titlebar-icon, 16px);
+  background: currentColor;
+}
+
+.lightink-window-caption--min > span {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M5 11h14v2H5z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M5 11h14v2H5z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-window-caption--max > span {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M7 7h10v10H7z' fill-opacity='0'/><path fill='black' d='M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 2v8h8V8H8z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 2v8h8V8H8z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-window-caption--max[data-maximized='true'] > span {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M8 8h9v9H8z' fill-opacity='0'/><path fill='black' d='M9 5h8a2 2 0 0 1 2 2v8h-2V7H9V5zm-2 4h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zm0 2v8h8v-8H7z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M9 5h8a2 2 0 0 1 2 2v8h-2V7H9V5zm-2 4h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zm0 2v8h8v-8H7z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-window-caption--close > span {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6.7 6.7 12 12l5.3-5.3 1.4 1.4L13.4 13.4l5.3 5.3-1.4 1.4L12 14.8l-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6.7 6.7 12 12l5.3-5.3 1.4 1.4L13.4 13.4l5.3 5.3-1.4 1.4L12 14.8l-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-window-caption:hover,
+.lightink-window-caption:focus-visible {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+  outline: none;
+}
+
+.lightink-window-caption--close:hover,
+.lightink-window-caption--close:focus-visible {
+  background: #e81123;
+  color: #fff;
+}
+
+.lightink-library-header {
+  -webkit-app-region: drag;
+}
+
+.lightink-library-header input,
+.lightink-library-header button,
+.lightink-library-search,
+.lightink-reader-chrome-action,
+.lightink-window-caption {
+  -webkit-app-region: no-drag;
+}

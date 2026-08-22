@@ -102,25 +102,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
-.lightink-reader-sidebar-search-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: 10px;
-  padding: 0.4rem 0.6rem;
-  background: color-mix(in srgb, var(--lightink-fg) 4%, var(--lightink-bg));
-  color: var(--lightink-fg);
-  font: inherit;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.lightink-reader-sidebar-search-input:focus {
-  outline: 0;
-  border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
-}
-
-/* 笔记搜索输入框：原内联样式迁入，现代化圆角与聚焦态。 */
+/* 统一搜索输入框：标注分类下筛选标注，正文分类下搜索全书。 */
 .lightink-reader-sidebar-note-search-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -143,10 +125,6 @@
   flex: 0 0 auto;
   color: var(--lightink-muted);
   font-size: 0.8rem;
-}
-
-.lightink-reader-sidebar.is-searching .lightink-reader-sidebar-filters {
-  display: none;
 }
 
 .lightink-reader-sidebar-hit.is-current {
@@ -368,7 +346,7 @@
   text-align: center;
 }
 
-/* ===== 搜索栈（笔记搜索 + 全文搜索分组） ===== */
+/* ===== 搜索区（单输入框：标注分类下筛选标注，正文分类下搜索全书） ===== */
 
 .lightink-reader-sidebar-search-stack {
   display: flex;
@@ -378,26 +356,10 @@
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
-.lightink-reader-sidebar:not(.is-searching) .lightink-reader-sidebar-search-mode--document {
-  display: none;
-}
-
-.lightink-reader-sidebar.is-searching .lightink-reader-sidebar-search-mode--notes {
-  display: none;
-}
-
 .lightink-reader-sidebar-search-stack .lightink-reader-sidebar-search,
 .lightink-reader-sidebar-search-stack .lightink-reader-sidebar-note-search {
   padding: 0;
   border: 0;
-}
-
-.lightink-reader-sidebar-search-label {
-  display: block;
-  margin-bottom: 0.25rem;
-  font-size: 0.7rem;
-  letter-spacing: 0.03em;
-  color: var(--lightink-muted);
 }
 
 /* ===== 窄窗抽屉 ===== */

@@ -31,6 +31,9 @@ export interface ReaderChromePanelCopy {
   layout: string;
   paginated: string;
   scroll: string;
+  statusBar: string;
+  statusBarShow: string;
+  statusBarHide: string;
   smaller: string;
   larger: string;
   fonts: Readonly<Record<ReaderFontFamilyPreset, string>>;
@@ -52,6 +55,9 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
     layout: '版式',
     paginated: '翻页',
     scroll: '滚动',
+    statusBar: '状态栏',
+    statusBarShow: '显示',
+    statusBarHide: '隐藏',
     smaller: '缩小',
     larger: '放大',
     fonts: {
@@ -261,6 +267,33 @@ export function fillReaderTypographyPanel(
   );
   layoutSection.appendChild(modes);
   panel.appendChild(layoutSection);
+
+  // 状态栏：阅读态下可完全隐藏底部状态栏（编辑器状态栏不受影响）。
+  const statusBarSection = section(copy.statusBar, 'status-bar');
+  const statusBarModes = document.createElement('div');
+  statusBarModes.className = 'lightink-reader-type-modes';
+  statusBarModes.setAttribute('role', 'group');
+  statusBarModes.setAttribute('aria-label', copy.statusBar);
+  for (const option of [
+    { label: copy.statusBarShow, hide: false },
+    { label: copy.statusBarHide, hide: true },
+  ] as const) {
+    const choice = document.createElement('button');
+    choice.type = 'button';
+    choice.className = 'lightink-reader-type-choice';
+    choice.dataset.statusBarMode = option.hide ? 'hide' : 'show';
+    choice.textContent = option.label;
+    choice.setAttribute('aria-pressed', typography.hideStatusBar === option.hide ? 'true' : 'false');
+    choice.classList.toggle('is-active', typography.hideStatusBar === option.hide);
+    choice.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onTypography({ hideStatusBar: option.hide });
+    });
+    statusBarModes.appendChild(choice);
+  }
+  statusBarSection.appendChild(statusBarModes);
+  panel.appendChild(statusBarSection);
 
   panel.appendChild(
     sliderRow(

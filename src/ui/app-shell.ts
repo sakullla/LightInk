@@ -47,6 +47,7 @@ import { renderCheatsheet, type CheatBinding } from './help-cheatsheet.js';
 import { createMenuBar, type Menu, type MenuItem } from './menus.js';
 import { labelModal, mountModalFocus } from './modal-focus.js';
 import { matchEvent } from './shortcuts.js';
+import { createWindowTitlebar, type WindowTitlebar } from './window-titlebar.js';
 import {
   applyWorkspaceSurface,
   resolveWorkspaceSurface,
@@ -308,6 +309,8 @@ export interface AppShell {
   setReaderTypography(patch: Partial<ReaderTypography>): void;
   /** Stamp workspace mode/surface on the shell root (dataset + class). */
   applyWorkspace(snapshot: Pick<WorkspaceSnapshot, 'mode' | 'surface'>): void;
+  /** Client title bar (drag region + caption buttons). */
+  readonly titlebar: HTMLElement;
   /** Shelf header travel control; library view relocates this into its toolbar. */
   readonly enterEditorButton: HTMLButtonElement;
   /** 按当前标签状态重绘标签栏。 */
@@ -1163,6 +1166,7 @@ export function createAppShell(
       overflowLabel: () => actions.t('menu.more'),
     });
     syncTravelLabels();
+    titlebar.retranslate();
   }
   rebuildMenusRef = rebuildMenus;
 
@@ -1173,9 +1177,13 @@ export function createAppShell(
     rebuildMenus();
   }
 
+  const titlebar: WindowTitlebar = createWindowTitlebar(document, {
+    getLocale: () => actions.getLocale(),
+  });
+
   chromeHost.replaceChildren(menuTrigger, toolbar);
   tabsHost.replaceChildren(tabsTrigger, tabBar);
-  root.replaceChildren(chromeHost, tabsHost, readerShell, mainRow, statusBarHost);
+  root.replaceChildren(titlebar.element, chromeHost, tabsHost, readerShell, mainRow, statusBarHost);
   root.classList.add('lightink-immersive');
 
   function applyWorkspace(snapshot: Pick<WorkspaceSnapshot, 'mode' | 'surface'>): void {
@@ -1460,9 +1468,11 @@ export function createAppShell(
       menuActions.onSetReaderTypography?.(patch);
     },
     applyWorkspace,
+    titlebar: titlebar.element,
     enterEditorButton: enterEditorBtn,
     renderTabBar,
     destroy: () => {
+      titlebar.dispose();
       if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
         document.removeEventListener('keydown', onReaderLayoutShortcut, true);
       }

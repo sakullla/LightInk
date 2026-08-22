@@ -546,7 +546,7 @@ describe('Reader load lifecycle', () => {
     expect(sidebar.hidden).toBe(false);
     expect(sidebar.querySelector('.lightink-replace-input')).toBeNull();
     expect(
-      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-search-input')?.value,
+      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
     ).toBe('keyword');
     expect(sidebar.classList.contains('is-searching')).toBe(true);
     expect(sidebar.querySelector('.lightink-reader-sidebar-search-status')?.textContent).toBeTruthy();
@@ -555,13 +555,13 @@ describe('Reader load lifecycle', () => {
     document.documentElement.dataset.readingLayout = 'scroll';
     expect(sidebar.hidden).toBe(false);
     expect(
-      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-search-input')?.value,
+      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
     ).toBe('keyword');
 
     sidebar.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')!.click();
     expect(sidebar.hidden).toBe(true);
     expect(
-      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-search-input')?.value,
+      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
     ).toBe('');
     expect(sidebar.classList.contains('is-searching')).toBe(false);
     await view.destroy();

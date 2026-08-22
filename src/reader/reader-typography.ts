@@ -54,6 +54,8 @@ export interface ReaderTypography {
   readonly fontScaleStep: FontScaleStep;
   readonly lineHeight: number;
   readonly measureRem: number;
+  /** 阅读态下完全隐藏底部状态栏（编辑器状态栏不受影响）。 */
+  readonly hideStatusBar: boolean;
 }
 
 export const DEFAULT_READER_TYPOGRAPHY: ReaderTypography = {
@@ -61,6 +63,7 @@ export const DEFAULT_READER_TYPOGRAPHY: ReaderTypography = {
   fontScaleStep: DEFAULT_FONT_SCALE,
   lineHeight: DEFAULT_READER_LINE_HEIGHT,
   measureRem: DEFAULT_READER_MEASURE_REM,
+  hideStatusBar: false,
 };
 
 export interface ReaderTypographyStorage {
@@ -110,6 +113,7 @@ export interface ReaderTypographyInput {
   readonly fontScaleStep?: number;
   readonly lineHeight?: number;
   readonly measureRem?: number;
+  readonly hideStatusBar?: boolean;
 }
 
 export function normalizeReaderTypography(
@@ -130,6 +134,8 @@ export function normalizeReaderTypography(
     measureRem: snapReaderMeasureRem(
       typeof value.measureRem === 'number' ? value.measureRem : fallback.measureRem,
     ),
+    hideStatusBar:
+      typeof value.hideStatusBar === 'boolean' ? value.hideStatusBar : fallback.hideStatusBar,
   };
 }
 
@@ -147,6 +153,7 @@ export function parseReaderTypography(raw: string | null | undefined): ReaderTyp
       fontScaleStep: typeof parsed.fontScaleStep === 'number' ? parsed.fontScaleStep : undefined,
       lineHeight: typeof parsed.lineHeight === 'number' ? parsed.lineHeight : undefined,
       measureRem: typeof parsed.measureRem === 'number' ? parsed.measureRem : undefined,
+      hideStatusBar: typeof parsed.hideStatusBar === 'boolean' ? parsed.hideStatusBar : undefined,
     });
   } catch {
     return defaultReaderTypography();

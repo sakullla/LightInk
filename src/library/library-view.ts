@@ -40,6 +40,14 @@ import type {
 import type { ProgressStorage } from '../reader/reading-progress.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
+import {
+  applyLibraryTheme,
+  LIBRARY_THEMES,
+  loadLibraryTheme,
+  saveLibraryTheme,
+  type LibraryThemeId,
+  type LibraryThemeStorage,
+} from './library-theme.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibrarySection = 'shelf' | 'sources' | 'manage';
@@ -47,6 +55,7 @@ type ShelfGroup = 'all' | 'in-progress' | 'unread' | 'text' | 'comic';
 
 interface Labels {
   library: string;
+  brand: string;
   myBooks: string;
   manage: string;
   backToShelf: string;
@@ -146,6 +155,13 @@ interface Labels {
   noCustomGroups: string;
   invalidGroupMove: string;
   smartGroups: string;
+  collapse: string;
+  expand: string;
+  filterGroups: string;
+  filterSmartGroups: string;
+  filterSources: string;
+  noMatch: string;
+  emptyGroups: string;
   managedBooks: string;
   remoteBooks: string;
   epubBooks: string;
@@ -154,11 +170,22 @@ interface Labels {
   seriesGroup: string;
   sourceGroup: string;
   formatGroup: string;
+  libraryTheme: string;
+  libraryThemeHint: string;
+  appearance: string;
+  themePaper: string;
+  themeGallery: string;
+  themeMoss: string;
+  themeWalnut: string;
+  themeInk: string;
+  collapseNav: string;
+  expandNav: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
   en: {
     library: 'Library',
+    brand: 'LightInk',
     myBooks: 'My books',
     manage: 'Manage',
     backToShelf: 'Back to shelf',
@@ -266,9 +293,27 @@ const LABELS: Record<Locale, Labels> = {
     seriesGroup: 'Series: {name}',
     sourceGroup: 'Source: {name}',
     formatGroup: 'Format: {name}',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    filterGroups: 'Filter collections…',
+    filterSmartGroups: 'Filter smart groups…',
+    filterSources: 'Filter sources…',
+    noMatch: 'No matches',
+    emptyGroups: 'No collections yet. Use + to create one.',
+    libraryTheme: 'Shelf theme',
+    libraryThemeHint: 'Applies to the shelf only. Editor and reader keep their own themes.',
+    appearance: 'Appearance',
+    themePaper: 'Paper',
+    themeGallery: 'Gallery',
+    themeMoss: 'Moss',
+    themeWalnut: 'Walnut',
+    themeInk: 'Ink',
+    collapseNav: 'Collapse sidebar',
+    expandNav: 'Expand sidebar',
   },
   'zh-CN': {
     library: '书库',
+    brand: '轻墨',
     myBooks: '我的书',
     manage: '管理',
     backToShelf: '返回书架',
@@ -376,6 +421,23 @@ const LABELS: Record<Locale, Labels> = {
     seriesGroup: '系列：{name}',
     sourceGroup: '来源：{name}',
     formatGroup: '格式：{name}',
+    collapse: '折叠',
+    expand: '展开',
+    filterGroups: '筛选分组…',
+    filterSmartGroups: '筛选智能分组…',
+    filterSources: '筛选书库源…',
+    noMatch: '无匹配项',
+    emptyGroups: '还没有分组，点 + 新建。',
+    libraryTheme: '书架主题',
+    libraryThemeHint: '只改变书架外观，不影响编辑器和阅读器。',
+    appearance: '外观',
+    themePaper: '纸书',
+    themeGallery: '展厅',
+    themeMoss: '苔绿',
+    themeWalnut: '胡桃',
+    themeInk: '墨黑',
+    collapseNav: '收起导航',
+    expandNav: '展开导航',
   },
 };
 
@@ -439,6 +501,8 @@ export interface LibraryViewDependencies {
   readonly onEnterEditor?: () => void;
   readonly webdav?: Pick<WebDavClient, 'getProfile' | 'saveProfile' | 'forgetProfile'>;
   readonly onOpenSyncPanel?: () => void;
+  /** Persists the shelf chrome theme; never the editor or reader keys. */
+  readonly themeStorage?: LibraryThemeStorage | null;
 }
 
 export const CONTINUE_DISMISS_KEY = 'lightink.library.continueDismissed';
@@ -620,7 +684,51 @@ function isManagedBodyAvailable(item: LibraryItem): boolean {
   );
 }
 
+const LIBRARY_NAV_COLLAPSED_KEY = 'lightink.library.navCollapsed';
+
+function loadNavCollapsed(storage: LibraryThemeStorage | null | undefined): boolean {
+  try {
+    return storage?.getItem(LIBRARY_NAV_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveNavCollapsed(
+  storage: LibraryThemeStorage | null | undefined,
+  collapsed: boolean,
+): void {
+  try {
+    storage?.setItem(LIBRARY_NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Privacy mode / quota — keep the session value.
+  }
+}
+
 const SHELF_GROUPS: readonly ShelfGroup[] = ['all', 'in-progress', 'unread', 'text', 'comic'];
+
+// 内置智能组中与书库快捷过滤（SHELF_GROUPS）语义重复的项，不在智能分组导航中重复渲染。
+const SHELF_FILTER_SMART_IDS: ReadonlySet<string> = new Set([
+  'smart:in-progress',
+  'smart:unread',
+  'smart:text',
+  'smart:comic',
+]);
+
+function libraryThemeLabel(labels: Labels, id: LibraryThemeId): string {
+  switch (id) {
+    case 'paper':
+      return labels.themePaper;
+    case 'gallery':
+      return labels.themeGallery;
+    case 'moss':
+      return labels.themeMoss;
+    case 'walnut':
+      return labels.themeWalnut;
+    case 'ink':
+      return labels.themeInk;
+  }
+}
 
 function groupLabel(labels: Labels, group: ShelfGroup): string {
   switch (group) {
@@ -637,6 +745,72 @@ function groupLabel(labels: Labels, group: ShelfGroup): string {
   }
 }
 
+/** 导航图标：feather 风格，stroke=currentColor。分区标题用类型图标，筛选项用功能图标。 */
+const NAV_ICON_PATHS = {
+  search: ['M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z', 'M21 21l-4.35-4.35'],
+  chevron: ['M9 18l6-6-6-6'],
+  folder: [
+    'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+  ],
+  sparkles: [
+    'M12 3l1.4 4.2L18 8.6l-4.6 1.4L12 14l-1.4-4L6 8.6l4.6-1.4L12 3z',
+    'M18.5 13.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7.7-2.1z',
+  ],
+  source: ['M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z'],
+  settings: [
+    'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+    'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
+  ],
+  library: [
+    'M4 19.5A2.5 2.5 0 0 1 6.5 17H20',
+    'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+  ],
+  reading: ['M12 8v4l3 3', 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z'],
+  unread: [
+    'M22 12h-6l-2 3h-4l-2-3H2',
+    'M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
+  ],
+  text: [
+    'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z',
+    'M14 2v6h6',
+    'M16 13H8',
+    'M16 17H8',
+    'M10 9H8',
+  ],
+  comic: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  hash: ['M4 9h16', 'M4 15h16', 'M10 3L8 21', 'M16 3l-2 18'],
+} as const;
+
+const SHELF_NAV_ICONS: Record<ShelfGroup, readonly string[]> = {
+  all: NAV_ICON_PATHS.library,
+  'in-progress': NAV_ICON_PATHS.reading,
+  unread: NAV_ICON_PATHS.unread,
+  text: NAV_ICON_PATHS.text,
+  comic: NAV_ICON_PATHS.comic,
+};
+
+function createNavIcon(
+  doc: Document,
+  paths: readonly string[],
+  className = 'lightink-library-nav-icon',
+): SVGElement {
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', className);
+  for (const d of paths) {
+    const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
 export function createLibraryView(
   host: HTMLElement,
   deps: LibraryViewDependencies,
@@ -648,9 +822,15 @@ export function createLibraryView(
   root.dataset.workspaceHome = 'true';
   root.dataset.libraryNav = 'shelf';
   root.setAttribute('aria-label', LABELS[deps.getLocale()].library);
+  let currentLibraryTheme = loadLibraryTheme(deps.themeStorage);
+  applyLibraryTheme(root, currentLibraryTheme);
 
   const header = doc.createElement('header');
   header.className = 'lightink-library-header';
+  header.setAttribute('data-tauri-drag-region', '');
+  const brand = doc.createElement('div');
+  brand.className = 'lightink-library-brand';
+  brand.setAttribute('data-tauri-drag-region', '');
   const heading = doc.createElement('h1');
   const searchForm = doc.createElement('form');
   searchForm.className = 'lightink-library-search';
@@ -666,6 +846,8 @@ export function createLibraryView(
   searchClear.type = 'button';
   searchClear.hidden = true;
   searchForm.append(searchInput, searchClear, searchButton);
+  const headerMain = doc.createElement('div');
+  headerMain.className = 'lightink-library-header-main';
   const toolbar = doc.createElement('div');
   toolbar.className = 'lightink-library-toolbar';
   const importButton = button(doc, '');
@@ -674,14 +856,14 @@ export function createLibraryView(
   const syncButton = button(doc, '', 'lightink-library-sync-entry');
   const manageNavButton = button(doc, '', 'lightink-library-nav-item lightink-library-manage-entry');
   manageNavButton.dataset.libraryNavItem = 'manage';
-  const myBooksButton = button(doc, '', 'lightink-library-nav-item lightink-library-home');
-  myBooksButton.dataset.libraryNavItem = 'my-books';
-  header.append(heading, searchForm, toolbar);
+  headerMain.append(heading, searchForm, toolbar);
+  header.append(brand, headerMain);
 
   const body = doc.createElement('div');
   body.className = 'lightink-library-body';
   const navPane = doc.createElement('aside');
   navPane.className = 'lightink-library-nav';
+  navPane.id = 'lightink-library-nav';
   const groupPane = doc.createElement('section');
   groupPane.className = 'lightink-library-groups lightink-library-nav-section';
   groupPane.dataset.navSection = 'shelf';
@@ -689,27 +871,103 @@ export function createLibraryView(
   shelfHeading.className = 'lightink-library-nav-heading';
   const filterList = doc.createElement('nav');
   filterList.className = 'lightink-library-filter-list';
+  /** 分区筛选（搜索按钮 + 内嵌图标输入框）：分组 / 智能分组 / 书库源共用同一模式。 */
+  interface SectionFilterRefs {
+    toggle: HTMLButtonElement;
+    wrap: HTMLDivElement;
+    input: HTMLInputElement;
+    clear: HTMLButtonElement;
+  }
+  const createSectionFilter = (modifier: string): SectionFilterRefs => {
+    const toggle = button(
+      doc,
+      '',
+      `lightink-library-icon-button lightink-library-pane-action lightink-library-section-filter-toggle lightink-library-${modifier}-filter-toggle`,
+    );
+    toggle.appendChild(createNavIcon(doc, NAV_ICON_PATHS.search));
+    toggle.setAttribute('aria-expanded', 'false');
+    const wrap = doc.createElement('div');
+    wrap.className = 'lightink-library-section-filter-wrap';
+    wrap.hidden = true;
+    wrap.appendChild(createNavIcon(doc, NAV_ICON_PATHS.search));
+    const input = doc.createElement('input');
+    input.type = 'text';
+    input.className = `lightink-library-section-filter lightink-library-${modifier}-filter`;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    const clear = button(
+      doc,
+      '×',
+      'lightink-library-icon-button lightink-library-section-filter-clear',
+    );
+    clear.type = 'button';
+    clear.hidden = true;
+    wrap.append(input, clear);
+    return { toggle, wrap, input, clear };
+  };
+  const paneActions = (...items: HTMLElement[]): HTMLDivElement => {
+    const cluster = doc.createElement('div');
+    cluster.className = 'lightink-library-pane-actions';
+    cluster.append(...items);
+    return cluster;
+  };
+  const createSectionToggle = (section: string): HTMLButtonElement => {
+    const toggle = button(
+      doc,
+      '',
+      'lightink-library-icon-button lightink-library-collapse-toggle',
+    );
+    toggle.dataset.navToggle = section;
+    toggle.appendChild(
+      createNavIcon(doc, NAV_ICON_PATHS.chevron, 'lightink-library-collapse-chevron'),
+    );
+    return toggle;
+  };
+
   const groupHeader = doc.createElement('div');
   groupHeader.className = 'lightink-library-pane-heading';
+  const groupToggle = createSectionToggle('groups');
   const groupTitle = doc.createElement('h2');
-  const addGroupButton = button(doc, '+', 'lightink-library-icon-button lightink-library-group-add');
-  groupHeader.append(groupTitle, addGroupButton);
+  const groupFilter = createSectionFilter('group');
+  const addGroupButton = button(
+    doc,
+    '+',
+    'lightink-library-icon-button lightink-library-group-add lightink-library-pane-action',
+  );
+  groupHeader.append(
+    groupToggle,
+    createNavIcon(doc, NAV_ICON_PATHS.folder, 'lightink-library-section-icon'),
+    groupTitle,
+    paneActions(groupFilter.toggle, addGroupButton),
+  );
   const groupList = doc.createElement('nav');
   groupList.className = 'lightink-library-group-list';
+  const groupBody = doc.createElement('div');
+  groupBody.className = 'lightink-library-group-body';
+  groupBody.append(groupFilter.wrap, groupList);
   const smartGroupHeader = doc.createElement('div');
   smartGroupHeader.className = 'lightink-library-pane-heading';
+  const smartGroupToggle = createSectionToggle('smart-groups');
   const smartGroupTitle = doc.createElement('h3');
-  smartGroupHeader.append(smartGroupTitle);
+  const smartGroupFilter = createSectionFilter('smart-group');
+  smartGroupHeader.append(
+    smartGroupToggle,
+    createNavIcon(doc, NAV_ICON_PATHS.sparkles, 'lightink-library-section-icon'),
+    smartGroupTitle,
+    paneActions(smartGroupFilter.toggle),
+  );
   const smartGroupList = doc.createElement('nav');
   smartGroupList.className = 'lightink-library-smart-group-list';
+  const smartGroupBody = doc.createElement('div');
+  smartGroupBody.className = 'lightink-library-smart-group-body';
+  smartGroupBody.append(smartGroupFilter.wrap, smartGroupList);
   groupPane.append(
     shelfHeading,
-    myBooksButton,
     filterList,
     groupHeader,
-    groupList,
+    groupBody,
     smartGroupHeader,
-    smartGroupList,
+    smartGroupBody,
   );
   const groupOverlay = doc.createElement('div');
   groupOverlay.className = 'lightink-modal-overlay lightink-library-group-modal';
@@ -748,12 +1006,26 @@ export function createLibraryView(
   sourcePane.dataset.navSection = 'sources';
   const sourceHeader = doc.createElement('div');
   sourceHeader.className = 'lightink-library-pane-heading';
+  const sourceToggle = createSectionToggle('sources');
   const sourceTitle = doc.createElement('h2');
-  const addSourceButton = button(doc, '+', 'lightink-library-icon-button');
-  sourceHeader.append(sourceTitle, addSourceButton);
+  const sourceFilter = createSectionFilter('source');
+  const addSourceButton = button(
+    doc,
+    '+',
+    'lightink-library-icon-button lightink-library-pane-action',
+  );
+  sourceHeader.append(
+    sourceToggle,
+    createNavIcon(doc, NAV_ICON_PATHS.source, 'lightink-library-section-icon'),
+    sourceTitle,
+    paneActions(sourceFilter.toggle, addSourceButton),
+  );
   const sourceList = doc.createElement('nav');
   sourceList.className = 'lightink-library-source-list';
-  sourcePane.append(sourceHeader, sourceList);
+  const sourceBody = doc.createElement('div');
+  sourceBody.className = 'lightink-library-source-body';
+  sourceBody.append(sourceFilter.wrap, sourceList);
+  sourcePane.append(sourceHeader, sourceBody);
   const managePane = doc.createElement('section');
   managePane.className = 'lightink-library-manage lightink-library-nav-section';
   managePane.dataset.navSection = 'manage';
@@ -761,7 +1033,14 @@ export function createLibraryView(
   manageNav.className = 'lightink-library-manage-nav';
   manageNav.append(manageNavButton);
   managePane.append(manageNav);
-  navPane.append(groupPane, sourcePane, managePane);
+  const navCollapse = button(
+    doc,
+    '',
+    'lightink-library-icon-button lightink-library-nav-collapse',
+  );
+  navCollapse.appendChild(createNavIcon(doc, NAV_ICON_PATHS.chevron));
+  navCollapse.setAttribute('aria-controls', navPane.id);
+  navPane.append(groupPane, sourcePane, managePane, navCollapse);
   const sourceOverlay = doc.createElement('div');
   sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
   sourceOverlay.hidden = true;
@@ -829,9 +1108,20 @@ export function createLibraryView(
   detail.className = 'lightink-library-detail';
   detail.hidden = true;
   workArea.append(itemList, detail);
+  const appearance = doc.createElement('section');
+  appearance.className = 'lightink-library-appearance';
+  const appearanceTitle = doc.createElement('h2');
+  appearanceTitle.className = 'lightink-library-appearance-title';
+  const appearanceHint = doc.createElement('p');
+  appearanceHint.className = 'lightink-library-appearance-hint';
+  const themeSwatches = doc.createElement('div');
+  themeSwatches.className = 'lightink-library-theme-swatches';
+  themeSwatches.setAttribute('role', 'radiogroup');
+  appearance.append(appearanceTitle, appearanceHint, themeSwatches);
   const managePanel = doc.createElement('div');
   managePanel.className = 'lightink-library-manage-panel';
   managePanel.append(
+    appearance,
     importButton,
     clearCacheButton,
     cacheSummary,
@@ -860,6 +1150,8 @@ export function createLibraryView(
   root.append(header, body, membershipOverlay, groupOverlay, sourceOverlay);
   host.appendChild(root);
 
+  let navRailCollapsed = loadNavCollapsed(deps.themeStorage);
+  root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
   let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
   let selectedCustomGroupId: string | null = null;
@@ -890,8 +1182,38 @@ export function createLibraryView(
   let requestGeneration = 0;
   const activeOperations = new Set<AbortController>();
   const trail: Array<{ title: string; url?: string }> = [];
+  let groupListCollapsed = false;
+  let smartGroupListCollapsed = true;
+  let sourceListCollapsed = false;
+  let groupFilterQuery = '';
+  let smartGroupFilterQuery = '';
+  let sourceFilterQuery = '';
+
+  function setNavSectionCollapsed(
+    toggle: HTMLButtonElement,
+    list: HTMLElement,
+    collapsed: boolean,
+    sectionLabel: string,
+  ): void {
+    list.hidden = collapsed;
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.closest('.lightink-library-pane-heading')?.classList.toggle('is-collapsed', collapsed);
+    const action = collapsed ? labels().expand : labels().collapse;
+    toggle.title = `${action}: ${sectionLabel}`;
+    toggle.setAttribute('aria-label', `${action}: ${sectionLabel}`);
+  }
 
   const labels = (): Labels => LABELS[deps.getLocale()];
+  const setNavRailCollapsed = (collapsed: boolean, persist = true): void => {
+    navRailCollapsed = collapsed;
+    root.dataset.libraryNavCollapsed = collapsed ? 'true' : 'false';
+    navCollapse.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? labels().expandNav : labels().collapseNav;
+    navCollapse.title = label;
+    navCollapse.setAttribute('aria-label', label);
+    if (persist) saveNavCollapsed(deps.themeStorage, collapsed);
+  };
+  setNavRailCollapsed(navRailCollapsed, false);
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
   const catalogActive = (): boolean => activeSection === 'sources' && selectedSourceId !== null;
@@ -919,10 +1241,27 @@ export function createLibraryView(
       seen.add(group.id);
       return true;
     });
+    // 与书库快捷过滤重复的内置组不在智能分组中重复出现；同规则（如静态 EPUB 与动态
+    // format:epub）只保留先出现的一个。
+    const seenRules = new Set<string>();
+    smartGroups = smartGroups.filter((group) => {
+      if (SHELF_FILTER_SMART_IDS.has(group.id)) return false;
+      const ruleKey = `${group.rule.type}:${group.rule.value}`;
+      if (seenRules.has(ruleKey)) return false;
+      seenRules.add(ruleKey);
+      return true;
+    });
+    // 没有匹配书籍的空组不显示；书目尚未加载时保持现状，避免选中态被误清。
+    if (items.length > 0) {
+      smartGroups = smartGroups.filter((group) =>
+        items.some((display) => smartGroupMatches(display.item, group.rule, progressFor(display))),
+      );
+    }
     smartGroups.sort(
       (left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
     );
     if (
+      items.length > 0 &&
       selectedSmartGroupId !== null &&
       !smartGroups.some((group) => group.id === selectedSmartGroupId)
     ) {
@@ -1094,6 +1433,7 @@ export function createLibraryView(
   }
 
   function syncPageChrome(): void {
+    brand.textContent = labels().brand;
     const inCatalog = catalogActive();
     root.dataset.libraryNav =
       activeSection === 'sources' ? (inCatalog ? 'catalog' : 'sources') : activeSection;
@@ -1101,24 +1441,28 @@ export function createLibraryView(
     parkWorkspaceTravel();
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
     if (activeSection === 'shelf') {
-      heading.textContent = labels().myBooks;
+      heading.textContent = '';
+      heading.hidden = true;
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       content.replaceChildren(continueHost, status, itemList);
       detail.hidden = true;
       selected = null;
     } else if (activeSection === 'manage') {
+      heading.hidden = false;
       heading.textContent = labels().manage;
       toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
       content.replaceChildren(status, managePanel);
     } else if (inCatalog) {
+      heading.hidden = false;
       heading.textContent = selectedSource()?.title ?? labels().library;
       toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
       workArea.replaceChildren(itemList, detail);
       content.replaceChildren(navigation, status, workArea);
     } else {
+      heading.hidden = false;
       heading.textContent = labels().sources;
       toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
@@ -1305,6 +1649,26 @@ export function createLibraryView(
     }
   }
 
+  /** 分组筛选：保留名称命中的节点及其祖先链；查询为空时原样返回。 */
+  function filterGroupNodes(
+    nodes: readonly LibraryGroupNode[],
+    query: string,
+  ): LibraryGroupNode[] {
+    if (query === '') return [...nodes];
+    const lowered = query.toLowerCase();
+    const walk = (list: readonly LibraryGroupNode[]): LibraryGroupNode[] => {
+      const result: LibraryGroupNode[] = [];
+      for (const node of list) {
+        const children = walk(node.children);
+        if (node.group.name.toLowerCase().includes(lowered) || children.length > 0) {
+          result.push({ ...node, children });
+        }
+      }
+      return result;
+    };
+    return walk(nodes);
+  }
+
   function appendCustomGroupNode(node: LibraryGroupNode): void {
     const wrapper = doc.createElement('div');
     wrapper.className = 'lightink-library-custom-group';
@@ -1314,9 +1678,12 @@ export function createLibraryView(
     wrapper.draggable = true;
     const row = doc.createElement('div');
     row.className = 'lightink-library-custom-group-row';
-    const toggle = button(doc, node.children.length > 0 ? '>' : '', 'lightink-library-group-toggle');
+    const toggle = button(doc, '', 'lightink-library-group-toggle');
+    toggle.appendChild(
+      createNavIcon(doc, NAV_ICON_PATHS.chevron, 'lightink-library-collapse-chevron'),
+    );
     toggle.disabled = node.children.length === 0;
-    const expanded = expandedGroupIds.has(node.group.id);
+    const expanded = expandedGroupIds.has(node.group.id) || groupFilterQuery.trim() !== '';
     toggle.classList.toggle('is-expanded', expanded);
     toggle.setAttribute('aria-label', node.group.name);
     toggle.setAttribute('aria-expanded', String(expanded));
@@ -1327,6 +1694,7 @@ export function createLibraryView(
       renderGroups();
     });
     const choose = button(doc, node.group.name, 'lightink-library-group');
+    choose.prepend(createNavIcon(doc, NAV_ICON_PATHS.folder));
     choose.dataset.customGroupId = node.group.id;
     choose.dataset.libraryGroupId = node.group.id;
     const chosen = activeSection === 'shelf' && selectedCustomGroupId === node.group.id;
@@ -1458,6 +1826,17 @@ export function createLibraryView(
     }
   }
 
+  function syncSectionFilterLabels(refs: SectionFilterRefs, label: string): void {
+    refs.toggle.title = label;
+    refs.toggle.setAttribute('aria-label', label);
+    refs.toggle.setAttribute('aria-expanded', String(!refs.wrap.hidden));
+    refs.input.placeholder = label;
+    refs.input.setAttribute('aria-label', label);
+    refs.clear.title = labels().clear;
+    refs.clear.setAttribute('aria-label', labels().clear);
+    refs.clear.hidden = refs.input.value.trim() === '';
+  }
+
   function renderGroups(): void {
     filterList.replaceChildren();
     groupList.replaceChildren();
@@ -1466,18 +1845,19 @@ export function createLibraryView(
     groupPane.setAttribute('aria-label', labels().groups);
     addGroupButton.title = labels().newGroup;
     addGroupButton.setAttribute('aria-label', labels().newGroup);
-    myBooksButton.textContent = labels().myBooks;
+    setNavSectionCollapsed(groupToggle, groupBody, groupListCollapsed, labels().groups);
+    setNavSectionCollapsed(
+      smartGroupToggle,
+      smartGroupBody,
+      smartGroupListCollapsed,
+      labels().smartGroups,
+    );
+    syncSectionFilterLabels(groupFilter, labels().filterGroups);
     const shelfActive = activeSection === 'shelf';
-    const myBooksActive =
-      shelfActive &&
-      selectedGroup === 'all' &&
-      selectedCustomGroupId === null &&
-      selectedSmartGroupId === null;
-    myBooksButton.classList.toggle('is-active', myBooksActive);
-    if (myBooksActive) myBooksButton.setAttribute('aria-current', 'true');
-    else myBooksButton.removeAttribute('aria-current');
     for (const group of SHELF_GROUPS) {
       const row = button(doc, groupLabel(labels(), group), 'lightink-library-group');
+      row.prepend(createNavIcon(doc, SHELF_NAV_ICONS[group]));
+      row.title = groupLabel(labels(), group);
       row.dataset.shelfGroup = group;
       const active =
         shelfActive &&
@@ -1494,8 +1874,15 @@ export function createLibraryView(
       });
       filterList.appendChild(row);
     }
-    for (const node of customGroupTree(groups)) {
+    for (const node of filterGroupNodes(customGroupTree(groups), groupFilterQuery.trim())) {
       appendCustomGroupNode(node);
+    }
+    if (groupList.childElementCount === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-library-nav-empty';
+      empty.textContent =
+        groupFilterQuery.trim() === '' ? labels().emptyGroups : labels().noMatch;
+      groupList.appendChild(empty);
     }
     renderSmartGroups();
     renderGroupEditor();
@@ -1504,8 +1891,16 @@ export function createLibraryView(
   function renderSmartGroups(): void {
     smartGroupList.replaceChildren();
     smartGroupTitle.textContent = labels().smartGroups;
+    syncSectionFilterLabels(smartGroupFilter, labels().filterSmartGroups);
+    // 一个智能分组都没有（全部为空组被隐藏）时整个分区不占位
+    const sectionEmpty = smartGroups.length === 0;
+    smartGroupHeader.hidden = sectionEmpty;
+    smartGroupBody.hidden = sectionEmpty || smartGroupListCollapsed;
+    const query = smartGroupFilterQuery.trim().toLowerCase();
     for (const group of smartGroups) {
+      if (query !== '' && !smartGroupName(group).toLowerCase().includes(query)) continue;
       const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
+      item.prepend(createNavIcon(doc, NAV_ICON_PATHS.hash));
       item.dataset.smartGroupId = group.id;
       const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
       item.classList.toggle('is-active', active);
@@ -1517,23 +1912,39 @@ export function createLibraryView(
       });
       smartGroupList.appendChild(item);
     }
+    if (!sectionEmpty && smartGroupList.childElementCount === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-library-nav-empty';
+      empty.textContent = labels().noMatch;
+      smartGroupList.appendChild(empty);
+    }
   }
 
   function renderSources(): void {
     sourceList.replaceChildren();
-    if (sources.length === 0 && webDavProfile === null) {
+    setNavSectionCollapsed(sourceToggle, sourceBody, sourceListCollapsed, labels().sources);
+    syncSectionFilterLabels(sourceFilter, labels().filterSources);
+    const query = sourceFilterQuery.trim().toLowerCase();
+    const matches = (text: string): boolean => query === '' || text.toLowerCase().includes(query);
+    const visibleSources = sources.filter(
+      (source) => matches(source.title) || matches(source.url),
+    );
+    const showWebDav =
+      webDavProfile !== null && matches(webDavProfile.name) && matches(webDavProfile.url);
+    if (visibleSources.length === 0 && !showWebDav) {
       const empty = doc.createElement('p');
       empty.className = 'lightink-library-source-empty';
-      empty.textContent = labels().emptySources;
+      empty.textContent = query === '' ? labels().emptySources : labels().noMatch;
       sourceList.appendChild(empty);
       return;
     }
-    for (const source of sources) {
+    for (const source of visibleSources) {
       const row = doc.createElement('div');
       row.className = 'lightink-library-source-row';
       const stack = doc.createElement('div');
       stack.className = 'lightink-library-source-stack';
       const choose = button(doc, source.title, 'lightink-library-source');
+      choose.prepend(createNavIcon(doc, NAV_ICON_PATHS.source));
       choose.dataset.sourceId = source.id;
       choose.title = source.url;
       choose.classList.toggle('is-active', selectedSourceId === source.id);
@@ -1556,7 +1967,7 @@ export function createLibraryView(
       row.append(stack, edit, remove);
       sourceList.appendChild(row);
     }
-    if (webDavProfile !== null) {
+    if (showWebDav && webDavProfile !== null) {
       const profile = webDavProfile;
       const row = doc.createElement('div');
       row.className = 'lightink-library-source-row';
@@ -1564,6 +1975,7 @@ export function createLibraryView(
       const stack = doc.createElement('div');
       stack.className = 'lightink-library-source-stack';
       const choose = button(doc, profile.name, 'lightink-library-source');
+      choose.prepend(createNavIcon(doc, NAV_ICON_PATHS.source));
       choose.dataset.sourceKind = 'webdav';
       choose.title = profile.url;
       choose.addEventListener('click', () => {
@@ -2752,10 +3164,46 @@ export function createLibraryView(
     }
   }
 
+  function renderThemeSwatches(): void {
+    themeSwatches.replaceChildren();
+    themeSwatches.setAttribute('aria-label', labels().libraryTheme);
+    for (const theme of LIBRARY_THEMES) {
+      const swatch = button(doc, '', 'lightink-library-theme-swatch');
+      swatch.type = 'button';
+      swatch.dataset.libraryTheme = theme.id;
+      const preview = doc.createElement('span');
+      preview.className = 'lightink-library-theme-preview';
+      preview.style.backgroundColor = theme.page;
+      preview.style.borderColor = theme.border;
+      const accent = doc.createElement('i');
+      accent.style.backgroundColor = theme.accent;
+      preview.append(accent);
+      const name = doc.createElement('span');
+      name.className = 'lightink-library-theme-swatch-name';
+      name.textContent = libraryThemeLabel(labels(), theme.id);
+      swatch.append(preview, name);
+      swatch.title = name.textContent ?? '';
+      swatch.setAttribute('aria-label', name.textContent ?? '');
+      swatch.setAttribute('role', 'radio');
+      swatch.setAttribute('aria-checked', String(theme.id === currentLibraryTheme));
+      swatch.classList.toggle('is-active', theme.id === currentLibraryTheme);
+      swatch.addEventListener('click', () => {
+        currentLibraryTheme = saveLibraryTheme(deps.themeStorage, theme.id);
+        applyLibraryTheme(root, currentLibraryTheme);
+        renderThemeSwatches();
+        doc.dispatchEvent(new CustomEvent('lightink:library-theme', { detail: currentLibraryTheme }));
+      });
+      themeSwatches.append(swatch);
+    }
+  }
+
   function retranslate(): void {
     const l = labels();
     root.setAttribute('aria-label', l.library);
     manageNavButton.textContent = l.manage;
+    manageNavButton.prepend(createNavIcon(doc, NAV_ICON_PATHS.settings));
+    manageNavButton.title = l.manage;
+    manageNavButton.setAttribute('aria-label', l.manage);
     editorButton.textContent = l.markdownEditor;
     editorButton.title = l.markdownEditor;
     editorButton.setAttribute('aria-label', l.markdownEditor);
@@ -2778,6 +3226,13 @@ export function createLibraryView(
     addSourceButton.setAttribute('aria-label', l.addSource);
     previousButton.textContent = l.prev;
     nextButton.textContent = l.next;
+    appearanceTitle.textContent = l.appearance;
+    appearanceHint.textContent = l.libraryThemeHint;
+    setNavRailCollapsed(navRailCollapsed, false);
+    groupHeader.title = l.groups;
+    smartGroupHeader.title = l.smartGroups;
+    sourceHeader.title = l.sources;
+    renderThemeSwatches();
     syncPageChrome();
     renderGroups();
     renderSources();
@@ -2810,9 +3265,135 @@ export function createLibraryView(
     void search();
     syncSearchClear();
   });
+  navCollapse.addEventListener('click', () => {
+    setNavRailCollapsed(!navRailCollapsed);
+  });
   addGroupButton.addEventListener('click', () => {
     openGroupEditor({ kind: 'create' });
   });
+  groupToggle.addEventListener('click', () => {
+    groupListCollapsed = !groupListCollapsed;
+    setNavSectionCollapsed(groupToggle, groupBody, groupListCollapsed, labels().groups);
+  });
+  smartGroupToggle.addEventListener('click', () => {
+    smartGroupListCollapsed = !smartGroupListCollapsed;
+    setNavSectionCollapsed(
+      smartGroupToggle,
+      smartGroupBody,
+      smartGroupListCollapsed,
+      labels().smartGroups,
+    );
+  });
+  sourceToggle.addEventListener('click', () => {
+    sourceListCollapsed = !sourceListCollapsed;
+    setNavSectionCollapsed(sourceToggle, sourceBody, sourceListCollapsed, labels().sources);
+  });
+  // 整行可点（最佳实践）：点击分区标题行任意位置折叠/展开，+ 添加按钮除外。
+  for (const [heading, toggle] of [
+    [groupHeader, groupToggle],
+    [smartGroupHeader, smartGroupToggle],
+    [sourceHeader, sourceToggle],
+  ] as const) {
+    heading.addEventListener('click', (event) => {
+      if (navRailCollapsed) {
+        setNavRailCollapsed(false);
+        return;
+      }
+      if (event.target instanceof Element && event.target.closest('button') !== null) return;
+      toggle.click();
+    });
+  }
+  // 分区筛选：搜索按钮展开/收起输入框，输入即过滤，Esc 清空或收起。
+  // 分区折叠时输入框在 body 内不可见，先展开再显示筛选。
+  function attachSectionFilter(
+    refs: SectionFilterRefs,
+    apply: (query: string) => void,
+    expandSection?: () => void,
+  ): void {
+    refs.toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const show = refs.wrap.hidden;
+      if (show) expandSection?.();
+      refs.wrap.hidden = !show;
+      refs.toggle.setAttribute('aria-expanded', String(show));
+      refs.clear.hidden = refs.input.value.trim() === '';
+      if (show) {
+        refs.input.focus();
+        return;
+      }
+      if (refs.input.value !== '') {
+        refs.input.value = '';
+        refs.clear.hidden = true;
+        apply('');
+      }
+    });
+    refs.clear.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (refs.input.value === '') {
+        refs.wrap.hidden = true;
+        refs.toggle.setAttribute('aria-expanded', 'false');
+        refs.input.blur();
+        return;
+      }
+      refs.input.value = '';
+      refs.clear.hidden = true;
+      apply('');
+      refs.input.focus();
+    });
+    refs.input.addEventListener('input', () => {
+      refs.clear.hidden = refs.input.value.trim() === '';
+      apply(refs.input.value);
+    });
+    refs.input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (refs.input.value !== '') {
+        refs.input.value = '';
+        refs.clear.hidden = true;
+        apply('');
+        return;
+      }
+      refs.wrap.hidden = true;
+      refs.toggle.setAttribute('aria-expanded', 'false');
+    });
+  }
+  attachSectionFilter(
+    groupFilter,
+    (query) => {
+      groupFilterQuery = query;
+      renderGroups();
+    },
+    () => {
+      if (!groupListCollapsed) return;
+      groupListCollapsed = false;
+      setNavSectionCollapsed(groupToggle, groupBody, false, labels().groups);
+    },
+  );
+  attachSectionFilter(
+    smartGroupFilter,
+    (query) => {
+      smartGroupFilterQuery = query;
+      renderSmartGroups();
+    },
+    () => {
+      if (!smartGroupListCollapsed) return;
+      smartGroupListCollapsed = false;
+      setNavSectionCollapsed(smartGroupToggle, smartGroupBody, false, labels().smartGroups);
+    },
+  );
+  attachSectionFilter(
+    sourceFilter,
+    (query) => {
+      sourceFilterQuery = query;
+      renderSources();
+    },
+    () => {
+      if (!sourceListCollapsed) return;
+      sourceListCollapsed = false;
+      setNavSectionCollapsed(sourceToggle, sourceBody, false, labels().sources);
+    },
+  );
   groupEditor.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (groupEditorMode === null) return;
@@ -2906,12 +3487,6 @@ export function createLibraryView(
       event.preventDefault();
       closeSourceForm();
     }
-  });
-  myBooksButton.addEventListener('click', () => {
-    selectedGroup = 'all';
-    selectedCustomGroupId = null;
-    selectedSmartGroupId = null;
-    void activateShelf();
   });
   manageNavButton.addEventListener('click', () => void showManage());
   editorButton.addEventListener('click', () => deps.onEnterEditor?.());

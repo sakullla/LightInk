@@ -43,21 +43,26 @@ export function resolveDisplayTier(m: DisplayMetrics): DisplayTier {
     return 'compact';
   }
 
-  // For upscale tiers, use the larger of viewport/screen (maximized window).
-  const cssWidth = Math.max(viewport, screen, 0);
+  // Layout follows the live window. A restored 1400px pane on a 2K/4K
+  // monitor must stay hd — only a filled window may lift via physical px
+  // (4K@200% still reports CSS ~1920).
+  const fillsScreen = screen > 0 && viewport >= screen * 0.88;
+  const cssWidth = viewport;
+
+  const physical = fillsScreen ? physicalWidth : 0;
 
   // 2) >4K: 5K (~5120), 8K, or ultra-wide high-DPI.
-  if (cssWidth >= 4400 || physicalWidth >= 5000) {
+  if (cssWidth >= 4400 || physical >= 5000) {
     return 'xuhd';
   }
   // 3) 4K class: native 4K, or high-DPR panel with large physical width.
   //    (4K@200% → CSS ~1920 + physical 3840 → uhd, not hd.)
-  if (cssWidth >= 3000 || physicalWidth >= 3400) {
+  if (cssWidth >= 3000 || physical >= 3400) {
     return 'uhd';
   }
   // 4) 2K / large laptop: 1440p (2560), ultrawide, 4K@~150% CSS ~2560.
   //    Keep 1920 (classic 1080p@100%) as hd — floor is 2200, not 1600.
-  if (cssWidth >= 2200 || physicalWidth >= 2500) {
+  if (cssWidth >= 2200 || physical >= 2500) {
     return 'qhd';
   }
   return 'hd';
@@ -102,6 +107,7 @@ export function installDisplayScale(
     refresh();
   };
   win.addEventListener('resize', onResize);
+  win.visualViewport?.addEventListener('resize', onResize);
 
   // Chromium fires this when OS display scale changes (not universally available).
   const dprMql =
@@ -120,6 +126,7 @@ export function installDisplayScale(
     refresh,
     dispose(): void {
       win.removeEventListener('resize', onResize);
+      win.visualViewport?.removeEventListener('resize', onResize);
       dprMql?.removeEventListener?.('change', onDpr);
     },
   };

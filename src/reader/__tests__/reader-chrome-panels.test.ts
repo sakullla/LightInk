@@ -103,6 +103,32 @@ describe('reader chrome panels', () => {
     expect(panel.getAttribute('aria-modal')).toBe('true');
   });
 
+  it('offers a status bar show/hide choice that patches typography', () => {
+    const panel = document.createElement('div');
+    const onTypography = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      { ...DEFAULT_READER_TYPOGRAPHY },
+      'white',
+      defaultReaderChromePanelCopy(),
+      onTypography,
+      vi.fn(),
+      vi.fn(),
+    );
+    const sectionEl = panel.querySelector('[data-type-section="status-bar"]');
+    expect(sectionEl).not.toBeNull();
+    const hideChoice = sectionEl!.querySelector<HTMLButtonElement>(
+      '[data-status-bar-mode="hide"]',
+    )!;
+    const showChoice = sectionEl!.querySelector<HTMLButtonElement>(
+      '[data-status-bar-mode="show"]',
+    )!;
+    expect(showChoice.getAttribute('aria-pressed')).toBe('true');
+    expect(hideChoice.getAttribute('aria-pressed')).toBe('false');
+    hideChoice.click();
+    expect(onTypography).toHaveBeenCalledWith({ hideStatusBar: true });
+  });
+
   it('anchors a sheet under its toolbar button instead of the far edge', () => {
     const host = document.createElement('div');
     const panel = document.createElement('div');

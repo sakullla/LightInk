@@ -127,6 +127,47 @@ describe('sync panel', () => {
     expect(dialog.textContent).toContain('MOVE, If-None-Match');
   });
 
+  it('shows only the credential fields that match the selected sign-in method', async () => {
+    showSyncPanel(createDeps());
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const auth = dialog.querySelector('select')!;
+    const hint = dialog.querySelector('.lightink-sync-auth-hint')!;
+    const fields = dialog.querySelectorAll<HTMLInputElement>('.lightink-sync-field input');
+    const username = fields[2]!.parentElement!;
+    const password = fields[3]!.parentElement!;
+    const token = fields[4]!.parentElement!;
+
+    expect(auth.value).toBe('basic');
+    expect(hint.textContent).toContain('应用密码');
+    expect(username.hidden).toBe(false);
+    expect(password.hidden).toBe(false);
+    expect(token.hidden).toBe(true);
+
+    auth.value = 'bearer';
+    auth.dispatchEvent(new Event('change'));
+    expect(hint.textContent).toContain('访问令牌');
+    expect(username.hidden).toBe(true);
+    expect(password.hidden).toBe(true);
+    expect(token.hidden).toBe(false);
+    button(dialog, '关闭').click();
+  });
+
+  it('groups connection, status, and danger actions into separate sections', async () => {
+    const panelDeps = createDeps();
+    showSyncPanel({ ...panelDeps, migration: { preview: vi.fn(async () => ({ entries: [] })), apply: vi.fn(async () => ({ migrated: 0, duplicates: 0, failed: [], aliases: [] })) } });
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const titles = [...dialog.querySelectorAll('.lightink-sync-section-title')].map((el) => el.textContent);
+    expect(titles).toEqual(['连接', '状态', '冲突', '管理旧书', '危险操作']);
+    expect(dialog.querySelector('.lightink-sync-form-actions')?.textContent).toContain('保存配置');
+    expect(dialog.querySelector('.lightink-sync-status-actions')?.textContent).toContain('立即同步');
+    expect(dialog.querySelector('.lightink-sync-section--danger')?.textContent).toContain('忘记目标');
+    expect(dialog.querySelector('.lightink-sync-footer')?.textContent).toContain('关闭');
+    expect(dialog.querySelector('.lightink-sync-status-state')?.textContent).toBe('就绪');
+    button(dialog, '关闭').click();
+  });
+
   it('keeps the configured profile visible when forgetting it fails', async () => {
     const panelDeps = createDeps();
     panelDeps.webdav.getProfile = vi.fn(async () => ({

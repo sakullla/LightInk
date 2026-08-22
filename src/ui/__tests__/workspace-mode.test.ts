@@ -296,6 +296,10 @@ describe('applyWorkspaceSurface', () => {
     expect(root.dataset.workspaceSurface).toBe('reader');
     expect(classNames.has('is-workspace-reader')).toBe(true);
     expect(classNames.has('is-workspace-shelf')).toBe(false);
+
+    classNames.add('is-reader-chrome-revealed');
+    applyWorkspaceSurface(root, { mode: 'reader', surface: 'shelf' });
+    expect(classNames.has('is-reader-chrome-revealed')).toBe(false);
   });
 });
 

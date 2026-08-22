@@ -153,6 +153,21 @@ function defaultCancel(id: number): void {
   }
 }
 
+function isWindowTitlebarHot(): boolean {
+  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
+    return false;
+  }
+  const bar = document.getElementById('lightink-window-titlebar');
+  if (bar === null || typeof bar.matches !== 'function') {
+    return false;
+  }
+  try {
+    return bar.matches(':hover, :focus-within');
+  } catch {
+    return false;
+  }
+}
+
 function applyOverlayLayout(element: HTMLElement): void {
   // Sticky to the visible scrollport so the bar stays on screen in scroll
   // mode. Height 0 keeps it out of flow (reveal cannot shift the page).
@@ -237,6 +252,7 @@ export function createReaderChrome(
   bar.className = 'lightink-reader-chrome-bar';
   bar.setAttribute('role', 'toolbar');
   bar.setAttribute('aria-label', labels.backToShelf);
+  bar.setAttribute('data-tauri-drag-region', '');
   applyBarLayout(bar);
 
   const makeButton = (action: ReaderChromeAction, label: string): HTMLButtonElement => {
@@ -257,7 +273,11 @@ export function createReaderChrome(
   const tocButton = makeButton('toc', labels.toc);
   const typographyButton = makeButton('typography', labels.typography);
   const annotationsButton = makeButton('annotations', labels.annotations);
-  bar.append(backButton, tocButton, typographyButton, annotationsButton);
+  const drag = document.createElement('div');
+  drag.className = 'lightink-reader-chrome-drag';
+  drag.setAttribute('data-tauri-drag-region', '');
+  drag.setAttribute('aria-hidden', 'true');
+  bar.append(backButton, tocButton, typographyButton, annotationsButton, drag);
   element.appendChild(bar);
 
   let revealed = false;
@@ -290,13 +310,26 @@ export function createReaderChrome(
   };
 
   const scheduleHide = (): void => {
-    if (destroyed || overlayOpen() || pointerInsideBar || !revealed || stayRevealed()) {
+    if (
+      destroyed ||
+      overlayOpen() ||
+      pointerInsideBar ||
+      !revealed ||
+      stayRevealed() ||
+      isWindowTitlebarHot()
+    ) {
       return;
     }
     clearHideTimer();
     hideTimer = schedule(() => {
       hideTimer = null;
-      if (destroyed || overlayOpen() || pointerInsideBar || stayRevealed()) {
+      if (
+        destroyed ||
+        overlayOpen() ||
+        pointerInsideBar ||
+        stayRevealed() ||
+        isWindowTitlebarHot()
+      ) {
         return;
       }
       revealed = false;

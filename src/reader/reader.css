@@ -66,11 +66,20 @@
   align-items: center;
   gap: 0.15rem;
   min-height: 2.25rem;
-  padding: 0.25rem 0.4rem;
+  padding: 0.25rem calc(var(--lightink-titlebar-caption, 32px) * 3 + 1.25rem) 0.25rem 0.4rem;
   background: var(--lightink-bg-elevated);
   color: var(--lightink-fg);
   border-bottom: 1px solid var(--lightink-border);
   font-size: 0.78rem;
+  -webkit-app-region: drag;
+}
+
+.lightink-reader-chrome-drag {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 1.5rem;
+  min-height: 100%;
+  -webkit-app-region: drag;
 }
 
 .lightink-reader-chrome-action {
@@ -84,6 +93,7 @@
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .lightink-reader-chrome-action:hover {

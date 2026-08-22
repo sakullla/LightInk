@@ -124,6 +124,9 @@ export function applyWorkspaceSurface(
   root.classList.toggle('is-workspace-editor', snapshot.surface === 'editor');
   root.classList.toggle('is-workspace-shelf', snapshot.surface === 'shelf');
   root.classList.toggle('is-workspace-reader', snapshot.surface === 'reader');
+  if (snapshot.surface !== 'reader') {
+    root.classList.toggle('is-reader-chrome-revealed', false);
+  }
 }
 
 /**

@@ -8,6 +8,11 @@ export interface AppWindowLike {
   setFullscreen(fullscreen: boolean): Promise<void>;
   setDecorations?(decorations: boolean): Promise<void>;
   setTheme?(theme: 'light' | 'dark' | null): Promise<void>;
+  minimize?(): Promise<void>;
+  toggleMaximize?(): Promise<void>;
+  close?(): Promise<void>;
+  isMaximized?(): Promise<boolean>;
+  onResized?(handler: () => void): Promise<(() => void) | void>;
 }
 
 /** Resolve the current Tauri webview/window, or null outside Tauri. */

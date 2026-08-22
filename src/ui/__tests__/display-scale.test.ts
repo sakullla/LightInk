@@ -114,6 +114,23 @@ describe('resolveDisplayTier', () => {
     ).toBe('xuhd');
   });
 
+  it('does not inherit 2K/4K gutters from a restored window on a large screen', () => {
+    expect(
+      resolveDisplayTier({
+        innerWidth: 1400,
+        screenWidth: 2560,
+        devicePixelRatio: 1,
+      }),
+    ).toBe('hd');
+    expect(
+      resolveDisplayTier({
+        innerWidth: 2560,
+        screenWidth: 2560,
+        devicePixelRatio: 1,
+      }),
+    ).toBe('qhd');
+  });
+
   it('treats invalid dpr as 1', () => {
     expect(
       resolveDisplayTier({

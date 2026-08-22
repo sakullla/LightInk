@@ -174,6 +174,19 @@ function smartGroupButton(host: ParentNode, name: string): HTMLButtonElement {
   return fallback;
 }
 
+function navSectionToggle(host: ParentNode, section: string): HTMLButtonElement {
+  const toggle = host.querySelector(`[data-nav-toggle="${section}"]`);
+  if (!(toggle instanceof HTMLButtonElement)) {
+    throw new Error(`nav section toggle not found: ${section}`);
+  }
+  return toggle;
+}
+
+function expandNavSection(host: ParentNode, section: string): void {
+  const toggle = navSectionToggle(host, section);
+  if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+}
+
 
 function isShown(el: Element | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -200,13 +213,6 @@ function groupButton(host: ParentNode, label: string): HTMLButtonElement {
     (button) => button.textContent === label && isShown(button),
   );
   if (within instanceof HTMLButtonElement) return within;
-  // 新导航结构下「全部」由「我的书」导航项承载
-  if (label === '全部') {
-    const home = Array.from(host.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === '我的书' && isShown(button),
-    );
-    if (home instanceof HTMLButtonElement) return home;
-  }
   return shownButtonWithText(host, label);
 }
 
@@ -457,16 +463,11 @@ async function openManage(host: HTMLElement): Promise<void> {
 }
 
 async function openMyBooks(host: HTMLElement): Promise<void> {
+  // 「全部」快捷过滤即书库主页（原独立「我的书」导航项已与其合并）
   const navEntry = Array.from(host.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === '我的书' && isShown(button),
+    (button) => button.textContent?.trim() === '全部' && isShown(button),
   );
-  const home = host.querySelector<HTMLButtonElement>('.lightink-library-home');
-  const target =
-    navEntry instanceof HTMLButtonElement
-      ? navEntry
-      : home instanceof HTMLButtonElement && isShown(home)
-        ? home
-        : undefined;
+  const target = navEntry instanceof HTMLButtonElement ? navEntry : undefined;
   if (target === undefined) {
     // 已停留在封面墙时无需再导航
     if (host.querySelector('.lightink-library-item--cover') !== null) return;
@@ -538,7 +539,7 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
+    expect(navItemActive(navButton(host, '全部'))).toBe(true);
     const unreadRow = itemRow(host, unread.id);
     const comicRow = itemRow(host, comic.id);
     expect(unreadRow.textContent).toContain('本地小说');
@@ -569,7 +570,7 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
+    expect(navItemActive(navButton(host, '全部'))).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
     expect(isShown(host.querySelector('[aria-label="关闭书库"]'))).toBe(false);
@@ -589,6 +590,10 @@ describe('LibraryView my-books home', () => {
     // 书库区的分组树随首屏导航可见
     expect(isShown(host.querySelector('.lightink-library-groups'))).toBe(true);
     expect(host.querySelector('.lightink-library-search')).not.toBeNull();
+    const shelfTitle = host.querySelector<HTMLHeadingElement>('.lightink-library-header h1');
+    expect(shelfTitle?.hidden).toBe(true);
+    expect(host.textContent).not.toContain('我的书');
+    expect(host.querySelector('.lightink-library-brand')?.textContent).toBe('轻墨');
     view.destroy();
   });
 
@@ -1028,7 +1033,7 @@ describe('LibraryView my-books home', () => {
 });
 
 describe('LibraryView navigation', () => {
-  it('presents a persistent left navigation with 书库 / 书源 / 管理 and defaults to 我的书', async () => {
+  it('presents a persistent left navigation with 书库 / 书源 / 管理 and defaults to 全部', async () => {
     const deps = dependencies();
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1037,13 +1042,13 @@ describe('LibraryView navigation', () => {
 
     const nav = libraryNav(host);
     expect(isShown(nav)).toBe(true);
-    expect(nav.textContent).toContain('我的书');
+    expect(nav.textContent).toContain('全部');
     expect(nav.textContent).toMatch(/书源|书库源/);
     expect(nav.textContent).toContain('管理');
     // 分组树迁入书库区导航
     expect(nav.querySelector('.lightink-library-groups')).not.toBeNull();
-    // 默认选中「我的书」，内容区呈现封面墙
-    expect(navItemActive(navButton(host, '我的书'))).toBe(true);
+    // 默认选中「全部」（书库主页），内容区呈现封面墙
+    expect(navItemActive(navButton(host, '全部'))).toBe(true);
     expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
     view.destroy();
   });
@@ -1561,6 +1566,73 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(css).toMatch(
       /\.lightink-library-cover-wall\s*\{[^}]*display:\s*grid[^}]*grid-template-columns/,
     );
+    // 导航分区不收缩（防止内容溢出与后续分区重叠），由导航容器整体滚动
+    const navSectionRule = css.match(/\.lightink-library-nav-section\s*\{([^}]*)\}/);
+    expect(navSectionRule).not.toBeNull();
+    expect(navSectionRule![1]).toMatch(/flex:\s*0 0 auto/);
+    const navRule = css.match(/\.lightink-library-nav\s*\{([^}]*)\}/);
+    expect(navRule).not.toBeNull();
+    expect(navRule![1]).toMatch(/overflow-y:\s*auto/);
+    view.destroy();
+  });
+
+  it('keeps the brand word on the window edge when the nav is collapsed', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\[data-library-nav-collapsed='true'\] \.lightink-library-header\s*\{[^}]*display:\s*flex/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav-collapsed='true'\] \.lightink-library-brand\s*\{[^}]*font-size:\s*15px/,
+    );
+    expect(css).not.toMatch(
+      /\[data-library-nav-collapsed='true'\] \.lightink-library-brand\s*\{[^}]*font-size:\s*13px/,
+    );
+  });
+
+  it('keeps the shelf search compact in the titlebar row', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-library-header\s*\{[^}]*align-items:\s*center/,
+    );
+    expect(css).toMatch(/\.lightink-library-search\s*\{[^}]*height:\s*32px/);
+    expect(css).toMatch(/\.lightink-library-search\s*\{[^}]*width:\s*var\(--lightink-library-search-max/);
+    expect(css).toMatch(
+      /\.lightink-library-search input(?:,|\s|,)[\s\S]*?min-height:\s*0/,
+    );
+  });
+
+  it('applies an independent shelf theme and can switch it without the editor key', async () => {
+    const store: Record<string, string> = {};
+    const themeStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ themeStorage }));
+    await view.show();
+    await openManage(host);
+
+    const root = libraryRoot(host);
+    expect(root.dataset.libraryTheme).toBe('gallery');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#e8edf2');
+    expect(host.querySelector('.lightink-library-header .lightink-library-theme-swatches')).toBeNull();
+    expect(host.querySelector('.lightink-library-manage-panel .lightink-library-appearance')).toBeTruthy();
+    expect(host.querySelector('.lightink-library-appearance-hint')?.textContent).toContain('书架');
+    const swatches = host.querySelectorAll<HTMLButtonElement>(
+      '.lightink-library-manage-panel .lightink-library-theme-swatch',
+    );
+    expect(swatches).toHaveLength(5);
+    const ink = [...swatches].find((button) => button.dataset.libraryTheme === 'ink');
+    expect(ink).toBeTruthy();
+    ink!.click();
+    expect(root.dataset.libraryTheme).toBe('ink');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#14161a');
+    expect(store['lightink.library.theme']).toBe('ink');
+    expect(store['lightink.theme']).toBeUndefined();
+    expect(store['lightink.reader.theme']).toBeUndefined();
     view.destroy();
   });
 
@@ -1577,6 +1649,34 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(rootRule![1]).toMatch(/color:\s*var\(--lightink-fg/);
     expect(css).toMatch(/var\(--lightink-(muted|border|accent)/);
     expect(css).toMatch(/\.lightink-library-cover\s*\{[^}]*var\(--lightink-/);
+  });
+
+  it('scales the shelf and manage panel across compact / hd / qhd / uhd / xuhd', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    for (const tier of ['compact', 'hd', 'qhd', 'uhd', 'xuhd']) {
+      expect(css).toMatch(
+        new RegExp(
+          `html\\[data-display=['"]${tier}['"]\\]\\s*\\.lightink-library\\s*\\{[^}]*--lightink-library-manage-max`,
+        ),
+      );
+      expect(css).toMatch(
+        new RegExp(
+          `html\\[data-display=['"]${tier}['"]\\]\\s*\\.lightink-library\\s*\\{[^}]*--lightink-library-cover-min`,
+        ),
+      );
+      expect(css).toMatch(
+        new RegExp(
+          `html\\[data-display=['"]${tier}['"]\\]\\s*\\.lightink-library\\s*\\{[^}]*--lightink-library-nav-width`,
+        ),
+      );
+    }
+    expect(css).toMatch(/max-width:\s*var\(--lightink-library-manage-max\)/);
+    expect(css).toMatch(/@container\s+library-content\s*\(min-width:\s*52rem\)/);
+    expect(css).toMatch(
+      /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)\)/,
+    );
+    expect(css).not.toMatch(/--lightink-measure/);
+    expect(css).not.toMatch(/--lightink-page-pad/);
   });
 
   it('does not project progress onto unopened OPDS catalog entries', async () => {
@@ -1916,13 +2016,14 @@ describe('LibraryView shelf collections', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    // 智能分组作为只读导航项呈现，选中即过滤右侧内容区
-    smartGroupButton(host, '文字书').click();
+    // 智能分组默认折叠，展开后作为只读导航项呈现，选中即过滤右侧内容区
+    expandNavSection(host, 'smart-groups');
+    smartGroupButton(host, 'EPUB').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
 
-    const comicGroup = smartGroupButton(host, '漫画');
+    const comicGroup = smartGroupButton(host, 'CBZ');
     comicGroup.click();
     await settle();
     expect(itemRow(host, comic.id)).toBeTruthy();
@@ -1935,6 +2036,262 @@ describe('LibraryView shelf collections', () => {
     );
     await settle();
     expect(document.querySelector('.lightink-context-menu')).toBeNull();
+    view.destroy();
+  });
+
+  it('hides empty smart groups, shelf-filter duplicates, and duplicate rules', async () => {
+    const novel = seriesNovel();
+    const comic = comicItem({
+      id: 'local:/ebook/hell-comic.cbz',
+      title: '地狱漫画',
+      localPath: '/ebook/hell-comic.cbz',
+    });
+    const { deps } = collectionDependencies({
+      items: [novel, comic],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    expandNavSection(host, 'smart-groups');
+
+    const smartItems = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('.lightink-library-smart-group'),
+    ).filter((item) => isShown(item));
+    const names = smartItems.map((item) => item.textContent?.trim());
+    // 与书库快捷过滤重复的内置组不再出现在智能分组中
+    expect(names).not.toContain('在读');
+    expect(names).not.toContain('未读');
+    expect(names).not.toContain('文字书');
+    expect(names).not.toContain('漫画');
+    // 零匹配的空组不显示（无 PDF、无受管/远程书籍）
+    expect(names).not.toContain('PDF');
+    expect(names).not.toContain('受管书籍');
+    expect(names).not.toContain('远程书籍');
+    // 静态 EPUB 与动态 format:epub 同规则只保留一个
+    expect(names.filter((name) => name === 'EPUB')).toHaveLength(1);
+    expect(names).toContain('CBZ');
+    view.destroy();
+  });
+
+  it('renders collapsible nav sections as disclosures with type icons', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const groupHeading = host.querySelector('.lightink-library-groups .lightink-library-pane-heading');
+    const smartHeading = host.querySelector(
+      '.lightink-library-smart-group-body',
+    )?.previousElementSibling;
+    const sourceHeading = host.querySelector('.lightink-library-sources .lightink-library-pane-heading');
+    expect(groupHeading?.querySelector('.lightink-library-section-icon')).toBeTruthy();
+    expect(groupHeading?.querySelector('.lightink-library-collapse-chevron')).toBeTruthy();
+    expect(smartHeading?.querySelector('.lightink-library-section-icon')).toBeTruthy();
+    expect(sourceHeading?.querySelector('.lightink-library-section-icon')).toBeTruthy();
+    expect(host.querySelector('[data-shelf-group="all"] .lightink-library-nav-icon')).toBeTruthy();
+    expect(host.querySelector('.lightink-library-manage-entry .lightink-library-nav-icon')).toBeTruthy();
+    expect(groupHeading?.classList.contains('is-collapsed')).toBe(false);
+    expect(sourceHeading?.classList.contains('is-collapsed')).toBe(false);
+    view.destroy();
+  });
+
+  it('collapses the sidebar to an icon rail and remembers the choice', async () => {
+    const store: Record<string, string> = {};
+    const themeStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ themeStorage }));
+    await view.show();
+
+    const root = libraryRoot(host);
+    const toggle = host.querySelector<HTMLButtonElement>('.lightink-library-nav-collapse')!;
+    expect(root.dataset.libraryNavCollapsed).toBe('false');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-controls')).toBe('lightink-library-nav');
+
+    toggle.click();
+    expect(root.dataset.libraryNavCollapsed).toBe('true');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(store['lightink.library.navCollapsed']).toBe('1');
+    expect(host.querySelector('[data-shelf-group="all"]')).toBeTruthy();
+
+    view.destroy();
+    const nextHost = document.createElement('div');
+    document.body.appendChild(nextHost);
+    const next = createLibraryView(nextHost, dependencies({ themeStorage }));
+    await next.show();
+    expect(libraryRoot(nextHost).dataset.libraryNavCollapsed).toBe('true');
+    next.destroy();
+  });
+
+  it('collapses and expands nav sections, with smart groups collapsed by default', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const smartBody = host.querySelector('.lightink-library-smart-group-body');
+    const groupBodyEl = host.querySelector('.lightink-library-group-body');
+    const sourceBodyEl = host.querySelector('.lightink-library-source-body');
+    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
+    expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(false);
+    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(false);
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
+
+    // 展开智能分组后内容可见；再次点击折叠
+    navSectionToggle(host, 'smart-groups').click();
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
+    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(false);
+    expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
+    navSectionToggle(host, 'smart-groups').click();
+    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
+
+    // 分组与书库源分区同样可折叠
+    navSectionToggle(host, 'groups').click();
+    expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(true);
+    navSectionToggle(host, 'sources').click();
+    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(true);
+    view.destroy();
+  });
+
+  it('filters the collection tree by name from the section filter input', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '科幻小说' });
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '推理小说' });
+    expect(collectionButton(host, '科幻小说')).toBeTruthy();
+    expect(collectionButton(host, '推理小说')).toBeTruthy();
+
+    const filterToggle = host.querySelector<HTMLButtonElement>(
+      '.lightink-library-group-filter-toggle',
+    )!;
+    const filter = host.querySelector<HTMLInputElement>('.lightink-library-group-filter')!;
+    const filterWrap = host.querySelector<HTMLElement>('.lightink-library-section-filter-wrap')!;
+    // 筛选输入框默认收起，由分区标题行的搜索按钮展开
+    expect(filterWrap.hidden).toBe(true);
+    filterToggle.click();
+    expect(filterWrap.hidden).toBe(false);
+    expect(filter.placeholder).toBe('筛选分组…');
+    filter.value = '科幻';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(collectionButton(host, '科幻小说')).toBeTruthy();
+    expect(() => collectionButton(host, '推理小说')).toThrow(/collection button not found/);
+
+    const clear = filterWrap.querySelector<HTMLButtonElement>(
+      '.lightink-library-section-filter-clear',
+    )!;
+    expect(clear.hidden).toBe(false);
+    clear.click();
+    await settle();
+    expect(filter.value).toBe('');
+    expect(clear.hidden).toBe(true);
+    expect(collectionButton(host, '科幻小说')).toBeTruthy();
+    expect(collectionButton(host, '推理小说')).toBeTruthy();
+
+    filter.value = '科幻';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(() => collectionButton(host, '推理小说')).toThrow(/collection button not found/);
+
+    // 清空后完整分组树恢复
+    filter.value = '';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(collectionButton(host, '科幻小说')).toBeTruthy();
+    expect(collectionButton(host, '推理小说')).toBeTruthy();
+    view.destroy();
+  });
+
+  it('expands a collapsed smart-group section when the filter button is clicked', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({
+      items: [novel],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const smartBody = host.querySelector<HTMLElement>('.lightink-library-smart-group-body')!;
+    const filterWrap = host.querySelector<HTMLElement>(
+      '.lightink-library-smart-group-body .lightink-library-section-filter-wrap',
+    )!;
+    expect(smartBody.hidden).toBe(true);
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
+
+    host.querySelector<HTMLButtonElement>('.lightink-library-smart-group-filter-toggle')!.click();
+    expect(smartBody.hidden).toBe(false);
+    expect(filterWrap.hidden).toBe(false);
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
+    view.destroy();
+  });
+
+  it('filters smart groups by name from the section filter input', async () => {
+    const novel = seriesNovel();
+    const comic = comicItem({
+      id: 'local:/ebook/hell-comic.cbz',
+      title: '地狱漫画',
+      localPath: '/ebook/hell-comic.cbz',
+    });
+    const { deps } = collectionDependencies({
+      items: [novel, comic],
+      seriesStemByItemId: { [novel.id]: seriesStem },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    expandNavSection(host, 'smart-groups');
+    expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
+    expect(smartGroupButton(host, 'CBZ')).toBeTruthy();
+
+    const toggle = host.querySelector<HTMLButtonElement>(
+      '.lightink-library-smart-group-filter-toggle',
+    )!;
+    toggle.click();
+    const input = host.querySelector<HTMLInputElement>(
+      '.lightink-library-smart-group-filter',
+    )!;
+    expect(input.placeholder).toBe('筛选智能分组…');
+    input.value = 'EP';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
+    expect(() => smartGroupButton(host, 'CBZ')).toThrow(/smart group nav item not found/);
+
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(smartGroupButton(host, 'CBZ')).toBeTruthy();
     view.destroy();
   });
 

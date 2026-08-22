@@ -130,6 +130,14 @@ describe('createReaderChrome reveal', () => {
     expect(buttons).toHaveLength(4);
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
+    const bar = host.querySelector('.lightink-reader-chrome-bar');
+    expect(bar?.getAttribute('data-tauri-drag-region')).toBe('');
+    expect(host.querySelector('.lightink-reader-chrome-drag')?.getAttribute('data-tauri-drag-region')).toBe(
+      '',
+    );
+    for (const button of buttons) {
+      expect(button.hasAttribute('data-tauri-drag-region')).toBe(false);
+    }
     for (const button of buttons) {
       expect(button.hidden).toBe(false);
       expect((button.textContent ?? '').trim().length).toBeGreaterThan(0);
@@ -296,6 +304,20 @@ describe('createReaderChrome auto-hide', () => {
     expect(chrome.isRevealed()).toBe(false);
 
     overlay.open = true;
+    chrome.reveal();
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
+    expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('stays revealed while the window titlebar is hovered', () => {
+    vi.useFakeTimers();
+    const titlebar = document.createElement('div');
+    titlebar.id = 'lightink-window-titlebar';
+    titlebar.matches = ((selector: string) =>
+      selector.includes(':hover')) as typeof titlebar.matches;
+    document.body.append(titlebar);
+    const { chrome } = mount();
+
     chrome.reveal();
     vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
     expect(chrome.isRevealed()).toBe(true);

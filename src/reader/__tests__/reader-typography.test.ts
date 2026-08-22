@@ -69,6 +69,8 @@ describe('parseReaderTypography', () => {
       fontScaleStep: 1.25,
       lineHeight: 1.5,
       measureRem: 28,
+      // 旧偏好没有 hideStatusBar 字段，解析后默认 false（向后兼容）
+      hideStatusBar: false,
     });
     expect(
       parseReaderTypography(
@@ -100,6 +102,7 @@ describe('load/saveReaderTypography', () => {
       fontScaleStep: 1.25,
       lineHeight: 1.5,
       measureRem: 18,
+      hideStatusBar: false,
     };
     saveReaderTypography(storage, next);
     expect(store[FONT_SCALE_STORAGE_KEY]).toBeUndefined();
@@ -115,6 +118,7 @@ describe('load/saveReaderTypography', () => {
       fontScaleStep: 1.125,
       lineHeight: 1.65,
       measureRem: 28,
+      hideStatusBar: true,
     };
     saveReaderTypography(storage, chosen);
     expect(loadReaderTypography(storage)).toEqual(chosen);
@@ -177,6 +181,7 @@ describe('applyReaderTypography', () => {
       fontScaleStep: 1.25,
       lineHeight: 1.5,
       measureRem: 18,
+      hideStatusBar: false,
     });
     expect(props['--lightink-reader-font-family']).toBe('Georgia, serif');
     expect(props['--lightink-reader-font-scale']).toBe('1.25');

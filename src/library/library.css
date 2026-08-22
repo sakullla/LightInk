@@ -1,15 +1,25 @@
 /*
- * Bookshelf chrome. Kindle / Apple Books: library is a neutral system surface;
- * sepia paper stays in the reader. Covers supply color; UI stays monochrome.
- * All colors come from the global --lightink-* theme tokens (src/theme/tokens.css),
- * so light/dark themes and custom theme CSS apply without per-theme overrides.
+ * Bookshelf chrome. Kindle / Apple Books: the shelf is its own surface.
+ * Colors still consume --lightink-* names; applyLibraryTheme stamps a
+ * shelf-only palette onto .lightink-library so the editor theme is unused.
  */
 
 .lightink-library {
   --lightink-library-pad-x: 32px;
   --lightink-library-pad-y: 20px;
-  --lightink-library-nav-width: 208px;
+  --lightink-library-nav-width: 240px;
+  --lightink-library-nav-min: 168px;
+  --lightink-library-nav-collapsed: 56px;
   --lightink-library-cover-min: 160px;
+  --lightink-library-cover-max: 196px;
+  --lightink-library-cover-gap-x: 20px;
+  --lightink-library-cover-gap-y: 24px;
+  --lightink-library-title-size: 26px;
+  --lightink-library-search-max: 200px;
+  --lightink-library-manage-max: 40rem;
+  --lightink-library-theme-tile: 88px;
+  --lightink-library-theme-preview: 48px;
+  --lightink-library-detail-min: 240px;
   position: absolute;
   inset: 0;
   display: flex;
@@ -65,7 +75,10 @@
 }
 
 .lightink-library button:focus-visible,
-.lightink-library input:focus-visible,
+.lightink-library-group-form input:focus-visible,
+.lightink-library-source-form input:focus-visible,
+.lightink-library-cache-limit-form input:focus-visible,
+.lightink-library-detail input:focus-visible,
 .lightink-library select:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 2px;
@@ -77,11 +90,53 @@
 }
 
 .lightink-library-header {
+  display: grid;
+  grid-template-columns: minmax(var(--lightink-library-nav-min), var(--lightink-library-nav-width)) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0;
+  min-height: var(--lightink-titlebar-height, 36px);
+  padding: 0 calc(var(--lightink-titlebar-caption, 32px) * 3 + 20px) 0 0;
+}
+
+.lightink-library-brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--lightink-titlebar-height, 36px);
+  padding: 0 12px 0 18px;
+  overflow: hidden;
+  color: var(--lightink-fg);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Collapsed rail is too narrow for 「轻墨」; keep the word on the window edge. */
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-header {
+  display: flex;
+  align-items: center;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  padding: 0 16px 0 18px;
+  font-size: 15px;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-header-main {
+  flex: 1 1 auto;
+}
+
+.lightink-library-header-main {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 56px;
-  padding: var(--lightink-library-pad-y) var(--lightink-library-pad-x) 8px;
+  min-width: 0;
+  min-height: var(--lightink-titlebar-height, 36px);
+  padding: 0 8px 0 16px;
 }
 
 .lightink-library-header h1 {
@@ -89,25 +144,32 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.03em;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lightink-library-header h1[hidden] {
+  display: none !important;
 }
 
 .lightink-library-search {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 0 1 260px;
-  max-width: 260px;
-  min-width: 160px;
+  flex: 0 0 var(--lightink-library-search-max);
+  width: var(--lightink-library-search-max);
+  max-width: var(--lightink-library-search-max);
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
   margin-left: auto;
-  padding: 0 30px 0 32px;
+  padding: 0 28px 0 30px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--lightink-accent-soft);
   color: var(--lightink-muted);
 }
@@ -130,6 +192,7 @@
   position: absolute;
   width: 1px;
   height: 1px;
+  min-height: 0 !important;
   padding: 0 !important;
   margin: -1px;
   overflow: hidden;
@@ -142,20 +205,24 @@
 .lightink-library-acquisition {
   width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: 0;
   border-radius: 0;
 }
 
 .lightink-library-search input,
 .lightink-library-search input[type='text'],
-.lightink-library-search input[type='search'] {
+.lightink-library-search input[type='search'],
+.lightink-library-search input:focus,
+.lightink-library-search input:focus-visible {
   appearance: none;
   -webkit-appearance: none;
   border: none !important;
-  outline: none;
-  box-shadow: none;
+  outline: none !important;
+  outline-offset: 0;
+  box-shadow: none !important;
   background: transparent;
-  min-height: 34px;
+  height: 100%;
+  min-height: 0;
   color: var(--lightink-fg);
 }
 
@@ -251,19 +318,20 @@
 /* Two-column shell: persistent left navigation + right content area. */
 .lightink-library-body {
   display: grid;
-  grid-template-columns: minmax(168px, var(--lightink-library-nav-width)) minmax(0, 1fr);
+  grid-template-columns: minmax(var(--lightink-library-nav-min), var(--lightink-library-nav-width)) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
+  transition: grid-template-columns 200ms ease;
 }
 
 /* Left navigation pane: 书库 / 书源 / 管理 sections. */
 .lightink-library-nav {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 4px;
   min-width: 0;
   min-height: 0;
-  padding: 8px 12px 20px;
+  padding: 8px 10px 16px;
   overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--lightink-border);
@@ -272,42 +340,212 @@
 .lightink-library-nav-section {
   position: relative;
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  min-height: 0;
 }
 
 .lightink-library-groups {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
 }
 
+/* 静态分区标签（书库）：弱化、不参与点击，和下面的 disclosure 标题同一字号体系。 */
 .lightink-library-nav-heading {
   margin: 0;
-  padding: 4px 10px 6px;
+  padding: 2px 8px 8px;
   color: var(--lightink-muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
   letter-spacing: 0.06em;
 }
 
+/* 可折叠分区标题：组织者，不是目的地。左侧小三角 + 类型图标，和筛选项拉开层级。 */
 .lightink-library-pane-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 6px;
+  min-height: 28px;
+  margin-top: 10px;
+  padding: 3px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lightink-library-filter-list + .lightink-library-pane-heading {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+}
+
+.lightink-library-sources {
+  margin-top: 4px;
+}
+
+.lightink-library-pane-heading:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-library-pane-heading:hover .lightink-library-section-icon,
+.lightink-library-pane-heading:hover .lightink-library-collapse-chevron {
+  color: var(--lightink-fg);
+}
+
+.lightink-library-section-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+}
+
+/* 分区操作：固定两列（筛选 | +），没有 + 的分区留空，保证三行放大镜对齐。 */
+.lightink-library-pane-actions {
+  display: grid;
+  grid-template-columns: 28px 28px;
+  align-items: center;
+  justify-items: center;
+  gap: 2px;
+  width: 58px;
+  flex: 0 0 58px;
+  margin-left: auto;
+}
+
+.lightink-library-pane-action {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.lightink-library-pane-heading:hover .lightink-library-pane-action,
+.lightink-library-pane-heading:focus-within .lightink-library-pane-action,
+.lightink-library-pane-action[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.lightink-library-pane-action[aria-expanded='true'] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+/* 折叠 chevron：小三角，对齐 11px 分区标签，避免看起来像导航项前缀。 */
+.lightink-library-collapse-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-collapse-chevron {
+  width: 10px;
+  height: 10px;
+  opacity: 0.72;
+  transition: transform 200ms ease;
+}
+
+.lightink-library-collapse-toggle[aria-expanded='true'] .lightink-library-collapse-chevron {
+  transform: rotate(90deg);
+}
+
+/* 分区筛选：和导航项同宽；图标与文字留出明确间距，避免光标贴住放大镜。 */
+.lightink-library-section-filter-wrap {
+  display: flex;
+  align-items: center;
   gap: 8px;
   min-height: 32px;
-  padding: 6px 4px 4px 10px;
+  margin: 0 0 6px;
+  padding: 0 4px 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--lightink-accent-soft);
+  box-shadow: none;
+}
+
+.lightink-library-section-filter-wrap[hidden] {
+  display: none !important;
+}
+
+.lightink-library-section-filter-wrap > .lightink-library-nav-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+  pointer-events: none;
+}
+
+.lightink-library-section-filter {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px 0 2px;
+  border: none !important;
+  border-radius: 0;
+  outline: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  line-height: 32px;
+}
+
+.lightink-library input.lightink-library-section-filter:focus,
+.lightink-library input.lightink-library-section-filter:focus-visible,
+.lightink-library-section-filter-wrap:focus-within {
+  border: none !important;
+  outline: none !important;
+  outline-offset: 0;
+  box-shadow: none !important;
+}
+
+.lightink-library-section-filter-clear {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  color: var(--lightink-muted);
+  font-size: 16px !important;
+}
+
+/* 分区空态提示（无分组 / 筛选无匹配）。 */
+.lightink-library-nav-empty {
+  margin: 2px 10px 6px;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-pane-heading h2,
+.lightink-library-pane-heading h3 {
+  flex: 1 1 auto;
 }
 
 .lightink-library-pane-heading h2,
 .lightink-library-pane-heading h3,
 .lightink-library-detail h2 {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
   color: var(--lightink-muted);
-  font-size: 12px;
-  font-weight: 550;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-group-body,
+.lightink-library-smart-group-body,
+.lightink-library-source-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 1px 0 2px 8px;
 }
 
 .lightink-library-filter-list,
@@ -319,25 +557,24 @@
   gap: 2px;
 }
 
-.lightink-library-group-list,
-.lightink-library-source-list {
-  min-height: 0;
+/* 展开的智能分组列表可能很长（作者/系列），给独立滚动上限；其余列表随导航整体滚动。 */
+.lightink-library-smart-group-list {
+  max-height: 38vh;
   overflow-x: hidden;
   overflow-y: auto;
 }
 
-.lightink-library-group-list {
-  flex: 0 1 auto;
-}
-
-/* Nav items: 我的书 / 管理 entries, shelf filters, custom groups, smart groups. */
+/* Nav items: 管理 entry, shelf filters, custom groups, smart groups. */
 .lightink-library-nav-item,
 .lightink-library-source,
 .lightink-library-group,
 .lightink-library-smart-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  min-height: 32px;
-  padding: 6px 10px;
+  min-height: 30px;
+  padding: 5px 10px;
   overflow: hidden;
   border: none !important;
   border-radius: 8px;
@@ -349,6 +586,32 @@
   white-space: nowrap;
 }
 
+/* 行内导航图标：弱化色，hover/选中时跟随文字色。 */
+.lightink-library-nav-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-nav-item:hover .lightink-library-nav-icon,
+.lightink-library-source:hover .lightink-library-nav-icon,
+.lightink-library-group:hover .lightink-library-nav-icon,
+.lightink-library-smart-group:hover .lightink-library-nav-icon,
+.lightink-library-nav-item.is-active .lightink-library-nav-icon,
+.lightink-library-source.is-active .lightink-library-nav-icon,
+.lightink-library-group.is-active .lightink-library-nav-icon,
+.lightink-library-smart-group.is-active .lightink-library-nav-icon {
+  color: currentColor;
+}
+
+.lightink-library-nav-item:hover,
+.lightink-library-source:hover,
+.lightink-library-group:hover,
+.lightink-library-smart-group:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent) !important;
+}
+
 .lightink-library-nav-item.is-active,
 .lightink-library-source.is-active,
 .lightink-library-group.is-active,
@@ -356,19 +619,6 @@
   background: var(--lightink-accent-soft) !important;
   color: var(--lightink-accent);
   font-weight: 600;
-}
-
-.lightink-library-smart-group::before {
-  display: inline-block;
-  width: 12px;
-  margin-right: 7px;
-  color: var(--lightink-muted);
-  content: '#';
-  text-align: center;
-}
-
-.lightink-library-smart-group.is-active::before {
-  color: var(--lightink-accent);
 }
 
 /* Custom group tree: depth indent via --lightink-group-depth (set inline). */
@@ -394,18 +644,21 @@
 }
 
 .lightink-library-group-toggle {
+  display: inline-grid;
+  place-items: center;
   width: 22px;
   min-height: 30px;
   padding: 0 !important;
   border: none !important;
   background: transparent !important;
   color: var(--lightink-muted);
-  font-size: 14px;
-  transform: rotate(0deg);
-  transition: transform 120ms ease;
 }
 
-.lightink-library-group-toggle.is-expanded {
+.lightink-library-group-toggle .lightink-library-collapse-chevron {
+  transition: transform 200ms ease;
+}
+
+.lightink-library-group-toggle.is-expanded .lightink-library-collapse-chevron {
   transform: rotate(90deg);
 }
 
@@ -443,23 +696,37 @@
   flex: 0 0 auto;
 }
 
-/* Source rows inside the 书源 nav section. */
+/* Source rows: same rhythm as other nav items, not elevated cards. */
 .lightink-library-source-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 .lightink-library-source-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  grid-template-columns: minmax(0, 1fr) 26px 26px;
   align-items: center;
-  gap: 4px;
-  min-height: 52px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: var(--lightink-bg-elevated);
-  box-shadow: inset 0 0 0 1px var(--lightink-border);
+  gap: 2px;
+  min-height: 32px;
+  padding: 2px 4px 2px 2px;
+  border-radius: 8px;
+}
+
+.lightink-library-source-row:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-library-source-row .lightink-library-source-edit,
+.lightink-library-source-row .lightink-library-source-remove {
+  opacity: 0;
+}
+
+.lightink-library-source-row:hover .lightink-library-source-edit,
+.lightink-library-source-row:hover .lightink-library-source-remove,
+.lightink-library-source-row:focus-within .lightink-library-source-edit,
+.lightink-library-source-row:focus-within .lightink-library-source-remove {
+  opacity: 1;
 }
 
 .lightink-library-source-stack {
@@ -476,11 +743,105 @@
 
 .lightink-library-source-url {
   overflow: hidden;
-  padding: 0 4px;
+  padding: 0 4px 2px;
   color: var(--lightink-muted);
-  font-size: 12px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Utility area (管理): separated from collections, same pattern as Slack/Linear. */
+.lightink-library-manage {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+}
+
+.lightink-library-nav-collapse {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  margin-top: auto;
+  border: none;
+  box-shadow: none;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-nav-collapse:focus-visible {
+  outline: none;
+}
+
+.lightink-library-nav-collapse .lightink-library-nav-icon {
+  width: 16px;
+  height: 16px;
+  transform: rotate(180deg);
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-collapse {
+  align-self: center;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-collapse .lightink-library-nav-icon {
+  transform: none;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] {
+  --lightink-library-nav-width: var(--lightink-library-nav-collapsed);
+  --lightink-library-nav-min: var(--lightink-library-nav-collapsed);
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-body {
+  grid-template-columns: var(--lightink-library-nav-collapsed) minmax(0, 1fr);
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav {
+  align-items: stretch;
+  padding: 8px 6px 10px;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-heading,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-collapse-toggle,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading h2,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading h3,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-actions,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-group-body,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-smart-group-body,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-source-body {
+  display: none;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading {
+  justify-content: center;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 4px 0;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-filter-list + .lightink-library-pane-heading {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-item,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-group {
+  justify-content: center;
+  gap: 0;
+  padding: 6px 4px;
+  font-size: 0;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-icon,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-section-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-actions {
+  width: 0;
+  flex-basis: 0;
 }
 
 .lightink-library-source-empty {
@@ -678,6 +1039,8 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  container-type: inline-size;
+  container-name: library-content;
 }
 
 .lightink-library-navigation {
@@ -861,11 +1224,11 @@
 
 .lightink-library-cover-wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-library-cover-min), 196px));
+  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-library-cover-min), var(--lightink-library-cover-max)));
   justify-content: start;
   align-content: start;
-  gap: 24px 20px;
-  padding: 16px var(--lightink-library-pad-x) 56px;
+  gap: var(--lightink-library-cover-gap-y) var(--lightink-library-cover-gap-x);
+  padding: 8px var(--lightink-library-pad-x) 56px;
 }
 
 .lightink-library-items .lightink-library-empty {
@@ -1117,6 +1480,84 @@
   margin: 0;
 }
 
+.lightink-library-appearance {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--lightink-library-manage-max);
+  margin-bottom: 8px;
+}
+
+.lightink-library-appearance-title {
+  margin: 0;
+  color: var(--lightink-fg);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.lightink-library-appearance-hint {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lightink-library-theme-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-library-theme-tile), 1fr));
+  gap: 8px;
+}
+
+.lightink-library-theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-height: 0;
+  padding: 6px;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.lightink-library-theme-preview {
+  display: block;
+  height: var(--lightink-library-theme-preview);
+  overflow: hidden;
+  border: 1px solid var(--lightink-border);
+  border-radius: 8px;
+}
+
+.lightink-library-theme-preview i {
+  display: block;
+  width: 36%;
+  height: 100%;
+}
+
+.lightink-library-theme-swatch-name {
+  color: var(--lightink-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.lightink-library-theme-swatch:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  color: inherit;
+}
+
+.lightink-library-theme-swatch.is-active {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-library-theme-swatch.is-active .lightink-library-theme-preview {
+  box-shadow: inset 0 0 0 2px var(--lightink-accent);
+}
+
+.lightink-library-theme-swatch.is-active .lightink-library-theme-swatch-name {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
 /* Manage panel (管理 content): import / WebDAV / cache controls. */
 .lightink-library-manage-panel {
   display: flex;
@@ -1135,7 +1576,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  max-width: 40rem;
+  max-width: var(--lightink-library-manage-max);
   min-height: 44px;
   padding: 10px 14px;
   border-radius: 10px;
@@ -1152,6 +1593,25 @@
   color: var(--lightink-accent);
 }
 
+@container library-content (min-width: 52rem) {
+  .lightink-library-manage-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 12px 16px;
+  }
+
+  .lightink-library-appearance {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .lightink-library-manage-panel > button,
+  .lightink-library-cache-summary {
+    max-width: none;
+  }
+}
+
 .lightink-library-cache-summary {
   position: relative;
   display: flex;
@@ -1159,7 +1619,7 @@
   justify-content: flex-start;
   gap: 6px;
   width: 100%;
-  max-width: 40rem;
+  max-width: var(--lightink-library-manage-max);
   min-height: 44px;
   padding: 10px 14px;
   border-radius: 10px;
@@ -1244,19 +1704,186 @@
 }
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 32%);
+  grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
+}
+
+/*
+ * Shelf scale: same html[data-display] tiers as the editor (display-scale.ts).
+ * compact ≈ 720p / 1366 · hd ≈ 1080p · qhd ≈ 2K · uhd ≈ 4K · xuhd >4K.
+ * Colors stay on --lightink-*; only layout tokens change here.
+ */
+html[data-display='compact'] .lightink-library {
+  --lightink-library-pad-x: 20px;
+  --lightink-library-pad-y: 14px;
+  --lightink-library-nav-width: 208px;
+  --lightink-library-nav-min: 156px;
+  --lightink-library-nav-collapsed: 52px;
+  --lightink-library-cover-min: 128px;
+  --lightink-library-cover-max: 168px;
+  --lightink-library-cover-gap-x: 14px;
+  --lightink-library-cover-gap-y: 18px;
+  --lightink-library-title-size: 22px;
+  --lightink-library-search-max: 176px;
+  --lightink-library-manage-max: min(32rem, 100%);
+  --lightink-library-theme-tile: 76px;
+  --lightink-library-theme-preview: 40px;
+  --lightink-library-detail-min: 200px;
+}
+
+html[data-display='hd'] .lightink-library {
+  --lightink-library-pad-x: 32px;
+  --lightink-library-pad-y: 20px;
+  --lightink-library-nav-width: 240px;
+  --lightink-library-nav-min: 168px;
+  --lightink-library-nav-collapsed: 56px;
+  --lightink-library-cover-min: 160px;
+  --lightink-library-cover-max: 196px;
+  --lightink-library-cover-gap-x: 20px;
+  --lightink-library-cover-gap-y: 24px;
+  --lightink-library-title-size: 26px;
+  --lightink-library-search-max: 200px;
+  --lightink-library-manage-max: 40rem;
+  --lightink-library-theme-tile: 88px;
+  --lightink-library-theme-preview: 48px;
+  --lightink-library-detail-min: 240px;
+}
+
+html[data-display='qhd'] .lightink-library {
+  --lightink-library-pad-x: 40px;
+  --lightink-library-pad-y: 24px;
+  --lightink-library-nav-width: 264px;
+  --lightink-library-nav-min: 200px;
+  --lightink-library-nav-collapsed: 60px;
+  --lightink-library-cover-min: 176px;
+  --lightink-library-cover-max: 220px;
+  --lightink-library-cover-gap-x: 24px;
+  --lightink-library-cover-gap-y: 28px;
+  --lightink-library-title-size: 28px;
+  --lightink-library-search-max: 220px;
+  --lightink-library-manage-max: 44rem;
+  --lightink-library-theme-tile: 100px;
+  --lightink-library-theme-preview: 56px;
+  --lightink-library-detail-min: 280px;
+}
+
+html[data-display='uhd'] .lightink-library {
+  --lightink-library-pad-x: 52px;
+  --lightink-library-pad-y: 32px;
+  --lightink-library-nav-width: 288px;
+  --lightink-library-nav-min: 220px;
+  --lightink-library-nav-collapsed: 64px;
+  --lightink-library-cover-min: 196px;
+  --lightink-library-cover-max: 248px;
+  --lightink-library-cover-gap-x: 28px;
+  --lightink-library-cover-gap-y: 32px;
+  --lightink-library-title-size: 32px;
+  --lightink-library-search-max: 240px;
+  --lightink-library-manage-max: 48rem;
+  --lightink-library-theme-tile: 112px;
+  --lightink-library-theme-preview: 64px;
+  --lightink-library-detail-min: 320px;
+}
+
+html[data-display='xuhd'] .lightink-library {
+  --lightink-library-pad-x: 64px;
+  --lightink-library-pad-y: 40px;
+  --lightink-library-nav-width: 312px;
+  --lightink-library-nav-min: 240px;
+  --lightink-library-nav-collapsed: 72px;
+  --lightink-library-cover-min: 216px;
+  --lightink-library-cover-max: 272px;
+  --lightink-library-cover-gap-x: 32px;
+  --lightink-library-cover-gap-y: 36px;
+  --lightink-library-title-size: 36px;
+  --lightink-library-search-max: 260px;
+  --lightink-library-manage-max: 52rem;
+  --lightink-library-theme-tile: 124px;
+  --lightink-library-theme-preview: 72px;
+  --lightink-library-detail-min: 360px;
+}
+
+@media (max-width: 1279px) {
+  html:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd']) .lightink-library {
+    --lightink-library-pad-x: 20px;
+    --lightink-library-pad-y: 14px;
+    --lightink-library-nav-width: 208px;
+    --lightink-library-nav-min: 156px;
+    --lightink-library-cover-min: 128px;
+    --lightink-library-cover-max: 168px;
+    --lightink-library-title-size: 22px;
+    --lightink-library-search-max: 176px;
+    --lightink-library-manage-max: min(32rem, 100%);
+    --lightink-library-theme-tile: 76px;
+    --lightink-library-detail-min: 200px;
+  }
+}
+
+@media (min-width: 1600px) {
+  html:not([data-display='uhd']):not([data-display='xuhd']):not([data-display='compact']) .lightink-library {
+    --lightink-library-pad-x: 40px;
+    --lightink-library-pad-y: 24px;
+    --lightink-library-nav-width: 264px;
+    --lightink-library-nav-min: 200px;
+    --lightink-library-cover-min: 176px;
+    --lightink-library-cover-max: 220px;
+    --lightink-library-title-size: 28px;
+    --lightink-library-search-max: 220px;
+    --lightink-library-manage-max: 44rem;
+    --lightink-library-theme-tile: 100px;
+    --lightink-library-detail-min: 280px;
+  }
+}
+
+@media (min-width: 2400px) {
+  html:not([data-display='xuhd']):not([data-display='compact']) .lightink-library {
+    --lightink-library-pad-x: 52px;
+    --lightink-library-pad-y: 32px;
+    --lightink-library-nav-width: 288px;
+    --lightink-library-nav-min: 220px;
+    --lightink-library-cover-min: 196px;
+    --lightink-library-cover-max: 248px;
+    --lightink-library-title-size: 32px;
+    --lightink-library-search-max: 240px;
+    --lightink-library-manage-max: 48rem;
+    --lightink-library-theme-tile: 112px;
+    --lightink-library-detail-min: 320px;
+  }
+}
+
+@media (min-width: 4400px) {
+  html .lightink-library {
+    --lightink-library-pad-x: 64px;
+    --lightink-library-pad-y: 40px;
+    --lightink-library-nav-width: 312px;
+    --lightink-library-nav-min: 240px;
+    --lightink-library-cover-min: 216px;
+    --lightink-library-cover-max: 272px;
+    --lightink-library-title-size: 36px;
+    --lightink-library-search-max: 260px;
+    --lightink-library-manage-max: 52rem;
+    --lightink-library-theme-tile: 124px;
+    --lightink-library-detail-min: 360px;
+  }
 }
 
 @media (max-width: 760px) {
-  .lightink-library {
+  html .lightink-library,
+  html[data-display] .lightink-library {
     --lightink-library-pad-x: 18px;
-    --lightink-library-cover-min: 112px;
+    --lightink-library-pad-y: 12px;
+    --lightink-library-nav-width: 132px;
+    --lightink-library-nav-min: 132px;
+    --lightink-library-cover-min: 104px;
+    --lightink-library-cover-max: 1fr;
+    --lightink-library-cover-gap-x: 12px;
+    --lightink-library-cover-gap-y: 16px;
+    --lightink-library-search-max: 100%;
+    --lightink-library-manage-max: 100%;
+    --lightink-library-detail-min: 200px;
   }
 
   .lightink-library-header {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    grid-template-columns: minmax(var(--lightink-library-nav-min), var(--lightink-library-nav-width)) minmax(0, 1fr);
   }
 
   .lightink-library-header h1 {
@@ -1273,7 +1900,11 @@
   }
 
   .lightink-library-body {
-    grid-template-columns: 132px minmax(0, 1fr);
+    grid-template-columns: var(--lightink-library-nav-width) minmax(0, 1fr);
+  }
+
+  .lightink-library[data-library-nav-collapsed='true'] .lightink-library-body {
+    grid-template-columns: var(--lightink-library-nav-collapsed) minmax(0, 1fr);
   }
 
   .lightink-library-nav {
@@ -1281,15 +1912,28 @@
   }
 
   .lightink-library-cover-wall {
-    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-    gap: 16px 12px;
     padding: 12px;
   }
 
   .lightink-library-detail {
     position: absolute;
-    inset: 42px 0 0 132px;
+    inset: 42px 0 0 var(--lightink-library-nav-width);
     z-index: 2;
     background: var(--lightink-bg);
+  }
+
+  .lightink-library[data-library-nav-collapsed='true'] .lightink-library-detail {
+    inset: 42px 0 0 var(--lightink-library-nav-collapsed);
+  }
+}
+
+html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
+  --lightink-library-nav-width: var(--lightink-library-nav-collapsed);
+  --lightink-library-nav-min: var(--lightink-library-nav-collapsed);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-library-body {
+    transition: none;
   }
 }

@@ -212,17 +212,20 @@ describe('annotation-sidebar 重做', () => {
     });
     document.body.appendChild(sidebar.element);
     sidebar.render(annotations);
-    expect(sidebar.element.querySelector('.lightink-reader-sidebar-search-input')).not.toBeNull();
+    // 单输入框 + 分类行：宿主提供搜索时出现「搜索正文」分类
+    expect(sidebar.element.querySelector('[data-kind-filter="document"]')).not.toBeNull();
     expect(sidebar.element.querySelector('.lightink-reader-sidebar-search-stack')).not.toBeNull();
-    expect(
-      sidebar.element.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')
-        ?.placeholder,
-    ).toBe('annotation.search.placeholder');
-    expect(
-      sidebar.element.querySelector<HTMLInputElement>('.lightink-reader-sidebar-search-input')
-        ?.placeholder,
-    ).toBe('reader.search.document');
+    const input = sidebar.element.querySelector<HTMLInputElement>(
+      '.lightink-reader-sidebar-note-search-input',
+    )!;
+    expect(input.placeholder).toBe('annotation.search.placeholder');
     expect(sidebar.element.querySelectorAll('.lightink-reader-sidebar-item')).toHaveLength(3);
+
+    // 输入文本后切到「搜索正文」分类：同一输入框触发正文检索，描述随之切换
+    input.value = 'keyword';
+    (sidebar.element.querySelector('[data-kind-filter="document"]') as HTMLButtonElement).click();
+    expect(queries).toEqual(['keyword']);
+    expect(input.placeholder).toBe('reader.search.document');
 
     sidebar.renderHits([]);
     expect(sidebar.element.classList.contains('is-searching')).toBe(true);
@@ -258,15 +261,67 @@ describe('annotation-sidebar 重做', () => {
     expect(closed).toBe(0);
     expect(sidebar.getSearchQuery()).toBe('');
 
+    // 切回标注分类：清除正文搜索会话并恢复标注列表
+    (sidebar.element.querySelector('[data-kind-filter="all"]') as HTMLButtonElement).click();
+    expect(cleared).toBe(2);
+    expect(sidebar.element.querySelectorAll('.lightink-reader-sidebar-item')).toHaveLength(3);
+    expect(input.placeholder).toBe('annotation.search.placeholder');
+
     sidebar.render(annotations);
     sidebar.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(closed).toBe(1);
   });
 
-  it('omits the document search box when search is not enabled', () => {
+  it('omits the document category when search is not enabled', () => {
     const { sidebar } = mount();
-    expect(sidebar.element.querySelector('.lightink-reader-sidebar-search-input')).toBeNull();
+    expect(sidebar.element.querySelector('[data-kind-filter="document"]')).toBeNull();
     expect(sidebar.element.querySelector('.lightink-reader-sidebar-note-search-input')).not.toBeNull();
+  });
+
+  it('默认「全部」分类下输入即同时筛选标注并检索正文，命中合并显示', () => {
+    const queries: string[] = [];
+    const sidebar = createAnnotationSidebar({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: (query) => queries.push(query),
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(sidebar.element);
+    sidebar.render(annotations);
+    const input = sidebar.element.querySelector<HTMLInputElement>(
+      '.lightink-reader-sidebar-note-search-input',
+    )!;
+
+    // 默认「全部」分类：输入触发正文检索，标注筛选立即生效
+    input.value = '旧备注';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(queries).toEqual(['旧备注']);
+    expect(
+      sidebar.element.querySelector<HTMLElement>('[data-annotation-id="n1"]'),
+    ).not.toBeNull();
+
+    // 正文命中回流后与标注命中合并呈现（不互斥切换）
+    sidebar.renderHits([{ key: '1:0:7', snippet: '旧备注 正文命中', location: 'page 1', current: true }]);
+    expect(
+      sidebar.element.querySelector<HTMLElement>('[data-annotation-id="n1"]'),
+    ).not.toBeNull();
+    expect(sidebar.element.querySelectorAll('.lightink-reader-sidebar-hit')).toHaveLength(1);
+    expect(sidebar.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent).toBe(
+      '1/1',
+    );
+
+    // 选中具体类型后只筛标注，不再检索正文
+    queries.length = 0;
+    (sidebar.element.querySelector('[data-kind-filter="note"]') as HTMLButtonElement).click();
+    input.value = '旧备';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(queries).toEqual([]);
+    sidebar.element.remove();
   });
 
   it('搜备注或摘录能命中，搜无关词不命中', () => {

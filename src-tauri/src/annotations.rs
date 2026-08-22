@@ -12,12 +12,15 @@
 //! [`crate::asset::content_hash_hex`]，FNV-1a 64-bit）；`read_annotations` /
 //! `write_annotations` 接收该哈希作为存储 key，只负责按 key 读写 JSON。
 
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use crate::identifiers::validate_content_hash;
+
+#[cfg(test)]
 use serde_json::Value;
+#[cfg(test)]
+use std::collections::{HashMap, HashSet};
 
 const ANNOTATIONS_DIR: &str = "annotations";
 
@@ -58,6 +61,7 @@ fn resolve_base_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("lightink"))
 }
 
+#[cfg(test)]
 fn parse_annotation_file(json: &str) -> Option<(u64, Vec<Value>)> {
     if json.trim().is_empty() {
         return None;
@@ -69,6 +73,7 @@ fn parse_annotation_file(json: &str) -> Option<(u64, Vec<Value>)> {
     Some((version, annotations))
 }
 
+#[cfg(test)]
 fn annotation_id(value: &Value) -> Option<&str> {
     value
         .get("id")
@@ -76,6 +81,7 @@ fn annotation_id(value: &Value) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+#[cfg(test)]
 fn annotation_updated_at(value: &Value) -> f64 {
     value
         .get("updatedAt")
@@ -85,6 +91,7 @@ fn annotation_updated_at(value: &Value) -> f64 {
         .unwrap_or(0.0)
 }
 
+#[cfg(test)]
 fn merge_version(local: u64, remote: u64) -> u64 {
     if local == 2 || remote == 2 {
         2
@@ -98,6 +105,7 @@ fn merge_version(local: u64, remote: u64) -> u64 {
 /// Merge two annotation documents by record id. The newer `updatedAt` wins;
 /// a missing `updatedAt` falls back to `createdAt`. Corrupt or empty input is
 /// treated as no records so a bad remote file cannot wipe local notes.
+#[cfg(test)]
 pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
     let local = parse_annotation_file(local_json);
     let remote = parse_annotation_file(remote_json);
@@ -146,6 +154,7 @@ pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
 }
 
 /// List locally stored annotation files keyed by content hash.
+#[cfg(test)]
 pub fn list_annotations_by_hash(base_dir: &Path) -> Result<Vec<(String, String)>, String> {
     let dir = base_dir.join(ANNOTATIONS_DIR);
     if !dir.exists() {
@@ -174,6 +183,7 @@ pub fn list_annotations_by_hash(base_dir: &Path) -> Result<Vec<(String, String)>
 
 /// Read local annotations for a content hash, merge a remote document by
 /// `updatedAt`, and write only when the merged result differs.
+#[cfg(test)]
 pub fn merge_remote_annotations_impl(
     base_dir: &Path,
     content_hash: &str,
