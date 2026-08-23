@@ -469,6 +469,78 @@ describe('readerFlowSpreadFromTypography', () => {
   });
 });
 
+describe('readerPageSpread compact / narrow (R5)', () => {
+  const previousInnerWidth = window.innerWidth;
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-touch-primary');
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: previousInnerWidth,
+    });
+  });
+
+  function expectSingleFullWidthColumn(
+    page: ReturnType<typeof readerPageSpread>,
+    visibleWidth: number,
+  ): void {
+    expect(page.columns).toBe(1);
+    expect(page.gap).toBe(0);
+    expect(page.width).toBe(visibleWidth);
+    expect(page.columnWidth).toBe(visibleWidth);
+    // 单栏步进等于可视宽度，避免叠字与跳页。
+    expect(page.step).toBe(visibleWidth);
+  }
+
+  it('forces columns=1, gap=0 and 100% width when the pane cannot hold two stable columns', () => {
+    for (const width of [360, 390, 520]) {
+      expectSingleFullWidthColumn(readerPageSpread(width, 16, 22), width);
+      expectSingleFullWidthColumn(
+        readerFlowSpreadFromTypography(width, 16, DEFAULT_READER_TYPOGRAPHY),
+        width,
+      );
+    }
+  });
+
+  it('forces a single full-width column on a compact/touch surface even when the pane is wide', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    expect(readerSurfaceIsCompact()).toBe(true);
+    expectSingleFullWidthColumn(readerPageSpread(1000, 16, 22), 1000);
+    expectSingleFullWidthColumn(
+      readerFlowSpreadFromTypography(1000, 16, DEFAULT_READER_TYPOGRAPHY),
+      1000,
+    );
+
+    document.documentElement.removeAttribute('data-touch-primary');
+    document.documentElement.setAttribute('data-android', '');
+    expect(readerSurfaceIsCompact()).toBe(true);
+    expectSingleFullWidthColumn(readerPageSpread(1000, 16, 22), 1000);
+  });
+
+  it('treats a sub-600px window as compact and still fills one column', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    expect(readerSurfaceIsCompact()).toBe(true);
+    expectSingleFullWidthColumn(readerPageSpread(390, 16, 22), 390);
+  });
+
+  it('keeps two filling columns on a desktop-wide pane without compact flags', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
+    expect(readerSurfaceIsCompact()).toBe(false);
+    const page = readerPageSpread(1000, 16, 22);
+    expect(page.columns).toBe(2);
+    expect(page.width).toBe(1000);
+    expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+    expect(page.step).toBe(page.width + page.gap);
+    expect(readerFlowSpreadFromTypography(1000, 16, { ...DEFAULT_READER_TYPOGRAPHY, measureRem: 32 }).columns).toBe(2);
+  });
+
+  it('keeps the flow CSS column-width fallback at 100% for a single column', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    expect(flow).toMatch(/column-width:\s*var\(--lightink-reader-column-width,\s*100%\)/);
+  });
+});
+
 describe('clampReaderPageExtent', () => {
   it('caps a chapter-tall pane to the window so pagination still has pages', () => {
     expect(

@@ -1277,6 +1277,9 @@ export function createLibraryView(
   const continueHost = doc.createElement('div');
   continueHost.className = 'lightink-library-continue';
   continueHost.hidden = true;
+  const chipRow = doc.createElement('nav');
+  chipRow.className = 'lightink-library-shelf-chips';
+  chipRow.hidden = true;
   const workArea = doc.createElement('div');
   workArea.className = 'lightink-library-workarea';
   const itemList = doc.createElement('div');
@@ -1829,19 +1832,26 @@ export function createLibraryView(
       heading.hidden = !isMobileLibraryChrome();
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
-      content.replaceChildren(continueHost, status, itemList);
+      chipRow.hidden = !isMobileLibraryChrome();
+      if (isMobileLibraryChrome()) {
+        content.replaceChildren(chipRow, continueHost, status, itemList);
+      } else {
+        content.replaceChildren(continueHost, status, itemList);
+      }
       detail.hidden = true;
       selected = null;
     } else if (activeSection === 'manage') {
       heading.hidden = false;
       heading.textContent = labels().manage;
       toolbar.replaceChildren();
+      chipRow.hidden = true;
       itemList.classList.remove('lightink-library-cover-wall');
       content.replaceChildren(status, manage.element);
     } else if (inCatalog) {
       heading.hidden = false;
       heading.textContent = selectedSource()?.title ?? labels().library;
       toolbar.replaceChildren();
+      chipRow.hidden = true;
       itemList.classList.add('lightink-library-cover-wall');
       workArea.replaceChildren(itemList, detail);
       content.replaceChildren(navigation, status, workArea);
@@ -1850,6 +1860,7 @@ export function createLibraryView(
       const pickingCatalog = currentTab === 'catalog' && isMobileLibraryChrome();
       heading.textContent = pickingCatalog ? labels().tabCatalog : labels().sources;
       toolbar.replaceChildren();
+      chipRow.hidden = true;
       itemList.classList.remove('lightink-library-cover-wall');
       catalogHint.textContent = labels().catalogPickSource;
       catalogHint.hidden = !pickingCatalog;
@@ -2264,12 +2275,30 @@ export function createLibraryView(
     refs.clear.hidden = refs.input.value.trim() === '';
   }
 
+  function selectShelfGroup(group: ShelfGroup): void {
+    selectedGroup = group;
+    selectedCustomGroupId = null;
+    selectedSmartGroupId = null;
+    void activateShelf();
+  }
+
+  function shelfGroupIsActive(group: ShelfGroup): boolean {
+    return (
+      activeSection === 'shelf' &&
+      selectedCustomGroupId === null &&
+      selectedSmartGroupId === null &&
+      selectedGroup === group
+    );
+  }
+
   function renderGroups(): void {
     filterList.replaceChildren();
+    chipRow.replaceChildren();
     groupList.replaceChildren();
     shelfHeading.textContent = labels().library;
     groupTitle.textContent = labels().groups;
     groupPane.setAttribute('aria-label', labels().groups);
+    chipRow.setAttribute('aria-label', labels().library);
     addGroupButton.title = labels().newGroup;
     addGroupButton.setAttribute('aria-label', labels().newGroup);
     setNavSectionCollapsed(groupToggle, groupBody, groupListCollapsed, labels().groups);
@@ -2280,26 +2309,27 @@ export function createLibraryView(
       labels().smartGroups,
     );
     syncSectionFilterLabels(groupFilter, labels().filterGroups);
-    const shelfActive = activeSection === 'shelf';
     for (const group of SHELF_GROUPS) {
-      const row = button(doc, groupLabel(labels(), group), 'lightink-library-group');
+      const caption = groupLabel(labels(), group);
+      const active = shelfGroupIsActive(group);
+      const row = button(doc, caption, 'lightink-library-group');
       row.prepend(createNavIcon(doc, SHELF_NAV_ICONS[group]));
-      row.title = groupLabel(labels(), group);
+      row.title = caption;
       row.dataset.shelfGroup = group;
-      const active =
-        shelfActive &&
-        selectedCustomGroupId === null &&
-        selectedSmartGroupId === null &&
-        selectedGroup === group;
       row.classList.toggle('is-active', active);
       if (active) row.setAttribute('aria-current', 'true');
       row.addEventListener('click', () => {
-        selectedGroup = group;
-        selectedCustomGroupId = null;
-        selectedSmartGroupId = null;
-        void activateShelf();
+        selectShelfGroup(group);
       });
       filterList.appendChild(row);
+      const chip = button(doc, caption, 'lightink-library-shelf-chip');
+      chip.dataset.shelfGroup = group;
+      chip.classList.toggle('is-active', active);
+      if (active) chip.setAttribute('aria-current', 'true');
+      chip.addEventListener('click', () => {
+        selectShelfGroup(group);
+      });
+      chipRow.appendChild(chip);
     }
     for (const node of filterGroupNodes(customGroupTree(groups), groupFilterQuery.trim())) {
       appendCustomGroupNode(node);

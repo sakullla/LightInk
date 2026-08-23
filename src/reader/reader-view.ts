@@ -551,13 +551,36 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   ): void => {
     flowRenderer.applyPaginatedDocument(frame, frameDocument, options);
   };
-  const remasureScrollFrames = (): void => {
+  /**
+   * 版式切换门控：度量期间挡住帧 ResizeObserver。可重入——外层已持有时
+   * 内层不得提前释放，成功或抛错都只由持有方清掉。
+   */
+  const holdLayoutSwitching = (work: () => void): void => {
+    const held = layoutSwitching;
     layoutSwitching = true;
     try {
-      flowRenderer.remasureScrollFrames();
+      work();
     } finally {
-      layoutSwitching = false;
+      if (!held) {
+        layoutSwitching = false;
+      }
     }
+  };
+  const remasureScrollFrames = (): void => {
+    holdLayoutSwitching(() => {
+      flowRenderer.remasureScrollFrames();
+    });
+  };
+  /** 切回翻页：按当前可视宽度重算单栏步进后再让 paging enabled() 生效。 */
+  const remasurePaginatedFrames = (options?: { restoreRatio?: number; snap?: boolean }): void => {
+    holdLayoutSwitching(() => {
+      stalePaginatedChapters = null;
+      const frame = visibleFlowFrame();
+      const doc = frame?.contentDocument;
+      if (frame !== null && doc !== undefined && doc !== null) {
+        applyPaginatedDocument(frame, doc, options);
+      }
+    });
   };
   const syncVisibleFlowFrames = (): void => {
     flowRenderer.syncVisibleFrames();
@@ -2160,8 +2183,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   /**
-   * 划选 mouseup（flow/txt，iframe 内）：捕获待确认划选并唤起工具栏（R3）。
-   * 不再直接建标注——高亮/笔记经工具栏确认，取消高亮在选中已有 mark 时可用。
+   * 划选确认（flow/txt，iframe 内）：桌面 mouseup 与触屏 selectionchange/touchend
+   * 稳定后共用同一入口。捕获待确认划选并唤起既有工具栏，不新造 UI。
    */
   const onFlowSelectionMouseUp = (
     selection: Selection | null,
@@ -2652,11 +2675,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       restoreAttempts = 0;
     }
     setActiveChapter(saved?.index ?? chapterFromScroll());
-    const frame = visibleFlowFrame();
-    const doc = frame?.contentDocument;
-    if (frame !== null && doc !== undefined && doc !== null) {
-      applyPaginatedDocument(frame, doc, saved === null ? undefined : { restoreRatio: saved.ratio });
-    }
+    remasurePaginatedFrames(saved === null ? undefined : { restoreRatio: saved.ratio });
     if (pendingRestore !== null) {
       applySavedProgress();
     }
@@ -2681,19 +2700,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     // 排版/版式变化会触发重排（分栏或重测高），先快照当前位置，重排后恢复，
     // 与 syncPaginatedChapter 的缩放路径同一机制，避免跳回书的开头。
     const saved = pendingRestore ?? lastFlowProgress ?? currentProgressSnapshot();
-    layoutSwitching = true;
-    try {
-      if (flowIsPaginated()) {
-        const frame = visibleFlowFrame();
-        const doc = frame?.contentDocument;
-        if (frame !== null && doc !== undefined && doc !== null) {
-          applyPaginatedDocument(frame, doc);
-        }
-      } else {
-        remasureScrollFrames();
-      }
-    } finally {
-      layoutSwitching = false;
+    if (flowIsPaginated()) {
+      remasurePaginatedFrames();
+    } else {
+      remasureScrollFrames();
     }
     refreshOpenSearch();
     syncFlowState();
@@ -2803,15 +2813,27 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const applyFlowLayout = (layout: ReaderFlowLayout): void => {
     const next = parseReaderLayout(layout);
     saveReaderLayout(preferenceStorage, next);
-    applyReaderLayout(root, next);
-    if (typeof document !== 'undefined') {
-      applyReaderDocumentLayout(document.documentElement, 'reader', next);
+    try {
+      holdLayoutSwitching(() => {
+        // 先写 data-reading-layout：scroll 时 bindTouchPaging/bindClickPaging
+        // 的 enabled()（仅 paginated）立刻为假，点翻失效且不吞纵向滑动。
+        applyReaderLayout(root, next);
+        if (typeof document !== 'undefined') {
+          applyReaderDocumentLayout(document.documentElement, 'reader', next);
+        }
+        dispatchReaderFlowLayoutPref(next);
+        if (next === 'scroll') {
+          flowRenderer.remasureScrollFrames();
+        } else {
+          remasurePaginatedFrames();
+        }
+      });
+    } finally {
+      refreshViewport();
+      renderTypographyPanel();
+      readerChrome?.syncStayRevealed();
+      syncChromeRevealAttr();
     }
-    dispatchReaderFlowLayoutPref(next);
-    refreshViewport();
-    renderTypographyPanel();
-    readerChrome?.syncStayRevealed();
-    syncChromeRevealAttr();
   };
 
   const applyPaperTheme = (theme: ReaderThemeId): void => {

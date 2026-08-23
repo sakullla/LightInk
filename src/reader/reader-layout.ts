@@ -147,6 +147,10 @@ export interface ReaderPageSpread {
  * the stored line-length — otherwise a desktop window stays one column
  * with an empty facing page. Two columns split the page evenly so
  * `column-count: 2` cannot leak a leftover sliver.
+ *
+ * Compact / touch never uses that desktop pair threshold: an inflated
+ * iframe width would paint two overlapping columns and skip a page.
+ * Force one full-width column (`column-width: 100%`) and step by that width.
  */
 export const READER_SPREAD_MIN_COLUMN_REM = 16;
 
@@ -154,14 +158,18 @@ export function readerPageSpread(
   containerWidth: number,
   fontSizePx: number,
   measureRem: number,
+  compact?: boolean,
 ): ReaderPageSpread {
   const size = Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 16;
   const measurePx = Math.max(1, Math.round(measureRem * size));
   const minColumnPx = Math.round(READER_SPREAD_MIN_COLUMN_REM * size);
   const minPad = Math.max(40, Math.round(size * 2.5));
   const pairGap = Math.max(40, Math.round(size * 2.5));
-  const pageWidth = Math.max(1, Math.round(containerWidth));
-  if (pageWidth >= 2 * minColumnPx + pairGap) {
+  const pageWidth =
+    Number.isFinite(containerWidth) && containerWidth > 0 ? Math.max(1, Math.round(containerWidth)) : 1;
+  const forceSingle =
+    compact === true || (compact !== false && readerSurfaceIsCompact());
+  if (!forceSingle && pageWidth >= 2 * minColumnPx + pairGap) {
     const columnWidth = Math.max(1, Math.floor((pageWidth - pairGap) / 2));
     const width = columnWidth * 2 + pairGap;
     return {
@@ -191,8 +199,9 @@ export function readerFlowSpreadFromTypography(
   containerWidth: number,
   fontSizePx: number,
   typography: ReaderTypography,
+  compact?: boolean,
 ): ReaderPageSpread {
-  return readerPageSpread(containerWidth, fontSizePx, typography.measureRem);
+  return readerPageSpread(containerWidth, fontSizePx, typography.measureRem, compact);
 }
 
 /** Phone/tablet reading: Kindle Narrow is ~16pt, not the desktop 40px gutter. */

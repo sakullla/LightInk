@@ -103,6 +103,7 @@ body {
   color: inherit;
   font: inherit;
   line-height: var(--lightink-reader-line-height, 1.8);
+  -webkit-touch-callout: none;
 }
 p { margin: 0 0 0.55em; }
 h1, h2, h3 {
@@ -398,6 +399,20 @@ function readerSurfaceActive(root: HTMLElement): boolean {
   return root.dataset.workspaceSurface === 'reader';
 }
 
+/** 宿主 html 上的触屏/Android 旗标（iframe 文档本身不带 data-android）。 */
+function hostHasTouchFlags(root: HTMLElement): boolean {
+  const fromRoot =
+    typeof root.closest === 'function' ? root.closest('html') : null;
+  const documentRoot =
+    (fromRoot instanceof Element ? fromRoot : null) ??
+    (typeof document !== 'undefined' ? document.documentElement : null);
+  return (
+    documentRoot instanceof Element &&
+    (documentRoot.hasAttribute('data-android') ||
+      documentRoot.hasAttribute('data-touch-primary'))
+  );
+}
+
 function ancestorIsHidden(root: HTMLElement): boolean {
   let node: HTMLElement | null = root;
   while (node !== null) {
@@ -522,6 +537,74 @@ function readerPaperColor(root: HTMLElement): string {
   return computed.backgroundColor || 'transparent';
 }
 
+/** Layout / visual viewport CSS width; NaN when the engine has no usable figure. */
+function visualViewportCssWidth(): number {
+  if (typeof window === 'undefined') {
+    return Number.NaN;
+  }
+  const visual = window.visualViewport?.width;
+  if (typeof visual === 'number' && Number.isFinite(visual) && visual > 0) {
+    return visual;
+  }
+  return Number.isFinite(window.innerWidth) && window.innerWidth > 0
+    ? window.innerWidth
+    : Number.NaN;
+}
+
+/**
+ * Compact/touch page width: reader root or visual viewport.
+ * Never take an inflated iframe/host box (that path painted column-count:2).
+ */
+function resolveReaderVisualPageWidth(root: HTMLElement): number {
+  const rootWidth = root.clientWidth;
+  if (Number.isFinite(rootWidth) && rootWidth > 1) {
+    return Math.round(rootWidth);
+  }
+  if (typeof root.getBoundingClientRect === 'function') {
+    const painted = root.getBoundingClientRect().width;
+    if (Number.isFinite(painted) && painted > 1) {
+      return Math.round(painted);
+    }
+  }
+  const visual = visualViewportCssWidth();
+  if (Number.isFinite(visual) && visual > 1) {
+    return Math.round(visual);
+  }
+  return Number.NaN;
+}
+
+function resolveFlowPageSpread(
+  root: HTMLElement,
+  viewport: { width: number; fontPx: number },
+  frame: HTMLIFrameElement | null,
+): {
+  compact: boolean;
+  pageWidth: number;
+  innerWidth: number;
+  widthUsable: boolean;
+  pad: number;
+  layout: ReturnType<typeof readerFlowSpreadFromTypography>;
+} {
+  const compact = readerSurfaceIsCompact(root);
+  const pageWidth = compact
+    ? resolveReaderVisualPageWidth(root)
+    : Math.max(
+        viewport.width,
+        Math.round(frame?.getBoundingClientRect().width || 0),
+        Math.round(frame?.clientWidth || 0),
+      );
+  const pad = readerPageInnerPadPx(viewport.fontPx, compact);
+  const widthUsable = Number.isFinite(pageWidth) && pageWidth > 1;
+  const innerWidth = widthUsable ? Math.max(1, pageWidth - pad * 2) : Number.NaN;
+  const layout = readerFlowSpreadFromTypography(
+    innerWidth,
+    viewport.fontPx,
+    resolveReaderTypography(root),
+    compact,
+  );
+  return { compact, pageWidth, innerWidth, widthUsable, pad, layout };
+}
+
 function applyFlowTypography(
   root: HTMLElement,
   frameDocument: Document,
@@ -541,6 +624,9 @@ function applyFlowTypography(
   frameDocument.body.style.fontFamily = resolveReaderFontFamily(typography.fontFamily);
   frameDocument.body.style.fontSize = `calc(${computed.fontSize} * ${typography.fontScaleStep})`;
   frameDocument.body.style.lineHeight = String(typography.lineHeight);
+  if (hostHasTouchFlags(root)) {
+    frameDocument.body.style.setProperty('-webkit-touch-callout', 'none');
+  }
 }
 
 function flowFrameSource(html: string, stylesheet = ''): string {
@@ -1035,7 +1121,14 @@ export function createFlowRenderer(
       frame?.contentDocument === undefined || frame.contentDocument === null
         ? null
         : readerPagedScroller(frame.contentDocument);
-    const step = scroller === null ? 0 : pagedFrameStep(scroller);
+    const compact = readerSurfaceIsCompact(root);
+    const viewport = pagedViewport();
+    const metrics = resolveFlowPageSpread(root, viewport, frame);
+    const storedStep = scroller === null ? 0 : pagedFrameStep(scroller);
+    const step =
+      compact && Number.isFinite(metrics.layout.step) && metrics.layout.step > 1
+        ? metrics.layout.step
+        : storedStep;
     if (
       scroller !== undefined &&
       scroller !== null &&
@@ -1096,32 +1189,29 @@ export function createFlowRenderer(
     frame.style.width = '100%';
     frame.style.maxWidth = '100%';
     const viewport = pagedViewport();
-    const pageWidth = Math.max(
-      viewport.width,
-      Math.round(frame.getBoundingClientRect().width || 0),
-      Math.round(frame.clientWidth || 0),
+    const { pageWidth, innerWidth, widthUsable, pad, layout } = resolveFlowPageSpread(
+      root,
+      viewport,
+      frame,
     );
     const cover = readerChapterLooksLikeCover(frameDocument);
     const plates = readerChapterLooksLikePlates(frameDocument);
-    const pad = readerPageInnerPadPx(viewport.fontPx, readerSurfaceIsCompact(root));
-    const innerWidth = Math.max(1, pageWidth - pad * 2);
-    const layout = readerFlowSpreadFromTypography(
-      innerWidth,
-      viewport.fontPx,
-      resolveReaderTypography(root),
-    );
-    const spread = cover || plates
+    const forceSingle = !widthUsable || cover || plates;
+    const spread = forceSingle
       ? {
           ...layout,
-          width: innerWidth,
+          width: widthUsable ? innerWidth : layout.width,
           columns: 1,
-          columnWidth: innerWidth,
+          columnWidth: widthUsable ? innerWidth : layout.columnWidth,
           gap: 0,
-          step: pagedColumnStep(innerWidth, 0),
+          step: pagedColumnStep(widthUsable ? innerWidth : Math.max(1, layout.width), 0),
         }
       : layout;
     const { columnWidth, columns, gap, step } = spread;
     const height = viewport.height;
+    const pageWidthCss = widthUsable ? `${pageWidth}px` : '100%';
+    const spreadWidthCss = widthUsable ? `${spread.width}px` : '100%';
+    const columnWidthCss = widthUsable ? `${columnWidth}px` : '100%';
     const html = frameDocument.documentElement;
     const pageBox = ensureReaderSpread(frameDocument);
     const previousRatio = pagedProgressRatio(pageBox);
@@ -1136,7 +1226,7 @@ export function createFlowRenderer(
     html.style.boxShadow = 'none';
     html.style.setProperty('height', `${height}px`, 'important');
     html.style.boxSizing = 'border-box';
-    html.style.setProperty('width', `${pageWidth}px`, 'important');
+    html.style.setProperty('width', pageWidthCss, 'important');
     html.style.maxWidth = 'none';
     html.style.paddingLeft = '0';
     html.style.paddingRight = '0';
@@ -1148,17 +1238,22 @@ export function createFlowRenderer(
     html.style.removeProperty('column-fill');
     applyPagedSpreadVars(html, { columnWidth, columns, gap });
     applyPagedPageStep(html, step);
+    if (!widthUsable) {
+      html.style.setProperty('--lightink-reader-column-width', '100%');
+      html.style.setProperty('--lightink-reader-column-count', '1');
+      html.style.setProperty('--lightink-reader-column-gap', '0px');
+    }
     html.style.setProperty('--lightink-reader-page-height', `${height}px`);
     html.style.setProperty('--lightink-reader-image-max-height', `${height}px`);
     pageBox.style.boxSizing = 'border-box';
-    pageBox.style.setProperty('width', `${spread.width}px`, 'important');
+    pageBox.style.setProperty('width', spreadWidthCss, 'important');
     pageBox.style.maxWidth = 'none';
     pageBox.style.setProperty('height', `${height}px`, 'important');
     pageBox.style.setProperty('max-height', `${height}px`, 'important');
     pageBox.style.setProperty('overflow-x', 'auto', 'important');
     pageBox.style.setProperty('overflow-y', 'hidden', 'important');
     pageBox.style.scrollbarWidth = 'none';
-    pageBox.style.setProperty('column-width', `${columnWidth}px`, 'important');
+    pageBox.style.setProperty('column-width', columnWidthCss, 'important');
     pageBox.style.setProperty('column-count', String(columns), 'important');
     pageBox.style.setProperty('column-gap', `${gap}px`, 'important');
     pageBox.style.setProperty('column-fill', 'auto', 'important');
@@ -1166,11 +1261,17 @@ export function createFlowRenderer(
     pageBox.style.paddingRight = '0';
     applyPagedSpreadVars(pageBox, { columnWidth, columns, gap });
     applyPagedPageStep(pageBox, step);
+    if (!widthUsable) {
+      pageBox.style.setProperty('--lightink-reader-column-width', '100%');
+      pageBox.style.setProperty('--lightink-reader-column-count', '1');
+      pageBox.style.setProperty('--lightink-reader-column-gap', '0px');
+    }
     // 正文插图锁在本栏。封面铺满整页。连续插图画页各占一页，避免第二张从图缝里被裁掉。
     const mediaMax = cover || plates ? spread.width : columnWidth;
+    const mediaMaxCss = widthUsable && Number.isFinite(mediaMax) && mediaMax > 0 ? `${mediaMax}px` : '100%';
     const mediaList = frameDocument.querySelectorAll<HTMLElement>('img, svg');
     mediaList.forEach((media, index) => {
-      media.style.maxWidth = `${mediaMax}px`;
+      media.style.maxWidth = mediaMaxCss;
       media.style.maxHeight = `${height}px`;
       media.style.objectFit = 'contain';
       media.style.marginTop = '0';
@@ -1179,7 +1280,7 @@ export function createFlowRenderer(
       if (cover || plates) {
         // Contain-fit the page box so a small cover scales up and a
         // large plate scales down (Kindle / Apple Books / Readium).
-        media.style.width = `${mediaMax}px`;
+        media.style.width = mediaMaxCss;
         media.style.height = `${height}px`;
         media.classList.add('lightink-reader-media--page');
       } else {
@@ -1201,7 +1302,7 @@ export function createFlowRenderer(
       }
     });
     for (const figure of frameDocument.querySelectorAll<HTMLElement>('figure')) {
-      figure.style.maxWidth = `${mediaMax}px`;
+      figure.style.maxWidth = mediaMaxCss;
       figure.style.marginTop = '0';
       figure.style.marginBottom = '0';
       figure.style.breakInside = 'auto';
@@ -1212,7 +1313,7 @@ export function createFlowRenderer(
     frameDocument.body.style.boxSizing = 'border-box';
     frameDocument.body.style.setProperty('height', `${height}px`, 'important');
     frameDocument.body.style.setProperty('min-height', `${height}px`, 'important');
-    frameDocument.body.style.setProperty('width', `${pageWidth}px`, 'important');
+    frameDocument.body.style.setProperty('width', pageWidthCss, 'important');
     frameDocument.body.style.maxWidth = 'none';
     frameDocument.body.style.setProperty('overflow', 'hidden', 'important');
     frameDocument.body.style.marginLeft = '0';
@@ -1464,13 +1565,45 @@ export function createFlowRenderer(
             frameDocument.getElementById(targetId)?.scrollIntoView({ block: 'center' });
           }
         };
-        const onMouseUp = (): void => {
+        const notifySelection = (): void => {
           hooks.onSelectionMouseUp(
             frameWindow.getSelection(),
             frameChapter,
             frameDocument.body,
             frame,
           );
+        };
+        const onMouseUp = (): void => {
+          notifySelection();
+        };
+        let stableSelectionTimer: ReturnType<typeof setTimeout> | null = null;
+        const flushStableSelection = (): void => {
+          stableSelectionTimer = null;
+          if (!hostHasTouchFlags(root)) {
+            return;
+          }
+          notifySelection();
+        };
+        const scheduleStableSelection = (): void => {
+          if (!hostHasTouchFlags(root)) {
+            return;
+          }
+          if (stableSelectionTimer !== null) {
+            clearTimeout(stableSelectionTimer);
+          }
+          // selectionchange 在长按拖选中连发；停一拍再走既有 onSelectionMouseUp。
+          stableSelectionTimer = setTimeout(flushStableSelection, 80);
+        };
+        const onSelectionChange = (): void => {
+          scheduleStableSelection();
+        };
+        const onTouchEnd = (): void => {
+          scheduleStableSelection();
+        };
+        const onContextMenu = (event: Event): void => {
+          if (hostHasTouchFlags(root)) {
+            event.preventDefault();
+          }
         };
         // 划选发生在 iframe 内，键盘焦点也在 iframe 文档——Escape 需在 frame 内转发。
         const onKeyDown = (event: KeyboardEvent): void => {
@@ -1562,6 +1695,9 @@ export function createFlowRenderer(
         };
         frameDocument.addEventListener('click', onClick);
         frameDocument.addEventListener('mouseup', onMouseUp);
+        frameDocument.addEventListener('selectionchange', onSelectionChange);
+        frameDocument.addEventListener('touchend', onTouchEnd);
+        frameDocument.addEventListener('contextmenu', onContextMenu);
         frameDocument.addEventListener('keydown', onKeyDown);
         frameDocument.addEventListener('pointermove', onPointerMove);
         // Capture on both: some engines skip window when the target is <img>.
@@ -1639,11 +1775,18 @@ export function createFlowRenderer(
         };
         syncChapterResources(win);
         releaseRemoteImages.push(() => {
+          if (stableSelectionTimer !== null) {
+            clearTimeout(stableSelectionTimer);
+            stableSelectionTimer = null;
+          }
           resizeObserver?.disconnect();
           releaseImages();
           releaseFrameTouchPaging();
           frameDocument.removeEventListener('click', onClick);
           frameDocument.removeEventListener('mouseup', onMouseUp);
+          frameDocument.removeEventListener('selectionchange', onSelectionChange);
+          frameDocument.removeEventListener('touchend', onTouchEnd);
+          frameDocument.removeEventListener('contextmenu', onContextMenu);
           frameDocument.removeEventListener('keydown', onKeyDown);
           frameDocument.removeEventListener('pointermove', onPointerMove);
           frameWindow.removeEventListener('wheel', onWheel, true);
