@@ -42,7 +42,7 @@ export interface OpdsFeed {
   readonly previousUrl?: string;
   readonly searchTemplate?: string;
   readonly sourceUrl: string;
-  readonly format?: 'opds1' | 'opds2';
+  readonly format?: 'opds1' | 'opds2' | 'webdav';
   readonly groups?: readonly OpdsGroup[];
 }
 

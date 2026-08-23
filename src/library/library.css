@@ -1078,6 +1078,20 @@ html[data-touch-primary] .lightink-library-header {
   white-space: normal;
 }
 
+.lightink-library-source-form-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-source-form-status[data-status='error'] {
+  color: var(--lightink-danger);
+}
+
+.lightink-library-source-form-status[data-status='success'] {
+  color: var(--lightink-accent);
+}
+
 /* Membership (organize into groups) overlay. */
 .lightink-library-membership-overlay {
   position: absolute;

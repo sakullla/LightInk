@@ -408,6 +408,14 @@ const en = {
   'heading.default': 'Heading',
   'table.col1': 'Column 1',
   'table.col2': 'Column 2',
+  'library.sourceKind': 'Source type',
+  'library.opdsSource': 'OPDS',
+  'library.webdav.source': 'WebDAV',
+  'library.webdav.url': 'WebDAV URL',
+  'library.webdav.edit': 'Edit WebDAV source',
+  'library.webdav.testConnection': 'Test connection',
+  'library.webdav.connectionOk': 'Connection succeeded',
+  'library.webdav.httpNotAllowed': 'HTTP addresses require Allow HTTP/LAN.',
 } as const satisfies Dict;
 
 export type MessageKey = keyof typeof en;
@@ -795,6 +803,14 @@ const zhCN = {
   'heading.default': '标题',
   'table.col1': '列1',
   'table.col2': '列2',
+  'library.sourceKind': '源类型',
+  'library.opdsSource': 'OPDS',
+  'library.webdav.source': 'WebDAV',
+  'library.webdav.url': 'WebDAV 地址',
+  'library.webdav.edit': '编辑 WebDAV 源',
+  'library.webdav.testConnection': '测试连接',
+  'library.webdav.connectionOk': '连接成功',
+  'library.webdav.httpNotAllowed': 'HTTP 地址需要勾选允许 HTTP/LAN',
 } as const satisfies Readonly<Record<MessageKey, string>>;
 
 const CATALOG: Readonly<Record<LocaleId, Readonly<Record<MessageKey, string>>>> = {

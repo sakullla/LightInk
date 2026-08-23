@@ -34,7 +34,12 @@ function clean(value: string | undefined): string {
 
 function sourceValue(item: LibraryItem): 'managed' | 'external' | 'remote' {
   if (item.sourceKind === 'managed' || item.blobHash != null) return 'managed';
-  if (item.sourceKind === 'opds' || item.sourceKind === 'remote' || item.availability === 'remote') {
+  if (
+    item.sourceKind === 'opds' ||
+    item.sourceKind === 'webdav' ||
+    item.sourceKind === 'remote' ||
+    item.availability === 'remote'
+  ) {
     return 'remote';
   }
   return 'external';

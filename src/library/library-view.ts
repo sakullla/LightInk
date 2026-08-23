@@ -51,7 +51,7 @@ import type { ProgressStorage } from '../reader/reading-progress.js';
 import type { ReaderPrefsStorage } from '../reader/reader-prefs.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import { bindLongPress } from '../ui/touch/long-press.js';
-import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
+import type { WebDavSourceClient } from './webdav-source-client.js';
 import {
   applyLibraryTheme,
   loadLibraryTheme,
@@ -84,8 +84,10 @@ interface Labels {
   webdavSource: string;
   webdavUrl: string;
   webdavSync: string;
-  webdavSaved: string;
   editWebDav: string;
+  testConnection: string;
+  testConnectionOk: string;
+  httpNotAllowed: string;
   importLocal: string;
   search: string;
   searchPlaceholder: string;
@@ -228,8 +230,10 @@ const LABELS: Record<Locale, Labels> = {
     webdavSource: 'WebDAV',
     webdavUrl: 'WebDAV URL',
     webdavSync: 'WebDAV sync',
-    webdavSaved: 'WebDAV settings saved',
     editWebDav: 'Edit WebDAV',
+    testConnection: 'Test connection',
+    testConnectionOk: 'Connection succeeded',
+    httpNotAllowed: 'HTTP addresses require Allow HTTP/LAN.',
     importLocal: 'Import local book',
     search: 'Search',
     searchPlaceholder: 'Search this library',
@@ -370,8 +374,10 @@ const LABELS: Record<Locale, Labels> = {
     webdavSource: 'WebDAV',
     webdavUrl: 'WebDAV 地址',
     webdavSync: 'WebDAV 同步',
-    webdavSaved: 'WebDAV 设置已保存',
     editWebDav: '编辑 WebDAV',
+    testConnection: '测试连接',
+    testConnectionOk: '连接成功',
+    httpNotAllowed: 'HTTP 地址需要勾选允许 HTTP/LAN',
     importLocal: '导入本地书籍',
     search: '搜索',
     searchPlaceholder: '搜索当前书库',
@@ -551,7 +557,10 @@ export interface LibraryViewDependencies {
   readonly progressStorage?: ProgressStorage | null;
   /** Open the Markdown editor from Manage. */
   readonly onEnterEditor?: () => void;
-  readonly webdav?: Pick<WebDavClient, 'getProfile' | 'saveProfile' | 'forgetProfile'>;
+  readonly webdavSource?: Pick<
+    WebDavSourceClient,
+    'addSource' | 'listSources' | 'removeSource' | 'browse' | 'test'
+  >;
   readonly onOpenSyncPanel?: () => void;
   /** Persists the shelf chrome theme; never the editor or reader keys. */
   readonly themeStorage?: LibraryThemeStorage | null;
@@ -575,6 +584,39 @@ export interface LibraryView {
   refresh(): Promise<void>;
   retranslate(): void;
   destroy(): void;
+}
+
+type CatalogSourceKind = 'opds' | 'webdav';
+
+interface CatalogSource extends OpdsSource {
+  readonly kind: CatalogSourceKind;
+}
+
+function asCatalogSources(
+  kind: CatalogSourceKind,
+  list: readonly OpdsSource[],
+): CatalogSource[] {
+  return list.map((source) => ({ ...source, kind }));
+}
+
+function withoutCatalogKind(source: CatalogSource): OpdsSource {
+  return {
+    id: source.id,
+    title: source.title,
+    url: source.url,
+    allowHttp: source.allowHttp,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+    ...(source.credentialRef === undefined ? {} : { credentialRef: source.credentialRef }),
+  };
+}
+
+function httpRequiresAllow(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
 interface DisplayItem {
@@ -616,8 +658,12 @@ function displayFromPersistedItem(item: LibraryItem): DisplayItem {
   return { item, links: fallback === undefined ? [] : [fallback] };
 }
 
-function itemFromEntry(sourceId: string, entry: OpdsEntry): DisplayItem {
-  const itemId = entry.itemId ?? `opds:${sourceId}:${entry.id}`;
+function itemFromEntry(
+  sourceId: string,
+  entry: OpdsEntry,
+  sourceKind: LibraryItem['sourceKind'] = 'opds',
+): DisplayItem {
+  const itemId = entry.itemId ?? `${sourceKind}:${sourceId}:${entry.id}`;
   const links = entry.links
     .filter((link) => link.acquisition)
     .map((link) => acquisitionFromOpds(itemId, link));
@@ -626,7 +672,7 @@ function itemFromEntry(sourceId: string, entry: OpdsEntry): DisplayItem {
     item: {
       id: itemId,
       sourceId,
-      sourceKind: 'opds',
+      sourceKind,
       title: entry.title,
       authors: entry.authors,
       coverUrl: entry.coverUrl,
@@ -643,13 +689,17 @@ function itemFromEntry(sourceId: string, entry: OpdsEntry): DisplayItem {
   };
 }
 
-function itemsFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
-  const displays = feed.entries.map((entry) => itemFromEntry(sourceId, entry));
+function itemsFromFeed(
+  sourceId: string,
+  feed: OpdsFeed,
+  sourceKind: LibraryItem['sourceKind'] = 'opds',
+): DisplayItem[] {
+  const displays = feed.entries.map((entry) => itemFromEntry(sourceId, entry, sourceKind));
   for (const [index, group] of (feed.groups ?? []).entries()) {
     const entries = [...(group.publications ?? []), ...group.navigation];
     for (const entry of entries) {
       displays.push({
-        ...itemFromEntry(sourceId, entry),
+        ...itemFromEntry(sourceId, entry, sourceKind),
         catalogGroupKey: `opds-group-${index}`,
         catalogGroupTitle: group.title,
       });
@@ -662,14 +712,24 @@ function isNavigationDisplay(display: DisplayItem): boolean {
   return display.entry?.kind === 'navigation';
 }
 
-function publicationsFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
-  return itemsFromFeed(sourceId, feed).filter((display) => !isNavigationDisplay(display));
+function publicationsFromFeed(
+  sourceId: string,
+  feed: OpdsFeed,
+  sourceKind: LibraryItem['sourceKind'] = 'opds',
+): DisplayItem[] {
+  return itemsFromFeed(sourceId, feed, sourceKind).filter(
+    (display) => !isNavigationDisplay(display),
+  );
 }
 
-function navigationFromFeed(sourceId: string, feed: OpdsFeed): DisplayItem[] {
+function navigationFromFeed(
+  sourceId: string,
+  feed: OpdsFeed,
+  sourceKind: LibraryItem['sourceKind'] = 'opds',
+): DisplayItem[] {
   const seen = new Set<string>();
   const navigations: DisplayItem[] = [];
-  for (const display of itemsFromFeed(sourceId, feed)) {
+  for (const display of itemsFromFeed(sourceId, feed, sourceKind)) {
     if (!isNavigationDisplay(display)) continue;
     const url = display.entry?.navigationUrl;
     if (url == null || url === '' || seen.has(url)) continue;
@@ -1278,13 +1338,12 @@ export function createLibraryView(
   let pendingAddItemId: string | null = null;
   let ignoreGroupBackdrop = false;
   let ignoreSourceBackdrop = false;
-  let sources: OpdsSource[] = [];
+  let sources: CatalogSource[] = [];
   let selectedSourceId: string | null = null;
   let catalogRoot: CatalogTreeNode | null = null;
   let selectedCatalogKey = '';
   let editingSourceId: string | null = null;
-  let editingWebDav = false;
-  let webDavProfile: SyncProfile | null = null;
+  let editingSourceKind: CatalogSourceKind = 'opds';
   let selected: DisplayItem | null = null;
   let items: DisplayItem[] = [];
   let shelfItems: DisplayItem[] = [];
@@ -1434,8 +1493,10 @@ export function createLibraryView(
     onOpenSyncPanel: deps.onOpenSyncPanel,
     onEnterEditor: deps.onEnterEditor,
   });
-  const selectedSource = (): OpdsSource | undefined =>
+  const selectedSource = (): CatalogSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
+  const catalogItemKind = (): LibraryItem['sourceKind'] =>
+    selectedSource()?.kind === 'webdav' ? 'webdav' : 'opds';
   const catalogActive = (): boolean => activeSection === 'sources' && selectedSourceId !== null;
 
   function resetCatalogTree(): void {
@@ -1443,7 +1504,7 @@ export function createLibraryView(
     selectedCatalogKey = '';
   }
 
-  function ensureCatalogRoot(source: OpdsSource): CatalogTreeNode {
+  function ensureCatalogRoot(source: CatalogSource): CatalogTreeNode {
     if (catalogRoot !== null && catalogRoot.key === '') return catalogRoot;
     catalogRoot = {
       key: '',
@@ -1524,7 +1585,8 @@ export function createLibraryView(
 
   function applyCatalogFeed(sourceId: string, loaded: OpdsFeed, url?: string): void {
     feed = loaded;
-    const publications = publicationsFromFeed(sourceId, loaded);
+    const itemKind = catalogItemKind();
+    const publications = publicationsFromFeed(sourceId, loaded, itemKind);
     const source = selectedSource();
     if (source !== undefined) ensureCatalogRoot(source);
     const node = findCatalogNode(catalogNodeKey(url));
@@ -1532,7 +1594,10 @@ export function createLibraryView(
       node.publications = publications;
       node.loaded = true;
       node.expanded = true;
-      node.children = mergeCatalogChildren(node, navigationFromFeed(sourceId, loaded));
+      node.children = mergeCatalogChildren(
+        node,
+        navigationFromFeed(sourceId, loaded, itemKind),
+      );
       selectedCatalogKey = node.key;
       syncCatalogTrail();
     }
@@ -2297,9 +2362,7 @@ export function createLibraryView(
     const visibleSources = sources.filter(
       (source) => matches(source.title) || matches(source.url),
     );
-    const showWebDav =
-      webDavProfile !== null && matches(webDavProfile.name) && matches(webDavProfile.url);
-    if (visibleSources.length === 0 && !showWebDav) {
+    if (visibleSources.length === 0) {
       const empty = doc.createElement('p');
       empty.className = 'lightink-library-source-empty';
       empty.textContent = query === '' ? labels().emptySources : labels().noMatch;
@@ -2309,6 +2372,7 @@ export function createLibraryView(
     for (const source of visibleSources) {
       const row = doc.createElement('div');
       row.className = 'lightink-library-source-row';
+      row.dataset.sourceKind = source.kind;
       const stack = doc.createElement('div');
       stack.className = 'lightink-library-source-stack';
       const choose = button(doc, source.title, 'lightink-library-source');
@@ -2324,44 +2388,15 @@ export function createLibraryView(
       url.className = 'lightink-library-source-url';
       url.textContent = source.url;
       stack.append(choose, url);
+      const editLabel = source.kind === 'webdav' ? labels().editWebDav : labels().editSource;
       const edit = button(doc, '', 'lightink-library-icon-button lightink-library-source-edit');
-      edit.title = labels().editSource;
-      edit.setAttribute('aria-label', `${labels().editSource}: ${source.title}`);
+      edit.title = editLabel;
+      edit.setAttribute('aria-label', `${editLabel}: ${source.title}`);
       edit.addEventListener('click', () => openSourceForm(source));
       const remove = button(doc, '', 'lightink-library-icon-button lightink-library-source-remove');
       remove.title = labels().deleteSource;
       remove.setAttribute('aria-label', `${labels().deleteSource}: ${source.title}`);
       remove.addEventListener('click', () => void removeSource(source));
-      row.append(stack, edit, remove);
-      sourceList.appendChild(row);
-    }
-    if (showWebDav && webDavProfile !== null) {
-      const profile = webDavProfile;
-      const row = doc.createElement('div');
-      row.className = 'lightink-library-source-row';
-      row.dataset.sourceKind = 'webdav';
-      const stack = doc.createElement('div');
-      stack.className = 'lightink-library-source-stack';
-      const choose = button(doc, profile.name, 'lightink-library-source');
-      choose.prepend(createNavIcon(doc, NAV_ICON_PATHS.source));
-      choose.dataset.sourceKind = 'webdav';
-      choose.title = profile.url;
-      choose.addEventListener('click', () => {
-        if (deps.onOpenSyncPanel !== undefined) deps.onOpenSyncPanel();
-        else openWebDavForm();
-      });
-      const url = doc.createElement('span');
-      url.className = 'lightink-library-source-url';
-      url.textContent = profile.url;
-      stack.append(choose, url);
-      const edit = button(doc, '', 'lightink-library-icon-button lightink-library-source-edit');
-      edit.title = labels().editWebDav;
-      edit.setAttribute('aria-label', `${labels().editWebDav}: ${profile.name}`);
-      edit.addEventListener('click', () => openWebDavForm());
-      const remove = button(doc, '', 'lightink-library-icon-button lightink-library-source-remove');
-      remove.title = labels().deleteSource;
-      remove.setAttribute('aria-label', `${labels().deleteSource}: ${profile.name}`);
-      remove.addEventListener('click', () => void removeWebDav());
       row.append(stack, edit, remove);
       sourceList.appendChild(row);
     }
@@ -2925,10 +2960,12 @@ export function createLibraryView(
   }
 
   function requestFor(display: DisplayItem): LibraryOpenRequest {
+    const catalog =
+      selectedSource() ?? sources.find((source) => source.id === display.item.sourceId);
     return {
       item: display.item,
       acquisition: selectedAcquisition(display),
-      source: selectedSource() ?? sources.find((source) => source.id === display.item.sourceId),
+      source: catalog === undefined ? undefined : withoutCatalogKind(catalog),
     };
   }
 
@@ -3226,7 +3263,13 @@ export function createLibraryView(
     currentUrl = url;
     lastAction = () => loadFeed(currentUrl);
     try {
-      const loaded = await deps.opds.browse(source.id, url);
+      if (source.kind === 'webdav' && deps.webdavSource === undefined) {
+        throw new Error(labels().offline);
+      }
+      const loaded =
+        source.kind === 'webdav'
+          ? await deps.webdavSource!.browse(source.id, url)
+          : await deps.opds.browse(source.id, url);
       if (generation !== requestGeneration) return;
       applyCatalogFeed(source.id, loaded, url);
       refreshSmartGroups();
@@ -3288,7 +3331,7 @@ export function createLibraryView(
     setStatus('');
     manage.showHome();
     syncPageChrome();
-    await refreshWebDavProfile();
+    await refreshSources().catch(() => undefined);
     renderSources();
     await manage.refreshCache();
   }
@@ -3349,7 +3392,7 @@ export function createLibraryView(
     syncSearchClear();
     setStatus('');
     syncPageChrome();
-    await refreshWebDavProfile();
+    await refreshSources().catch(() => undefined);
     renderSources();
   }
 
@@ -3382,6 +3425,15 @@ export function createLibraryView(
     const query = searchInput.value.trim();
     if (query === '') {
       if (catalogActive() && selectedSourceId !== null) {
+        if (selectedSource()?.kind === 'webdav') {
+          const node = findCatalogNode(selectedCatalogKey);
+          items = node?.publications ?? items;
+          selected = null;
+          setStatus('');
+          renderItems();
+          renderDetail();
+          return;
+        }
         await openCatalog(selectedSourceId);
         return;
       }
@@ -3403,6 +3455,16 @@ export function createLibraryView(
       renderItems();
       return;
     }
+    if (selectedSource()?.kind === 'webdav') {
+      const lowered = query.toLocaleLowerCase();
+      const pool = findCatalogNode(selectedCatalogKey)?.publications ?? items;
+      items = pool.filter((display) => itemTitle(display.item).toLocaleLowerCase().includes(lowered));
+      selected = null;
+      setStatus('');
+      renderItems();
+      renderDetail();
+      return;
+    }
     const generation = ++requestGeneration;
     const painted = catalogHasPaintedContent();
     if (!painted) {
@@ -3414,7 +3476,7 @@ export function createLibraryView(
       const loaded = await deps.opds.search(selectedSourceId, query);
       if (generation !== requestGeneration) return;
       feed = loaded;
-      items = publicationsFromFeed(selectedSourceId, loaded);
+      items = publicationsFromFeed(selectedSourceId, loaded, catalogItemKind());
       refreshSmartGroups();
       selected = null;
       trail.splice(0, trail.length, { title: `${labels().search}: ${query}`, url: loaded.sourceUrl });
@@ -3431,20 +3493,69 @@ export function createLibraryView(
     }
   }
 
-  async function refreshWebDavProfile(): Promise<void> {
-    if (deps.webdav === undefined) {
-      webDavProfile = null;
-      return;
+  async function refreshSources(): Promise<void> {
+    const opdsList = await deps.opds.listSources();
+    let webdavList: OpdsSource[] = [];
+    if (deps.webdavSource !== undefined) {
+      try {
+        webdavList = await deps.webdavSource.listSources();
+      } catch {
+        webdavList = [];
+      }
     }
-    try {
-      webDavProfile = await deps.webdav.getProfile();
-    } catch {
-      webDavProfile = null;
-    }
+    sources = [...asCatalogSources('opds', opdsList), ...asCatalogSources('webdav', webdavList)];
   }
 
-  function renderSourceForm(source?: OpdsSource, kind: 'opds' | 'webdav' = 'opds'): void {
+  function sourceInputFromForm(editing?: CatalogSource): {
+    input: OpdsSourceInput;
+    kind: CatalogSourceKind;
+    url: string;
+    allowHttp: boolean;
+  } {
+    const data = new FormData(sourceForm);
+    const kind: CatalogSourceKind = data.get('kind') === 'webdav' ? 'webdav' : 'opds';
+    const auth = String(data.get('auth') ?? 'none');
+    const url = String(data.get('url') ?? '');
+    const allowHttp = data.get('allowHttp') === 'on';
+    return {
+      kind,
+      url,
+      allowHttp,
+      input: {
+        id: editing?.id,
+        title: String(data.get('title') ?? ''),
+        url,
+        allowHttp,
+        credentialRef: auth === 'keep' ? editing?.credentialRef : undefined,
+        clearCredential:
+          editing?.credentialRef !== undefined && auth === 'none' ? true : undefined,
+        credential:
+          auth === 'basic'
+            ? {
+                kind: 'basic',
+                username: String(data.get('username') ?? ''),
+                password: String(data.get('password') ?? ''),
+              }
+            : auth === 'bearer'
+              ? { kind: 'bearer', token: String(data.get('token') ?? '') }
+              : undefined,
+      },
+    };
+  }
+
+  function setFormStatus(message: string, kind: 'error' | 'success' | '' = ''): void {
+    const statusEl = sourceForm.querySelector<HTMLElement>('.lightink-library-source-form-status');
+    if (statusEl === null) return;
+    statusEl.textContent = message;
+    statusEl.hidden = message === '';
+    if (kind === '') delete statusEl.dataset.status;
+    else statusEl.dataset.status = kind;
+  }
+
+  function renderSourceForm(source?: CatalogSource, kind: CatalogSourceKind = 'opds'): void {
     sourceForm.replaceChildren();
+    editingSourceKind = source?.kind ?? kind;
+    const isWebDav = editingSourceKind === 'webdav';
     const makeInput = (name: string, type = 'text'): HTMLInputElement => {
       const input = doc.createElement('input');
       input.name = name;
@@ -3468,9 +3579,15 @@ export function createLibraryView(
     cancel.addEventListener('click', () => {
       closeSourceForm();
     });
-    actions.append(save, cancel);
+    actions.append(save);
+    if (isWebDav && deps.webdavSource !== undefined) {
+      const test = button(doc, labels().testConnection);
+      test.addEventListener('click', () => void testWebDavSource());
+      actions.append(test);
+    }
+    actions.append(cancel);
     const fields: HTMLElement[] = [];
-    if (source === undefined && deps.webdav !== undefined) {
+    if (source === undefined && deps.webdavSource !== undefined) {
       const kindSelect = doc.createElement('select');
       kindSelect.name = 'kind';
       kindSelect.setAttribute('aria-label', labels().sourceKind);
@@ -3480,13 +3597,19 @@ export function createLibraryView(
         option.textContent = value === 'opds' ? labels().opdsSource : labels().webdavSource;
         kindSelect.appendChild(option);
       }
-      kindSelect.value = kind;
+      kindSelect.value = editingSourceKind;
       kindSelect.addEventListener('change', () => {
-        editingWebDav = kindSelect.value === 'webdav';
-        renderSourceForm(undefined, kindSelect.value === 'webdav' ? 'webdav' : 'opds');
+        editingSourceKind = kindSelect.value === 'webdav' ? 'webdav' : 'opds';
+        renderSourceForm(undefined, editingSourceKind);
         sourceForm.querySelector<HTMLInputElement>('input')?.focus();
       });
       fields.push(labeled(kindSelect, labels().sourceKind));
+    } else {
+      const hiddenKind = doc.createElement('input');
+      hiddenKind.type = 'hidden';
+      hiddenKind.name = 'kind';
+      hiddenKind.value = editingSourceKind;
+      fields.push(hiddenKind);
     }
     const title = makeInput('title');
     const url = makeInput('url', 'url');
@@ -3511,43 +3634,6 @@ export function createLibraryView(
       username.required = password.required = auth.value === 'basic';
       token.required = auth.value === 'bearer';
     });
-    if (kind === 'webdav') {
-      editingWebDav = true;
-      if (webDavProfile !== null && !webDavProfile.needsCredential) {
-        const option = doc.createElement('option');
-        option.value = 'keep';
-        option.textContent = labels().keepAuth;
-        auth.appendChild(option);
-      }
-      for (const value of ['basic', 'bearer'] as const) {
-        const option = doc.createElement('option');
-        option.value = value;
-        option.textContent = labels()[value];
-        auth.appendChild(option);
-      }
-      sourceForm.setAttribute('aria-label', webDavProfile === null ? labels().addSource : labels().editWebDav);
-      sourceForm.append(
-        ...fields,
-        labeled(title, labels().title),
-        labeled(url, labels().webdavUrl),
-        labeled(auth, labels().auth),
-        username,
-        password,
-        token,
-        allowLabel,
-        actions,
-      );
-      title.value = webDavProfile?.name ?? '';
-      url.value = webDavProfile?.url ?? '';
-      allow.checked = webDavProfile?.allowHttp ?? false;
-      auth.value =
-        webDavProfile !== null && !webDavProfile.needsCredential
-          ? 'keep'
-          : (webDavProfile?.authType ?? 'basic');
-      auth.dispatchEvent(new Event('change'));
-      return;
-    }
-    editingWebDav = false;
     if (source?.credentialRef !== undefined) {
       const option = doc.createElement('option');
       option.value = 'keep';
@@ -3560,22 +3646,30 @@ export function createLibraryView(
       option.textContent = labels()[value];
       auth.appendChild(option);
     }
-    sourceForm.setAttribute('aria-label', source === undefined ? labels().addSource : labels().editSource);
+    const formStatus = doc.createElement('p');
+    formStatus.className = 'lightink-library-source-form-status';
+    formStatus.setAttribute('role', 'status');
+    formStatus.hidden = true;
+    const editLabel = isWebDav ? labels().editWebDav : labels().editSource;
+    sourceForm.setAttribute('aria-label', source === undefined ? labels().addSource : editLabel);
     sourceForm.append(
       ...fields,
       labeled(title, labels().title),
-      labeled(url, labels().url),
+      labeled(url, isWebDav ? labels().webdavUrl : labels().url),
       labeled(auth, labels().auth),
       username,
       password,
       token,
       allowLabel,
+      formStatus,
       actions,
     );
     title.value = source?.title ?? '';
     url.value = source?.url ?? '';
     allow.checked = source?.allowHttp ?? false;
-    auth.value = source?.credentialRef === undefined ? 'none' : 'keep';
+    auth.value =
+      source?.credentialRef !== undefined ? 'keep' : isWebDav && source === undefined ? 'basic' : 'none';
+    auth.dispatchEvent(new Event('change'));
   }
 
   function showSourceOverlay(): void {
@@ -3591,7 +3685,7 @@ export function createLibraryView(
 
   function closeSourceForm(): void {
     editingSourceId = null;
-    editingWebDav = false;
+    editingSourceKind = 'opds';
     sourceForm.reset();
     sourceOverlay.hidden = true;
     addSourceButton.classList.remove('is-open');
@@ -3599,108 +3693,76 @@ export function createLibraryView(
     addSourceButton.focus();
   }
 
-  function openSourceForm(source?: OpdsSource): void {
+  function openSourceForm(source?: CatalogSource): void {
     editingSourceId = source?.id ?? null;
-    editingWebDav = false;
-    renderSourceForm(source);
+    editingSourceKind = source?.kind ?? 'opds';
+    renderSourceForm(source, editingSourceKind);
     showSourceOverlay();
     sourceForm.querySelector<HTMLInputElement>('input')?.focus();
   }
 
-  function openWebDavForm(): void {
-    editingSourceId = null;
-    editingWebDav = true;
-    renderSourceForm(undefined, 'webdav');
-    showSourceOverlay();
-    sourceForm.querySelector<HTMLInputElement>('input')?.focus();
-  }
-
-  async function saveWebDav(): Promise<void> {
-    if (deps.webdav === undefined) return;
-    const data = new FormData(sourceForm);
-    const auth = String(data.get('auth') ?? 'basic');
-    const authType =
-      auth === 'bearer' || auth === 'basic'
-        ? auth
-        : (webDavProfile?.authType ?? 'basic');
+  async function testWebDavSource(): Promise<void> {
+    if (deps.webdavSource === undefined) return;
+    const editing = sources.find(
+      (candidate) => candidate.id === editingSourceId && candidate.kind === 'webdav',
+    );
+    const { input, url, allowHttp } = sourceInputFromForm(editing);
+    if (httpRequiresAllow(url) && !allowHttp) {
+      setFormStatus(labels().httpNotAllowed, 'error');
+      deps.notify(labels().httpNotAllowed, 'error');
+      return;
+    }
     try {
-      webDavProfile = await deps.webdav.saveProfile({
-        id: webDavProfile?.id,
-        name: String(data.get('title') ?? ''),
-        url: String(data.get('url') ?? ''),
-        authType,
-        allowHttp: data.get('allowHttp') === 'on',
-        credential:
-          auth === 'basic'
-            ? {
-                kind: 'basic',
-                username: String(data.get('username') ?? ''),
-                password: String(data.get('password') ?? ''),
-              }
-            : auth === 'bearer'
-              ? { kind: 'bearer', token: String(data.get('token') ?? '') }
-              : undefined,
-      });
-      closeSourceForm();
-      renderSources();
+      await deps.webdavSource.test(input);
+      setFormStatus(labels().testConnectionOk, 'success');
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      const message = errorText(error, labels().offline);
+      setFormStatus(message, 'error');
+      deps.notify(message, 'error');
     }
   }
 
   async function saveSource(): Promise<void> {
-    const data = new FormData(sourceForm);
-    if (editingWebDav || String(data.get('kind') ?? '') === 'webdav') {
-      await saveWebDav();
+    const editing = sources.find(
+      (candidate) =>
+        candidate.id === editingSourceId && candidate.kind === editingSourceKind,
+    );
+    const { input, kind, url, allowHttp } = sourceInputFromForm(editing);
+    if (kind === 'webdav' && httpRequiresAllow(url) && !allowHttp) {
+      setFormStatus(labels().httpNotAllowed, 'error');
+      deps.notify(labels().httpNotAllowed, 'error');
       return;
     }
-    const auth = String(data.get('auth') ?? 'none');
-    const editing = sources.find((source) => source.id === editingSourceId);
-    const input: OpdsSourceInput = {
-      id: editing?.id,
-      title: String(data.get('title') ?? ''),
-      url: String(data.get('url') ?? ''),
-      allowHttp: data.get('allowHttp') === 'on',
-      credentialRef: auth === 'keep' ? editing?.credentialRef : undefined,
-      clearCredential:
-        editing?.credentialRef !== undefined && auth === 'none' ? true : undefined,
-      credential:
-        auth === 'basic'
-          ? {
-              kind: 'basic',
-              username: String(data.get('username') ?? ''),
-              password: String(data.get('password') ?? ''),
-            }
-          : auth === 'bearer'
-            ? { kind: 'bearer', token: String(data.get('token') ?? '') }
-            : undefined,
-    };
     try {
-      await deps.opds.addSource(input);
-      sources = await deps.opds.listSources();
+      if (kind === 'webdav') {
+        if (deps.webdavSource === undefined) return;
+        await deps.webdavSource.addSource(input);
+      } else {
+        await deps.opds.addSource(input);
+      }
+      await refreshSources();
       closeSourceForm();
+      renderSources();
       await showMyBooks();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      const message = errorText(error, labels().offline);
+      setFormStatus(message, 'error');
+      deps.notify(message, 'error');
     }
   }
 
-  async function removeWebDav(): Promise<void> {
-    if (deps.webdav === undefined) return;
+  async function removeSource(source: CatalogSource): Promise<void> {
     try {
-      await deps.webdav.forgetProfile();
-      webDavProfile = null;
-      if (editingWebDav) closeSourceForm();
-      renderSources();
-    } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
-    }
-  }
-
-  async function removeSource(source: OpdsSource): Promise<void> {
-    try {
-      await deps.opds.removeSource(source.id);
-      sources = sources.filter((candidate) => candidate.id !== source.id);
+      if (source.kind === 'webdav') {
+        if (deps.webdavSource === undefined) return;
+        await deps.webdavSource.removeSource(source.id);
+      } else {
+        await deps.opds.removeSource(source.id);
+      }
+      sources = sources.filter(
+        (candidate) => !(candidate.id === source.id && candidate.kind === source.kind),
+      );
+      if (recentCatalogSourceId === source.id) recentCatalogSourceId = null;
       if (editingSourceId === source.id) closeSourceForm();
       if (selectedSourceId === source.id) closeCatalog();
       else renderSources();
@@ -3728,7 +3790,7 @@ export function createLibraryView(
     const generation = ++requestGeneration;
     beginBlockingLoad();
     try {
-      sources = await deps.opds.listSources();
+      await refreshSources();
       if (generation !== requestGeneration) return;
       if (catalogActive()) {
         syncPageChrome();
@@ -3738,13 +3800,11 @@ export function createLibraryView(
       }
       if (activeSection === 'sources') {
         syncPageChrome();
-        await refreshWebDavProfile();
         renderSources();
         return;
       }
       if (activeSection === 'manage') {
         syncPageChrome();
-        await refreshWebDavProfile();
         renderSources();
         await manage.refreshCache();
         return;
@@ -3794,8 +3854,10 @@ export function createLibraryView(
     renderContinueBar();
     renderItems();
     if (catalogActive()) renderDetail();
-    if (editingWebDav) renderSourceForm(undefined, 'webdav');
-    else renderSourceForm(sources.find((source) => source.id === editingSourceId));
+    renderSourceForm(
+      sources.find((source) => source.id === editingSourceId && source.kind === editingSourceKind),
+      editingSourceKind,
+    );
     if (membershipItemId !== null) openMembershipEditor(membershipItemId);
   }
 
@@ -4086,7 +4148,7 @@ export function createLibraryView(
     event.stopPropagation();
   });
   addSourceButton.addEventListener('click', () => {
-    if (sourceOverlay.hidden || editingSourceId !== null || editingWebDav) openSourceForm();
+    if (sourceOverlay.hidden || editingSourceId !== null) openSourceForm();
     else closeSourceForm();
   });
   sourceOverlay.addEventListener('click', (event) => {

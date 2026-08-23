@@ -17,6 +17,7 @@ import {
   type LibraryItem,
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
+import type { WebDavSource } from '../webdav-source-client.js';
 import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
 import '../library.css';
 
@@ -30,6 +31,40 @@ const source: OpdsSource = {
   createdAt: 1,
   updatedAt: 1,
 };
+
+function webDavSource(overrides: Partial<WebDavSource> = {}): WebDavSource {
+  return {
+    id: 'webdav-1',
+    title: '漫画柜',
+    url: 'https://dav.example/remote.php/dav',
+    allowHttp: false,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+const webdav: OpdsSource = {
+  id: 'webdav-1',
+  title: 'Nextcloud',
+  url: 'https://dav.example/remote.php/dav',
+  allowHttp: false,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+function webdavSourceClient(
+  overrides: Partial<NonNullable<LibraryViewDependencies['webdavSource']>> = {},
+): NonNullable<LibraryViewDependencies['webdavSource']> {
+  return {
+    addSource: vi.fn(async () => webdav),
+    listSources: vi.fn(async () => [webdav]),
+    removeSource: vi.fn(async () => undefined),
+    browse: vi.fn(async () => feed({ title: webdav.title, sourceUrl: webdav.url })),
+    test: vi.fn(async () => ({ ok: true, finalUrl: webdav.url })),
+    ...overrides,
+  };
+}
 
 const entry: OpdsEntry = {
   id: 'entry-1',
@@ -97,6 +132,20 @@ function dependencies(overrides: Partial<LibraryViewDependencies> = {}): Library
       clearCache: vi.fn(async () => undefined),
       setCacheLimit: vi.fn(async () => undefined),
       cacheStats: vi.fn(async () => ({ bytesCached: 0, limitBytes: 2 * 1024 ** 3 })),
+    },
+    webdavSource: {
+      addSource: vi.fn(async (input) =>
+        webDavSource({
+          title: input.title,
+          url: input.url,
+          allowHttp: input.allowHttp ?? false,
+          credentialRef: input.credential !== undefined ? 'webdav-source-webdav-1' : undefined,
+        }),
+      ),
+      listSources: vi.fn(async () => []),
+      removeSource: vi.fn(async () => undefined),
+      browse: vi.fn(async () => feed()),
+      test: vi.fn(async () => ({ ok: true, finalUrl: 'https://dav.example/remote.php/dav' })),
     },
     getLocale: () => 'zh-CN',
     onOpen: vi.fn(async () => undefined),
@@ -1561,26 +1610,29 @@ describe('LibraryView sources, manage, and catalog', () => {
   });
 
   it('adds WebDAV from the source dialog and lists it beside OPDS sources', async () => {
-    const profile = {
-      id: 'p1',
-      name: 'Nextcloud',
-      url: 'https://dav.example/remote.php/dav',
-      authType: 'basic' as const,
-      allowHttp: false,
-      needsCredential: false,
-      updatedAt: 1,
-    };
-    const saveProfile = vi.fn(async () => profile);
-    const getProfile = vi.fn(async () => null);
     const onOpenSyncPanel = vi.fn();
-    const deps = dependencies({
-      webdav: {
-        getProfile,
-        saveProfile,
-        forgetProfile: vi.fn(async () => undefined),
-      },
-      onOpenSyncPanel,
+    let davSources: OpdsSource[] = [];
+    const addSource = vi.fn(async (input) => {
+      const saved: OpdsSource = {
+        ...webdav,
+        title: input.title,
+        url: input.url,
+        allowHttp: input.allowHttp ?? false,
+        credentialRef: input.credential === undefined ? undefined : 'webdav-source-webdav-1',
+      };
+      davSources = [saved];
+      return saved;
     });
+    const listSources = vi.fn(async () => davSources);
+    const browse = vi.fn(async () =>
+      feed({
+        title: '漫画柜',
+        sourceUrl: webdav.url,
+        entries: [entry],
+      }),
+    );
+    const client = webdavSourceClient({ addSource, listSources, browse });
+    const deps = dependencies({ webdavSource: client, onOpenSyncPanel });
     const host = document.createElement('div');
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
@@ -1595,27 +1647,305 @@ describe('LibraryView sources, manage, and catalog', () => {
     kind.dispatchEvent(new Event('change', { bubbles: true }));
     const webdavForm = sourceFormOf(host);
     expect(isShown(webdavForm)).toBe(true);
-    (webdavForm.elements.namedItem('title') as HTMLInputElement).value = profile.name;
-    (webdavForm.elements.namedItem('url') as HTMLInputElement).value = profile.url;
+    expect(webdavForm.querySelector('button')?.parentElement?.textContent).toContain('测试连接');
+    (webdavForm.elements.namedItem('title') as HTMLInputElement).value = webdav.title;
+    (webdavForm.elements.namedItem('url') as HTMLInputElement).value = webdav.url;
     (webdavForm.elements.namedItem('username') as HTMLInputElement).value = 'user';
     (webdavForm.elements.namedItem('password') as HTMLInputElement).value = 'pass';
     webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
 
-    expect(saveProfile).toHaveBeenCalledWith(
+    expect(addSource).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: profile.name,
-        url: profile.url,
-        authType: 'basic',
+        title: webdav.title,
+        url: webdav.url,
         credential: { kind: 'basic', username: 'user', password: 'pass' },
       }),
     );
+    await openSources(host);
     const webdavRow = host.querySelector<HTMLElement>('[data-source-kind="webdav"]');
     expect(webdavRow).not.toBeNull();
     expect(isShown(webdavRow ?? null)).toBe(true);
     expect(webdavRow?.textContent).toContain('Nextcloud');
     shownButtonWithText(host, 'Nextcloud').click();
-    expect(onOpenSyncPanel).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(onOpenSyncPanel).not.toHaveBeenCalled();
+    expect(browse).toHaveBeenCalledWith('webdav-1', undefined);
+    expect(host.textContent).toContain('远程漫画');
+    view.destroy();
+  });
+
+  it('lists multiple WebDAV sources beside OPDS and opens each catalog independently', async () => {
+    const second: OpdsSource = {
+      ...webdav,
+      id: 'webdav-2',
+      title: '群晖',
+      url: 'https://nas.example/dav',
+    };
+    const browse = vi.fn(async (sourceId: string) =>
+      feed({
+        title: sourceId,
+        sourceUrl: sourceId === 'webdav-2' ? second.url : webdav.url,
+        entries: [
+          {
+            ...entry,
+            id: `${sourceId}-book`,
+            itemId: `${sourceId}-item`,
+            title: sourceId === 'webdav-2' ? '群晖漫画' : '云端漫画',
+          },
+        ],
+      }),
+    );
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({
+        listSources: vi.fn(async () => [webdav, second]),
+        browse,
+      }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    expect(host.querySelectorAll('.lightink-library-source-row[data-source-kind="webdav"]').length).toBe(
+      2,
+    );
+    expect(host.querySelector('[data-source-kind="opds"]')?.textContent).toContain('测试书库');
+    shownButtonWithText(host, 'Nextcloud').click();
+    await settle();
+    expect(browse).toHaveBeenCalledWith('webdav-1', undefined);
+    expect(host.textContent).toContain('云端漫画');
+    backToShelfControl(host).click();
+    await settle();
+    shownButtonWithText(host, '群晖').click();
+    await settle();
+    expect(browse).toHaveBeenCalledWith('webdav-2', undefined);
+    expect(host.textContent).toContain('群晖漫画');
+    backToShelfControl(host).click();
+    await settle();
+    shownButtonWithText(host, '测试书库').click();
+    await settle();
+    expect(deps.opds.browse).toHaveBeenCalledWith('source-1', undefined);
+    view.destroy();
+  });
+
+  it('rejects a WebDAV HTTP URL unless Allow HTTP/LAN is checked', async () => {
+    const addSource = vi.fn(async () => webdav);
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({ addSource, listSources: vi.fn(async () => []) }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf(host);
+    (form.elements.namedItem('kind') as HTMLSelectElement).value = 'webdav';
+    (form.elements.namedItem('kind') as HTMLSelectElement).dispatchEvent(
+      new Event('change', { bubbles: true }),
+    );
+    const webdavForm = sourceFormOf(host);
+    (webdavForm.elements.namedItem('title') as HTMLInputElement).value = '局域网';
+    (webdavForm.elements.namedItem('url') as HTMLInputElement).value = 'http://192.168.1.2/dav';
+    (webdavForm.elements.namedItem('username') as HTMLInputElement).value = 'user';
+    (webdavForm.elements.namedItem('password') as HTMLInputElement).value = 'pass';
+    webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(addSource).not.toHaveBeenCalled();
+    expect(webdavForm.textContent).toContain('HTTP 地址需要勾选允许 HTTP/LAN');
+    (webdavForm.elements.namedItem('allowHttp') as HTMLInputElement).checked = true;
+    webdavForm.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(addSource).toHaveBeenCalledWith(expect.objectContaining({ allowHttp: true }));
+    view.destroy();
+  });
+
+  it('shows a WebDAV test-connection failure in the source form', async () => {
+    const test = vi.fn(async () => {
+      throw new Error('WEBDAV_SOURCE_AUTH_REQUIRED: 鉴权失败');
+    });
+    const addSource = vi.fn(async () => webdav);
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({
+        test,
+        addSource,
+        listSources: vi.fn(async () => []),
+      }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf(host);
+    (form.elements.namedItem('kind') as HTMLSelectElement).value = 'webdav';
+    (form.elements.namedItem('kind') as HTMLSelectElement).dispatchEvent(
+      new Event('change', { bubbles: true }),
+    );
+    const webdavForm = sourceFormOf(host);
+    (webdavForm.elements.namedItem('title') as HTMLInputElement).value = webdav.title;
+    (webdavForm.elements.namedItem('url') as HTMLInputElement).value = webdav.url;
+    shownButtonWithText(webdavForm, '测试连接').click();
+    await settle();
+    expect(test).toHaveBeenCalled();
+    expect(webdavForm.textContent).toContain('鉴权失败');
+    expect(addSource).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('browses WebDAV directories with OPDS-like breadcrumbs and omits unsupported files', async () => {
+    const folder = navigationEntry({
+      id: 'nav-books',
+      itemId: 'nav-books-item',
+      title: '漫画',
+      navigationUrl: 'https://dav.example/remote.php/dav/books/',
+    });
+    const book: OpdsEntry = {
+      ...entry,
+      id: 'one-piece',
+      itemId: 'webdav-item-1',
+      title: 'One Piece 01.cbz',
+    };
+    const browse = vi.fn(async (_sourceId: string, url?: string) => {
+      if (url === folder.navigationUrl) {
+        return feed({
+          title: '漫画',
+          sourceUrl: folder.navigationUrl,
+          entries: [book],
+        });
+      }
+      return feed({
+        title: webdav.title,
+        sourceUrl: webdav.url,
+        entries: [folder],
+      });
+    });
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({ browse }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host, 'Nextcloud');
+    expect(browse).toHaveBeenCalledWith('webdav-1', undefined);
+    expect(host.textContent).toContain('漫画');
+    expect(host.textContent).not.toContain('cover.jpg');
+    catalogTreeNode(host, '漫画').click();
+    await settle();
+    expect(browse).toHaveBeenCalledWith('webdav-1', folder.navigationUrl);
+    expect(host.textContent).toContain('One Piece 01.cbz');
+    const crumbs = host.querySelector('.lightink-library-breadcrumbs');
+    expect(crumbs?.textContent).toContain('Nextcloud');
+    expect(crumbs?.textContent).toContain('漫画');
+    view.destroy();
+  });
+
+  it('filters the current WebDAV catalog locally instead of calling OPDS search', async () => {
+    const other: OpdsEntry = { ...entry, id: 'entry-2', itemId: 'item-2', title: '本地过滤小说' };
+    const browse = vi.fn(async () =>
+      feed({ title: webdav.title, sourceUrl: webdav.url, entries: [entry, other] }),
+    );
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({ browse }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host, 'Nextcloud');
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '过滤';
+    host.querySelector<HTMLFormElement>('.lightink-library-search')!.dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(deps.opds.search).not.toHaveBeenCalled();
+    expect(host.textContent).toContain('本地过滤小说');
+    expect(host.textContent).not.toContain('远程漫画');
+    input.value = '';
+    host.querySelector<HTMLFormElement>('.lightink-library-search')!.dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(host.textContent).toContain('远程漫画');
+    expect(host.textContent).toContain('本地过滤小说');
+    view.destroy();
+  });
+
+  it('deletes a WebDAV source without touching OPDS sources or the sync panel', async () => {
+    const onOpenSyncPanel = vi.fn();
+    const removeSource = vi.fn(async () => undefined);
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({ removeSource }),
+      onOpenSyncPanel,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    host.querySelector<HTMLButtonElement>('[aria-label="删除源: Nextcloud"]')!.click();
+    await settle();
+    expect(removeSource).toHaveBeenCalledWith('webdav-1');
+    expect(host.querySelector('[data-source-kind="webdav"]')).toBeNull();
+    expect(host.querySelector('[data-source-kind="opds"]')?.textContent).toContain('测试书库');
+    expect(onOpenSyncPanel).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('preserves or clears a WebDAV credential from the shared source form', async () => {
+    const authenticated = { ...webdav, credentialRef: 'webdav-source-webdav-1' };
+    const addSource = vi.fn(async (input) => ({
+      ...authenticated,
+      title: input.title,
+      credentialRef: input.clearCredential === true ? undefined : authenticated.credentialRef,
+    }));
+    const listSources = vi.fn(async () => [authenticated]);
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({ addSource, listSources }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    host.querySelector<HTMLButtonElement>('[aria-label^="编辑 WebDAV"]')!.click();
+    const form = sourceFormOf(host);
+    expect((form.elements.namedItem('auth') as HTMLSelectElement).value).toBe('keep');
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(addSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'webdav-1',
+        credentialRef: 'webdav-source-webdav-1',
+        clearCredential: undefined,
+        credential: undefined,
+      }),
+    );
+
+    host.querySelector<HTMLButtonElement>('[aria-label^="编辑 WebDAV"]')!.click();
+    const again = sourceFormOf(host);
+    (again.elements.namedItem('auth') as HTMLSelectElement).value = 'none';
+    again.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(addSource).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: 'webdav-1',
+        credentialRef: undefined,
+        clearCredential: true,
+      }),
+    );
     view.destroy();
   });
 

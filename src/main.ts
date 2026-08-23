@@ -167,6 +167,7 @@ import {
   type LibraryView,
 } from './library/library-view.js';
 import { credentialRefForResource, opdsClient } from './library/opds-client.js';
+import { webDavSourceClient } from './library/webdav-source-client.js';
 import { createSyncableStorage } from './storage/syncable-storage.js';
 import { documentClient } from './sync/document-client.js';
 import { syncRecordClient } from './sync/sync-client.js';
@@ -2503,7 +2504,7 @@ libraryView = createLibraryView(shell.editorArea, {
         workspaceTravel: shell.enterEditorButton,
         onEnterEditor: () => workspace.enterEditor(),
       }),
-  webdav: webDavClient,
+  webdavSource: webDavSourceClient,
   onOpenSyncPanel: openWebDavSyncPanel,
   themeStorage: syncableStorage,
   readerPrefsStorage: syncableStorage,
