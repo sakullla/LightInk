@@ -74,6 +74,7 @@ import {
   SEARCH_MARK_CURRENT_CLASS,
   type SearchMarkSpec,
 } from './search-overlay.js';
+import { createSearchSheet, type SearchSheet } from './search-sheet.js';
 import type {
   ReaderInstance,
   ReaderLoadOptions,
@@ -386,6 +387,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   typePanel.className = 'lightink-reader-chrome-panel lightink-reader-chrome-typography';
   typePanel.hidden = true;
   typePanel.setAttribute('data-panel', 'typography');
+
+  /** 触屏搜索层（R5/R6）：懒建；注册进 isOverlayOpen/dismissOverlay 参与返回分层。 */
+  let searchSheet: SearchSheet | null = null;
 
   const annotationsEnabled = deps.readAnnotations !== undefined;
 
@@ -1481,6 +1485,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       setSidebarVisible(false);
       return true;
     }
+    if (closeSearchSheet()) {
+      return true;
+    }
     return closeChromePanel();
   };
 
@@ -1496,6 +1503,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     syncSidebarOverlayDom();
     if (!active) {
       hideSelectionToolbar();
+      closeSearchSheet();
       closeChromePanel();
       readerChrome?.dismiss();
       syncChromeRevealAttr();
@@ -1951,15 +1959,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const pdfMatchKey = (match: PdfSearchMatch): string =>
     `${match.page}:${match.start}:${match.end}`;
 
-  const syncSearchHits = (): void => {
-    if (sidebar === null) {
-      return;
-    }
-    const query = sidebar.getSearchQuery().trim();
-    if (query === '') {
-      sidebar.render(annotations);
-      return;
-    }
+  const collectSearchHitViews = (): SearchHitView[] => {
     const hits: SearchHitView[] = [];
     if (pdfSearch !== null) {
       for (const [index, match] of pdfSearch.matches.entries()) {
@@ -1986,7 +1986,24 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
       });
     }
-    sidebar.renderHits(hits);
+    return hits;
+  };
+
+  const syncSearchHits = (): void => {
+    if (searchSheet !== null && searchSheet.isOpen()) {
+      searchSheet.renderHits(
+        searchSheet.getQuery().trim() === '' ? [] : collectSearchHitViews(),
+      );
+    }
+    if (sidebar === null) {
+      return;
+    }
+    const query = sidebar.getSearchQuery().trim();
+    if (query === '') {
+      sidebar.render(annotations);
+      return;
+    }
+    sidebar.renderHits(collectSearchHitViews());
   };
 
   const jumpToSearchKey = (key: string): void => {
@@ -2035,8 +2052,55 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return sanitizeSearchQuery(typeof window !== 'undefined' ? window.getSelection()?.toString() : '');
   };
 
-  /** 打开标注弹出框并聚焦搜索（PDF / 流式；CBZ 无文本则空结果）。 */
+  const ensureSearchSheet = (): SearchSheet => {
+    if (searchSheet === null) {
+      searchSheet = createSearchSheet({
+        t,
+        onQuery: (query) => runReaderSearch(query),
+        // 点命中跳转且层保持打开（连续查阅）；宿主重放 renderHits 校正 current。
+        onJump: (key) => jumpToSearchKey(key),
+        // 层关闭（× / Escape / 点空白 / 宿主关闭）：命中 overlay 随层收起
+        // （与侧栏关闭同语义），查询词保留供重开续查。
+        onClose: () => {
+          clearSearchSession();
+          if (
+            searchSheet !== null &&
+            typeof document !== 'undefined' &&
+            searchSheet.element.contains(document.activeElement)
+          ) {
+            root.focus();
+          }
+        },
+      });
+    }
+    return searchSheet;
+  };
+
+  /** 关触屏搜索层；层原本打开返回 true（供 dismissOverlay 分层判定）。 */
+  const closeSearchSheet = (): boolean => searchSheet?.close() === true;
+
+  /** 触屏路径（R5）：独立底栏搜索层，不再强制打开标注侧栏。 */
+  const openTouchSearchSheet = (query?: string): void => {
+    const sheet = ensureSearchSheet();
+    if (sheet.element.parentNode !== root) {
+      root.appendChild(sheet.element);
+    }
+    const seed = sanitizeSearchQuery(query) || currentSearchSelection();
+    sheet.open(seed === '' ? undefined : seed);
+    const effective = sheet.getQuery().trim();
+    if (effective !== '') {
+      runReaderSearch(effective);
+    } else {
+      syncSearchHits();
+    }
+  };
+
+  /** 打开搜索：触屏走底栏搜索层；桌面打开标注侧栏并聚焦搜索（PDF / 流式；CBZ 无文本则空结果）。 */
   const openSearch = (query?: string): void => {
+    if (readerChromeTouchMode()) {
+      openTouchSearchSheet(query);
+      return;
+    }
     const scroller = flowScrollContainer();
     const left = scroller.scrollLeft;
     const top = scroller.scrollTop;
@@ -2544,10 +2608,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   }
 
   const refreshOpenSearch = (): void => {
-    if (!sidebarVisible || !tabActive || sidebar === null) {
+    if (!tabActive) {
       return;
     }
-    const query = (sidebar.getSearchQuery() || flowSearch?.query || pdfSearch?.query || '').trim();
+    const sheetOpen = searchSheet !== null && searchSheet.isOpen();
+    if (!sheetOpen && (!sidebarVisible || sidebar === null)) {
+      return;
+    }
+    const uiQuery = sheetOpen ? searchSheet!.getQuery() : sidebar!.getSearchQuery();
+    const query = (uiQuery || flowSearch?.query || pdfSearch?.query || '').trim();
     if (query === '') {
       return;
     }
@@ -2859,9 +2928,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
+      openSearch: () => openSearch(),
       toggleSidebar: () => setSidebarVisible(!sidebarVisible),
-      isOverlayOpen: () => sidebarVisible || chromePanel !== null,
-      dismissOverlay: () => closeChromePanel(),
+      isOverlayOpen: () =>
+        sidebarVisible || chromePanel !== null || searchSheet?.isOpen() === true,
+      // 一次退一层：搜索层在最上，先于 TOC/排版浮层关闭。
+      dismissOverlay: () => closeSearchSheet() || closeChromePanel(),
       isSidebarVisible: () => sidebarVisible,
       isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
       hideSelectionToolbar,
@@ -2932,6 +3004,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       exportEmbedImages = null;
       closeOpenNoteDialog(); // 打开中的笔记弹层经 Escape 正规 release（续体守卫丢弃迟到保存）
       closePdfSearch(); // 切换文档清掉搜索状态与命中 overlay
+      closeSearchSheet();
       const controller = new AbortController();
       activeLoadController = controller;
       const generation = ++loadGeneration;
@@ -3200,6 +3273,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pendingSearchScrollKey = null;
       pdfSearch = null;
       flowSearch = null;
+      searchSheet?.destroy();
+      searchSheet = null;
       scrollHost.removeEventListener('scroll', scheduleFlowScroll);
       paneScroller?.removeEventListener('scroll', scheduleFlowScroll);
       pageHost.removeEventListener('scroll', schedulePageScroll);

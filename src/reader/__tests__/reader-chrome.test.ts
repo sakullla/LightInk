@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 
 /**
- * Contract for `src/reader/reader-chrome.ts` (T3 / R4 / R5):
+ * Contract for `src/reader/reader-chrome.ts` (T3 / R4 / R5 + 搜索一等入口):
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
  * First paint is hidden except a 1px progress hairline. A page click
- * or a pointer near the top/bottom edge reveals four text-labeled actions
+ * or a pointer near the top/bottom edge reveals five text-labeled actions
  * together with a progress footer:
- *   返回书架 · 目录 · 排版 · 本书标注
+ *   返回书架 · 目录 · 排版 · 搜索 · 本书标注
  * 「返回书架」 is the first control (start of the top bar). It is the only
- * path that calls injected `returnToShelf`. 目录 / 排版 / 本书标注 call
- * `openOutline` / `openTypography` / `toggleSidebar`.
+ * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索 / 本书标注
+ * call `openOutline` / `openTypography` / `openSearch` / `toggleSidebar`.
+ * 搜索 lives in the tools cluster; the chrome only forwards to the injected
+ * `openSearch` — reader-view decides desktop (annotation sidebar search)
+ * versus touch (bottom-sheet search layer).
  *
  * The bar is out of document flow (`position: absolute|fixed|sticky`) so
  * reveal/dismiss does not change the reading area's top or height.
@@ -21,9 +24,9 @@
  *   selection toolbar → annotation sidebar → dismissOverlay() → chrome bar.
  * Return true when a layer closed; false when nothing is open.
  *
- * Deps: `returnToShelf`, `openOutline`, `openTypography`, `toggleSidebar`,
- * optional `isOverlayOpen`, `dismissOverlay`, `isSidebarVisible`,
- * `isSelectionToolbarVisible`, `hideSelectionToolbar`.
+ * Deps: `returnToShelf`, `openOutline`, `openSearch`, `openTypography`,
+ * `toggleSidebar`, optional `isOverlayOpen`, `dismissOverlay`,
+ * `isSidebarVisible`, `isSelectionToolbarVisible`, `hideSelectionToolbar`.
  *
  * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
  * reveal — the chrome only leaves via center tap, Escape, or closing an
@@ -31,9 +34,9 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createReaderChrome } from '../reader-chrome.js';
+import { createReaderChrome, READER_CHROME_ACTIONS } from '../reader-chrome.js';
 
-const LABELS = ['返回书架', '目录', '排版', '本书标注'] as const;
+const LABELS = ['返回书架', '目录', '排版', '搜索', '本书标注'] as const;
 const AUTO_HIDE_MS = 2500;
 
 function stubRect(
@@ -84,6 +87,7 @@ function mount(overrides: Record<string, unknown> = {}) {
   const deps = {
     returnToShelf: vi.fn(),
     openOutline: vi.fn(),
+    openSearch: vi.fn(),
     openTypography: vi.fn(),
     toggleSidebar: vi.fn(),
     isOverlayOpen: vi.fn(() => false),
@@ -125,14 +129,14 @@ describe('createReaderChrome first paint', () => {
 });
 
 describe('createReaderChrome reveal', () => {
-  it('reveals four text-labeled controls with 返回书架 first after a page click', () => {
+  it('reveals five text-labeled controls with 返回书架 first after a page click', () => {
     const { host, page, chrome } = mount();
 
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
 
     const buttons = labeledButtons(host);
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
     const bar = host.querySelector('.lightink-reader-chrome-bar');
@@ -212,9 +216,11 @@ describe('createReaderChrome actions', () => {
     chrome.reveal();
 
     buttonByLabel(host, '目录').click();
+    buttonByLabel(host, '搜索').click();
     buttonByLabel(host, '排版').click();
     buttonByLabel(host, '本书标注').click();
     expect(deps.openOutline).toHaveBeenCalledTimes(1);
+    expect(deps.openSearch).toHaveBeenCalledTimes(1);
     expect(deps.openTypography).toHaveBeenCalledTimes(1);
     expect(deps.toggleSidebar).toHaveBeenCalledTimes(1);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
@@ -222,6 +228,7 @@ describe('createReaderChrome actions', () => {
     buttonByLabel(host, '返回书架').click();
     expect(deps.returnToShelf).toHaveBeenCalledTimes(1);
     expect(deps.openOutline).toHaveBeenCalledTimes(1);
+    expect(deps.openSearch).toHaveBeenCalledTimes(1);
     expect(deps.openTypography).toHaveBeenCalledTimes(1);
     expect(deps.toggleSidebar).toHaveBeenCalledTimes(1);
   });
@@ -234,6 +241,40 @@ describe('createReaderChrome actions', () => {
     clickPage(page, 160);
     expect(deps.dismissOverlay).toHaveBeenCalledTimes(1);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+});
+
+describe('createReaderChrome search entry', () => {
+  it('declares search as a first-class chrome action', () => {
+    expect(READER_CHROME_ACTIONS).toContain('search');
+  });
+
+  it('puts 搜索 in the tools cluster and only forwards to openSearch', () => {
+    const { host, chrome, deps } = mount();
+    chrome.reveal();
+
+    const searchButton = buttonByLabel(host, '搜索');
+    expect(searchButton.dataset.readerChromeAction).toBe('search');
+    expect(
+      host.querySelector('.lightink-reader-chrome-tools')?.contains(searchButton),
+    ).toBe(true);
+
+    searchButton.click();
+    expect(deps.openSearch).toHaveBeenCalledTimes(1);
+    // The chrome never opens the sidebar or any panel itself; reader-view
+    // routes openSearch to sidebar (desktop) or the search sheet (touch).
+    expect(deps.toggleSidebar).not.toHaveBeenCalled();
+    expect(deps.openOutline).not.toHaveBeenCalled();
+    expect(deps.openTypography).not.toHaveBeenCalled();
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('works the same under touchMode', () => {
+    const { host, chrome, deps } = mount({ touchMode: true });
+    chrome.reveal();
+    buttonByLabel(host, '搜索').click();
+    expect(deps.openSearch).toHaveBeenCalledTimes(1);
+    expect(deps.toggleSidebar).not.toHaveBeenCalled();
   });
 });
 

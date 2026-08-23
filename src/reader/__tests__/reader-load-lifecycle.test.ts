@@ -153,6 +153,8 @@ function readerViewDeps(
 
 function clearReaderStorage(): void {
   delete document.documentElement.dataset.readingLayout;
+  document.documentElement.removeAttribute('data-touch-primary');
+  document.documentElement.removeAttribute('data-android');
   try {
     const storage = globalThis.localStorage;
     if (storage === undefined) {
@@ -653,6 +655,52 @@ describe('Reader load lifecycle', () => {
       sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
     ).toBe('');
     expect(sidebar.classList.contains('is-searching')).toBe(false);
+    await view.destroy();
+  });
+
+  it('opens the touch search sheet from openSearch without forcing the annotation sidebar', async () => {
+    // 触屏旗标（R5）：openSearch 走独立底栏搜索层，不再强制打开标注侧栏。
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const onReturnToShelf = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>alpha keyword</p>' },
+          { title: 'Two', html: '<p>keyword again</p>' },
+        ],
+      }),
+      onReturnToShelf,
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+
+    view.openSearch?.('keyword');
+
+    expect(view.isSidebarVisible()).toBe(false);
+    const sidebar = host.querySelector<HTMLElement>('.lightink-reader-sidebar');
+    expect(sidebar?.hidden ?? true).toBe(true);
+    const visibleSheets = (): HTMLElement[] =>
+      [...document.querySelectorAll<HTMLElement>('.is-touch-sheet')].filter(
+        (el) => !el.hidden && el.getAttribute('aria-hidden') !== 'true',
+      );
+    const sheet = visibleSheets()[0];
+    expect(sheet).not.toBeUndefined();
+    // 选区/入参 seed 预填进搜索层查询框。
+    expect(sheet!.querySelector<HTMLInputElement>('input')?.value).toBe('keyword');
+
+    // Escape（Android 系统返回经 back-navigation 合成同键）一次只关搜索层，不合书。
+    const root = host.querySelector<HTMLElement>('.lightink-reader')!;
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(visibleSheets()).toHaveLength(0);
+    expect(view.isSidebarVisible()).toBe(false);
+    expect(onReturnToShelf).not.toHaveBeenCalled();
+    expect(view.state.phase).toBe('ready');
+    expect(host.querySelector('.lightink-reader')).not.toBeNull();
     await view.destroy();
   });
 

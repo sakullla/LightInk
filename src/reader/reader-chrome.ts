@@ -2,7 +2,8 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。顶栏是四项带文字入口；底栏与沉浸条都是单行：
+ * 边缘时顶栏与底栏同时出现。顶栏是五项带文字入口（返回书架 · 目录 · 排版 ·
+ * 搜索 · 本书标注）；底栏与沉浸条都是单行：
  * 章节名 | 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC 刻度。
  *
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
@@ -17,12 +18,13 @@ import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
 
-export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'annotations';
+export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'search' | 'annotations';
 
 export interface ReaderChromeLabels {
   readonly backToShelf: string;
   readonly toc: string;
   readonly typography: string;
+  readonly search: string;
   readonly annotations: string;
   readonly toolbar: string;
   readonly progress: string;
@@ -40,6 +42,7 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
   'backToShelf',
   'toc',
   'typography',
+  'search',
   'annotations',
 ];
 
@@ -51,6 +54,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     backToShelf: 'Back to Shelf',
     toc: 'Contents',
     typography: 'Typography',
+    search: 'Search',
     annotations: 'Book notes',
     toolbar: 'Reading controls',
     progress: 'Reading progress',
@@ -60,6 +64,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     backToShelf: '返回书架',
     toc: '目录',
     typography: '排版',
+    search: '搜索',
     annotations: '本书标注',
     toolbar: '阅读控件',
     progress: '阅读进度',
@@ -83,6 +88,8 @@ export interface ReaderChromeDeps {
   returnToShelf: () => void;
   openOutline?: () => void;
   openTypography?: () => void;
+  /** 顶栏搜索一等入口：桌面走标注侧栏搜索，触屏走独立底栏搜索层。 */
+  openSearch?: () => void;
   toggleSidebar?: () => void;
   isOverlayOpen?: () => boolean;
   dismissOverlay?: () => boolean;
@@ -306,6 +313,7 @@ export function createReaderChrome(
   const backButton = makeButton('backToShelf', labels.backToShelf);
   const tocButton = makeButton('toc', labels.toc);
   const typographyButton = makeButton('typography', labels.typography);
+  const searchButton = makeButton('search', labels.search);
   const annotationsButton = makeButton('annotations', labels.annotations);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
@@ -313,7 +321,7 @@ export function createReaderChrome(
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, annotationsButton);
+  tools.append(tocButton, typographyButton, searchButton, annotationsButton);
   bar.append(backButton, tools, drag);
   element.appendChild(bar);
 
@@ -400,7 +408,7 @@ export function createReaderChrome(
     footer.setAttribute('aria-hidden', revealed ? 'false' : 'true');
     whisper.hidden = revealed;
     whisper.setAttribute('aria-hidden', revealed ? 'true' : 'false');
-    for (const button of [backButton, tocButton, typographyButton, annotationsButton]) {
+    for (const button of [backButton, tocButton, typographyButton, searchButton, annotationsButton]) {
       button.hidden = !revealed;
     }
   };
@@ -607,6 +615,11 @@ export function createReaderChrome(
     event.preventDefault();
     event.stopPropagation();
     deps.openTypography?.();
+  });
+  searchButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deps.openSearch?.();
   });
   annotationsButton.addEventListener('click', (event) => {
     event.preventDefault();

@@ -560,3 +560,123 @@
 .lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-popover::before {
   display: none;
 }
+
+/* ===== 触屏搜索层（底栏 sheet：查询框 + 命中列表，R5/R6） =====
+ * 根元素即面板本体，复用 chrome-panel + is-touch-sheet（圆角底栏形态）；
+ * 点空白关层走 reader-chrome 点击护栏（层内点按被 chrome-panel 类忽略）。 */
+
+.lightink-reader-search-sheet {
+  min-height: min(38vh, 20rem);
+  padding-bottom: var(--lightink-safe-bottom, 0px);
+}
+
+.lightink-reader-search-sheet-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.65rem 0.75rem 0.45rem;
+}
+
+.lightink-reader-search-sheet-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+.lightink-reader-search-sheet-input:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-reader-search-sheet-status {
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lightink-reader-search-sheet-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-reader-search-sheet-close:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+}
+
+.lightink-reader-search-sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem 0.45rem 0.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lightink-reader-search-sheet-hit {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.lightink-reader-search-sheet-hit:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-search-sheet-hit.is-current {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+}
+
+.lightink-reader-search-sheet-location {
+  font-size: 0.68rem;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-search-sheet-text {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.lightink-reader-search-sheet-empty {
+  margin: 0;
+  padding: 0.9rem 0.75rem;
+  color: var(--lightink-muted);
+}
+
+/* 触屏（粗指针）：搜索层全部可点目标 ≥44px。 */
+@media (pointer: coarse) {
+  .lightink-reader-search-sheet-input,
+  .lightink-reader-search-sheet-hit {
+    min-height: 44px;
+  }
+
+  .lightink-reader-search-sheet-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
