@@ -159,6 +159,7 @@ pub fn run() {
             webdav_source::webdav_source_list,
             webdav_source::webdav_source_remove,
             webdav_source::webdav_source_test,
+            webdav_source::webdav_source_browse,
             annotations::read_annotations,
             annotations::write_annotations,
             annotations::content_hash,
