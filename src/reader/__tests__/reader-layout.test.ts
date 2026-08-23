@@ -336,6 +336,72 @@ describe('readerPageInnerPadPx', () => {
   });
 });
 
+describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () => {
+  const readerCss = (): string =>
+    readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+  const panelsCss = (): string =>
+    readFileSync(resolve(process.cwd(), 'src/reader/reader-chrome-panels.css'), 'utf-8');
+
+  it('keeps the touch top chrome below the status bar with --lightink-safe-top', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+  });
+
+  it('pads the touch bottom chrome rows with --lightink-safe-bottom', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    );
+  });
+
+  it('keeps top chrome entries and the progress slider at 44px hit targets on touch', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-scrubber,\s*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-progress\s*\{[^}]*min-height:\s*44px/,
+    );
+  });
+
+  it('keeps touch bottom sheets clear of the gesture bar with --lightink-safe-bottom', () => {
+    const css = panelsCss();
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+    );
+  });
+
+  it('keeps the search sheet query box, hit rows, and close button at 44px on coarse pointers', () => {
+    const css = panelsCss();
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-search-sheet-input,\s*\.lightink-reader-search-sheet-hit\s*\{[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-search-sheet-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+    );
+  });
+});
+
 describe('readerFlowSpreadFromTypography', () => {
   it('keeps two facing columns on a wide page even when the stored measure is long', () => {
     const comfortable = { ...DEFAULT_READER_TYPOGRAPHY, measureRem: 22 };

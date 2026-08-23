@@ -394,15 +394,26 @@
   }
 }
 
-/* 触屏（粗指针）：侧栏行与按钮更大点按目标。 */
+/* 触屏（粗指针）：侧栏行项、按钮、筛选标签页命中目标 ≥44px。 */
 @media (pointer: coarse) {
   .lightink-reader-sidebar-item,
-  .lightink-reader-sidebar-close {
-    min-height: 40px;
+  .lightink-reader-sidebar-close,
+  .lightink-reader-sidebar-note-search-input,
+  .lightink-reader-sidebar-filter,
+  .lightink-reader-sidebar-jump,
+  .lightink-reader-sidebar-edit,
+  .lightink-reader-sidebar-remove {
+    min-height: 44px;
   }
 
-  .lightink-reader-sidebar-note-search-input {
-    min-height: 40px;
+  .lightink-reader-sidebar-close {
+    min-width: 44px;
+  }
+
+  /* 颜色圆点筛选：放大为 44px 命中圆（背景色仍由内联 style 提供）。 */
+  .lightink-reader-sidebar-color-filter:not([data-color='all']) {
+    width: 44px;
+    height: 44px;
   }
 }
 

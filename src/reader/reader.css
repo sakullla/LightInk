@@ -488,8 +488,8 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-scrubber,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-progress {
-  height: 32px;
-  min-height: 32px;
+  height: 44px;
+  min-height: 44px;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-progress::-webkit-slider-thumb {
@@ -564,8 +564,8 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 
   .lightink-reader-chrome-footer .lightink-reader-chrome-scrubber,
   .lightink-reader-chrome-footer .lightink-reader-chrome-progress {
-    height: 32px;
-    min-height: 32px;
+    height: 44px;
+    min-height: 44px;
   }
 
   .lightink-reader-chrome-progress::-webkit-slider-thumb {

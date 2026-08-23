@@ -533,6 +533,7 @@
 @media (pointer: coarse) {
   .lightink-reader-toc-item,
   .lightink-reader-type-choice,
+  .lightink-reader-type-font,
   .lightink-reader-type-step,
   .lightink-reader-theme-swatch {
     min-height: 44px;
