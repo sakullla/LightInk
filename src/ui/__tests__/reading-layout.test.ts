@@ -26,6 +26,7 @@ import {
   saveReadingLayout,
   scrollPagedScrollerToEdge,
   scrollToKeepViewportAnchor,
+  settlePagedRelease,
   snapPagedScroller,
   viewportAnchor,
 } from '../reading-layout.js';
@@ -90,6 +91,42 @@ describe('paged navigation', () => {
     const scroller = { scrollLeft: 430, scrollWidth: 1600, clientWidth: 800 };
     snapPagedScroller(scroller);
     expect(scroller.scrollLeft).toBe(800);
+  });
+
+  it('settles a short drag back to the nearest whole page', () => {
+    const scroller = { scrollLeft: 40, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 0, -40, 400)).toBe(true);
+    expect(scroller.scrollLeft).toBe(0);
+  });
+
+  it('completes one page from the gesture start after a committed swipe', () => {
+    const scroller = { scrollLeft: 160, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 0, -160, 400)).toBe(true);
+    expect(scroller.scrollLeft).toBe(400);
+  });
+
+  it('does not skip a page when the committed swipe starts between columns', () => {
+    const scroller = { scrollLeft: 280, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 200, -80, 400)).toBe(true);
+    expect(scroller.scrollLeft).toBe(400);
+  });
+
+  it('does not add a second step when native scroll already reached the next page', () => {
+    const scroller = { scrollLeft: 400, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 0, -200, 400)).toBe(true);
+    expect(scroller.scrollLeft).toBe(400);
+  });
+
+  it('lets the caller change chapter when a committed swipe starts on the last page', () => {
+    const scroller = { scrollLeft: 1200, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 1200, -80, 400)).toBe(false);
+    expect(scroller.scrollLeft).toBe(1200);
+  });
+
+  it('lets the caller change chapter when a committed swipe starts on the first page', () => {
+    const scroller = { scrollLeft: 20, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 0, 80, 400)).toBe(false);
+    expect(scroller.scrollLeft).toBe(0);
   });
 
   it('does not snap a short last page back to the previous whole page', () => {

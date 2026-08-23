@@ -248,6 +248,61 @@ describe('bindTouchPaging', () => {
     expect(page).toHaveBeenCalledWith(1);
   });
 
+  it('settles a short horizontal drag without a discrete page turn', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const scroller = { scrollLeft: 0 };
+    const settleDrag = vi.fn<(startLeft: number, dx: number) => boolean>(() => true);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindTouchPaging(el, {
+      page,
+      viewportWidth: () => 400,
+      pagedScroller: () => scroller,
+      settleDrag,
+    });
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 220, clientY: 200 }));
+    scroller.scrollLeft = 30;
+    const end = touchEvent('touchend', { clientX: 190, clientY: 204 });
+    el.dispatchEvent(end);
+    expect(settleDrag).toHaveBeenCalledWith(0, -30);
+    expect(page).not.toHaveBeenCalled();
+    expect(end.defaultPrevented).toBe(true);
+  });
+
+  it('falls through to page() when settle says the chapter edge was reached', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const settleDrag = vi.fn<(startLeft: number, dx: number) => boolean>(() => false);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindTouchPaging(el, {
+      page,
+      viewportWidth: () => 400,
+      pagedScroller: () => ({ scrollLeft: 1200 }),
+      settleDrag,
+    });
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 300, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 120, clientY: 210 }));
+    expect(settleDrag).toHaveBeenCalled();
+    expect(page).toHaveBeenCalledWith(1);
+  });
+
+  it('does not settle a tap so edge zones still page', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const settleDrag = vi.fn<(startLeft: number, dx: number) => boolean>(() => true);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindTouchPaging(el, {
+      page,
+      viewportWidth: () => 400,
+      pagedScroller: () => ({ scrollLeft: 0 }),
+      settleDrag,
+    });
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 340, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 340, clientY: 200 }));
+    expect(settleDrag).not.toHaveBeenCalled();
+    expect(page).toHaveBeenCalledWith(1);
+  });
+
   it('ignores a slow press (long-press / selection gesture)', () => {
     let now = 1000;
     const { el, page } = mount({ now: () => now });

@@ -425,6 +425,23 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     );
   });
 
+  it('pads immersive page text below the status bar and display cutout', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-scroll\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+    const coarse = coarsePointerCss(css);
+    expect(coarse).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+    expect(coarse).toMatch(
+      /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-scroll\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    );
+  });
+
   it('reserves page bottom space so the whisper hairline does not strike the last line', () => {
     const css = readerCss();
     expect(css).toMatch(

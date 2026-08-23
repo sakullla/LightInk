@@ -312,6 +312,63 @@ export function snapPagedScroller(
   scroller.scrollLeft = snapped;
 }
 
+/** Matches `TOUCH_SWIPE_MIN_PX`: a short drag should snap back, not free-scroll. */
+const PAGED_RELEASE_COMMIT_PX = 48;
+const PAGED_RELEASE_COMMIT_RATIO = 0.22;
+const PAGED_RELEASE_EDGE_PX = 2;
+
+/**
+ * After a finger-drag on a column scroller, finish or revert the page.
+ * Native `overflow-x: auto` already moved `scrollLeft`; this must not add a
+ * second step on top. Returns false only when the gesture asked for the next
+ * chapter (already on the last/first page) so the caller can change chapters.
+ */
+export function settlePagedRelease(
+  scroller: {
+    scrollLeft: number;
+    scrollWidth: number;
+    clientWidth: number;
+    style?: { width?: string; getPropertyValue?(name: string): string };
+  },
+  startLeft: number,
+  dragDx: number,
+  stepSize?: number,
+): boolean {
+  const step = resolvePagedStep(scroller, stepSize);
+  const maxLeft = pagedScrollMax(scroller);
+  if (maxLeft <= 0) {
+    return false;
+  }
+  const start = Math.min(maxLeft, Math.max(0, startLeft));
+  const nativeDelta = scroller.scrollLeft - start;
+  const traveled = Math.max(Math.abs(dragDx), Math.abs(nativeDelta));
+  const commitPx = Math.min(PAGED_RELEASE_COMMIT_PX, Math.max(1, step * PAGED_RELEASE_COMMIT_RATIO));
+  const commit = traveled >= commitPx;
+  const goingNext = Math.abs(dragDx) >= 1 ? dragDx < 0 : nativeDelta > 0;
+  if (commit && goingNext) {
+    if (start >= maxLeft - PAGED_RELEASE_EDGE_PX) {
+      snapPagedScroller(scroller, step);
+      return false;
+    }
+    // One step from the page that contains `start`, not from nearest.
+    // round(200/400)+1 would skip ahead to page 2.
+    scroller.scrollLeft = Math.min(maxLeft, Math.max(0, (Math.floor(start / step) + 1) * step));
+    snapPagedScroller(scroller, step);
+    return true;
+  }
+  if (commit && !goingNext) {
+    if (start <= PAGED_RELEASE_EDGE_PX) {
+      snapPagedScroller(scroller, step);
+      return false;
+    }
+    scroller.scrollLeft = Math.min(maxLeft, Math.max(0, (Math.ceil(start / step) - 1) * step));
+    snapPagedScroller(scroller, step);
+    return true;
+  }
+  snapPagedScroller(scroller, step);
+  return true;
+}
+
 /** First or last page of a columnized chapter (used when crossing chapters). */
 export function scrollPagedScrollerToEdge(
   scroller: { scrollLeft: number; scrollWidth: number; clientWidth: number },

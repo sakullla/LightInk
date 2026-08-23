@@ -86,6 +86,12 @@ export interface TabManagerDeps {
    * TabManager 在 closeTab 时 destroy。
    */
   mountReader?: (container: HTMLElement) => Promise<ReaderInstance>;
+  /**
+   * Phone / single-surface readers: opening a different book reuses the
+   * existing reader tab instead of stacking one per path. The caller must
+   * load the new target when the path or identity changes.
+   */
+  replaceExistingReader?: boolean;
   /** 为标签创建宿主元素（生产为 document.createElement('div')）。 */
   createHostElement: (tabId: string) => HTMLElement;
   /** 把宿主元素挂到界面上。 */
@@ -215,7 +221,8 @@ type TabManagerOptionalUi =
   | 'notifyExternalUnreadable'
   | 'formatUntitledTitle'
   | 'formatUntitledRestoredTitle'
-  | 'mountReader';
+  | 'mountReader'
+  | 'replaceExistingReader';
 
 export class TabManager {
   private readonly deps: Required<Omit<TabManagerDeps, TabManagerOptionalUi>> &
@@ -286,6 +293,7 @@ export class TabManager {
       confirmExternalConflict: deps.confirmExternalConflict,
       notifyExternalUnreadable: deps.notifyExternalUnreadable,
       mountReader: deps.mountReader,
+      replaceExistingReader: deps.replaceExistingReader,
     };
   }
 
@@ -480,6 +488,22 @@ export class TabManager {
       this.switchTab(existing.id);
       if (filePath !== null) this.deps.onFileOpened?.(filePath);
       return existing;
+    }
+    const leftover =
+      this.deps.replaceExistingReader === true
+        ? this.tabs.find((t): t is ReaderTabState => t.kind === 'reader')
+        : undefined;
+    if (leftover !== undefined) {
+      const next = leftover as {
+        -readonly [K in keyof ReaderTabState]: ReaderTabState[K];
+      };
+      next.filePath = filePath;
+      next.syntheticId = remoteSyntheticId ?? `reader-${newUntitledToken()}`;
+      next.title = target.displayName;
+      next.target = target;
+      this.switchTab(leftover.id);
+      if (filePath !== null) this.deps.onFileOpened?.(filePath);
+      return leftover;
     }
     const mountReader = this.deps.mountReader;
     if (mountReader === undefined) {

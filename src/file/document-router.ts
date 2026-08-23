@@ -1,4 +1,5 @@
 import type { TabManager } from '../tabs/tab-manager.js';
+import { readerTabShowsPath } from '../tabs/reader-tab-reveal.js';
 import type { ReaderTabState, TabState } from '../tabs/types.js';
 import { isReaderPath } from './file-drop.js';
 
@@ -28,7 +29,7 @@ export async function openDocumentPath(
     deps.onReaderOpenError(path, error);
     return null;
   }
-  if (existing === tab) {
+  if (existing === tab && readerTabShowsPath(tab, path)) {
     return tab;
   }
 

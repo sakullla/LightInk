@@ -1,9 +1,11 @@
 /**
  * Safe-area insets for edge-to-edge Android / notched phones.
  *
- * CSS `env(safe-area-inset-*)` is the default. Older WebViews report 0 even
- * when the status bar overlaps the page; the Android activity then injects
- * `window.__lightinkSafeArea` and/or calls `__lightinkApplySafeArea`.
+ * Official practice (Android edge-to-edge + WebView insets): draw the paper
+ * behind system bars, but keep text and controls out of
+ * `systemBars() | displayCutout()`. CSS `env(safe-area-inset-*)` is the
+ * default; older WebViews report 0 even when the status bar overlaps, so
+ * MainActivity injects `window.__lightinkSafeArea` / `__lightinkApplySafeArea`.
  */
 
 export interface SafeAreaInsets {

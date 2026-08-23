@@ -29,6 +29,30 @@ describe('openDocumentPath', () => {
     expect(deps.manager.openReader).not.toHaveBeenCalled();
   });
 
+  it('reloads when a leftover Reader tab is reused for a different book', async () => {
+    const load = vi.fn();
+    const leftover = {
+      kind: 'reader',
+      id: 'reader-1',
+      filePath: '/books/one.epub',
+      reader: { load },
+    } as unknown as ReaderTabState;
+    const deps = {
+      manager: manager({
+        tabList: [leftover],
+        openReader: vi.fn(async () => {
+          leftover.filePath = '/books/three.epub';
+          return leftover;
+        }),
+      }),
+      onReaderOpenError: vi.fn(),
+      onReaderLoadError: vi.fn(),
+    };
+
+    await expect(openDocumentPath('/books/three.epub', deps)).resolves.toBe(leftover);
+    expect(load).toHaveBeenCalledWith('/books/three.epub');
+  });
+
   it('reuses an open Reader without loading it again', async () => {
     const load = vi.fn();
     const existing = {

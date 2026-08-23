@@ -421,8 +421,10 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
  * Mobile reader (Kindle / Apple Books / 微信读书):
  * narrow ~16pt page gutters, status-bar-aware icon chrome, 44px hits.
  * Back may stay at the top edge. TOC / Aa / search / notes sit in the
- * footer thumb zone (above the progress row). Footer padding includes
- * --lightink-safe-bottom so the four actions clear the gesture bar.
+ * footer thumb zone (above the progress row).
+ * Paper may draw edge-to-edge; text and chrome must clear
+ * --lightink-safe-top/left/right (status bar + notch / hole-punch) and
+ * --lightink-safe-bottom (gesture / home indicator).
  */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader {
   --lightink-reader-pad-x: 0.9rem;
@@ -440,13 +442,23 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-  padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem)
-    var(--lightink-reader-whisper-reserve);
+  padding: calc(var(--lightink-safe-top, 0px) + 0.2rem)
+    max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-right, 0px))
+    var(--lightink-reader-whisper-reserve)
+    max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-left, 0px));
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-  padding: 0.85rem var(--lightink-reader-pad-x, 0.9rem)
-    calc(var(--lightink-reader-whisper-reserve) + 0.35rem);
+  padding: calc(var(--lightink-safe-top, 0px) + 0.85rem)
+    max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px))
+    calc(var(--lightink-reader-whisper-reserve) + 0.35rem)
+    max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-pages[data-reader-active='true']:not([data-comic-reader='true']) {
+  padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
+  padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
+  padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-bar {
@@ -556,13 +568,23 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   }
 
   .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-    padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem)
-      var(--lightink-reader-whisper-reserve);
+    padding: calc(var(--lightink-safe-top, 0px) + 0.2rem)
+      max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-right, 0px))
+      var(--lightink-reader-whisper-reserve)
+      max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-left, 0px));
   }
 
   .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-    padding: 0.85rem var(--lightink-reader-pad-x, 0.9rem)
-      calc(var(--lightink-reader-whisper-reserve) + 0.35rem);
+    padding: calc(var(--lightink-safe-top, 0px) + 0.85rem)
+      max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px))
+      calc(var(--lightink-reader-whisper-reserve) + 0.35rem)
+      max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
+  }
+
+  .lightink-reader-pages[data-reader-active='true']:not([data-comic-reader='true']) {
+    padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
+    padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
+    padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
   }
 
   .lightink-reader-chrome-bar {

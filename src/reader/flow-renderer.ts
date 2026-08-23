@@ -33,6 +33,7 @@ import {
   pagedFrameStep,
   pagedProgressRatio,
   readingNavDirection,
+  settlePagedRelease,
   snapPagedScroller,
 } from '../ui/reading-layout.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
@@ -1114,6 +1115,57 @@ export function createFlowRenderer(
 
   const gatePagedWheel = createPagedWheelGate();
 
+  const resolveVisiblePageStep = (
+    frame: HTMLIFrameElement | null,
+    scroller: { style: { width: string; getPropertyValue(name: string): string }; clientWidth: number } | null,
+  ): number => {
+    const compact = readerSurfaceIsCompact(root);
+    const viewport = pagedViewport();
+    const metrics = resolveFlowPageSpread(root, viewport, frame);
+    const storedStep = scroller === null ? 0 : pagedFrameStep(scroller);
+    return compact && Number.isFinite(metrics.layout.step) && metrics.layout.step > 1
+      ? metrics.layout.step
+      : storedStep;
+  };
+
+  const settleVisiblePagedRelease = (startLeft: number, dx: number): boolean => {
+    if (!isFlowPaginated(root)) {
+      return false;
+    }
+    const frame = visibleFrame();
+    const scroller =
+      frame?.contentDocument === undefined || frame.contentDocument === null
+        ? null
+        : readerPagedScroller(frame.contentDocument);
+    if (scroller === null) {
+      return false;
+    }
+    const step = resolveVisiblePageStep(frame, scroller);
+    const settled = settlePagedRelease(scroller, startLeft, dx, step);
+    if (settled) {
+      if (frame !== null) delete frame.dataset.pagedRestore;
+      hooks.syncState();
+      hooks.dismissSelectionToolbar();
+    }
+    return settled;
+  };
+
+  const snapVisiblePagedScroller = (): void => {
+    if (!isFlowPaginated(root)) {
+      return;
+    }
+    const frame = visibleFrame();
+    const scroller =
+      frame?.contentDocument === undefined || frame.contentDocument === null
+        ? null
+        : readerPagedScroller(frame.contentDocument);
+    if (scroller === null) {
+      return;
+    }
+    snapPagedScroller(scroller, resolveVisiblePageStep(frame, scroller));
+    hooks.syncState();
+  };
+
   const advanceFlowPage = (direction: 1 | -1): boolean => {
     if (!isFlowPaginated(root)) {
       return false;
@@ -1123,14 +1175,7 @@ export function createFlowRenderer(
       frame?.contentDocument === undefined || frame.contentDocument === null
         ? null
         : readerPagedScroller(frame.contentDocument);
-    const compact = readerSurfaceIsCompact(root);
-    const viewport = pagedViewport();
-    const metrics = resolveFlowPageSpread(root, viewport, frame);
-    const storedStep = scroller === null ? 0 : pagedFrameStep(scroller);
-    const step =
-      compact && Number.isFinite(metrics.layout.step) && metrics.layout.step > 1
-        ? metrics.layout.step
-        : storedStep;
+    const step = resolveVisiblePageStep(frame, scroller);
     if (
       scroller !== undefined &&
       scroller !== null &&
@@ -1718,6 +1763,9 @@ export function createFlowRenderer(
           tapPrevRatio: TOUCH_TAP_PREV_RATIO,
           tapNextRatio: TOUCH_TAP_NEXT_RATIO,
           page: (direction) => advanceFlowPage(direction),
+          pagedScroller: () => readerPagedScroller(frameDocument),
+          settleDrag: (startLeft, dx) => settleVisiblePagedRelease(startLeft, dx),
+          onScrollIdle: snapVisiblePagedScroller,
         });
         const releaseImages = bindBlockedRemoteImages(
           frameDocument.body,

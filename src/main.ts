@@ -166,6 +166,7 @@ import {
   toggleFullscreen,
 } from './ui/window-chrome.js';
 import { formatDocumentTitle } from './ui/window-title.js';
+import { readerTabToReveal } from './tabs/reader-tab-reveal.js';
 import { installWindowCloseProtection } from './ui/window-lifecycle.js';
 import { libraryClient, type ManagedItemLocation } from './library/library-client.js';
 import {
@@ -692,10 +693,8 @@ function revealEditorMarkdownTab(): void {
 
 function revealReaderBookTab(): void {
   if (manager === undefined) return;
-  const active = manager.activeTab;
-  if (active !== null && active.kind === 'reader') return;
-  const reader = manager.tabList.find((tab) => tab.kind === 'reader');
-  if (reader !== undefined) {
+  const reader = readerTabToReveal(manager.tabList, manager.activeTabId);
+  if (reader !== undefined && manager.activeTabId !== reader.id) {
     manager.switchTab(reader.id);
   }
 }
@@ -999,7 +998,11 @@ async function openLibraryItem(
     if (tab === null) {
       throw new Error(i18n.t('reader.loadFailed', { detail: item.title }));
     }
-    workspace.openBook();
+    if (tab.kind === 'reader') {
+      workspace.openBook();
+    } else if (isMarkdownTab(tab)) {
+      workspace.enterEditor();
+    }
     return;
   }
   const acquisition = request.acquisition;
@@ -2186,6 +2189,11 @@ manager = new TabManager({
   formatUntitledTitle: (n) => i18n.t('app.untitled', { n: String(n) }),
   formatUntitledRestoredTitle: (n) => i18n.t('app.untitledRestored', { n: String(n) }),
   remoteImageLoadLabel: i18n.t('reader.remoteImageLoad'),
+  replaceExistingReader:
+    isAndroidApp ||
+    isTouchPrimary ||
+    document.documentElement.hasAttribute('data-android') ||
+    document.documentElement.hasAttribute('data-touch-primary'),
   writeSnapshot: writeSynchronizedSnapshot,
   clearSnapshot: clearSynchronizedSnapshot,
   listUntitledDrafts: listRecoverableDrafts,

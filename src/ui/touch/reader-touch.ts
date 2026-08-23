@@ -2,8 +2,10 @@
  * `touch/reader-touch` — 阅读器触控翻页：点按左右热区与横向滑动。
  *
  * 只负责手势判定与回调；翻页动作由调用方注入（flow-renderer 帧内接
- * `advanceFlowPage`，宿主侧接滚轮同一入口 `advancePagedWheel`），中间区点按
- * 返回 null 让既有 click 路径（chrome 切换/链接/划选）原样工作。
+ * `advanceFlowPage`，宿主侧接滚轮同一入口 `advancePagedWheel`）。帧内横向拖动
+ * 先走 `settleDrag` 吸附到整页，避免原生 overflow-x 停在两页之间；到章首/章末
+ * 才回落到 `page()` 切章。中间区点按返回 null 让既有 click 路径（chrome 切换/
+ * 链接/划选）原样工作。
  *
  * 桌面与部分 Android WebView iframe 没有可用的 touch 事件流，改走
  * `bindClickPaging`：不传比例时沿用对称 TOUCH_TAP_EDGE_RATIO 桌面热区，
@@ -91,6 +93,16 @@ export interface TouchPagingOptions {
   tapMaxMs?: number;
   /** 时钟（测试可注入）。 */
   now?(): number;
+  /** Column scroller that native overflow-x already moves during the drag. */
+  pagedScroller?: () => { scrollLeft: number } | null;
+  /**
+   * Snap the column scroller after a horizontal drag. Return true when the
+   * chapter handled the release (do not also call `page`). False means the
+   * gesture wants the previous/next chapter.
+   */
+  settleDrag?: (startLeft: number, dx: number) => boolean;
+  /** After an inertial fling (`scrollend`), snap to a whole page. */
+  onScrollIdle?: () => void;
 }
 
 /**
@@ -139,7 +151,7 @@ export function bindClickPaging(target: EventTarget, options: TouchPagingOptions
 export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions): () => void {
   const tapMaxMs = options.tapMaxMs ?? TOUCH_TAP_MAX_MS;
   const now = options.now ?? (() => Date.now());
-  let start: { x: number; y: number; at: number } | null = null;
+  let start: { x: number; y: number; at: number; scrollLeft: number } | null = null;
   let suppressNextClick = false;
   let suppressTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -187,7 +199,12 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
       return;
     }
     disarmBandClickSwallow();
-    start = { x: touch.clientX, y: touch.clientY, at: now() };
+    start = {
+      x: touch.clientX,
+      y: touch.clientY,
+      at: now(),
+      scrollLeft: options.pagedScroller?.()?.scrollLeft ?? 0,
+    };
   };
 
   // 捕获阶段先于 click 翻页/切换 chrome 的监听器；一次性，消费后即失效。
@@ -201,7 +218,24 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   };
 
   const onTouchCancel = (): void => {
+    if (start !== null && options.settleDrag !== undefined) {
+      options.settleDrag(start.scrollLeft, 0);
+    }
     start = null;
+  };
+
+  const onScrollEnd = (event: Event): void => {
+    if (options.onScrollIdle === undefined) {
+      return;
+    }
+    if (options.enabled !== undefined && !options.enabled()) {
+      return;
+    }
+    const box = options.pagedScroller?.();
+    if (box != null && !Object.is(event.target, box)) {
+      return;
+    }
+    options.onScrollIdle();
   };
 
   const onTouchEnd = (event: Event): void => {
@@ -220,13 +254,24 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
     }
     const dx = touch.clientX - from.x;
     const dy = touch.clientY - from.y;
-    let direction = resolveSwipePageDirection(dx, dy);
-    if (
-      direction === null &&
+    const isTap =
       now() - from.at <= tapMaxMs &&
       Math.abs(dx) <= TOUCH_TAP_MOVE_PX &&
-      Math.abs(dy) <= TOUCH_TAP_MOVE_PX
+      Math.abs(dy) <= TOUCH_TAP_MOVE_PX;
+    if (
+      !isTap &&
+      options.settleDrag !== undefined &&
+      Math.abs(dx) >= Math.abs(dy) &&
+      (Math.abs(dx) > TOUCH_TAP_MOVE_PX ||
+        (options.pagedScroller?.()?.scrollLeft ?? from.scrollLeft) !== from.scrollLeft)
     ) {
+      if (options.settleDrag(from.scrollLeft, dx)) {
+        event.preventDefault();
+        return;
+      }
+    }
+    let direction = resolveSwipePageDirection(dx, dy);
+    if (direction === null && isTap) {
       direction = resolveTapPageDirection(
         touch.clientX,
         options.viewportWidth(),
@@ -247,6 +292,9 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   target.addEventListener('touchend', onTouchEnd, { passive: false });
   target.addEventListener('touchcancel', onTouchCancel, { passive: true });
   target.addEventListener('click', onBandClick, { capture: true });
+  if (options.onScrollIdle !== undefined) {
+    target.addEventListener('scrollend', onScrollEnd, { capture: true, passive: true });
+  }
 
   return () => {
     disarmBandClickSwallow();
@@ -254,5 +302,8 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
     target.removeEventListener('touchend', onTouchEnd);
     target.removeEventListener('touchcancel', onTouchCancel);
     target.removeEventListener('click', onBandClick, { capture: true });
+    if (options.onScrollIdle !== undefined) {
+      target.removeEventListener('scrollend', onScrollEnd, { capture: true });
+    }
   };
 }

@@ -1111,6 +1111,44 @@ describe('reader 标签（只读，豁免可写路径）', () => {
     expect(manager.tabList).toHaveLength(0);
   });
 
+  it('replaceExistingReader 打开另一本书时复用同一阅读标签并改路径', async () => {
+    const rd = makeReaderDeps();
+    const { manager, deps } = makeHarness({ ...rd, replaceExistingReader: true });
+    const first = await manager.openReader('C:\\docs\\one.epub');
+    const third = await manager.openReader('C:\\docs\\three.epub');
+    expect(third.id).toBe(first.id);
+    expect(third.filePath).toBe('C:\\docs\\three.epub');
+    expect(third.title).toBe('three.epub');
+    expect(manager.tabList).toHaveLength(1);
+    expect(deps.mountReader).toHaveBeenCalledTimes(1);
+    expect(manager.activeTabId).toBe(first.id);
+  });
+
+  it('replaceExistingReader 从远程切到本地后不再用旧 syntheticId 命中远程书', async () => {
+    const rd = makeReaderDeps();
+    const { manager } = makeHarness({ ...rd, replaceExistingReader: true });
+    const remote = {
+      kind: 'remote' as const,
+      itemId: 'item-1',
+      resourceId: 'https://books.example/a.epub',
+      identity: { id: 'item-1', validator: '"v1"' },
+      displayName: '远程书.epub',
+      extension: 'epub',
+      mimeType: 'application/epub+zip',
+    };
+    const first = await manager.openReader(remote);
+    expect(first.syntheticId).toBe('reader:item-1');
+    const local = await manager.openReader('C:\\docs\\three.epub');
+    expect(local.id).toBe(first.id);
+    expect(local.filePath).toBe('C:\\docs\\three.epub');
+    expect(local.syntheticId).not.toBe('reader:item-1');
+    const again = await manager.openReader(remote);
+    expect(again.id).toBe(first.id);
+    expect(again.syntheticId).toBe('reader:item-1');
+    expect(again.filePath).toBeNull();
+    expect(again.target).toEqual(remote);
+  });
+
   it('重复打开同一路径 reader 标签切换而非新建', async () => {
     const rd = makeReaderDeps();
     const { manager, deps } = makeHarness(rd);
