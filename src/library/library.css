@@ -2710,5 +2710,59 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     width: 22px;
     height: 22px;
   }
+
+  /*
+   * 管理相关 dialog（分组编辑 / 书源编辑 / membership）：移动断点下放宽尺寸，
+   * 输入与按钮触控目标 ≥44px；16px 输入字号避免聚焦自动放大。
+   */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-group-modal
+    .lightink-modal-dialog,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-source-modal
+    .lightink-modal-dialog {
+    width: min(26rem, calc(100% - 32px));
+    max-width: calc(100% - 32px);
+    padding: 20px 16px 16px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
+    width: min(26rem, calc(100% - 32px));
+    max-height: min(80vh, 560px);
+    padding: 20px 16px 16px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form input,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form select,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-source-form
+    input:not([type='checkbox']),
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form-actions button,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form button,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-actions button {
+    min-height: 44px;
+    padding: 10px 18px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-source-form
+    input[type='checkbox'],
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-membership-options
+    input[type='checkbox'] {
+    width: 20px;
+    min-width: 20px;
+    min-height: 20px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-options label {
+    min-height: 44px;
+  }
 }
 

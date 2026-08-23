@@ -3258,6 +3258,29 @@ describe('LibraryView mobile shelf', () => {
     );
   });
 
+  it('gives the manage dialogs mobile sizes and ≥44px touch targets at the ≤760px breakpoint', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 分组/书源 dialog：移动断点下放宽宽度并接近全屏边距。
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-group-modal\s*\.lightink-modal-dialog,[\s\S]*?\.lightink-library-source-modal\s*\.lightink-modal-dialog\s*\{[^}]*max-width:\s*calc\(100% - 32px\)/,
+    );
+    // membership dialog 同样放宽。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-membership-dialog\s*\{[^}]*width:\s*min\(26rem, calc\(100% - 32px\)\)/,
+    );
+    // 表单输入触控目标 ≥44px 且 16px 字号避免聚焦自动放大。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-group-form input,[\s\S]*?\.lightink-library-source-form select\s*\{[^}]*min-height:\s*44px[^}]*font-size:\s*16px/,
+    );
+    // dialog 按钮与 membership 选项行保持 ≥44px 触控目标。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-group-form-actions button,[\s\S]*?\.lightink-library-membership-actions button\s*\{[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-membership-options label\s*\{[^}]*min-height:\s*44px/,
+    );
+  });
+
   function tabButton(host: ParentNode, tab: string): HTMLButtonElement {
     const button = host.querySelector<HTMLButtonElement>(`[data-library-tab-item="${tab}"]`);
     if (!(button instanceof HTMLButtonElement)) throw new Error(`tab not found: ${tab}`);
