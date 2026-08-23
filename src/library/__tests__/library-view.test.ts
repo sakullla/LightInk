@@ -1006,6 +1006,7 @@ describe('LibraryView my-books home', () => {
     expect(itemRow(host, unread.id).textContent).toContain('本地小说');
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
+    expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
 
     groupButton(host, '在读').click();
     await settle();
@@ -3263,6 +3264,13 @@ describe('LibraryView mobile shelf', () => {
     expect(css).not.toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*max-height:\s*42vh/,
     );
+    expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*max-height:\s*52px[^}]*overflow-x:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-height:\s*44px/,
+    );
     // 书源/目录：nav 与封面墙各自 overflow-y:auto，外层 body overflow:hidden。
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*overflow:\s*hidden/,
@@ -3355,6 +3363,62 @@ describe('LibraryView mobile shelf', () => {
       '管理',
     ]);
     expect(tabButton(host, 'shelf').getAttribute('aria-current')).toBe('page');
+    view.destroy();
+  });
+
+  it('filters the cover wall from a one-row chip strip when the in-page nav is hidden', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const unread = localItem();
+    const novel = localItem({
+      id: 'local:/books/c.epub',
+      title: '续读小说',
+      localPath: '/books/c.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === unread.id) return { status: 'not-started' as const };
+      return { status: 'in-progress' as const, unit: 'chapter' as const, index: 2, ratio: 0.4, percent: 21 };
+    });
+    const base = dependencies();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(
+      host,
+      dependencies({
+        getProgress,
+        library: { ...base.library, listItems: vi.fn(async () => [unread, novel]) },
+      }),
+    );
+    await view.show();
+
+    const content = libraryRoot(host).querySelector('.lightink-library-content');
+    const chips = content?.querySelector<HTMLElement>('.lightink-library-shelf-chips');
+    expect(chips).not.toBeNull();
+    expect(chips?.hidden).toBe(false);
+    expect(content?.contains(chips!)).toBe(true);
+    expect(
+      Array.from(chips!.querySelectorAll<HTMLButtonElement>('[data-shelf-group]')).map(
+        (chip) => chip.dataset.shelfGroup,
+      ),
+    ).toEqual(['all', 'in-progress', 'unread', 'text', 'comic']);
+
+    const reading = chips!.querySelector<HTMLButtonElement>('[data-shelf-group="in-progress"]');
+    expect(reading).not.toBeNull();
+    reading!.click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
+    expect(itemRow(host, novel.id).textContent).toContain('续读小说');
+    expect(
+      content
+        ?.querySelector('[data-shelf-group="in-progress"]')
+        ?.classList.contains('is-active'),
+    ).toBe(true);
+
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+    expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
     view.destroy();
   });
 

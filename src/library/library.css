@@ -1143,6 +1143,11 @@ html[data-touch-primary] .lightink-library-header {
   container-name: library-content;
 }
 
+/* Desktop keeps shelf filters in the left nav; the cover-wall chip row is phone-only. */
+.lightink-library-shelf-chips {
+  display: none;
+}
+
 .lightink-library-navigation {
   display: flex;
   align-items: center;
@@ -2632,6 +2637,46 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  /* 书架筛选：封面墙顶上一行 chip，承接被隐藏的页内「全部/在读」等。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-chips {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    max-height: 52px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 16px 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-chip {
+    flex: 0 0 auto;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+    color: var(--lightink-fg);
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-chip.is-active {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+    font-weight: 600;
   }
 
   :is(html[data-android], html[data-touch-primary])
