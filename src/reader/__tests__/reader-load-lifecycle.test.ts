@@ -753,6 +753,105 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
+  it('migrates a path-keyed local progress record onto the content hash', async () => {
+    const store: Record<string, string> = {};
+    const progressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    saveReadingProgress(progressStorage, '/books/legacy.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      total: 2,
+      updatedAt: 1,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      progressStorage,
+      getContentHash: async () => '0123456789abcdef',
+      readAnnotations: async () => '{"version":1,"annotations":[]}',
+    });
+    useReaderScrollLayout(host);
+    await view.load('/books/legacy.epub');
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(scroll, chapterEls, {
+      scrollTop: 0,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    view.restoreReadingProgress?.();
+    expect(scroll.scrollTop).toBe(chapterScrollTop(800, 800, 0.5));
+    expect(loadReadingProgress(progressStorage, '0123456789abcdef')).toMatchObject({
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+    });
+    await view.destroy();
+  });
+
+  it('restores local progress through a shelf alias when the hash key is empty', async () => {
+    const store: Record<string, string> = {};
+    const progressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    saveReadingProgress(progressStorage, '/old/name.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.25,
+      total: 2,
+      updatedAt: 1,
+    });
+    saveLibraryProgressAlias(progressStorage, 'local:/books/renamed.epub', '/old/name.epub');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      progressStorage,
+      getContentHash: async () => 'fedcba9876543210',
+      readAnnotations: async () => '{"version":1,"annotations":[]}',
+    });
+    useReaderScrollLayout(host);
+    await view.load('/books/renamed.epub');
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(scroll, chapterEls, {
+      scrollTop: 0,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    view.restoreReadingProgress?.();
+    expect(scroll.scrollTop).toBe(chapterScrollTop(800, 800, 0.25));
+    expect(loadReadingProgress(progressStorage, 'fedcba9876543210')).toMatchObject({
+      kind: 'flow',
+      index: 1,
+      ratio: 0.25,
+    });
+    await view.destroy();
+  });
+
   it('restores scroll progress onto the editor pane, not the inner chapter host', async () => {
     const store: Record<string, string> = {};
     const progressStorage = {
