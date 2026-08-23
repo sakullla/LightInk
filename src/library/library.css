@@ -2505,17 +2505,27 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     overflow: hidden;
   }
 
-  /* 页内导航：当前 Tab 对应的分区块常驻内容区上方，可独立滚动。 */
+  /*
+   * 页内导航：书源/目录可独立滚动，高度不超过内容区约 30%。
+   * 书架与管理整栏隐藏，封面墙或设置行占满 header 与底栏之间的第一屏。
+   */
   :is(html[data-android], html[data-touch-primary]) .lightink-library-nav {
     flex: 0 0 auto;
-    max-height: 42vh;
+    max-height: 30%;
+    min-height: 0;
     padding: 4px 10px 8px;
     overflow-y: auto;
     border-right: none;
     border-bottom: 1px solid var(--lightink-border);
   }
 
-  /* 每个 Tab 只展示自己的分区块；管理 Tab 整栏隐藏（管理页全屏）。 */
+  /* 每个 Tab 只展示自己的分区块；书架与管理整栏隐藏（底栏为主切换）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-nav {
+    display: none;
+  }
+
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-sources,
@@ -2605,8 +2615,34 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-content {
     flex: 1 1 auto;
+    min-height: 0;
     width: 100%;
     height: 100%;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-items,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='sources']
+    .lightink-library-items,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-items {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='manage']
+    .lightink-library-content,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='manage']
+    .lightink-library-manage-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-cover-wall {

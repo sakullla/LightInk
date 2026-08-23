@@ -3256,6 +3256,40 @@ describe('LibraryView mobile shelf', () => {
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header\s*\{[^}]*--lightink-safe-top/,
     );
+    // 书架 Tab：页内导航整栏隐藏，封面落在 header 与底栏之间，不得再用 42vh 压在封面上。
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-nav\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).not.toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*max-height:\s*42vh/,
+    );
+    // 书源/目录：nav 与封面墙各自 overflow-y:auto，外层 body overflow:hidden。
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*overflow-y:\s*auto/,
+    );
+    const itemsRule = css.match(/\.lightink-library-items\s*\{([^}]*)\}/);
+    expect(itemsRule).not.toBeNull();
+    expect(itemsRule![1]).toMatch(/overflow-y:\s*auto/);
+    expect(css).not.toMatch(
+      /\[data-library-nav=['"]?sources['"]?\]\s+\.lightink-library-nav\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).not.toMatch(
+      /\[data-library-nav=['"]?catalog['"]?\]\s+\.lightink-library-nav\s*\{[^}]*display:\s*none/,
+    );
+    // 管理面板：flex:1;min-height:0;overflow-y:auto，第一屏露出设置行。
+    const managePanelRule = css.match(/\.lightink-library-manage-panel\s*\{([^}]*)\}/);
+    expect(managePanelRule).not.toBeNull();
+    expect(managePanelRule![1]).toMatch(/flex:\s*1/);
+    expect(managePanelRule![1]).toMatch(/min-height:\s*0/);
+    expect(managePanelRule![1]).toMatch(/overflow-y:\s*auto/);
+    // 桌面双栏 grid 与无旗标路径保持不变。
+    const bodyRule = css.match(/\.lightink-library-body\s*\{([^}]*)\}/);
+    expect(bodyRule).not.toBeNull();
+    expect(bodyRule![1]).toMatch(/display:\s*grid/);
+    expect(bodyRule![1]).toMatch(/grid-template-columns/);
   });
 
   it('gives the manage dialogs mobile sizes and ≥44px touch targets at the ≤760px breakpoint', () => {
@@ -3300,6 +3334,8 @@ describe('LibraryView mobile shelf', () => {
     expect(root.dataset.libraryDrawer).toBeUndefined();
     expect(root.dataset.libraryNav).toBe('shelf');
     expect(root.dataset.libraryTab).toBe('shelf');
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
 
     const tabbar = host.querySelector<HTMLElement>('.lightink-library-tabbar');
     expect(tabbar).not.toBeNull();
@@ -3337,6 +3373,8 @@ describe('LibraryView mobile shelf', () => {
     );
     expect(root.dataset.libraryTab).toBe('manage');
     expect(host.querySelector('h1')?.textContent).toBe('管理');
+    expect(isShown(host.querySelector('.lightink-library-manage-panel'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-manage-row'))).toBe(true);
 
     // 目录 Tab 从未浏览过书源：落书源列表并给出选择书源空态。
     tabButton(host, 'catalog').click();
@@ -3357,6 +3395,8 @@ describe('LibraryView mobile shelf', () => {
     );
     expect(root.dataset.libraryTab).toBe('catalog');
     expect(hint?.hidden).toBe(true);
+    expect(host.querySelector('.lightink-library-nav')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-items')).not.toBeNull();
 
     // 离开目录 Tab 后再回来：有最近浏览书源，直达其 catalog。
     tabButton(host, 'shelf').click();
@@ -3381,6 +3421,8 @@ describe('LibraryView mobile shelf', () => {
     expect(root.dataset.libraryTab).toBe('sources');
     expect(hint?.hidden).toBe(true);
     expect(host.querySelector('h1')?.textContent).toBe('书库源');
+    expect(host.querySelector('.lightink-library-nav')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-sources')).not.toBeNull();
     view.destroy();
   });
 
