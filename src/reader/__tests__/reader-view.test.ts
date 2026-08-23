@@ -1895,3 +1895,215 @@ describe('窗口级翻页（R1：不限中间章节容器）', () => {
     await view.destroy();
   });
 });
+
+describe('流式触屏划选与版式切换（R6/R7）', () => {
+  const loadFlowSelectionBook = async (
+    chapterCount = 1,
+    extras: { preferenceStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void } } = {},
+  ): Promise<{
+    host: HTMLDivElement;
+    view: ReturnType<typeof createReaderView>;
+    reader: HTMLElement;
+    scroll: HTMLElement;
+    frames: HTMLIFrameElement[];
+  }> => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: chapterCount }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>chapter ${index + 1} selectable body</p>`,
+        })),
+      }),
+      preferenceStorage: extras.preferenceStorage,
+    });
+    await view.load('book.epub');
+    const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 400 });
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    return { host, view, reader, scroll, frames };
+  };
+
+  const stubRangeClientRect = (doc: Document): void => {
+    const proto = doc.defaultView?.Range?.prototype;
+    if (proto === undefined || typeof proto.getBoundingClientRect === 'function') {
+      return;
+    }
+    proto.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+      return {
+        x: 20,
+        y: 40,
+        left: 20,
+        top: 40,
+        width: 80,
+        height: 16,
+        right: 100,
+        bottom: 56,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+  };
+
+  const selectFrameQuote = (frame: HTMLIFrameElement, quote = 'selectable'): void => {
+    const doc = frame.contentDocument!;
+    stubRangeClientRect(doc);
+    // jsdom 不把 srcdoc 解析进 iframe 文档；与既有帧测一样在 load 后注入正文。
+    let paragraph = doc.querySelector('p');
+    if (paragraph === null) {
+      paragraph = doc.createElement('p');
+      paragraph.textContent = 'chapter 1 selectable body';
+      doc.body.appendChild(paragraph);
+    }
+    expect(paragraph.firstChild).not.toBeNull();
+    const node = paragraph.firstChild as Text;
+    const start = (node.textContent ?? '').indexOf(quote);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + quote.length);
+    const selection = doc.defaultView!.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  const visibleSelectionToolbar = (): HTMLElement | null => {
+    const toolbar = document.querySelector<HTMLElement>('.lightink-reader-selection-toolbar');
+    if (toolbar === null || toolbar.hidden) {
+      return null;
+    }
+    return toolbar;
+  };
+
+  const touchAt = (type: string, point: { clientX: number; clientY: number }): Event => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    const points = [point];
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : points });
+    Object.defineProperty(event, 'changedTouches', { value: points });
+    return event;
+  };
+
+  const tapRightZone = (target: EventTarget): void => {
+    target.dispatchEvent(touchAt('touchstart', { clientX: 350, clientY: 100 }));
+    target.dispatchEvent(touchAt('touchend', { clientX: 350, clientY: 100 }));
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+    document.documentElement.removeAttribute('data-touch-primary');
+    document.documentElement.removeAttribute('data-android');
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('shows the existing selection toolbar on desktop iframe mouseup and does not consume contextmenu', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadFlowSelectionBook();
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+    const toolbar = visibleSelectionToolbar();
+    expect(toolbar).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--highlight')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--note')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--copy')).not.toBeNull();
+
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    frameDocument.dispatchEvent(menu);
+    expect(menu.defaultPrevented).toBe(false);
+    await view.destroy();
+  });
+
+  it('shows the existing toolbar after touch selectionchange or touchend and consumes contextmenu', async () => {
+    vi.useFakeTimers();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const { view, frames } = await loadFlowSelectionBook();
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    expect(frame.srcdoc).toMatch(/-webkit-touch-callout:\s*none/);
+
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new Event('selectionchange'));
+    await vi.advanceTimersByTimeAsync(100);
+    if (visibleSelectionToolbar() === null) {
+      frameDocument.dispatchEvent(touchAt('touchend', { clientX: 200, clientY: 80 }));
+      await vi.advanceTimersByTimeAsync(100);
+    }
+
+    const toolbar = visibleSelectionToolbar();
+    expect(toolbar).not.toBeNull();
+    expect(toolbar!.classList.contains('lightink-reader-selection-toolbar')).toBe(true);
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--highlight')).not.toBeNull();
+
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    frameDocument.dispatchEvent(menu);
+    expect(menu.defaultPrevented).toBe(true);
+    await view.destroy();
+  });
+
+  it('releases layoutSwitching after switching to scroll, disables tap paging, and restores paging when paginated', async () => {
+    vi.useFakeTimers();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const { view, reader, frames } = await loadFlowSelectionBook(3, {
+      preferenceStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+      },
+    });
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    expect(reader.dataset.readingLayout).toBe('paginated');
+
+    tapRightZone(frameDocument);
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('1');
+
+    view.jumpToOutlineItem({ level: 1, text: 'Chapter 1', anchor: 0, chapter: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('0');
+
+    store['lightink.reader.flow.layout'] = 'scroll';
+    view.refreshPreferences?.();
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(document.documentElement.dataset.readingLayout).toBe('scroll');
+    const pageBox = frameDocument.querySelector<HTMLElement>('.lightink-reader-spread');
+    expect(pageBox?.style.columnCount ?? '').toBe('');
+
+    Object.defineProperty(frameDocument.body, 'scrollHeight', {
+      configurable: true,
+      value: 2400,
+    });
+    view.refreshViewport?.();
+    expect(Number.parseInt(frame.style.height, 10)).toBeGreaterThan(800);
+
+    tapRightZone(frameDocument);
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('0');
+
+    store['lightink.reader.flow.layout'] = 'paginated';
+    view.refreshPreferences?.();
+    expect(reader.dataset.readingLayout).toBe('paginated');
+    tapRightZone(frameDocument);
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('1');
+    await view.destroy();
+  });
+});

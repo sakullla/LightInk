@@ -103,6 +103,7 @@ body {
   color: inherit;
   font: inherit;
   line-height: var(--lightink-reader-line-height, 1.8);
+  -webkit-touch-callout: none;
 }
 p { margin: 0 0 0.55em; }
 h1, h2, h3 {
@@ -398,6 +399,20 @@ function readerSurfaceActive(root: HTMLElement): boolean {
   return root.dataset.workspaceSurface === 'reader';
 }
 
+/** 宿主 html 上的触屏/Android 旗标（iframe 文档本身不带 data-android）。 */
+function hostHasTouchFlags(root: HTMLElement): boolean {
+  const fromRoot =
+    typeof root.closest === 'function' ? root.closest('html') : null;
+  const documentRoot =
+    (fromRoot instanceof Element ? fromRoot : null) ??
+    (typeof document !== 'undefined' ? document.documentElement : null);
+  return (
+    documentRoot instanceof Element &&
+    (documentRoot.hasAttribute('data-android') ||
+      documentRoot.hasAttribute('data-touch-primary'))
+  );
+}
+
 function ancestorIsHidden(root: HTMLElement): boolean {
   let node: HTMLElement | null = root;
   while (node !== null) {
@@ -609,6 +624,9 @@ function applyFlowTypography(
   frameDocument.body.style.fontFamily = resolveReaderFontFamily(typography.fontFamily);
   frameDocument.body.style.fontSize = `calc(${computed.fontSize} * ${typography.fontScaleStep})`;
   frameDocument.body.style.lineHeight = String(typography.lineHeight);
+  if (hostHasTouchFlags(root)) {
+    frameDocument.body.style.setProperty('-webkit-touch-callout', 'none');
+  }
 }
 
 function flowFrameSource(html: string, stylesheet = ''): string {
@@ -1179,7 +1197,6 @@ export function createFlowRenderer(
     const cover = readerChapterLooksLikeCover(frameDocument);
     const plates = readerChapterLooksLikePlates(frameDocument);
     const forceSingle = !widthUsable || cover || plates;
-    const singleInner = widthUsable ? innerWidth : Number.NaN;
     const spread = forceSingle
       ? {
           ...layout,
@@ -1548,13 +1565,45 @@ export function createFlowRenderer(
             frameDocument.getElementById(targetId)?.scrollIntoView({ block: 'center' });
           }
         };
-        const onMouseUp = (): void => {
+        const notifySelection = (): void => {
           hooks.onSelectionMouseUp(
             frameWindow.getSelection(),
             frameChapter,
             frameDocument.body,
             frame,
           );
+        };
+        const onMouseUp = (): void => {
+          notifySelection();
+        };
+        let stableSelectionTimer: ReturnType<typeof setTimeout> | null = null;
+        const flushStableSelection = (): void => {
+          stableSelectionTimer = null;
+          if (!hostHasTouchFlags(root)) {
+            return;
+          }
+          notifySelection();
+        };
+        const scheduleStableSelection = (): void => {
+          if (!hostHasTouchFlags(root)) {
+            return;
+          }
+          if (stableSelectionTimer !== null) {
+            clearTimeout(stableSelectionTimer);
+          }
+          // selectionchange 在长按拖选中连发；停一拍再走既有 onSelectionMouseUp。
+          stableSelectionTimer = setTimeout(flushStableSelection, 80);
+        };
+        const onSelectionChange = (): void => {
+          scheduleStableSelection();
+        };
+        const onTouchEnd = (): void => {
+          scheduleStableSelection();
+        };
+        const onContextMenu = (event: Event): void => {
+          if (hostHasTouchFlags(root)) {
+            event.preventDefault();
+          }
         };
         // 划选发生在 iframe 内，键盘焦点也在 iframe 文档——Escape 需在 frame 内转发。
         const onKeyDown = (event: KeyboardEvent): void => {
@@ -1646,6 +1695,9 @@ export function createFlowRenderer(
         };
         frameDocument.addEventListener('click', onClick);
         frameDocument.addEventListener('mouseup', onMouseUp);
+        frameDocument.addEventListener('selectionchange', onSelectionChange);
+        frameDocument.addEventListener('touchend', onTouchEnd);
+        frameDocument.addEventListener('contextmenu', onContextMenu);
         frameDocument.addEventListener('keydown', onKeyDown);
         frameDocument.addEventListener('pointermove', onPointerMove);
         // Capture on both: some engines skip window when the target is <img>.
@@ -1723,11 +1775,18 @@ export function createFlowRenderer(
         };
         syncChapterResources(win);
         releaseRemoteImages.push(() => {
+          if (stableSelectionTimer !== null) {
+            clearTimeout(stableSelectionTimer);
+            stableSelectionTimer = null;
+          }
           resizeObserver?.disconnect();
           releaseImages();
           releaseFrameTouchPaging();
           frameDocument.removeEventListener('click', onClick);
           frameDocument.removeEventListener('mouseup', onMouseUp);
+          frameDocument.removeEventListener('selectionchange', onSelectionChange);
+          frameDocument.removeEventListener('touchend', onTouchEnd);
+          frameDocument.removeEventListener('contextmenu', onContextMenu);
           frameDocument.removeEventListener('keydown', onKeyDown);
           frameDocument.removeEventListener('pointermove', onPointerMove);
           frameWindow.removeEventListener('wheel', onWheel, true);
