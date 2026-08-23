@@ -3085,9 +3085,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             target.kind === 'remote'
               ? target.itemId
               : (contentHash ?? filePath);
+          // Hash is the write key after annotations resolve. Older local records
+          // still live under the path or a shelf alias (item.id / local:path).
           pendingRestore = loadReadingProgressFromIds(progressStorage, [
             progressId,
-            target.kind === 'remote' ? loadLibraryProgressAlias(progressStorage, target.itemId) ?? '' : '',
+            target.kind === 'local' ? filePath : '',
+            loadLibraryProgressAlias(
+              progressStorage,
+              target.kind === 'remote' ? target.itemId : target.identity.id,
+            ) ?? '',
             target.kind === 'remote' ? readerIdentityKey(target.identity) : '',
             contentHash ?? '',
           ]);
