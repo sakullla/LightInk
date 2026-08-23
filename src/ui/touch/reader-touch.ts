@@ -21,29 +21,33 @@ export const TOUCH_TAP_MAX_MS = 350;
 export const TOUCH_TAP_MOVE_PX = 12;
 /** 横向滑动翻页的最小位移（px）。 */
 export const TOUCH_SWIPE_MIN_PX = 48;
-/** 左右点按热区宽度占比。 */
-export const TOUCH_TAP_EDGE_RATIO = 0.25;
+/** 左侧「上一页」点按热区宽度占比。 */
+export const TOUCH_TAP_PREV_RATIO = 0.2;
+/** 右侧「下一页」点按热区宽度占比（阅读推进更频繁，热区更宽）。 */
+export const TOUCH_TAP_NEXT_RATIO = 0.3;
+/** 屏幕左右外缘排除带宽度（px）：避让系统边缘手势（如 Android 返回）。 */
+export const TOUCH_SYSTEM_EDGE_PX = 24;
 
 /**
  * 点按落点 → 翻页方向：左热区上一页、右热区下一页，中间区返回 null
- * （留给现有 click 行为，如 chrome 显隐切换）。
+ * （留给现有 click 行为，如 chrome 显隐切换）。左右热区占比独立，
+ * 各自最大 0.5，保证中间留路不被吞掉。
  */
 export function resolveTapPageDirection(
   clientX: number,
   viewportWidth: number,
-  edgeRatio: number = TOUCH_TAP_EDGE_RATIO,
+  prevRatio: number = TOUCH_TAP_PREV_RATIO,
+  nextRatio: number = TOUCH_TAP_NEXT_RATIO,
 ): 1 | -1 | null {
   if (!Number.isFinite(clientX) || !Number.isFinite(viewportWidth) || viewportWidth <= 0) {
     return null;
   }
-  const ratio = Math.min(0.5, Math.max(0, edgeRatio));
-  if (ratio === 0) {
-    return null;
-  }
-  if (clientX <= viewportWidth * ratio) {
+  const prev = Math.min(0.5, Math.max(0, prevRatio));
+  const next = Math.min(0.5, Math.max(0, nextRatio));
+  if (prev > 0 && clientX <= viewportWidth * prev) {
     return -1;
   }
-  if (clientX >= viewportWidth * (1 - ratio)) {
+  if (next > 0 && clientX >= viewportWidth * (1 - next)) {
     return 1;
   }
   return null;
@@ -73,6 +77,10 @@ export interface TouchPagingOptions {
   enabled?(): boolean;
   /** 点按热区判定所用的视口宽度。 */
   viewportWidth(): number;
+  /** 左侧「上一页」热区占比；缺省 TOUCH_TAP_PREV_RATIO。 */
+  tapPrevRatio?: number;
+  /** 右侧「下一页」热区占比；缺省 TOUCH_TAP_NEXT_RATIO。 */
+  tapNextRatio?: number;
   /** 点按判定上限（测试可注入）。 */
   tapMaxMs?: number;
   /** 时钟（测试可注入）。 */
@@ -99,7 +107,12 @@ export function bindClickPaging(target: EventTarget, options: TouchPagingOptions
     if (typeof mouse.clientX !== 'number') {
       return;
     }
-    const direction = resolveTapPageDirection(mouse.clientX, options.viewportWidth());
+    const direction = resolveTapPageDirection(
+      mouse.clientX,
+      options.viewportWidth(),
+      options.tapPrevRatio,
+      options.tapNextRatio,
+    );
     if (direction === null) {
       return;
     }
@@ -126,7 +139,21 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
     const touches = (event as TouchEventLike).touches;
     // 多指手势（缩放等）不参与翻页判定。
     const touch = touches !== undefined && touches.length === 1 ? touches[0] : undefined;
-    start = touch === undefined ? null : { x: touch.clientX, y: touch.clientY, at: now() };
+    if (touch === undefined) {
+      start = null;
+      return;
+    }
+    // 起始点落在左右外缘排除带内：本次手势整体不翻页，把边缘留给系统手势。
+    const width = options.viewportWidth();
+    if (
+      Number.isFinite(width) &&
+      width > TOUCH_SYSTEM_EDGE_PX * 2 &&
+      (touch.clientX <= TOUCH_SYSTEM_EDGE_PX || touch.clientX >= width - TOUCH_SYSTEM_EDGE_PX)
+    ) {
+      start = null;
+      return;
+    }
+    start = { x: touch.clientX, y: touch.clientY, at: now() };
   };
 
   const onTouchCancel = (): void => {
@@ -156,7 +183,12 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
       Math.abs(dx) <= TOUCH_TAP_MOVE_PX &&
       Math.abs(dy) <= TOUCH_TAP_MOVE_PX
     ) {
-      direction = resolveTapPageDirection(touch.clientX, options.viewportWidth());
+      direction = resolveTapPageDirection(
+        touch.clientX,
+        options.viewportWidth(),
+        options.tapPrevRatio,
+        options.tapNextRatio,
+      );
     }
     if (direction === null) {
       return;

@@ -561,7 +561,7 @@ describe('flow host touch paging', () => {
     return event;
   }
 
-  it('delegates a right-edge tap to advancePagedWheel (same entry as wheel)', () => {
+  it('delegates a right-zone tap to advancePagedWheel (same entry as wheel)', () => {
     const { root, scrollHost } = mountFlowRoot();
     const dirs: Array<1 | -1> = [];
     const renderer = createFlowRenderer(
@@ -574,15 +574,15 @@ describe('flow host touch paging', () => {
         },
       }),
     );
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
-    const end = touchEvent('touchend', { clientX: 390, clientY: 100 });
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 350, clientY: 100 }));
+    const end = touchEvent('touchend', { clientX: 350, clientY: 100 });
     scrollHost.dispatchEvent(end);
     expect(dirs).toEqual([1]);
     expect(end.defaultPrevented).toBe(true);
     renderer.clear();
   });
 
-  it('delegates a left-edge tap and a horizontal swipe', () => {
+  it('delegates a left-zone tap and a horizontal swipe', () => {
     const { root, scrollHost } = mountFlowRoot();
     const dirs: Array<1 | -1> = [];
     const renderer = createFlowRenderer(
@@ -595,15 +595,15 @@ describe('flow host touch paging', () => {
         },
       }),
     );
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 8, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 8, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 40, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 40, clientY: 100 }));
     scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 320, clientY: 100 }));
     scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 140, clientY: 108 }));
     expect(dirs).toEqual([-1, 1]);
     renderer.clear();
   });
 
-  it('delegates a right-edge mouse click to advancePagedWheel', () => {
+  it('uses asymmetric tap zones: prev only within 20%, next already at 30% from the right', () => {
     const { root, scrollHost } = mountFlowRoot();
     const dirs: Array<1 | -1> = [];
     const renderer = createFlowRenderer(
@@ -616,6 +616,61 @@ describe('flow host touch paging', () => {
         },
       }),
     );
+    // 400 * 0.2 = 80：x=100 已在左热区外（旧对称 25% 会误判为上一页）。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 100, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 100, clientY: 100 }));
+    expect(dirs).toEqual([]);
+    // 400 * (1 - 0.3) = 280：x=290 落在更宽的右热区（旧对称 25% 判为中间区）。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 290, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 290, clientY: 100 }));
+    expect(dirs).toEqual([1]);
+    renderer.clear();
+  });
+
+  it('ignores touch gestures starting inside the 24px system edge band', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    // 左外缘带内点按：即使落在上一页热区也不翻。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 10, clientY: 100 }));
+    const leftEnd = touchEvent('touchend', { clientX: 10, clientY: 100 });
+    scrollHost.dispatchEvent(leftEnd);
+    // 右外缘带内点按（400 - 390 = 10 < 24）。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    const rightEnd = touchEvent('touchend', { clientX: 390, clientY: 100 });
+    scrollHost.dispatchEvent(rightEnd);
+    // 从左外缘带内起始的横向滑动（系统返回手势）不翻页。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 12, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 220, clientY: 104 }));
+    expect(dirs).toEqual([]);
+    expect(leftEnd.defaultPrevented).toBe(false);
+    expect(rightEnd.defaultPrevented).toBe(false);
+    renderer.clear();
+  });
+
+  it('delegates a right-edge mouse click to advancePagedWheel (no touch edge band)', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    // 24px 外缘排除带只针对触控手势；鼠标 click 在 x=390 仍应翻页。
     const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 100 });
     scrollHost.dispatchEvent(event);
     expect(dirs).toEqual([1]);
@@ -657,8 +712,8 @@ describe('flow host touch paging', () => {
         },
       }),
     );
-    scrolled.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
-    scrolled.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    scrolled.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 350, clientY: 100 }));
+    scrolled.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 350, clientY: 100 }));
     expect(dirs).toEqual([]);
     renderer.clear();
 
@@ -674,8 +729,8 @@ describe('flow host touch paging', () => {
         },
       }),
     );
-    hidden.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
-    hidden.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    hidden.scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 350, clientY: 100 }));
+    hidden.scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 350, clientY: 100 }));
     expect(dirs).toEqual([]);
     hiddenRenderer.clear();
   });
@@ -694,8 +749,8 @@ describe('flow host touch paging', () => {
       }),
     );
     renderer.clear();
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 350, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 350, clientY: 100 }));
     expect(dirs).toEqual([]);
   });
 });

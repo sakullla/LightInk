@@ -36,7 +36,13 @@ import {
   snapPagedScroller,
 } from '../ui/reading-layout.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
-import { bindClickPaging, bindTouchPaging, resolveTapPageDirection } from '../ui/touch/reader-touch.js';
+import {
+  bindClickPaging,
+  bindTouchPaging,
+  resolveTapPageDirection,
+  TOUCH_TAP_NEXT_RATIO,
+  TOUCH_TAP_PREV_RATIO,
+} from '../ui/touch/reader-touch.js';
 import {
   applyReaderDocumentLayout,
   clampReaderPageExtent,
@@ -1566,10 +1572,13 @@ export function createFlowRenderer(
         // instead of into the srcdoc document.
         frame.addEventListener('wheel', onWheel, { passive: false, capture: true });
         // 帧内触控翻页：点按左右热区/横向滑动 → 与滚轮同一 advanceFlowPage 入口；
-        // 中间区点按不翻页，click 仍走既有 chrome 切换/链接/划选路径。
+        // 点按热区非对称（左 20% 上一页、右 30% 下一页），中部 50% 点按不翻页，
+        // click 仍走既有 chrome 切换/链接/划选路径。
         const releaseFrameTouchPaging = bindTouchPaging(frameDocument, {
           enabled: () => isFlowPaginated(root),
           viewportWidth: () => frame.clientWidth,
+          tapPrevRatio: TOUCH_TAP_PREV_RATIO,
+          tapNextRatio: TOUCH_TAP_NEXT_RATIO,
           page: (direction) => advanceFlowPage(direction),
         });
         const releaseImages = bindBlockedRemoteImages(
@@ -1915,7 +1924,13 @@ export function createFlowRenderer(
       viewportWidth: () => scrollHost.clientWidth,
       page: (direction: 1 | -1) => hooks.advancePagedWheel(direction),
     };
-    const releaseTouch = bindTouchPaging(scrollHost, hostPaging);
+    // 触控点按走非对称热区（显式传值固定绑定合同）；click 兜底
+    // （桌面/无 touch 流的 WebView）走 reader-touch 的同一缺省热区。
+    const releaseTouch = bindTouchPaging(scrollHost, {
+      ...hostPaging,
+      tapPrevRatio: TOUCH_TAP_PREV_RATIO,
+      tapNextRatio: TOUCH_TAP_NEXT_RATIO,
+    });
     const releaseClick = bindClickPaging(scrollHost, hostPaging);
     releaseHostTouchPaging = () => {
       releaseTouch();
