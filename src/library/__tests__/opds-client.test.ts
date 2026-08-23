@@ -167,6 +167,21 @@ describe('OpdsClient', () => {
     expect(credentialRefForResource(source, 'http://books.example/book.cbz')).toBeUndefined();
   });
 
+  it('scopes a WebDAV credentialRef with the same origin rule', () => {
+    const source = {
+      url: 'https://dav.example/remote.php/dav',
+      allowHttp: false,
+      credentialRef: 'webdav-source-webdav-1',
+    };
+    expect(
+      credentialRefForResource(source, 'https://dav.example/remote.php/dav/One%20Piece%2001.cbz'),
+    ).toBe('webdav-source-webdav-1');
+    expect(credentialRefForResource(source, 'https://cdn.example/One Piece 01.cbz')).toBeUndefined();
+    expect(
+      credentialRefForResource(source, 'http://dav.example/remote.php/dav/One Piece 01.cbz'),
+    ).toBeUndefined();
+  });
+
   it('adds and browses an OPDS 2.0 catalog through the same native commands as 1.x', async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const client = recordingClient(async <T>(command: string, args?: Record<string, unknown>) => {

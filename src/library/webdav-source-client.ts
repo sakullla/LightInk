@@ -2,8 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type { OpdsCredential, OpdsFeed, OpdsSource, OpdsSourceInput } from './opds-client.js';
 
-/** Named WebDAV library source; isomorphic with OpdsSource. */
+/** Named WebDAV library source; isomorphic with OpdsSource. Open/cache consume {url, allowHttp, credentialRef}. */
 export type WebDavSource = OpdsSource;
+
+export type { LibraryRemoteSource } from './opds-client.js';
 
 export type WebDavSourceInput = OpdsSourceInput;
 

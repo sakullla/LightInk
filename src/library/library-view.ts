@@ -39,13 +39,15 @@ import {
   type LibraryProgressQuery,
   type ProjectLibraryProgressOptions,
 } from './library-progress.js';
-import type {
-  OpdsClient,
-  OpdsEntry,
-  OpdsFeed,
-  OpdsLink,
-  OpdsSource,
-  OpdsSourceInput,
+import {
+  libraryRemoteSourceOf,
+  type LibraryRemoteSource,
+  type OpdsClient,
+  type OpdsEntry,
+  type OpdsFeed,
+  type OpdsLink,
+  type OpdsSource,
+  type OpdsSourceInput,
 } from './opds-client.js';
 import type { ProgressStorage } from '../reader/reading-progress.js';
 import type { ReaderPrefsStorage } from '../reader/reader-prefs.js';
@@ -502,7 +504,7 @@ const LABELS: Record<Locale, Labels> = {
 export interface LibraryOpenRequest {
   readonly item: LibraryItem;
   readonly acquisition?: AcquisitionLink;
-  readonly source?: OpdsSource;
+  readonly source?: LibraryRemoteSource;
 }
 
 export interface LibraryViewDependencies {
@@ -599,16 +601,8 @@ function asCatalogSources(
   return list.map((source) => ({ ...source, kind }));
 }
 
-function withoutCatalogKind(source: CatalogSource): OpdsSource {
-  return {
-    id: source.id,
-    title: source.title,
-    url: source.url,
-    allowHttp: source.allowHttp,
-    createdAt: source.createdAt,
-    updatedAt: source.updatedAt,
-    ...(source.credentialRef === undefined ? {} : { credentialRef: source.credentialRef }),
-  };
+function withoutCatalogKind(source: CatalogSource): LibraryRemoteSource {
+  return libraryRemoteSourceOf(source);
 }
 
 function httpRequiresAllow(url: string): boolean {

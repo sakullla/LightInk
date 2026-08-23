@@ -46,12 +46,16 @@ export interface OpdsFeed {
   readonly groups?: readonly OpdsGroup[];
 }
 
-export interface OpdsSource {
+/** Shared remote-catalog fields used to open or cache an acquisition. */
+export interface LibraryRemoteSource {
+  readonly url: string;
+  readonly allowHttp: boolean;
+  readonly credentialRef?: string;
+}
+
+export interface OpdsSource extends LibraryRemoteSource {
   readonly id: string;
   readonly title: string;
-  readonly url: string;
-  readonly credentialRef?: string;
-  readonly allowHttp: boolean;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -563,9 +567,18 @@ function feedFromNative(raw: unknown, fallbackUrl?: string): OpdsFeed {
   return raw as OpdsFeed;
 }
 
+/** Strip catalog metadata so open/cache only see {url, allowHttp, credentialRef}. */
+export function libraryRemoteSourceOf(source: LibraryRemoteSource): LibraryRemoteSource {
+  return {
+    url: source.url,
+    allowHttp: source.allowHttp,
+    ...(source.credentialRef === undefined ? {} : { credentialRef: source.credentialRef }),
+  };
+}
+
 /** Never forward a catalog credential to an acquisition on another origin. */
 export function credentialRefForResource(
-  source: OpdsSource | undefined,
+  source: LibraryRemoteSource | undefined,
   resourceUrl: string,
 ): string | undefined {
   if (source?.credentialRef === undefined) return undefined;

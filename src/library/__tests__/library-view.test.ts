@@ -1143,7 +1143,54 @@ describe('LibraryView my-books home', () => {
       expect.objectContaining({
         item: expect.objectContaining({ id: remote.id }),
         acquisition: expect.objectContaining({ href: 'https://books.example/get/EPUB/12' }),
-        source,
+        source: { url: source.url, allowHttp: source.allowHttp },
+      }),
+      expect.anything(),
+    );
+    view.destroy();
+  });
+
+  it('opens a persisted WebDAV shelf book from its stored acquisition URL', async () => {
+    const remote: LibraryItem = {
+      id: 'webdav-item-1',
+      sourceId: 'webdav-1',
+      sourceKind: 'webdav',
+      title: 'One Piece 01.cbz',
+      authors: [],
+      acquisitionUrl: 'https://dav.example/remote.php/dav/books/One%20Piece%2001.cbz',
+      mediaType: 'application/vnd.comicbook+zip',
+      extension: 'cbz',
+      availability: 'remote',
+      updatedAt: 1,
+    };
+    const authenticated = { ...webdav, credentialRef: 'webdav-source-webdav-1' };
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({
+        listSources: vi.fn(async () => [authenticated]),
+      }),
+      library: {
+        ...dependencies().library,
+        listItems: vi.fn(async () => [remote]),
+        listAcquisitionLinks: vi.fn(async () => []),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    itemRow(host, remote.id).click();
+    await settle();
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item: expect.objectContaining({ id: remote.id, sourceKind: 'webdav' }),
+        acquisition: expect.objectContaining({ href: remote.acquisitionUrl }),
+        source: {
+          url: authenticated.url,
+          allowHttp: false,
+          credentialRef: 'webdav-source-webdav-1',
+        },
       }),
       expect.anything(),
     );
@@ -1881,6 +1928,125 @@ describe('LibraryView sources, manage, and catalog', () => {
     view.destroy();
   });
 
+  it('opens a WebDAV catalog book through onOpen with the shared remote source shape', async () => {
+    const authenticated = { ...webdav, credentialRef: 'webdav-source-webdav-1' };
+    const book: OpdsEntry = {
+      id: 'one-piece',
+      itemId: 'webdav-item-1',
+      title: 'One Piece 01.cbz',
+      authors: [],
+      links: [
+        {
+          href: 'https://dav.example/remote.php/dav/One%20Piece%2001.cbz',
+          rel: 'http://opds-spec.org/acquisition',
+          mediaType: 'application/vnd.comicbook+zip',
+          extension: 'cbz',
+          acquisition: true,
+        },
+      ],
+    };
+    const browse = vi.fn(async () =>
+      feed({ title: authenticated.title, sourceUrl: authenticated.url, entries: [book] }),
+    );
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({
+        listSources: vi.fn(async () => [authenticated]),
+        browse,
+      }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host, 'Nextcloud');
+    itemRow(host, 'webdav-item-1').click();
+    await settle();
+    const pane = host.querySelector('.lightink-library-detail');
+    expect(pane instanceof HTMLElement && isShown(pane)).toBe(true);
+    shownButtonWithText(pane!, '打开阅读').click();
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item: expect.objectContaining({
+          id: 'webdav-item-1',
+          sourceId: 'webdav-1',
+          sourceKind: 'webdav',
+        }),
+        acquisition: expect.objectContaining({
+          href: 'https://dav.example/remote.php/dav/One%20Piece%2001.cbz',
+        }),
+        source: {
+          url: authenticated.url,
+          allowHttp: false,
+          credentialRef: 'webdav-source-webdav-1',
+        },
+      }),
+      expect.anything(),
+    );
+    expect(JSON.stringify(vi.mocked(deps.onOpen).mock.calls[0]?.[0])).not.toMatch(
+      /password|token|secret/i,
+    );
+    view.destroy();
+  });
+
+  it('caches a WebDAV catalog book through onCache with the shared remote source shape', async () => {
+    const authenticated = { ...webdav, credentialRef: 'webdav-source-webdav-1' };
+    const book: OpdsEntry = {
+      id: 'one-piece',
+      itemId: 'webdav-item-1',
+      title: 'One Piece 01.cbz',
+      authors: [],
+      links: [
+        {
+          href: 'https://dav.example/remote.php/dav/One%20Piece%2001.cbz',
+          rel: 'http://opds-spec.org/acquisition',
+          mediaType: 'application/vnd.comicbook+zip',
+          extension: 'cbz',
+          acquisition: true,
+        },
+      ],
+    };
+    const browse = vi.fn(async () =>
+      feed({ title: authenticated.title, sourceUrl: authenticated.url, entries: [book] }),
+    );
+    const deps = dependencies({
+      webdavSource: webdavSourceClient({
+        listSources: vi.fn(async () => [authenticated]),
+        browse,
+      }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host, 'Nextcloud');
+    itemRow(host, 'webdav-item-1').click();
+    await settle();
+    const pane = host.querySelector('.lightink-library-detail');
+    shownButtonWithText(pane!, '缓存整本').click();
+    await settle();
+    expect(deps.onCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item: expect.objectContaining({
+          id: 'webdav-item-1',
+          sourceKind: 'webdav',
+        }),
+        acquisition: expect.objectContaining({
+          href: 'https://dav.example/remote.php/dav/One%20Piece%2001.cbz',
+        }),
+        source: {
+          url: authenticated.url,
+          allowHttp: false,
+          credentialRef: 'webdav-source-webdav-1',
+        },
+      }),
+      expect.anything(),
+    );
+    view.destroy();
+  });
+
   it('deletes a WebDAV source without touching OPDS sources or the sync panel', async () => {
     const onOpenSyncPanel = vi.fn();
     const removeSource = vi.fn(async () => undefined);
@@ -2076,7 +2242,7 @@ describe('LibraryView sources, manage, and catalog', () => {
       expect.objectContaining({
         item: expect.objectContaining({ id: 'item-1' }),
         acquisition: expect.objectContaining({ href: 'https://books.example/book.cbz' }),
-        source,
+        source: { url: source.url, allowHttp: source.allowHttp },
       }),
       expect.anything(),
     );

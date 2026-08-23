@@ -125,4 +125,47 @@ describe('openRemoteSource', () => {
     await source.close();
     expect(commands.filter((command) => command === 'remote_close')).toHaveLength(1);
   });
+
+  it('forwards allowHttp and credentialRef when opening a WebDAV acquisition', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const invoke = (async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      if (command === 'remote_open') {
+        return {
+          resourceId: 'remote-webdav-1',
+          size: 4,
+          identity: 'webdav-item@etag',
+          etag: 'etag',
+          supportsRanges: false,
+          cacheComplete: false,
+        } as T;
+      }
+      return undefined as T;
+    }) as RemoteSourceInvoker['invoke'];
+    const target = {
+      kind: 'remote' as const,
+      itemId: 'webdav-item-1',
+      resourceId: 'https://dav.example/remote.php/dav/book.cbz',
+      identity: { id: 'webdav-item-1' },
+      displayName: 'book.cbz',
+      extension: 'cbz',
+      mimeType: 'application/zip',
+    };
+    const { metadata } = await openRemoteSource(target, {
+      invoker: { invoke },
+      allowHttp: true,
+      credentialRef: 'webdav-source-webdav-1',
+    });
+    expect(metadata.supportsRanges).toBe(false);
+    expect(calls[0]).toEqual({
+      command: 'remote_open',
+      args: expect.objectContaining({
+        url: 'https://dav.example/remote.php/dav/book.cbz',
+        itemId: 'webdav-item-1',
+        allowHttp: true,
+        credentialRef: 'webdav-source-webdav-1',
+      }),
+    });
+    expect(JSON.stringify(calls)).not.toMatch(/password|token|secret/i);
+  });
 });

@@ -78,10 +78,7 @@ import {
   createMarkdownAnnotationHost,
   type MarkdownAnnotationHost,
 } from './reader/markdown-annotations.js';
-import {
-  remoteOpenExpectedSize,
-  type RemoteOpenResult,
-} from './reader/sources/remote-source.js';
+import { type RemoteOpenResult } from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
 import { applyReaderTheme, loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
@@ -166,7 +163,12 @@ import {
   type LibraryOpenRequest,
   type LibraryView,
 } from './library/library-view.js';
-import { credentialRefForResource, opdsClient } from './library/opds-client.js';
+import { opdsClient } from './library/opds-client.js';
+import {
+  cacheLibraryRemoteItem,
+  openLibraryRemote,
+  remoteNeedsRangeWarning,
+} from './library/library-remote.js';
 import { webDavSourceClient } from './library/webdav-source-client.js';
 import { createSyncableStorage } from './storage/syncable-storage.js';
 import { documentClient } from './sync/document-client.js';
@@ -917,46 +919,9 @@ function remoteExtension(item: LibraryOpenRequest['item'], acquisition: NonNulla
   }
 }
 
-function remoteOperationId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
 function throwIfOperationAborted(signal?: AbortSignal): void {
   if (signal?.aborted === true) {
     throw new DOMException('The operation was aborted', 'AbortError');
-  }
-}
-
-async function openLibraryRemote(
-  request: LibraryOpenRequest,
-  signal?: AbortSignal,
-): Promise<RemoteOpenResult> {
-  const { item, acquisition } = request;
-  if (acquisition === undefined) throw new Error('没有可用的获取链接');
-  const requestId = remoteOperationId('library-open');
-  const cancel = (): void => {
-    void invoke<void>('remote_cancel', { requestId }).catch(() => undefined);
-  };
-  throwIfOperationAborted(signal);
-  signal?.addEventListener('abort', cancel, { once: true });
-  try {
-    const opened = await invoke<RemoteOpenResult>('remote_open', {
-      url: acquisition.href,
-      itemId: item.id,
-      allowHttp: request.source?.allowHttp === true,
-      credentialRef: credentialRefForResource(request.source, acquisition.href),
-      requestId,
-      expectedSize: remoteOpenExpectedSize(item, acquisition),
-    });
-    try {
-      throwIfOperationAborted(signal);
-    } catch (error) {
-      await invoke<void>('remote_close', { resourceId: opened.resourceId }).catch(() => undefined);
-      throw error;
-    }
-    return opened;
-  } finally {
-    signal?.removeEventListener('abort', cancel);
   }
 }
 
@@ -992,7 +957,7 @@ async function openLibraryItem(
   if (acquisition === undefined) throw new Error('没有可用的获取链接');
   let opened: RemoteOpenResult;
   try {
-    opened = await openLibraryRemote(request, signal);
+    opened = await openLibraryRemote(request, { signal });
   } catch (error) {
     throw new Error(localizedReaderError(error));
   }
@@ -1003,7 +968,7 @@ async function openLibraryItem(
   signal?.addEventListener('abort', cancel, { once: true });
   try {
     throwIfOperationAborted(signal);
-    if (!opened.supportsRanges) {
+    if (remoteNeedsRangeWarning(opened)) {
       await showAppAlert(i18n.t('reader.remote.noRange'));
     }
     throwIfOperationAborted(signal);
@@ -1041,44 +1006,13 @@ async function cacheLibraryItem(
   request: LibraryOpenRequest,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { item, acquisition } = request;
-  if (item.sourceKind === 'local' || item.sourceKind === 'managed' || acquisition === undefined) {
-    return;
-  }
-  let opened: RemoteOpenResult;
   try {
-    opened = await openLibraryRemote(request, signal);
-  } catch (error) {
-    throw new Error(localizedReaderError(error));
-  }
-  const cancel = (): void => {
-    void invoke<void>('remote_cancel', { resourceId: opened.resourceId }).catch(() => undefined);
-  };
-  signal?.addEventListener('abort', cancel, { once: true });
-  try {
-    const chunkSize = 16 * 1024 * 1024;
-    for (let offset = 0; offset < opened.size; offset += chunkSize) {
-      throwIfOperationAborted(signal);
-      const length = Math.min(chunkSize, opened.size - offset);
-      await invoke<ArrayBuffer | number[]>('remote_read_range', {
-        resourceId: opened.resourceId,
-        offset,
-        length,
-      });
-      throwIfOperationAborted(signal);
-    }
-    await libraryClient.upsertItem({
-      ...item,
-      etag: opened.etag,
-      lastModified: opened.lastModified,
-      size: opened.size,
-      updatedAt: Date.now(),
+    await cacheLibraryRemoteItem(request, {
+      signal,
+      upsertItem: (item) => libraryClient.upsertItem(item),
     });
   } catch (error) {
     throw new Error(localizedReaderError(error));
-  } finally {
-    signal?.removeEventListener('abort', cancel);
-    await invoke<void>('remote_close', { resourceId: opened.resourceId }).catch(() => undefined);
   }
 }
 
