@@ -32,12 +32,8 @@ export interface SearchSheetDeps {
   onQuery: (query: string) => void;
   /** 点命中跳转（层保持打开；宿主定位并以新的 current 重放 renderHits）。 */
   onJump?: (key: string) => void;
-  /** onJump 的装配别名（reader-view 使用；两者提供其一即可）。 */
-  onActivateHit?: (key: string) => void;
   /** 层每次从打开变为关闭时回调一次（同步控件条状态、按需清理会话）。 */
   onClose?: () => void;
-  /** onClose 的装配别名（reader-view 使用；与 onClose 同时提供则都回调）。 */
-  onDismiss?: () => void;
 }
 
 export interface SearchSheet {
@@ -51,16 +47,10 @@ export interface SearchSheet {
   setQuery(query: string): void;
   getQuery(): string;
   focusInput(): void;
-  /** focusInput 的装配别名（reader-view 使用）。 */
-  focusQuery(): void;
   /** 渲染命中列表；有查询但空命中时显示空态文案，不回退标注侧栏。 */
   renderHits(hits: readonly SearchHitView[]): void;
   destroy(): void;
 }
-
-/** 装配别名（reader-view 以 Reader 前缀引用；与 createSearchSheet 同物）。 */
-export type ReaderSearchSheet = SearchSheet;
-export type ReaderSearchSheetDeps = SearchSheetDeps;
 
 /** 创建触屏搜索底栏层。仅触屏路径装配；桌面 openSearch 走标注侧栏不经此层。 */
 export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
@@ -69,7 +59,7 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     return deps.copy?.[key] ?? deps.t?.(messageKey) ?? messageKey;
   };
   const onJump = (key: string): void => {
-    (deps.onJump ?? deps.onActivateHit)?.(key);
+    deps.onJump?.(key);
   };
 
   const root = document.createElement('section');
@@ -157,7 +147,6 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     }
     root.hidden = true;
     deps.onClose?.();
-    deps.onDismiss?.();
     return true;
   };
 
@@ -210,7 +199,6 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
       return input.value;
     },
     focusInput,
-    focusQuery: focusInput,
     renderHits(hits: readonly SearchHitView[]): void {
       lastHits = hits;
       renderList();
@@ -220,6 +208,3 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     },
   };
 }
-
-/** 装配别名（reader-view 以 Reader 前缀引用；与 createSearchSheet 同物）。 */
-export const createReaderSearchSheet = createSearchSheet;

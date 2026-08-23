@@ -145,7 +145,6 @@ import {
 } from './reader-progress-ui.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
-  defaultReaderChromePanelComicCopy,
   fillReaderTocPanel,
   fillReaderTypographyPanel,
   pinFixedOverlay,
@@ -2869,8 +2868,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       night: t('reader.theme.night'),
     },
     comic: {
-      // direction/spread 组标签暂无 i18n 键，沿用面板默认文案。
-      ...defaultReaderChromePanelComicCopy(),
+      direction: t('reader.comic.direction'),
+      spread: t('reader.comic.spread'),
       vertical: t('reader.comic.vertical'),
       paged: t('reader.comic.paged'),
       leftToRight: t('reader.comic.ltr'),

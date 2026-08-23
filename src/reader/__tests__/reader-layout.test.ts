@@ -336,6 +336,47 @@ describe('readerPageInnerPadPx', () => {
   });
 });
 
+/** Bodies of `@media ${query}` blocks, brace-balanced so rules after the block do not match. */
+function cssAtMediaBodies(css: string, query: string): string[] {
+  const marker = `@media ${query}`;
+  const bodies: string[] = [];
+  let searchFrom = 0;
+  while (searchFrom < css.length) {
+    const at = css.indexOf(marker, searchFrom);
+    if (at < 0) {
+      break;
+    }
+    const open = css.indexOf('{', at + marker.length);
+    if (open < 0) {
+      break;
+    }
+    let depth = 0;
+    let closed = -1;
+    for (let i = open; i < css.length; i += 1) {
+      const ch = css[i];
+      if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          closed = i;
+          break;
+        }
+      }
+    }
+    if (closed < 0) {
+      break;
+    }
+    bodies.push(css.slice(open + 1, closed));
+    searchFrom = closed + 1;
+  }
+  return bodies;
+}
+
+function coarsePointerCss(css: string): string {
+  return cssAtMediaBodies(css, '(pointer: coarse)').join('\n');
+}
+
 describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () => {
   const readerCss = (): string =>
     readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
@@ -347,8 +388,8 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
     );
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
+    expect(coarsePointerCss(css)).toMatch(
+      /\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-safe-top/,
     );
   });
 
@@ -360,11 +401,12 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    const coarse = coarsePointerCss(css);
+    expect(coarse).toMatch(
+      /\.lightink-reader-chrome-footer\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    expect(coarse).toMatch(
+      /\.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
   });
 
@@ -373,8 +415,8 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
     );
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+    expect(coarsePointerCss(css)).toMatch(
+      /\.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-scrubber,\s*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-progress\s*\{[^}]*min-height:\s*44px/,
@@ -392,12 +434,12 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
   });
 
   it('keeps the search sheet query box, hit rows, and close button at 44px on coarse pointers', () => {
-    const css = panelsCss();
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-search-sheet-input,\s*\.lightink-reader-search-sheet-hit\s*\{[^}]*min-height:\s*44px/,
+    const coarse = coarsePointerCss(panelsCss());
+    expect(coarse).toMatch(
+      /\.lightink-reader-search-sheet-input,\s*\.lightink-reader-search-sheet-hit\s*\{[^}]*min-height:\s*44px/,
     );
-    expect(css).toMatch(
-      /@media \(pointer: coarse\)[\s\S]*?\.lightink-reader-search-sheet-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+    expect(coarse).toMatch(
+      /\.lightink-reader-search-sheet-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
     );
   });
 });

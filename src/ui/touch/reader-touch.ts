@@ -30,6 +30,8 @@ export const TOUCH_TAP_PREV_RATIO = 0.2;
 export const TOUCH_TAP_NEXT_RATIO = 0.3;
 /** 屏幕左右外缘排除带宽度（px）：避让系统边缘手势（如 Android 返回）。 */
 export const TOUCH_SYSTEM_EDGE_PX = 24;
+/** 带内起始后若系统接管、没有合成 click，超时解除吞点击，避免误伤后续鼠标点击。 */
+export const TOUCH_BAND_CLICK_SUPPRESS_MS = 400;
 
 /**
  * 点按落点 → 翻页方向：左热区上一页、右热区下一页，中间区返回 null
@@ -139,6 +141,29 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   const now = options.now ?? (() => Date.now());
   let start: { x: number; y: number; at: number } | null = null;
   let suppressNextClick = false;
+  let suppressTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearBandClickSwallowTimer = (): void => {
+    if (suppressTimer === null) {
+      return;
+    }
+    clearTimeout(suppressTimer);
+    suppressTimer = null;
+  };
+
+  const disarmBandClickSwallow = (): void => {
+    suppressNextClick = false;
+    clearBandClickSwallowTimer();
+  };
+
+  const armBandClickSwallow = (): void => {
+    suppressNextClick = true;
+    clearBandClickSwallowTimer();
+    suppressTimer = setTimeout(() => {
+      suppressNextClick = false;
+      suppressTimer = null;
+    }, TOUCH_BAND_CLICK_SUPPRESS_MS);
+  };
 
   const onTouchStart = (event: Event): void => {
     const touches = (event as TouchEventLike).touches;
@@ -157,11 +182,11 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
       width > TOUCH_SYSTEM_EDGE_PX * 2 &&
       (touch.clientX <= TOUCH_SYSTEM_EDGE_PX || touch.clientX >= width - TOUCH_SYSTEM_EDGE_PX)
     ) {
-      suppressNextClick = true;
+      armBandClickSwallow();
       start = null;
       return;
     }
-    suppressNextClick = false;
+    disarmBandClickSwallow();
     start = { x: touch.clientX, y: touch.clientY, at: now() };
   };
 
@@ -170,7 +195,7 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
     if (!suppressNextClick) {
       return;
     }
-    suppressNextClick = false;
+    disarmBandClickSwallow();
     event.preventDefault();
     event.stopImmediatePropagation();
   };
@@ -224,6 +249,7 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   target.addEventListener('click', onBandClick, { capture: true });
 
   return () => {
+    disarmBandClickSwallow();
     target.removeEventListener('touchstart', onTouchStart);
     target.removeEventListener('touchend', onTouchEnd);
     target.removeEventListener('touchcancel', onTouchCancel);

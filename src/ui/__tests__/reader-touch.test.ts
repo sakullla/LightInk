@@ -13,6 +13,7 @@ import {
   bindTouchPaging,
   resolveSwipePageDirection,
   resolveTapPageDirection,
+  TOUCH_BAND_CLICK_SUPPRESS_MS,
   TOUCH_SYSTEM_EDGE_PX,
   TOUCH_TAP_EDGE_RATIO,
   TOUCH_TAP_NEXT_RATIO,
@@ -25,6 +26,7 @@ describe('touch paging constants', () => {
     expect(TOUCH_TAP_PREV_RATIO).toBe(0.2);
     expect(TOUCH_TAP_NEXT_RATIO).toBe(0.3);
     expect(TOUCH_SYSTEM_EDGE_PX).toBe(24);
+    expect(TOUCH_BAND_CLICK_SUPPRESS_MS).toBe(400);
   });
 });
 
@@ -171,6 +173,28 @@ describe('bindTouchPaging', () => {
     const later = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 });
     el.dispatchEvent(later);
     expect(clickPage).toHaveBeenCalledWith(1);
+  });
+
+  it('disarms the band click swallow after a short timeout when no click follows', () => {
+    vi.useFakeTimers();
+    try {
+      const { el } = mount();
+      const clickPage = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+      bindClickPaging(el, { page: clickPage, viewportWidth: () => 400 });
+      el.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 200 }));
+      el.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 200 }));
+      vi.advanceTimersByTime(TOUCH_BAND_CLICK_SUPPRESS_MS);
+      const later = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 390,
+        clientY: 200,
+      });
+      el.dispatchEvent(later);
+      expect(clickPage).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('disarms the band click swallow when the next gesture starts outside the band', () => {
