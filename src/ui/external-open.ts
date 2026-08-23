@@ -8,6 +8,8 @@
  * and uses the existing error dialog on failure.
  */
 
+import { displayNameOfPath } from '../file/path-ext.js';
+
 export type ExternalOpenSource = 'running' | 'cold-start';
 export type ExternalOpenOrigin = ExternalOpenSource | 'runtime';
 export type ExternalOpenLocale = 'en' | 'zh-CN';
@@ -123,8 +125,7 @@ export function displayNameForExternalOpen(
   if (title !== undefined && title.length > 0) {
     return title;
   }
-  const parts = path.split(/[\\/]/).filter((part) => part.length > 0);
-  return parts[parts.length - 1] ?? path;
+  return displayNameOfPath(path);
 }
 
 export function resolveExternalOpenLabels(

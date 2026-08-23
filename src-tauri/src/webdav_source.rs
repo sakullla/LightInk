@@ -593,13 +593,24 @@ fn book_extension(url: &Url) -> Option<String> {
         .then_some(extension)
 }
 
+fn decode_display_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.contains('%') {
+        if let Ok(decoded) = percent_decode(trimmed) {
+            if !decoded.is_empty() {
+                return decoded;
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
 fn resource_title(resource: &DavResource, url: &Url) -> String {
     resource
         .display_name
         .as_deref()
-        .map(str::trim)
+        .map(decode_display_name)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
         .or_else(|| last_path_segment(url))
         .unwrap_or_else(|| url.to_string())
 }
@@ -1238,6 +1249,26 @@ mod tests {
         let sub = Url::parse("https://dav.example/dav/books/%E7%94%BB%E5%86%8C/").unwrap();
         let feed = build_browse_feed(&source, &sub, &root, Vec::new()).unwrap();
         assert_eq!(feed.title, "画册");
+    }
+
+    #[test]
+    fn percent_encoded_displayname_is_decoded_for_titles() {
+        let source = browse_source();
+        let root = browse_root();
+        let body = r#"<?xml version="1.0"?>
+          <multistatus xmlns="DAV:">
+            <response>
+              <href>/dav/books/%E6%98%9F%E7%A9%BA.epub</href>
+              <propstat><prop>
+                <displayname>%E6%98%9F%E7%A9%BA.epub</displayname>
+                <getcontentlength>12</getcontentlength>
+                <resourcetype/>
+              </prop></propstat>
+            </response>
+          </multistatus>"#;
+        let feed =
+            build_browse_feed(&source, &root, &root, parse_multistatus(body).unwrap()).unwrap();
+        assert_eq!(feed.entries[0].title, "星空.epub");
     }
 
     #[test]

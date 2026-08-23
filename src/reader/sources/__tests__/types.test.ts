@@ -12,6 +12,7 @@ describe('reader source contracts', () => {
     const target = readerTargetFromPath('books\\novel.epub');
     expect(target.kind).toBe('local');
     expect(target.displayName).toBe('novel.epub');
+    expect(readerTargetFromPath('/cache/%E4%B8%89%E4%BD%93.epub').displayName).toBe('三体.epub');
     expect(target.extension).toBe('epub');
     expect(normalizeReaderTarget('books/novel.epub')).toMatchObject({ kind: 'local' });
   });

@@ -1,4 +1,4 @@
-import { extOfPath } from '../../file/path-ext.js';
+import { displayNameOfPath, extOfPath } from '../../file/path-ext.js';
 
 /** A document identity used by progress, annotations, and cache records. */
 export interface ReaderDocumentIdentity {
@@ -77,11 +77,6 @@ export interface ArchiveProvider {
   cancel?(): Promise<void>;
   subscribeProgress?(listener: (progress: ArchiveReadProgress) => void): () => void;
   close(): Promise<void>;
-}
-
-function displayNameOfPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  return normalized.slice(normalized.lastIndexOf('/') + 1) || normalized;
 }
 
 /** Build a local target while preserving the existing path-based API. */

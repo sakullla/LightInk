@@ -6,7 +6,29 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { FORMAT_TOOLS, formatToolbarPlugin, placeToolbar } from '../format-toolbar.js';
+import { AllSelection, EditorState, NodeSelection, TextSelection } from '@milkdown/prose/state';
+import { Schema } from '@milkdown/prose/model';
+import type { EditorView } from '@milkdown/prose/view';
+
+import {
+  FORMAT_TOOLS,
+  formatToolbarPlugin,
+  placeToolbar,
+  shouldShowFormatToolbar,
+} from '../format-toolbar.js';
+
+const schema = new Schema({
+  nodes: {
+    doc: { content: 'block+' },
+    paragraph: { content: 'text*', group: 'block' },
+    image: { group: 'block', atom: true, selectable: true },
+    text: { inline: true },
+  },
+});
+
+function viewOf(state: EditorState, focused: boolean): EditorView {
+  return { hasFocus: () => focused, state } as EditorView;
+}
 
 describe('FORMAT_TOOLS catalog (R7)', () => {
   it('exposes the five format tools in display order', () => {
@@ -74,6 +96,50 @@ describe('placeToolbar placement decision (R7)', () => {
     const p = placeToolbar({ top: 200, bottom: 220, left: 500 }, size, viewport, 20);
     // 上方 200-40-20=140
     expect(p.top).toBe(140);
+  });
+});
+
+describe('shouldShowFormatToolbar', () => {
+  const doc = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('hello')])]);
+
+  it('hides when the editor is not focused or the caret is empty', () => {
+    const selected = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, 1, 6),
+    });
+    const caret = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, 1, 1),
+    });
+    expect(shouldShowFormatToolbar(viewOf(selected, false))).toBe(false);
+    expect(shouldShowFormatToolbar(viewOf(caret, true))).toBe(false);
+  });
+
+  it('shows for a focused text range and a user select-all', () => {
+    const selected = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, 1, 6),
+    });
+    const all = EditorState.create({
+      schema,
+      doc,
+      selection: new AllSelection(doc),
+    });
+    expect(shouldShowFormatToolbar(viewOf(selected, true))).toBe(true);
+    expect(shouldShowFormatToolbar(viewOf(all, true))).toBe(true);
+  });
+
+  it('hides for a node selection so open-file first-block select does not float the bar', () => {
+    const imageDoc = schema.node('doc', null, [schema.node('image')]);
+    const state = EditorState.create({
+      schema,
+      doc: imageDoc,
+      selection: NodeSelection.create(imageDoc, 0),
+    });
+    expect(shouldShowFormatToolbar(viewOf(state, true))).toBe(false);
   });
 });
 

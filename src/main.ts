@@ -64,7 +64,7 @@ import {
   registerBrowserFile,
 } from './file/browser-file-store.js';
 import { openDocumentPath } from './file/document-router.js';
-import { extOfPath } from './file/path-ext.js';
+import { displayNameOfPath, extOfPath } from './file/path-ext.js';
 import type {
   ExportServiceDeps,
   ExportTabSnapshot,
@@ -594,7 +594,7 @@ function reportReaderLoadError(error: unknown): void {
 async function openPathByKind(path: string): Promise<TabState | null> {
   const progress = isReaderPath(path)
     ? beginOpenProgress({
-        title: path.replace(/\\/g, '/').split('/').pop() || path,
+        title: displayNameOfPath(path),
         label: i18n.t('reader.opening'),
       })
     : null;
@@ -1702,7 +1702,10 @@ function openWebDavSyncPanel(): void {
     doc: document,
     webdav: webDavClient,
     sync: syncRecordClient,
-    themeHost: document.querySelector<HTMLElement>('.lightink-reader') ?? undefined,
+    themeHost:
+      document.querySelector<HTMLElement>('.lightink-library:not([hidden])') ??
+      document.querySelector<HTMLElement>('.lightink-reader:not([hidden])') ??
+      undefined,
     themeStorage: syncableStorage,
     syncNow: () => applicationStateSync?.syncNow() ?? syncRecordClient.run(),
     migration: {

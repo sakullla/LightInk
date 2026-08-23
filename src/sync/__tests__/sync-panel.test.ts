@@ -10,7 +10,8 @@ import type { SyncPanelDeps } from '../sync-panel.js';
 import type { SyncStatus } from '../sync-client.js';
 import type { SyncProfileInput } from '../webdav-client.js';
 import type { ManagedMigrationPreview, ManagedMigrationResult } from '../../library/library-client.js';
-import { applyReaderTheme, READER_THEME_STORAGE_KEY } from '../../reader/reader-theme.js';
+import { applyLibraryTheme, LIBRARY_THEME_STORAGE_KEY } from '../../library/library-theme.js';
+import { applyReaderTheme } from '../../reader/reader-theme.js';
 
 const idle: SyncStatus = {
   state: 'idle',
@@ -198,31 +199,43 @@ describe('sync panel', () => {
     expect(dialog.textContent).toContain('disk is read-only');
   });
 
-  it('paints the dialog with reader paper instead of editor cream', () => {
+  it('paints the dialog with the shelf theme instead of editor cream', () => {
+    const host = document.createElement('div');
+    host.className = 'lightink-library';
+    applyLibraryTheme(host, 'ink');
+    document.body.append(host);
+    showSyncPanel({ ...createDeps(), themeHost: host });
+    const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.dataset.libraryTheme).toBe('ink');
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#14161a');
+    expect(overlay!.style.getPropertyValue('--lightink-accent')).toBe('#7ba3c9');
+    expect(overlay!.style.backgroundColor).toBe('');
+    host.remove();
+  });
+
+  it('copies a visible reader host when the shelf is hidden', () => {
     const host = document.createElement('div');
     host.className = 'lightink-reader';
     applyReaderTheme(host, 'white');
     document.body.append(host);
     showSyncPanel({ ...createDeps(), themeHost: host });
     const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
-    expect(overlay).not.toBeNull();
     expect(overlay!.dataset.readerTheme).toBe('white');
     expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#ffffff');
-    expect(overlay!.style.getPropertyValue('--lightink-accent')).toBe('#1a1a1a');
-    expect(overlay!.style.backgroundColor).toBe('');
     host.remove();
   });
 
-  it('falls back to the stored reader theme when no book host is mounted', () => {
+  it('falls back to the stored shelf theme when no host is mounted', () => {
     const storage = {
-      getItem: (key: string) => (key === READER_THEME_STORAGE_KEY ? 'night' : null),
+      getItem: (key: string) => (key === LIBRARY_THEME_STORAGE_KEY ? 'walnut' : null),
       setItem: () => undefined,
     };
     showSyncPanel({ ...createDeps(), themeStorage: storage });
     const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
-    expect(overlay!.dataset.readerTheme).toBe('night');
-    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#121212');
-    expect(overlay!.style.getPropertyValue('--lightink-fg')).toBe('#c8c8c8');
+    expect(overlay!.dataset.libraryTheme).toBe('walnut');
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#241c17');
+    expect(overlay!.style.getPropertyValue('--lightink-fg')).toBe('#eadcc8');
   });
 
   it('closes on Escape so the Android back chain returns to the manage page', async () => {

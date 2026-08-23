@@ -53,7 +53,11 @@ import { imageAssetPlugin, insertImageAt, type ImageAssetMountOptions } from './
 import { htmlWithImageParse, imageSizeNodeViewPlugin, imageWithSize } from './plugins/image-size.js';
 import { mathPlugin } from './plugins/math.js';
 import { mermaidPlugin } from './plugins/mermaid.js';
-import { progressiveSelectAll, progressiveSelectPlugin } from './plugins/progressive-select.js';
+import {
+  isFullDocumentSelection,
+  progressiveSelectAll,
+  progressiveSelectPlugin,
+} from './plugins/progressive-select.js';
 import { slashMenuPlugin } from './plugins/slash-menu.js';
 import { taskCheckboxPlugin } from './plugins/task-checkbox.js';
 import { runTableOp, type TableOpId } from './plugins/table-ops.js';
@@ -98,6 +102,21 @@ function isDevEnvironment(): boolean {
 /** True when the Milkdown editor has finished creating and has a live view. */
 function isCreated(state: MountState): boolean {
   return state.editor !== null && state.editor.status === EditorStatus.Created;
+}
+
+/** Collapse a leftover whole-document selection to a caret (open/focus artifact). */
+function collapseFullDocumentSelection(view: EditorView): void {
+  if (!isFullDocumentSelection(view.state)) {
+    return;
+  }
+  view.dispatch(view.state.tr.setSelection(TextSelection.atStart(view.state.doc)));
+}
+
+function collapseNonEmptySelection(view: EditorView): void {
+  if (view.state.selection.empty) {
+    return;
+  }
+  view.dispatch(view.state.tr.setSelection(TextSelection.atStart(view.state.doc)));
 }
 
 /** 取得底层 ProseMirror EditorView（编辑器未就绪或异常时返回 null）。 */
@@ -273,6 +292,10 @@ export async function mountEditor(
               console.warn('[lightink/editor] cursor binding skipped:', e);
             }
           }
+          const view = getView(state);
+          if (view !== null) {
+            collapseNonEmptySelection(view);
+          }
           resolve();
         }
         if (status === EditorStatus.Destroyed) {
@@ -294,6 +317,10 @@ export async function mountEditor(
         // Replace the live ProseMirror document.
         state.editor!.action(replaceAll(value, false));
         state.cachedMarkdown = value;
+        const view = getView(state);
+        if (view !== null) {
+          collapseNonEmptySelection(view);
+        }
       } else {
         // Editor not created yet — keep the fallback so getMarkdown still
         // returns something sensible for headless callers.
@@ -417,6 +444,15 @@ export async function mountEditor(
       const view = getView(state);
       if (view === null) return;
       view.focus();
+      collapseFullDocumentSelection(view);
+      // Windows / WebView often select-all when a freshly filled
+      // contenteditable is focused; collapse after that paint.
+      queueMicrotask(() => {
+        const live = getView(state);
+        if (live !== null) {
+          collapseFullDocumentSelection(live);
+        }
+      });
     },
     selectAll(): void {
       const view = getView(state);

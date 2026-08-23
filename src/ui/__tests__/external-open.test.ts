@@ -132,6 +132,7 @@ describe('displayNameForExternalOpen', () => {
       'Chapter 1.epub',
     );
     expect(displayNameForExternalOpen('/library/Chapter 1.epub', null)).toBe('Chapter 1.epub');
+    expect(displayNameForExternalOpen('/cache/%E4%B8%89%E4%BD%93.epub', null)).toBe('三体.epub');
   });
 });
 

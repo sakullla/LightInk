@@ -1,11 +1,10 @@
 import { labelModal, mountModalFocus } from '../ui/modal-focus.js';
+import { adoptDialogSurfaceTheme, inferDialogThemeHost } from '../ui/confirm-dialog.js';
 import {
-  applyReaderTheme,
-  loadReaderTheme,
-  parseReaderTheme,
-  readerThemeTokens,
-  type ReaderThemeStorage,
-} from '../reader/reader-theme.js';
+  applyLibraryTheme,
+  loadLibraryTheme,
+  type LibraryThemeStorage,
+} from '../library/library-theme.js';
 import type {
   SyncAuthType,
   SyncCredential,
@@ -34,10 +33,10 @@ export interface SyncPanelDeps {
   };
   readonly locale?: 'en' | 'zh-CN';
   readonly onClose?: () => void;
-  /** Live reading host, when a book is open. */
+  /** Visible shelf/reader host; inferred when omitted. */
   readonly themeHost?: HTMLElement;
-  /** `lightink.reader.theme` store; falls back to the document's localStorage. */
-  readonly themeStorage?: ReaderThemeStorage | null;
+  /** `lightink.library.theme` store; falls back to the document's localStorage. */
+  readonly themeStorage?: LibraryThemeStorage | null;
 }
 
 type Labels = {
@@ -190,7 +189,7 @@ function migrationLabel(entry: ManagedMigrationEntry): string {
   return `${entry.title}${suffix}`;
 }
 
-function themeStorageOf(deps: SyncPanelDeps): ReaderThemeStorage | null {
+function themeStorageOf(deps: SyncPanelDeps): LibraryThemeStorage | null {
   if (deps.themeStorage !== undefined) {
     return deps.themeStorage;
   }
@@ -202,22 +201,18 @@ function themeStorageOf(deps: SyncPanelDeps): ReaderThemeStorage | null {
 }
 
 /**
- * Paint the body-mounted dialog with reader paper, not editor cream/brown.
- * Overlay keeps a dimmed backdrop; only CSS variables inherit to the dialog.
+ * Paint the body-mounted dialog with the current shelf (or reader) tokens,
+ * not the editor / markdown cream on document.documentElement.
  */
-function applySyncPanelReaderTheme(overlay: HTMLElement, deps: SyncPanelDeps): void {
-  const resolved = deps.themeHost?.dataset.readerTheme
-    ? parseReaderTheme(deps.themeHost.dataset.readerTheme)
-    : loadReaderTheme(themeStorageOf(deps));
-  const tokens = readerThemeTokens(resolved);
-  applyReaderTheme(overlay, resolved);
+function applySyncPanelSurfaceTheme(overlay: HTMLElement, deps: SyncPanelDeps): void {
+  const host = deps.themeHost ?? inferDialogThemeHost(deps.doc);
+  if (host !== null) {
+    adoptDialogSurfaceTheme(overlay, host);
+    overlay.style.backgroundColor = '';
+    return;
+  }
+  applyLibraryTheme(overlay, loadLibraryTheme(themeStorageOf(deps)));
   overlay.style.backgroundColor = '';
-  overlay.style.setProperty('--lightink-accent', tokens.ink);
-  overlay.style.setProperty('--lightink-accent-soft', tokens.elevated);
-  overlay.style.setProperty(
-    '--lightink-overlay',
-    `color-mix(in srgb, ${tokens.ink} 36%, transparent)`,
-  );
 }
 
 /** Render the complete sync configuration/status surface. */
@@ -358,7 +353,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   body.append(dangerSection);
   dialog.append(header, body, footer);
   overlay.appendChild(dialog);
-  applySyncPanelReaderTheme(overlay, deps);
+  applySyncPanelSurfaceTheme(overlay, deps);
   doc.body.appendChild(overlay);
 
   let profile: SyncProfile | null = null;

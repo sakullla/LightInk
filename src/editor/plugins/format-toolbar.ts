@@ -13,7 +13,7 @@
  */
 
 import { $prose } from '@milkdown/utils';
-import { Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
+import { AllSelection, NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
 import { toggleMark } from '@milkdown/prose/commands';
 import type { EditorView } from '@milkdown/prose/view';
 
@@ -253,15 +253,34 @@ function applyFormatTool(view: EditorView, id: FormatToolId): void {
   toggleMark(markType)(view.state, (tr) => view.dispatch(tr));
 }
 
-/** 依据当前选区同步工具条显隐与位置。 */
-function syncToolbar(view: EditorView, toolbar: HTMLElement): void {
+/**
+ * Floating format bar is for a focused text range the user drew.
+ * Opening a file often leaves a full-document / node selection at (0,0);
+ * that must not pop the bar at the top-left of the page.
+ */
+export function shouldShowFormatToolbar(view: EditorView): boolean {
+  if (typeof view.hasFocus === 'function' && !view.hasFocus()) {
+    return false;
+  }
   const { selection } = view.state;
   if (selection.empty) {
+    return false;
+  }
+  if (selection instanceof NodeSelection) {
+    return false;
+  }
+  return selection instanceof TextSelection || selection instanceof AllSelection;
+}
+
+/** 依据当前选区同步工具条显隐与位置。 */
+function syncToolbar(view: EditorView, toolbar: HTMLElement): void {
+  if (!shouldShowFormatToolbar(view)) {
     toolbar.style.display = 'none';
     return;
   }
   // 先显示以测得尺寸（display:none 时 getBoundingClientRect 为 0）。
   toolbar.style.display = '';
+  const { selection } = view.state;
   const start = view.coordsAtPos(selection.from);
   const end = view.coordsAtPos(selection.to);
   const rect = toolbar.getBoundingClientRect();
