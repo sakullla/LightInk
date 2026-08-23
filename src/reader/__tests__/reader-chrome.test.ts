@@ -31,13 +31,20 @@
  * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
  * reveal — the chrome only leaves via center tap, Escape, or closing an
  * overlay. Desktop behavior above is unchanged when the flag is absent.
+ * toc / typography / search / annotations live in the footer thumb zone
+ * (hit target ≥44px) so they stay reachable after the top bar is dismissed.
+ * backToShelf may remain on the top bar or an edge.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderChrome, READER_CHROME_ACTIONS } from '../reader-chrome.js';
 
 const LABELS = ['返回书架', '目录', '排版', '搜索', '本书标注'] as const;
+const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
 const AUTO_HIDE_MS = 2500;
+const MIN_HIT_PX = 44;
 
 function stubRect(
   el: HTMLElement,
@@ -107,9 +114,50 @@ function clickPage(target: HTMLElement, clientY: number): void {
   );
 }
 
+function actionButton(root: ParentNode, action: string): HTMLButtonElement {
+  const match = [...root.querySelectorAll<HTMLButtonElement>('[data-reader-chrome-action]')].find(
+    (button) => button.dataset.readerChromeAction === action,
+  );
+  expect(match, `missing chrome action "${action}"`).toBeTruthy();
+  return match!;
+}
+
+function footerThumbZone(footer: HTMLElement): HTMLElement {
+  return (
+    footer.querySelector<HTMLElement>('.lightink-reader-chrome-thumb') ??
+    footer.querySelector<HTMLElement>('.lightink-reader-chrome-tools') ??
+    footer
+  );
+}
+
+function declaredHitPx(el: HTMLElement): number {
+  const computed = getComputedStyle(el);
+  for (const raw of [el.style.minHeight, el.style.height, computed.minHeight, computed.height]) {
+    const value = parseFloat(raw);
+    if (Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return 0;
+}
+
+function applyTouchReaderCss(): void {
+  document.documentElement.setAttribute('data-touch-primary', '');
+  if (document.head.querySelector('[data-reader-chrome-test-css]')) {
+    return;
+  }
+  const style = document.createElement('style');
+  style.dataset.readerChromeTestCss = 'true';
+  style.textContent = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+  document.head.append(style);
+}
+
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
+  document.documentElement.removeAttribute('data-touch-primary');
+  document.documentElement.removeAttribute('data-android');
+  document.head.querySelectorAll('[data-reader-chrome-test-css]').forEach((node) => node.remove());
 });
 
 describe('createReaderChrome first paint', () => {
@@ -472,6 +520,84 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
       '25%',
     );
+  });
+
+  it('places toc / typography / search / annotations in the footer thumb zone', () => {
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+
+    const zone = footerThumbZone(chrome.footer);
+    expect(chrome.footer.contains(zone)).toBe(true);
+    for (const action of THUMB_ACTIONS) {
+      const button = actionButton(host, action);
+      expect(zone.contains(button), `${action} should live in the footer thumb zone`).toBe(true);
+      expect(chrome.bar.contains(button), `${action} should leave the top bar in touchMode`).toBe(
+        false,
+      );
+      expect(button.hidden).toBe(false);
+    }
+  });
+
+  it('keeps the four thumb actions reachable after the top bar is dismissed', () => {
+    const { chrome, deps } = mount({ touchMode: true });
+    chrome.reveal();
+
+    chrome.bar.hidden = true;
+    chrome.bar.style.display = 'none';
+
+    const clicks: Array<[string, () => void]> = [
+      ['toc', () => expect(deps.openOutline).toHaveBeenCalledTimes(1)],
+      ['typography', () => expect(deps.openTypography).toHaveBeenCalledTimes(1)],
+      ['search', () => expect(deps.openSearch).toHaveBeenCalledTimes(1)],
+      ['annotations', () => expect(deps.toggleSidebar).toHaveBeenCalledTimes(1)],
+    ];
+    for (const [action, assertCall] of clicks) {
+      const button = actionButton(chrome.footer, action);
+      expect(chrome.footer.contains(button)).toBe(true);
+      expect(button.hidden).toBe(false);
+      expect(button.offsetParent !== null || chrome.footer.hidden === false).toBe(true);
+      button.click();
+      assertCall();
+    }
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('gives footer thumb actions a hit target of at least 44px', () => {
+    applyTouchReaderCss();
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    for (const action of THUMB_ACTIONS) {
+      const button = actionButton(host, action);
+      expect(chrome.footer.contains(button), `${action} must be in the footer to measure`).toBe(
+        true,
+      );
+      const size = declaredHitPx(button);
+      if (size > 0) {
+        expect(size, `${action} hit target`).toBeGreaterThanOrEqual(MIN_HIT_PX);
+      } else {
+        expect(css).toMatch(
+          /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
+        );
+      }
+    }
+  });
+});
+
+describe('createReaderChrome desktop keeps five actions on the top bar', () => {
+  it('keeps all five actions on the top bar and out of the footer', () => {
+    const { host, chrome } = mount();
+    chrome.reveal();
+
+    for (const action of READER_CHROME_ACTIONS) {
+      const button = actionButton(host, action);
+      expect(chrome.bar.contains(button), `${action} should stay on the desktop top bar`).toBe(
+        true,
+      );
+      expect(chrome.footer.contains(button)).toBe(false);
+    }
+    expect(chrome.footer.querySelector('[data-reader-chrome-action]')).toBeNull();
   });
 });
 

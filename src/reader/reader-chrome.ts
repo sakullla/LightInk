@@ -2,16 +2,19 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。顶栏是五项带文字入口（返回书架 · 目录 · 排版 ·
- * 搜索 · 本书标注）；底栏与沉浸条都是单行：
+ * 边缘时顶栏与底栏同时出现。桌面顶栏是五项带文字入口（返回书架 · 目录 ·
+ * 排版 · 搜索 · 本书标注）；底栏与沉浸条都是单行：
  * 章节名 | 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC 刻度。
  *
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
  * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
- * 控件条。「返回书架」是顶栏起始侧唯一合书入口。
+ * 控件条。「返回书架」是起始侧唯一合书入口。
  *
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
  * 唤出；只由中部点按 / Escape / 收浮层收起，whisper 进度线照常显示。
+ * 目录 / 排版 / 搜索 / 本书标注挪到 `.lightink-reader-chrome-footer` 拇指区
+ *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。显隐仍走既有
+ * reveal / dismiss，不另造一套 chrome 状态机。
  */
 
 import { formatReaderPercent } from './reader-progress-ui.js';
@@ -322,7 +325,11 @@ export function createReaderChrome(
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
   tools.append(tocButton, typographyButton, searchButton, annotationsButton);
-  bar.append(backButton, tools, drag);
+  if (touchMode) {
+    bar.append(backButton, drag);
+  } else {
+    bar.append(backButton, tools, drag);
+  }
   element.appendChild(bar);
 
   const footer = document.createElement('div');
@@ -358,7 +365,11 @@ export function createReaderChrome(
   slider.value = '0';
   slider.setAttribute('aria-label', labels.progress);
   scrubber.append(footerTrack, footerTicks, slider);
-  footer.append(footerChapter, scrubber, footerStats);
+  if (touchMode) {
+    footer.append(tools, footerChapter, scrubber, footerStats);
+  } else {
+    footer.append(footerChapter, scrubber, footerStats);
+  }
 
   const whisper = document.createElement('div');
   whisper.className = 'lightink-reader-chrome-whisper';
