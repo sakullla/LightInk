@@ -1509,11 +1509,11 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(true);
     const limitButton = host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!;
     limitButton.click();
-    const form = host.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
+    const subpage = host.querySelector<HTMLElement>('.lightink-library-manage-subpage')!;
+    expect(isShown(subpage)).toBe(true);
+    const form = subpage.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
     const input = form.elements.namedItem('cacheLimitGiB') as HTMLInputElement;
     const apply = form.querySelector<HTMLButtonElement>('.lightink-library-primary');
-    expect(limitButton.getAttribute('aria-expanded')).toBe('true');
-    expect(limitButton.classList.contains('is-open')).toBe(true);
     expect(form.querySelector('label')?.classList.contains('lightink-library-field')).toBe(true);
     expect(apply?.textContent).toBe('应用');
     expect(apply?.type).toBe('submit');
@@ -1537,8 +1537,9 @@ describe('LibraryView sources, manage, and catalog', () => {
     await settle();
 
     expect(deps.library.setCacheLimit).toHaveBeenCalledWith(3.5 * 1024 ** 3);
-    expect(form.hidden).toBe(true);
-    expect(limitButton.getAttribute('aria-expanded')).toBe('false');
+    // 提交成功后子页关闭，回到管理首页。
+    expect(isShown(subpage)).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-manage-home'))).toBe(true);
     view.destroy();
   });
 
@@ -2043,7 +2044,7 @@ describe('LibraryView sources, manage, and catalog', () => {
 
     const section = host.querySelector('.lightink-library-manage-panel .lightink-library-reader-prefs');
     expect(section).toBeTruthy();
-    expect(section?.querySelector('h2')?.textContent).toBe('阅读器');
+    expect(section?.querySelector('h2')?.textContent).toBe('阅读偏好');
     expect(section?.querySelector('p')?.textContent).toContain('进度条');
     const input = host.querySelector<HTMLInputElement>(
       '.lightink-library-reader-prefs input[name="showProgressBar"]',
@@ -3357,6 +3358,58 @@ describe('LibraryView mobile shelf', () => {
     expect(root.dataset.libraryTab).toBe('sources');
     expect(hint?.hidden).toBe(true);
     expect(host.querySelector('h1')?.textContent).toBe('书库源');
+    view.destroy();
+  });
+
+  it('opens the cache limit as a full-screen subpage that Escape (Android back) consumes', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    const root = libraryRoot(host);
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+
+    // 缓存上限在管理页内以全屏子页打开。
+    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const panel = host.querySelector<HTMLElement>('.lightink-library-manage-panel')!;
+    const subpage = panel.querySelector<HTMLElement>('.lightink-library-manage-subpage')!;
+    expect(panel.dataset.managePage).toBe('cache-limit');
+    expect(isShown(subpage)).toBe(true);
+    expect(isShown(panel.querySelector('.lightink-library-manage-home'))).toBe(false);
+
+    // 子页打开时合成 Escape（Android 返回）被消费，返回管理首页。
+    const input = subpage.querySelector<HTMLInputElement>('input[name="cacheLimitGiB"]')!;
+    const consumed = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(consumed);
+    expect(consumed.defaultPrevented).toBe(true);
+    expect(panel.dataset.managePage).toBe('home');
+    expect(isShown(subpage)).toBe(false);
+
+    // 子页未打开时不消费，交还分层链（书架顶层 → 系统默认）。
+    const passthrough = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    panel.dispatchEvent(passthrough);
+    expect(passthrough.defaultPrevented).toBe(false);
+
+    // 子页返回按钮同样回到管理首页。
+    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    expect(isShown(subpage)).toBe(true);
+    subpage.querySelector<HTMLButtonElement>('.lightink-library-manage-back')!.click();
+    expect(isShown(subpage)).toBe(false);
+    expect(isShown(panel.querySelector('.lightink-library-manage-home'))).toBe(true);
     view.destroy();
   });
 

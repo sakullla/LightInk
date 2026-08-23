@@ -1696,7 +1696,7 @@ html[data-touch-primary] .lightink-library-header {
   font-weight: 600;
 }
 
-/* Manage panel (管理 content): import / WebDAV / cache controls. */
+/* Manage panel (管理 content): grouped settings page with subpages. */
 .lightink-library-manage-panel {
   display: flex;
   flex-direction: column;
@@ -1708,13 +1708,42 @@ html[data-touch-primary] .lightink-library-header {
   padding: 16px var(--lightink-library-pad-x) 48px;
 }
 
-.lightink-library-manage-panel > button {
+.lightink-library-manage-home {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lightink-library-manage-home[hidden] {
+  display: none;
+}
+
+.lightink-library-manage-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--lightink-library-manage-max);
+}
+
+.lightink-library-manage-group-title {
+  margin: 0;
+  color: var(--lightink-fg);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+/* Settings rows: large touch targets (import / clear cache / sync / editor). */
+.lightink-library-manage-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  max-width: var(--lightink-library-manage-max);
   min-height: 44px;
   padding: 10px 14px;
   border-radius: 10px;
@@ -1725,14 +1754,65 @@ html[data-touch-primary] .lightink-library-header {
   text-align: left;
 }
 
-.lightink-library-manage-panel > button:hover:not(:disabled),
-.lightink-library-manage-panel > button:focus-visible {
+.lightink-library-manage-row:hover:not(:disabled),
+.lightink-library-manage-row:focus-visible {
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent);
 }
 
+.lightink-library-manage-row-chevron {
+  color: var(--lightink-muted);
+  font-size: 16px;
+}
+
+/* 缓存上限子页：管理页内的二级页（移动端全屏，见 ≤760px 断点）。 */
+.lightink-library-manage-subpage {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lightink-library-manage-subpage[hidden] {
+  display: none;
+}
+
+.lightink-library-manage-subpage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--lightink-library-manage-max);
+}
+
+.lightink-library-manage-subpage-title {
+  margin: 0;
+  color: var(--lightink-fg);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.lightink-library-manage-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 10px;
+  color: var(--lightink-accent);
+  font-size: 13px;
+}
+
+.lightink-library-manage-back::before {
+  content: '‹';
+  font-size: 16px;
+  line-height: 1;
+}
+
 @container library-content (min-width: 52rem) {
-  .lightink-library-manage-panel {
+  .lightink-library-manage-home {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-content: start;
@@ -1745,14 +1825,18 @@ html[data-touch-primary] .lightink-library-header {
     max-width: none;
   }
 
-  .lightink-library-manage-panel > button,
+  .lightink-library-manage-group {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .lightink-library-manage-row,
   .lightink-library-cache-summary {
     max-width: none;
   }
 }
 
 .lightink-library-cache-summary {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1769,21 +1853,17 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-cache-limit-form {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 4;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   gap: 10px;
-  width: min(16rem, calc(100vw - 48px));
+  width: 100%;
+  max-width: var(--lightink-library-manage-max);
   margin: 0;
   padding: 14px;
   border: 1px solid var(--lightink-border);
   border-radius: 10px;
   background: var(--lightink-bg-elevated);
-  box-shadow: var(--lightink-shadow-strong);
   color: var(--lightink-fg);
 }
 
@@ -2576,6 +2656,26 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-panel {
     padding: 8px 16px calc(28px + var(--lightink-safe-bottom, 0px));
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-row {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
+  /* 缓存上限子页：移动端全屏呈现，盖住底部 Tab 栏，返回键回到管理首页。 */
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-subpage {
+    position: fixed;
+    inset: 0;
+    z-index: 24;
+    padding: calc(var(--lightink-safe-top, 0px) + 8px) 16px
+      calc(28px + var(--lightink-safe-bottom, 0px));
+    overflow-y: auto;
+    background: var(--lightink-bg);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-subpage[hidden] {
+    display: none;
   }
 
   /* 底部 Tab 栏：书架 / 书源 / 目录 / 管理。 */
