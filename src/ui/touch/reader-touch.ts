@@ -5,7 +5,8 @@
  * `advanceFlowPage`，宿主侧接滚轮同一入口 `advancePagedWheel`），中间区点按
  * 返回 null 让既有 click 路径（chrome 切换/链接/划选）原样工作。
  *
- * 桌面无触摸事件流，天然零回归；滚动版式由原生触控滚动承担，调用方用
+ * 桌面与部分 Android WebView iframe 没有可用的 touch 事件流，改走
+ * `bindClickPaging` 同一热区；滚动版式由原生触控滚动承担，调用方用
  * `enabled` 门控只在翻页版式启用。
  */
 
@@ -76,6 +77,43 @@ export interface TouchPagingOptions {
   tapMaxMs?: number;
   /** 时钟（测试可注入）。 */
   now?(): number;
+}
+
+/**
+ * Desktop / WebView click paging: iframe and some Android WebViews never fire
+ * touch events, so edge taps must use the same zones as bindTouchPaging.
+ * Center clicks return without paging so chrome / link handlers still run.
+ */
+export function bindClickPaging(target: EventTarget, options: TouchPagingOptions): () => void {
+  const onClick = (event: Event): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+    if (options.enabled !== undefined && !options.enabled()) {
+      return;
+    }
+    const mouse = event as MouseEvent;
+    if (typeof mouse.button === 'number' && mouse.button !== 0) {
+      return;
+    }
+    if (typeof mouse.clientX !== 'number') {
+      return;
+    }
+    const direction = resolveTapPageDirection(mouse.clientX, options.viewportWidth());
+    if (direction === null) {
+      return;
+    }
+    if (options.page(direction)) {
+      event.preventDefault();
+      if (typeof mouse.stopPropagation === 'function') {
+        mouse.stopPropagation();
+      }
+    }
+  };
+  target.addEventListener('click', onClick);
+  return () => {
+    target.removeEventListener('click', onClick);
+  };
 }
 
 /** 绑定触控翻页手势；返回解绑函数。 */

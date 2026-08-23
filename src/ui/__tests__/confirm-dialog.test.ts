@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveCancelId,
   resolveDefaultId,
+  showAlertDialog,
   showConfirmDialog,
   type ConfirmDialogSpec,
 } from '../confirm-dialog.js';
@@ -70,5 +71,11 @@ describe('resolveCancelId（Esc / 遮罩）', () => {
 describe('showConfirmDialog 工厂形态', () => {
   it('导出为函数', () => {
     expect(typeof showConfirmDialog).toBe('function');
+  });
+});
+
+describe('showAlertDialog 工厂形态', () => {
+  it('导出为函数', () => {
+    expect(typeof showAlertDialog).toBe('function');
   });
 });

@@ -13,6 +13,7 @@
  */
 
 import type { MessageKey } from '../i18n/messages.js';
+import { displayChapterTitle } from './chapter-title.js';
 import type { ReaderChapter } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
 import {
@@ -35,9 +36,12 @@ import {
   snapPagedScroller,
 } from '../ui/reading-layout.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
-import { bindTouchPaging } from '../ui/touch/reader-touch.js';
+import { bindClickPaging, bindTouchPaging, resolveTapPageDirection } from '../ui/touch/reader-touch.js';
 import {
   applyReaderDocumentLayout,
+  clampReaderPageExtent,
+  readerPageInnerPadPx,
+  readerSurfaceIsCompact,
   applyReaderLayout,
   loadReaderLayout,
   parseReaderLayout,
@@ -75,13 +79,16 @@ html, body {
   outline: none;
   box-shadow: none !important;
 }
-html[data-reading-layout='paginated'] body div,
+html[data-reading-layout='paginated'] body div:not(.lightink-reader-spread),
 html[data-reading-layout='paginated'] body section,
 html[data-reading-layout='paginated'] body article,
 html[data-reading-layout='paginated'] body main {
   width: auto !important;
   max-width: none !important;
   float: none !important;
+  column-count: unset !important;
+  column-width: unset !important;
+  columns: unset !important;
   background-color: transparent !important;
   background-image: none !important;
   box-shadow: none !important;
@@ -136,15 +143,24 @@ html[data-reading-layout='paginated'] {
    does not create extra pages, so every turn jumped to the next chapter. */
 html[data-reading-layout='paginated'] .lightink-reader-spread {
   box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  column-width: var(--lightink-reader-column-width, 100%);
-  column-count: var(--lightink-reader-column-count, 1);
-  column-gap: var(--lightink-reader-column-gap, 0px);
-  column-fill: auto;
-  overflow: hidden;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  column-width: var(--lightink-reader-column-width, 100%) !important;
+  column-count: var(--lightink-reader-column-count, 1) !important;
+  column-gap: var(--lightink-reader-column-gap, 0px) !important;
+  column-fill: auto !important;
+  /* auto, not hidden: WebView/Chromium often keeps scrollWidth == clientWidth
+     for multicol + overflow:hidden, so wheel/click paging cannot move. */
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
   background: var(--lightink-bg, transparent) !important;
   box-shadow: none !important;
+}
+html[data-reading-layout='paginated'] .lightink-reader-spread::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 html[data-reading-layout='paginated']::-webkit-scrollbar {
   width: 0;
@@ -268,6 +284,29 @@ function isFlowPaginated(root: HTMLElement): boolean {
   return parseReaderLayout(root.dataset.readingLayout) === 'paginated';
 }
 
+/**
+ * iframe 内点击：整章包在 `<a href>` 里时不能先 preventDefault 再丢掉，
+ * 否则左右热区和顶栏切换都会没反应。章内 hash 仍走目录跳转。
+ */
+export function resolveFlowFrameClick(input: {
+  href: string | null;
+  clientX: number;
+  viewportWidth: number;
+  paginated: boolean;
+}): { kind: 'page'; direction: 1 | -1 } | { kind: 'in-book-nav'; href: string } | { kind: 'surface' } {
+  const href = input.href;
+  if (href !== null && href.startsWith('#')) {
+    return { kind: 'in-book-nav', href };
+  }
+  if (input.paginated) {
+    const direction = resolveTapPageDirection(input.clientX, input.viewportWidth);
+    if (direction !== null) {
+      return { kind: 'page', direction };
+    }
+  }
+  return { kind: 'surface' };
+}
+
 /** Apply an iframe wheel delta to the host scroller (same path as Markdown). */
 export function applyFrameWheelToScroller(
   event: { deltaX: number; deltaY: number; deltaMode: number; ctrlKey: boolean; metaKey: boolean },
@@ -305,6 +344,33 @@ function clearPaginatedMediaInline(frameDocument: Document): void {
     media.style.removeProperty('column-span');
     media.style.removeProperty('object-fit');
     media.classList.remove('lightink-reader-media--page');
+  }
+}
+
+const PAGED_INLINE_BOX_PROPS = [
+  'height',
+  'min-height',
+  'max-height',
+  'width',
+  'max-width',
+  'overflow',
+  'overflow-x',
+  'overflow-y',
+  'column-width',
+  'column-count',
+  'column-gap',
+  'column-fill',
+  'columns',
+  'overscroll-behavior',
+  '--lightink-reader-page-height',
+  '--lightink-reader-page-step',
+] as const;
+
+/** `style.height = 'auto'` cannot beat `setProperty(..., 'important')` from columns. */
+function clearPaginatedBoxInline(target: HTMLElement): void {
+  clearPagedSpreadVars(target);
+  for (const name of PAGED_INLINE_BOX_PROPS) {
+    target.style.removeProperty(name);
   }
 }
 
@@ -620,6 +686,8 @@ export interface FlowRendererHooks {
   scrollContainer(): HTMLElement;
   /** iframe 内指针移动：映射到宿主坐标后揭示顶栏（图片挡住宿主 pointermove）。 */
   onFramePointerMove?(event: { clientY: number }): void;
+  /** iframe 中间区点击：切换阅读器 chrome（左右热区翻页之后才走到这里）。 */
+  onFrameSurfaceClick?(event: MouseEvent): void;
   /** 滚轮翻页导航（含 trackpad 门限；移动后由编排壳隐藏划选工具栏）。 */
   advancePagedWheel(direction: 1 | -1): boolean;
   /** Escape 关闭可见的划选工具栏：返回是否可见并已隐藏。 */
@@ -684,6 +752,9 @@ export function createFlowRenderer(
   let ensureChapterMounted: ((index: number) => void) | null = null;
   let chapterContinuationObserver: IntersectionObserver | null = null;
   let chapterContinuationSentinel: HTMLElement | null = null;
+  let evictDistantChapters: ((active: number) => void) | null = null;
+  let resumeScrollMounts: (() => void) | null = null;
+  let evictTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Inflate and attach one lazy EPUB chapter at most once. */
   const ensureChapterFrame = (win: ChapterResourceWindow): void => {
@@ -694,7 +765,7 @@ export function createFlowRenderer(
       const fallback = hooks.t('reader.chapter', {
         n: String(Number(win.frame.dataset.chapterIndex ?? '0') + 1),
       });
-      const title = win.chapter.title || fallback;
+      const title = displayChapterTitle(win.chapter.title, fallback);
       win.heading.textContent = title;
       win.frame.title = title;
       win.sourceAssigned = true;
@@ -719,6 +790,11 @@ export function createFlowRenderer(
     });
   };
 
+  const chapterIsActive = (win: ChapterResourceWindow): boolean => {
+    const article = win.frame.closest('.lightink-reader-chapter');
+    return article instanceof HTMLElement && article.classList.contains('is-active');
+  };
+
   /** 按窗口状态串行执行 resolve/release（每章一个 promise 链，避免快进快出竞态）。 */
   const syncChapterResources = (win: ChapterResourceWindow): void => {
     if (win.chapter.resolveResources === undefined && win.chapter.releaseResources === undefined) {
@@ -733,10 +809,13 @@ export function createFlowRenderer(
         if (doc === null) {
           return;
         }
-        if (win.visible && win.ready) {
+        const hold =
+          win.visible ||
+          (isFlowPaginated(root) && (chapterIsActive(win) || win.ready));
+        if (hold && win.ready) {
           await win.chapter.resolveResources?.(doc);
           win.afterResolve?.();
-        } else if (!win.visible) {
+        } else if (!hold) {
           win.chapter.releaseResources?.(doc);
         }
       })
@@ -757,6 +836,12 @@ export function createFlowRenderer(
     chapterContinuationSentinel?.remove();
     chapterContinuationSentinel = null;
     ensureChapterMounted = null;
+    evictDistantChapters = null;
+    resumeScrollMounts = null;
+    if (evictTimer !== null) {
+      clearTimeout(evictTimer);
+      evictTimer = null;
+    }
     const windows = resourceWindows;
     resourceWindows = [];
     releaseRemoteImages.splice(0).forEach((release) => release());
@@ -771,15 +856,32 @@ export function createFlowRenderer(
   };
 
   const setActiveChapter = (index: number): void => {
-    ensureChapterMounted?.(index);
+    for (const near of [index - 2, index - 1, index, index + 1, index + 2]) {
+      if (near >= 0) {
+        ensureChapterMounted?.(near);
+      }
+    }
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+      if (evictTimer !== null) {
+        clearTimeout(evictTimer);
+      }
+      evictTimer = setTimeout(() => {
+        evictTimer = null;
+        evictDistantChapters?.(index);
+      }, 0);
+    } else {
+      evictDistantChapters?.(index);
+    }
     const chapters = scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter');
     chapters.forEach((chapter) => {
       const current = Number(chapter.dataset.chapterIndex);
       chapter.classList.toggle('is-active', current === index);
       const win = resourceWindows[current];
       if (win !== undefined) {
-        win.visible = current === index;
-        if (win.visible) ensureChapterFrame(win);
+        if (isFlowPaginated(root)) {
+          win.visible = current === index;
+        }
+        ensureChapterFrame(win);
         syncChapterResources(win);
       }
     });
@@ -818,13 +920,11 @@ export function createFlowRenderer(
     const paneBox = box(pane);
     const rootBox = box(root);
     const hostBox = box(scrollHost);
-    const width = Math.max(
-      1,
-      Math.round(Math.max(paneBox.w, rootBox.w, hostBox.w) - padX),
-    );
+    const rawWidth = Math.max(1, Math.round(Math.max(paneBox.w, rootBox.w, hostBox.w) - padX));
     // Never take scrollHost height: it can grow with chapter content and then
     // the "page" is as tall as the chapter (left column full, right empty,
-    // every turn jumps a chapter).
+    // every turn jumps a chapter). The editor pane can grow the same way when
+    // html[data-reading-layout] is still scroll — cap to the window.
     const visibleHeight =
       paneBox.h >= 80
         ? paneBox.h
@@ -835,7 +935,15 @@ export function createFlowRenderer(
             : hostBox.h >= 80
               ? hostBox.h
               : 1;
-    const height = Math.max(1, Math.round(visibleHeight - padY));
+    const capped = clampReaderPageExtent(
+      { width: rawWidth, height: Math.max(1, visibleHeight - padY) },
+      {
+        innerWidth: typeof window !== 'undefined' ? window.innerWidth : 0,
+        innerHeight: typeof window !== 'undefined' ? window.innerHeight : 0,
+      },
+    );
+    const width = capped.width;
+    const height = capped.height;
     const typography = resolveReaderTypography(root);
     const basePx = parseFloat(getComputedStyle(root).fontSize);
     const fontPx = readerTypographyFontSizePx(
@@ -935,14 +1043,18 @@ export function createFlowRenderer(
     }
     const active = scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
     const current = Number(active?.dataset.chapterIndex ?? 0);
-    ensureChapterMounted?.(current + direction);
+    const nextIndex = current + direction;
+    if (!Number.isSafeInteger(nextIndex) || nextIndex < 0) {
+      return false;
+    }
+    ensureChapterMounted?.(nextIndex);
     const next = scrollHost.querySelector<HTMLElement>(
-      `.lightink-reader-chapter[data-chapter-index="${current + direction}"]`,
+      `.lightink-reader-chapter[data-chapter-index="${nextIndex}"]`,
     );
     if (next === null) {
       return false;
     }
-    setActiveChapter(current + direction);
+    setActiveChapter(nextIndex);
     const nextFrame = next.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame');
     if (nextFrame !== null) {
       nextFrame.dataset.pagedRestore = direction < 0 ? 'end' : 'start';
@@ -985,7 +1097,7 @@ export function createFlowRenderer(
     );
     const cover = readerChapterLooksLikeCover(frameDocument);
     const plates = readerChapterLooksLikePlates(frameDocument);
-    const pad = Math.max(40, Math.round(viewport.fontPx * 2.5));
+    const pad = readerPageInnerPadPx(viewport.fontPx, readerSurfaceIsCompact(root));
     const innerWidth = Math.max(1, pageWidth - pad * 2);
     const layout = readerFlowSpreadFromTypography(
       innerWidth,
@@ -1016,9 +1128,9 @@ export function createFlowRenderer(
     html.style.border = '0';
     html.style.outline = 'none';
     html.style.boxShadow = 'none';
-    html.style.height = `${height}px`;
+    html.style.setProperty('height', `${height}px`, 'important');
     html.style.boxSizing = 'border-box';
-    html.style.width = `${pageWidth}px`;
+    html.style.setProperty('width', `${pageWidth}px`, 'important');
     html.style.maxWidth = 'none';
     html.style.paddingLeft = '0';
     html.style.paddingRight = '0';
@@ -1033,14 +1145,17 @@ export function createFlowRenderer(
     html.style.setProperty('--lightink-reader-page-height', `${height}px`);
     html.style.setProperty('--lightink-reader-image-max-height', `${height}px`);
     pageBox.style.boxSizing = 'border-box';
-    pageBox.style.width = `${spread.width}px`;
+    pageBox.style.setProperty('width', `${spread.width}px`, 'important');
     pageBox.style.maxWidth = 'none';
-    pageBox.style.height = `${height}px`;
-    pageBox.style.overflow = 'hidden';
-    pageBox.style.columnWidth = `${columnWidth}px`;
-    pageBox.style.columnCount = String(columns);
-    pageBox.style.columnGap = `${gap}px`;
-    pageBox.style.columnFill = 'auto';
+    pageBox.style.setProperty('height', `${height}px`, 'important');
+    pageBox.style.setProperty('max-height', `${height}px`, 'important');
+    pageBox.style.setProperty('overflow-x', 'auto', 'important');
+    pageBox.style.setProperty('overflow-y', 'hidden', 'important');
+    pageBox.style.scrollbarWidth = 'none';
+    pageBox.style.setProperty('column-width', `${columnWidth}px`, 'important');
+    pageBox.style.setProperty('column-count', String(columns), 'important');
+    pageBox.style.setProperty('column-gap', `${gap}px`, 'important');
+    pageBox.style.setProperty('column-fill', 'auto', 'important');
     pageBox.style.paddingLeft = '0';
     pageBox.style.paddingRight = '0';
     applyPagedSpreadVars(pageBox, { columnWidth, columns, gap });
@@ -1089,11 +1204,11 @@ export function createFlowRenderer(
       figure.style.removeProperty('column-span');
     }
     frameDocument.body.style.boxSizing = 'border-box';
-    frameDocument.body.style.height = `${height}px`;
-    frameDocument.body.style.minHeight = `${height}px`;
-    frameDocument.body.style.width = `${pageWidth}px`;
+    frameDocument.body.style.setProperty('height', `${height}px`, 'important');
+    frameDocument.body.style.setProperty('min-height', `${height}px`, 'important');
+    frameDocument.body.style.setProperty('width', `${pageWidth}px`, 'important');
     frameDocument.body.style.maxWidth = 'none';
-    frameDocument.body.style.overflow = 'hidden';
+    frameDocument.body.style.setProperty('overflow', 'hidden', 'important');
     frameDocument.body.style.marginLeft = '0';
     frameDocument.body.style.marginRight = '0';
     frameDocument.body.style.marginTop = '0';
@@ -1154,6 +1269,12 @@ export function createFlowRenderer(
                 if (win === undefined || win.generation !== renderGeneration) {
                   continue;
                 }
+                if (isFlowPaginated(root)) {
+                  // Paginated chapters are display:none unless active. IO then
+                  // reports the cover as hidden and releaseResources leaves
+                  // packaged image paths in place (broken cover, empty page).
+                  continue;
+                }
                 win.visible = entry.isIntersecting;
                 if (win.visible) ensureChapterFrame(win);
                 syncChapterResources(win);
@@ -1172,13 +1293,13 @@ export function createFlowRenderer(
       article.dataset.chapterIndex = String(chapterIndex);
       const heading = document.createElement('h1');
       heading.className = 'lightink-reader-chapter-title';
-      heading.textContent =
-        chapter.title || hooks.t('reader.chapter', { n: String(chapterIndex + 1) });
+      const fallbackTitle = hooks.t('reader.chapter', { n: String(chapterIndex + 1) });
+      const headingTitle = displayChapterTitle(chapter.title, fallbackTitle);
+      heading.textContent = headingTitle;
       const frame = document.createElement('iframe');
       frame.className = 'lightink-reader-chapter-frame';
       frame.dataset.chapterIndex = String(chapterIndex);
-      frame.title =
-        chapter.title || hooks.t('reader.chapter', { n: String(chapterIndex + 1) });
+      frame.title = headingTitle;
       frame.setAttribute('sandbox', 'allow-same-origin');
       frame.setAttribute('scrolling', 'no');
       frame.setAttribute('frameborder', '0');
@@ -1208,11 +1329,18 @@ export function createFlowRenderer(
         if (renderGeneration !== flowRenderGeneration) {
           return;
         }
+        // Inserting an empty iframe fires load for about:blank. A once-listener
+        // then never sees the real srcdoc, so columns/images/wheel bind to an
+        // empty document and the chapter looks random and broken.
+        if (!win.sourceAssigned || frame.dataset.frameBound === 'true') {
+          return;
+        }
         const frameDocument = frame.contentDocument;
         const frameWindow = frame.contentWindow;
         if (frameDocument === null || frameWindow === null) {
           return;
         }
+        frame.dataset.frameBound = 'true';
         const applyPaginatedMetrics = (): void => {
           applyPaginatedDocument(frame, frameDocument);
         };
@@ -1222,44 +1350,7 @@ export function createFlowRenderer(
           frameDocument.documentElement.dataset.readingLayout = paginated ? 'paginated' : 'scroll';
           applyFlowTypography(root, frameDocument);
           if (!paginated) {
-            const html = frameDocument.documentElement;
-            for (const pad of frameDocument.querySelectorAll('.lightink-reader-column-pad')) {
-              pad.remove();
-            }
-            clearPagedSpreadVars(html);
-            html.style.removeProperty('--lightink-reader-page-height');
-            html.style.removeProperty('column-width');
-            html.style.removeProperty('column-count');
-            html.style.removeProperty('column-gap');
-            html.style.removeProperty('column-fill');
-            html.style.removeProperty('overscroll-behavior');
-            html.style.height = 'auto';
-            html.style.minHeight = '0';
-            html.style.width = '100%';
-            html.style.maxWidth = '100%';
-            html.style.overflow = 'hidden';
-            html.scrollLeft = 0;
-            const pageBox = frameDocument.querySelector<HTMLElement>(`.${READER_SPREAD_CLASS}`);
-            if (pageBox !== null) {
-              clearPagedSpreadVars(pageBox);
-              pageBox.style.removeProperty('column-width');
-              pageBox.style.removeProperty('column-count');
-              pageBox.style.removeProperty('column-gap');
-              pageBox.style.removeProperty('column-fill');
-              pageBox.style.height = 'auto';
-              pageBox.style.width = '100%';
-              pageBox.style.overflow = 'visible';
-              pageBox.scrollLeft = 0;
-            }
-            frameDocument.body.style.height = 'auto';
-            frameDocument.body.style.minHeight = '0';
-            frameDocument.body.style.width = '100%';
-            frameDocument.body.style.maxWidth = '100%';
-            frameDocument.body.style.overflow = 'hidden';
-            clearPaginatedMediaInline(frameDocument);
-            applyScrollMediaMetrics(frameDocument);
-            frame.style.width = '100%';
-            frame.style.removeProperty('min-height');
+            applyScrollDocument(frame, frameDocument);
             return;
           }
           applyPaginatedMetrics();
@@ -1293,15 +1384,42 @@ export function createFlowRenderer(
             return;
           }
           const target = event.target;
-          const link =
-            target instanceof Element ? target.closest<HTMLAnchorElement>('a[href]') : null;
-          if (link === null) {
+          const element =
+            target !== null &&
+            typeof target === 'object' &&
+            typeof (target as Element).closest === 'function'
+              ? (target as Element)
+              : null;
+          const link = element?.closest<HTMLAnchorElement>('a[href]') ?? null;
+          const href = link?.getAttribute('href') ?? null;
+          const viewportWidth =
+            frameWindow.innerWidth > 0 ? frameWindow.innerWidth : frame.clientWidth;
+          const action = resolveFlowFrameClick({
+            href,
+            clientX: event.clientX,
+            viewportWidth,
+            paginated: isFlowPaginated(root),
+          });
+          if (action.kind === 'page') {
+            if (advanceFlowPage(action.direction)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            hooks.onFrameSurfaceClick?.(event);
+            return;
+          }
+          if (action.kind === 'surface') {
+            if (link !== null) {
+              event.preventDefault();
+            }
+            hooks.onFrameSurfaceClick?.(event);
             return;
           }
           event.preventDefault();
-          const href = link.getAttribute('href') ?? '';
-          if (href.startsWith('#lightink-chapter?')) {
-            const params = new URLSearchParams(href.slice('#lightink-chapter?'.length));
+          const navHref = action.href;
+          if (navHref.startsWith('#lightink-chapter?')) {
+            const params = new URLSearchParams(navHref.slice('#lightink-chapter?'.length));
             const chapter = Number(params.get('chapter'));
             if (!Number.isSafeInteger(chapter) || chapter < 0) {
               return;
@@ -1330,8 +1448,8 @@ export function createFlowRenderer(
             targetDoc?.getElementById(targetId ?? '')?.scrollIntoView({
               block: 'center',
             });
-          } else if (href.startsWith('#')) {
-            let targetId = href.slice(1);
+          } else if (navHref.startsWith('#')) {
+            let targetId = navHref.slice(1);
             try {
               targetId = decodeURIComponent(targetId);
             } catch {
@@ -1444,6 +1562,9 @@ export function createFlowRenderer(
         // The same WheelEvent object is ignored the second time.
         frameWindow.addEventListener('wheel', onWheel, { passive: false, capture: true });
         frameDocument.addEventListener('wheel', onWheel, { passive: false, capture: true });
+        // Parent-side iframe target: WebView2 sometimes delivers wheel here
+        // instead of into the srcdoc document.
+        frame.addEventListener('wheel', onWheel, { passive: false, capture: true });
         // 帧内触控翻页：点按左右热区/横向滑动 → 与滚轮同一 advanceFlowPage 入口；
         // 中间区点按不翻页，click 仍走既有 chrome 切换/链接/划选路径。
         const releaseFrameTouchPaging = bindTouchPaging(frameDocument, {
@@ -1456,13 +1577,26 @@ export function createFlowRenderer(
           hooks.t('reader.remoteImageLoad'),
           hooks.remoteImagePolicy,
         );
+        let lastPagedViewportKey = '';
         const resizeObserver =
           typeof ResizeObserver === 'undefined'
             ? null
             : new ResizeObserver(() => {
-                if (!applyingFrame && !hooks.isLayoutSwitching()) {
-                  syncHeight();
+                if (applyingFrame || hooks.isLayoutSwitching()) {
+                  return;
                 }
+                // Paginated chrome is viewport-driven. Ignore inner body
+                // resizes from column pads; only rerun when the page box size
+                // actually changed (first layout often starts at 0×0).
+                if (isFlowPaginated(root)) {
+                  const viewport = pagedViewport();
+                  const key = `${viewport.width}x${viewport.height}`;
+                  if (key === lastPagedViewportKey || viewport.width < 32 || viewport.height < 32) {
+                    return;
+                  }
+                  lastPagedViewportKey = key;
+                }
+                syncHeight();
               });
         resizeObserver?.observe(frameDocument.body);
         const onImageLoad = (): void => {
@@ -1485,6 +1619,9 @@ export function createFlowRenderer(
         // T8：帧就绪——章节引用资源（EPUB 图片）按窗口可见性物化；物化完成后
         // 重新挂图片 load 监听并同步帧高（懒物化的图片此时才开始加载）。
         win.ready = true;
+        if (isFlowPaginated(root) && (chapterIsActive(win) || scrollHost.querySelector('.is-active') === null)) {
+          win.visible = true;
+        }
         win.afterResolve = () => {
           if (win.generation === flowRenderGeneration) {
             watchFrameImages();
@@ -1502,9 +1639,10 @@ export function createFlowRenderer(
           frameDocument.removeEventListener('pointermove', onPointerMove);
           frameWindow.removeEventListener('wheel', onWheel, true);
           frameDocument.removeEventListener('wheel', onWheel, true);
+          frame.removeEventListener('wheel', onWheel, true);
         });
       };
-      frame.addEventListener('load', onLoad, { once: true });
+      frame.addEventListener('load', onLoad);
       releaseRemoteImages.push(() => frame.removeEventListener('load', onLoad));
       article.append(heading, frame);
       const following = Array.from(
@@ -1521,13 +1659,40 @@ export function createFlowRenderer(
       const chapter = chapters[index];
       if (chapter !== undefined) appendChapter(chapter, index);
     };
+    evictDistantChapters = (active): void => {
+      if (!isFlowPaginated(root) || chapters.length <= 8) {
+        return;
+      }
+      // Prefetch ±2 so the next ~2-page chapter is already srcdoc'd; evict
+      // only beyond ±3 so a turn does not create/destroy an iframe.
+      const keepRadius = 3;
+      for (const index of [...renderedChapterIndexes]) {
+        if (Math.abs(index - active) <= keepRadius) {
+          continue;
+        }
+        const win = resourceWindows[index];
+        if (win !== undefined) {
+          win.generation = -1;
+          const doc = win.frame.contentDocument;
+          if (doc !== null) {
+            win.chapter.releaseResources?.(doc);
+          }
+          win.frame.removeAttribute('srcdoc');
+          win.frame.closest('.lightink-reader-chapter')?.remove();
+          resourceWindows[index] = undefined;
+        }
+        renderedChapterIndexes.delete(index);
+      }
+    };
 
     // Keep the initial browsing-context budget bounded. A timer-based background
-    // loop still creates every iframe and eventually blocks on large EPUBs, even
-    // when it yields between batches. Scroll mode extends this window only when
-    // the reader approaches its end; paginated mode mounts the requested chapter
-    // from setActiveChapter/advanceFlowPage.
-    const initialCount = Math.min(chapters.length, 8);
+    // loop still creates every iframe and eventually blocks on large EPUBs.
+    // Scroll mode extends this window via the sentinel; paginated mode mounts
+    // a small first window and evicts chapters that leave the keep radius.
+    const initialCount = Math.min(
+      chapters.length,
+      isFlowPaginated(root) && chapters.length > 8 ? 2 : 8,
+    );
     for (let index = 0; index < initialCount; index += 1) {
       appendChapter(chapters[index]!, index);
     }
@@ -1553,6 +1718,22 @@ export function createFlowRenderer(
         chapterContinuationObserver.observe(chapterContinuationSentinel);
       }
     };
+    resumeScrollMounts = (): void => {
+      if (renderGeneration !== flowRenderGeneration || isFlowPaginated(root)) {
+        return;
+      }
+      // Paginated eviction can punch holes before nextChapter (e.g. 0–1
+      // dropped after a jump). Restart from the first missing spine item.
+      for (let index = 0; index < nextChapter; index += 1) {
+        if (!renderedChapterIndexes.has(index)) {
+          nextChapter = index;
+          break;
+        }
+      }
+      if (nextChapter < chapters.length) {
+        appendBatch();
+      }
+    };
     if (nextChapter < chapters.length && typeof IntersectionObserver !== 'undefined') {
       chapterContinuationSentinel = document.createElement('div');
       chapterContinuationSentinel.className = 'lightink-reader-chapter-sentinel';
@@ -1575,7 +1756,46 @@ export function createFlowRenderer(
     }
   };
 
+  const applyScrollDocument = (frame: HTMLIFrameElement, frameDocument: Document): void => {
+    const html = frameDocument.documentElement;
+    const body = frameDocument.body;
+    html.dataset.readingLayout = 'scroll';
+    applyFlowTypography(root, frameDocument);
+    for (const pad of frameDocument.querySelectorAll('.lightink-reader-column-pad')) {
+      pad.remove();
+    }
+    clearPaginatedBoxInline(html);
+    html.style.height = 'auto';
+    html.style.minHeight = '0';
+    html.style.width = '100%';
+    html.style.maxWidth = '100%';
+    html.style.overflow = 'hidden';
+    html.scrollLeft = 0;
+    const pageBox = frameDocument.querySelector<HTMLElement>(`.${READER_SPREAD_CLASS}`);
+    if (pageBox !== null) {
+      clearPaginatedBoxInline(pageBox);
+      pageBox.style.height = 'auto';
+      pageBox.style.width = '100%';
+      pageBox.style.overflow = 'visible';
+      pageBox.scrollLeft = 0;
+    }
+    clearPaginatedBoxInline(body);
+    body.style.height = 'auto';
+    body.style.minHeight = '0';
+    body.style.width = '100%';
+    body.style.maxWidth = '100%';
+    body.style.overflow = 'hidden';
+    clearPaginatedMediaInline(frameDocument);
+    applyScrollMediaMetrics(frameDocument);
+    frame.style.width = '100%';
+    frame.style.removeProperty('min-height');
+    frame.style.removeProperty('max-height');
+  };
+
   const remasureScrollFrames = (): void => {
+    if (isFlowPaginated(root)) {
+      return;
+    }
     for (const frame of scrollHost.querySelectorAll<HTMLIFrameElement>(
       '.lightink-reader-chapter-frame[data-frame-ready="true"]',
     )) {
@@ -1583,52 +1803,13 @@ export function createFlowRenderer(
       if (frameDocument === null) {
         continue;
       }
-      const html = frameDocument.documentElement;
-      const body = frameDocument.body;
-      html.dataset.readingLayout = 'scroll';
-      for (const pad of frameDocument.querySelectorAll('.lightink-reader-column-pad')) {
-        pad.remove();
-      }
-      clearPagedSpreadVars(html);
-      html.style.removeProperty('--lightink-reader-page-height');
-      html.style.removeProperty('column-width');
-      html.style.removeProperty('column-count');
-      html.style.removeProperty('column-gap');
-      html.style.removeProperty('column-fill');
-      html.style.removeProperty('overscroll-behavior');
-      html.style.height = 'auto';
-      html.style.minHeight = '0';
-      html.style.width = '100%';
-      html.style.maxWidth = '100%';
-      html.style.overflow = 'hidden';
-      html.scrollLeft = 0;
-      const pageBox = frameDocument.querySelector<HTMLElement>(`.${READER_SPREAD_CLASS}`);
-      if (pageBox !== null) {
-        clearPagedSpreadVars(pageBox);
-        pageBox.style.removeProperty('column-width');
-        pageBox.style.removeProperty('column-count');
-        pageBox.style.removeProperty('column-gap');
-        pageBox.style.removeProperty('column-fill');
-        pageBox.style.height = 'auto';
-        pageBox.style.width = '100%';
-        pageBox.style.overflow = 'visible';
-        pageBox.scrollLeft = 0;
-      }
-      body.style.height = 'auto';
-      body.style.minHeight = '0';
-      body.style.width = '100%';
-      body.style.maxWidth = '100%';
-      body.style.overflow = 'hidden';
-      clearPaginatedMediaInline(frameDocument);
-      applyScrollMediaMetrics(frameDocument);
-      frame.style.width = '100%';
-      frame.style.removeProperty('min-height');
-      applyFlowTypography(root, frameDocument);
+      applyScrollDocument(frame, frameDocument);
       const nextHeight = `${flowFrameContentHeight(frameDocument)}px`;
       if (frame.style.height !== nextHeight) {
         frame.style.height = nextHeight;
       }
     }
+    resumeScrollMounts?.();
     hooks.renderHighlights();
   };
 
@@ -1729,11 +1910,17 @@ export function createFlowRenderer(
     if (releaseHostTouchPaging !== null) {
       return;
     }
-    releaseHostTouchPaging = bindTouchPaging(scrollHost, {
+    const hostPaging = {
       enabled: () => flowReaderHostActive(root),
       viewportWidth: () => scrollHost.clientWidth,
-      page: (direction) => hooks.advancePagedWheel(direction),
-    });
+      page: (direction: 1 | -1) => hooks.advancePagedWheel(direction),
+    };
+    const releaseTouch = bindTouchPaging(scrollHost, hostPaging);
+    const releaseClick = bindClickPaging(scrollHost, hostPaging);
+    releaseHostTouchPaging = () => {
+      releaseTouch();
+      releaseClick();
+    };
   };
 
   const unbindHostTouchPaging = (): void => {

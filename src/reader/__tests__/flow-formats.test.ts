@@ -473,6 +473,54 @@ describe('parseEpub', () => {
     expect(content.chapters[1]!.html).toContain('<p>乙</p>');
   });
 
+  it('keeps NCX/heading titles and strips junk converter <title> text from the body', async () => {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package>' +
+            '<manifest>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
+            '</manifest><spine><itemref idref="ch1"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/toc.ncx',
+      new Uint8ArrayReader(
+        enc(
+          '<ncx><navMap><navPoint><navLabel><text>第4章 白月光</text></navLabel>' +
+            '<content src="ch1.xhtml"/></navPoint></navMap></ncx>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(
+        enc(
+          '<html><head><title>ccdqxkhp</title></head><body>' +
+            '<p>ccdqxkhp</p><h1>第4章 白月光（求收藏）</h1><p>正文</p></body></html>',
+        ),
+      ),
+    );
+    const content = await parseEpub(await zip.close());
+    expect(content.chapters[0]!.title).toBe('第4章 白月光（求收藏）');
+    expect(content.chapters[0]!.html).toContain('第4章 白月光（求收藏）');
+    expect(content.chapters[0]!.html).not.toContain('ccdqxkhp');
+  });
+
   it('通过带有界预读的随机源解析 EPUB，并合并相邻 ZIP 读取', async () => {
     const bytes = await buildEpub(true, true);
     const reads: Array<{ offset: number; length: number }> = [];
@@ -508,6 +556,32 @@ describe('parseEpub', () => {
 
     expect(content.chapters[65]!.title).toBe('正文 66');
     expect(content.chapters[65]!.html).toContain('<p>66</p>');
+    content.dispose?.();
+  });
+
+  it('远程随机源首次只物化前两章，且 ZIP 预读不超过半兆', async () => {
+    const bytes = await buildLargeEpub(10);
+    const reads: Array<{ offset: number; length: number }> = [];
+    const source: RandomAccessSource = {
+      size: bytes.length,
+      identity: { id: 'epub-remote' },
+      access: 'remote',
+      readRange: async (offset, length) => {
+        reads.push({ offset, length });
+        return bytes.slice(offset, offset + length);
+      },
+      close: async () => undefined,
+    };
+    const content = await parseEpub(source);
+    expect(content.chapters).toHaveLength(10);
+    expect(content.chapters[0]!.html).toContain('<p>1</p>');
+    expect(content.chapters[1]!.html).toContain('<p>2</p>');
+    expect(content.chapters[2]!.html).toBe('');
+    expect(content.chapters[9]!.html).toBe('');
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((read) => read.length <= 512 * 1024)).toBe(true);
+    await content.chapters[9]!.load?.();
+    expect(content.chapters[9]!.html).toContain('<p>10</p>');
     content.dispose?.();
   });
 

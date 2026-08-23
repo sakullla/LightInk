@@ -31,6 +31,9 @@ import {
   READER_FLOW_PAGED_PADDING_X_REM,
   applyReaderDocumentLayout,
   applyReaderLayout,
+  clampReaderPageExtent,
+  readerPageInnerPadPx,
+  readerSurfaceIsCompact,
   loadReaderLayout,
   parseReaderLayout,
   readerFlowColumnLayout,
@@ -259,8 +262,41 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*--lightink-titlebar-caption/,
     );
     expect(css).toMatch(/\.lightink-reader-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-bar\s*\{[^}]*--lightink-safe-top/,
+    );
     expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*-webkit-app-region:\s*no-drag/);
+    expect(css).toMatch(/\.lightink-reader-chrome-track--whisper\s*\{[^}]*height:\s*1px/);
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-footer\s*\{[^}]*flex-direction:\s*row/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-whisper\s*\{[^}]*flex-direction:\s*row/,
+    );
+    expect(css).toMatch(
+      /html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-whisper \.lightink-reader-chrome-scrubber,\s*html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-scrubber\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-reader-progress-bar='off'\]\s*\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\s*\{[^}]*--lightink-reader-pad-x:\s*0\.9rem/,
+    );
+    expect(css).toMatch(/\.lightink-reader-chrome-tools\s*\{[^}]*display:\s*flex/);
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px/,
+    );
   });
+
+describe('readerPageInnerPadPx', () => {
+  it('uses a Kindle-narrow gutter on compact surfaces and the desktop pad otherwise', () => {
+    expect(readerPageInnerPadPx(16, false)).toBe(40);
+    expect(readerPageInnerPadPx(16, true)).toBe(17);
+    document.documentElement.setAttribute('data-android', '');
+    expect(readerSurfaceIsCompact()).toBe(true);
+    document.documentElement.removeAttribute('data-android');
+  });
+});
 
   it('keeps the annotation notebook below the titlebar so caption chips do not cover it', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-sidebar.css'), 'utf-8');
@@ -322,6 +358,17 @@ describe('readerFlowSpreadFromTypography', () => {
     expect(page.width).toBe(1000);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
     expect(page.step).toBe(page.width + page.gap);
+  });
+});
+
+describe('clampReaderPageExtent', () => {
+  it('caps a chapter-tall pane to the window so pagination still has pages', () => {
+    expect(
+      clampReaderPageExtent({ width: 1100, height: 5000 }, { innerWidth: 1280, innerHeight: 720 }),
+    ).toEqual({ width: 1100, height: 720 });
+    expect(
+      clampReaderPageExtent({ width: 1100, height: 800 }, { innerWidth: 1280, innerHeight: 768 }),
+    ).toEqual({ width: 1100, height: 800 });
   });
 });
 
@@ -553,6 +600,26 @@ describe('flow host touch paging', () => {
     scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 320, clientY: 100 }));
     scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 140, clientY: 108 }));
     expect(dirs).toEqual([-1, 1]);
+    renderer.clear();
+  });
+
+  it('delegates a right-edge mouse click to advancePagedWheel', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 100 });
+    scrollHost.dispatchEvent(event);
+    expect(dirs).toEqual([1]);
+    expect(event.defaultPrevented).toBe(true);
     renderer.clear();
   });
 

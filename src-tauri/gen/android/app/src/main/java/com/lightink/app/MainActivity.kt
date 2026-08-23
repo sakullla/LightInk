@@ -8,6 +8,8 @@ import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.concurrent.Executors
 import org.json.JSONArray
@@ -114,6 +116,38 @@ class MainActivity : TauriActivity() {
     this.webView = webView
     // 前端契约见 src/file/file-dialog.ts（SAF 桥通道）。
     webView.addJavascriptInterface(SafBridgeJsInterface(), "LightInkSafBridge")
+    // Older WebViews report env(safe-area-inset-*) as 0. Push system-bar
+    // insets as CSS pixels so the reader chrome sits below the status bar.
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { view, windowInsets ->
+      val bars = windowInsets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+      )
+      val density = view.resources.displayMetrics.density.coerceAtLeast(0.01f)
+      val top = bars.top / density
+      val right = bars.right / density
+      val bottom = bars.bottom / density
+      val left = bars.left / density
+      val script =
+        "(function(){" +
+          "var r=document.documentElement;" +
+          "r.style.setProperty('--lightink-safe-top','${top}px');" +
+          "r.style.setProperty('--lightink-safe-right','${right}px');" +
+          "r.style.setProperty('--lightink-safe-bottom','${bottom}px');" +
+          "r.style.setProperty('--lightink-safe-left','${left}px');" +
+          "window.__lightinkSafeArea={top:$top,right:$right,bottom:$bottom,left:$left};" +
+          "if(window.__lightinkApplySafeArea){" +
+          "window.__lightinkApplySafeArea(window.__lightinkSafeArea);" +
+          "}" +
+          "})()"
+      view.post {
+        val live = this.webView
+        if (live != null && live === view) {
+          live.evaluateJavascript(script, null)
+        }
+      }
+      windowInsets
+    }
+    ViewCompat.requestApplyInsets(webView)
   }
 
   override fun onDestroy() {
@@ -202,9 +236,9 @@ class MainActivity : TauriActivity() {
     if (name.isNullOrBlank()) {
       return null
     }
-    // 保留 Unicode 字母/数字（CJK 书名等）：书架标题直接取自该文件名，
-    // 不能把它们抹成 '_'。仅替换真正不安全的字符（路径分隔符、控制符等）。
-    val sanitized = name.replace(Regex("[^\\p{L}\\p{N}._-]"), "_")
+    // 保留 Unicode 书名（含空格与常见标点）：书架标题直接取自该文件名。
+    // 只替换路径分隔符、Windows 保留符和控制符，避免把「三体 01」抹成乱码式下划线。
+    val sanitized = name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
     // 拒绝仅由点组成的名字（"." / ".." 路径穿越风险），回落默认名。
     if (sanitized.all { it == '.' }) {
       return null

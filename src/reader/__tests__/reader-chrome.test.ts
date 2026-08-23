@@ -4,7 +4,7 @@
  * Contract for `src/reader/reader-chrome.ts` (T3 / R4 / R5):
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
- * First paint is hidden except a low-contrast chapter whisper. A page click
+ * First paint is hidden except a 1px progress hairline. A page click
  * or a pointer near the top/bottom edge reveals four text-labeled actions
  * together with a progress footer:
  *   返回书架 · 目录 · 排版 · 本书标注
@@ -132,6 +132,7 @@ describe('createReaderChrome reveal', () => {
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
     const bar = host.querySelector('.lightink-reader-chrome-bar');
+    expect(bar?.querySelector('.lightink-reader-chrome-tools')?.contains(buttons[1]!)).toBe(true);
     expect(bar?.getAttribute('data-tauri-drag-region')).toBe('');
     expect(host.querySelector('.lightink-reader-chrome-drag')?.getAttribute('data-tauri-drag-region')).toBe(
       '',
@@ -140,6 +141,7 @@ describe('createReaderChrome reveal', () => {
       expect(button.hasAttribute('data-tauri-drag-region')).toBe(false);
     }
     for (const button of buttons) {
+      expect(button.getAttribute('aria-label')?.trim()).toBe(button.textContent?.trim());
       expect(button.hidden).toBe(false);
       expect((button.textContent ?? '').trim().length).toBeGreaterThan(0);
       expect(button.textContent?.trim()).not.toBe('×');
@@ -386,6 +388,7 @@ describe('createReaderChrome footer and whisper', () => {
       chapterTitle: '第一章',
       location: '2 / 10',
       progress: 0.25,
+      ticks: [0.2, 0.55],
     });
     expect(chrome.footer.querySelector('.lightink-reader-chrome-chapter')?.textContent).toBe(
       '第一章',
@@ -393,14 +396,35 @@ describe('createReaderChrome footer and whisper', () => {
     expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-chapter')?.textContent).toBe(
       '第一章',
     );
-    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
-      '2 / 10 · 25%',
+    expect([...chrome.footer.children].map((node) => node.className)).toEqual([
+      'lightink-reader-chrome-chapter',
+      'lightink-reader-chrome-scrubber',
+      'lightink-reader-chrome-footer-stats',
+    ]);
+    expect([...chrome.whisper.children].map((node) => node.className)).toEqual([
+      'lightink-reader-chrome-whisper-chapter',
+      'lightink-reader-chrome-scrubber lightink-reader-chrome-scrubber--whisper',
+      'lightink-reader-chrome-whisper-progress',
+    ]);
+    expect(chrome.whisper.getAttribute('aria-label')).toContain('第一章');
+    expect(chrome.whisper.getAttribute('aria-label')).toContain('25%');
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-location')?.textContent).toBe(
+      '2 / 10',
     );
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-percent')?.textContent).toBe('25%');
+    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
+      '25%',
+    );
+    expect(chrome.whisper.querySelectorAll('.lightink-reader-chrome-tick')).toHaveLength(0);
+    expect(chrome.footer.style.getPropertyValue('--lightink-reader-progress')).toBe('0.25');
+    expect(chrome.footer.querySelectorAll('.lightink-reader-chrome-tick')).toHaveLength(2);
     const slider = chrome.footer.querySelector<HTMLInputElement>('.lightink-reader-chrome-progress');
     expect(slider?.value).toBe('250');
     slider!.value = '500';
     slider!.dispatchEvent(new Event('input', { bubbles: true }));
     expect(onSeekProgress).toHaveBeenCalledWith(0.5);
+    expect(chrome.footer.style.getPropertyValue('--lightink-reader-progress')).toBe('0.5');
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-percent')?.textContent).toBe('50%');
   });
 
   it('reveals chrome when the whisper is clicked', () => {

@@ -449,6 +449,22 @@ export function nearestVisibleSlot(slotTops: readonly number[], viewportTop: num
   return best;
 }
 
+/** Spine index of the mounted chapter nearest the viewport — never the NodeList offset. */
+export function nearestVisibleChapterIndex(
+  chapters: readonly { index: number; top: number }[],
+  viewportTop: number,
+): number {
+  if (chapters.length === 0) {
+    return 0;
+  }
+  const slot = nearestVisibleSlot(
+    chapters.map((chapter) => chapter.top),
+    viewportTop,
+  );
+  const index = chapters[Math.max(0, slot)]?.index;
+  return Number.isSafeInteger(index) && index! >= 0 ? index! : 0;
+}
+
 /** Axis-aligned rect in viewport coordinates (e.g. getBoundingClientRect). */
 export interface LayoutRect {
   left: number;

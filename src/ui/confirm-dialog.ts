@@ -46,6 +46,22 @@ export function resolveCancelId(spec: ConfirmDialogSpec): string | null {
   return spec.buttons[spec.buttons.length - 1]?.id ?? null;
 }
 
+export interface AlertDialogSpec {
+  readonly title: string;
+  readonly message: string;
+  readonly okLabel: string;
+}
+
+/** 单按钮提示层，取代 tauri-plugin-dialog 的原生 message。 */
+export function showAlertDialog(doc: Document, spec: AlertDialogSpec): Promise<void> {
+  return showConfirmDialog(doc, {
+    title: spec.title,
+    message: spec.message,
+    buttons: [{ id: 'ok', label: spec.okLabel, kind: 'primary' }],
+    cancelId: 'ok',
+  }).then(() => undefined);
+}
+
 /** 弹出确认层，resolve 为用户选择的按钮 id（或取消 id）。 */
 export function showConfirmDialog(doc: Document, spec: ConfirmDialogSpec): Promise<string> {
   return new Promise<string>((resolve) => {

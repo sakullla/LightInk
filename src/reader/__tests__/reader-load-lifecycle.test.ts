@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
 import type { ReaderInputSource } from '../formats/index.js';
+import { saveLibraryProgressAlias } from '../../library/library-progress.js';
 import {
   chapterScrollTop,
   loadReadingProgress,
@@ -286,9 +287,62 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
     expect(close).toHaveBeenCalledTimes(1);
     expect(progressStorage.setItem).toHaveBeenCalledWith(
-      `${READING_PROGRESS_KEY_PREFIX}item-1@etag-1`,
+      `${READING_PROGRESS_KEY_PREFIX}item-1`,
       expect.any(String),
     );
+  });
+
+  it('reopens an OPDS book at the saved chapter when the server validator changes', async () => {
+    vi.useFakeTimers();
+    const store: Record<string, string> = {};
+    const progressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    saveReadingProgress(progressStorage, 'item-1@etag-old', {
+      version: 1,
+      kind: 'flow',
+      index: 5,
+      ratio: 0,
+      total: 40,
+      updatedAt: 1,
+    });
+    saveLibraryProgressAlias(progressStorage, 'item-1', 'item-1@etag-old');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      openRemoteSource: async () => ({
+        size: 1024,
+        identity: { id: 'item-1', validator: 'etag-new' },
+        readRange: async () => new Uint8Array(),
+        close: async () => undefined,
+      }),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 40 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>${index + 1}</p>`,
+        })),
+      }),
+      progressStorage,
+    });
+    await view.load({
+      kind: 'remote',
+      itemId: 'item-1',
+      resourceId: 'remote-9',
+      identity: { id: 'item-1', validator: 'etag-new' },
+      displayName: 'Remote Book',
+      extension: 'epub',
+      mimeType: 'application/epub+zip',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const active = host.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
+    expect(Number(active?.dataset.chapterIndex)).toBe(5);
+    expect(view.state.current).toBe(6);
+    expect(store[`${READING_PROGRESS_KEY_PREFIX}item-1`]).toContain('"index":5');
+    await view.destroy();
   });
 
   it('loads a local EPUB through bounded random reads instead of copying the whole file', async () => {

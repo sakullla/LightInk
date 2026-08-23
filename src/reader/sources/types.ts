@@ -35,6 +35,12 @@ export type ReaderTarget = LocalReaderTarget | RemoteReaderTarget;
 export interface RandomAccessSource {
   readonly size: number;
   readonly identity: ReaderDocumentIdentity;
+  /**
+   * Remote HTTP sources must use a smaller ZIP window than local files.
+   * Readium streams OPDS EPUBs with Range requests instead of prefetching
+   * multi-megabyte slices on first paint.
+   */
+  readonly access?: 'local' | 'remote';
   readRange(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
   close(): Promise<void>;
 }

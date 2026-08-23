@@ -7,7 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { message as dialogMessage, open as openDialog, save } from '@tauri-apps/plugin-dialog';
+import { open as openDialog, save } from '@tauri-apps/plugin-dialog';
 
 import { mountEditor } from './editor/index.js';
 import { classifyLink } from './editor/link-navigation.js';
@@ -78,10 +78,14 @@ import {
   createMarkdownAnnotationHost,
   type MarkdownAnnotationHost,
 } from './reader/markdown-annotations.js';
-import type { RemoteOpenResult } from './reader/sources/remote-source.js';
+import {
+  remoteOpenExpectedSize,
+  type RemoteOpenResult,
+} from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
 import { applyReaderTheme, loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
+import { applyReaderPrefs, loadReaderPrefs } from './reader/reader-prefs.js';
 import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
 import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
@@ -108,7 +112,7 @@ import {
   type ExternalOpenOrigin,
   type ExternalOpenTab,
 } from './ui/external-open.js';
-import { showConfirmDialog } from './ui/confirm-dialog.js';
+import { showAlertDialog, showConfirmDialog } from './ui/confirm-dialog.js';
 import { showExitConfirmation } from './ui/exit-confirmation.js';
 import {
   createStatusBar,
@@ -137,7 +141,8 @@ import {
   type ReadingLayout,
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
-import { isAndroidApp, isTouchPrimary } from './ui/mobile-platform.js';
+import { applyMobileDocumentFlags, isAndroidApp, isTouchPrimary } from './ui/mobile-platform.js';
+import { bindSafeAreaBridge } from './ui/safe-area.js';
 import { registerAndroidBackNavigation } from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
@@ -182,6 +187,8 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (app === null) {
   throw new Error('LightInk: #app root container not found in index.html');
 }
+applyMobileDocumentFlags();
+bindSafeAreaBridge();
 
 let applicationStateSync: ApplicationStateSync | undefined;
 const syncableStorage = createSyncableStorage(window.localStorage, {
@@ -203,6 +210,8 @@ void getAppWindow().then((win) => {
     displayScale.refresh();
   });
 });
+
+applyReaderPrefs(document.documentElement, loadReaderPrefs(syncableStorage));
 
 // Reading font zoom (body/code) over tier baselines; persists lightink.fontScale.
 const fontScale = installFontScale(document.documentElement, syncableStorage);
@@ -280,6 +289,14 @@ function toggleReadingLayoutMode(): void {
 const i18n = createI18n(syncableStorage);
 const isMac = isMacPlatform();
 
+function showAppAlert(message: string, title = i18n.t('app.name')): Promise<void> {
+  return showAlertDialog(document, {
+    title,
+    message,
+    okLabel: i18n.t('dialog.ok'),
+  });
+}
+
 type RecentMutationCommand = 'add_recent' | 'remove_recent' | 'clear_recents';
 let recentPersistenceNotice: Promise<void> | null = null;
 
@@ -287,10 +304,7 @@ function reportRecentPersistenceError(error: unknown): void {
   // eslint-disable-next-line no-console
   console.error('[lightink/recents] persistence failed', error);
   if (recentPersistenceNotice !== null) return;
-  const pending = dialogMessage(i18n.t('error.recentsPersistFailed'), {
-    title: i18n.t('app.name'),
-    kind: 'error',
-  })
+  const pending = showAppAlert(i18n.t('error.recentsPersistFailed'))
     .then(() => undefined)
     .catch((dialogError: unknown) => {
       // eslint-disable-next-line no-console
@@ -375,10 +389,7 @@ const themeService = new ThemeService({
 
 function reportCustomThemeError(error: unknown): void {
   const detail = error instanceof Error ? error.message : String(error ?? '');
-  void dialogMessage(i18n.t('error.customTheme', { detail }), {
-    title: i18n.t('app.name'),
-    kind: 'error',
-  });
+  void showAppAlert(i18n.t('error.customTheme', { detail }));
 }
 
 void themeService.restorePersistedCustomTheme().catch(reportCustomThemeError);
@@ -533,10 +544,7 @@ const localizedReaderError = (error: unknown): string =>
   readerLoadErrorDetail(error, (key, vars) => i18n.t(key, vars));
 
 function reportReaderLoadError(error: unknown): void {
-  void dialogMessage(i18n.t('reader.loadFailed', { detail: localizedReaderError(error) }), {
-    title: i18n.t('app.name'),
-    kind: 'error',
-  });
+  void showAppAlert(i18n.t('reader.loadFailed', { detail: localizedReaderError(error) }));
 }
 
 /**
@@ -592,19 +600,15 @@ async function openExternalAssociationPath(
       return null;
     },
     workspace,
-    notify: (message, kind = 'info') => {
-      const dialogKind = kind === 'warning' || kind === 'error' ? kind : 'info';
-      void dialogMessage(message, { title: i18n.t('app.name'), kind: dialogKind });
+    notify: (message) => {
+      void showAppAlert(message);
     },
     reportOpenFailure: (filePath) => {
       // Reader load/open already used reportReaderLoadError inside openPathByKind.
       if (isReaderPath(filePath)) {
         return;
       }
-      void dialogMessage(i18n.t('error.openFileMissing', { path: filePath }), {
-        title: i18n.t('app.name'),
-        kind: 'warning',
-      });
+      void showAppAlert(i18n.t('error.openFileMissing', { path: filePath }));
     },
     restoreWindow: () => revealExistingWindow(),
     locale: i18n.locale,
@@ -941,6 +945,7 @@ async function openLibraryRemote(
       allowHttp: request.source?.allowHttp === true,
       credentialRef: credentialRefForResource(request.source, acquisition.href),
       requestId,
+      expectedSize: remoteOpenExpectedSize(item, acquisition),
     });
     try {
       throwIfOperationAborted(signal);
@@ -998,10 +1003,7 @@ async function openLibraryItem(
   try {
     throwIfOperationAborted(signal);
     if (!opened.supportsRanges) {
-      await dialogMessage(i18n.t('reader.remote.noRange'), {
-        title: i18n.t('app.name'),
-        kind: 'warning',
-      });
+      await showAppAlert(i18n.t('reader.remote.noRange'));
     }
     throwIfOperationAborted(signal);
     const extension = remoteExtension(item, acquisition);
@@ -1101,8 +1103,8 @@ async function enrichLocalLibraryItem(
     const meta = await extractLocalBookMeta(item.localPath, bytes);
     let title = meta.title !== undefined && meta.title !== '' ? meta.title : item.title;
     if (extension === 'epub') {
-      const { resolveLocalEpubTitle } = await import('./library/filename-series.js');
-      const resolved = resolveLocalEpubTitle(item.localPath, meta.title);
+      const { resolveImportedEpubTitle } = await import('./library/filename-series.js');
+      const resolved = resolveImportedEpubTitle(item.title, item.localPath, meta.title);
       if (resolved !== '') {
         title = resolved;
       }
@@ -1130,11 +1132,10 @@ async function enrichLocalLibraryItem(
  */
 function notifyLocalImportError(error: unknown): void {
   const detail = error instanceof Error ? error.message : String(error ?? '');
-  void dialogMessage(
+  void showAppAlert(
     i18n.locale === 'en'
       ? `Failed to import local book: ${detail}`
       : `导入本地书籍失败：${detail}`,
-    { title: i18n.t('app.name'), kind: 'error' },
   );
 }
 
@@ -1228,16 +1229,15 @@ async function joinActiveMarkdownToSyncSpace(): Promise<void> {
     if (!adopted) return;
     rememberManagedRecent(result.document.id);
     if (result.warnings.length > 0) {
-      void dialogMessage(result.warnings.join('\n'), {
-        title: i18n.locale === 'en' ? 'Sync space warnings' : '同步空间提示',
-        kind: 'warning',
-      });
+      void showAppAlert(
+        result.warnings.join('\n'),
+        i18n.locale === 'en' ? 'Sync space warnings' : '同步空间提示',
+      );
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error ?? '');
-    void dialogMessage(
+    void showAppAlert(
       `${i18n.locale === 'en' ? 'Could not join the sync space' : '加入同步空间失败'}\n${detail}`,
-      { title: i18n.t('app.name'), kind: 'error' },
     );
   }
 }
@@ -1331,10 +1331,7 @@ async function importAndInsertImage(sourcePath: string): Promise<void> {
     relPath = await importImageAsset(tab.filePath, tab.syntheticId, sourcePath);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error ?? '');
-    void dialogMessage(i18n.t('error.imageImport', { detail }), {
-      title: i18n.t('error.imageImportTitle'),
-      kind: 'error',
-    });
+    void showAppAlert(i18n.t('error.imageImport', { detail }), i18n.t('error.imageImportTitle'));
     return;
   }
   const alt = fileNameStem(sourcePath);
@@ -1381,10 +1378,7 @@ async function handleOsFileDrop(paths: readonly string[]): Promise<void> {
   for (const path of plan.markdown) {
     const opened = await manager.openFile(path);
     if (opened === null) {
-      void dialogMessage(i18n.t('error.openFileMissing', { path }), {
-        title: i18n.t('app.name'),
-        kind: 'warning',
-      });
+      void showAppAlert(i18n.t('error.openFileMissing', { path }));
     } else {
       openedMarkdown = true;
     }
@@ -1401,10 +1395,7 @@ async function handleOsFileDrop(paths: readonly string[]): Promise<void> {
   if (plan.unsupported.length > 0) {
     const sep = i18n.locale === 'en' ? ', ' : '、';
     const names = plan.unsupported.map((p) => p.split(/[\\/]/).pop() ?? p).join(sep);
-    void dialogMessage(i18n.t('error.unsupportedType', { names }), {
-      title: i18n.t('app.name'),
-      kind: 'warning',
-    });
+    void showAppAlert(i18n.t('error.unsupportedType', { names }));
   }
 }
 
@@ -1611,10 +1602,7 @@ function reportExportError(message: string, error: unknown): void {
   // eslint-disable-next-line no-console
   console.error(`[lightink/export] ${message}`, error);
   const detail = error instanceof Error ? error.message : String(error ?? '');
-  void dialogMessage(`${message}\n${detail}`, {
-    title: i18n.t('error.exportFailed'),
-    kind: 'error',
-  });
+  void showAppAlert(`${message}\n${detail}`, i18n.t('error.exportFailed'));
 }
 
 function createExportDeps(
@@ -1729,11 +1717,10 @@ shell = createAppShell(
       if (tab === null) {
         // 文件缺失/不可读：移除该最近条目并提示。
         const removed = await persistRecentMutation('remove_recent', { path });
-        void dialogMessage(
+        void showAppAlert(
           `${i18n.t('error.openFile', { path })}${
             removed ? ` ${i18n.t('error.recentRemoved')}` : ''
           }`,
-          { title: i18n.t('app.name'), kind: 'warning' },
         );
         return false;
       }
@@ -1912,6 +1899,8 @@ function applySynchronizedPreferences(): void {
   autosave?.setEnabled(loadAutosaveEnabled(syncableStorage));
   statusBar?.setVisible(loadStatusBarVisible(syncableStorage));
   outline?.setWidth(readStoredOutlineWidth(syncableStorage) ?? OUTLINE_WIDTH_DEFAULT);
+
+  applyReaderPrefs(document.documentElement, loadReaderPrefs(syncableStorage));
 
   const chrome = loadChromePinPrefs(syncableStorage);
   const pinned = chrome.menu && chrome.tabs;
@@ -2124,7 +2113,7 @@ function annotationHostFor(tab: MarkdownTabState): MarkdownAnnotationHost {
       readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),
       writeAnnotations: writeSyncedAnnotations,
       notify: (message) => {
-        void dialogMessage(message, { title: i18n.t('app.name'), kind: 'warning' });
+        void showAppAlert(message);
       },
     });
     markdownAnnotations.set(tab.id, host);
@@ -2185,7 +2174,7 @@ manager = new TabManager({
       writeAnnotations: (contentHash, json) =>
         writeSyncedAnnotations(contentHash, json),
       notify: (message) => {
-        void dialogMessage(message, { title: i18n.t('app.name'), kind: 'warning' });
+        void showAppAlert(message);
       },
       requestArchivePassword: ({ displayName, retry }) =>
         showArchivePasswordDialog(document, {
@@ -2345,7 +2334,7 @@ manager = new TabManager({
       i18n.locale === 'en'
         ? `The file is unreadable or was deleted externally:\n${tab.filePath ?? tab.title}`
         : `文件不可读或已被外部删除：\n${tab.filePath ?? tab.title}`;
-    void dialogMessage(message, { title: i18n.t('app.name'), kind: 'warning' });
+    void showAppAlert(message);
   },
   confirmLinkOpen: (href) =>
     showOpenLinkConfirm(document, href, {
@@ -2517,6 +2506,7 @@ libraryView = createLibraryView(shell.editorArea, {
   webdav: webDavClient,
   onOpenSyncPanel: openWebDavSyncPanel,
   themeStorage: syncableStorage,
+  readerPrefsStorage: syncableStorage,
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,
@@ -2528,8 +2518,8 @@ libraryView = createLibraryView(shell.editorArea, {
   },
   onImportLocal: importLocalLibraryItem,
   onLocalChange: () => applicationStateSync?.schedule(),
-  notify: (message, kind = 'warning') => {
-    void dialogMessage(message, { title: i18n.t('app.name'), kind });
+  notify: (message) => {
+    void showAppAlert(message);
   },
   confirmGroupDelete: async (_group, message) =>
     (await showConfirmDialog(document, {
@@ -2745,10 +2735,7 @@ function handleLinkNavigation(href: string): void {
 async function openLocalMdLink(path: string): Promise<void> {
   const opened = await manager.openFile(path);
   if (opened === null) {
-    void dialogMessage(i18n.t('error.openFileMissing', { path }), {
-      title: i18n.t('app.name'),
-      kind: 'warning',
-    });
+    void showAppAlert(i18n.t('error.openFileMissing', { path }));
   }
 }
 

@@ -27,6 +27,7 @@ const EXACT_SYNC_KEYS = new Set([
   'lightink.reader.flow.layout',
   'lightink.reader.typography',
   'lightink.reader.theme',
+  'lightink.reader.prefs',
   'lightink.library.theme',
   'lightink.library.navCollapsed',
   'lightink.reader.comic.preferences',

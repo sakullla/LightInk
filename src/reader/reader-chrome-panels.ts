@@ -333,6 +333,12 @@ export function positionReaderChromePanel(
 }
 
 /** Pin an overlay to the visible reading pane so scroll mode cannot carry it away. */
+function isTouchReaderChrome(
+  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
+): boolean {
+  return root !== null && (root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary'));
+}
+
 export function pinFixedOverlay(
   overlay: HTMLElement,
   pane: { getBoundingClientRect(): DOMRect } | null,
@@ -343,6 +349,18 @@ export function pinFixedOverlay(
   if (pane === null || typeof pane.getBoundingClientRect !== 'function') {
     return;
   }
+  if (isTouchReaderChrome()) {
+    overlay.classList.add('is-touch-sheet');
+    overlay.style.position = 'fixed';
+    overlay.style.left = '0';
+    overlay.style.right = '0';
+    overlay.style.top = 'auto';
+    overlay.style.bottom = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = 'auto';
+    return;
+  }
+  overlay.classList.remove('is-touch-sheet');
   const box = pane.getBoundingClientRect();
   const titlebar = titlebarOffsetPx();
   overlay.style.position = 'fixed';
@@ -369,11 +387,13 @@ function titlebarOffsetPx(): number {
 }
 
 export function unpinFixedOverlay(overlay: HTMLElement): void {
+  overlay.classList.remove('is-touch-sheet');
   overlay.style.removeProperty('position');
   overlay.style.removeProperty('top');
   overlay.style.removeProperty('right');
   overlay.style.removeProperty('bottom');
   overlay.style.removeProperty('left');
+  overlay.style.removeProperty('width');
   overlay.style.removeProperty('height');
 }
 

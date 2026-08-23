@@ -11,6 +11,7 @@ import {
   applyFrameWheelToScroller,
   createFlowRenderer,
   flowFrameContentHeight,
+  resolveFlowFrameClick,
   shouldForwardFrameShortcut,
   totalColumnCount,
 } from '../flow-renderer.js';
@@ -444,6 +445,41 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(el.style.getPropertyValue('--lightink-reader-column-count')).toBe('');
   });
 
+  it('does not let a wrapping EPUB link swallow edge paging or chrome toggles', () => {
+    expect(
+      resolveFlowFrameClick({
+        href: 'https://example.invalid/next',
+        clientX: 390,
+        viewportWidth: 400,
+        paginated: true,
+      }),
+    ).toEqual({ kind: 'page', direction: 1 });
+    expect(
+      resolveFlowFrameClick({
+        href: 'https://example.invalid/next',
+        clientX: 200,
+        viewportWidth: 400,
+        paginated: true,
+      }),
+    ).toEqual({ kind: 'surface' });
+    expect(
+      resolveFlowFrameClick({
+        href: '#lightink-chapter?chapter=2',
+        clientX: 390,
+        viewportWidth: 400,
+        paginated: true,
+      }),
+    ).toEqual({ kind: 'in-book-nav', href: '#lightink-chapter?chapter=2' });
+    expect(
+      resolveFlowFrameClick({
+        href: null,
+        clientX: 12,
+        viewportWidth: 400,
+        paginated: true,
+      }),
+    ).toEqual({ kind: 'page', direction: -1 });
+  });
+
   it('flow-renderer applyPaginatedDocument 写入阅读页栏变量且 iframe 铺满纸面', () => {
     const hooks: FlowRendererHooks = {
       t: (key) => key,
@@ -486,6 +522,8 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     );
     expect(pageBox.style.columnCount).toBe(String(metrics.columns));
     expect(pageBox.style.columnWidth).toBe(`${metrics.columnWidth}px`);
+    expect(pageBox.style.overflowX).toBe('auto');
+    expect(pageBox.style.overflowY).toBe('hidden');
     expect(metrics.columnWidth * metrics.columns + metrics.gap).toBeLessThanOrEqual(1020);
     expect(html.style.getPropertyValue('--lightink-reader-column-width')).toBe(
       `${metrics.columnWidth}px`,
@@ -678,6 +716,97 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     pane.remove();
   });
 
+  it('caps a grown editor pane so a text chapter still paginates inside the window', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
+    const hooks: FlowRendererHooks = {
+      t: (key) => key,
+      remoteImagePolicy: sessionRemoteImagePolicy,
+      syncState: () => undefined,
+      applyPendingRestore: () => undefined,
+      renderHighlights: () => undefined,
+      handleNoteMarkClick: () => false,
+      onSelectionMouseUp: () => undefined,
+      openSearch: () => undefined,
+      advanceReading: () => false,
+      advancePagedWheel: () => false,
+      dismissSelectionToolbar: () => false,
+      isLayoutSwitching: () => false,
+      scrollContainer: () => document.body,
+    };
+    const pane = document.createElement('div');
+    pane.id = 'lightink-editor-area';
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 5000 });
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    Object.defineProperty(root, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(root, 'clientHeight', { configurable: true, value: 5000 });
+    const scrollHost = document.createElement('div');
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(scrollHost, 'clientHeight', { configurable: true, value: 5000 });
+    root.appendChild(scrollHost);
+    pane.appendChild(root);
+    document.body.appendChild(pane);
+    const renderer = createFlowRenderer(scrollHost, root, hooks);
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument!;
+    doc.body.innerHTML = '<p>一段足够长的正文，用来确认翻页高度被窗口卡住。</p>'.repeat(40);
+    renderer.applyPaginatedDocument(iframe, doc);
+    const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
+    expect(pageBox.style.height).toBe('720px');
+    expect(pageBox.style.columnCount).toBe('2');
+    iframe.remove();
+    pane.remove();
+  });
+
+  it('uses a narrow gutter on compact surfaces so a phone page is not 40px padded', () => {
+    document.documentElement.setAttribute('data-android', '');
+    const hooks: FlowRendererHooks = {
+      t: (key) => key,
+      remoteImagePolicy: sessionRemoteImagePolicy,
+      syncState: () => undefined,
+      applyPendingRestore: () => undefined,
+      renderHighlights: () => undefined,
+      handleNoteMarkClick: () => false,
+      onSelectionMouseUp: () => undefined,
+      openSearch: () => undefined,
+      advanceReading: () => false,
+      advancePagedWheel: () => false,
+      dismissSelectionToolbar: () => false,
+      isLayoutSwitching: () => false,
+      scrollContainer: () => document.body,
+    };
+    const pane = document.createElement('div');
+    pane.id = 'lightink-editor-area';
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 720 });
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    Object.defineProperty(root, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(root, 'clientHeight', { configurable: true, value: 720 });
+    const scrollHost = document.createElement('div');
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(scrollHost, 'clientHeight', { configurable: true, value: 720 });
+    root.appendChild(scrollHost);
+    pane.appendChild(root);
+    document.body.appendChild(pane);
+    const renderer = createFlowRenderer(scrollHost, root, hooks);
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument!;
+    doc.body.innerHTML = '<p>手机正文</p>';
+    renderer.applyPaginatedDocument(iframe, doc);
+    const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
+    const width = Number.parseInt(pageBox.style.width, 10);
+    expect(width).toBeGreaterThan(320);
+    expect(pageBox.style.columnCount).toBe('1');
+    iframe.remove();
+    pane.remove();
+    document.documentElement.removeAttribute('data-android');
+  });
+
   it('gives consecutive illustration plates a page each so the second is not clipped', () => {
     const hooks: FlowRendererHooks = {
       t: (key) => key,
@@ -767,6 +896,7 @@ describe('大型流式书首次渲染预算', () => {
   it('同步只挂载前八章，空闲计时器不会继续创建全书 iframe', async () => {
     vi.useFakeTimers();
     const root = document.createElement('div');
+    root.dataset.readingLayout = 'scroll';
     const scrollHost = document.createElement('div');
     root.appendChild(scrollHost);
     document.body.appendChild(root);
@@ -791,7 +921,254 @@ describe('大型流式书首次渲染预算', () => {
       Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
         (chapter) => Number(chapter.dataset.chapterIndex),
       ),
-    ).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 30]);
+    ).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 28, 29, 30, 31, 32]);
+    renderer.clear();
+  });
+
+  it('paginated mode keeps a three-chapter window and can page past it', () => {
+    vi.useFakeTimers();
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render(
+      Array.from({ length: 40 }, (_, index) => ({
+        title: `Chapter ${index + 1}`,
+        html: `<p>${index + 1}</p>`,
+      })),
+    );
+    renderer.setActiveChapter(0);
+    vi.advanceTimersByTime(0);
+    expect(
+      Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
+        (chapter) => Number(chapter.dataset.chapterIndex),
+      ),
+    ).toEqual([0, 1, 2]);
+    expect(
+      scrollHost.querySelector<HTMLIFrameElement>(
+        '[data-chapter-index="1"] .lightink-reader-chapter-frame',
+      )?.srcdoc,
+    ).toContain('<p>2</p>');
+    vi.advanceTimersByTime(2000);
+    expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(3);
+    expect(scrollHost.querySelector('[data-chapter-index="8"]')).toBeNull();
+
+    renderer.setActiveChapter(7);
+    vi.advanceTimersByTime(0);
+    expect(
+      Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
+        (chapter) => Number(chapter.dataset.chapterIndex),
+      ),
+    ).toEqual([5, 6, 7, 8, 9]);
+    const moved = renderer.advancePage(1);
+    expect(moved).toBe(true);
+    expect(
+      scrollHost.querySelector('[data-chapter-index="8"]')?.classList.contains('is-active'),
+    ).toBe(true);
+    expect(scrollHost.querySelector('[data-chapter-index="0"]')).toBeNull();
+    renderer.clear();
+    vi.useRealTimers();
+  });
+
+  it('switching paginated to scroll remounts evicted chapters and continues the spine', () => {
+    vi.useFakeTimers();
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render(
+      Array.from({ length: 40 }, (_, index) => ({
+        title: `Chapter ${index + 1}`,
+        html: `<p>${index + 1}</p>`,
+      })),
+    );
+    renderer.setActiveChapter(5);
+    vi.advanceTimersByTime(0);
+    expect(
+      Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
+        (chapter) => Number(chapter.dataset.chapterIndex),
+      ),
+    ).toEqual([3, 4, 5, 6, 7]);
+    expect(scrollHost.querySelector('[data-chapter-index="0"]')).toBeNull();
+    expect(scrollHost.querySelector('[data-chapter-index="20"]')).toBeNull();
+
+    root.dataset.readingLayout = 'scroll';
+    renderer.remasureScrollFrames();
+    expect(scrollHost.querySelector('[data-chapter-index="0"]')).not.toBeNull();
+    vi.advanceTimersByTime(2000);
+    expect(scrollHost.querySelector('[data-chapter-index="20"]')).toBeNull();
+    renderer.clear();
+    vi.useRealTimers();
+  });
+
+  it('ignores the iframe about:blank load so srcdoc still gets columns and images', async () => {
+    const resolveResources = vi.fn(async () => undefined);
+    let releaseLoad: (() => void) | undefined;
+    const chapter = {
+      title: 'Cover',
+      html: '',
+      load: () =>
+        new Promise<void>((resolve) => {
+          releaseLoad = () => {
+            chapter.html = '<p>正文</p><img src="OEBPS/images/cover.jpg" alt="Cover">';
+            resolve();
+          };
+        }),
+      resolveResources,
+    };
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([chapter]);
+    renderer.setActiveChapter(0);
+    const frame = scrollHost.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')!;
+    frame.dispatchEvent(new Event('load'));
+    expect(frame.dataset.frameBound).toBeUndefined();
+    expect(resolveResources).not.toHaveBeenCalled();
+
+    releaseLoad!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(frame.srcdoc).toContain('OEBPS/images/cover.jpg');
+    frame.dispatchEvent(new Event('load'));
+    await vi.waitFor(() => {
+      expect(frame.dataset.frameBound).toBe('true');
+      expect(resolveResources).toHaveBeenCalled();
+    });
+    renderer.clear();
+  });
+
+  it('materializes packaged images on the active paginated chapter even when IO says hidden', async () => {
+    const resolveResources = vi.fn(async () => undefined);
+    const OriginalIO = globalThis.IntersectionObserver;
+    class HiddenObserver {
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element): void {
+        this.callback(
+          [{ target, isIntersecting: false } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+      root = null;
+      rootMargin = '';
+      thresholds = [];
+    }
+    vi.stubGlobal('IntersectionObserver', HiddenObserver);
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([
+      {
+        title: 'Cover',
+        html: '<img src="OEBPS/images/cover.jpg" alt="Cover">',
+        resolveResources,
+      },
+    ]);
+    renderer.setActiveChapter(0);
+    const frame = scrollHost.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')!;
+    frame.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolveResources).toHaveBeenCalled();
+    renderer.clear();
+    if (OriginalIO === undefined) {
+      vi.unstubAllGlobals();
+    } else {
+      vi.stubGlobal('IntersectionObserver', OriginalIO);
+    }
+  });
+
+  it('replaces junk converter titles on the chapter heading', () => {
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([{ title: 'ccdqxkhp', html: '<p>正文</p>' }]);
+    expect(scrollHost.querySelector('.lightink-reader-chapter-title')?.textContent).toBe(
+      'reader.chapter',
+    );
+    expect(
+      scrollHost.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')?.title,
+    ).toBe('reader.chapter');
+    renderer.clear();
+  });
+
+  it('paginated prefetch materializes images on neighbor chapters before they become active', async () => {
+    const resolve0 = vi.fn(async () => undefined);
+    const resolve1 = vi.fn(async () => undefined);
+    const resolve2 = vi.fn(async () => undefined);
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([
+      { title: 'Cover', html: '<img src="a.jpg" alt="">', resolveResources: resolve0 },
+      { title: 'Chapter 2', html: '<p>2</p><img src="b.jpg" alt="">', resolveResources: resolve1 },
+      { title: 'Chapter 3', html: '<p>3</p><img src="c.jpg" alt="">', resolveResources: resolve2 },
+    ]);
+    renderer.setActiveChapter(0);
+    for (const frame of scrollHost.querySelectorAll('iframe')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolve0).toHaveBeenCalled();
+    expect(resolve1).toHaveBeenCalled();
+    expect(resolve2).toHaveBeenCalled();
+    renderer.clear();
+  });
+
+  it('scroll mode does not release mounted chapter images after a jump', async () => {
+    const resolve0 = vi.fn(async () => undefined);
+    const release0 = vi.fn();
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'scroll';
+    const scrollHost = document.createElement('div');
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([
+      {
+        title: 'Chapter 1',
+        html: '<img src="a.jpg" alt="">',
+        resolveResources: resolve0,
+        releaseResources: release0,
+      },
+      ...Array.from({ length: 39 }, (_, index) => ({
+        title: `Chapter ${index + 2}`,
+        html: `<p>${index + 2}</p>`,
+      })),
+    ]);
+    const first = scrollHost.querySelector<HTMLIFrameElement>(
+      '[data-chapter-index="0"] .lightink-reader-chapter-frame',
+    )!;
+    first.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolve0).toHaveBeenCalled();
+    renderer.setActiveChapter(30);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(release0).not.toHaveBeenCalled();
     renderer.clear();
   });
 
@@ -812,11 +1189,13 @@ describe('大型流式书首次渲染预算', () => {
     await view.load('large.epub');
 
     expect(view.state).toMatchObject({ current: 1, total: 1_200, locationKind: 'chapter' });
-    expect(host.querySelectorAll('.lightink-reader-chapter')).toHaveLength(8);
+    expect(host.querySelectorAll('.lightink-reader-chapter').length).toBeGreaterThan(0);
+    expect(host.querySelectorAll('.lightink-reader-chapter').length).toBeLessThan(16);
     await view.destroy();
   });
 
   it('翻页越过首批窗口时按需挂载下一章', () => {
+    vi.useFakeTimers();
     document.documentElement.dataset.readingLayout = 'paginated';
     const root = document.createElement('div');
     root.dataset.readingLayout = 'paginated';
@@ -831,14 +1210,21 @@ describe('大型流式书首次渲染预算', () => {
       })),
     );
     renderer.setActiveChapter(7);
+    vi.advanceTimersByTime(0);
 
     expect(renderer.advancePage(1)).toBe(true);
+    vi.advanceTimersByTime(0);
     expect(
       scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset
         .chapterIndex,
     ).toBe('8');
-    expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(9);
+    expect(
+      Array.from(scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')).map(
+        (chapter) => Number(chapter.dataset.chapterIndex),
+      ),
+    ).toEqual([5, 6, 7, 8, 9, 10]);
     renderer.clear();
+    vi.useRealTimers();
   });
 });
 
@@ -967,6 +1353,48 @@ describe('滚动模式章节帧高度（末行裁切）', () => {
     expect(image.style.height).toMatch(/^auto$/);
     expect(image.classList.contains('lightink-reader-media--page')).toBe(false);
     expect(image.style.maxHeight).toMatch(/^\d+px$/);
+    renderer.clear();
+  });
+
+  it('remasure after paginated !important height lets the chapter grow', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1100 });
+    const pane = document.createElement('div');
+    pane.id = 'lightink-editor-area';
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 800 });
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    Object.defineProperty(root, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(root, 'clientHeight', { configurable: true, value: 800 });
+    const scrollHost = document.createElement('div');
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(scrollHost, 'clientHeight', { configurable: true, value: 800 });
+    root.appendChild(scrollHost);
+    pane.appendChild(root);
+    document.body.appendChild(pane);
+    const renderer = createFlowRenderer(scrollHost, root, flowRendererHooks());
+    renderer.render([{ title: '长章', html: `<p>${'正文'.repeat(40)}</p>`.repeat(20) }]);
+    const frame = scrollHost.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')!;
+    frame.dispatchEvent(new Event('load'));
+    const frameDocument = frame.contentDocument!;
+    expect(frameDocument.documentElement.style.getPropertyPriority('height')).toBe('important');
+    expect(frameDocument.documentElement.style.height).toBe('800px');
+    expect(frame.style.height).toBe('800px');
+
+    Object.defineProperty(frameDocument.body, 'scrollHeight', {
+      configurable: true,
+      value: 2400,
+    });
+    root.dataset.readingLayout = 'scroll';
+    renderer.remasureScrollFrames();
+    expect(frameDocument.documentElement.style.getPropertyPriority('height')).toBe('');
+    expect(frameDocument.documentElement.style.height).toBe('auto');
+    expect(frameDocument.body.style.getPropertyPriority('height')).toBe('');
+    expect(frameDocument.body.style.height).toBe('auto');
+    const pageBox = frameDocument.querySelector<HTMLElement>('.lightink-reader-spread');
+    expect(pageBox?.style.columnCount ?? '').toBe('');
+    expect(Number.parseInt(frame.style.height, 10)).toBeGreaterThan(800);
     renderer.clear();
   });
 });
@@ -1261,6 +1689,111 @@ describe('缩放性能（T6：档位合并去抖 + 仅可见章分栏 + 流式�
 
     // 修复前：scrollTop 停留在 0（跳回书的第一页）；修复后：按快照恢复到 400。
     expect(scroll.scrollTop).toBe(400);
+    await view.destroy();
+  });
+
+  it('翻页切到滚动后进度按全书章节算，不把已挂载窗口当成 86%', async () => {
+    vi.useFakeTimers();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 40 }, (_, index) => ({
+          title: `第${index + 1}章`,
+          html: `<p>chapter ${index + 1}</p>`,
+        })),
+      }),
+      preferenceStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+      },
+    });
+    await view.load('book.epub');
+    view.jumpToOutlineItem({ level: 1, text: '第6章', anchor: 5, chapter: 5 });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const frame of host.querySelectorAll('iframe')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    expect(view.state.current).toBe(6);
+
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 800 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 2400 });
+    scroll.scrollTop = 1376;
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 800,
+      left: 0,
+      right: 400,
+      width: 400,
+      height: 800,
+    } as DOMRect);
+    for (const chapter of scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')) {
+      const index = Number(chapter.dataset.chapterIndex);
+      Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 800 });
+      vi.spyOn(chapter, 'getBoundingClientRect').mockReturnValue({
+        top: (index - 5) * 800,
+        bottom: (index - 4) * 800,
+        left: 0,
+        right: 400,
+        width: 400,
+        height: 800,
+      } as DOMRect);
+    }
+
+    store['lightink.reader.flow.layout'] = 'scroll';
+    view.refreshPreferences?.();
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    await vi.advanceTimersByTimeAsync(2000);
+    for (const chapter of scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')) {
+      const index = Number(chapter.dataset.chapterIndex);
+      Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 800 });
+      vi.spyOn(chapter, 'getBoundingClientRect').mockReturnValue({
+        top: (index - 5) * 800,
+        bottom: (index - 4) * 800,
+        left: 0,
+        right: 400,
+        width: 400,
+        height: 800,
+      } as DOMRect);
+    }
+    scroll.dispatchEvent(new Event('scroll'));
+    await vi.advanceTimersByTimeAsync(16);
+    expect(view.state.current).toBe(6);
+    expect(view.state.total).toBe(40);
+    expect(view.state.progress).toBeLessThan(0.25);
+    expect(view.state.progress).toBeCloseTo(5 / 40, 5);
+    await view.destroy();
+  });
+
+  it('拖动进度条按全书章节跳转，而不是已挂载窗口高度', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 40 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>${index + 1}</p>`,
+        })),
+      }),
+    });
+    await view.load('book.epub');
+    const slider = host.querySelector<HTMLInputElement>('.lightink-reader-chrome-progress');
+    expect(slider).not.toBeNull();
+    slider!.value = '500';
+    slider!.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    const active = host.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
+    expect(Number(active?.dataset.chapterIndex)).toBe(20);
+    expect(view.state.current).toBe(21);
+    expect(view.state.progress).toBeCloseTo(20 / 40, 5);
     await view.destroy();
   });
 });

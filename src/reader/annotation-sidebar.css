@@ -406,3 +406,7 @@
   }
 }
 
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar {
+  inset: var(--lightink-safe-top, 0px) 0 var(--lightink-safe-bottom, 0px) auto;
+}
+

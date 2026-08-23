@@ -71,13 +71,15 @@ html[data-display='xuhd'] {
 }
 
 #app.is-workspace-shelf .lightink-window-titlebar,
-#app.is-workspace-reader .lightink-window-titlebar {
+#app.is-workspace-reader .lightink-window-titlebar,
+#app.is-workspace-editor .lightink-window-titlebar {
   left: auto;
   width: auto;
 }
 
 #app.is-workspace-shelf .lightink-window-titlebar-drag,
-#app.is-workspace-reader .lightink-window-titlebar-drag {
+#app.is-workspace-reader .lightink-window-titlebar-drag,
+#app.is-workspace-editor .lightink-window-titlebar-drag {
   display: none;
 }
 
@@ -92,6 +94,23 @@ html[data-display='xuhd'] {
 #app.is-workspace-reader .lightink-window-titlebar:focus-within {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Phones have no desktop caption. Keep min/max/close off the status bar. */
+html[data-android] .lightink-window-titlebar,
+html[data-touch-primary] .lightink-window-titlebar {
+  display: none !important;
+}
+
+@media (pointer: coarse) {
+  .lightink-window-titlebar {
+    display: none !important;
+  }
+}
+
+html[data-android],
+html[data-touch-primary] {
+  --lightink-titlebar-caption: 0px;
 }
 
 .lightink-window-caption {

@@ -1563,11 +1563,29 @@ pub fn find_cache_object(
     connection: &Connection,
     source_key: &str,
 ) -> Result<Option<(String, PathBuf)>, String> {
+    Ok(find_cache_object_row(connection, source_key)?.map(|(id, path, _, _)| (id, path)))
+}
+
+/// Returns id, path, total_size, and complete for a cache row.
+pub fn find_cache_object_row(
+    connection: &Connection,
+    source_key: &str,
+) -> Result<Option<(String, PathBuf, Option<u64>, bool)>, String> {
     connection
         .query_row(
-            "SELECT id, path FROM cache_objects WHERE source_key=?1",
+            "SELECT id, path, total_size, complete FROM cache_objects WHERE source_key=?1",
             params![source_key],
-            |row| Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?))),
+            |row| {
+                let total_size = row
+                    .get::<_, Option<i64>>(2)?
+                    .map(|value| value.max(0) as u64);
+                Ok((
+                    row.get(0)?,
+                    PathBuf::from(row.get::<_, String>(1)?),
+                    total_size,
+                    row.get::<_, i64>(3)? != 0,
+                ))
+            },
         )
         .optional()
         .map_err(|error| format!("无法读取缓存对象: {error}"))

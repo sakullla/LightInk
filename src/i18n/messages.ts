@@ -141,6 +141,8 @@ const en = {
   'reader.cancelled': 'Document loading was cancelled.',
   'reader.failed': 'Document loading failed.',
   'reader.chapter': 'Chapter {n}',
+  'reader.progress.chapterOf': 'Chapter {current} of {total}',
+  'reader.progress.pageOf': 'Page {current} of {total}',
   'reader.loadFailed': 'Could not open this eBook:\n{detail}',
   'reader.fileTooLarge': 'File is too large ({actual} bytes; limit {limit} bytes).',
   'reader.limit.archiveEntries':
@@ -530,6 +532,8 @@ const zhCN = {
   'reader.cancelled': '文档加载已取消。',
   'reader.failed': '文档加载失败。',
   'reader.chapter': '第 {n} 章',
+  'reader.progress.chapterOf': '第 {current} / {total} 章',
+  'reader.progress.pageOf': '第 {current} / {total} 页',
   'reader.loadFailed': '无法打开此电子书：\n{detail}',
   'reader.fileTooLarge': '文件过大（{actual} 字节；上限 {limit} 字节）。',
   'reader.limit.archiveEntries': '压缩包条目过多（实际 {actual}；上限 {limit}）。',

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseFilenameSeries } from '../filename-series.js';
+import {
+  parseFilenameSeries,
+  resolveImportedEpubTitle,
+  resolveLocalEpubTitle,
+} from '../filename-series.js';
 
 const HELL_STEM = '地狱模式～喜欢挑战特殊成就的玩家在废设定的异世界成为无双～';
 const HELL_FILE = `${HELL_STEM} - 01.epub`;
@@ -148,5 +152,30 @@ describe('parseFilenameSeries', () => {
     expect(parsed.informative).toBe(true);
     expect(parsed.seriesStem).toBe(HELL_STEM);
     expect(parsed.volume).toBe('01');
+  });
+
+  it('does not treat a managed content-hash blob name as an informative title', () => {
+    const hash = 'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456';
+    const parsed = parseFilenameSeries(`C:/app/library/managed/blobs/${hash.slice(0, 2)}/${hash}.epub`);
+    expect(parsed.informative).toBe(false);
+    expect(resolveLocalEpubTitle(`${hash}.epub`, '河山记')).toBe('河山记');
+  });
+});
+
+describe('resolveImportedEpubTitle', () => {
+  it('keeps the original filename when enrich reads a hashed managed blob path', () => {
+    const hash = 'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456';
+    expect(
+      resolveImportedEpubTitle(
+        '三体.epub',
+        `C:/app/library/managed/blobs/${hash.slice(0, 2)}/${hash}.epub`,
+        'ããä½',
+      ),
+    ).toBe('三体');
+  });
+
+  it('falls back to dc:title when the source name is also uninformative', () => {
+    const hash = 'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456';
+    expect(resolveImportedEpubTitle('01.epub', `${hash}.epub`, '河山记')).toBe('河山记');
   });
 });

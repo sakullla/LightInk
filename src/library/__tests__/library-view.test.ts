@@ -658,6 +658,9 @@ function itemCard(host: ParentNode, itemId: string): HTMLElement {
 
 afterEach(() => {
   document.body.replaceChildren();
+  document.documentElement.removeAttribute('data-android');
+  document.documentElement.removeAttribute('data-touch-primary');
+  delete document.documentElement.dataset.readerProgressBar;
 });
 
 describe('LibraryView my-books home', () => {
@@ -702,6 +705,77 @@ describe('LibraryView my-books home', () => {
     expect(comicRow.textContent).toContain('第 12 页');
     expect(comicRow.textContent).toContain('已读 37%');
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
+    view.destroy();
+  });
+
+  it('puts a quick-import tile at the end of the local cover wall', async () => {
+    const book = localItem();
+    const imported = localItem({
+      id: 'local:/books/new.epub',
+      title: '新导入的书',
+      localPath: '/books/new.epub',
+    });
+    let items = [book];
+    const onImportLocal = vi.fn(async () => imported);
+    const base = dependencies();
+    const deps = dependencies({
+      onImportLocal,
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => items),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const tiles = Array.from(host.querySelectorAll('.lightink-library-item'));
+    const importTile = host.querySelector<HTMLButtonElement>('.lightink-library-item--import');
+    expect(importTile).not.toBeNull();
+    expect(importTile?.getAttribute('aria-label')).toBe('导入本地书籍');
+    expect(importTile?.title).toBe('导入本地书籍');
+    expect(importTile?.textContent?.trim()).toBe('');
+    expect(tiles[tiles.length - 1]).toBe(importTile);
+    expect((tiles[0] as HTMLElement | undefined)?.dataset.itemId).toBe(book.id);
+
+    items = [book, imported];
+    importTile!.click();
+    await settle();
+    expect(onImportLocal).toHaveBeenCalledTimes(1);
+    expect(itemRow(host, imported.id).textContent).toContain('新导入的书');
+    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    view.destroy();
+  });
+
+  it('keeps the import tile on an empty shelf and hides it while searching or browsing a catalog', async () => {
+    const onImportLocal = vi.fn(async () => null);
+    const base = dependencies();
+    const deps = dependencies({
+      onImportLocal,
+      library: { ...base.library, listItems: vi.fn(async () => []) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-empty')).toBeNull();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河山';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+
+    shownControl(host, '清除').click();
+    await settle();
+    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+
+    await openCatalog(host);
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+    expect(itemRow(host, 'item-1').textContent).toContain('远程漫画');
     view.destroy();
   });
 
@@ -985,6 +1059,45 @@ describe('LibraryView my-books home', () => {
       expect.anything(),
     );
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
+    view.destroy();
+  });
+
+  it('opens a persisted OPDS shelf book from its stored acquisition URL', async () => {
+    const remote: LibraryItem = {
+      id: 'opds:source-1:book-12',
+      sourceId: 'source-1',
+      sourceKind: 'opds',
+      title: '远程小说',
+      authors: [],
+      acquisitionUrl: 'https://books.example/get/EPUB/12',
+      mediaType: 'application/epub+zip',
+      extension: 'epub',
+      availability: 'remote',
+      updatedAt: 1,
+    };
+    const deps = dependencies({
+      library: {
+        ...dependencies().library,
+        listItems: vi.fn(async () => [remote]),
+        listAcquisitionLinks: vi.fn(async () => []),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    itemRow(host, remote.id).click();
+    await settle();
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item: expect.objectContaining({ id: remote.id }),
+        acquisition: expect.objectContaining({ href: 'https://books.example/get/EPUB/12' }),
+        source,
+      }),
+      expect.anything(),
+    );
     view.destroy();
   });
 
@@ -1816,6 +1929,8 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(isShown(host.querySelector('.lightink-library-source-url'))).toBe(false);
     expect(host.textContent).toContain('远程漫画');
     expect(host.textContent).toContain('返回书架');
+    expect(host.querySelector('.lightink-library-back-to-shelf')?.closest('.lightink-library-catalog-tree')).toBeNull();
+    expect(host.querySelector('.lightink-library-catalog-pane > .lightink-library-catalog-tree')).not.toBeNull();
 
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     // 书架不消费 reader 内部令牌
@@ -1912,6 +2027,54 @@ describe('LibraryView sources, manage, and catalog', () => {
     view.destroy();
   });
 
+  it('offers a dedicated reader prefs block to hide the progress bar', async () => {
+    const store: Record<string, string> = {};
+    const readerPrefsStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ readerPrefsStorage }));
+    await view.show();
+    await openManage(host);
+
+    const section = host.querySelector('.lightink-library-manage-panel .lightink-library-reader-prefs');
+    expect(section).toBeTruthy();
+    expect(section?.querySelector('h2')?.textContent).toBe('阅读器');
+    expect(section?.querySelector('p')?.textContent).toContain('进度条');
+    const input = host.querySelector<HTMLInputElement>(
+      '.lightink-library-reader-prefs input[name="showProgressBar"]',
+    );
+    expect(input?.checked).toBe(true);
+    expect(host.textContent).toContain('显示进度条');
+    expect(document.documentElement.dataset.readerProgressBar).toBe('on');
+
+    input!.checked = false;
+    input!.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(store['lightink.reader.prefs']).toContain('"showProgressBar":false');
+    expect(document.documentElement.dataset.readerProgressBar).toBe('off');
+    expect(store['lightink.reader.typography']).toBeUndefined();
+    expect(store['lightink.reader.theme']).toBeUndefined();
+    expect(store['lightink.library.theme']).toBeUndefined();
+
+    store['lightink.reader.prefs'] = JSON.stringify({ showProgressBar: true });
+    view.retranslate();
+    expect(input!.checked).toBe(true);
+    expect(document.documentElement.dataset.readerProgressBar).toBe('on');
+    store['lightink.reader.prefs'] = JSON.stringify({ showProgressBar: false });
+    window.dispatchEvent(
+      new CustomEvent('lightink:syncable-storage-change', {
+        detail: { key: 'lightink.reader.prefs' },
+      }),
+    );
+    expect(input!.checked).toBe(false);
+    expect(document.documentElement.dataset.readerProgressBar).toBe('off');
+    view.destroy();
+  });
+
   it('drops the hardcoded shelf palette and consumes main theme tokens', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     // 不再定义 --lightink-shelf-* 私有自定义属性（色板与尺寸令牌全部移除）
@@ -1947,6 +2110,9 @@ describe('LibraryView sources, manage, and catalog', () => {
       );
     }
     expect(css).toMatch(/max-width:\s*var\(--lightink-library-manage-max\)/);
+    expect(css).toMatch(
+      /\.lightink-library-appearance,\s*\.lightink-library-reader-prefs\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/,
+    );
     expect(css).toMatch(/@container\s+library-content\s*\(min-width:\s*52rem\)/);
     expect(css).toMatch(
       /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)\)/,
@@ -2502,6 +2668,31 @@ describe('LibraryView shelf collections', () => {
     next.destroy();
   });
 
+  it('keeps 返回书架 on the collapsed catalog rail', async () => {
+    const deps = dependencies();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    const toggle = host.querySelector<HTMLButtonElement>('.lightink-library-nav-collapse')!;
+    toggle.click();
+    expect(libraryRoot(host).dataset.libraryNavCollapsed).toBe('true');
+    const back = host.querySelector<HTMLElement>('.lightink-library-back-to-shelf');
+    expect(back?.closest('.lightink-library-catalog-tree')).toBeNull();
+    expect(isShown(back)).toBe(true);
+    expect(backToShelfControl(host).textContent).toContain('返回书架');
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\[data-library-nav-collapsed='true'\]\[data-library-nav=['"]?catalog['"]?\] \.lightink-library-catalog-tree\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav-collapsed='true'\]\[data-library-nav=['"]?catalog['"]?\] \.lightink-library-back-to-shelf/,
+    );
+    view.destroy();
+  });
+
   it('collapses and expands nav sections, with smart groups collapsed by default', async () => {
     const novel = seriesNovel();
     const { deps } = collectionDependencies({
@@ -2757,6 +2948,60 @@ describe('LibraryView remove from library', () => {
     view.destroy();
   });
 
+  it('does not flash a removed book when returning to the shelf before reload finishes', async () => {
+    const keep = localItem();
+    const gone = localItem({
+      id: 'local:/books/remove-stale.epub',
+      title: '待移出残留',
+      localPath: '/books/remove-stale.epub',
+    });
+    let shelf = [keep, gone];
+    let resolveReload: ((items: LibraryItem[]) => void) | undefined;
+    const listItems = vi
+      .fn()
+      .mockResolvedValueOnce([keep, gone])
+      .mockImplementation(
+        () =>
+          new Promise<LibraryItem[]>((resolve) => {
+            resolveReload = resolve;
+          }),
+      );
+    const removeItem = vi.fn(async (id: string) => {
+      shelf = shelf.filter((item) => item.id !== id);
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: {
+        ...base.library,
+        listItems,
+        removeItem,
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openItemMenu(host, gone.id);
+    contextMenuItem('移出书库').click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
+
+    await openCatalog(host);
+    backToShelfControl(host).click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'shelf',
+      'catalog did not return to the shelf',
+    );
+    expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
+    expect(itemRow(host, keep.id)).toBeTruthy();
+
+    resolveReload?.(shelf);
+    await settle();
+    expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
+    view.destroy();
+  });
+
   it('offers 移出书库 on a managed cover and on the detail pane of an already-imported catalog book', async () => {
     const managed = localItem({
       id: 'managed:book-1',
@@ -2984,6 +3229,54 @@ describe('LibraryView touch long-press', () => {
     contextMenuItem('重命名分组').click();
     await settle();
     expect(groupFormOf(host)).toBeTruthy();
+    view.destroy();
+  });
+});
+
+describe('LibraryView mobile shelf', () => {
+  it('uses a full-width cover grid and a drawer instead of a persistent sidebar', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*block/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*position:\s*fixed/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(3/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header\s*\{[^}]*--lightink-safe-top/,
+    );
+  });
+
+  it('opens filters from a hamburger and returns the cover wall after a choice', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    const root = libraryRoot(host);
+    const menu = host.querySelector<HTMLButtonElement>('.lightink-library-nav-menu');
+    const backdrop = host.querySelector<HTMLButtonElement>('.lightink-library-nav-backdrop');
+    expect(menu).not.toBeNull();
+    expect(root.dataset.libraryDrawer).toBe('closed');
+    expect(host.querySelector('h1')?.hidden).toBe(false);
+    expect(host.querySelector('h1')?.textContent).toBe('书库');
+
+    menu!.click();
+    expect(root.dataset.libraryDrawer).toBe('open');
+    expect(backdrop?.hidden).toBe(false);
+
+    navButton(host, '在读').click();
+    await settle();
+    expect(root.dataset.libraryDrawer).toBe('closed');
+    expect(navItemActive(navButton(host, '在读'))).toBe(true);
+
+    menu!.click();
+    backdrop!.click();
+    expect(root.dataset.libraryDrawer).toBe('closed');
     view.destroy();
   });
 });

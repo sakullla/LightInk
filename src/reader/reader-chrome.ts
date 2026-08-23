@@ -2,13 +2,15 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。顶栏是四项带文字入口；底栏是章节名 + 可拖进度。
- * 收起后底部保留一行低对比章节名（whisper），不占文档流。
+ * 边缘时顶栏与底栏同时出现。顶栏是四项带文字入口；底栏与沉浸条都是单行：
+ * 章节名 | 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC 刻度。
  *
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
  * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
  * 控件条。「返回书架」是顶栏起始侧唯一合书入口。
  */
+
+import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
 
@@ -28,6 +30,7 @@ export interface ReaderChromeProgress {
   readonly chapterTitle: string;
   readonly location: string;
   readonly progress: number;
+  readonly ticks?: readonly number[];
 }
 
 export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
@@ -281,6 +284,7 @@ export function createReaderChrome(
     button.className = `lightink-reader-chrome-action lightink-reader-chrome-action--${action}`;
     button.dataset.readerChromeAction = action;
     button.textContent = label;
+    button.setAttribute('aria-label', label);
     if (action === 'toc' || action === 'typography') {
       button.setAttribute('aria-haspopup', 'dialog');
       button.setAttribute('aria-expanded', 'false');
@@ -297,20 +301,36 @@ export function createReaderChrome(
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
   drag.setAttribute('aria-hidden', 'true');
-  bar.append(backButton, tocButton, typographyButton, annotationsButton, drag);
+  const tools = document.createElement('div');
+  tools.className = 'lightink-reader-chrome-tools';
+  tools.append(tocButton, typographyButton, annotationsButton);
+  bar.append(backButton, tools, drag);
   element.appendChild(bar);
 
   const footer = document.createElement('div');
   footer.className = 'lightink-reader-chrome-footer';
   footer.setAttribute('role', 'group');
   footer.setAttribute('aria-label', labels.footer);
-  const footerMeta = document.createElement('div');
-  footerMeta.className = 'lightink-reader-chrome-footer-meta';
   const footerChapter = document.createElement('span');
   footerChapter.className = 'lightink-reader-chrome-chapter';
+  const footerStats = document.createElement('span');
+  footerStats.className = 'lightink-reader-chrome-footer-stats';
   const footerLocation = document.createElement('span');
   footerLocation.className = 'lightink-reader-chrome-location';
-  footerMeta.append(footerChapter, footerLocation);
+  const footerPercent = document.createElement('span');
+  footerPercent.className = 'lightink-reader-chrome-percent';
+  footerStats.append(footerLocation, footerPercent);
+  const scrubber = document.createElement('div');
+  scrubber.className = 'lightink-reader-chrome-scrubber';
+  const footerTrack = document.createElement('div');
+  footerTrack.className = 'lightink-reader-chrome-track';
+  footerTrack.setAttribute('aria-hidden', 'true');
+  const footerFill = document.createElement('div');
+  footerFill.className = 'lightink-reader-chrome-fill';
+  const footerTicks = document.createElement('div');
+  footerTicks.className = 'lightink-reader-chrome-ticks';
+  footerTicks.setAttribute('aria-hidden', 'true');
+  footerTrack.append(footerFill);
   const slider = document.createElement('input');
   slider.type = 'range';
   slider.className = 'lightink-reader-chrome-progress';
@@ -319,16 +339,28 @@ export function createReaderChrome(
   slider.step = '1';
   slider.value = '0';
   slider.setAttribute('aria-label', labels.progress);
-  footer.append(footerMeta, slider);
+  scrubber.append(footerTrack, footerTicks, slider);
+  footer.append(footerChapter, scrubber, footerStats);
 
   const whisper = document.createElement('div');
   whisper.className = 'lightink-reader-chrome-whisper';
   whisper.setAttribute('aria-live', 'polite');
   const whisperChapter = document.createElement('span');
   whisperChapter.className = 'lightink-reader-chrome-whisper-chapter';
+  const whisperScrubber = document.createElement('div');
+  whisperScrubber.className = 'lightink-reader-chrome-scrubber lightink-reader-chrome-scrubber--whisper';
+  whisperScrubber.setAttribute('aria-hidden', 'true');
+  const whisperTrack = document.createElement('div');
+  whisperTrack.className = 'lightink-reader-chrome-track lightink-reader-chrome-track--whisper';
+  const whisperFill = document.createElement('div');
+  whisperFill.className = 'lightink-reader-chrome-fill';
+  const whisperTicks = document.createElement('div');
+  whisperTicks.className = 'lightink-reader-chrome-ticks';
+  whisperTrack.append(whisperFill);
+  whisperScrubber.append(whisperTrack, whisperTicks);
   const whisperProgress = document.createElement('span');
   whisperProgress.className = 'lightink-reader-chrome-whisper-progress';
-  whisper.append(whisperChapter, whisperProgress);
+  whisper.append(whisperChapter, whisperScrubber, whisperProgress);
 
   let revealed = false;
   let pointerInsideBar = false;
@@ -589,30 +621,57 @@ export function createReaderChrome(
     pointerInsideBar = true;
     clearHideTimer();
   });
+  const paintRatio = (ratio: number, percent: string): void => {
+    const writeProgress = (dock: HTMLElement): void => {
+      const style = dock.style;
+      if (style !== undefined && typeof style.setProperty === 'function') {
+        style.setProperty('--lightink-reader-progress', String(ratio));
+      }
+    };
+    writeProgress(footer);
+    writeProgress(whisper);
+    footerPercent.textContent = percent;
+    whisperProgress.textContent = percent;
+  };
+
   slider.addEventListener('input', () => {
     const value = Number.parseInt(slider.value, 10);
     const progress = Number.isFinite(value) ? Math.min(1, Math.max(0, value / 1000)) : 0;
+    paintRatio(progress, formatReaderPercent(progress));
     deps.onSeekProgress?.(progress);
   });
 
-  const formatPercent = (progress: number): string => {
-    const normalized = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
-    return `${Math.round(normalized * 100)}%`;
+  const paintTicks = (host: HTMLElement, ticks: readonly number[]): void => {
+    if (typeof host.replaceChildren !== 'function') {
+      return;
+    }
+    host.replaceChildren();
+    for (const fraction of ticks) {
+      if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
+        continue;
+      }
+      const tick = document.createElement('i');
+      tick.className = 'lightink-reader-chrome-tick';
+      tick.style.left = `${(fraction * 100).toFixed(2)}%`;
+      host.appendChild(tick);
+    }
   };
 
   const setProgress = (snapshot: ReaderChromeProgress): void => {
     const title = snapshot.chapterTitle.trim();
     const location = snapshot.location.trim();
+    const percent = formatReaderPercent(snapshot.progress);
+    const ratio = Number.isFinite(snapshot.progress) ? Math.min(1, Math.max(0, snapshot.progress)) : 0;
     footerChapter.textContent = title;
     footerLocation.textContent = location;
     whisperChapter.textContent = title;
-    whisperProgress.textContent = location === '' ? formatPercent(snapshot.progress) : `${location} · ${formatPercent(snapshot.progress)}`;
+    whisper.setAttribute('aria-label', [title, location, percent].filter((part) => part !== '').join(' · '));
+    paintRatio(ratio, percent);
+    const ticks = snapshot.ticks ?? [];
+    paintTicks(footerTicks, ticks);
+    paintTicks(whisperTicks, []);
     if (typeof document === 'undefined' || document.activeElement !== slider) {
-      const value = Math.round(
-        (Number.isFinite(snapshot.progress) ? Math.min(1, Math.max(0, snapshot.progress)) : 0) *
-          1000,
-      );
-      slider.value = String(value);
+      slider.value = String(Math.round(ratio * 1000));
     }
   };
 

@@ -94,6 +94,7 @@ import {
   chapterScrollRatio,
   chapterScrollTop,
   loadReadingProgress,
+  loadReadingProgressFromIds,
   resolveProgressStorage,
   saveReadingProgress,
   type ProgressStorage,
@@ -105,7 +106,7 @@ import {
   createCoalescedScrollHandler,
   createPagedWheelGate,
   createResizeSettle,
-  nearestVisibleSlot,
+  nearestVisibleChapterIndex,
   pagedFrameStep,
   pagedProgressRatio,
   rafFrameScheduler,
@@ -128,12 +129,16 @@ import {
   openNativeArchive,
   type ArchivePasswordProvider,
 } from './sources/native-archive.js';
+import { loadLibraryProgressAlias } from '../library/library-progress.js';
 import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
 import { createReaderChrome, type ReaderChrome } from './reader-chrome.js';
 import {
+  clampFlowRestoreIndex,
+  flowBookProgress,
   formatReaderLocation,
+  readerProgressTickFractions,
   playReaderPageTurn,
   resolveReaderChapterTitle,
 } from './reader-progress-ui.js';
@@ -462,14 +467,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         openNote(annotation);
         return true;
       }
-      const target = event.target;
-      const link =
-        target instanceof Element ? target.closest<HTMLAnchorElement>('a[href]') : null;
-      if (link === null) {
-        readerChrome?.handleSurfaceClick(event);
-        syncChromeRevealAttr();
-      }
       return false;
+    },
+    onFrameSurfaceClick: (event) => {
+      readerChrome?.handleSurfaceClick(event);
+      syncChromeRevealAttr();
     },
     onSelectionMouseUp: (selection, chapter, body, frame) =>
       onFlowSelectionMouseUp(selection, chapter, body, frame),
@@ -689,17 +691,25 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (flowChapterCount === 0) {
       return false;
     }
-    const targetIndex = Math.min(saved.index, flowChapterCount - 1);
-    setActiveChapter(targetIndex);
+    const restoreIndex = clampFlowRestoreIndex(saved.index, flowChapterCount);
     if (flowIsPaginated()) {
+      setActiveChapter(restoreIndex);
       const frame = scrollHost.querySelector<HTMLIFrameElement>(
-        `.lightink-reader-chapter[data-chapter-index="${targetIndex}"] .lightink-reader-chapter-frame`,
+        `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"] .lightink-reader-chapter-frame`,
       );
+      const frameReady = frame?.dataset.frameReady === 'true';
       const doc = frame?.contentDocument;
       const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
-      if (scroller === null || scroller.clientWidth <= 1) {
+      if (!frameReady || scroller === null || scroller.clientWidth <= 1) {
         restoreAttempts += 1;
-        if (restoreAttempts >= 8) {
+        // OPDS chapters often load after the first paint. Clearing pendingRestore
+        // here would leave the book at chapter 0 even though the iframe later
+        // calls applyPendingRestore.
+        if (frameReady && restoreAttempts >= 8) {
+          pendingRestore = null;
+          return true;
+        }
+        if (restoreAttempts >= FLOW_RESTORE_MAX_ATTEMPTS * 8) {
           pendingRestore = null;
           return true;
         }
@@ -711,9 +721,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pendingRestore = null;
       return true;
     }
+    setActiveChapter(restoreIndex);
     const scroller = flowScrollContainer();
     const article = scrollHost.querySelector<HTMLElement>(
-      `.lightink-reader-chapter[data-chapter-index="${targetIndex}"]`,
+      `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"]`,
     );
     const scrollerReady = scroller.clientHeight > 1;
     const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
@@ -995,18 +1006,23 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return articleRect.top - scrollerRect.top + scroller.scrollTop;
   };
 
-  /** 流式：视口顶部最近章节索引（共享 nearestVisibleSlot，与 PDF/CBZ 同一槽位判定）。 */
+  /** 流式：视口顶部最近章节的 spine 索引（稀疏窗口不能用 NodeList 下标）。 */
   const chapterFromScroll = (): number => {
-    const chapters = scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter');
+    const chapters = Array.from(
+      scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
+    );
     if (chapters.length === 0) {
       return 0;
     }
     const scroller = flowScrollContainer();
     const hostTop = scroller.getBoundingClientRect().top;
-    const slotTops = Array.from(chapters, (chapter) => chapter.getBoundingClientRect().top);
-    const nearest = nearestVisibleSlot(slotTops, hostTop);
-    const chapterIndex = Number(chapters[Math.max(0, nearest)]?.dataset.chapterIndex ?? 0);
-    return Number.isSafeInteger(chapterIndex) ? chapterIndex : 0;
+    return nearestVisibleChapterIndex(
+      chapters.map((chapter) => ({
+        index: Number(chapter.dataset.chapterIndex),
+        top: chapter.getBoundingClientRect().top,
+      })),
+      hostTop,
+    );
   };
 
   const firstVisibleChapter = (): number => {
@@ -1028,17 +1044,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     const current = Math.min(total, firstVisibleChapter() + 1);
-    let progress = 1;
+    let progress = 0;
     if (flowIsPaginated()) {
       const doc = visibleFlowFrame()?.contentDocument;
       const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
-      if (scroller !== null) {
-        const chapterRatio = total === 0 ? 0 : (current - 1) / total;
-        const pageRatio = pagedProgressRatio(scroller) / Math.max(1, total);
-        progress = Math.min(1, chapterRatio + pageRatio);
-      } else {
-        progress = total === 0 ? 0 : current / total;
-      }
+      progress = flowBookProgress(
+        current,
+        total,
+        scroller === null ? 0 : pagedProgressRatio(scroller),
+      );
     } else {
       const scroller = flowScrollContainer();
       const article = scrollHost.querySelector<HTMLElement>(
@@ -1053,7 +1067,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
               articleOffsetInScroller(article, scroller),
               chapterHeight,
             );
-      progress = Math.min(1, Math.max(0, (current - 1 + localRatio) / total));
+      progress = flowBookProgress(current, total, localRatio);
     }
     updateReaderState({ current, total, progress, scale: 1, locationKind: 'chapter' });
   };
@@ -1294,10 +1308,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   }
 
   function syncChromeProgress(): void {
+    const kind = readerState.locationKind;
+    const current = readerState.current;
+    const total = readerState.total;
+    const location =
+      kind === 'page' && total > 0 && current > 0
+        ? t('reader.progress.pageOf', { current: String(current), total: String(total) })
+        : kind === 'chapter' && total > 0 && current > 0
+          ? t('reader.progress.chapterOf', { current: String(current), total: String(total) })
+          : formatReaderLocation(current, total);
     readerChrome?.setProgress({
       chapterTitle: resolveReaderChapterTitle(readerState, readerOutline, locationFallback),
-      location: formatReaderLocation(readerState.current, readerState.total),
+      location,
       progress: readerState.progress,
+      ticks: readerProgressTickFractions(readerOutline, total, kind),
     });
   }
 
@@ -1321,29 +1345,26 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       return;
     }
-    if (flowChapterCount > 0) {
-      const total = flowChapterCount;
-      const pos = clamped * total;
-      const chapterIndex = Math.min(total - 1, Math.floor(pos));
-      const pageRatio = Math.min(1, Math.max(0, pos - chapterIndex));
-      setActiveChapter(chapterIndex);
-      if (flowIsPaginated()) {
-        const frame = scrollHost.querySelector<HTMLIFrameElement>(
-          `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"] .lightink-reader-chapter-frame`,
-        );
-        const doc = frame?.contentDocument;
-        if (doc !== undefined && doc !== null) {
-          applyPagedProgress(readerPagedScroller(doc), pageRatio);
-        }
-      } else {
-        scrollHost
-          .querySelector<HTMLElement>(`.lightink-reader-chapter[data-chapter-index="${chapterIndex}"]`)
-          ?.scrollIntoView({ block: 'start' });
-      }
-      syncFlowState();
-      schedulePersistReadingProgress();
+    if (flowChapterCount === 0) {
       return;
     }
+    const total = flowChapterCount;
+    const pos = clamped * total;
+    const chapterIndex = Math.min(total - 1, Math.max(0, Math.floor(pos)));
+    pendingRestore = {
+      version: 1,
+      kind: 'flow',
+      index: chapterIndex,
+      ratio: Math.min(1, Math.max(0, pos - chapterIndex)),
+      total,
+      updatedAt: Date.now(),
+    };
+    restoreAttempts = 0;
+    if (!applySavedProgress()) {
+      scheduleRestoreRetry();
+    }
+    syncFlowState();
+    schedulePersistReadingProgress();
   }
 
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
@@ -3061,9 +3082,22 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         throwIfReaderLoadCancelled(controller.signal);
         if (isCurrent()) {
           progressId =
-            contentHash ??
-            (target.kind === 'remote' ? readerIdentityKey(target.identity) : filePath);
-          pendingRestore = loadReadingProgress(progressStorage, progressId);
+            target.kind === 'remote'
+              ? target.itemId
+              : (contentHash ?? filePath);
+          pendingRestore = loadReadingProgressFromIds(progressStorage, [
+            progressId,
+            target.kind === 'remote' ? loadLibraryProgressAlias(progressStorage, target.itemId) ?? '' : '',
+            target.kind === 'remote' ? readerIdentityKey(target.identity) : '',
+            contentHash ?? '',
+          ]);
+          if (
+            pendingRestore !== null &&
+            progressId !== '' &&
+            loadReadingProgress(progressStorage, progressId) === null
+          ) {
+            saveReadingProgress(progressStorage, progressId, pendingRestore);
+          }
           restoreAttempts = 0;
           cancelRestoreRetry();
           setReaderPhase('ready');

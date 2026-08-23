@@ -3,7 +3,8 @@
 use crate::credential_store::{delete_credential, get_credential, set_credential};
 use crate::library::{
     self, cache_limit, cached_ranges, confined_cache_path, evict_cache, find_cache_object,
-    record_cached_range, touch_cache_object, upsert_cache_object, ByteRange, CacheObject,
+    find_cache_object_row, record_cached_range, touch_cache_object, upsert_cache_object, ByteRange,
+    CacheObject,
 };
 use futures_util::StreamExt;
 use reqwest::header::{
@@ -16,13 +17,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 pub const MAX_RANGE_BYTES: u64 = 16 * 1024 * 1024;
+/// One GET is fine when the whole file is about one ZIP window (Readium / RemoteZip).
+const TINY_COMPLETE_MAX_BYTES: u64 = 512 * 1024;
+/// Never force a complete GET larger than this, even on a high-RTT LAN.
+const COMPLETE_FILL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Suffix probe that usually contains the ZIP central directory.
+const ZIP_TAIL_PROBE_BYTES: u64 = 512 * 1024;
+/// Extra first-paint Range RTTs after the tail (container, OPF, CSS, 2 chapters).
+const FIRST_PAINT_EXTRA_RTTS: f64 = 5.0;
+const FIRST_PAINT_EXTRA_BYTES: f64 = 512.0 * 1024.0;
 const MAX_FRONTEND_SAFE_BYTES: u64 = (1_u64 << 53) - 1;
 const KEYRING_SERVICE: &str = "lightink.opds";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -368,11 +378,11 @@ fn resource_version(
     etag: Option<&str>,
     last_modified: Option<&str>,
     session_id: &str,
-    handle_sequence: u64,
+    _handle_sequence: u64,
 ) -> String {
     validator_key(etag, last_modified)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("session-{session_id}-{handle_sequence}"))
+        .unwrap_or_else(|| format!("session-{session_id}"))
 }
 
 fn cache_keys(
@@ -388,6 +398,116 @@ fn cache_keys(
     } else {
         (format!("{}\n{version}", url.as_str()), version)
     }
+}
+
+pub(crate) fn prefers_complete_download(size: u64) -> bool {
+    (1..=TINY_COMPLETE_MAX_BYTES).contains(&size)
+}
+
+/// Catalog `length` can be wrong. A failed tiny GET must not abort open.
+fn complete_get_size_unreliable(error: &RemoteError) -> bool {
+    error.code == "REMOTE_SIZE_CHANGED" || error.code == "REMOTE_SIZE_UNKNOWN"
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransferTiming {
+    pub ttfb: Duration,
+    pub transfer: Duration,
+    pub bytes: u64,
+}
+
+/// Readium / Colibrio stream by Range on slow links. Fill the rest with one GET
+/// only when measured bandwidth makes extra first-paint RTTs more expensive.
+pub(crate) fn prefers_complete_fill(
+    total_size: u64,
+    already_have: u64,
+    timing: TransferTiming,
+) -> bool {
+    if prefers_complete_download(total_size) {
+        return true;
+    }
+    if !(1..=COMPLETE_FILL_MAX_BYTES).contains(&total_size) || timing.bytes == 0 {
+        return false;
+    }
+    let remain = total_size.saturating_sub(already_have) as f64;
+    if remain <= 0.0 {
+        return false;
+    }
+    let transfer_secs = timing.transfer.max(Duration::from_millis(1)).as_secs_f64();
+    let bps = timing.bytes as f64 / transfer_secs;
+    if !bps.is_finite() || bps <= 0.0 {
+        return false;
+    }
+    let ttfb = timing.ttfb.as_secs_f64();
+    let cost_fill = ttfb + remain / bps;
+    let cost_ranges = FIRST_PAINT_EXTRA_RTTS * ttfb + FIRST_PAINT_EXTRA_BYTES.min(remain) / bps;
+    cost_fill < cost_ranges
+}
+
+/// Calibre-Web Atom `length` can be a few bytes off the real EPUB.
+/// `expected == 0` means "any complete object for this URL".
+pub(crate) fn complete_cache_size_compatible(expected: u64, actual: u64) -> bool {
+    if actual == 0 {
+        return false;
+    }
+    if expected == 0 || expected == actual {
+        return true;
+    }
+    let drift = expected.abs_diff(actual);
+    drift <= 64 * 1024 || drift.saturating_mul(50) <= expected.max(actual)
+}
+
+pub(crate) fn complete_cache_lookup_keys(url: &Url, session_id: &str) -> Vec<String> {
+    let url_key = url.as_str().to_string();
+    vec![url_key.clone(), format!("{url_key}\nsession-{session_id}")]
+}
+
+/// Reuse a fully downloaded object so OPDS reopen does not fetch the EPUB again.
+fn reuse_complete_cache(
+    app: &AppHandle,
+    url: &Url,
+    size: u64,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+    session_id: &str,
+) -> Result<Option<(String, PathBuf, u64)>, RemoteError> {
+    let data_dir = library::app_data_dir(app)
+        .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+    let cache_dir =
+        library::cache_dir(app).map_err(|message| RemoteError::new("REMOTE_CACHE_IO", message))?;
+    let mut connection = library::open_database_at(&data_dir)
+        .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+    let mut keys = complete_cache_lookup_keys(url, session_id);
+    let (derived, _) = cache_keys(url, etag, last_modified, session_id, 0);
+    if !keys.contains(&derived) {
+        keys.push(derived);
+    }
+    for source_key in keys {
+        let Some((object_id, cache_path, _total_size, complete)) =
+            find_cache_object_row(&connection, &source_key)
+                .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?
+        else {
+            continue;
+        };
+        if !complete {
+            continue;
+        }
+        let Some(path) = confined_cache_path(&cache_dir, &cache_path) else {
+            continue;
+        };
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let actual = metadata.len();
+        if !complete_cache_size_compatible(size, actual) {
+            continue;
+        }
+        touch_cache_object(&mut connection, &object_id)
+            .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+        return Ok(Some((object_id, path, actual)));
+    }
+    Ok(None)
 }
 
 fn ensure_frontend_safe_size(size: u64) -> Result<u64, RemoteError> {
@@ -782,6 +902,296 @@ pub(crate) fn file_info(
     })
 }
 
+fn publish_open(
+    state: &RemoteState,
+    handle_sequence: u64,
+    url: Url,
+    client: Client,
+    item_id: &str,
+    size: u64,
+    object_id: String,
+    cache_path: PathBuf,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    mime_type: Option<String>,
+    credential: Option<RemoteCredential>,
+    supports_ranges: bool,
+    cache_complete: bool,
+    session_id: &str,
+) -> Result<RemoteOpenResult, RemoteError> {
+    let resource_id = format!("remote-{handle_sequence}");
+    let version = if cache_complete {
+        format!("size-{size}")
+    } else {
+        resource_version(
+            etag.as_deref(),
+            last_modified.as_deref(),
+            session_id,
+            handle_sequence,
+        )
+    };
+    let identity = format!("{item_id}@{version}");
+    state.handles.lock().map_err(|_| lock_error())?.insert(
+        resource_id.clone(),
+        Arc::new(RemoteHandle {
+            url,
+            client,
+            identity: identity.clone(),
+            size,
+            object_id,
+            cache_path,
+            etag: etag.clone(),
+            last_modified: last_modified.clone(),
+            credential,
+            supports_ranges,
+            mime_type: mime_type.clone(),
+        }),
+    );
+    Ok(RemoteOpenResult {
+        resource_id,
+        size,
+        identity,
+        etag,
+        last_modified,
+        mime_type,
+        supports_ranges,
+        cache_complete,
+    })
+}
+
+async fn download_complete_object(
+    app: &AppHandle,
+    url: &Url,
+    client: &Client,
+    credential: Option<&RemoteCredential>,
+    token: &CancellationToken,
+    size_hint: u64,
+    session_id: &str,
+    handle_sequence: u64,
+) -> Result<
+    (
+        u64,
+        String,
+        PathBuf,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+    RemoteError,
+> {
+    let response = tokio::select! {
+        _ = token.cancelled() => return Err(cancelled_error()),
+        response = apply_credential(client.get(url.clone()), credential).send() => response.map_err(|error| {
+            RemoteError::new("REMOTE_NETWORK_ERROR", format!("无法连接远程资源: {error}"))
+        })?,
+    };
+    if let Some(error) = response_error(&response) {
+        return Err(error);
+    }
+    if !response.status().is_success() {
+        return Err(RemoteError::status(
+            "REMOTE_HTTP_ERROR",
+            format!("远程服务器返回 HTTP {}", response.status().as_u16()),
+            response.status(),
+        ));
+    }
+    let etag = header_string(response.headers(), ETAG);
+    let last_modified = header_string(response.headers(), LAST_MODIFIED);
+    let mime_type = header_string(response.headers(), CONTENT_TYPE);
+    let stable_validator = format!("size-{size_hint}");
+    let (object_id, cache_path) = prepare_cache(
+        app,
+        url,
+        size_hint,
+        Some(&stable_validator),
+        None,
+        session_id,
+        handle_sequence,
+    )?;
+    let connection = library::open_database_at(
+        &library::app_data_dir(app)
+            .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?,
+    )
+    .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+    let limit =
+        cache_limit(&connection).map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+    let downloaded = download_response(response, &cache_path, limit, Some(token)).await?;
+    if downloaded == 0 {
+        return Err(RemoteError::new("REMOTE_SIZE_UNKNOWN", "远程资源为空"));
+    }
+    if !complete_cache_size_compatible(size_hint, downloaded) {
+        return Err(RemoteError::new(
+            "REMOTE_SIZE_CHANGED",
+            "远程资源大小与目录记录不一致",
+        ));
+    }
+    if downloaded != size_hint {
+        let connection = library::open_database_at(
+            &library::app_data_dir(app)
+                .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?,
+        )
+        .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
+        connection
+            .execute(
+                "UPDATE cache_objects SET total_size=?1 WHERE id=?2",
+                rusqlite::params![downloaded as i64, object_id],
+            )
+            .map_err(|error| {
+                RemoteError::new("REMOTE_CACHE_DB", format!("无法更新缓存大小: {error}"))
+            })?;
+    }
+    mark_cached(
+        app,
+        &object_id,
+        ByteRange::new(0, downloaded).unwrap(),
+        true,
+    )?;
+    Ok((
+        downloaded,
+        object_id,
+        cache_path,
+        etag,
+        last_modified,
+        mime_type,
+    ))
+}
+
+/// RemoteZip / Readium: one suffix Range gets the real size and ZIP tail.
+/// Slow links stay on Range; high-RTT fast links may fill the rest with one GET.
+async fn open_from_suffix_probe(
+    app: &AppHandle,
+    state: &RemoteState,
+    handle_sequence: u64,
+    url: Url,
+    client: Client,
+    item_id: &str,
+    credential: Option<RemoteCredential>,
+    token: &CancellationToken,
+    expected_size: Option<u64>,
+    session_id: &str,
+) -> Result<Option<RemoteOpenResult>, RemoteError> {
+    let probe = expected_size
+        .filter(|&size| size > 1)
+        .map(|size| size.min(ZIP_TAIL_PROBE_BYTES))
+        .unwrap_or(ZIP_TAIL_PROBE_BYTES);
+    let started = Instant::now();
+    let response = tokio::select! {
+        _ = token.cancelled() => return Err(cancelled_error()),
+        response = apply_credential(
+            client.get(url.clone()).header(RANGE, format!("bytes=-{probe}")),
+            credential.as_ref(),
+        ).send() => match response {
+            Ok(response) => response,
+            Err(_) => return Ok(None),
+        },
+    };
+    let ttfb = started.elapsed();
+    if let Some(error) = response_error(&response) {
+        return Err(error);
+    }
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Ok(None);
+    }
+    let raw_range = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            RemoteError::new("REMOTE_CONTENT_RANGE_INVALID", "206 响应缺少 Content-Range")
+        })?;
+    let parsed = parse_content_range(raw_range)?;
+    let size = ensure_frontend_safe_size(parsed.total)?;
+    let etag = header_string(response.headers(), ETAG);
+    let last_modified = header_string(response.headers(), LAST_MODIFIED);
+    let mime_type = header_string(response.headers(), CONTENT_TYPE);
+    let body_started = Instant::now();
+    let bytes = tokio::select! {
+        _ = token.cancelled() => return Err(cancelled_error()),
+        bytes = response.bytes() => bytes.map_err(|error| {
+            RemoteError::new("REMOTE_NETWORK_ERROR", format!("无法读取远程探测响应: {error}"))
+        })?,
+    };
+    let expected_len = parsed
+        .end_inclusive
+        .saturating_sub(parsed.start)
+        .saturating_add(1);
+    if bytes.len() as u64 != expected_len {
+        return Ok(None);
+    }
+    let timing = TransferTiming {
+        ttfb,
+        transfer: body_started.elapsed(),
+        bytes: expected_len,
+    };
+    if prefers_complete_fill(size, expected_len, timing) {
+        if let Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) =
+            download_complete_object(
+                app,
+                &url,
+                &client,
+                credential.as_ref(),
+                token,
+                size,
+                session_id,
+                handle_sequence,
+            )
+            .await
+        {
+            return Ok(Some(publish_open(
+                state,
+                handle_sequence,
+                url,
+                client,
+                item_id,
+                downloaded,
+                object_id,
+                cache_path,
+                etag,
+                last_modified,
+                mime_type,
+                credential,
+                true,
+                true,
+                session_id,
+            )?));
+        }
+    }
+    let (object_id, cache_path) = prepare_cache(
+        app,
+        &url,
+        size,
+        etag.as_deref(),
+        last_modified.as_deref(),
+        session_id,
+        handle_sequence,
+    )?;
+    write_range(&cache_path, parsed.start, &bytes, size).await?;
+    mark_cached(
+        app,
+        &object_id,
+        ByteRange::new(parsed.start, parsed.end_inclusive.saturating_add(1))
+            .map_err(|message| RemoteError::new("REMOTE_RANGE_INVALID", message))?,
+        size == expected_len,
+    )?;
+    Ok(Some(publish_open(
+        state,
+        handle_sequence,
+        url,
+        client,
+        item_id,
+        size,
+        object_id,
+        cache_path,
+        etag,
+        last_modified,
+        mime_type,
+        credential,
+        true,
+        size == expected_len,
+        session_id,
+    )?))
+}
+
 #[tauri::command]
 pub async fn remote_open(
     app: AppHandle,
@@ -791,6 +1201,7 @@ pub async fn remote_open(
     allow_http: Option<bool>,
     credential_ref: Option<String>,
     request_id: Option<String>,
+    expected_size: Option<u64>,
 ) -> Result<RemoteOpenResult, RemoteError> {
     let url = validate_remote_url(&url, allow_http.unwrap_or(false))?;
     let handle_sequence = state.sequence.fetch_add(1, Ordering::Relaxed);
@@ -801,9 +1212,99 @@ pub async fn remote_open(
         .as_deref()
         .and_then(|reference| load_credential(&state, reference));
     let client = build_client(&url, credential.is_some())?;
-    let head = tokio::select! {
-        _ = token.cancelled() => return Err(cancelled_error()),
-        response = apply_credential(client.head(url.clone()), credential.as_ref()).send() => response.ok(),
+    if let Some((object_id, cache_path, actual_size)) = reuse_complete_cache(
+        &app,
+        &url,
+        expected_size.unwrap_or(0),
+        None,
+        None,
+        &state.session_id,
+    )? {
+        if token.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        return publish_open(
+            state.inner(),
+            handle_sequence,
+            url,
+            client,
+            &item_id,
+            actual_size,
+            object_id,
+            cache_path,
+            None,
+            None,
+            None,
+            credential,
+            true,
+            true,
+            &state.session_id,
+        );
+    }
+    if let Some(size) = expected_size.filter(|&candidate| prefers_complete_download(candidate)) {
+        let size = ensure_frontend_safe_size(size)?;
+        match download_complete_object(
+            &app,
+            &url,
+            &client,
+            credential.as_ref(),
+            &token,
+            size,
+            &state.session_id,
+            handle_sequence,
+        )
+        .await
+        {
+            Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) => {
+                return publish_open(
+                    state.inner(),
+                    handle_sequence,
+                    url,
+                    client,
+                    &item_id,
+                    downloaded,
+                    object_id,
+                    cache_path,
+                    etag,
+                    last_modified,
+                    mime_type,
+                    credential,
+                    true,
+                    true,
+                    &state.session_id,
+                );
+            }
+            Err(error) if complete_get_size_unreliable(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if let Some(opened) = open_from_suffix_probe(
+        &app,
+        state.inner(),
+        handle_sequence,
+        url.clone(),
+        client.clone(),
+        &item_id,
+        credential.clone(),
+        &token,
+        expected_size,
+        &state.session_id,
+    )
+    .await?
+    {
+        return Ok(opened);
+    }
+    // HEAD is a wasted RTT on Calibre-Web (same ~1.7s TTFB as GET) and is
+    // skipped when Atom already published a size. Real size still comes from
+    // the Range probe / Content-Range, because `length` can be a few bytes off.
+    let skip_head = expected_size.is_some_and(|size| size > 0);
+    let head = if skip_head {
+        None
+    } else {
+        tokio::select! {
+            _ = token.cancelled() => return Err(cancelled_error()),
+            response = apply_credential(client.head(url.clone()), credential.as_ref()).send() => response.ok(),
+        }
     };
     if let Some(response) = head
         .as_ref()
@@ -879,6 +1380,75 @@ pub async fn remote_open(
             supports_ranges: false,
             cache_complete: true,
         });
+    }
+
+    if let Some(size) = head_size.filter(|&candidate| candidate > 0) {
+        let size = ensure_frontend_safe_size(size)?;
+        if let Some((object_id, cache_path, actual_size)) = reuse_complete_cache(
+            &app,
+            &url,
+            size,
+            etag.as_deref(),
+            last_modified.as_deref(),
+            &state.session_id,
+        )? {
+            if token.is_cancelled() {
+                return Err(cancelled_error());
+            }
+            return publish_open(
+                state.inner(),
+                handle_sequence,
+                url,
+                client,
+                &item_id,
+                actual_size,
+                object_id,
+                cache_path,
+                etag,
+                last_modified,
+                mime_type,
+                credential,
+                true,
+                true,
+                &state.session_id,
+            );
+        }
+        if prefers_complete_download(size) {
+            match download_complete_object(
+                &app,
+                &url,
+                &client,
+                credential.as_ref(),
+                &token,
+                size,
+                &state.session_id,
+                handle_sequence,
+            )
+            .await
+            {
+                Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) => {
+                    return publish_open(
+                        state.inner(),
+                        handle_sequence,
+                        url,
+                        client,
+                        &item_id,
+                        downloaded,
+                        object_id,
+                        cache_path,
+                        etag,
+                        last_modified,
+                        mime_type,
+                        credential,
+                        true,
+                        true,
+                        &state.session_id,
+                    );
+                }
+                Err(error) if complete_get_size_unreliable(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     let response = tokio::select! {
@@ -1368,6 +1938,76 @@ mod tests {
     }
 
     #[test]
+    fn only_tiny_files_use_a_complete_get_on_open() {
+        assert!(prefers_complete_download(TINY_COMPLETE_MAX_BYTES));
+        assert!(!prefers_complete_download(TINY_COMPLETE_MAX_BYTES + 1));
+        assert!(!prefers_complete_download(4_301_456));
+        assert!(!prefers_complete_download(0));
+    }
+
+    #[test]
+    fn tiny_complete_get_falls_back_when_catalog_length_is_wrong() {
+        assert!(complete_get_size_unreliable(&RemoteError::new(
+            "REMOTE_SIZE_CHANGED",
+            "远程资源大小与目录记录不一致",
+        )));
+        assert!(complete_get_size_unreliable(&RemoteError::new(
+            "REMOTE_SIZE_UNKNOWN",
+            "远程资源为空",
+        )));
+        assert!(!complete_get_size_unreliable(&RemoteError::new(
+            "REMOTE_NETWORK_ERROR",
+            "无法连接远程资源",
+        )));
+    }
+
+    #[test]
+    fn high_rtt_fast_link_fills_remainder_slow_link_keeps_range() {
+        let tail = ZIP_TAIL_PROBE_BYTES;
+        let calibre = TransferTiming {
+            ttfb: Duration::from_millis(1700),
+            transfer: Duration::from_millis(50),
+            bytes: tail,
+        };
+        assert!(prefers_complete_fill(4_301_456, tail, calibre));
+        let slow = TransferTiming {
+            ttfb: Duration::from_millis(1700),
+            transfer: Duration::from_secs(5),
+            bytes: tail,
+        };
+        assert!(!prefers_complete_fill(4_301_456, tail, slow));
+        let low_rtt_slow = TransferTiming {
+            ttfb: Duration::from_millis(200),
+            transfer: Duration::from_secs(5),
+            bytes: tail,
+        };
+        assert!(!prefers_complete_fill(4_301_456, tail, low_rtt_slow));
+        assert!(!prefers_complete_fill(
+            COMPLETE_FILL_MAX_BYTES + 1,
+            tail,
+            calibre
+        ));
+    }
+
+    #[test]
+    fn calibre_atom_length_matches_real_epub_bytes() {
+        assert!(complete_cache_size_compatible(4_301_445, 4_301_456));
+        assert!(complete_cache_size_compatible(0, 4_301_456));
+        assert!(!complete_cache_size_compatible(4_301_456, 0));
+        assert!(!complete_cache_size_compatible(4_301_456, 20_000_000));
+    }
+
+    #[test]
+    fn complete_cache_lookup_keeps_url_key_when_etag_changes() {
+        let url = Url::parse("https://calibre.example/opds/download/2/epub/").unwrap();
+        let keys = complete_cache_lookup_keys(&url, "session-a");
+        assert_eq!(keys[0], url.as_str());
+        assert_eq!(keys[1], format!("{}\nsession-session-a", url.as_str()));
+        let changing = cache_keys(&url, Some("\"1787456298-4301456\""), None, "session-a", 1);
+        assert_eq!(changing.0, url.as_str());
+    }
+
+    #[test]
     fn unvalidated_cache_keys_are_isolated_by_session() {
         let url = Url::parse("https://example.test/book.cbz").unwrap();
         let first = cache_keys(&url, None, None, "application-a", 1);
@@ -1376,6 +2016,10 @@ mod tests {
         assert_eq!(
             cache_keys(&url, Some("\"v1\""), None, "application-a", 1),
             cache_keys(&url, Some("\"v1\""), None, "application-b", 2)
+        );
+        assert_eq!(
+            cache_keys(&url, None, None, "application-a", 1),
+            cache_keys(&url, None, None, "application-a", 99)
         );
     }
 

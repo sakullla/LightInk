@@ -4,6 +4,7 @@ import {
   chapterScrollRatio,
   chapterScrollTop,
   loadReadingProgress,
+  loadReadingProgressFromIds,
   parseReadingProgress,
   readingProgressKey,
   saveReadingProgress,
@@ -55,6 +56,8 @@ describe('load/saveReadingProgress', () => {
 
     expect(chapterScrollRatio(250, 100, 400)).toBe(0.375);
     expect(chapterScrollTop(100, 400, 0.375)).toBe(250);
+    expect(loadReadingProgressFromIds(storage, ['missing', '0123456789abcdef'])?.index).toBe(3);
+    expect(loadReadingProgressFromIds(storage, ['', 'missing'])).toBeNull();
     expect(loadReadingProgress(storage, '')).toBeNull();
     expect(
       loadReadingProgress(

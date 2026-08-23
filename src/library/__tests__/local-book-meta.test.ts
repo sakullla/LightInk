@@ -49,6 +49,16 @@ async function buildCoverEpub(dcTitle = '河山记'): Promise<Uint8Array> {
 }
 
 describe('extractLocalBookMeta', () => {
+  it('does not replace dc:title with a managed content-hash filename', async () => {
+    const hash = 'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456';
+    const meta = await extractLocalBookMeta(
+      `C:/app/library/managed/blobs/${hash.slice(0, 2)}/${hash}.epub`,
+      await buildCoverEpub(),
+    );
+    expect(meta.title).toBe('河山记');
+    expect(meta.seriesStem).toBeUndefined();
+  });
+
   it('uses dc:title only when the filename is uninformative', async () => {
     const meta = await extractLocalBookMeta('2.epub', await buildCoverEpub());
     expect(meta.title).toBe('河山记');
@@ -94,6 +104,43 @@ describe('extractLocalBookMeta', () => {
       '地狱模式 Vol. 2',
     ]);
     expect(parsed.map((meta) => meta.seriesVolume)).toEqual(['02', '02', '2']);
+  });
+
+  it('decodes a GBK packaged dc:title instead of showing mojibake', async () => {
+    let gbkAvailable = false;
+    try {
+      new TextDecoder('gbk');
+      gbkAvailable = true;
+    } catch {
+      gbkAvailable = false;
+    }
+    if (!gbkAvailable) {
+      return;
+    }
+    const gbkTitle = new Uint8Array([0xd6, 0xd0, 0xce, 0xc4]);
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        encode(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    const prefix = encode(
+      '<?xml version="1.0" encoding="GBK"?><package><metadata><dc:title>',
+    );
+    const suffix = encode('</dc:title></metadata><manifest></manifest><spine></spine></package>');
+    const opf = new Uint8Array(prefix.length + gbkTitle.length + suffix.length);
+    opf.set(prefix, 0);
+    opf.set(gbkTitle, prefix.length);
+    opf.set(suffix, prefix.length + gbkTitle.length);
+    await zip.add('OEBPS/content.opf', new Uint8ArrayReader(opf));
+    const bytes = await zip.close();
+    const meta = await extractLocalBookMeta('01.epub', bytes);
+    expect(meta.title).toBe('中文');
   });
 
   it('keeps [author] prefixes and trailing decorations out of the series stem', async () => {

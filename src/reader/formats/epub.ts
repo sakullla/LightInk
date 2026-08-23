@@ -16,6 +16,9 @@ import { sanitizeParsedHtml } from '../sanitize.js';
 import { sanitizeReaderCss } from '../sanitize-css.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
+import type { RandomAccessSource } from '../sources/types.js';
+import { decodeReaderText } from './text-encoding.js';
+import { isUsableEpubChapterTitle } from '../chapter-title.js';
 import {
   ParseError,
   ReaderLimitError,
@@ -35,6 +38,47 @@ interface ManifestItem {
 
 const EPUB_EAGER_CHAPTER_LIMIT = 64;
 const EPUB_INITIAL_CHAPTERS = 2;
+const EPUB_REMOTE_MAX_STYLESHEETS = 2;
+
+function isRandomAccessSource(source: ArchiveInput): source is RandomAccessSource {
+  return typeof (source as RandomAccessSource).readRange === 'function';
+}
+
+function isRemoteArchiveInput(source: ArchiveInput): boolean {
+  return isRandomAccessSource(source) && source.access === 'remote';
+}
+
+function eagerChapterCount(source: ArchiveInput, chapterCount: number): number {
+  if (isRemoteArchiveInput(source)) {
+    return Math.min(EPUB_INITIAL_CHAPTERS, chapterCount);
+  }
+  return chapterCount <= EPUB_EAGER_CHAPTER_LIMIT
+    ? chapterCount
+    : Math.min(EPUB_INITIAL_CHAPTERS, chapterCount);
+}
+
+function firstBodyHeadingText(body: HTMLElement): string {
+  return body.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+function stripLeadingJunkTitle(body: HTMLElement, junk: string): void {
+  const label = junk.trim();
+  if (label === '' || isUsableEpubChapterTitle(label)) {
+    return;
+  }
+  const firstNode = body.firstChild;
+  if (firstNode !== null && firstNode.nodeType === 3 && firstNode.textContent?.trim() === label) {
+    firstNode.remove();
+  }
+  const first = body.firstElementChild;
+  if (
+    first !== null &&
+    first.textContent?.trim() === label &&
+    first.matches('p, div, span, h1, h2, h3, h4, h5, h6')
+  ) {
+    first.remove();
+  }
+}
 
 /** 从标签字符串中取属性值。 */
 function attr(tag: string, name: string): string | null {
@@ -128,7 +172,7 @@ export async function parseEpub(
     let opfPath: string | null = null;
     const containerFile = archive.file('META-INF/container.xml');
     if (containerFile !== null) {
-      const container = await containerFile.readText(signal);
+      const container = decodeReaderText(await containerFile.readBytes(signal));
       throwIfReaderLoadCancelled(signal);
       const m = container.match(/<rootfile\b[^>]*full-path\s*=\s*("([^"]*)"|'([^']*)')/i);
       if (m !== null) {
@@ -148,7 +192,7 @@ export async function parseEpub(
     if (opfFile === null) {
       throw new ParseError('EPUB OPF 文件缺失');
     }
-    const opf = await opfFile.readText(signal);
+    const opf = decodeReaderText(await opfFile.readBytes(signal));
     throwIfReaderLoadCancelled(signal);
 
     const bookTitle = (
@@ -349,7 +393,7 @@ export async function parseEpub(
       if (ncxReference === null || ncxFile === null) {
         continue;
       }
-      const ncx = await ncxFile.readText(signal);
+      const ncx = decodeReaderText(await ncxFile.readBytes(signal));
       const pointRe = /<navLabel\b[^>]*>[\s\S]*?<text\b[^>]*>([\s\S]*?)<\/text>[\s\S]*?<content\b[^>]*\bsrc\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi;
       let point: RegExpExecArray | null;
       while ((point = pointRe.exec(ncx)) !== null) {
@@ -387,7 +431,7 @@ export async function parseEpub(
           if (file === null) {
             throw new ParseError('EPUB 章节文件缺失');
           }
-          const xhtml = await file.readText(signal);
+          const xhtml = decodeReaderText(await file.readBytes(signal));
           throwIfReaderLoadCancelled(signal);
           const document = new DOMParser().parseFromString(xhtml, 'text/html');
           const body = document.body;
@@ -437,7 +481,13 @@ export async function parseEpub(
             link.setAttribute('href', `#lightink-chapter?${params.toString()}`);
           }
           const sectionTitle = document.title.trim();
-          if (sectionTitle !== '') chapter.title = sectionTitle;
+          const headingTitle = firstBodyHeadingText(body);
+          if (isUsableEpubChapterTitle(sectionTitle)) {
+            chapter.title = sectionTitle;
+          } else if (isUsableEpubChapterTitle(headingTitle)) {
+            chapter.title = headingTitle;
+          }
+          stripLeadingJunkTitle(body, sectionTitle);
           chapter.html = sanitizeParsedHtml(body);
           if (hasPackagedImages) {
             chapter.resolveResources = materializeImages;
@@ -452,16 +502,15 @@ export async function parseEpub(
     if (chapters.length === 0) {
       throw new ParseError('EPUB 未找到可读章节内容');
     }
-    const eagerCount =
-      chapters.length <= EPUB_EAGER_CHAPTER_LIMIT
-        ? chapters.length
-        : Math.min(EPUB_INITIAL_CHAPTERS, chapters.length);
+    const remote = isRemoteArchiveInput(source);
+    const eagerCount = eagerChapterCount(source, chapters.length);
     for (let index = 0; index < eagerCount; index += 1) {
       await chapters[index]!.load?.();
     }
 
     const stylesheetParts: string[] = [];
     let stylesheetBytes = 0;
+    let stylesheetCount = 0;
     for (const item of items.values()) {
       const mediaType = item.mediaType.toLowerCase();
       if (mediaType !== 'text/css' && !mediaType.startsWith('text/css;')) {
@@ -482,6 +531,10 @@ export async function parseEpub(
       throwIfReaderLoadCancelled(signal);
       stylesheetBytes += cssFile.uncompressedSize;
       stylesheetParts.push(cssText);
+      stylesheetCount += 1;
+      if (remote && stylesheetCount >= EPUB_REMOTE_MAX_STYLESHEETS) {
+        break;
+      }
     }
     const stylesheet = sanitizeReaderCss(stylesheetParts.join('\n'));
     const embedExportImages = async (

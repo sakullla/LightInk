@@ -132,8 +132,24 @@ export interface SafeArchiveOptions {
  * EPUB chapters are normally adjacent ZIP entries. An eight-megabyte sliding
  * window turns hundreds of tiny backend/HTTP reads into a handful of bounded
  * sequential reads while keeping the complete archive out of WebView memory.
+ * Remote OPDS sources keep a Readium-sized window: the ZIP central directory
+ * lives in the last ~64KB, and first-paint only needs container/OPF/chapter 1.
  */
-const ZIP_READ_AHEAD_BYTES = 8 * 1024 * 1024;
+const ZIP_LOCAL_READ_AHEAD_BYTES = 8 * 1024 * 1024;
+const ZIP_REMOTE_READ_AHEAD_BYTES = 256 * 1024;
+const ZIP_REMOTE_TAIL_AHEAD_BYTES = 512 * 1024;
+
+function zipReadAheadBytes(source: RandomAccessSource, index: number, length: number): number {
+  const available = Math.max(0, source.size - index);
+  if (source.access !== 'remote') {
+    return Math.min(available, Math.max(length, ZIP_LOCAL_READ_AHEAD_BYTES));
+  }
+  const tailStart = Math.max(0, source.size - ZIP_REMOTE_TAIL_AHEAD_BYTES);
+  if (index >= tailStart) {
+    return available;
+  }
+  return Math.min(available, Math.max(length, ZIP_REMOTE_READ_AHEAD_BYTES));
+}
 
 function isRandomAccessSource(input: ArchiveInput): input is RandomAccessSource {
   return typeof (input as RandomAccessSource).readRange === 'function';
@@ -174,8 +190,7 @@ export async function openSafeArchive(
         const start = index - this.cachedOffset;
         return this.cachedBytes.slice(start, start + length);
       }
-      const available = Math.max(0, this.randomSource.size - index);
-      const requested = Math.min(available, Math.max(length, ZIP_READ_AHEAD_BYTES));
+      const requested = zipReadAheadBytes(this.randomSource, index, length);
       const bytes = await this.randomSource.readRange(index, requested, signal);
       if (bytes.byteLength < length) {
         throw new Error('ZIP source returned an incomplete range');

@@ -40,6 +40,7 @@ function storage(initial: Record<string, string> = {}) {
 describe('SyncableStorage', () => {
   it('allows whitelisted preferences and progress prefixes only', () => {
     expect(isSyncableStorageKey('lightink.theme')).toBe(true);
+    expect(isSyncableStorageKey('lightink.reader.prefs')).toBe(true);
     expect(isSyncableStorageKey('lightink.theme.customCss')).toBe(true);
     expect(isSyncableStorageKey('lightink.opds.sources')).toBe(true);
     expect(isSyncableStorageKey(PROGRESS_KEY)).toBe(true);

@@ -74,6 +74,24 @@ describe('window titlebar', () => {
     expect(css).toMatch(
       /#app\.is-workspace-reader\.is-reader-chrome-revealed \.lightink-window-titlebar/,
     );
+    expect(css).toMatch(
+      /html\[data-android\] \.lightink-window-titlebar,\s*html\[data-touch-primary\] \.lightink-window-titlebar\s*\{[^}]*display:\s*none/,
+    );
+  });
+
+  it('keeps editor caption chips on the right so they do not cover the menu bar', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/window-titlebar.css'), 'utf-8');
+    expect(css).toMatch(
+      /#app\.is-workspace-editor \.lightink-window-titlebar\s*\{[^}]*left:\s*auto/,
+    );
+    expect(css).toMatch(
+      /#app\.is-workspace-editor \.lightink-window-titlebar-drag\s*\{[^}]*display:\s*none/,
+    );
+    const theme = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
+    expect(theme).toMatch(
+      /#app\.is-workspace-editor #lightink-toolbar,\s*#app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*calc\(\s*var\(--lightink-titlebar-caption/,
+    );
+    expect(theme).toMatch(/\.lightink-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
   });
 
   it('clears stamped shelf tokens from the titlebar', () => {

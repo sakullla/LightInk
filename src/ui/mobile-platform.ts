@@ -58,3 +58,28 @@ export const isAndroidApp: boolean = detectAndroidApp();
 
 /** 是否触屏优先（pointer: coarse）。 */
 export const isTouchPrimary: boolean = detectTouchPrimary();
+
+/**
+ * Stamp platform flags on the document so CSS can hide desktop caption chrome
+ * and apply safe-area padding without waiting for a media-query paint.
+ */
+export function applyMobileDocumentFlags(
+  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
+  facts: { android?: boolean; touchPrimary?: boolean } = {},
+): void {
+  if (root === null) {
+    return;
+  }
+  const android = facts.android ?? isAndroidApp;
+  const touchPrimary = facts.touchPrimary ?? isTouchPrimary;
+  if (android) {
+    root.setAttribute('data-android', '');
+  } else {
+    root.removeAttribute('data-android');
+  }
+  if (touchPrimary) {
+    root.setAttribute('data-touch-primary', '');
+  } else {
+    root.removeAttribute('data-touch-primary');
+  }
+}

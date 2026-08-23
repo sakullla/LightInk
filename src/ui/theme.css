@@ -353,8 +353,21 @@ html[data-display='xuhd'] {
 }
 
 #lightink-toolbar .lightink-menu-bar {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+}
+
+.lightink-chrome-drag {
+  flex: 1 1 auto;
+  min-width: 32px;
+  align-self: stretch;
+  -webkit-app-region: drag;
+}
+
+/* Caption chips sit on the right; keep File/Edit and tabs out from under them. */
+#app.is-workspace-editor #lightink-toolbar,
+#app.is-workspace-editor #lightink-tabbar {
+  padding-right: calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px);
 }
 
 /* Workspace travel: quiet menu-bar action, not a leftover native button. */

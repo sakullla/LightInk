@@ -3,8 +3,20 @@ import { describe, expect, it } from 'vitest';
 import {
   attachRemoteSource,
   openRemoteSource,
+  remoteOpenExpectedSize,
   type RemoteSourceInvoker,
 } from '../remote-source.js';
+
+describe('remoteOpenExpectedSize', () => {
+  it('prefers the OPDS acquisition length so a 4MB Calibre book can skip Range probes', () => {
+    expect(
+      remoteOpenExpectedSize({ size: 99 }, { size: 4_301_445 }),
+    ).toBe(4_301_445);
+    expect(remoteOpenExpectedSize({ size: 4_301_445 })).toBe(4_301_445);
+    expect(remoteOpenExpectedSize({}, {})).toBeUndefined();
+    expect(remoteOpenExpectedSize({ size: 0 })).toBeUndefined();
+  });
+});
 
 describe('openRemoteSource', () => {
   it('attaches to an existing backend handle without opening the URL again', async () => {
@@ -73,6 +85,7 @@ describe('openRemoteSource', () => {
       mimeType: 'application/zip',
     };
     const { source } = await openRemoteSource(target, { invoker });
+    expect(source.access).toBe('remote');
     expect(await source.readRange(1, 2)).toEqual(new Uint8Array([2, 3]));
     await source.close();
     expect(calls.map((call) => call.command)).toEqual([

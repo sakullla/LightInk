@@ -38,6 +38,13 @@ import type {
   OpdsSourceInput,
 } from './opds-client.js';
 import type { ProgressStorage } from '../reader/reading-progress.js';
+import {
+  READER_PREFS_STORAGE_KEY,
+  applyReaderPrefs,
+  loadReaderPrefs,
+  saveReaderPrefs,
+  type ReaderPrefsStorage,
+} from '../reader/reader-prefs.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import { bindLongPress } from '../ui/touch/long-press.js';
 import type { SyncProfile, WebDavClient } from '../sync/webdav-client.js';
@@ -174,6 +181,9 @@ interface Labels {
   libraryTheme: string;
   libraryThemeHint: string;
   appearance: string;
+  readerPrefs: string;
+  readerPrefsHint: string;
+  showProgressBar: string;
   themePaper: string;
   themeGallery: string;
   themeMoss: string;
@@ -182,6 +192,9 @@ interface Labels {
   collapseNav: string;
   expandNav: string;
   resizeNav: string;
+  browseMenu: string;
+  closeMenu: string;
+  importShort: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
@@ -304,6 +317,9 @@ const LABELS: Record<Locale, Labels> = {
     emptyGroups: 'No collections yet. Use + to create one.',
     libraryTheme: 'Shelf theme',
     libraryThemeHint: 'Applies to the shelf only. Editor and reader keep their own themes.',
+    readerPrefs: 'Reader',
+    readerPrefsHint: 'Applies while reading. Turn the bottom progress bar off for a cleaner page.',
+    showProgressBar: 'Show progress bar',
     appearance: 'Appearance',
     themePaper: 'Paper',
     themeGallery: 'Gallery',
@@ -313,6 +329,9 @@ const LABELS: Record<Locale, Labels> = {
     collapseNav: 'Collapse sidebar',
     expandNav: 'Expand sidebar',
     resizeNav: 'Resize sidebar',
+    browseMenu: 'Browse library',
+    closeMenu: 'Close',
+    importShort: 'Import',
   },
   'zh-CN': {
     library: '书库',
@@ -433,6 +452,9 @@ const LABELS: Record<Locale, Labels> = {
     emptyGroups: '还没有分组，点 + 新建。',
     libraryTheme: '书架主题',
     libraryThemeHint: '只改变书架外观，不影响编辑器和阅读器。',
+    readerPrefs: '阅读器',
+    readerPrefsHint: '只影响阅读界面。关闭后阅读区底部不再显示进度条。',
+    showProgressBar: '显示进度条',
     appearance: '外观',
     themePaper: '纸书',
     themeGallery: '展厅',
@@ -442,6 +464,9 @@ const LABELS: Record<Locale, Labels> = {
     collapseNav: '收起导航',
     expandNav: '展开导航',
     resizeNav: '调整侧栏宽度',
+    browseMenu: '浏览书库',
+    closeMenu: '关闭',
+    importShort: '导入',
   },
 };
 
@@ -507,6 +532,8 @@ export interface LibraryViewDependencies {
   readonly onOpenSyncPanel?: () => void;
   /** Persists the shelf chrome theme; never the editor or reader keys. */
   readonly themeStorage?: LibraryThemeStorage | null;
+  /** Persists reader chrome prefs such as the bottom progress bar. */
+  readonly readerPrefsStorage?: ReaderPrefsStorage | null;
 }
 
 export const CONTINUE_DISMISS_KEY = 'lightink.library.continueDismissed';
@@ -556,6 +583,26 @@ function acquisitionFromOpds(itemId: string, link: OpdsLink): AcquisitionLink {
     extension: link.extension,
     size: link.size,
   };
+}
+
+/** Shelf rows persist the primary download on the item, not in `links`. */
+function acquisitionFromItem(item: LibraryItem): AcquisitionLink | undefined {
+  if (item.acquisitionUrl == null || item.acquisitionUrl === '') {
+    return undefined;
+  }
+  return {
+    itemId: item.id,
+    href: item.acquisitionUrl,
+    rel: 'http://opds-spec.org/acquisition',
+    mediaType: item.mediaType,
+    extension: item.extension,
+    size: item.size,
+  };
+}
+
+function displayFromPersistedItem(item: LibraryItem): DisplayItem {
+  const fallback = acquisitionFromItem(item);
+  return { item, links: fallback === undefined ? [] : [fallback] };
 }
 
 function itemFromEntry(sourceId: string, entry: OpdsEntry): DisplayItem {
@@ -841,6 +888,8 @@ const NAV_ICON_PATHS = {
   ],
   comic: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
   hash: ['M4 9h16', 'M4 15h16', 'M10 3L8 21', 'M16 3l-2 18'],
+  menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
+  plus: ['M12 5v14', 'M5 12h14'],
 } as const;
 
 const SHELF_NAV_ICONS: Record<ShelfGroup, readonly string[]> = {
@@ -886,6 +935,8 @@ export function createLibraryView(
   root.setAttribute('aria-label', LABELS[deps.getLocale()].library);
   let currentLibraryTheme = loadLibraryTheme(deps.themeStorage);
   applyLibraryTheme(root, currentLibraryTheme);
+  let currentReaderPrefs = loadReaderPrefs(deps.readerPrefsStorage);
+  applyReaderPrefs(doc.documentElement, currentReaderPrefs);
 
   const header = doc.createElement('header');
   header.className = 'lightink-library-header';
@@ -918,8 +969,12 @@ export function createLibraryView(
   const syncButton = button(doc, '', 'lightink-library-sync-entry');
   const manageNavButton = button(doc, '', 'lightink-library-nav-item lightink-library-manage-entry');
   manageNavButton.dataset.libraryNavItem = 'manage';
-  headerMain.append(heading, searchForm, toolbar);
-  header.append(brand, headerMain);
+  const navMenu = button(doc, '', 'lightink-library-nav-menu lightink-library-icon-button');
+  navMenu.appendChild(createNavIcon(doc, NAV_ICON_PATHS.menu));
+  const headerImport = button(doc, '', 'lightink-library-header-import lightink-library-icon-button');
+  headerImport.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus));
+  headerMain.append(heading, searchForm, headerImport, toolbar);
+  header.append(navMenu, brand, headerMain);
 
   const body = doc.createElement('div');
   body.className = 'lightink-library-body';
@@ -1089,14 +1144,14 @@ export function createLibraryView(
   sourceBody.append(sourceFilter.wrap, sourceList);
   sourcePane.append(sourceHeader, sourceBody);
   const catalogPane = doc.createElement('section');
-  catalogPane.className = 'lightink-library-catalog-tree lightink-library-nav-section';
+  catalogPane.className = 'lightink-library-catalog-pane lightink-library-nav-section';
   catalogPane.dataset.navSection = 'catalog';
   catalogPane.hidden = true;
   const catalogBack = button(doc, '', 'lightink-library-nav-item lightink-library-back-to-shelf');
   const catalogHeading = doc.createElement('h2');
   catalogHeading.className = 'lightink-library-nav-heading';
   const catalogTree = doc.createElement('nav');
-  catalogTree.className = 'lightink-library-catalog-tree-list';
+  catalogTree.className = 'lightink-library-catalog-tree';
   catalogTree.setAttribute('aria-label', 'Catalog');
   catalogPane.append(catalogBack, catalogHeading, catalogTree);
   const managePane = doc.createElement('section');
@@ -1204,17 +1259,36 @@ export function createLibraryView(
   themeSwatches.className = 'lightink-library-theme-swatches';
   themeSwatches.setAttribute('role', 'radiogroup');
   appearance.append(appearanceTitle, appearanceHint, themeSwatches);
+  const readerPrefs = doc.createElement('section');
+  readerPrefs.className = 'lightink-library-reader-prefs';
+  const readerPrefsTitle = doc.createElement('h2');
+  readerPrefsTitle.className = 'lightink-library-appearance-title';
+  const readerPrefsHint = doc.createElement('p');
+  readerPrefsHint.className = 'lightink-library-appearance-hint';
+  const progressBarLabel = doc.createElement('label');
+  progressBarLabel.className = 'lightink-library-reader-pref';
+  const progressBarInput = doc.createElement('input');
+  progressBarInput.type = 'checkbox';
+  progressBarInput.name = 'showProgressBar';
+  const progressBarText = doc.createElement('span');
+  progressBarLabel.append(progressBarInput, progressBarText);
+  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel);
   const managePanel = doc.createElement('div');
   managePanel.className = 'lightink-library-manage-panel';
   managePanel.append(
     appearance,
+    readerPrefs,
     importButton,
     clearCacheButton,
     cacheSummary,
     ...(deps.onOpenSyncPanel === undefined ? [] : [syncButton]),
     ...(deps.onEnterEditor === undefined ? [] : [editorButton]),
   );
-  body.append(navPane, content);
+  const navBackdrop = doc.createElement('button');
+  navBackdrop.type = 'button';
+  navBackdrop.className = 'lightink-library-nav-backdrop';
+  navBackdrop.hidden = true;
+  body.append(navPane, navBackdrop, content);
   const membershipOverlay = doc.createElement('div');
   membershipOverlay.className = 'lightink-library-membership-overlay';
   membershipOverlay.hidden = true;
@@ -1240,6 +1314,9 @@ export function createLibraryView(
   let navWidthPx = loadNavWidth(deps.themeStorage);
   const importedItemIds = new Set<string>();
   root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
+  root.dataset.libraryDrawer = 'closed';
+  navMenu.setAttribute('aria-expanded', 'false');
+  navMenu.setAttribute('aria-controls', navPane.id);
   let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
   let selectedCustomGroupId: string | null = null;
@@ -1295,6 +1372,26 @@ export function createLibraryView(
   }
 
   const labels = (): Labels => LABELS[deps.getLocale()];
+
+  const isMobileLibraryChrome = (): boolean => {
+    const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
+    return (
+      rootEl?.hasAttribute('data-android') === true ||
+      rootEl?.hasAttribute('data-touch-primary') === true
+    );
+  };
+
+  const setMobileDrawer = (open: boolean): void => {
+    root.dataset.libraryDrawer = open ? 'open' : 'closed';
+    navBackdrop.hidden = !open;
+    navMenu.setAttribute('aria-expanded', String(open));
+    navMenu.setAttribute('aria-label', open ? labels().closeMenu : labels().browseMenu);
+    navBackdrop.setAttribute('aria-label', labels().closeMenu);
+  };
+
+  const closeMobileDrawer = (): void => {
+    setMobileDrawer(false);
+  };
 
   function rememberImportedItems(list: readonly LibraryItem[]): void {
     importedItemIds.clear();
@@ -1679,8 +1776,8 @@ export function createLibraryView(
     sourcePane.hidden = inCatalog;
     catalogPane.hidden = !inCatalog;
     if (activeSection === 'shelf') {
-      heading.textContent = '';
-      heading.hidden = true;
+      heading.textContent = labels().library;
+      heading.hidden = !isMobileLibraryChrome();
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       content.replaceChildren(continueHost, status, itemList);
@@ -2693,6 +2790,26 @@ export function createLibraryView(
     continueHost.hidden = false;
   }
 
+  function shouldShowImportTile(): boolean {
+    return activeSection === 'shelf' && !catalogActive() && searchInput.value.trim() === '';
+  }
+
+  function renderImportTile(): HTMLButtonElement {
+    const tile = button(doc, '', 'lightink-library-item lightink-library-item--import');
+    tile.dataset.libraryAction = 'import';
+    tile.setAttribute('role', 'option');
+    tile.setAttribute('aria-label', labels().importLocal);
+    tile.title = labels().importLocal;
+    const cover = doc.createElement('div');
+    cover.className = 'lightink-library-cover lightink-library-cover--import';
+    cover.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus, 'lightink-library-import-plus'));
+    tile.append(cover);
+    tile.addEventListener('click', () => {
+      importButton.click();
+    });
+    return tile;
+  }
+
   function renderItems(): void {
     const shown = visibleItems();
     itemList.replaceChildren();
@@ -2700,14 +2817,19 @@ export function createLibraryView(
       return;
     }
     if (shown.length === 0) {
-      const empty = doc.createElement('div');
-      empty.className = 'lightink-library-empty';
       const query = searchInput.value.trim();
       const filtered =
         query !== '' ||
         selectedGroup !== 'all' ||
         selectedCustomGroupId !== null ||
         selectedSmartGroupId !== null;
+      if (!filtered && shouldShowImportTile()) {
+        itemList.appendChild(renderImportTile());
+        detail.hidden = true;
+        return;
+      }
+      const empty = doc.createElement('div');
+      empty.className = 'lightink-library-empty';
       if (query !== '') empty.textContent = labels().emptySearch;
       else if (filtered) empty.textContent = labels().emptyFilter;
       else empty.textContent = labels().empty;
@@ -2737,16 +2859,40 @@ export function createLibraryView(
           : renderCoverCard(display),
       );
     }
+    if (shouldShowImportTile()) {
+      itemList.appendChild(renderImportTile());
+    }
     if (selected === null) detail.hidden = true;
   }
 
+  function rememberDisplay(display: DisplayItem): DisplayItem {
+    const index = items.findIndex((candidate) => candidate.item.id === display.item.id);
+    if (index >= 0) {
+      items[index] = display;
+    }
+    const shelfIndex = shelfItems.findIndex((candidate) => candidate.item.id === display.item.id);
+    if (shelfIndex >= 0) {
+      shelfItems[shelfIndex] = display;
+    }
+    if (selected?.item.id === display.item.id) {
+      selected = display;
+    }
+    return display;
+  }
+
   async function ensureLinks(display: DisplayItem): Promise<DisplayItem> {
-    if (display.links.length > 0 || isLocalItem(display.item)) return display;
+    if (isLocalItem(display.item)) return display;
+    const fallback = acquisitionFromItem(display.item);
     try {
-      const links = await deps.library.listAcquisitionLinks(display.item.id);
-      return { ...display, links };
+      const stored = await deps.library.listAcquisitionLinks(display.item.id);
+      const links = stored.length > 0 ? stored : display.links.length > 0 ? display.links : fallback === undefined ? [] : [fallback];
+      return rememberDisplay({ ...display, links });
     } catch {
-      return display;
+      if (display.links.length > 0) return display;
+      return rememberDisplay({
+        ...display,
+        links: fallback === undefined ? [] : [fallback],
+      });
     }
   }
 
@@ -2778,7 +2924,11 @@ export function createLibraryView(
   function selectedAcquisition(display: DisplayItem | null = selected): AcquisitionLink | undefined {
     const select = detail.querySelector<HTMLSelectElement>('.lightink-library-acquisition');
     const href = select?.value;
-    return display?.links.find((link) => link.href === href) ?? display?.links[0];
+    return (
+      display?.links.find((link) => link.href === href) ??
+      display?.links[0] ??
+      (display === null ? undefined : acquisitionFromItem(display.item))
+    );
   }
 
   function requestFor(display: DisplayItem): LibraryOpenRequest {
@@ -2805,8 +2955,9 @@ export function createLibraryView(
       await loadFeed(display.entry.navigationUrl);
       return;
     }
-    const request = requestFor(display);
-    if (!isLocalItem(display.item) && request.acquisition === undefined) {
+    const resolved = await ensureLinks(display);
+    const request = requestFor(resolved);
+    if (!isLocalItem(resolved.item) && request.acquisition === undefined) {
       deps.notify(labels().noAcquisition, 'warning');
       return;
     }
@@ -3046,7 +3197,7 @@ export function createLibraryView(
       ]);
       if (generation !== requestGeneration) return;
       rememberImportedItems(loaded);
-      items = loaded.map((item) => ({ item, links: [] }));
+      items = loaded.map(displayFromPersistedItem);
       shelfItems = items;
       groups = loadedGroups;
       memberships = loadedMemberships;
@@ -3204,7 +3355,7 @@ export function createLibraryView(
         .filter((item) =>
           `${itemTitle(item)}\n${itemAuthors(item).join('\n')}`.toLocaleLowerCase().includes(lowered),
         )
-        .map((item) => ({ item, links: [] }));
+        .map(displayFromPersistedItem);
       refreshSmartGroups();
       selected = null;
       renderContinueBar();
@@ -3522,6 +3673,7 @@ export function createLibraryView(
       await deps.library.removeItem(item.id);
       importedItemIds.delete(item.id);
       items = items.filter((candidate) => candidate.item.id !== item.id);
+      shelfItems = shelfItems.filter((candidate) => candidate.item.id !== item.id);
       selected = null;
       renderItems();
       renderDetail();
@@ -3600,6 +3752,22 @@ export function createLibraryView(
     }
   }
 
+  const syncReaderPrefsFromStorage = (): void => {
+    currentReaderPrefs = loadReaderPrefs(deps.readerPrefsStorage);
+    applyReaderPrefs(doc.documentElement, currentReaderPrefs);
+    progressBarInput.checked = currentReaderPrefs.showProgressBar;
+  };
+
+  const onReaderPrefsStorage = (event: Event): void => {
+    const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+    if (key !== READER_PREFS_STORAGE_KEY) {
+      return;
+    }
+    syncReaderPrefsFromStorage();
+  };
+  const prefsTarget = doc.defaultView ?? doc;
+  prefsTarget.addEventListener('lightink:syncable-storage-change', onReaderPrefsStorage);
+
   function retranslate(): void {
     const l = labels();
     root.setAttribute('aria-label', l.library);
@@ -3616,6 +3784,10 @@ export function createLibraryView(
     sourceTitle.textContent = l.sources;
     searchInput.placeholder = l.searchPlaceholder;
     searchInput.setAttribute('aria-label', l.searchPlaceholder);
+    navMenu.setAttribute('aria-label', root.dataset.libraryDrawer === 'open' ? l.closeMenu : l.browseMenu);
+    navBackdrop.setAttribute('aria-label', l.closeMenu);
+    headerImport.title = l.importLocal;
+    headerImport.setAttribute('aria-label', l.importLocal);
     searchClear.title = l.clear;
     searchClear.setAttribute('aria-label', l.clear);
     searchButton.textContent = l.search;
@@ -3633,6 +3805,11 @@ export function createLibraryView(
     nextButton.textContent = l.next;
     appearanceTitle.textContent = l.appearance;
     appearanceHint.textContent = l.libraryThemeHint;
+    readerPrefsTitle.textContent = l.readerPrefs;
+    readerPrefsHint.textContent = l.readerPrefsHint;
+    progressBarText.textContent = l.showProgressBar;
+    progressBarLabel.title = l.showProgressBar;
+    syncReaderPrefsFromStorage();
     setNavRailCollapsed(navRailCollapsed, false);
     groupHeader.title = l.groups;
     smartGroupHeader.title = l.smartGroups;
@@ -3672,6 +3849,29 @@ export function createLibraryView(
   });
   navCollapse.addEventListener('click', () => {
     setNavRailCollapsed(!navRailCollapsed);
+  });
+  navMenu.addEventListener('click', () => {
+    setMobileDrawer(root.dataset.libraryDrawer !== 'open');
+  });
+  navBackdrop.addEventListener('click', () => {
+    closeMobileDrawer();
+  });
+  headerImport.addEventListener('click', () => {
+    importButton.click();
+  });
+  navPane.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (
+      target.closest(
+        '.lightink-library-group, .lightink-library-source, .lightink-library-smart-group, .lightink-library-catalog-label, .lightink-library-nav-item, .lightink-library-back-to-shelf',
+      ) === null
+    ) {
+      return;
+    }
+    closeMobileDrawer();
   });
   let navResizePointerId: number | null = null;
   let navResizeBodyTransition = '';
@@ -3925,6 +4125,13 @@ export function createLibraryView(
   });
   manageNavButton.addEventListener('click', () => void showManage());
   editorButton.addEventListener('click', () => deps.onEnterEditor?.());
+  progressBarInput.addEventListener('change', () => {
+    currentReaderPrefs = saveReaderPrefs(deps.readerPrefsStorage, {
+      showProgressBar: progressBarInput.checked,
+    });
+    applyReaderPrefs(doc.documentElement, currentReaderPrefs);
+    doc.dispatchEvent(new CustomEvent('lightink:reader-prefs', { detail: currentReaderPrefs }));
+  });
   syncButton.addEventListener('click', () => deps.onOpenSyncPanel?.());
   root.addEventListener('contextmenu', (event) => {
     event.preventDefault();
@@ -4011,7 +4218,12 @@ export function createLibraryView(
       }
     } else if (event.key === 'Enter' && current >= 0) {
       event.preventDefault();
-      const display = shown.find((candidate) => candidate.item.id === rows[current]?.dataset.itemId);
+      const row = rows[current];
+      if (row?.dataset.libraryAction === 'import') {
+        row.click();
+        return;
+      }
+      const display = shown.find((candidate) => candidate.item.id === row?.dataset.itemId);
       void openSelected(display ?? null);
     }
   });
@@ -4058,6 +4270,7 @@ export function createLibraryView(
       requestGeneration += 1;
       for (const controller of activeOperations) controller.abort();
       activeOperations.clear();
+      prefsTarget.removeEventListener('lightink:syncable-storage-change', onReaderPrefsStorage);
       deps.workspaceTravel?.remove();
       root.remove();
     },

@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  bindClickPaging,
   bindTouchPaging,
   resolveSwipePageDirection,
   resolveTapPageDirection,
@@ -147,6 +148,52 @@ describe('bindTouchPaging', () => {
     unbind();
     el.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 200 }));
     el.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 200 }));
+    expect(page).not.toHaveBeenCalled();
+  });
+});
+
+describe('bindClickPaging', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function mount(overrides: { enabled?: () => boolean } = {}) {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    const unbind = bindClickPaging(el, {
+      page,
+      viewportWidth: () => 400,
+      ...overrides,
+    });
+    return { el, page, unbind };
+  }
+
+  it('pages on a right-edge mouse click and stops the event from toggling chrome', () => {
+    const { el, page } = mount();
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 });
+    el.dispatchEvent(event);
+    expect(page).toHaveBeenCalledWith(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('pages back on a left-edge mouse click', () => {
+    const { el, page } = mount();
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 200 }));
+    expect(page).toHaveBeenCalledWith(-1);
+  });
+
+  it('does not page on a center click so chrome can still toggle', () => {
+    const { el, page } = mount();
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 });
+    el.dispatchEvent(event);
+    expect(page).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('respects the enabled gate', () => {
+    const { el, page } = mount({ enabled: () => false });
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 }));
     expect(page).not.toHaveBeenCalled();
   });
 });

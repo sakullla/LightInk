@@ -1179,7 +1179,15 @@ export function createAppShell(
       }
     },
   });
-  toolbar.append(menuBar.element, enterReaderHomeBtn);
+  const chromeDrag = document.createElement('div');
+  chromeDrag.className = 'lightink-chrome-drag';
+  chromeDrag.setAttribute('data-tauri-drag-region', '');
+  chromeDrag.setAttribute('aria-hidden', 'true');
+  const tabsDrag = document.createElement('div');
+  tabsDrag.className = 'lightink-chrome-drag lightink-chrome-drag--tabs';
+  tabsDrag.setAttribute('data-tauri-drag-region', '');
+  tabsDrag.setAttribute('aria-hidden', 'true');
+  toolbar.append(menuBar.element, chromeDrag, enterReaderHomeBtn);
 
   function rebuildMenus(): void {
     const next = buildMenus(menuActions);
@@ -1209,19 +1217,31 @@ export function createAppShell(
   root.replaceChildren(titlebar.element, chromeHost, tabsHost, readerShell, mainRow, statusBarHost);
   root.classList.add('lightink-immersive');
 
+  let lastWorkspaceSurface: WorkspaceSnapshot['surface'] | null = null;
+
   function applyWorkspace(snapshot: Pick<WorkspaceSnapshot, 'mode' | 'surface'>): void {
     applyWorkspaceSurface(root, snapshot);
     applyWorkspaceSurface(mainRow, snapshot);
     applyWorkspaceSurface(editorArea, snapshot);
     const editorChrome = snapshot.surface === 'editor';
     const shelfChrome = snapshot.surface === 'shelf';
+    const enteringEditor =
+      editorChrome && lastWorkspaceSurface !== null && lastWorkspaceSurface !== 'editor';
     setChromeSetVisible(chromeHost, editorChrome);
     setChromeSetVisible(tabsHost, editorChrome);
     setChromeSetVisible(readerShell, shelfChrome);
     setChromeSetVisible(statusBarHost, !shelfChrome);
     if (!editorChrome) {
       menuBar.closeAll();
+    } else if (enteringEditor) {
+      // Manage → 编辑 must land on a usable File/Edit bar, not a 6px strip
+      // buried under the caption overlay.
+      chrome.reveal('menu');
+      chrome.reveal('tabs');
+      syncMenuChrome();
+      syncTabsChrome();
     }
+    lastWorkspaceSurface = snapshot.surface;
     applyReaderChrome();
   }
 
@@ -1480,6 +1500,7 @@ export function createAppShell(
         item.append(btn, close);
         return item;
       }),
+      tabsDrag,
     );
   }
 

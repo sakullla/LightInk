@@ -543,3 +543,20 @@
     min-width: 44px;
   }
 }
+
+/* Bottom sheet for catalog / typography — thumbs reach it; status bar stays clear. */
+.lightink-reader-chrome-panel.is-touch-sheet {
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: min(72vh, calc(100vh - var(--lightink-safe-top, 0px) - 1.5rem));
+  border-radius: 16px 16px 0 0;
+  padding-bottom: var(--lightink-safe-bottom, 0px);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-popover::before {
+  display: none;
+}

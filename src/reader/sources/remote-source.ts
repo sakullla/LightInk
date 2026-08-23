@@ -38,6 +38,18 @@ function bytesFromIpc(raw: ArrayBuffer | Uint8Array | readonly number[]): Uint8A
   throw new Error('远程读取返回了无效字节');
 }
 
+/** OPDS `length` / item.size: skip HEAD+Range when the file is already sized. */
+export function remoteOpenExpectedSize(
+  item: { readonly size?: number },
+  acquisition?: { readonly size?: number },
+): number | undefined {
+  const size = acquisition?.size ?? item.size;
+  if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+    return undefined;
+  }
+  return Math.floor(size);
+}
+
 export function isRemoteTarget(target: ReaderTarget): target is RemoteReaderTarget {
   return target.kind === 'remote';
 }
@@ -55,6 +67,7 @@ function createHandleSource(
   return {
     size: metadata.size,
     identity: { id: metadata.identity },
+    access: 'remote',
     async readRange(offset, length, readSignal) {
       if (closed) {
         throw new Error('远程读取源已关闭');

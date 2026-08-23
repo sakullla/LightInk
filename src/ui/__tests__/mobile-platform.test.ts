@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * mobile-platform — 前端唯一平台事实点：Android UA 判定与 pointer:coarse
  * 触屏判定；SSR/测试环境安全回退为桌面语义（false）。
@@ -79,6 +80,19 @@ describe('detectTouchPrimary', () => {
         throw new Error('no media support');
       }),
     ).toBe(false);
+  });
+});
+
+describe('applyMobileDocumentFlags', () => {
+  it('stamps android and touch-primary flags for CSS', async () => {
+    const { applyMobileDocumentFlags } = await import('../mobile-platform.js');
+    const root = document.createElement('html');
+    applyMobileDocumentFlags(root, { android: true, touchPrimary: true });
+    expect(root.hasAttribute('data-android')).toBe(true);
+    expect(root.hasAttribute('data-touch-primary')).toBe(true);
+    applyMobileDocumentFlags(root, { android: false, touchPrimary: false });
+    expect(root.hasAttribute('data-android')).toBe(false);
+    expect(root.hasAttribute('data-touch-primary')).toBe(false);
   });
 });
 

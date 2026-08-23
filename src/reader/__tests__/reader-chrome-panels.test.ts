@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 import {
@@ -13,6 +13,11 @@ import {
 } from '../reader-chrome-panels.js';
 
 describe('reader chrome panels', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-touch-primary');
+    document.documentElement.removeAttribute('data-android');
+  });
+
   it('renders a vertical contents list and marks the current chapter', () => {
     const panel = document.createElement('div');
     const onSelect = vi.fn();
@@ -152,5 +157,22 @@ describe('reader chrome panels', () => {
     expect(overlay.style.bottom).toBe('60px');
     unpinFixedOverlay(overlay);
     expect(overlay.style.position).toBe('');
+  });
+
+  it('docks the overlay as a bottom sheet on a touch-primary document', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const overlay = document.createElement('div');
+    const pane = {
+      getBoundingClientRect: () =>
+        ({ left: 20, top: 40, width: 800, height: 600, right: 820, bottom: 640 }) as DOMRect,
+    };
+    pinFixedOverlay(overlay, pane, { innerWidth: 1000, innerHeight: 700 });
+    expect(overlay.classList.contains('is-touch-sheet')).toBe(true);
+    expect(overlay.style.left).toBe('0px');
+    expect(overlay.style.bottom).toBe('0px');
+    expect(overlay.style.top).toBe('auto');
+    unpinFixedOverlay(overlay);
+    expect(overlay.classList.contains('is-touch-sheet')).toBe(false);
+    document.documentElement.removeAttribute('data-touch-primary');
   });
 });

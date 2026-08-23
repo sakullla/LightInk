@@ -11,6 +11,7 @@ import { bytesToBase64 } from '../asset/asset-service.js';
 import { extOfPath } from '../file/path-ext.js';
 import { openSafeArchive } from '../reader/formats/safe-archive.js';
 import { SAFE_READER_IMAGE_MIME_TYPES } from '../reader/formats/resource-limits.js';
+import { decodeReaderText } from '../reader/formats/text-encoding.js';
 import { parseFilenameSeries } from './filename-series.js';
 
 export const MAX_SHELF_COVER_BYTES = 1_500_000;
@@ -152,7 +153,7 @@ async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
     let opfPath: string | null = null;
     const container = archive.file('META-INF/container.xml');
     if (container !== null) {
-      const xml = await container.readText();
+      const xml = decodeReaderText(await container.readBytes());
       opfPath = attr(
         xml.match(/<rootfile\b[^>]*?\/?>/i)?.[0] ?? '',
         'full-path',
@@ -168,7 +169,7 @@ async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
     if (opfFile === null) {
       return { authors: [] };
     }
-    const opf = await opfFile.readText();
+    const opf = decodeReaderText(await opfFile.readBytes());
     const items = parseManifest(opf);
     const chosen = coverItem(opf, items);
     let coverUrl: string | undefined;

@@ -363,8 +363,12 @@ describe('createAppShell immersive chrome', () => {
       { onSwitch: () => undefined, onClose: () => undefined },
     );
     const tabBar = (root as unknown as FakeEl).querySelector('#lightink-tabbar');
-    expect(tabBar?.children).toHaveLength(3);
-    expect(tabBar?.children.map((c) => c.dataset.tabId)).toEqual(['tab-1', 'tab-2', 'tab-3']);
+    const tabItems = tabBar?.children.filter((child) => child.dataset.tabId);
+    expect(tabItems).toHaveLength(3);
+    expect(tabItems?.map((child) => child.dataset.tabId)).toEqual(['tab-1', 'tab-2', 'tab-3']);
+    expect(tabBar?.children.some((child) => child.className.includes('lightink-chrome-drag'))).toBe(
+      true,
+    );
     expect(tabBar?.getAttribute('role')).toBe('tablist');
     const activeButton = tabBar?.children[1]?.children[0];
     expect(activeButton?.getAttribute('role')).toBe('tab');
@@ -427,6 +431,38 @@ describe('createAppShell immersive chrome', () => {
     expect(statusHost?.hidden).toBe(false);
   });
 
+  it('reveals the editor menu and tab bar when opening Markdown even if chrome is unpinned', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'shelf' }),
+        getWorkspaceMode: () => 'reader',
+      },
+      {
+        shortcutBindings: () => [],
+        storage: null,
+        initialPinPrefs: { menu: false, tabs: false },
+      },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    expect(shell.chrome.isRevealed('menu')).toBe(false);
+    expect(shell.chrome.isRevealed('tabs')).toBe(false);
+
+    shell.applyWorkspace({ mode: 'editor', surface: 'editor' });
+    expect(fakeRoot.querySelector('#lightink-chrome-host')?.hidden).toBe(false);
+    expect(fakeRoot.querySelector('#lightink-chrome-host')?.classList.contains('is-menu-revealed')).toBe(
+      true,
+    );
+    expect(fakeRoot.querySelector('#lightink-tabs-host')?.classList.contains('is-tabs-revealed')).toBe(
+      true,
+    );
+    expect(shell.chrome.isRevealed('menu')).toBe(true);
+    expect(shell.chrome.isRevealed('tabs')).toBe(true);
+  });
+
   it('round-trips via labeled 编辑 and 阅读/书架 without sharing one chrome set', () => {
     installFakeDocument();
     const calls: string[] = [];
@@ -467,6 +503,11 @@ describe('createAppShell immersive chrome', () => {
     expect(readBtn?.hidden).toBe(true);
     expect(readBtn?.className).toContain('lightink-workspace-travel');
     expect(fakeRoot.querySelector('#lightink-toolbar')?.contains(readBtn)).toBe(true);
+    expect(
+      fakeRoot
+        .querySelector('#lightink-toolbar')
+        ?.children.some((child) => child.className.includes('lightink-chrome-drag')),
+    ).toBe(true);
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
     readBtn?.click();
     expect(calls).toEqual(['editor', 'shelf']);

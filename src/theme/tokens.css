@@ -27,6 +27,12 @@
 [data-theme="warm-light"] {
   color-scheme: light;
 
+  /* Edge-to-edge / notch: WebView env() plus optional Android-injected overrides. */
+  --lightink-safe-top: env(safe-area-inset-top, 0px);
+  --lightink-safe-right: env(safe-area-inset-right, 0px);
+  --lightink-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --lightink-safe-left: env(safe-area-inset-left, 0px);
+
   /* 阅读视图流式栏宽：约 32–36 汉字行长（WCAG 1.4.8 CJK ≤40）。 */
   --lightink-reader-content-width: 36rem;
   /* 流式正文高亮（不透明，文字在 mark 内）。PDF 文本层另用半透明叠在 canvas 上。 */
@@ -282,4 +288,10 @@
 }
 .hljs-strong {
   font-weight: 600;
+}
+
+/* Android WebView often reports env(safe-area-inset-*) as 0 until insets arrive. */
+html[data-android] {
+  --lightink-safe-top: max(env(safe-area-inset-top, 0px), 28px);
+  --lightink-safe-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
 }

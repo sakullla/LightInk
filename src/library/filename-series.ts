@@ -52,6 +52,8 @@ const TRAILING_DECORATION_RE =
 const AUTHOR_PREFIX_RE = /^(?:\[[^\[\]]+\]\s*)+/u;
 
 const ONLY_DIGITS_RE = /^[0-9]+$/;
+/** Content-addressed blob names (SHA-256 hex) are not shelf titles. */
+const CONTENT_HASH_NAME_RE = /^[a-f0-9]{32,}$/i;
 
 const VOLUME_RULES: readonly VolumeRule[] = [
   {
@@ -216,7 +218,7 @@ function isUsefulSeriesStem(text: string): boolean {
 export function parseFilenameSeries(path: string): FilenameSeriesParse {
   const raw = toAsciiDigits(stripExtension(basenameOf(path))).trim();
   const title = stripTrailingDecorations(raw) || raw;
-  if (raw === '') {
+  if (raw === '' || CONTENT_HASH_NAME_RE.test(raw)) {
     return { informative: false, title };
   }
 
@@ -255,4 +257,20 @@ export function resolveLocalEpubTitle(path: string, dcTitle?: string): string {
     return fallback;
   }
   return parsed.title;
+}
+
+/**
+ * Managed imports store the file under a content hash. The shelf title must
+ * keep the original display name; the blob path is only a fallback.
+ */
+export function resolveImportedEpubTitle(
+  sourceName: string,
+  blobPath: string,
+  dcTitle?: string,
+): string {
+  const fromSource = parseFilenameSeries(sourceName);
+  if (fromSource.informative && fromSource.title !== '') {
+    return fromSource.title;
+  }
+  return resolveLocalEpubTitle(blobPath, dcTitle);
 }

@@ -1136,11 +1136,15 @@ describe('reader 标签（只读，豁免可写路径）', () => {
     };
 
     const first = await manager.openReader(target);
-    const second = await manager.openReader({ ...target });
+    const second = await manager.openReader({
+      ...target,
+      resourceId: 'https://books.example/a.cbz?v=2',
+      identity: { id: 'item-1', validator: '"v2"' },
+    });
 
     expect(second).toBe(first);
     expect(first.filePath).toBeNull();
-    expect(first.syntheticId).toBe('reader:item-1@"v1"');
+    expect(first.syntheticId).toBe('reader:item-1');
     expect(first.target).toEqual(target);
     expect(manager.tabList).toHaveLength(1);
     expect(onFileOpened).not.toHaveBeenCalled();

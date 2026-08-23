@@ -34,7 +34,6 @@ import type { ImageAssetMountOptions } from '../editor/plugins/image.js';
 import type { ReaderInstance } from '../reader/types.js';
 import {
   normalizeReaderTarget,
-  readerIdentityKey,
   type ReaderTarget,
 } from '../reader/sources/types.js';
 import {
@@ -471,7 +470,7 @@ export class TabManager {
     const target = normalizeReaderTarget(targetOrPath);
     const filePath = target.kind === 'local' ? target.path : null;
     const remoteSyntheticId =
-      target.kind === 'remote' ? `reader:${readerIdentityKey(target.identity)}` : null;
+      target.kind === 'remote' ? `reader:${target.itemId}` : null;
     const existing = this.tabs.find(
       (t): t is ReaderTabState =>
         t.kind === 'reader' &&

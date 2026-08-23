@@ -194,3 +194,46 @@ export function readerFlowSpreadFromTypography(
 ): ReaderPageSpread {
   return readerPageSpread(containerWidth, fontSizePx, typography.measureRem);
 }
+
+/** Phone/tablet reading: Kindle Narrow is ~16pt, not the desktop 40px gutter. */
+export function readerPageInnerPadPx(fontPx: number, compact = false): number {
+  const size = Number.isFinite(fontPx) && fontPx > 0 ? fontPx : 16;
+  if (compact) {
+    return Math.max(14, Math.round(size * 1.05));
+  }
+  return Math.max(40, Math.round(size * 2.5));
+}
+
+export function readerSurfaceIsCompact(root?: ParentNode | null): boolean {
+  const fromRoot =
+    root instanceof Element
+      ? root.closest('html') ?? root.ownerDocument?.documentElement
+      : null;
+  const documentRoot =
+    fromRoot ?? (typeof document !== 'undefined' ? document.documentElement : null);
+  if (
+    documentRoot instanceof Element &&
+    (documentRoot.hasAttribute('data-android') || documentRoot.hasAttribute('data-touch-primary'))
+  ) {
+    return true;
+  }
+  return typeof window !== 'undefined' && window.innerWidth > 0 && window.innerWidth < 600;
+}
+
+/**
+ * A pane that grew with chapter HTML must not become the page. That makes
+ * one mega-page (no columns, bar at 100%, next turn skips the chapter).
+ */
+export function clampReaderPageExtent(
+  measured: { width: number; height: number },
+  view: { innerWidth: number; innerHeight: number },
+): { width: number; height: number } {
+  const viewW = Number.isFinite(view.innerWidth) ? view.innerWidth : 0;
+  const viewH = Number.isFinite(view.innerHeight) ? view.innerHeight : 0;
+  const width = Math.max(1, Math.round(measured.width));
+  const height = Math.max(1, Math.round(measured.height));
+  return {
+    width: viewW > 80 && width > viewW + 80 ? Math.round(viewW) : width,
+    height: viewH > 80 && height > viewH + 80 ? Math.round(viewH) : height,
+  };
+}

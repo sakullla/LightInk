@@ -176,6 +176,8 @@ function extensionFromHref(href: string): string | undefined {
 function extensionFromMediaType(mediaType: string | undefined, href: string): string | undefined {
   switch (mediaTypeBase(mediaType)) {
     case 'application/epub+zip':
+    case 'application/x-epub+zip':
+    case 'application/kepub+zip':
       return 'epub';
     case 'application/pdf':
       return 'pdf';
@@ -184,6 +186,7 @@ function extensionFromMediaType(mediaType: string | undefined, href: string): st
       return 'cbz';
     case 'application/vnd.rar':
     case 'application/x-rar-compressed':
+    case 'application/vnd.comicbook-rar':
       return extensionFromHref(href) === 'cbr' ? 'cbr' : 'rar';
     case 'application/x-7z-compressed':
       return extensionFromHref(href) === 'cb7' ? 'cb7' : '7z';
@@ -196,6 +199,34 @@ function extensionFromMediaType(mediaType: string | undefined, href: string): st
     default:
       return extensionFromHref(href);
   }
+}
+
+function isCatalogOrPageMediaType(mediaType: string | undefined): boolean {
+  const type = mediaTypeBase(mediaType);
+  return (
+    type === 'text/html' ||
+    type === 'application/xhtml+xml' ||
+    type === 'application/atom+xml' ||
+    type === 'application/xml' ||
+    type === 'text/xml' ||
+    type === 'application/opds+json' ||
+    type === 'application/opds-publication+json' ||
+    type.startsWith('image/')
+  );
+}
+
+function isReadableAcquisition(
+  tokens: readonly string[],
+  extension: string | undefined,
+  mediaType: string | undefined,
+): boolean {
+  if (isCatalogOrPageMediaType(mediaType)) return false;
+  const readable = SUPPORTED_EXTENSIONS.has(extension ?? '');
+  if (isAcquisitionRel(tokens)) {
+    const type = mediaTypeBase(mediaType);
+    return readable || type === '' || type === 'application/octet-stream';
+  }
+  return readable && mediaTypeBase(mediaType) !== '';
 }
 
 function restoreTemplateBraces(href: string): string {
@@ -261,7 +292,16 @@ function isCoverRel(tokens: readonly string[]): boolean {
 }
 
 function linkSize(link: Record<string, unknown>): number | undefined {
-  if (typeof link.length === 'number' && Number.isFinite(link.length)) return link.length;
+  if (typeof link.length === 'number' && Number.isFinite(link.length) && link.length > 0) {
+    return link.length;
+  }
+  if (typeof link.length === 'string') {
+    const parsed = Number(link.length);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  if (typeof link.size === 'number' && Number.isFinite(link.size) && link.size > 0) {
+    return link.size;
+  }
   if (isRecord(link.properties) && typeof link.properties.numberOfBytes === 'number') {
     return link.properties.numberOfBytes;
   }
@@ -288,7 +328,7 @@ function mapLink(link: unknown, baseUrl: string): OpdsLink {
     title: asTrimmedString(link.title),
     size: linkSize(link),
     extension,
-    acquisition: isAcquisitionRel(tokens) && SUPPORTED_EXTENSIONS.has(extension ?? ''),
+    acquisition: isReadableAcquisition(tokens, extension, mediaType),
   };
 }
 

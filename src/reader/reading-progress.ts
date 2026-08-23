@@ -93,6 +93,25 @@ export function loadReadingProgress(
   }
 }
 
+/** First matching record. Used to migrate OPDS keys off etag/session identities. */
+export function loadReadingProgressFromIds(
+  storage: ProgressStorage | null | undefined,
+  ids: readonly string[],
+): ReadingProgress | null {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (id === '' || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const found = loadReadingProgress(storage, id);
+    if (found !== null) {
+      return found;
+    }
+  }
+  return null;
+}
+
 interface StoredProgressEntry {
   readonly key: string;
   readonly id: string;

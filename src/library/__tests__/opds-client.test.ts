@@ -262,6 +262,54 @@ describe('OpdsClient', () => {
     expect(atomResult.entries[0]?.links[0]?.acquisition).toBe(true);
   });
 
+  it('treats Kavita/Calibre downloads without a filename as acquisition links', async () => {
+    const client = recordingClient(async <T>(command: string) => {
+      if (command === 'opds_browse') {
+        return {
+          metadata: { title: 'Kavita' },
+          publications: [
+            {
+              metadata: { identifier: '1', title: '无扩展名' },
+              links: [
+                {
+                  rel: 'http://opds-spec.org/acquisition/open-access',
+                  href: '/api/opds/key/series/1/volume/1/chapter/1/download',
+                  type: 'application/epub+zip',
+                },
+              ],
+            },
+            {
+              metadata: { identifier: '2', title: 'Calibre' },
+              links: [
+                {
+                  rel: 'http://opds-spec.org/acquisition',
+                  href: '/get/EPUB/12',
+                },
+              ],
+            },
+            {
+              metadata: { identifier: '3', title: '商店页' },
+              links: [
+                {
+                  rel: 'http://opds-spec.org/acquisition/buy',
+                  href: '/store/3',
+                  type: 'text/html',
+                },
+              ],
+            },
+          ],
+        } as T;
+      }
+      return {} as T;
+    });
+
+    const feed = await client.browse('source-1', 'https://kavita.example/api/opds/key');
+    expect(feed.entries[0]?.links[0]?.acquisition).toBe(true);
+    expect(feed.entries[0]?.links[0]?.extension).toBe('epub');
+    expect(feed.entries[1]?.links[0]?.acquisition).toBe(true);
+    expect(feed.entries[2]?.links[0]?.acquisition).toBe(false);
+  });
+
   it('only forwards none, basic, or bearer credentials when adding a source', async () => {
     const payloads: unknown[] = [];
     const client = recordingClient(async <T>(_command: string, args?: Record<string, unknown>) => {

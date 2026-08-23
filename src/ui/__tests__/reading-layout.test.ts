@@ -12,6 +12,7 @@ import {
   isReadingNavKey,
   loadReadingLayout,
   nearestVisibleSlot,
+  nearestVisibleChapterIndex,
   applyPagedPageStep,
   pagedColumnStep,
   pagedFrameStep,
@@ -290,6 +291,19 @@ describe('nearestVisibleSlot', () => {
   it('keeps the earlier slot on ties and returns -1 when empty', () => {
     expect(nearestVisibleSlot([100, 300], 200)).toBe(0);
     expect(nearestVisibleSlot([], 0)).toBe(-1);
+  });
+
+  it('maps a sparse mounted window back to the spine index', () => {
+    expect(
+      nearestVisibleChapterIndex(
+        [
+          { index: 4, top: 0 },
+          { index: 5, top: 800 },
+          { index: 6, top: 1600 },
+        ],
+        820,
+      ),
+    ).toBe(5);
   });
 });
 

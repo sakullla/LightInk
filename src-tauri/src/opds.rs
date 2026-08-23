@@ -182,13 +182,26 @@ fn extension_from_href(href: &str) -> Option<String> {
     (!extension.is_empty()).then_some(extension)
 }
 
+fn media_type_base(media_type: Option<&str>) -> String {
+    media_type
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+}
+
 fn extension_from_media_type(media_type: Option<&str>, href: &str) -> Option<String> {
-    let media_type = media_type.unwrap_or_default().to_ascii_lowercase();
-    match media_type.split(';').next().unwrap_or_default().trim() {
-        "application/epub+zip" => Some("epub".into()),
+    match media_type_base(media_type).as_str() {
+        "application/epub+zip" | "application/x-epub+zip" | "application/kepub+zip" => {
+            Some("epub".into())
+        }
         "application/pdf" => Some("pdf".into()),
         "application/vnd.comicbook+zip" | "application/x-cbz" => Some("cbz".into()),
-        "application/vnd.rar" | "application/x-rar-compressed" => Some(
+        "application/vnd.rar"
+        | "application/x-rar-compressed"
+        | "application/vnd.comicbook-rar" => Some(
             extension_from_href(href)
                 .filter(|ext| ext == "cbr")
                 .unwrap_or_else(|| "rar".into()),
@@ -203,6 +216,37 @@ fn extension_from_media_type(media_type: Option<&str>, href: &str) -> Option<Str
         "text/plain" => Some("txt".into()),
         _ => extension_from_href(href),
     }
+}
+
+fn is_catalog_or_page_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "text/html"
+            | "application/xhtml+xml"
+            | "application/atom+xml"
+            | "application/xml"
+            | "text/xml"
+            | "application/opds+json"
+            | "application/opds-publication+json"
+    ) || media_type.starts_with("image/")
+}
+
+fn is_acquisition_rel(rel: &str) -> bool {
+    rel.split_ascii_whitespace().any(|token| {
+        token == "acquisition" || token == "download" || token.contains("opds-spec.org/acquisition")
+    })
+}
+
+fn is_acquisition_link(rel: &str, extension: Option<&str>, media_type: Option<&str>) -> bool {
+    let media = media_type_base(media_type);
+    if is_catalog_or_page_media_type(&media) {
+        return false;
+    }
+    let readable = supported_extension(extension);
+    if is_acquisition_rel(rel) {
+        return readable || media.is_empty() || media == "application/octet-stream";
+    }
+    readable && !media.is_empty()
 }
 
 fn resolve_link_url(base: &Url, href: &str) -> Result<String, RemoteError> {
@@ -253,11 +297,7 @@ fn parse_link(
     let href = href.ok_or_else(|| RemoteError::new("OPDS_LINK_INVALID", "OPDS link 缺少 href"))?;
     let href = resolve_link_url(base, &href)?;
     let extension = extension_from_media_type(media_type.as_deref(), &href);
-    let rel_tokens = rel.split_ascii_whitespace().collect::<Vec<_>>();
-    let acquisition_rel = rel_tokens
-        .iter()
-        .any(|token| token.contains("opds-spec.org/acquisition") || *token == "acquisition");
-    let acquisition = acquisition_rel && supported_extension(extension.as_deref());
+    let acquisition = is_acquisition_link(&rel, extension.as_deref(), media_type.as_deref());
     Ok(OpdsLink {
         href,
         rel,
@@ -392,10 +432,7 @@ fn json_link(value: &Value, base: &Url) -> Result<Option<OpdsLink>, RemoteError>
         .or_else(|| object.get("size"))
         .and_then(Value::as_u64);
     let extension = extension_from_media_type(media_type.as_deref(), &href);
-    let rel_acquisition = rel
-        .split_ascii_whitespace()
-        .any(|token| token.contains("opds-spec.org/acquisition") || token == "acquisition");
-    let acquisition = rel_acquisition && supported_extension(extension.as_deref());
+    let acquisition = is_acquisition_link(&rel, extension.as_deref(), media_type.as_deref());
     Ok(Some(OpdsLink {
         href,
         rel,
@@ -1298,6 +1335,41 @@ mod tests {
         );
         assert!(feed.entries[0].links[0].acquisition);
         assert_eq!(feed.entries[0].links[0].extension.as_deref(), Some("cbz"));
+    }
+
+    #[test]
+    fn treats_kavita_style_downloads_without_filename_as_acquisition() {
+        let base = Url::parse("https://kavita.example/api/opds/key").unwrap();
+        let typed = parse_opds_feed(
+            r#"<feed><title>K</title><entry><id>1</id><title>Book</title>
+              <link rel="http://opds-spec.org/acquisition/open-access"
+                    href="/api/opds/key/series/1/volume/1/chapter/1/download"
+                    type="application/epub+zip" />
+            </entry></feed>"#,
+            &base,
+        )
+        .unwrap();
+        assert!(typed.entries[0].links[0].acquisition);
+        assert_eq!(typed.entries[0].links[0].extension.as_deref(), Some("epub"));
+
+        let opaque = parse_opds_feed(
+            r#"<feed><title>C</title><entry><id>2</id><title>Calibre</title>
+              <link rel="http://opds-spec.org/acquisition" href="/get/EPUB/12" />
+            </entry></feed>"#,
+            &Url::parse("https://calibre.example/opds").unwrap(),
+        )
+        .unwrap();
+        assert!(opaque.entries[0].links[0].acquisition);
+
+        let store = parse_opds_feed(
+            r#"<feed><title>S</title><entry><id>3</id><title>Store</title>
+              <link rel="http://opds-spec.org/acquisition/buy"
+                    href="/store/3" type="text/html" />
+            </entry></feed>"#,
+            &Url::parse("https://store.example/opds").unwrap(),
+        )
+        .unwrap();
+        assert!(!store.entries[0].links[0].acquisition);
     }
 
     #[test]
