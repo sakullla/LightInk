@@ -3234,13 +3234,20 @@ describe('LibraryView touch long-press', () => {
 });
 
 describe('LibraryView mobile shelf', () => {
-  it('uses a full-width cover grid and a drawer instead of a persistent sidebar', () => {
+  it('replaces the drawer with a bottom tab bar gated to the ≤760px breakpoint', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 抽屉整体移除：不再有 hamburger / backdrop / drawer 状态样式。
+    expect(css).not.toContain('lightink-library-nav-menu');
+    expect(css).not.toContain('lightink-library-nav-backdrop');
+    expect(css).not.toContain('data-library-drawer');
+    // Tab 栏只在移动 chrome + ≤760px 断点出现；宽视口触屏桌面保持桌面侧栏。
+    expect(css).toMatch(/\.lightink-library-tabbar\s*\{\s*display:\s*none/);
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*block/,
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*display:\s*grid/,
     );
+    // 移动 chrome 窄屏下 body 纵向排布，导航成为页内区块而非 fixed 抽屉。
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*position:\s*fixed/,
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(3/,
@@ -3250,7 +3257,13 @@ describe('LibraryView mobile shelf', () => {
     );
   });
 
-  it('opens filters from a hamburger and returns the cover wall after a choice', async () => {
+  function tabButton(host: ParentNode, tab: string): HTMLButtonElement {
+    const button = host.querySelector<HTMLButtonElement>(`[data-library-tab-item="${tab}"]`);
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`tab not found: ${tab}`);
+    return button;
+  }
+
+  it('renders the bottom tab bar instead of the hamburger drawer under mobile chrome', async () => {
     document.documentElement.setAttribute('data-android', '');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -3258,25 +3271,104 @@ describe('LibraryView mobile shelf', () => {
     await view.show();
 
     const root = libraryRoot(host);
-    const menu = host.querySelector<HTMLButtonElement>('.lightink-library-nav-menu');
-    const backdrop = host.querySelector<HTMLButtonElement>('.lightink-library-nav-backdrop');
-    expect(menu).not.toBeNull();
-    expect(root.dataset.libraryDrawer).toBe('closed');
-    expect(host.querySelector('h1')?.hidden).toBe(false);
-    expect(host.querySelector('h1')?.textContent).toBe('书库');
+    expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
+    expect(host.querySelector('.lightink-library-nav-backdrop')).toBeNull();
+    expect(root.dataset.libraryDrawer).toBeUndefined();
+    expect(root.dataset.libraryNav).toBe('shelf');
+    expect(root.dataset.libraryTab).toBe('shelf');
 
-    menu!.click();
-    expect(root.dataset.libraryDrawer).toBe('open');
-    expect(backdrop?.hidden).toBe(false);
+    const tabbar = host.querySelector<HTMLElement>('.lightink-library-tabbar');
+    expect(tabbar).not.toBeNull();
+    const tabs = Array.from(
+      tabbar!.querySelectorAll<HTMLButtonElement>('[data-library-tab-item]'),
+    );
+    expect(tabs.map((tab) => tab.dataset.libraryTabItem)).toEqual([
+      'shelf',
+      'sources',
+      'catalog',
+      'manage',
+    ]);
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      '书架',
+      '书源',
+      '目录',
+      '管理',
+    ]);
+    expect(tabButton(host, 'shelf').getAttribute('aria-current')).toBe('page');
+    view.destroy();
+  });
 
-    navButton(host, '在读').click();
-    await settle();
-    expect(root.dataset.libraryDrawer).toBe('closed');
-    expect(navItemActive(navButton(host, '在读'))).toBe(true);
+  it('switches sections from the tabs and keeps the catalog pick-source empty state', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
 
-    menu!.click();
-    backdrop!.click();
-    expect(root.dataset.libraryDrawer).toBe('closed');
+    const root = libraryRoot(host);
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('manage');
+    expect(host.querySelector('h1')?.textContent).toBe('管理');
+
+    // 目录 Tab 从未浏览过书源：落书源列表并给出选择书源空态。
+    tabButton(host, 'catalog').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'sources',
+      'catalog tab did not land on the source list',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+    const hint = host.querySelector<HTMLElement>('.lightink-library-catalog-hint');
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.textContent).toBe('选择一个书库源以浏览它的目录。');
+
+    // 在书源列表里选源进入目录浏览。
+    shownButtonWithText(host, '测试书库').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'catalog',
+      'source catalog did not open',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+    expect(hint?.hidden).toBe(true);
+
+    // 离开目录 Tab 后再回来：有最近浏览书源，直达其 catalog。
+    tabButton(host, 'shelf').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'shelf',
+      'shelf tab did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('shelf');
+    tabButton(host, 'catalog').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'catalog',
+      'catalog tab did not return to the recent source catalog',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+
+    // 书源 Tab 直达书源列表，不显示目录空态。
+    tabButton(host, 'sources').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'sources',
+      'sources tab did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('sources');
+    expect(hint?.hidden).toBe(true);
+    expect(host.querySelector('h1')?.textContent).toBe('书库源');
+    view.destroy();
+  });
+
+  it('does not mount the tab bar without the mobile chrome flags', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
+    expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('shelf');
     view.destroy();
   });
 });

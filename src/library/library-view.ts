@@ -22,6 +22,11 @@ import {
   type SmartGroupDefinition,
 } from './library-smart-groups.js';
 import { classifyLibraryKind } from './library-kind.js';
+import {
+  createLibraryTabbar,
+  type LibraryTabbarLabels,
+  type LibraryTabId,
+} from './library-tabbar.js';
 import { isShelfCoverUrl } from './local-book-meta.js';
 import {
   coverProgressFillPercent,
@@ -192,8 +197,11 @@ interface Labels {
   collapseNav: string;
   expandNav: string;
   resizeNav: string;
-  browseMenu: string;
-  closeMenu: string;
+  tabNavigation: string;
+  tabShelf: string;
+  tabSources: string;
+  tabCatalog: string;
+  catalogPickSource: string;
   importShort: string;
 }
 
@@ -329,8 +337,11 @@ const LABELS: Record<Locale, Labels> = {
     collapseNav: 'Collapse sidebar',
     expandNav: 'Expand sidebar',
     resizeNav: 'Resize sidebar',
-    browseMenu: 'Browse library',
-    closeMenu: 'Close',
+    tabNavigation: 'Library navigation',
+    tabShelf: 'Shelf',
+    tabSources: 'Sources',
+    tabCatalog: 'Catalog',
+    catalogPickSource: 'Pick a source to browse its catalog.',
     importShort: 'Import',
   },
   'zh-CN': {
@@ -464,8 +475,11 @@ const LABELS: Record<Locale, Labels> = {
     collapseNav: '收起导航',
     expandNav: '展开导航',
     resizeNav: '调整侧栏宽度',
-    browseMenu: '浏览书库',
-    closeMenu: '关闭',
+    tabNavigation: '书库导航',
+    tabShelf: '书架',
+    tabSources: '书源',
+    tabCatalog: '目录',
+    catalogPickSource: '选择一个书库源以浏览它的目录。',
     importShort: '导入',
   },
 };
@@ -969,12 +983,10 @@ export function createLibraryView(
   const syncButton = button(doc, '', 'lightink-library-sync-entry');
   const manageNavButton = button(doc, '', 'lightink-library-nav-item lightink-library-manage-entry');
   manageNavButton.dataset.libraryNavItem = 'manage';
-  const navMenu = button(doc, '', 'lightink-library-nav-menu lightink-library-icon-button');
-  navMenu.appendChild(createNavIcon(doc, NAV_ICON_PATHS.menu));
   const headerImport = button(doc, '', 'lightink-library-header-import lightink-library-icon-button');
   headerImport.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus));
   headerMain.append(heading, searchForm, headerImport, toolbar);
-  header.append(navMenu, brand, headerMain);
+  header.append(brand, headerMain);
 
   const body = doc.createElement('div');
   body.className = 'lightink-library-body';
@@ -1236,6 +1248,10 @@ export function createLibraryView(
   const retryButton = button(doc, '');
   retryButton.hidden = true;
   status.append(retryButton);
+  // 目录 Tab 无最近浏览书源时落在书源列表，用该空态提示引导选择。
+  const catalogHint = doc.createElement('p');
+  catalogHint.className = 'lightink-library-catalog-hint';
+  catalogHint.hidden = true;
   const continueHost = doc.createElement('div');
   continueHost.className = 'lightink-library-continue';
   continueHost.hidden = true;
@@ -1284,11 +1300,7 @@ export function createLibraryView(
     ...(deps.onOpenSyncPanel === undefined ? [] : [syncButton]),
     ...(deps.onEnterEditor === undefined ? [] : [editorButton]),
   );
-  const navBackdrop = doc.createElement('button');
-  navBackdrop.type = 'button';
-  navBackdrop.className = 'lightink-library-nav-backdrop';
-  navBackdrop.hidden = true;
-  body.append(navPane, navBackdrop, content);
+  body.append(navPane, content);
   const membershipOverlay = doc.createElement('div');
   membershipOverlay.className = 'lightink-library-membership-overlay';
   membershipOverlay.hidden = true;
@@ -1314,10 +1326,9 @@ export function createLibraryView(
   let navWidthPx = loadNavWidth(deps.themeStorage);
   const importedItemIds = new Set<string>();
   root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
-  root.dataset.libraryDrawer = 'closed';
-  navMenu.setAttribute('aria-expanded', 'false');
-  navMenu.setAttribute('aria-controls', navPane.id);
   let activeSection: LibrarySection = 'shelf';
+  let mobileTab: LibraryTabId = 'shelf';
+  let recentCatalogSourceId: string | null = null;
   let selectedGroup: ShelfGroup = 'all';
   let selectedCustomGroupId: string | null = null;
   let groups: LibraryGroup[] = [];
@@ -1381,17 +1392,13 @@ export function createLibraryView(
     );
   };
 
-  const setMobileDrawer = (open: boolean): void => {
-    root.dataset.libraryDrawer = open ? 'open' : 'closed';
-    navBackdrop.hidden = !open;
-    navMenu.setAttribute('aria-expanded', String(open));
-    navMenu.setAttribute('aria-label', open ? labels().closeMenu : labels().browseMenu);
-    navBackdrop.setAttribute('aria-label', labels().closeMenu);
-  };
-
-  const closeMobileDrawer = (): void => {
-    setMobileDrawer(false);
-  };
+  const tabbarLabels = (): LibraryTabbarLabels => ({
+    navigation: labels().tabNavigation,
+    shelf: labels().tabShelf,
+    sources: labels().tabSources,
+    catalog: labels().tabCatalog,
+    manage: labels().manage,
+  });
 
   function rememberImportedItems(list: readonly LibraryItem[]): void {
     importedItemIds.clear();
@@ -1438,6 +1445,15 @@ export function createLibraryView(
     if (persist) saveNavCollapsed(deps.themeStorage, collapsed);
   };
   setNavRailCollapsed(navRailCollapsed, false);
+  // 底部 Tab 栏仅移动 chrome 挂载；≤760px 断点由 CSS 控制可见性，
+  // 宽视口（含触屏桌面）只见桌面导航栏。
+  const tabbar = isMobileLibraryChrome()
+    ? createLibraryTabbar(doc, {
+        labels: tabbarLabels(),
+        onSelect: (tab) => void activateMobileTab(tab),
+      })
+    : null;
+  if (tabbar !== null) root.appendChild(tabbar.element);
   const selectedSource = (): OpdsSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);
   const catalogActive = (): boolean => activeSection === 'sources' && selectedSourceId !== null;
@@ -1769,7 +1785,19 @@ export function createLibraryView(
     const inCatalog = catalogActive();
     root.dataset.libraryNav =
       activeSection === 'sources' ? (inCatalog ? 'catalog' : 'sources') : activeSection;
+    // 移动 Tab 反映当前外壳状态；书源列表态保留 Tab 意图（书源 vs 目录空态）。
+    const currentTab: LibraryTabId =
+      activeSection === 'shelf'
+        ? 'shelf'
+        : activeSection === 'manage'
+          ? 'manage'
+          : inCatalog || mobileTab === 'catalog'
+            ? 'catalog'
+            : 'sources';
+    root.dataset.libraryTab = currentTab;
+    tabbar?.setActive(currentTab);
     searchForm.hidden = activeSection !== 'shelf' && !inCatalog;
+    catalogHint.hidden = true;
     parkWorkspaceTravel();
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
     groupPane.hidden = inCatalog;
@@ -1798,10 +1826,13 @@ export function createLibraryView(
       content.replaceChildren(navigation, status, workArea);
     } else {
       heading.hidden = false;
-      heading.textContent = labels().sources;
+      const pickingCatalog = currentTab === 'catalog' && isMobileLibraryChrome();
+      heading.textContent = pickingCatalog ? labels().tabCatalog : labels().sources;
       toolbar.replaceChildren();
       itemList.classList.remove('lightink-library-cover-wall');
-      content.replaceChildren(status);
+      catalogHint.textContent = labels().catalogPickSource;
+      catalogHint.hidden = !pickingCatalog;
+      content.replaceChildren(status, catalogHint);
     }
     renderGroups();
     renderSources();
@@ -3255,6 +3286,7 @@ export function createLibraryView(
 
   async function showMyBooks(): Promise<void> {
     activeSection = 'shelf';
+    mobileTab = 'shelf';
     selectedSourceId = null;
     selected = null;
     feed = null;
@@ -3281,6 +3313,7 @@ export function createLibraryView(
 
   async function showManage(): Promise<void> {
     activeSection = 'manage';
+    mobileTab = 'manage';
     selectedSourceId = null;
     selected = null;
     feed = null;
@@ -3313,6 +3346,8 @@ export function createLibraryView(
   async function openCatalog(sourceId: string): Promise<void> {
     const sameSource = catalogActive() && selectedSourceId === sourceId && catalogRoot !== null;
     activeSection = 'sources';
+    mobileTab = 'catalog';
+    recentCatalogSourceId = sourceId;
     selectedSourceId = sourceId;
     searchInput.value = '';
     syncSearchClear();
@@ -3335,6 +3370,49 @@ export function createLibraryView(
       /* keep the last known imported set */
     }
     await loadFeed(undefined);
+  }
+
+  /** 书源 Tab / 目录 Tab 空态：停留在书源列表，不进入任何 catalog。 */
+  async function showSourcesList(): Promise<void> {
+    activeSection = 'sources';
+    selectedSourceId = null;
+    selected = null;
+    feed = null;
+    currentUrl = undefined;
+    trail.splice(0);
+    resetCatalogTree();
+    items = [];
+    searchInput.value = '';
+    syncSearchClear();
+    setStatus('');
+    syncPageChrome();
+    await refreshWebDavProfile();
+    renderSources();
+  }
+
+  /** 移动底部 Tab 切换：书架/书源/管理直达；目录复用最近浏览书源，否则落书源列表空态。 */
+  async function activateMobileTab(tab: LibraryTabId): Promise<void> {
+    mobileTab = tab;
+    if (tab === 'shelf') {
+      await activateShelf();
+      return;
+    }
+    if (tab === 'manage') {
+      await showManage();
+      return;
+    }
+    if (tab === 'catalog') {
+      const recent =
+        recentCatalogSourceId !== null &&
+        sources.some((source) => source.id === recentCatalogSourceId)
+          ? recentCatalogSourceId
+          : null;
+      if (recent !== null) {
+        await openCatalog(recent);
+        return;
+      }
+    }
+    await showSourcesList();
   }
 
   async function search(): Promise<void> {
@@ -3784,8 +3862,7 @@ export function createLibraryView(
     sourceTitle.textContent = l.sources;
     searchInput.placeholder = l.searchPlaceholder;
     searchInput.setAttribute('aria-label', l.searchPlaceholder);
-    navMenu.setAttribute('aria-label', root.dataset.libraryDrawer === 'open' ? l.closeMenu : l.browseMenu);
-    navBackdrop.setAttribute('aria-label', l.closeMenu);
+    tabbar?.setLabels(tabbarLabels());
     headerImport.title = l.importLocal;
     headerImport.setAttribute('aria-label', l.importLocal);
     searchClear.title = l.clear;
@@ -3850,28 +3927,8 @@ export function createLibraryView(
   navCollapse.addEventListener('click', () => {
     setNavRailCollapsed(!navRailCollapsed);
   });
-  navMenu.addEventListener('click', () => {
-    setMobileDrawer(root.dataset.libraryDrawer !== 'open');
-  });
-  navBackdrop.addEventListener('click', () => {
-    closeMobileDrawer();
-  });
   headerImport.addEventListener('click', () => {
     importButton.click();
-  });
-  navPane.addEventListener('click', (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-    if (
-      target.closest(
-        '.lightink-library-group, .lightink-library-source, .lightink-library-smart-group, .lightink-library-catalog-label, .lightink-library-nav-item, .lightink-library-back-to-shelf',
-      ) === null
-    ) {
-      return;
-    }
-    closeMobileDrawer();
   });
   let navResizePointerId: number | null = null;
   let navResizeBodyTransition = '';
@@ -4251,6 +4308,7 @@ export function createLibraryView(
       root.hidden = false;
       deps.onVisibilityChange?.(true);
       activeSection = 'shelf';
+      mobileTab = 'shelf';
       selectedGroup = 'all';
       selectedSmartGroupId = null;
       selectedCustomGroupId = null;
