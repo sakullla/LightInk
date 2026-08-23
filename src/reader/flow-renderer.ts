@@ -1925,7 +1925,7 @@ export function createFlowRenderer(
       page: (direction: 1 | -1) => hooks.advancePagedWheel(direction),
     };
     // 触控点按走非对称热区（显式传值固定绑定合同）；click 兜底
-    // （桌面/无 touch 流的 WebView）走 reader-touch 的同一缺省热区。
+    // （桌面/无 touch 流的 WebView）不传比例，保持对称 TOUCH_TAP_EDGE_RATIO 桌面热区。
     const releaseTouch = bindTouchPaging(scrollHost, {
       ...hostPaging,
       tapPrevRatio: TOUCH_TAP_PREV_RATIO,

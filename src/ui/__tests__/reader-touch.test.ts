@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
 /**
- * touch/reader-touch — 阅读器触控翻页：点按左右热区（非对称：左 20% 上一页、
- * 右 30% 下一页、中部留给控件切换）/横向滑动的纯判定，以及 bindTouchPaging
- * 的事件流（系统外缘 24px 排除带、门控、click 抑制、解绑）。
+ * touch/reader-touch — 阅读器触控翻页：点按左右热区（触屏注入非对称：左 20%
+ * 上一页、右 30% 下一页、中部留给控件切换；缺省保持桌面对称 25%/25%）/横向
+ * 滑动的纯判定，以及 bindTouchPaging 的事件流（系统外缘 24px 排除带与带内
+ * 合成 click 吞掉、门控、click 抑制、解绑）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,12 +14,14 @@ import {
   resolveSwipePageDirection,
   resolveTapPageDirection,
   TOUCH_SYSTEM_EDGE_PX,
+  TOUCH_TAP_EDGE_RATIO,
   TOUCH_TAP_NEXT_RATIO,
   TOUCH_TAP_PREV_RATIO,
 } from '../touch/reader-touch.js';
 
 describe('touch paging constants', () => {
-  it('exposes the asymmetric tap ratios and the system edge band width', () => {
+  it('exposes the desktop/touch tap ratios and the system edge band width', () => {
+    expect(TOUCH_TAP_EDGE_RATIO).toBe(0.25);
     expect(TOUCH_TAP_PREV_RATIO).toBe(0.2);
     expect(TOUCH_TAP_NEXT_RATIO).toBe(0.3);
     expect(TOUCH_SYSTEM_EDGE_PX).toBe(24);
@@ -26,10 +29,15 @@ describe('touch paging constants', () => {
 });
 
 describe('resolveTapPageDirection', () => {
-  it('maps left/right edge zones to prev/next and the center to null', () => {
+  it('defaults to the symmetric desktop zones (25%/25%) when no ratios are passed', () => {
     expect(resolveTapPageDirection(10, 400)).toBe(-1);
     expect(resolveTapPageDirection(390, 400)).toBe(1);
     expect(resolveTapPageDirection(200, 400)).toBeNull();
+    // 桌面 click 热区边界锁定：400 * 0.25 = 100 / 400 * 0.75 = 300。
+    expect(resolveTapPageDirection(100, 400)).toBe(-1);
+    expect(resolveTapPageDirection(101, 400)).toBeNull();
+    expect(resolveTapPageDirection(299, 400)).toBeNull();
+    expect(resolveTapPageDirection(300, 400)).toBe(1);
   });
 
   it('supports independent prev/next ratios (left 20% / right 30%)', () => {
@@ -44,11 +52,12 @@ describe('resolveTapPageDirection', () => {
     expect(resolveTapPageDirection(300, 400, prev, next)).toBe(1);
   });
 
-  it('falls back to the default ratio for whichever side is omitted', () => {
-    // 只传 prevRatio：右侧仍用 TOUCH_TAP_NEXT_RATIO=0.3（阈值 280）。
-    expect(resolveTapPageDirection(100, 400, 0.25)).toBe(-1);
-    expect(resolveTapPageDirection(280, 400, 0.25)).toBe(1);
-    expect(resolveTapPageDirection(200, 400, 0.25)).toBeNull();
+  it('falls back to the symmetric desktop ratio for whichever side is omitted', () => {
+    // 只传 prevRatio：右侧回落对称 TOUCH_TAP_EDGE_RATIO=0.25（阈值 300）。
+    expect(resolveTapPageDirection(80, 400, 0.2)).toBe(-1);
+    expect(resolveTapPageDirection(299, 400, 0.2)).toBeNull();
+    expect(resolveTapPageDirection(300, 400, 0.2)).toBe(1);
+    expect(resolveTapPageDirection(200, 400, 0.2)).toBeNull();
   });
 
   it('rejects invalid geometry', () => {
@@ -145,6 +154,42 @@ describe('bindTouchPaging', () => {
     expect(page).not.toHaveBeenCalled();
   });
 
+  it('swallows the synthetic click that follows a band-start tap, once', () => {
+    // 带内点按不 preventDefault（把手势留给系统），浏览器随后仍会派发合成
+    // click；无排除带的 click 路径（bindClickPaging）不能因此翻页。
+    const { el, page } = mount();
+    const clickPage = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindClickPaging(el, { page: clickPage, viewportWidth: () => 400 });
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 200 }));
+    const synthetic = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 });
+    el.dispatchEvent(synthetic);
+    expect(page).not.toHaveBeenCalled();
+    expect(clickPage).not.toHaveBeenCalled();
+    expect(synthetic.defaultPrevented).toBe(true);
+    // 一次性：吞掉后随后的独立 click（如桌面鼠标）照常翻页。
+    const later = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 });
+    el.dispatchEvent(later);
+    expect(clickPage).toHaveBeenCalledWith(1);
+  });
+
+  it('disarms the band click swallow when the next gesture starts outside the band', () => {
+    const { el, page } = mount();
+    const clickPage = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindClickPaging(el, { page: clickPage, viewportWidth: () => 400 });
+    // 带内起始武装了吞 click，但没有 click 跟来（系统接管手势）……
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 200 }));
+    // ……下一个带外中部点按解除武装：它自己的合成 click 正常走 chrome 留路。
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 200, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 200, clientY: 200 }));
+    const centerClick = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 });
+    el.dispatchEvent(centerClick);
+    expect(page).not.toHaveBeenCalled();
+    expect(clickPage).not.toHaveBeenCalled();
+    expect(centerClick.defaultPrevented).toBe(false);
+  });
+
   it('still pages a swipe that starts outside the band and ends inside it', () => {
     const { el, page } = mount();
     el.dispatchEvent(touchEvent('touchstart', { clientX: 300, clientY: 200 }));
@@ -223,12 +268,18 @@ describe('bindTouchPaging', () => {
     expect(end.defaultPrevented).toBe(false);
   });
 
-  it('stops paging after unbind', () => {
+  it('stops paging and releases the band click swallow after unbind', () => {
     const { el, page, unbind } = mount();
+    // 先武装带内吞 click，再解绑：捕获监听器必须一并移除。
+    el.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 200 }));
+    el.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 200 }));
     unbind();
     el.dispatchEvent(touchEvent('touchstart', { clientX: 340, clientY: 200 }));
     el.dispatchEvent(touchEvent('touchend', { clientX: 340, clientY: 200 }));
     expect(page).not.toHaveBeenCalled();
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 });
+    el.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
   });
 });
 

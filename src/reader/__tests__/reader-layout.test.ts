@@ -678,6 +678,57 @@ describe('flow host touch paging', () => {
     renderer.clear();
   });
 
+  it('keeps desktop mouse click zones symmetric at 25%/25% (R10)', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    // x=100 = 400*0.25：对称左热区仍翻上一页（触屏非对称 20% 会判为中部）。
+    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }));
+    expect(dirs).toEqual([-1]);
+    // x=290 < 400*0.75=300：对称右热区外不翻页（触屏非对称 30% 才会翻）。
+    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 290, clientY: 100 }));
+    expect(dirs).toEqual([-1]);
+    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 300, clientY: 100 }));
+    expect(dirs).toEqual([-1, 1]);
+    renderer.clear();
+  });
+
+  it('swallows the synthetic click following a band-start tap so it cannot page', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    // 带内点按不翻页且不 preventDefault；随后的合成 click 落在 click 热区，
+    // 必须被一次性吞掉，否则 bindClickPaging 兜底会翻页。
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 390, clientY: 100 }));
+    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 390, clientY: 100 }));
+    const synthetic = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 100 });
+    scrollHost.dispatchEvent(synthetic);
+    expect(dirs).toEqual([]);
+    expect(synthetic.defaultPrevented).toBe(true);
+    // 一次性：后续独立鼠标 click 照常翻页。
+    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 100 }));
+    expect(dirs).toEqual([1]);
+    renderer.clear();
+  });
+
   it('does not page on a center tap (chrome toggle click path preserved)', () => {
     const { root, scrollHost } = mountFlowRoot();
     const dirs: Array<1 | -1> = [];

@@ -6,8 +6,9 @@
  * 返回 null 让既有 click 路径（chrome 切换/链接/划选）原样工作。
  *
  * 桌面与部分 Android WebView iframe 没有可用的 touch 事件流，改走
- * `bindClickPaging` 同一热区；滚动版式由原生触控滚动承担，调用方用
- * `enabled` 门控只在翻页版式启用。
+ * `bindClickPaging`：不传比例时沿用对称 TOUCH_TAP_EDGE_RATIO 桌面热区，
+ * 触屏绑定点才显式注入非对称比例。滚动版式由原生触控滚动承担，调用方
+ * 用 `enabled` 门控只在翻页版式启用。
  */
 
 export interface TouchPointLike {
@@ -21,9 +22,11 @@ export const TOUCH_TAP_MAX_MS = 350;
 export const TOUCH_TAP_MOVE_PX = 12;
 /** 横向滑动翻页的最小位移（px）。 */
 export const TOUCH_SWIPE_MIN_PX = 48;
-/** 左侧「上一页」点按热区宽度占比。 */
+/** 桌面 click 热区对称占比（左右各 25%）；ratio 缺省的 click 路径沿用此值。 */
+export const TOUCH_TAP_EDGE_RATIO = 0.25;
+/** 触屏左侧「上一页」点按热区宽度占比（触屏绑定点显式传入）。 */
 export const TOUCH_TAP_PREV_RATIO = 0.2;
-/** 右侧「下一页」点按热区宽度占比（阅读推进更频繁，热区更宽）。 */
+/** 触屏右侧「下一页」点按热区宽度占比（阅读推进更频繁，热区更宽）。 */
 export const TOUCH_TAP_NEXT_RATIO = 0.3;
 /** 屏幕左右外缘排除带宽度（px）：避让系统边缘手势（如 Android 返回）。 */
 export const TOUCH_SYSTEM_EDGE_PX = 24;
@@ -31,13 +34,14 @@ export const TOUCH_SYSTEM_EDGE_PX = 24;
 /**
  * 点按落点 → 翻页方向：左热区上一页、右热区下一页，中间区返回 null
  * （留给现有 click 行为，如 chrome 显隐切换）。左右热区占比独立，
- * 各自最大 0.5，保证中间留路不被吞掉。
+ * 各自最大 0.5，保证中间留路不被吞掉。缺省保持桌面对称热区
+ * （TOUCH_TAP_EDGE_RATIO），触屏绑定点显式注入非对称比例。
  */
 export function resolveTapPageDirection(
   clientX: number,
   viewportWidth: number,
-  prevRatio: number = TOUCH_TAP_PREV_RATIO,
-  nextRatio: number = TOUCH_TAP_NEXT_RATIO,
+  prevRatio: number = TOUCH_TAP_EDGE_RATIO,
+  nextRatio: number = TOUCH_TAP_EDGE_RATIO,
 ): 1 | -1 | null {
   if (!Number.isFinite(clientX) || !Number.isFinite(viewportWidth) || viewportWidth <= 0) {
     return null;
@@ -77,9 +81,9 @@ export interface TouchPagingOptions {
   enabled?(): boolean;
   /** 点按热区判定所用的视口宽度。 */
   viewportWidth(): number;
-  /** 左侧「上一页」热区占比；缺省 TOUCH_TAP_PREV_RATIO。 */
+  /** 左侧「上一页」热区占比；缺省对称 TOUCH_TAP_EDGE_RATIO。 */
   tapPrevRatio?: number;
-  /** 右侧「下一页」热区占比；缺省 TOUCH_TAP_NEXT_RATIO。 */
+  /** 右侧「下一页」热区占比；缺省对称 TOUCH_TAP_EDGE_RATIO。 */
   tapNextRatio?: number;
   /** 点按判定上限（测试可注入）。 */
   tapMaxMs?: number;
@@ -134,6 +138,7 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   const tapMaxMs = options.tapMaxMs ?? TOUCH_TAP_MAX_MS;
   const now = options.now ?? (() => Date.now());
   let start: { x: number; y: number; at: number } | null = null;
+  let suppressNextClick = false;
 
   const onTouchStart = (event: Event): void => {
     const touches = (event as TouchEventLike).touches;
@@ -144,16 +149,30 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
       return;
     }
     // 起始点落在左右外缘排除带内：本次手势整体不翻页，把边缘留给系统手势。
+    // 系统没接管时浏览器仍会派发合成 click，落点在无排除带的 click 热区
+    // （bindClickPaging / 帧内 click）会翻页，所以一次性吞掉这个 click。
     const width = options.viewportWidth();
     if (
       Number.isFinite(width) &&
       width > TOUCH_SYSTEM_EDGE_PX * 2 &&
       (touch.clientX <= TOUCH_SYSTEM_EDGE_PX || touch.clientX >= width - TOUCH_SYSTEM_EDGE_PX)
     ) {
+      suppressNextClick = true;
       start = null;
       return;
     }
+    suppressNextClick = false;
     start = { x: touch.clientX, y: touch.clientY, at: now() };
+  };
+
+  // 捕获阶段先于 click 翻页/切换 chrome 的监听器；一次性，消费后即失效。
+  const onBandClick = (event: Event): void => {
+    if (!suppressNextClick) {
+      return;
+    }
+    suppressNextClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
   };
 
   const onTouchCancel = (): void => {
@@ -202,10 +221,12 @@ export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions
   target.addEventListener('touchstart', onTouchStart, { passive: true });
   target.addEventListener('touchend', onTouchEnd, { passive: false });
   target.addEventListener('touchcancel', onTouchCancel, { passive: true });
+  target.addEventListener('click', onBandClick, { capture: true });
 
   return () => {
     target.removeEventListener('touchstart', onTouchStart);
     target.removeEventListener('touchend', onTouchEnd);
     target.removeEventListener('touchcancel', onTouchCancel);
+    target.removeEventListener('click', onBandClick, { capture: true });
   };
 }
