@@ -16,12 +16,24 @@ use tauri::{AppHandle, Manager};
 pub const DATABASE_FILE: &str = "library.sqlite3";
 pub const CACHE_DIRECTORY: &str = "remote-cache";
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-pub(crate) const SCHEMA_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 9;
 const CACHE_LIMIT_KEY: &str = "cache_limit_bytes";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpdsSource {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub credential_ref: Option<String>,
+    pub allow_http: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebDavSource {
     pub id: String,
     pub title: String,
     pub url: String,
@@ -649,6 +661,21 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                     )
                     .map_err(|error| format!("无法创建受管文档表: {error}"))?;
             }
+            9 => {
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS webdav_sources (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           title TEXT NOT NULL,
+                           url TEXT NOT NULL,
+                           credential_ref TEXT,
+                           allow_http INTEGER NOT NULL DEFAULT 0,
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );",
+                    )
+                    .map_err(|error| format!("无法创建 WebDAV 书库源表: {error}"))?;
+            }
             _ => return Err(format!("缺少书库数据库 v{target} 迁移实现")),
         }
         transaction
@@ -1027,6 +1054,107 @@ pub fn library_remove_source(app: AppHandle, source_id: String) -> Result<(), St
     transaction
         .commit()
         .map_err(|error| format!("无法提交 OPDS 源删除: {error}"))
+}
+
+fn webdav_source_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WebDavSource> {
+    Ok(WebDavSource {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        url: row.get(2)?,
+        credential_ref: row.get(3)?,
+        allow_http: row.get::<_, i64>(4)? != 0,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+pub(crate) fn webdav_source_rows(connection: &Connection) -> Result<Vec<WebDavSource>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, title, url, credential_ref, allow_http, created_at, updated_at
+             FROM webdav_sources ORDER BY title COLLATE NOCASE, id",
+        )
+        .map_err(|error| format!("无法读取 WebDAV 书库源: {error}"))?;
+    let rows = statement
+        .query_map([], webdav_source_from_row)
+        .map_err(|error| format!("无法读取 WebDAV 书库源: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析 WebDAV 书库源: {error}"))
+}
+
+pub(crate) fn webdav_find_source(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<Option<WebDavSource>, String> {
+    connection
+        .query_row(
+            "SELECT id, title, url, credential_ref, allow_http, created_at, updated_at
+             FROM webdav_sources WHERE id=?1",
+            params![source_id],
+            webdav_source_from_row,
+        )
+        .optional()
+        .map_err(|error| format!("无法读取 WebDAV 书库源: {error}"))
+}
+
+pub(crate) fn webdav_upsert_source_row(
+    connection: &Connection,
+    source: &WebDavSource,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO webdav_sources(id, title, url, credential_ref, allow_http, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET title=?2, url=?3, credential_ref=?4,
+               allow_http=?5, updated_at=?7",
+            params![
+                source.id,
+                source.title,
+                source.url,
+                source.credential_ref,
+                i64::from(source.allow_http),
+                source.created_at,
+                source.updated_at,
+            ],
+        )
+        .map_err(|error| format!("无法保存 WebDAV 书库源: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn webdav_delete_source_row(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM webdav_sources WHERE id = ?1",
+            params![source_id],
+        )
+        .map_err(|error| format!("无法删除 WebDAV 书库源: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn webdav_list_sources(app: &AppHandle) -> Result<Vec<WebDavSource>, String> {
+    let connection = open_database_at(&app_data_dir(app)?)?;
+    webdav_source_rows(&connection)
+}
+
+pub(crate) fn webdav_find_source_by_id(
+    app: &AppHandle,
+    source_id: &str,
+) -> Result<Option<WebDavSource>, String> {
+    let connection = open_database_at(&app_data_dir(app)?)?;
+    webdav_find_source(&connection, source_id)
+}
+
+pub(crate) fn webdav_upsert_source(app: &AppHandle, source: &WebDavSource) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(app)?)?;
+    webdav_upsert_source_row(&connection, source)
+}
+
+pub(crate) fn webdav_remove_source(app: &AppHandle, source_id: &str) -> Result<(), String> {
+    let connection = open_database_at(&app_data_dir(app)?)?;
+    webdav_delete_source_row(&connection, source_id)
 }
 
 #[tauri::command]
@@ -2134,6 +2262,142 @@ mod tests {
             .unwrap()
             .flatten()
             .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt.")));
+    }
+
+    #[test]
+    fn migrates_v8_to_webdav_sources_without_losing_existing_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '8');
+                INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', '2147483648');
+                CREATE TABLE opds_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, allow_http INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                INSERT INTO opds_sources(id,title,url,created_at,updated_at)
+                  VALUES ('opds-1','旧目录','https://example.test/opds',1,1);
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, cover_url TEXT,
+                  local_path TEXT, acquisition_url TEXT, media_type TEXT, extension TEXT,
+                  size INTEGER, etag TEXT, last_modified TEXT, series TEXT, number TEXT,
+                  volume TEXT, page_count INTEGER, reading_direction TEXT, cover_page INTEGER,
+                  blob_hash TEXT, availability TEXT NOT NULL DEFAULT 'external',
+                  offline_pinned INTEGER NOT NULL DEFAULT 0,
+                  subjects_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(id,source_kind,title,authors_json,updated_at)
+                  VALUES ('managed:old','managed','旧书','[]',1);
+                CREATE TABLE library_groups (
+                  id TEXT PRIMARY KEY NOT NULL, parent_id TEXT, name TEXT NOT NULL,
+                  kind TEXT NOT NULL, rule_json TEXT, sort_order INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_group_members (
+                  group_id TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+                  PRIMARY KEY(group_id, item_id)
+                );
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_exists(&migrated, "webdav_sources"));
+        for column in [
+            "id",
+            "title",
+            "url",
+            "credential_ref",
+            "allow_http",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(table_has_column(&migrated, "webdav_sources", column));
+        }
+        let opds_title: String = migrated
+            .query_row(
+                "SELECT title FROM opds_sources WHERE id='opds-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(opds_title, "旧目录");
+        let item_title: String = migrated
+            .query_row(
+                "SELECT title FROM library_items WHERE id='managed:old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_title, "旧书");
+    }
+
+    #[test]
+    fn webdav_sources_round_trip_multiple_named_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = database_for_tests(directory.path()).unwrap();
+        assert!(webdav_source_rows(&connection).unwrap().is_empty());
+        let first = WebDavSource {
+            id: "webdav-a".into(),
+            title: "漫画柜".into(),
+            url: "https://dav.example/comics/".into(),
+            credential_ref: Some("webdav-source-webdav-a".into()),
+            allow_http: false,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let second = WebDavSource {
+            id: "webdav-b".into(),
+            title: "局域网".into(),
+            url: "http://192.168.1.2:8080/books".into(),
+            credential_ref: None,
+            allow_http: true,
+            created_at: 2,
+            updated_at: 2,
+        };
+        webdav_upsert_source_row(&connection, &first).unwrap();
+        webdav_upsert_source_row(&connection, &second).unwrap();
+        let rows = webdav_source_rows(&connection).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].title, "漫画柜");
+        assert_eq!(rows[0].id, "webdav-b");
+        assert!(rows[0].allow_http);
+        assert_eq!(
+            rows[1].credential_ref.as_deref(),
+            Some("webdav-source-webdav-a")
+        );
+
+        let updated = WebDavSource {
+            title: "局域网新".into(),
+            updated_at: 3,
+            ..second.clone()
+        };
+        webdav_upsert_source_row(&connection, &updated).unwrap();
+        let found = webdav_find_source(&connection, "webdav-b")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.title, "局域网新");
+        assert_eq!(found.created_at, 2);
+        assert_eq!(found.updated_at, 3);
+
+        webdav_delete_source_row(&connection, "webdav-b").unwrap();
+        assert!(webdav_find_source(&connection, "webdav-b")
+            .unwrap()
+            .is_none());
+        assert_eq!(webdav_source_rows(&connection).unwrap().len(), 1);
+
+        // OPDS 源表与 webdav_sources 互不影响。
+        let opds_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM opds_sources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(opds_count, 0);
     }
 
     #[test]

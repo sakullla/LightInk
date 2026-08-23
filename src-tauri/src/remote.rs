@@ -520,7 +520,10 @@ fn ensure_frontend_safe_size(size: u64) -> Result<u64, RemoteError> {
     Ok(size)
 }
 
-fn load_credential(state: &RemoteState, credential_ref: &str) -> Option<RemoteCredential> {
+pub(crate) fn load_credential(
+    state: &RemoteState,
+    credential_ref: &str,
+) -> Option<RemoteCredential> {
     if let Some(value) = get_credential(KEYRING_SERVICE, credential_ref) {
         if let Ok(credential) = serde_json::from_str(&value) {
             return Some(credential);

@@ -22,6 +22,7 @@ mod remote;
 mod snapshot;
 mod sync;
 mod webdav;
+mod webdav_source;
 mod window_chrome;
 
 use tauri_plugin_opener::OpenerExt;
@@ -154,6 +155,10 @@ pub fn run() {
             opds::opds_browse,
             opds::opds_search,
             opds::opds_remove_source,
+            webdav_source::webdav_source_add,
+            webdav_source::webdav_source_list,
+            webdav_source::webdav_source_remove,
+            webdav_source::webdav_source_test,
             annotations::read_annotations,
             annotations::write_annotations,
             annotations::content_hash,
