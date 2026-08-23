@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { showSyncPanel } from '../sync-panel.js';
@@ -192,6 +195,38 @@ describe('sync panel', () => {
     expect(fields[0]!.value).toBe('Nextcloud');
     expect(fields[1]!.value).toBe('https://dav.example');
     expect(dialog.textContent).toContain('disk is read-only');
+  });
+
+  it('closes on Escape so the Android back chain returns to the manage page', async () => {
+    const onClose = vi.fn();
+    showSyncPanel({ ...createDeps(), onClose });
+    await settle();
+    expect(document.querySelector('.lightink-sync-dialog')).not.toBeNull();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+
+    expect(document.querySelector('.lightink-sync-dialog')).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('presents full-screen with touch-sized controls at the ≤760px mobile breakpoint', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
+    // 全屏呈现：铺满视口、去掉边框圆角，仅门控在移动 chrome flag 下。
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-sync-dialog\s*\{[^}]*max-width:\s*100vw[^}]*max-height:\s*none[^}]*border-radius:\s*0/,
+    );
+    // 页脚保留关闭 affordance，按钮触控目标 ≥44px。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-sync-dialog \.lightink-modal-btn\s*\{[^}]*min-height:\s*44px/,
+    );
+    // 输入 44px 高 + 16px 字号（避免移动 WebView 聚焦自动放大）。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-sync-field input,[\s\S]*?\.lightink-sync-field select\s*\{[^}]*min-height:\s*44px[^}]*font-size:\s*16px/,
+    );
+    // 冲突/迁移列表行保持整行触控目标。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-sync-checkbox,[\s\S]*?\.lightink-sync-migration-row\s*\{[^}]*min-height:\s*44px/,
+    );
   });
 });
 

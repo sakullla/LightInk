@@ -1509,11 +1509,11 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(isShown(host.querySelector('.lightink-library-cache-summary'))).toBe(true);
     const limitButton = host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!;
     limitButton.click();
-    const form = host.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
+    const subpage = host.querySelector<HTMLElement>('.lightink-library-manage-subpage')!;
+    expect(isShown(subpage)).toBe(true);
+    const form = subpage.querySelector<HTMLFormElement>('.lightink-library-cache-limit-form')!;
     const input = form.elements.namedItem('cacheLimitGiB') as HTMLInputElement;
     const apply = form.querySelector<HTMLButtonElement>('.lightink-library-primary');
-    expect(limitButton.getAttribute('aria-expanded')).toBe('true');
-    expect(limitButton.classList.contains('is-open')).toBe(true);
     expect(form.querySelector('label')?.classList.contains('lightink-library-field')).toBe(true);
     expect(apply?.textContent).toBe('应用');
     expect(apply?.type).toBe('submit');
@@ -1537,8 +1537,9 @@ describe('LibraryView sources, manage, and catalog', () => {
     await settle();
 
     expect(deps.library.setCacheLimit).toHaveBeenCalledWith(3.5 * 1024 ** 3);
-    expect(form.hidden).toBe(true);
-    expect(limitButton.getAttribute('aria-expanded')).toBe('false');
+    // 提交成功后子页关闭，回到管理首页。
+    expect(isShown(subpage)).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-manage-home'))).toBe(true);
     view.destroy();
   });
 
@@ -2043,7 +2044,7 @@ describe('LibraryView sources, manage, and catalog', () => {
 
     const section = host.querySelector('.lightink-library-manage-panel .lightink-library-reader-prefs');
     expect(section).toBeTruthy();
-    expect(section?.querySelector('h2')?.textContent).toBe('阅读器');
+    expect(section?.querySelector('h2')?.textContent).toBe('阅读偏好');
     expect(section?.querySelector('p')?.textContent).toContain('进度条');
     const input = host.querySelector<HTMLInputElement>(
       '.lightink-library-reader-prefs input[name="showProgressBar"]',
@@ -3234,13 +3235,20 @@ describe('LibraryView touch long-press', () => {
 });
 
 describe('LibraryView mobile shelf', () => {
-  it('uses a full-width cover grid and a drawer instead of a persistent sidebar', () => {
+  it('replaces the drawer with a bottom tab bar gated to the ≤760px breakpoint', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 抽屉整体移除：不再有 hamburger / backdrop / drawer 状态样式。
+    expect(css).not.toContain('lightink-library-nav-menu');
+    expect(css).not.toContain('lightink-library-nav-backdrop');
+    expect(css).not.toContain('data-library-drawer');
+    // Tab 栏只在移动 chrome + ≤760px 断点出现；宽视口触屏桌面保持桌面侧栏。
+    expect(css).toMatch(/\.lightink-library-tabbar\s*\{\s*display:\s*none/);
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*block/,
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*display:\s*grid/,
     );
+    // 移动 chrome 窄屏下 body 纵向排布，导航成为页内区块而非 fixed 抽屉。
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*position:\s*fixed/,
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(3/,
@@ -3250,7 +3258,36 @@ describe('LibraryView mobile shelf', () => {
     );
   });
 
-  it('opens filters from a hamburger and returns the cover wall after a choice', async () => {
+  it('gives the manage dialogs mobile sizes and ≥44px touch targets at the ≤760px breakpoint', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // 分组/书源 dialog：移动断点下放宽宽度并接近全屏边距。
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-group-modal\s*\.lightink-modal-dialog,[\s\S]*?\.lightink-library-source-modal\s*\.lightink-modal-dialog\s*\{[^}]*max-width:\s*calc\(100% - 32px\)/,
+    );
+    // membership dialog 同样放宽。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-membership-dialog\s*\{[^}]*width:\s*min\(26rem, calc\(100% - 32px\)\)/,
+    );
+    // 表单输入触控目标 ≥44px 且 16px 字号避免聚焦自动放大。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-group-form input,[\s\S]*?\.lightink-library-source-form select\s*\{[^}]*min-height:\s*44px[^}]*font-size:\s*16px/,
+    );
+    // dialog 按钮与 membership 选项行保持 ≥44px 触控目标。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-group-form-actions button,[\s\S]*?\.lightink-library-membership-actions button\s*\{[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-membership-options label\s*\{[^}]*min-height:\s*44px/,
+    );
+  });
+
+  function tabButton(host: ParentNode, tab: string): HTMLButtonElement {
+    const button = host.querySelector<HTMLButtonElement>(`[data-library-tab-item="${tab}"]`);
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`tab not found: ${tab}`);
+    return button;
+  }
+
+  it('renders the bottom tab bar instead of the hamburger drawer under mobile chrome', async () => {
     document.documentElement.setAttribute('data-android', '');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -3258,25 +3295,156 @@ describe('LibraryView mobile shelf', () => {
     await view.show();
 
     const root = libraryRoot(host);
-    const menu = host.querySelector<HTMLButtonElement>('.lightink-library-nav-menu');
-    const backdrop = host.querySelector<HTMLButtonElement>('.lightink-library-nav-backdrop');
-    expect(menu).not.toBeNull();
-    expect(root.dataset.libraryDrawer).toBe('closed');
-    expect(host.querySelector('h1')?.hidden).toBe(false);
-    expect(host.querySelector('h1')?.textContent).toBe('书库');
+    expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
+    expect(host.querySelector('.lightink-library-nav-backdrop')).toBeNull();
+    expect(root.dataset.libraryDrawer).toBeUndefined();
+    expect(root.dataset.libraryNav).toBe('shelf');
+    expect(root.dataset.libraryTab).toBe('shelf');
 
-    menu!.click();
-    expect(root.dataset.libraryDrawer).toBe('open');
-    expect(backdrop?.hidden).toBe(false);
+    const tabbar = host.querySelector<HTMLElement>('.lightink-library-tabbar');
+    expect(tabbar).not.toBeNull();
+    const tabs = Array.from(
+      tabbar!.querySelectorAll<HTMLButtonElement>('[data-library-tab-item]'),
+    );
+    expect(tabs.map((tab) => tab.dataset.libraryTabItem)).toEqual([
+      'shelf',
+      'sources',
+      'catalog',
+      'manage',
+    ]);
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      '书架',
+      '书源',
+      '目录',
+      '管理',
+    ]);
+    expect(tabButton(host, 'shelf').getAttribute('aria-current')).toBe('page');
+    view.destroy();
+  });
 
-    navButton(host, '在读').click();
-    await settle();
-    expect(root.dataset.libraryDrawer).toBe('closed');
-    expect(navItemActive(navButton(host, '在读'))).toBe(true);
+  it('switches sections from the tabs and keeps the catalog pick-source empty state', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
 
-    menu!.click();
-    backdrop!.click();
-    expect(root.dataset.libraryDrawer).toBe('closed');
+    const root = libraryRoot(host);
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('manage');
+    expect(host.querySelector('h1')?.textContent).toBe('管理');
+
+    // 目录 Tab 从未浏览过书源：落书源列表并给出选择书源空态。
+    tabButton(host, 'catalog').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'sources',
+      'catalog tab did not land on the source list',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+    const hint = host.querySelector<HTMLElement>('.lightink-library-catalog-hint');
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.textContent).toBe('选择一个书库源以浏览它的目录。');
+
+    // 在书源列表里选源进入目录浏览。
+    shownButtonWithText(host, '测试书库').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'catalog',
+      'source catalog did not open',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+    expect(hint?.hidden).toBe(true);
+
+    // 离开目录 Tab 后再回来：有最近浏览书源，直达其 catalog。
+    tabButton(host, 'shelf').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'shelf',
+      'shelf tab did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('shelf');
+    tabButton(host, 'catalog').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'catalog',
+      'catalog tab did not return to the recent source catalog',
+    );
+    expect(root.dataset.libraryTab).toBe('catalog');
+
+    // 书源 Tab 直达书源列表，不显示目录空态。
+    tabButton(host, 'sources').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'sources',
+      'sources tab did not activate',
+    );
+    expect(root.dataset.libraryTab).toBe('sources');
+    expect(hint?.hidden).toBe(true);
+    expect(host.querySelector('h1')?.textContent).toBe('书库源');
+    view.destroy();
+  });
+
+  it('opens the cache limit as a full-screen subpage that Escape (Android back) consumes', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    const root = libraryRoot(host);
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => root.dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+
+    // 缓存上限在管理页内以全屏子页打开。
+    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const panel = host.querySelector<HTMLElement>('.lightink-library-manage-panel')!;
+    const subpage = panel.querySelector<HTMLElement>('.lightink-library-manage-subpage')!;
+    expect(panel.dataset.managePage).toBe('cache-limit');
+    expect(isShown(subpage)).toBe(true);
+    expect(isShown(panel.querySelector('.lightink-library-manage-home'))).toBe(false);
+
+    // 子页打开时合成 Escape（Android 返回）被消费，返回管理首页。
+    const input = subpage.querySelector<HTMLInputElement>('input[name="cacheLimitGiB"]')!;
+    const consumed = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(consumed);
+    expect(consumed.defaultPrevented).toBe(true);
+    expect(panel.dataset.managePage).toBe('home');
+    expect(isShown(subpage)).toBe(false);
+
+    // 子页未打开时不消费，交还分层链（书架顶层 → 系统默认）。
+    const passthrough = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    panel.dispatchEvent(passthrough);
+    expect(passthrough.defaultPrevented).toBe(false);
+
+    // 子页返回按钮同样回到管理首页。
+    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    expect(isShown(subpage)).toBe(true);
+    subpage.querySelector<HTMLButtonElement>('.lightink-library-manage-back')!.click();
+    expect(isShown(subpage)).toBe(false);
+    expect(isShown(panel.querySelector('.lightink-library-manage-home'))).toBe(true);
+    view.destroy();
+  });
+
+  it('does not mount the tab bar without the mobile chrome flags', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
+    expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('shelf');
     view.destroy();
   });
 });
