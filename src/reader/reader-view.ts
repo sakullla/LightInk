@@ -145,12 +145,14 @@ import {
 } from './reader-progress-ui.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
+  defaultReaderChromePanelComicCopy,
   fillReaderTocPanel,
   fillReaderTypographyPanel,
   pinFixedOverlay,
   positionReaderChromePanel,
   unpinFixedOverlay,
   type ReaderChromePanelCopy,
+  type ReaderTypographyComicControls,
 } from './reader-chrome-panels.js';
 import {
   applyReaderTheme,
@@ -2866,6 +2868,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       gray: t('reader.theme.gray'),
       night: t('reader.theme.night'),
     },
+    comic: {
+      // direction/spread 组标签暂无 i18n 键，沿用面板默认文案。
+      ...defaultReaderChromePanelComicCopy(),
+      vertical: t('reader.comic.vertical'),
+      paged: t('reader.comic.paged'),
+      leftToRight: t('reader.comic.ltr'),
+      rightToLeft: t('reader.comic.rtl'),
+      singlePage: t('reader.comic.single'),
+      doublePage: t('reader.comic.double'),
+      fitWidth: t('reader.comic.fitWidth'),
+    },
   });
 
   const renderTocPanel = (): void => {
@@ -2879,6 +2892,36 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       jumpToOutlineItem(item);
       closeChromePanel();
     });
+  };
+
+  /**
+   * Typography panel format gate (R8): live format adapters are the
+   * authority, the loaded extension covers the load window before a handle
+   * exists, and anything undeterminable conservatively counts as flow.
+   */
+  const readerFormatKind = (): 'flow' | 'pdf' | 'comic' => {
+    if (pdfHandle !== null || loadedExt === 'pdf') {
+      return 'pdf';
+    }
+    if (cbzHandle !== null || (PAGE_EXTS.has(loadedExt) && loadedExt !== 'pdf')) {
+      return 'comic';
+    }
+    return 'flow';
+  };
+
+  /** Map the comic sheet onto the live cbz handle; no new preference keys. */
+  const comicTypographyControls = (): ReaderTypographyComicControls | null => {
+    const handle = cbzHandle;
+    if (handle === null) {
+      return null;
+    }
+    return {
+      preferences: handle.preferences,
+      onPreferences: (patch) => {
+        handle.setPreferences(patch);
+        renderTypographyPanel();
+      },
+    };
   };
 
   const renderTypographyPanel = (): void => {
@@ -2896,6 +2939,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }),
       loadReaderLayout(preferenceStorage),
       applyFlowLayout,
+      readerFormatKind(),
+      comicTypographyControls(),
     );
   };
 

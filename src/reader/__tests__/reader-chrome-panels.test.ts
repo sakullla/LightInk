@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { defaultComicPreferences } from '../comic-preferences.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 import {
   defaultReaderChromePanelCopy,
@@ -106,6 +107,128 @@ describe('reader chrome panels', () => {
     expect(panel.querySelectorAll('.lightink-reader-type-glyph--measure')).toHaveLength(5);
     expect(panel.textContent).not.toContain('✓');
     expect(panel.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('keeps the full typography control set for flow books and unknown formats', () => {
+    for (const formatKind of ['flow', undefined] as const) {
+      const panel = document.createElement('div');
+      fillReaderTypographyPanel(
+        panel,
+        DEFAULT_READER_TYPOGRAPHY,
+        'white',
+        defaultReaderChromePanelCopy(),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        'paginated',
+        vi.fn(),
+        formatKind,
+      );
+      for (const kind of ['size', 'theme', 'font', 'layout', 'spacing', 'measure']) {
+        expect(
+          panel.querySelector(`[data-type-section="${kind}"]`),
+          `${kind} for formatKind=${String(formatKind)}`,
+        ).not.toBeNull();
+      }
+      expect(panel.querySelector('.lightink-reader-type-hero')).not.toBeNull();
+      expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(4);
+      expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(2);
+    }
+  });
+
+  it('shows only theme and layout for pdf — flow-only controls are not rendered', () => {
+    const panel = document.createElement('div');
+    const onLayout = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'sepia',
+      defaultReaderChromePanelCopy(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      'paginated',
+      onLayout,
+      'pdf',
+    );
+    expect(panel.querySelector('[data-type-section="theme"]')).not.toBeNull();
+    expect(panel.querySelector('[data-type-section="layout"]')).not.toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-theme-swatch')).toHaveLength(4);
+    expect(panel.querySelectorAll('.lightink-reader-type-mode')).toHaveLength(2);
+    for (const kind of ['size', 'font', 'spacing', 'measure']) {
+      expect(panel.querySelector(`[data-type-section="${kind}"]`), kind).toBeNull();
+    }
+    expect(panel.querySelector('.lightink-reader-type-hero')).toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(0);
+    expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(0);
+    // Hidden items leave no disabled placeholders behind.
+    expect(panel.querySelectorAll('[disabled], [aria-disabled="true"]')).toHaveLength(0);
+    const scroll = [...panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-type-choice')].find(
+      (button) => button.getAttribute('aria-label') === '滚动',
+    );
+    expect(scroll).toBeDefined();
+    scroll!.click();
+    expect(onLayout).toHaveBeenCalledWith('scroll');
+  });
+
+  it('maps comic typography onto the injected existing comic preferences only', () => {
+    const panel = document.createElement('div');
+    const onTypography = vi.fn();
+    const onPreferences = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      onTypography,
+      vi.fn(),
+      vi.fn(),
+      'paginated',
+      vi.fn(),
+      'comic',
+      { preferences: defaultComicPreferences(), onPreferences },
+    );
+    for (const kind of ['size', 'font', 'spacing', 'measure']) {
+      expect(panel.querySelector(`[data-type-section="${kind}"]`), kind).toBeNull();
+    }
+    expect(panel.querySelector('.lightink-reader-type-hero')).toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(0);
+    expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(0);
+    expect(panel.querySelectorAll('[disabled], [aria-disabled="true"]')).toHaveLength(0);
+    const paged = [...panel.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) =>
+        button.getAttribute('aria-label') === '横向翻页' ||
+        button.textContent?.includes('横向翻页') === true,
+    );
+    expect(paged).toBeDefined();
+    paged!.click();
+    expect(onPreferences).toHaveBeenCalledTimes(1);
+    const patch = onPreferences.mock.calls[0]![0] as Record<string, unknown>;
+    for (const key of Object.keys(patch)) {
+      // Only existing comic preference keys — the sheet adds no new capability.
+      expect(['mode', 'direction', 'spread', 'fitWidth']).toContain(key);
+    }
+    // No flow typography patches can originate from a comic panel.
+    expect(onTypography).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the full flow sheet when comic capabilities are not injected', () => {
+    const panel = document.createElement('div');
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      'paginated',
+      vi.fn(),
+      'comic',
+    );
+    for (const kind of ['size', 'theme', 'font', 'layout', 'spacing', 'measure']) {
+      expect(panel.querySelector(`[data-type-section="${kind}"]`), kind).not.toBeNull();
+    }
   });
 
   it('does not put a status-bar toggle in typography — reader chrome owns the footer', () => {

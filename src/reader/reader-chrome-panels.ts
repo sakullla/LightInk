@@ -15,9 +15,35 @@ import {
 } from './reader-typography.js';
 import type { ReaderFlowLayout } from './reader-layout.js';
 import { READER_THEMES, type ReaderThemeId } from './reader-theme.js';
+import type { ComicPreferences } from './comic-preferences.js';
 
 export const READER_TYPE_LINE_HEIGHTS = [1.5, 1.65, 1.8, 2] as const;
 export const READER_TYPE_MEASURE_REMS = [16, 18, 22, 26, 32] as const;
+
+/**
+ * Format gate for the typography sheet: flow gets every control, pdf keeps
+ * only theme plus paginated/scroll, comic maps existing comic preferences.
+ * Anything unrecognized falls back to the full flow sheet.
+ */
+export type ReaderTypographyFormatKind = 'flow' | 'pdf' | 'comic';
+
+/** Existing comic capabilities injected by the reader; the sheet adds none. */
+export interface ReaderTypographyComicControls {
+  readonly preferences: ComicPreferences;
+  readonly onPreferences: (patch: Partial<ComicPreferences>) => void;
+}
+
+export interface ReaderChromePanelComicCopy {
+  direction: string;
+  spread: string;
+  vertical: string;
+  paged: string;
+  leftToRight: string;
+  rightToLeft: string;
+  singlePage: string;
+  doublePage: string;
+  fitWidth: string;
+}
 
 export interface ReaderChromePanelCopy {
   tocTitle: string;
@@ -37,6 +63,22 @@ export interface ReaderChromePanelCopy {
   lineHeights: readonly string[];
   measures: readonly string[];
   themes: Readonly<Record<ReaderThemeId, string>>;
+  comic?: Readonly<ReaderChromePanelComicCopy>;
+}
+
+/** Labels mirror the comic toolbar wording in formats/cbz.ts. */
+export function defaultReaderChromePanelComicCopy(): ReaderChromePanelComicCopy {
+  return {
+    direction: '方向',
+    spread: '页面',
+    vertical: '竖向滚动',
+    paged: '横向翻页',
+    leftToRight: '从左到右',
+    rightToLeft: '从右到左',
+    singlePage: '单页',
+    doublePage: '双页',
+    fitWidth: '适合宽度',
+  };
 }
 
 export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
@@ -68,6 +110,7 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
       gray: '石墨',
       night: '夜间',
     },
+    comic: defaultReaderChromePanelComicCopy(),
   };
 }
 
@@ -131,6 +174,8 @@ export function fillReaderTypographyPanel(
   onSize: (direction: 'in' | 'out') => void,
   layout: ReaderFlowLayout = 'paginated',
   onLayout: (next: ReaderFlowLayout) => void = () => undefined,
+  formatKind: ReaderTypographyFormatKind = 'flow',
+  comic: ReaderTypographyComicControls | null = null,
 ): void {
   panel.replaceChildren();
   panel.classList.add('lightink-reader-type-sheet');
@@ -138,6 +183,109 @@ export function fillReaderTypographyPanel(
   panel.setAttribute('aria-modal', 'true');
   panel.setAttribute('aria-label', copy.typeTitle);
 
+  // Undecidable formats fall back to the full flow sheet rather than hiding
+  // controls the reader might need; comic needs its injected capabilities.
+  const kind: ReaderTypographyFormatKind =
+    formatKind === 'pdf' || (formatKind === 'comic' && comic !== null) ? formatKind : 'flow';
+
+  if (kind === 'comic' && comic !== null) {
+    fillComicTypographySections(panel, copy, comic);
+    return;
+  }
+  const flowOnly = kind === 'flow';
+
+  if (flowOnly) {
+    appendSizeSection(panel, typography, copy, onSize);
+  }
+
+  const themeSection = section(copy.theme, 'theme');
+  const swatches = document.createElement('div');
+  swatches.className = 'lightink-reader-theme-swatches';
+  swatches.setAttribute('role', 'radiogroup');
+  swatches.setAttribute('aria-label', copy.theme);
+  for (const preset of READER_THEMES) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'lightink-reader-theme-swatch';
+    swatch.dataset.readerTheme = preset.id;
+    swatch.setAttribute('role', 'radio');
+    swatch.setAttribute('aria-checked', preset.id === theme ? 'true' : 'false');
+    swatch.setAttribute('aria-label', copy.themes[preset.id]);
+    swatch.title = copy.themes[preset.id];
+    swatch.style.setProperty('--lightink-reader-swatch-page', preset.page);
+    swatch.style.setProperty('--lightink-reader-swatch-ink', preset.ink);
+    swatch.classList.toggle('is-active', preset.id === theme);
+    const page = document.createElement('span');
+    page.className = 'lightink-reader-theme-page';
+    page.setAttribute('aria-hidden', 'true');
+    for (let line = 0; line < 3; line += 1) {
+      page.appendChild(document.createElement('i'));
+    }
+    const name = document.createElement('span');
+    name.className = 'lightink-reader-theme-swatch-name';
+    name.textContent = copy.themes[preset.id];
+    swatch.append(page, name);
+    swatch.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onTheme(preset.id);
+    });
+    swatches.appendChild(swatch);
+  }
+  themeSection.appendChild(swatches);
+  panel.appendChild(themeSection);
+
+  if (flowOnly) {
+    appendFontSection(panel, typography, copy, onTypography);
+  }
+
+  const layoutSection = section(copy.layout, 'layout');
+  const modes = document.createElement('div');
+  modes.className = 'lightink-reader-type-modes';
+  modes.setAttribute('role', 'group');
+  modes.setAttribute('aria-label', copy.layout);
+  modes.append(
+    modeCard(copy.paginated, 'paginated', layout === 'paginated', () => onLayout('paginated')),
+    modeCard(copy.scroll, 'scroll', layout === 'scroll', () => onLayout('scroll')),
+  );
+  layoutSection.appendChild(modes);
+  panel.appendChild(layoutSection);
+
+  if (!flowOnly) {
+    return;
+  }
+  panel.appendChild(
+    sliderRow(
+      copy.lineHeight,
+      'spacing',
+      READER_TYPE_LINE_HEIGHTS.map((lineHeight, index) => ({
+        label: copy.lineHeights[index] ?? String(lineHeight),
+        selected: typography.lineHeight === lineHeight,
+        apply: () => onTypography({ lineHeight }),
+        glyph: spacingGlyph(index + 1),
+      })),
+    ),
+  );
+  panel.appendChild(
+    sliderRow(
+      copy.measure,
+      'measure',
+      READER_TYPE_MEASURE_REMS.map((measureRem, index) => ({
+        label: copy.measures[index] ?? String(measureRem),
+        selected: typography.measureRem === measureRem,
+        apply: () => onTypography({ measureRem }),
+        glyph: measureGlyph(index + 1),
+      })),
+    ),
+  );
+}
+
+function appendSizeSection(
+  panel: HTMLElement,
+  typography: ReaderTypography,
+  copy: ReaderChromePanelCopy,
+  onSize: (direction: 'in' | 'out') => void,
+): void {
   const minScale = FONT_SCALE_STEPS[0] ?? 0.85;
   const maxScale = FONT_SCALE_STEPS[FONT_SCALE_STEPS.length - 1] ?? 5;
   const sizeSection = section(copy.size, 'size', true);
@@ -182,44 +330,14 @@ export function fillReaderTypographyPanel(
   sizeRow.append(smaller, preview, larger);
   sizeSection.appendChild(sizeRow);
   panel.appendChild(sizeSection);
+}
 
-  const themeSection = section(copy.theme, 'theme');
-  const swatches = document.createElement('div');
-  swatches.className = 'lightink-reader-theme-swatches';
-  swatches.setAttribute('role', 'radiogroup');
-  swatches.setAttribute('aria-label', copy.theme);
-  for (const preset of READER_THEMES) {
-    const swatch = document.createElement('button');
-    swatch.type = 'button';
-    swatch.className = 'lightink-reader-theme-swatch';
-    swatch.dataset.readerTheme = preset.id;
-    swatch.setAttribute('role', 'radio');
-    swatch.setAttribute('aria-checked', preset.id === theme ? 'true' : 'false');
-    swatch.setAttribute('aria-label', copy.themes[preset.id]);
-    swatch.title = copy.themes[preset.id];
-    swatch.style.setProperty('--lightink-reader-swatch-page', preset.page);
-    swatch.style.setProperty('--lightink-reader-swatch-ink', preset.ink);
-    swatch.classList.toggle('is-active', preset.id === theme);
-    const page = document.createElement('span');
-    page.className = 'lightink-reader-theme-page';
-    page.setAttribute('aria-hidden', 'true');
-    for (let line = 0; line < 3; line += 1) {
-      page.appendChild(document.createElement('i'));
-    }
-    const name = document.createElement('span');
-    name.className = 'lightink-reader-theme-swatch-name';
-    name.textContent = copy.themes[preset.id];
-    swatch.append(page, name);
-    swatch.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onTheme(preset.id);
-    });
-    swatches.appendChild(swatch);
-  }
-  themeSection.appendChild(swatches);
-  panel.appendChild(themeSection);
-
+function appendFontSection(
+  panel: HTMLElement,
+  typography: ReaderTypography,
+  copy: ReaderChromePanelCopy,
+  onTypography: (patch: Partial<ReaderTypography>) => void,
+): void {
   const fontSection = section(copy.font, 'font');
   const fonts = document.createElement('div');
   fonts.className = 'lightink-reader-type-fonts';
@@ -249,6 +367,20 @@ export function fillReaderTypographyPanel(
   }
   fontSection.appendChild(fonts);
   panel.appendChild(fontSection);
+}
+
+/**
+ * Comic sheet: only the preferences the comic renderer already persists via
+ * comic-preferences.ts (mode, direction, spread, fit width). No flow controls,
+ * and hidden items are simply not rendered — no disabled placeholders.
+ */
+function fillComicTypographySections(
+  panel: HTMLElement,
+  copy: ReaderChromePanelCopy,
+  comic: ReaderTypographyComicControls,
+): void {
+  const comicCopy = copy.comic ?? defaultReaderChromePanelComicCopy();
+  const preferences = comic.preferences;
 
   const layoutSection = section(copy.layout, 'layout');
   const modes = document.createElement('div');
@@ -256,36 +388,81 @@ export function fillReaderTypographyPanel(
   modes.setAttribute('role', 'group');
   modes.setAttribute('aria-label', copy.layout);
   modes.append(
-    modeCard(copy.paginated, 'paginated', layout === 'paginated', () => onLayout('paginated')),
-    modeCard(copy.scroll, 'scroll', layout === 'scroll', () => onLayout('scroll')),
+    modeCard(comicCopy.paged, 'paginated', preferences.mode === 'paged', () =>
+      comic.onPreferences({ mode: 'paged' }),
+    ),
+    modeCard(comicCopy.vertical, 'scroll', preferences.mode === 'vertical', () =>
+      comic.onPreferences({ mode: 'vertical' }),
+    ),
   );
   layoutSection.appendChild(modes);
   panel.appendChild(layoutSection);
 
   panel.appendChild(
-    sliderRow(
-      copy.lineHeight,
-      'spacing',
-      READER_TYPE_LINE_HEIGHTS.map((lineHeight, index) => ({
-        label: copy.lineHeights[index] ?? String(lineHeight),
-        selected: typography.lineHeight === lineHeight,
-        apply: () => onTypography({ lineHeight }),
-        glyph: spacingGlyph(index + 1),
-      })),
-    ),
+    comicChoiceSection(comicCopy.direction, 'comic-direction', [
+      {
+        label: comicCopy.leftToRight,
+        selected: preferences.direction === 'ltr',
+        apply: () => comic.onPreferences({ direction: 'ltr' }),
+      },
+      {
+        label: comicCopy.rightToLeft,
+        selected: preferences.direction === 'rtl',
+        apply: () => comic.onPreferences({ direction: 'rtl' }),
+      },
+    ]),
   );
   panel.appendChild(
-    sliderRow(
-      copy.measure,
-      'measure',
-      READER_TYPE_MEASURE_REMS.map((measureRem, index) => ({
-        label: copy.measures[index] ?? String(measureRem),
-        selected: typography.measureRem === measureRem,
-        apply: () => onTypography({ measureRem }),
-        glyph: measureGlyph(index + 1),
-      })),
-    ),
+    comicChoiceSection(comicCopy.spread, 'comic-spread', [
+      {
+        label: comicCopy.singlePage,
+        selected: preferences.spread === 'single',
+        apply: () => comic.onPreferences({ spread: 'single' }),
+      },
+      {
+        label: comicCopy.doublePage,
+        selected: preferences.spread === 'double',
+        apply: () => comic.onPreferences({ spread: 'double' }),
+      },
+    ]),
   );
+  panel.appendChild(
+    comicChoiceSection(comicCopy.fitWidth, 'comic-fit', [
+      {
+        label: comicCopy.fitWidth,
+        selected: preferences.fitWidth,
+        apply: () => comic.onPreferences({ fitWidth: !preferences.fitWidth }),
+      },
+    ]),
+  );
+}
+
+function comicChoiceSection(
+  label: string,
+  kind: string,
+  choices: readonly { label: string; selected: boolean; apply: () => void }[],
+): HTMLElement {
+  const block = section(label, kind);
+  const group = document.createElement('div');
+  group.className = 'lightink-reader-type-fonts lightink-reader-type-comic-group';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', label);
+  for (const choice of choices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lightink-reader-type-choice lightink-reader-type-comic-choice';
+    button.textContent = choice.label;
+    button.setAttribute('aria-pressed', choice.selected ? 'true' : 'false');
+    button.classList.toggle('is-active', choice.selected);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      choice.apply();
+    });
+    group.appendChild(button);
+  }
+  block.appendChild(group);
+  return block;
 }
 
 /** Anchor a sheet under its toolbar button, clamped to the reading host. */
