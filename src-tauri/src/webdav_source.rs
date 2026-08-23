@@ -512,21 +512,19 @@ fn parse_multistatus(xml: &str) -> Result<Vec<DavResource>, RemoteError> {
                     }
                 } else if name == "response" && current.is_none() {
                     current = Some(DavResource::default());
-                } else if name == "collection"
-                    && stack.iter().any(|part| part == "resourcetype")
-                    && current.is_some()
-                {
-                    current.as_mut().expect("checked above").is_collection = true;
+                } else if name == "collection" && stack.iter().any(|part| part == "resourcetype") {
+                    if let Some(resource) = current.as_mut() {
+                        resource.is_collection = true;
+                    }
                 }
                 stack.push(name);
             }
             Ok(Event::Empty(element)) => {
                 let name = local(element.name().as_ref());
-                if name == "collection"
-                    && stack.iter().any(|part| part == "resourcetype")
-                    && current.is_some()
-                {
-                    current.as_mut().expect("checked above").is_collection = true;
+                if name == "collection" && stack.iter().any(|part| part == "resourcetype") {
+                    if let Some(resource) = current.as_mut() {
+                        resource.is_collection = true;
+                    }
                 }
             }
             Ok(Event::Text(text)) => {

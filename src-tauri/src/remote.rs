@@ -483,16 +483,15 @@ fn reuse_complete_cache(
         keys.push(derived);
     }
     for source_key in keys {
-        let Some((object_id, cache_path, _total_size, complete)) =
-            find_cache_object_row(&connection, &source_key)
-                .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?
+        let Some(row) = find_cache_object_row(&connection, &source_key)
+            .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?
         else {
             continue;
         };
-        if !complete {
+        if !row.complete {
             continue;
         }
-        let Some(path) = confined_cache_path(&cache_dir, &cache_path) else {
+        let Some(path) = confined_cache_path(&cache_dir, &row.path) else {
             continue;
         };
         let metadata = match std::fs::metadata(&path) {
@@ -503,9 +502,9 @@ fn reuse_complete_cache(
         if !complete_cache_size_compatible(size, actual) {
             continue;
         }
-        touch_cache_object(&mut connection, &object_id)
+        touch_cache_object(&mut connection, &row.id)
             .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?;
-        return Ok(Some((object_id, path, actual)));
+        return Ok(Some((row.id, path, actual)));
     }
     Ok(None)
 }
@@ -905,12 +904,10 @@ pub(crate) fn file_info(
     })
 }
 
-fn publish_open(
-    state: &RemoteState,
-    handle_sequence: u64,
+struct PublishedHandle {
     url: Url,
     client: Client,
-    item_id: &str,
+    item_id: String,
     size: u64,
     object_id: String,
     cache_path: PathBuf,
@@ -920,71 +917,80 @@ fn publish_open(
     credential: Option<RemoteCredential>,
     supports_ranges: bool,
     cache_complete: bool,
+}
+
+fn publish_open(
+    state: &RemoteState,
+    handle_sequence: u64,
     session_id: &str,
+    published: PublishedHandle,
 ) -> Result<RemoteOpenResult, RemoteError> {
     let resource_id = format!("remote-{handle_sequence}");
-    let version = if cache_complete {
-        format!("size-{size}")
+    let version = if published.cache_complete {
+        format!("size-{}", published.size)
     } else {
         resource_version(
-            etag.as_deref(),
-            last_modified.as_deref(),
+            published.etag.as_deref(),
+            published.last_modified.as_deref(),
             session_id,
             handle_sequence,
         )
     };
-    let identity = format!("{item_id}@{version}");
+    let identity = format!("{}@{version}", published.item_id);
     state.handles.lock().map_err(|_| lock_error())?.insert(
         resource_id.clone(),
         Arc::new(RemoteHandle {
-            url,
-            client,
+            url: published.url,
+            client: published.client,
             identity: identity.clone(),
-            size,
-            object_id,
-            cache_path,
-            etag: etag.clone(),
-            last_modified: last_modified.clone(),
-            credential,
-            supports_ranges,
-            mime_type: mime_type.clone(),
+            size: published.size,
+            object_id: published.object_id,
+            cache_path: published.cache_path,
+            etag: published.etag.clone(),
+            last_modified: published.last_modified.clone(),
+            credential: published.credential,
+            supports_ranges: published.supports_ranges,
+            mime_type: published.mime_type.clone(),
         }),
     );
     Ok(RemoteOpenResult {
         resource_id,
-        size,
+        size: published.size,
         identity,
-        etag,
-        last_modified,
-        mime_type,
-        supports_ranges,
-        cache_complete,
+        etag: published.etag,
+        last_modified: published.last_modified,
+        mime_type: published.mime_type,
+        supports_ranges: published.supports_ranges,
+        cache_complete: published.cache_complete,
     })
+}
+
+struct CompleteDownload<'a> {
+    url: &'a Url,
+    client: &'a Client,
+    credential: Option<&'a RemoteCredential>,
+    size_hint: u64,
+    session_id: &'a str,
+}
+
+struct CompleteObject {
+    size: u64,
+    object_id: String,
+    cache_path: PathBuf,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    mime_type: Option<String>,
 }
 
 async fn download_complete_object(
     app: &AppHandle,
-    url: &Url,
-    client: &Client,
-    credential: Option<&RemoteCredential>,
-    token: &CancellationToken,
-    size_hint: u64,
-    session_id: &str,
     handle_sequence: u64,
-) -> Result<
-    (
-        u64,
-        String,
-        PathBuf,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ),
-    RemoteError,
-> {
+    token: &CancellationToken,
+    download: CompleteDownload<'_>,
+) -> Result<CompleteObject, RemoteError> {
     let response = tokio::select! {
         _ = token.cancelled() => return Err(cancelled_error()),
-        response = apply_credential(client.get(url.clone()), credential).send() => response.map_err(|error| {
+        response = apply_credential(download.client.get(download.url.clone()), download.credential).send() => response.map_err(|error| {
             RemoteError::new("REMOTE_NETWORK_ERROR", format!("无法连接远程资源: {error}"))
         })?,
     };
@@ -1001,14 +1007,14 @@ async fn download_complete_object(
     let etag = header_string(response.headers(), ETAG);
     let last_modified = header_string(response.headers(), LAST_MODIFIED);
     let mime_type = header_string(response.headers(), CONTENT_TYPE);
-    let stable_validator = format!("size-{size_hint}");
+    let stable_validator = format!("size-{}", download.size_hint);
     let (object_id, cache_path) = prepare_cache(
         app,
-        url,
-        size_hint,
+        download.url,
+        download.size_hint,
         Some(&stable_validator),
         None,
-        session_id,
+        download.session_id,
         handle_sequence,
     )?;
     let connection = library::open_database_at(
@@ -1022,13 +1028,13 @@ async fn download_complete_object(
     if downloaded == 0 {
         return Err(RemoteError::new("REMOTE_SIZE_UNKNOWN", "远程资源为空"));
     }
-    if !complete_cache_size_compatible(size_hint, downloaded) {
+    if !complete_cache_size_compatible(download.size_hint, downloaded) {
         return Err(RemoteError::new(
             "REMOTE_SIZE_CHANGED",
             "远程资源大小与目录记录不一致",
         ));
     }
-    if downloaded != size_hint {
+    if downloaded != download.size_hint {
         let connection = library::open_database_at(
             &library::app_data_dir(app)
                 .map_err(|message| RemoteError::new("REMOTE_CACHE_DB", message))?,
@@ -1049,14 +1055,22 @@ async fn download_complete_object(
         ByteRange::new(0, downloaded).unwrap(),
         true,
     )?;
-    Ok((
-        downloaded,
+    Ok(CompleteObject {
+        size: downloaded,
         object_id,
         cache_path,
         etag,
         last_modified,
         mime_type,
-    ))
+    })
+}
+
+struct SuffixProbeOpen<'a> {
+    url: Url,
+    client: Client,
+    item_id: &'a str,
+    credential: Option<RemoteCredential>,
+    expected_size: Option<u64>,
 }
 
 /// RemoteZip / Readium: one suffix Range gets the real size and ZIP tail.
@@ -1065,15 +1079,18 @@ async fn open_from_suffix_probe(
     app: &AppHandle,
     state: &RemoteState,
     handle_sequence: u64,
-    url: Url,
-    client: Client,
-    item_id: &str,
-    credential: Option<RemoteCredential>,
-    token: &CancellationToken,
-    expected_size: Option<u64>,
     session_id: &str,
+    token: &CancellationToken,
+    probe: SuffixProbeOpen<'_>,
 ) -> Result<Option<RemoteOpenResult>, RemoteError> {
-    let probe = expected_size
+    let SuffixProbeOpen {
+        url,
+        client,
+        item_id,
+        credential,
+        expected_size,
+    } = probe;
+    let probe_bytes = expected_size
         .filter(|&size| size > 1)
         .map(|size| size.min(ZIP_TAIL_PROBE_BYTES))
         .unwrap_or(ZIP_TAIL_PROBE_BYTES);
@@ -1081,7 +1098,7 @@ async fn open_from_suffix_probe(
     let response = tokio::select! {
         _ = token.cancelled() => return Err(cancelled_error()),
         response = apply_credential(
-            client.get(url.clone()).header(RANGE, format!("bytes=-{probe}")),
+            client.get(url.clone()).header(RANGE, format!("bytes=-{probe_bytes}")),
             credential.as_ref(),
         ).send() => match response {
             Ok(response) => response,
@@ -1127,35 +1144,38 @@ async fn open_from_suffix_probe(
         bytes: expected_len,
     };
     if prefers_complete_fill(size, expected_len, timing) {
-        if let Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) =
-            download_complete_object(
-                app,
-                &url,
-                &client,
-                credential.as_ref(),
-                token,
-                size,
+        if let Ok(complete) = download_complete_object(
+            app,
+            handle_sequence,
+            token,
+            CompleteDownload {
+                url: &url,
+                client: &client,
+                credential: credential.as_ref(),
+                size_hint: size,
                 session_id,
-                handle_sequence,
-            )
-            .await
+            },
+        )
+        .await
         {
             return Ok(Some(publish_open(
                 state,
                 handle_sequence,
-                url,
-                client,
-                item_id,
-                downloaded,
-                object_id,
-                cache_path,
-                etag,
-                last_modified,
-                mime_type,
-                credential,
-                true,
-                true,
                 session_id,
+                PublishedHandle {
+                    url,
+                    client,
+                    item_id: item_id.to_string(),
+                    size: complete.size,
+                    object_id: complete.object_id,
+                    cache_path: complete.cache_path,
+                    etag: complete.etag,
+                    last_modified: complete.last_modified,
+                    mime_type: complete.mime_type,
+                    credential,
+                    supports_ranges: true,
+                    cache_complete: true,
+                },
             )?));
         }
     }
@@ -1179,23 +1199,26 @@ async fn open_from_suffix_probe(
     Ok(Some(publish_open(
         state,
         handle_sequence,
-        url,
-        client,
-        item_id,
-        size,
-        object_id,
-        cache_path,
-        etag,
-        last_modified,
-        mime_type,
-        credential,
-        true,
-        size == expected_len,
         session_id,
+        PublishedHandle {
+            url,
+            client,
+            item_id: item_id.to_string(),
+            size,
+            object_id,
+            cache_path,
+            etag,
+            last_modified,
+            mime_type,
+            credential,
+            supports_ranges: true,
+            cache_complete: size == expected_len,
+        },
     )?))
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // invoke payload names are the public IPC contract
 pub async fn remote_open(
     app: AppHandle,
     state: State<'_, RemoteState>,
@@ -1229,52 +1252,58 @@ pub async fn remote_open(
         return publish_open(
             state.inner(),
             handle_sequence,
-            url,
-            client,
-            &item_id,
-            actual_size,
-            object_id,
-            cache_path,
-            None,
-            None,
-            None,
-            credential,
-            true,
-            true,
             &state.session_id,
+            PublishedHandle {
+                url,
+                client,
+                item_id,
+                size: actual_size,
+                object_id,
+                cache_path,
+                etag: None,
+                last_modified: None,
+                mime_type: None,
+                credential,
+                supports_ranges: true,
+                cache_complete: true,
+            },
         );
     }
     if let Some(size) = expected_size.filter(|&candidate| prefers_complete_download(candidate)) {
         let size = ensure_frontend_safe_size(size)?;
         match download_complete_object(
             &app,
-            &url,
-            &client,
-            credential.as_ref(),
-            &token,
-            size,
-            &state.session_id,
             handle_sequence,
+            &token,
+            CompleteDownload {
+                url: &url,
+                client: &client,
+                credential: credential.as_ref(),
+                size_hint: size,
+                session_id: &state.session_id,
+            },
         )
         .await
         {
-            Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) => {
+            Ok(complete) => {
                 return publish_open(
                     state.inner(),
                     handle_sequence,
-                    url,
-                    client,
-                    &item_id,
-                    downloaded,
-                    object_id,
-                    cache_path,
-                    etag,
-                    last_modified,
-                    mime_type,
-                    credential,
-                    true,
-                    true,
                     &state.session_id,
+                    PublishedHandle {
+                        url,
+                        client,
+                        item_id,
+                        size: complete.size,
+                        object_id: complete.object_id,
+                        cache_path: complete.cache_path,
+                        etag: complete.etag,
+                        last_modified: complete.last_modified,
+                        mime_type: complete.mime_type,
+                        credential,
+                        supports_ranges: true,
+                        cache_complete: true,
+                    },
                 );
             }
             Err(error) if complete_get_size_unreliable(&error) => {}
@@ -1285,13 +1314,15 @@ pub async fn remote_open(
         &app,
         state.inner(),
         handle_sequence,
-        url.clone(),
-        client.clone(),
-        &item_id,
-        credential.clone(),
-        &token,
-        expected_size,
         &state.session_id,
+        &token,
+        SuffixProbeOpen {
+            url: url.clone(),
+            client: client.clone(),
+            item_id: &item_id,
+            credential: credential.clone(),
+            expected_size,
+        },
     )
     .await?
     {
@@ -1401,51 +1432,57 @@ pub async fn remote_open(
             return publish_open(
                 state.inner(),
                 handle_sequence,
-                url,
-                client,
-                &item_id,
-                actual_size,
-                object_id,
-                cache_path,
-                etag,
-                last_modified,
-                mime_type,
-                credential,
-                true,
-                true,
                 &state.session_id,
+                PublishedHandle {
+                    url,
+                    client,
+                    item_id,
+                    size: actual_size,
+                    object_id,
+                    cache_path,
+                    etag,
+                    last_modified,
+                    mime_type,
+                    credential,
+                    supports_ranges: true,
+                    cache_complete: true,
+                },
             );
         }
         if prefers_complete_download(size) {
             match download_complete_object(
                 &app,
-                &url,
-                &client,
-                credential.as_ref(),
-                &token,
-                size,
-                &state.session_id,
                 handle_sequence,
+                &token,
+                CompleteDownload {
+                    url: &url,
+                    client: &client,
+                    credential: credential.as_ref(),
+                    size_hint: size,
+                    session_id: &state.session_id,
+                },
             )
             .await
             {
-                Ok((downloaded, object_id, cache_path, etag, last_modified, mime_type)) => {
+                Ok(complete) => {
                     return publish_open(
                         state.inner(),
                         handle_sequence,
-                        url,
-                        client,
-                        &item_id,
-                        downloaded,
-                        object_id,
-                        cache_path,
-                        etag,
-                        last_modified,
-                        mime_type,
-                        credential,
-                        true,
-                        true,
                         &state.session_id,
+                        PublishedHandle {
+                            url,
+                            client,
+                            item_id,
+                            size: complete.size,
+                            object_id: complete.object_id,
+                            cache_path: complete.cache_path,
+                            etag: complete.etag,
+                            last_modified: complete.last_modified,
+                            mime_type: complete.mime_type,
+                            credential,
+                            supports_ranges: true,
+                            cache_complete: true,
+                        },
                     );
                 }
                 Err(error) if complete_get_size_unreliable(&error) => {}

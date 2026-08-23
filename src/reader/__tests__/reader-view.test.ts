@@ -1694,6 +1694,20 @@ describe('缩放性能（T6：档位合并去抖 + 仅可见章分栏 + 流式�
 
   it('翻页切到滚动后进度按全书章节算，不把已挂载窗口当成 86%', async () => {
     vi.useFakeTimers();
+    globalThis.localStorage?.clear();
+    // Sibling tests persist book.epub at chapter 0. If jump does not cancel
+    // pendingRestore, iframe load reapplies that leftover and current stays 1.
+    globalThis.localStorage?.setItem(
+      'lightink.reader.progress.book.epub',
+      JSON.stringify({
+        version: 1,
+        kind: 'flow',
+        index: 0,
+        ratio: 0,
+        total: 40,
+        updatedAt: 1,
+      }),
+    );
     const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
     const host = document.createElement('div');
     document.body.appendChild(host);

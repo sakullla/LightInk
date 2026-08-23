@@ -2456,6 +2456,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     if (item.chapter !== undefined) {
+      // A later iframe load must not apply leftover progress and undo this jump.
+      pendingRestore = null;
+      cancelRestoreRetry();
       setActiveChapter(item.chapter);
       if (flowIsPaginated()) {
         const frame = scrollHost.querySelector<HTMLIFrameElement>(
