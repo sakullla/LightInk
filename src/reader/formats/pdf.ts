@@ -183,7 +183,12 @@ export interface PdfRenderHandle {
   /** 滚动到指定页（1-based），并同步 controller.page。供翻页/侧栏跳转。 */
   scrollToPage(page: number): void;
   /** 全文搜索（大小写不敏感）：按页序返回命中（页码 + 该页拼接文本偏移）。 */
-  search(query: string): Promise<PdfSearchMatch[]>;
+  search(
+    query: string,
+    options?: {
+      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => void;
+    },
+  ): Promise<PdfSearchMatch[]>;
   /** PDF 书签树拍平后的大纲（无书签则为空）。 */
   outline(): Promise<OutlineItem[]>;
   /** 释放 pdfjs 文档资源 + 断开 observer（关闭/重开 PDF 时调用）。 */
@@ -690,16 +695,32 @@ export async function renderPdfInto(
     return text;
   };
 
-  const search = async (query: string): Promise<PdfSearchMatch[]> => {
+  const search = async (
+    query: string,
+    options?: {
+      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => void;
+    },
+  ): Promise<PdfSearchMatch[]> => {
     if (query.trim().length === 0 || destroyed || isAborted()) {
       return [];
     }
-    // 逐页懒取文本后复用 findPdfMatches（单一匹配实现，测试锁定行为）。
+    // 逐页懒取文本后复用 findPdfMatches；每几页交出一帧，避免整本扫描锁死输入。
     const texts: string[] = [];
+    let matches: PdfSearchMatch[] = [];
     for (let index = 0; index < total && !destroyed && !isAborted(); index += 1) {
       texts.push(await ensurePageText(index));
+      const done = index === total - 1;
+      if (done || (index + 1) % 2 === 0) {
+        matches = findPdfMatches(texts, query);
+        options?.onProgress?.(matches, done);
+        if (!done) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+        }
+      }
     }
-    return findPdfMatches(texts, query);
+    return matches;
   };
 
   const outline = async (): Promise<OutlineItem[]> => {

@@ -4,9 +4,10 @@
  * 标注侧栏（R5）测试：摘录/备注搜索、类型与颜色筛、定位、跳转/改备注/删除；
  * 书内正文搜索仍与标注搜索并存；附笔记弹层 Promise 语义。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnnotationSidebar } from '../annotation-sidebar.js';
+import { SEARCH_QUERY_DEBOUNCE_MS } from '../search-panel.js';
 import { showNoteDialog } from '../note-dialog.js';
 import {
   ANNOTATION_COLORS,
@@ -84,6 +85,7 @@ function mount() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
 });
 
@@ -297,13 +299,17 @@ describe('annotation-sidebar 重做', () => {
       '.lightink-reader-sidebar-note-search-input',
     )!;
 
-    // 默认「全部」分类：输入触发正文检索，标注筛选立即生效
+    // 默认「全部」分类：标注筛选立即生效，正文检索等输入停顿后再跑。
+    vi.useFakeTimers();
     input.value = '旧备注';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(queries).toEqual(['旧备注']);
+    expect(queries).toEqual([]);
     expect(
       sidebar.element.querySelector<HTMLElement>('[data-annotation-id="n1"]'),
     ).not.toBeNull();
+    vi.advanceTimersByTime(SEARCH_QUERY_DEBOUNCE_MS);
+    expect(queries).toEqual(['旧备注']);
+    vi.useRealTimers();
 
     // 正文命中回流后与标注命中合并呈现（不互斥切换）
     sidebar.renderHits([{ key: '1:0:7', snippet: '旧备注 正文命中', location: 'page 1', current: true }]);

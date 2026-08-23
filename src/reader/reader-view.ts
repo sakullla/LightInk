@@ -59,12 +59,17 @@ import { showNoteDialog } from './note-dialog.js';
 import { outlineFromEntries } from './outline.js';
 import type { OutlineItem } from '../outline/outline-model.js';
 import {
+  capSearchHits,
+  createSearchBusyReveal,
   findTextHits,
+  htmlToSearchText,
   nearestMatchIndex,
   nextMatchIndex,
   preserveMatchIndex,
   sanitizeSearchQuery,
+  SEARCH_HIT_CAP,
   snippetAround,
+  yieldToUi,
   type PdfSearchMatch,
 } from './search-panel.js';
 import {
@@ -147,6 +152,7 @@ import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
   fillReaderTocPanel,
   fillReaderTypographyPanel,
+  mountReaderOverlay,
   pinFixedOverlay,
   positionReaderChromePanel,
   unpinFixedOverlay,
@@ -364,6 +370,18 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   status.hidden = true;
+  const statusLabel = document.createElement('span');
+  statusLabel.className = 'lightink-reader-status-label';
+  const loadTrack = document.createElement('div');
+  loadTrack.className = 'lightink-reader-load-track';
+  loadTrack.hidden = true;
+  loadTrack.setAttribute('role', 'progressbar');
+  loadTrack.setAttribute('aria-valuemin', '0');
+  loadTrack.setAttribute('aria-valuemax', '100');
+  const loadFill = document.createElement('div');
+  loadFill.className = 'lightink-reader-load-fill';
+  loadTrack.appendChild(loadFill);
+  status.append(statusLabel, loadTrack);
 
   root.append(scrollHost, pageHost, status);
   applyReaderLayout(root, loadReaderLayout(preferenceStorage));
@@ -430,15 +448,25 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   /** Spine item count is metadata, independent from the bounded mounted iframe window. */
   let flowChapterCount = 0;
   /** PDF 搜索状态（查询/命中/活动命中索引）；UI 在标注侧栏。 */
-  let pdfSearch: { query: string; matches: PdfSearchMatch[]; active: number } | null = null;
+  let pdfSearch: {
+    query: string;
+    matches: PdfSearchMatch[];
+    active: number;
+    done: boolean;
+  } | null = null;
   let flowSearch: {
     query: string;
     /** 章索引 → 该章命中 spec（共享幂等引擎按 host 渲染与类名校正）。 */
     byChapter: Map<number, SearchMarkSpec[]>;
     marks: HTMLElement[];
     active: number;
+    done: boolean;
   } | null = null;
   let searchGeneration = 0;
+  let searchDisplayLimit = SEARCH_HIT_CAP;
+  const searchBusy = createSearchBusyReveal(() => {
+    syncSearchHits();
+  });
   let searchDebounce: ReturnType<typeof setTimeout> | null = null;
   /** 激活跳转待滚动的命中 key（页:起:止）：命中首次就绪时滚动一次后清除。 */
   let pendingSearchScrollKey: string | null = null;
@@ -826,7 +854,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             ? 'reader.failed'
             : null;
     status.hidden = messageKey === null;
-    status.textContent = messageKey === null ? '' : t(messageKey);
+    statusLabel.textContent = messageKey === null ? '' : t(messageKey);
+    loadTrack.hidden = state.phase !== 'loading';
   };
 
   const setReaderState = (next: ReaderState): void => {
@@ -1248,6 +1277,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           clearSearchSession();
           sidebar?.render(annotations);
         },
+        onLoadMore: () => loadMoreSearchHits(),
       },
       onJump: (annotation) => {
         const loc = annotation.locator;
@@ -1329,6 +1359,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const pinSidebarOverlay = (): void => {
     if (sidebar === null || sidebar.element.hidden) {
+      return;
+    }
+    if (readerChromeTouchMode()) {
+      mountReaderOverlay(sidebar.element, root);
+      pinFixedOverlay(sidebar.element, closestPane() ?? root);
       return;
     }
     if (flowIsPaginated()) {
@@ -1418,6 +1453,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sidebar?.element.setAttribute('aria-hidden', shown ? 'false' : 'true');
     if (sidebar !== null) {
       sidebar.element.hidden = !shown;
+      if (!shown) {
+        unpinFixedOverlay(sidebar.element);
+      }
     }
     if (sidebarBackdrop !== null) {
       sidebarBackdrop.hidden = !shown;
@@ -1428,6 +1466,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 切换侧栏显隐，并让窄窗 drawer 获得或释放键盘焦点。 */
   function setSidebarVisible(visible: boolean): void {
+    if (visible) {
+      closeSearchSheet();
+      closeChromePanel();
+    }
     if (!visible && sidebarVisible) {
       closePdfSearch();
     }
@@ -1776,34 +1818,51 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
   };
 
-  /** 执行搜索（去抖 200ms：快速输入时不叠加全文档扫描）：命中后跳到首个并渲染 overlay。 */
+  const applyPdfMatches = (
+    query: string,
+    matches: PdfSearchMatch[],
+    done: boolean,
+    handle: NonNullable<typeof pdfHandle>,
+  ): void => {
+    const currentPage = handle.controller.page;
+    const previous = pdfSearch?.query === query ? pdfSearch.active : -1;
+    const firstAtOrAfter = matches.findIndex((match) => match.page >= currentPage);
+    const active = preserveMatchIndex(matches.length, previous, firstAtOrAfter);
+    pdfSearch = { query, matches, active, done };
+    if (done) {
+      searchBusy.clear();
+    }
+    renderPdfSearchMarks();
+    syncSearchHits();
+  };
+
+  /** 执行 PDF 搜索：输入层已去抖；这里只换代取消过期 in-flight 结果。 */
   const runPdfSearch = (query: string): void => {
     const handle = pdfHandle;
     if (handle === null) {
       return;
     }
-    // 入口即换代：等待去抖窗口内的旧 in-flight 结果与未 fire 的旧定时器同代失效。
     const generation = ++searchGeneration;
+    searchDisplayLimit = SEARCH_HIT_CAP;
+    searchBusy.start();
     if (searchDebounce !== null) {
       clearTimeout(searchDebounce);
-    }
-    searchDebounce = setTimeout(() => {
       searchDebounce = null;
-      void (async () => {
-        const matches = await handle.search(query);
-        if (destroyed || generation !== searchGeneration || handle !== pdfHandle) {
-          return; // 迟到结果（新查询/切换文档）丢弃
-        }
-        clearReaderSearchMarks();
-        const currentPage = handle.controller.page;
-        const firstAtOrAfter = matches.findIndex((match) => match.page >= currentPage);
-        const active = nearestMatchIndex(matches.length, firstAtOrAfter);
-        pdfSearch = { query, matches, active };
-        renderPdfSearchMarks();
-        syncSearchHits();
-        // Opening Find or typing a query should not yank the reader back to page 1.
-      })();
-    }, 200);
+    }
+    void (async () => {
+      const matches = await handle.search(query, {
+        onProgress: (partial, done) => {
+          if (destroyed || generation !== searchGeneration || handle !== pdfHandle) {
+            return;
+          }
+          applyPdfMatches(query, partial, done, handle);
+        },
+      });
+      if (destroyed || generation !== searchGeneration || handle !== pdfHandle) {
+        return;
+      }
+      applyPdfMatches(query, matches, true, handle);
+    })();
   };
 
   /** 跳到指定命中（环形步进在面板回调中计算）。 */
@@ -1841,6 +1900,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const clearSearchSession = (): void => {
     searchGeneration += 1;
+    searchDisplayLimit = SEARCH_HIT_CAP;
+    searchBusy.clear();
     if (searchDebounce !== null) {
       clearTimeout(searchDebounce);
       searchDebounce = null;
@@ -1870,6 +1931,59 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     });
   };
 
+  const chapterFrame = (index: number): HTMLIFrameElement | null =>
+    scrollHost.querySelector<HTMLIFrameElement>(
+      `.lightink-reader-chapter[data-chapter-index="${String(index)}"] .lightink-reader-chapter-frame`,
+    );
+
+  const collectFlowMarks = (
+    byChapter: ReadonlyMap<number, SearchMarkSpec[]>,
+  ): { marks: HTMLElement[]; firstAtOrAfter: number } => {
+    const marks: HTMLElement[] = [];
+    const currentChapter = Math.max(0, readerState.current - 1);
+    let firstAtOrAfter = -1;
+    for (const [chapter, specs] of byChapter) {
+      const doc = chapterFrame(chapter)?.contentDocument;
+      if (doc === null || doc === undefined) {
+        continue;
+      }
+      for (const spec of specs) {
+        const mark = doc.body.querySelector<HTMLElement>(
+          `[data-search-key="${cssEscape(spec.key)}"]`,
+        );
+        if (mark === null) {
+          continue;
+        }
+        if (firstAtOrAfter < 0 && chapter >= currentChapter) {
+          firstAtOrAfter = marks.length;
+        }
+        marks.push(mark);
+      }
+    }
+    return { marks, firstAtOrAfter };
+  };
+
+  const publishFlowSearch = (
+    query: string,
+    byChapter: Map<number, SearchMarkSpec[]>,
+    done: boolean,
+    preserveActive?: number,
+  ): void => {
+    renderFlowSearchMarks(byChapter, null);
+    const { marks, firstAtOrAfter } = collectFlowMarks(byChapter);
+    const fallback = nearestMatchIndex(marks.length, firstAtOrAfter);
+    const active = preserveMatchIndex(marks.length, preserveActive ?? flowSearch?.active ?? -1, fallback);
+    const currentKey = active >= 0 ? marks[active]?.dataset.searchKey ?? null : null;
+    if (currentKey !== null) {
+      renderFlowSearchMarks(byChapter, currentKey);
+    }
+    flowSearch = { query, byChapter, marks, active, done };
+    if (done) {
+      searchBusy.clear();
+    }
+    syncSearchHits();
+  };
+
   const runFlowSearch = (query: string, options?: { preserveActive?: number }): void => {
     const trimmed = query.trim();
     if (trimmed === '' || PAGE_EXTS.has(loadedExt)) {
@@ -1880,44 +1994,51 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       syncSearchHits();
       return;
     }
-    const byChapter = new Map<number, SearchMarkSpec[]>();
-    flowDocuments().forEach((doc, chapter) => {
-      const hits = findTextHits(doc.body.textContent ?? '', trimmed);
-      if (hits.length === 0) {
-        return;
-      }
-      byChapter.set(
-        chapter,
-        hits.map((hit, ordinal) => ({
-          key: flowSearchMarkKey(chapter, ordinal, hit.start, hit.end),
-          start: hit.start,
-          end: hit.end,
-        })),
-      );
-    });
-    renderFlowSearchMarks(byChapter, null);
-    const marks: HTMLElement[] = [];
-    flowDocuments().forEach((doc, chapter) => {
-      for (const spec of byChapter.get(chapter) ?? []) {
-        const mark = doc.body.querySelector<HTMLElement>(
-          `[data-search-key="${cssEscape(spec.key)}"]`,
-        );
-        if (mark !== null) {
-          marks.push(mark);
+    const generation = ++searchGeneration;
+    searchDisplayLimit = SEARCH_HIT_CAP;
+    searchBusy.start();
+    publishFlowSearch(trimmed, new Map(), false, options?.preserveActive);
+    void (async () => {
+      const byChapter = new Map<number, SearchMarkSpec[]>();
+      const total = Math.max(exportChapters.length, flowChapterCount);
+      for (let chapter = 0; chapter < total; chapter += 1) {
+        if (destroyed || generation !== searchGeneration) {
+          return;
+        }
+        const mounted = chapterFrame(chapter)?.contentDocument?.body.textContent ?? '';
+        let text = mounted;
+        if (text.trim() === '') {
+          const source = exportChapters[chapter];
+          if (source !== undefined) {
+            await source.load?.();
+            if (destroyed || generation !== searchGeneration) {
+              return;
+            }
+            text = htmlToSearchText(source.html);
+          }
+        }
+        const hits = findTextHits(text, trimmed);
+        if (hits.length > 0) {
+          byChapter.set(
+            chapter,
+            hits.map((hit, ordinal) => ({
+              key: flowSearchMarkKey(chapter, ordinal, hit.start, hit.end),
+              start: hit.start,
+              end: hit.end,
+            })),
+          );
+        }
+        if (chapter === 0 || (chapter + 1) % 2 === 0 || chapter === total - 1) {
+          publishFlowSearch(trimmed, byChapter, chapter === total - 1, options?.preserveActive);
+          if (chapter < total - 1) {
+            await yieldToUi();
+          }
         }
       }
-    });
-    const scroller = flowScrollContainer();
-    const scrollerTop = scroller.getBoundingClientRect().top;
-    const firstAtOrAfter = marks.findIndex((mark) => mark.getBoundingClientRect().top >= scrollerTop - 8);
-    const fallback = nearestMatchIndex(marks.length, firstAtOrAfter);
-    const active = preserveMatchIndex(marks.length, options?.preserveActive ?? -1, fallback);
-    const currentKey = active >= 0 ? marks[active]?.dataset.searchKey ?? null : null;
-    if (currentKey !== null) {
-      renderFlowSearchMarks(byChapter, currentKey); // 幂等：仅校正当前类名
-    }
-    flowSearch = { query: trimmed, byChapter, marks, active };
-    syncSearchHits();
+      if (!destroyed && generation === searchGeneration) {
+        publishFlowSearch(trimmed, byChapter, true, options?.preserveActive);
+      }
+    })();
   };
 
   const revealFlowMark = (mark: HTMLElement | undefined): void => {
@@ -1995,28 +2116,69 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         });
       }
     } else if (flowSearch !== null) {
-      flowDocuments().forEach((doc, chapter) => {
-        const text = doc.body.textContent ?? '';
-        for (const spec of flowSearch?.byChapter.get(chapter) ?? []) {
-          const markIndex = flowSearch!.marks.findIndex(
+      const chapters = [...flowSearch.byChapter.keys()].sort((left, right) => left - right);
+      for (const chapter of chapters) {
+        const mounted = chapterFrame(chapter)?.contentDocument?.body.textContent ?? '';
+        const text =
+          mounted.trim() !== ''
+            ? mounted
+            : htmlToSearchText(exportChapters[chapter]?.html ?? '');
+        for (const spec of flowSearch.byChapter.get(chapter) ?? []) {
+          const markIndex = flowSearch.marks.findIndex(
             (mark) => mark.dataset.searchKey === spec.key,
           );
           hits.push({
             key: spec.key,
             snippet: snippetAround(text, spec.start, spec.end),
             location: t('reader.chapter', { n: String(chapter + 1) }),
-            current: markIndex === flowSearch!.active,
+            current: markIndex === flowSearch.active,
           });
         }
-      });
+      }
     }
-    return hits;
+    return capSearchHits(hits, searchDisplayLimit);
+  };
+
+  const searchSessionDone = (): boolean =>
+    pdfSearch !== null ? pdfSearch.done : flowSearch !== null ? flowSearch.done : true;
+
+  const searchHitTotal = (): number =>
+    pdfSearch !== null ? pdfSearch.matches.length : collectAllFlowHitCount();
+
+  const collectAllFlowHitCount = (): number => {
+    if (flowSearch === null) {
+      return 0;
+    }
+    let count = 0;
+    for (const specs of flowSearch.byChapter.values()) {
+      count += specs.length;
+    }
+    return count;
+  };
+
+  const loadMoreSearchHits = (): void => {
+    if (searchHitTotal() <= searchDisplayLimit && searchSessionDone()) {
+      return;
+    }
+    searchDisplayLimit += SEARCH_HIT_CAP;
+    syncSearchHits();
+  };
+
+  const searchHitsState = () => {
+    const done = searchSessionDone();
+    const revealed = searchBusy.revealed();
+    return {
+      pending: !done && !revealed,
+      searching: !done && revealed,
+      hasMore: searchHitTotal() > searchDisplayLimit || (!done && revealed),
+    };
   };
 
   const syncSearchHits = (): void => {
     if (searchSheet !== null && searchSheet.isOpen()) {
       searchSheet.renderHits(
         searchSheet.getQuery().trim() === '' ? [] : collectSearchHitViews(),
+        searchHitsState(),
       );
     }
     if (sidebar === null) {
@@ -2027,7 +2189,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       sidebar.render(annotations);
       return;
     }
-    sidebar.renderHits(collectSearchHitViews());
+    sidebar.renderHits(collectSearchHitViews(), searchHitsState());
   };
 
   const jumpToSearchKey = (key: string): void => {
@@ -2036,9 +2198,43 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     if (flowSearch !== null) {
-      activateFlowMatchAt(
-        flowSearch.marks.findIndex((mark) => mark.dataset.searchKey === key),
+      const mounted = flowSearch.marks.findIndex((mark) => mark.dataset.searchKey === key);
+      if (mounted >= 0) {
+        activateFlowMatchAt(mounted);
+        return;
+      }
+      const chapter = Number(key.split(':')[0]);
+      if (Number.isSafeInteger(chapter)) {
+        void revealFlowSearchKey(key, chapter);
+      }
+    }
+  };
+
+  const revealFlowSearchKey = async (key: string, chapter: number): Promise<void> => {
+    flowRenderer.ensureChapter(chapter);
+    setActiveChapter(chapter);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await yieldToUi();
+      if (flowSearch === null) {
+        return;
+      }
+      renderFlowSearchMarks(
+        flowSearch.byChapter,
+        key,
       );
+      const { marks, firstAtOrAfter } = collectFlowMarks(flowSearch.byChapter);
+      flowSearch.marks = marks;
+      flowSearch.active = preserveMatchIndex(
+        marks.length,
+        marks.findIndex((mark) => mark.dataset.searchKey === key),
+        firstAtOrAfter,
+      );
+      const mark = marks.find((candidate) => candidate.dataset.searchKey === key);
+      if (mark !== undefined) {
+        revealFlowMark(mark);
+        syncSearchHits();
+        return;
+      }
     }
   };
 
@@ -2083,6 +2279,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         onQuery: (query) => runReaderSearch(query),
         // 点命中跳转且层保持打开（连续查阅）；宿主重放 renderHits 校正 current。
         onJump: (key) => jumpToSearchKey(key),
+        onLoadMore: () => loadMoreSearchHits(),
         // 层关闭（× / Escape / 点空白 / 宿主关闭）：命中 overlay 随层收起
         // （与侧栏关闭同语义），查询词保留供重开续查。
         onClose: () => {
@@ -2105,10 +2302,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 触屏路径（R5）：独立底栏搜索层，不再强制打开标注侧栏。 */
   const openTouchSearchSheet = (query?: string): void => {
-    const sheet = ensureSearchSheet();
-    if (sheet.element.parentNode !== root) {
-      root.appendChild(sheet.element);
+    if (sidebarVisible) {
+      setSidebarVisible(false);
     }
+    closeChromePanel();
+    const sheet = ensureSearchSheet();
+    mountReaderOverlay(sheet.element, root);
+    pinFixedOverlay(sheet.element, root);
     const seed = sanitizeSearchQuery(query) || currentSearchSelection();
     sheet.open(seed === '' ? undefined : seed);
     const effective = sheet.getQuery().trim();
@@ -2372,12 +2572,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       onArchiveProgress: (progress) => {
         if (progress.phase === 'sequential' && progress.currentEntry < progress.targetEntry) {
           status.hidden = false;
-          status.textContent = t('reader.archive.sequentialProgress', {
+          loadTrack.hidden = false;
+          statusLabel.textContent = t('reader.archive.sequentialProgress', {
             current: String(progress.currentEntry + 1),
             target: String(progress.targetEntry + 1),
           });
         } else if (readerState.phase === 'ready') {
           status.hidden = true;
+          loadTrack.hidden = true;
         }
       },
     });
@@ -2455,9 +2657,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (destroyed || signal.aborted || generation !== loadGeneration) {
         return;
       }
+      // 与 Rust R4 一致：读失败（含无 Tauri IPC）视为空标注，不弹窗阻断阅读。
       contentHash = null;
       annotations = [];
-      deps.notify?.(t('annotation.loadFailed'));
       return;
     }
     renderHighlights(); // flow/txt 正文与 PDF 文本层（含旧 anchor 数据重渲染）
@@ -2970,6 +3172,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       closeChromePanel();
       return;
     }
+    if (sidebarVisible) {
+      setSidebarVisible(false);
+    }
+    closeSearchSheet();
     chromePanel = next;
     if (next === 'toc') {
       renderTocPanel();
@@ -2980,6 +3186,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     typePanel.hidden = next !== 'typography';
     const panel = next === 'toc' ? tocPanel : typePanel;
     const action = next === 'toc' ? 'toc' : 'typography';
+    mountReaderOverlay(panel, root);
     positionReaderChromePanel(
       panel,
       root,
@@ -2998,8 +3205,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       toggleSidebar: () => setSidebarVisible(!sidebarVisible),
       isOverlayOpen: () =>
         sidebarVisible || chromePanel !== null || searchSheet?.isOpen() === true,
-      // 一次退一层：搜索层在最上，先于 TOC/排版浮层关闭。
-      dismissOverlay: () => closeSearchSheet() || closeChromePanel(),
+      // 一次退一层：搜索 → TOC/排版 → 标注。点空白走同一条链。
+      dismissOverlay: () => {
+        if (closeSearchSheet()) {
+          return true;
+        }
+        if (closeChromePanel()) {
+          return true;
+        }
+        if (sidebarVisible) {
+          setSidebarVisible(false);
+          return true;
+        }
+        return false;
+      },
       isSidebarVisible: () => sidebarVisible,
       isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
       hideSelectionToolbar,

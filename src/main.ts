@@ -53,7 +53,16 @@ import {
 } from './editor/insert-commands.js';
 import { fileNameStem, importImageAsset } from './asset/asset-service.js';
 import { isReaderPath, planDroppedFiles } from './file/file-drop.js';
-import { OPEN_FILTERS, showOpenDialog } from './file/file-dialog.js';
+import { showOpenDialog } from './file/file-dialog.js';
+import {
+  browserFileSize,
+  isBrowserFilePath,
+  isTauriRuntime,
+  pickBrowserFile,
+  readBrowserFileBytes,
+  readBrowserFileChunk,
+  registerBrowserFile,
+} from './file/browser-file-store.js';
 import { openDocumentPath } from './file/document-router.js';
 import { extOfPath } from './file/path-ext.js';
 import type {
@@ -110,6 +119,7 @@ import {
   type ExternalOpenTab,
 } from './ui/external-open.js';
 import { showAlertDialog, showConfirmDialog } from './ui/confirm-dialog.js';
+import { beginOpenProgress } from './ui/open-progress.js';
 import { showExitConfirmation } from './ui/exit-confirmation.js';
 import {
   createStatusBar,
@@ -138,7 +148,12 @@ import {
   type ReadingLayout,
 } from './ui/reading-layout.js';
 import { formatShortcutLabel, isMacPlatform } from './ui/platform.js';
-import { applyMobileDocumentFlags, isAndroidApp, isTouchPrimary } from './ui/mobile-platform.js';
+import {
+  applyMobileDocumentFlags,
+  browserPreviewMobileFacts,
+  isAndroidApp,
+  isTouchPrimary,
+} from './ui/mobile-platform.js';
 import { bindSafeAreaBridge } from './ui/safe-area.js';
 import { registerAndroidBackNavigation } from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
@@ -160,10 +175,16 @@ import {
 } from './library/library-progress.js';
 import {
   createLibraryView,
+  type LibraryOpenProgress,
   type LibraryOpenRequest,
   type LibraryView,
 } from './library/library-view.js';
-import { opdsClient } from './library/opds-client.js';
+import {
+  acquisitionFileName,
+  createBrowserOpdsClient,
+  fetchProxiedRemoteFile,
+} from './library/browser-opds-client.js';
+import { opdsClient as nativeOpdsClient } from './library/opds-client.js';
 import {
   cacheLibraryRemoteItem,
   openLibraryRemote,
@@ -190,7 +211,7 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (app === null) {
   throw new Error('LightInk: #app root container not found in index.html');
 }
-applyMobileDocumentFlags();
+applyMobileDocumentFlags(undefined, browserPreviewMobileFacts());
 bindSafeAreaBridge();
 
 let applicationStateSync: ApplicationStateSync | undefined;
@@ -202,6 +223,11 @@ const syncableStorage = createSyncableStorage(window.localStorage, {
     applicationStateSync?.notifyStorageChange(key, value);
   },
 });
+
+const browserOpdsClient = isTauriRuntime()
+  ? null
+  : createBrowserOpdsClient({ storage: syncableStorage });
+const opdsClient = browserOpdsClient ?? nativeOpdsClient;
 
 // 1080p / 2K / 4K layout tier → html[data-display]; theme.css scales tokens.
 const displayScale = installDisplayScale(document.documentElement, window);
@@ -304,6 +330,8 @@ type RecentMutationCommand = 'add_recent' | 'remove_recent' | 'clear_recents';
 let recentPersistenceNotice: Promise<void> | null = null;
 
 function reportRecentPersistenceError(error: unknown): void {
+  // Browser preview has no add_recent / list_recents; do not block the reader.
+  if (!isTauriRuntime()) return;
   // eslint-disable-next-line no-console
   console.error('[lightink/recents] persistence failed', error);
   if (recentPersistenceNotice !== null) return;
@@ -323,6 +351,7 @@ async function persistRecentMutation(
   command: RecentMutationCommand,
   payload?: Record<string, unknown>,
 ): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   try {
     await invoke<void>(command, payload);
     return true;
@@ -496,7 +525,9 @@ async function readReaderBytes(
   );
   try {
     throwIfReaderReadCancelled(signal);
-    const raw = await invoke<ArrayBuffer>('read_file_bytes', { path: filePath });
+    const raw = isBrowserFilePath(filePath)
+      ? await readBrowserFileBytes(filePath)
+      : await invoke<ArrayBuffer>('read_file_bytes', { path: filePath });
     throwIfReaderReadCancelled(signal);
     const bytes = readerBytesFromIpc(filePath, raw);
     throwIfReaderReadCancelled(signal);
@@ -523,11 +554,13 @@ async function readReaderChunk(
   );
   try {
     throwIfReaderReadCancelled(signal);
-    const raw = await invoke<ArrayBuffer>('read_file_bytes', {
-      path: filePath,
-      offset,
-      length,
-    });
+    const raw = isBrowserFilePath(filePath)
+      ? await readBrowserFileChunk(filePath, offset, length)
+      : await invoke<ArrayBuffer>('read_file_bytes', {
+          path: filePath,
+          offset,
+          length,
+        });
     throwIfReaderReadCancelled(signal);
     return readerChunkFromIpc(raw, length);
   } catch (error) {
@@ -538,7 +571,9 @@ async function readReaderChunk(
 /** Read bounded file metadata without hashing or transferring the EPUB body. */
 async function readReaderFileSize(filePath: string, signal?: AbortSignal): Promise<number> {
   throwIfReaderReadCancelled(signal);
-  const size = await invoke<number>('reader_file_size', { path: filePath });
+  const size = isBrowserFilePath(filePath)
+    ? browserFileSize(filePath)
+    : await invoke<number>('reader_file_size', { path: filePath });
   throwIfReaderReadCancelled(signal);
   return size;
 }
@@ -556,27 +591,37 @@ function reportReaderLoadError(error: unknown): void {
  * 失败标签会立即清理。菜单打开 / 最近打开 / 拖入 / CLI 与文件关联入口共用此分发。
  */
 async function openPathByKind(path: string): Promise<TabState | null> {
-  const tab = await openDocumentPath(path, {
-    manager,
-    onReaderOpenError: (failedPath, error) => {
-      // eslint-disable-next-line no-console
-      console.error(`[lightink] 打开阅读文件失败: ${failedPath}`, error);
-      reportReaderLoadError(error);
-    },
-    onReaderLoadError: (error) => {
-      reportReaderLoadError(error);
-    },
-  });
-  // File→Open / recents / drop share this helper. A reader tab opened while
-  // the shelf is showing must flip hasOpenBook so the book is not left under
-  // the library. Markdown opened from the shelf must enter the editor.
-  if (tab?.kind === 'reader') {
-    workspace.openBook();
-    tab.reader.restoreReadingProgress?.();
-  } else if (tab !== null && isMarkdownTab(tab)) {
-    workspace.enterEditor();
+  const progress = isReaderPath(path)
+    ? beginOpenProgress({
+        title: path.replace(/\\/g, '/').split('/').pop() || path,
+        label: i18n.t('reader.opening'),
+      })
+    : null;
+  try {
+    const tab = await openDocumentPath(path, {
+      manager,
+      onReaderOpenError: (failedPath, error) => {
+        // eslint-disable-next-line no-console
+        console.error(`[lightink] 打开阅读文件失败: ${failedPath}`, error);
+        reportReaderLoadError(error);
+      },
+      onReaderLoadError: (error) => {
+        reportReaderLoadError(error);
+      },
+    });
+    // File→Open / recents / drop share this helper. A reader tab opened while
+    // the shelf is showing must flip hasOpenBook so the book is not left under
+    // the library. Markdown opened from the shelf must enter the editor.
+    if (tab?.kind === 'reader') {
+      workspace.openBook();
+      tab.reader.restoreReadingProgress?.();
+    } else if (tab !== null && isMarkdownTab(tab)) {
+      workspace.enterEditor();
+    }
+    return tab;
+  } finally {
+    progress?.close();
   }
-  return tab;
 }
 
 /**
@@ -930,7 +975,11 @@ async function openLibraryItem(
   signal?: AbortSignal,
 ): Promise<void> {
   const { item } = request;
+  const reportProgress = (progress: LibraryOpenProgress): void => {
+    request.onProgress?.(progress);
+  };
   if (item.sourceKind === 'local' || item.sourceKind === 'managed') {
+    reportProgress({ phase: 'open' });
     let location: ManagedItemLocation;
     try {
       location = await libraryClient.materializeItem(item.id);
@@ -955,6 +1004,37 @@ async function openLibraryItem(
   }
   const acquisition = request.acquisition;
   if (acquisition === undefined) throw new Error('没有可用的获取链接');
+  if (!isTauriRuntime()) {
+    const filename = acquisitionFileName(item, acquisition);
+    const onDownloadProgress = (loaded: number, total?: number): void => {
+      reportProgress({ phase: 'download', loaded, total });
+    };
+    const file =
+      browserOpdsClient !== null && item.sourceId !== undefined && item.sourceId !== ''
+        ? await browserOpdsClient.fetchAcquisition(item.sourceId, acquisition.href, {
+            signal,
+            filename,
+            mimeType: acquisition.mediaType,
+            expectedSize: acquisition.size,
+            onProgress: onDownloadProgress,
+          })
+        : await fetchProxiedRemoteFile(acquisition.href, {
+            allowHttp: request.source?.allowHttp === true,
+            filename,
+            mimeType: acquisition.mediaType,
+            signal,
+            expectedSize: acquisition.size,
+            onProgress: onDownloadProgress,
+          });
+    reportProgress({ phase: 'open' });
+    const path = registerBrowserFile(file);
+    const tab = await openPathByKind(path);
+    if (tab === null) {
+      throw new Error(i18n.t('reader.loadFailed', { detail: item.title }));
+    }
+    workspace.openBook();
+    return;
+  }
   let opened: RemoteOpenResult;
   try {
     opened = await openLibraryRemote(request, { signal });
@@ -991,6 +1071,7 @@ async function openLibraryItem(
       tab.reader.restoreReadingProgress?.();
       return;
     }
+    reportProgress({ phase: 'open' });
     await tab.reader.load(target);
     workspace.openBook();
     tab.reader.restoreReadingProgress?.();
@@ -1006,6 +1087,10 @@ async function cacheLibraryItem(
   request: LibraryOpenRequest,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (!isTauriRuntime()) {
+    await openLibraryItem(request, signal);
+    return;
+  }
   try {
     await cacheLibraryRemoteItem(request, {
       signal,
@@ -1074,17 +1159,29 @@ function notifyLocalImportError(error: unknown): void {
   );
 }
 
+async function pickLocalOpenPath(): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    return pickBrowserFile();
+  }
+  return showOpenDialog();
+}
+
 async function importLocalLibraryItem(): Promise<import('./library/library-client.js').LibraryItem | null> {
   let selected: string | null = null;
   try {
-    // 统一选择接口（file-dialog.ts）：桌面 plugin-dialog，Android SAF 桥。
-    selected = await showOpenDialog();
+    // 浏览器预览无 Tauri：用 input[type=file] 选书并直接进阅读器。
+    // 原生：统一选择接口（file-dialog.ts）桌面 plugin-dialog / Android SAF。
+    selected = await pickLocalOpenPath();
   } catch (error) {
     // 选择通道失败（Android SAF 桥缺失/复制失败等）：明确报错，不静默。
     notifyLocalImportError(error);
     return null;
   }
   if (selected === null) return null;
+  if (!isTauriRuntime()) {
+    await openPathByKind(selected);
+    return null;
+  }
   try {
     const item = await libraryClient.importManagedBook(selected);
     const enriched = await enrichLocalLibraryItem(item);
@@ -1103,14 +1200,8 @@ async function importLocalLibraryItem(): Promise<import('./library/library-clien
 async function openViaDialog(): Promise<void> {
   let picked: string | null;
   try {
-    const result = await openDialog({
-      multiple: false,
-      directory: false,
-      filters: OPEN_FILTERS,
-    });
-    picked = typeof result === 'string' ? result : null;
+    picked = await pickLocalOpenPath();
   } catch {
-    // 非 Tauri 环境（纯前端 dev）：无原生对话框，静默取消。
     return;
   }
   if (picked === null) {
@@ -1608,6 +1699,8 @@ function openWebDavSyncPanel(): void {
     doc: document,
     webdav: webDavClient,
     sync: syncRecordClient,
+    themeHost: document.querySelector<HTMLElement>('.lightink-reader') ?? undefined,
+    themeStorage: syncableStorage,
     syncNow: () => applicationStateSync?.syncNow() ?? syncRecordClient.run(),
     migration: {
       preview: () => libraryClient.previewManagedMigration(),
@@ -1646,7 +1739,8 @@ shell = createAppShell(
     isEditorEntrySuppressed: () => isAndroidApp,
     onEnterReaderHome: () => workspace.enterReaderHome(),
     isReaderBookOpen: () => workspace.mode === 'reader' && workspace.hasOpenBook,
-    listRecents: () => invoke<string[]>('list_recents'),
+    listRecents: () =>
+      isTauriRuntime() ? invoke<string[]>('list_recents') : Promise.resolve([]),
     openRecent: async (path) => {
       const tab = await openPathByKind(path);
       if (tab === null) {
@@ -2045,7 +2139,8 @@ function annotationHostFor(tab: MarkdownTabState): MarkdownAnnotationHost {
     host = createMarkdownAnnotationHost(tab.hostElement, {
       t: (key, vars) => i18n.t(key, vars),
       getContentHash: (path) => invoke<string>('content_hash', { path }),
-      readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),
+      readAnnotations: (contentHash) =>
+        invoke<string>('read_annotations', { contentHash }).catch(() => ''),
       writeAnnotations: writeSyncedAnnotations,
       notify: (message) => {
         void showAppAlert(message);
@@ -2105,7 +2200,8 @@ manager = new TabManager({
       readSize: readReaderFileSize,
       t: (key, vars) => i18n.t(key, vars),
       getContentHash: (path) => invoke<string>('content_hash', { path }),
-      readAnnotations: (contentHash) => invoke<string>('read_annotations', { contentHash }),
+      readAnnotations: (contentHash) =>
+        invoke<string>('read_annotations', { contentHash }).catch(() => ''),
       writeAnnotations: (contentHash, json) =>
         writeSyncedAnnotations(contentHash, json),
       notify: (message) => {

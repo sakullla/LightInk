@@ -129,6 +129,181 @@ export function nextMatchIndex(total: number, active: number, direction: 1 | -1)
   return (active + direction + total) % total;
 }
 
+/** Pause after a committed keystroke before scanning the book. Empty query skips this. */
+export const SEARCH_QUERY_DEBOUNCE_MS = 280;
+
+/** First page of hit rows / highlights. More arrive as the scan continues or the list scrolls. */
+export const SEARCH_HIT_CAP = 80;
+
+/**
+ * Hold busy chrome (spinner, “12+”, load-more sentinel) until the scan has
+ * actually taken this long. Sub-second flashes only add a scrollbar.
+ */
+export const SEARCH_BUSY_REVEAL_MS = 1000;
+
+export interface SearchBusyReveal {
+  start(): void;
+  clear(): void;
+  revealed(): boolean;
+}
+
+/** Reveal in-flight search chrome only after SEARCH_BUSY_REVEAL_MS. */
+export function createSearchBusyReveal(
+  onReveal: () => void,
+  delayMs = SEARCH_BUSY_REVEAL_MS,
+): SearchBusyReveal {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let visible = false;
+  const clear = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    visible = false;
+  };
+  return {
+    start() {
+      clear();
+      timer = setTimeout(() => {
+        timer = null;
+        visible = true;
+        onReveal();
+      }, delayMs);
+    },
+    clear,
+    revealed() {
+      return visible;
+    },
+  };
+}
+
+export function capSearchHits<T>(hits: readonly T[], cap = SEARCH_HIT_CAP): T[] {
+  return hits.length <= cap ? [...hits] : hits.slice(0, cap);
+}
+
+const CJK_QUERY_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/** CJK can be a useful query at one character; Latin still waits for two. */
+export function liveSearchMinChars(query: string): number {
+  return CJK_QUERY_RE.test(query) ? 1 : 2;
+}
+
+/** Strip chapter HTML to the same concatenated text the overlay uses. */
+export function htmlToSearchText(html: string): string {
+  const trimmed = html.trim();
+  if (trimmed === '') {
+    return '';
+  }
+  if (typeof DOMParser !== 'undefined') {
+    const doc = new DOMParser().parseFromString(`<body>${trimmed}</body>`, 'text/html');
+    return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+  }
+  return trimmed.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
+}
+
+/** Yield so a long scan cannot lock typing, scrolling, or the result list. */
+export function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+/** Sentinel at the bottom of a scrollable result list. */
+export function observeLoadMore(
+  root: HTMLElement,
+  sentinel: HTMLElement,
+  onLoadMore: () => void,
+): () => void {
+  if (typeof IntersectionObserver === 'undefined') {
+    return () => undefined;
+  }
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        onLoadMore();
+      }
+    },
+    { root, rootMargin: '120px' },
+  );
+  observer.observe(sentinel);
+  return () => observer.disconnect();
+}
+
+/**
+ * IME-safe search input: keep the caret live, but only emit an expensive query
+ * after composition ends or the user pauses. Emptying the box emits immediately.
+ */
+export function bindImeSafeQuery(
+  input: HTMLInputElement,
+  onQuery: (query: string) => void,
+  options?: { debounceMs?: number },
+): () => void {
+  const debounceMs = options?.debounceMs ?? SEARCH_QUERY_DEBOUNCE_MS;
+  let composing = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let skipNextInput = false;
+
+  const emit = (query: string, immediate: boolean): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (immediate || query.trim() === '') {
+      onQuery(query);
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      onQuery(query);
+    }, debounceMs);
+  };
+
+  const onCompositionStart = (): void => {
+    composing = true;
+    skipNextInput = false;
+  };
+  const onCompositionEnd = (): void => {
+    composing = false;
+    skipNextInput = true;
+    emit(input.value, true);
+    // 部分引擎在 compositionend 后同步再派发一次 input；下一事件循环清掉闸门，
+    // 避免没有这条尾巴时把用户的下一个字也吞掉。
+    setTimeout(() => {
+      skipNextInput = false;
+    }, 0);
+  };
+  const onInput = (event: Event): void => {
+    if (skipNextInput) {
+      skipNextInput = false;
+      return;
+    }
+    if (composing || (event instanceof InputEvent && event.isComposing)) {
+      return;
+    }
+    emit(input.value, input.value.trim() === '');
+  };
+
+  input.addEventListener('compositionstart', onCompositionStart);
+  input.addEventListener('compositionend', onCompositionEnd);
+  input.addEventListener('input', onInput);
+  return () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    input.removeEventListener('compositionstart', onCompositionStart);
+    input.removeEventListener('compositionend', onCompositionEnd);
+    input.removeEventListener('input', onInput);
+  };
+}
+
 /** First line, trimmed, capped — same seed rules as Markdown Ctrl+F. */
 export function sanitizeSearchQuery(raw: string | null | undefined): string {
   const firstLine = (raw ?? '').split(/\r?\n/, 1)[0] ?? '';

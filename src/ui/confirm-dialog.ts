@@ -16,6 +16,46 @@
 
 import { labelModal, mountModalFocus } from './modal-focus.js';
 
+const SURFACE_THEME_VARS = [
+  '--lightink-bg',
+  '--lightink-bg-elevated',
+  '--lightink-fg',
+  '--lightink-muted',
+  '--lightink-border',
+  '--lightink-accent',
+  '--lightink-accent-soft',
+  '--lightink-overlay',
+  '--lightink-shadow',
+  '--lightink-danger',
+] as const;
+
+export function inferDialogThemeHost(doc: Document): HTMLElement | null {
+  return (
+    doc.querySelector<HTMLElement>('.lightink-library:not([hidden])') ??
+    doc.querySelector<HTMLElement>('.lightink-reader:not([hidden])') ??
+    doc.querySelector<HTMLElement>('[data-library-theme], [data-reader-theme]')
+  );
+}
+
+/** Stamp shelf/reader tokens onto a body-mounted overlay (not editor cream/brown). */
+export function adoptDialogSurfaceTheme(overlay: HTMLElement, host: HTMLElement): void {
+  if (typeof getComputedStyle !== 'function') return;
+  const style = getComputedStyle(host);
+  for (const name of SURFACE_THEME_VARS) {
+    const value = style.getPropertyValue(name).trim();
+    if (value !== '') overlay.style.setProperty(name, value);
+  }
+  const libraryTheme = host.dataset.libraryTheme;
+  if (libraryTheme !== undefined && libraryTheme !== '') {
+    overlay.dataset.libraryTheme = libraryTheme;
+  }
+  const readerTheme = host.dataset.readerTheme;
+  if (readerTheme !== undefined && readerTheme !== '') {
+    overlay.dataset.readerTheme = readerTheme;
+  }
+  if (style.color !== '') overlay.style.color = style.color;
+}
+
 export type ConfirmButtonKind = 'primary' | 'danger' | 'plain';
 
 export interface ConfirmButtonSpec {
@@ -32,6 +72,8 @@ export interface ConfirmDialogSpec {
   readonly buttons: readonly ConfirmButtonSpec[];
   /** Esc / 遮罩点击时解析的按钮 id；缺省取最后一个按钮。 */
   readonly cancelId?: string;
+  /** Copy tokens from this host; otherwise infer library/reader surface. */
+  readonly themeHost?: HTMLElement | null;
 }
 
 /** Enter / 默认聚焦的按钮 id：第一个 primary，否则第一个按钮；无按钮为 null。 */
@@ -50,6 +92,7 @@ export interface AlertDialogSpec {
   readonly title: string;
   readonly message: string;
   readonly okLabel: string;
+  readonly themeHost?: HTMLElement | null;
 }
 
 /** 单按钮提示层，取代 tauri-plugin-dialog 的原生 message。 */
@@ -59,6 +102,7 @@ export function showAlertDialog(doc: Document, spec: AlertDialogSpec): Promise<v
     message: spec.message,
     buttons: [{ id: 'ok', label: spec.okLabel, kind: 'primary' }],
     cancelId: 'ok',
+    themeHost: spec.themeHost,
   }).then(() => undefined);
 }
 
@@ -77,6 +121,8 @@ export function showConfirmDialog(doc: Document, spec: ConfirmDialogSpec): Promi
 
     const overlay = doc.createElement('div');
     overlay.className = 'lightink-modal-overlay';
+    const themeHost = spec.themeHost ?? inferDialogThemeHost(doc);
+    if (themeHost !== null) adoptDialogSurfaceTheme(overlay, themeHost);
     const dialog = doc.createElement('div');
     dialog.className = 'lightink-modal-dialog lightink-confirm-dialog';
     dialog.setAttribute('role', 'alertdialog');

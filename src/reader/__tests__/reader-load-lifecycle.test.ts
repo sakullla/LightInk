@@ -410,6 +410,8 @@ describe('Reader load lifecycle', () => {
       scale: 1,
       locationKind: 'chapter',
     });
+    expect(host.querySelector<HTMLElement>('.lightink-reader-status')?.hidden).toBe(true);
+    expect(host.querySelector<HTMLElement>('.lightink-reader-load-track')?.hidden).toBe(true);
     useReaderScrollLayout(host);
 
     const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
@@ -490,6 +492,9 @@ describe('Reader load lifecycle', () => {
     expect(host.querySelector<HTMLElement>('.lightink-reader-status')?.textContent).toBe(
       'reader.loading',
     );
+    const loadTrack = host.querySelector<HTMLElement>('.lightink-reader-load-track');
+    expect(loadTrack).not.toBeNull();
+    expect(loadTrack?.hidden).toBe(false);
 
     pendingB.resolve(bytes('new document'));
     await loadB;
@@ -534,6 +539,22 @@ describe('Reader load lifecycle', () => {
     expect(readAnnotations).toHaveBeenCalledTimes(1);
     expect(readAnnotations).toHaveBeenCalledWith('bbbbbbbbbbbbbbbb');
     expect(frameSource(host)).toContain('b.txt');
+  });
+
+  it('treats a failed annotation read as empty and does not notify', async () => {
+    const notify = vi.fn();
+    const host = document.createElement('div');
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('hello'),
+      getContentHash: async () => 'aaaaaaaaaaaaaaaa',
+      readAnnotations: async () => {
+        throw new Error('IPC unavailable');
+      },
+      notify,
+    });
+    await view.load('book.txt');
+    expect(notify).not.toHaveBeenCalled();
+    await view.destroy();
   });
 
   it('aborts pending work and prevents callbacks after destroy', async () => {
@@ -640,6 +661,11 @@ describe('Reader load lifecycle', () => {
       sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
     ).toBe('keyword');
     expect(sidebar.classList.contains('is-searching')).toBe(true);
+    expect(sidebar.querySelector('.lightink-reader-sidebar-empty')).toBeNull();
+    expect(sidebar.querySelector('.lightink-reader-sidebar-more')).toBeNull();
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector('[data-search-key]')).not.toBeNull();
+    });
     expect(sidebar.querySelector('.lightink-reader-sidebar-search-status')?.textContent).toBeTruthy();
 
     document.documentElement.dataset.readingLayout = 'paginated';
@@ -701,6 +727,84 @@ describe('Reader load lifecycle', () => {
     expect(onReturnToShelf).not.toHaveBeenCalled();
     expect(view.state.phase).toBe('ready');
     expect(host.querySelector('.lightink-reader')).not.toBeNull();
+    await view.destroy();
+  });
+
+  it('keeps the touch search sheet and annotation sheet mutually exclusive', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [{ title: 'One', html: '<p>alpha keyword</p>' }],
+      }),
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+
+    const visibleSheets = (): HTMLElement[] =>
+      [...document.querySelectorAll<HTMLElement>('.is-touch-sheet')].filter(
+        (el) => !el.hidden && el.getAttribute('aria-hidden') !== 'true',
+      );
+
+    view.toggleSidebar();
+    expect(view.isSidebarVisible()).toBe(true);
+    expect(
+      visibleSheets().some((el) => el.classList.contains('lightink-reader-sidebar')),
+    ).toBe(true);
+
+    view.openSearch?.('keyword');
+    expect(view.isSidebarVisible()).toBe(false);
+    const afterSearch = visibleSheets();
+    expect(afterSearch).toHaveLength(1);
+    expect(afterSearch[0]!.classList.contains('lightink-reader-search-sheet')).toBe(true);
+    expect(afterSearch[0]!.querySelector('input')?.value).toBe('keyword');
+
+    view.toggleSidebar();
+    expect(view.isSidebarVisible()).toBe(true);
+    const afterNotes = visibleSheets();
+    expect(afterNotes).toHaveLength(1);
+    expect(afterNotes[0]!.classList.contains('lightink-reader-sidebar')).toBe(true);
+    expect(
+      afterNotes.some((el) => el.classList.contains('lightink-reader-search-sheet')),
+    ).toBe(false);
+
+    await view.destroy();
+  });
+
+  it('closes a portaled touch annotation sheet from × and a page tap', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [{ title: 'One', html: '<p>alpha</p>' }],
+      }),
+    });
+    await view.load('book.epub');
+    revealReaderChrome(host);
+
+    view.toggleSidebar();
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-sidebar')!;
+    expect(view.isSidebarVisible()).toBe(true);
+    expect(sidebar.hidden).toBe(false);
+    expect(sidebar.parentElement).toBe(document.body);
+
+    sidebar.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')!.click();
+    expect(view.isSidebarVisible()).toBe(false);
+    expect(sidebar.hidden).toBe(true);
+
+    view.toggleSidebar();
+    expect(view.isSidebarVisible()).toBe(true);
+    const root = host.querySelector<HTMLElement>('.lightink-reader')!;
+    root.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(view.isSidebarVisible()).toBe(false);
+    expect(sidebar.hidden).toBe(true);
+
     await view.destroy();
   });
 

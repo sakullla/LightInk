@@ -10,6 +10,7 @@ import type { SyncPanelDeps } from '../sync-panel.js';
 import type { SyncStatus } from '../sync-client.js';
 import type { SyncProfileInput } from '../webdav-client.js';
 import type { ManagedMigrationPreview, ManagedMigrationResult } from '../../library/library-client.js';
+import { applyReaderTheme, READER_THEME_STORAGE_KEY } from '../../reader/reader-theme.js';
 
 const idle: SyncStatus = {
   state: 'idle',
@@ -195,6 +196,33 @@ describe('sync panel', () => {
     expect(fields[0]!.value).toBe('Nextcloud');
     expect(fields[1]!.value).toBe('https://dav.example');
     expect(dialog.textContent).toContain('disk is read-only');
+  });
+
+  it('paints the dialog with reader paper instead of editor cream', () => {
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    applyReaderTheme(host, 'white');
+    document.body.append(host);
+    showSyncPanel({ ...createDeps(), themeHost: host });
+    const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.dataset.readerTheme).toBe('white');
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#ffffff');
+    expect(overlay!.style.getPropertyValue('--lightink-accent')).toBe('#1a1a1a');
+    expect(overlay!.style.backgroundColor).toBe('');
+    host.remove();
+  });
+
+  it('falls back to the stored reader theme when no book host is mounted', () => {
+    const storage = {
+      getItem: (key: string) => (key === READER_THEME_STORAGE_KEY ? 'night' : null),
+      setItem: () => undefined,
+    };
+    showSyncPanel({ ...createDeps(), themeStorage: storage });
+    const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
+    expect(overlay!.dataset.readerTheme).toBe('night');
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#121212');
+    expect(overlay!.style.getPropertyValue('--lightink-fg')).toBe('#c8c8c8');
   });
 
   it('closes on Escape so the Android back chain returns to the manage page', async () => {

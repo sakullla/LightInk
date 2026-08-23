@@ -60,6 +60,24 @@ export const isAndroidApp: boolean = detectAndroidApp();
 export const isTouchPrimary: boolean = detectTouchPrimary();
 
 /**
+ * Browser preview: `?mobile=1` stamps phone chrome without an Android UA.
+ * Desktop Tauri and production builds ignore this unless the query is present.
+ */
+export function browserPreviewMobileFacts(
+  search: string | undefined = typeof window === 'undefined' ? undefined : window.location.search,
+): { android?: boolean; touchPrimary?: boolean } {
+  if (search === undefined || search === '') {
+    return {};
+  }
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  const mobile = params.get('mobile');
+  if (mobile === '1' || mobile === 'true') {
+    return { android: true, touchPrimary: true };
+  }
+  return {};
+}
+
+/**
  * Stamp platform flags on the document so CSS can hide desktop caption chrome
  * and apply safe-area padding without waiting for a media-query paint.
  */

@@ -811,6 +811,8 @@ export interface FlowRenderer {
   syncTheme(): void;
   /** 翻页模式前/后一页（章内 scrollLeft，到头则切章）。 */
   advancePage(direction: 1 | -1): boolean;
+  /** Mount a spine item so search can jump to an unloaded chapter. */
+  ensureChapter(index: number): void;
 }
 
 /**
@@ -2143,5 +2145,12 @@ export function createFlowRenderer(
     syncVisibleFrames,
     syncTheme,
     advancePage: advanceFlowPage,
+    ensureChapter(index: number): void {
+      ensureChapterMounted?.(index);
+      const win = resourceWindows[index];
+      if (win !== undefined) {
+        ensureChapterFrame(win);
+      }
+    },
   };
 }

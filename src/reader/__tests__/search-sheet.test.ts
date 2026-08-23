@@ -41,6 +41,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderChrome } from '../reader-chrome.js';
+import { SEARCH_QUERY_DEBOUNCE_MS } from '../search-panel.js';
 import { createSearchSheet } from '../search-sheet.js';
 
 const HITS = [
@@ -72,6 +73,7 @@ function queryInput(sheet: { element: HTMLElement }): HTMLInputElement {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
 });
 
@@ -112,18 +114,39 @@ describe('createSearchSheet layer', () => {
     expect(queryInput(sheet).value).toBe('other');
   });
 
-  it('typing drives onQuery and an emptied box hands over the empty query', () => {
+  it('typing drives onQuery after a pause and an emptied box hands over immediately', () => {
+    vi.useFakeTimers();
     const { sheet, deps } = mountSheet();
     sheet.open();
 
     const input = queryInput(sheet);
+    input.value = 'al';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     input.value = 'alpha';
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(deps.onQuery).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(SEARCH_QUERY_DEBOUNCE_MS);
+    expect(deps.onQuery).toHaveBeenCalledTimes(1);
     expect(deps.onQuery).toHaveBeenLastCalledWith('alpha');
 
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(deps.onQuery).toHaveBeenLastCalledWith('');
+    vi.useRealTimers();
+  });
+
+  it('does not search while an IME composition is open', () => {
+    const { sheet, deps } = mountSheet();
+    sheet.open();
+    const input = queryInput(sheet);
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = 'jian';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    expect(deps.onQuery).not.toHaveBeenCalled();
+    input.value = '鉴';
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    expect(deps.onQuery).toHaveBeenCalledTimes(1);
+    expect(deps.onQuery).toHaveBeenLastCalledWith('鉴');
   });
 
   it('renders hits with data-search-key, marks the current one and jumps without closing', () => {
@@ -158,6 +181,34 @@ describe('createSearchSheet layer', () => {
     sheet.renderHits([...HITS]);
     expect(sheet.element.textContent).not.toContain('reader.search.empty');
     expect(sheet.element.querySelectorAll('[data-search-key]')).toHaveLength(2);
+  });
+
+  it('does not flash empty copy or a load-more row during a quiet pending search', () => {
+    const { sheet } = mountSheet();
+    sheet.open('keyword');
+    sheet.renderHits([], { pending: true });
+    expect(sheet.element.querySelector('.lightink-reader-search-sheet-empty')).toBeNull();
+    expect(sheet.element.querySelector('.lightink-reader-search-sheet-more')).toBeNull();
+    expect(sheet.element.textContent).not.toContain('reader.search.empty');
+  });
+
+  it('keeps the list usable while more hits are still arriving', () => {
+    const onLoadMore = vi.fn();
+    const { sheet } = mountSheet({ onLoadMore });
+    sheet.open('keyword');
+    sheet.renderHits([...HITS], { searching: true, hasMore: true });
+
+    expect(sheet.element.textContent).toContain('2+');
+    expect(sheet.element.querySelector('.lightink-reader-search-sheet-more button')?.textContent).toBe(
+      'reader.search.searching',
+    );
+    sheet.renderHits([...HITS], { searching: false, hasMore: true });
+    const more = sheet.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-search-sheet-more button',
+    );
+    expect(more?.disabled).toBe(false);
+    more!.click();
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 
   it('closes from its own Escape (Android back synthesizes the same key) and consumes it', () => {

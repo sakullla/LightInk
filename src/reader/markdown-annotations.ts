@@ -283,8 +283,8 @@ export function createMarkdownAnnotationHost(
       if (destroyed || generation !== loadGeneration) {
         return;
       }
+      // 与 Rust R4 一致：读失败（含无 Tauri IPC）视为空标注，不弹窗阻断。
       annotations = [];
-      deps.notify?.(deps.t('annotation.loadFailed'));
     }
     applyDecorations();
     renderSidebar();

@@ -1,16 +1,16 @@
 /**
- * Mobile library chrome bottom tab bar (书架/书源/目录/管理).
+ * Mobile library chrome bottom tab bar (书架/书源/管理).
+ * Catalog browsing is a drill-in inside the sources tab, not a fourth tab.
  * Mounted only under the mobile chrome flags (data-android / data-touch-primary);
  * visibility is additionally gated to the ≤760px breakpoint in library.css.
  */
 
-export type LibraryTabId = 'shelf' | 'sources' | 'catalog' | 'manage';
+export type LibraryTabId = 'shelf' | 'sources' | 'manage';
 
 export interface LibraryTabbarLabels {
   readonly navigation: string;
   readonly shelf: string;
   readonly sources: string;
-  readonly catalog: string;
   readonly manage: string;
 }
 
@@ -25,7 +25,7 @@ export interface LibraryTabbar {
   setLabels(labels: LibraryTabbarLabels): void;
 }
 
-const TAB_ORDER: readonly LibraryTabId[] = ['shelf', 'sources', 'catalog', 'manage'];
+const TAB_ORDER: readonly LibraryTabId[] = ['shelf', 'sources', 'manage'];
 
 /* Feather-style stroke icons, same visual set as the desktop nav icons. */
 const TAB_ICON_PATHS: Record<LibraryTabId, readonly string[]> = {
@@ -34,7 +34,6 @@ const TAB_ICON_PATHS: Record<LibraryTabId, readonly string[]> = {
     'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
   ],
   sources: ['M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z'],
-  catalog: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
   manage: [
     'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
     'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82.33l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',

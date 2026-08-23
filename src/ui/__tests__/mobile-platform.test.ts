@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  browserPreviewMobileFacts,
   detectAndroidApp,
   detectTouchPrimary,
   isAndroidApp,
@@ -80,6 +81,22 @@ describe('detectTouchPrimary', () => {
         throw new Error('no media support');
       }),
     ).toBe(false);
+  });
+});
+
+describe('browserPreviewMobileFacts', () => {
+  it('stamps phone chrome for ?mobile=1 and ignores other queries', () => {
+    expect(browserPreviewMobileFacts('?mobile=1')).toEqual({
+      android: true,
+      touchPrimary: true,
+    });
+    expect(browserPreviewMobileFacts('mobile=true')).toEqual({
+      android: true,
+      touchPrimary: true,
+    });
+    expect(browserPreviewMobileFacts('?mobile=0')).toEqual({});
+    expect(browserPreviewMobileFacts('')).toEqual({});
+    expect(browserPreviewMobileFacts(undefined)).toEqual({});
   });
 });
 

@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultComicPreferences } from '../comic-preferences.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 import {
+  adoptReaderOverlayTheme,
   defaultReaderChromePanelCopy,
   fillReaderTocPanel,
   fillReaderTypographyPanel,
+  mountReaderOverlay,
   pinFixedOverlay,
   positionReaderChromePanel,
+  readerChromeFooterInset,
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
 
@@ -291,11 +294,54 @@ describe('reader chrome panels', () => {
     };
     pinFixedOverlay(overlay, pane, { innerWidth: 1000, innerHeight: 700 });
     expect(overlay.classList.contains('is-touch-sheet')).toBe(true);
-    expect(overlay.style.left).toBe('0px');
-    expect(overlay.style.bottom).toBe('0px');
+    expect(overlay.style.left).toBe('20px');
+    expect(overlay.style.right).toBe('180px');
+    expect(overlay.style.bottom).toBe('60px');
     expect(overlay.style.top).toBe('auto');
     unpinFixedOverlay(overlay);
     expect(overlay.classList.contains('is-touch-sheet')).toBe(false);
     document.documentElement.removeAttribute('data-touch-primary');
+  });
+
+  it('lifts the touch sheet above the reader footer instead of anchoring under the thumb button', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const footer = document.createElement('div');
+    footer.className = 'lightink-reader-chrome-footer';
+    footer.getBoundingClientRect = () =>
+      ({ left: 0, top: 700, width: 390, height: 72, right: 390, bottom: 772 }) as DOMRect;
+    document.body.append(footer);
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-chrome-popover';
+    const host = document.createElement('div');
+    host.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 390, height: 772, right: 390, bottom: 772 }) as DOMRect;
+    const anchor = document.createElement('button');
+    expect(readerChromeFooterInset(document)).toBe(72);
+    positionReaderChromePanel(panel, host, anchor);
+    expect(panel.classList.contains('is-touch-sheet')).toBe(true);
+    expect(panel.classList.contains('lightink-reader-chrome-popover')).toBe(false);
+    expect(panel.style.bottom).toBe('72px');
+    expect(panel.style.top).toBe('auto');
+    footer.remove();
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
+
+  it('copies reader tokens onto a body-mounted overlay so it does not use editor paper', () => {
+    const host = document.createElement('div');
+    host.dataset.readerTheme = 'white';
+    host.style.setProperty('--lightink-bg-elevated', 'rgb(246, 246, 246)');
+    host.style.setProperty('--lightink-fg', 'rgb(26, 26, 26)');
+    document.body.style.setProperty('--lightink-bg-elevated', 'rgb(251, 240, 217)');
+    document.body.append(host);
+    const overlay = document.createElement('div');
+    adoptReaderOverlayTheme(overlay, host);
+    mountReaderOverlay(overlay, host);
+    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('rgb(246, 246, 246)');
+    expect(overlay.style.getPropertyValue('--lightink-accent')).toBe('rgb(26, 26, 26)');
+    expect(overlay.dataset.readerTheme).toBe('white');
+    expect(overlay.parentElement).toBe(document.body);
+    overlay.remove();
+    host.remove();
+    document.body.style.removeProperty('--lightink-bg-elevated');
   });
 });

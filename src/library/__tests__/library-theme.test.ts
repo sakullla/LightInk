@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { THEME_STORAGE_KEY } from '../../theme/theme-service.js';
 import { READER_THEME_STORAGE_KEY } from '../../reader/reader-theme.js';
 import {
+  adoptLibraryOverlayTheme,
   applyLibraryTheme,
   DEFAULT_LIBRARY_THEME,
   libraryNativeWindowChrome,
   LIBRARY_THEME_STORAGE_KEY,
   loadLibraryTheme,
+  mountLibraryOverlay,
   parseLibraryTheme,
   saveLibraryTheme,
 } from '../library-theme.js';
@@ -57,5 +59,21 @@ describe('library shelf themes', () => {
       caption: '#14161a',
       text: '#d5dae2',
     });
+  });
+
+  it('copies shelf tokens onto a body-mounted overlay so it does not use editor paper', () => {
+    const host = document.createElement('div');
+    applyLibraryTheme(host, 'gallery');
+    document.body.style.setProperty('--lightink-bg-elevated', '#fffaf2');
+    document.body.append(host);
+    const overlay = document.createElement('div');
+    adoptLibraryOverlayTheme(overlay, host);
+    mountLibraryOverlay(overlay, host);
+    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('#f7f9fb');
+    expect(overlay.dataset.libraryTheme).toBe('gallery');
+    expect(overlay.parentElement).toBe(document.body);
+    overlay.remove();
+    host.remove();
+    document.body.style.removeProperty('--lightink-bg-elevated');
   });
 });

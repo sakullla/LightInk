@@ -27,12 +27,12 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     cacheLimit: 'Cache limit (GiB)',
     changeCacheLimit: 'Change cache limit',
     apply: 'Apply',
+    cancel: 'Cancel',
     syncGroup: 'Sync',
     webdavSync: 'WebDAV sync',
     otherGroup: 'Other',
     importLocal: 'Import local book',
     markdownEditor: 'Markdown editor',
-    backToManage: 'Back',
   },
   'zh-CN': {
     appearance: '外观',
@@ -47,12 +47,12 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     cacheLimit: '缓存上限（GiB）',
     changeCacheLimit: '调整缓存上限',
     apply: '应用',
+    cancel: '取消',
     syncGroup: '同步',
     webdavSync: 'WebDAV 同步',
     otherGroup: '其他',
     importLocal: '导入本地书籍',
     markdownEditor: 'Markdown 编辑',
-    backToManage: '返回',
   },
 };
 
@@ -180,10 +180,10 @@ describe('createLibraryManage grouped settings page', () => {
     manage.destroy();
   });
 
-  it('runs the cache-limit subpage state machine with overlay Escape semantics', async () => {
-    const { options } = manageOptions();
+  it('opens the cache-limit dialog without leaving the manage home', async () => {
+    const { options, themeRoot } = manageOptions();
     const manage = createLibraryManage(document, options);
-    document.body.appendChild(manage.element);
+    document.body.append(themeRoot, manage.element);
 
     // 主页不消费 Escape。
     expect(manage.handleEscape()).toBe(false);
@@ -199,18 +199,22 @@ describe('createLibraryManage grouped settings page', () => {
     entry.click();
     expect(manage.element.dataset.managePage).toBe('cache-limit');
     expect(manage.element.querySelector<HTMLElement>('.lightink-library-manage-home')!.hidden).toBe(
-      true,
+      false,
     );
-    const subpage = manage.element.querySelector<HTMLElement>('.lightink-library-manage-subpage')!;
-    expect(subpage.hidden).toBe(false);
+    const overlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
+    expect(overlay.hidden).toBe(false);
+    expect(overlay.parentElement).toBe(document.body);
+    expect(overlay.querySelector('.lightink-library-cache-limit-title')?.textContent).toBe(
+      '调整缓存上限',
+    );
 
-    const input = subpage.querySelector<HTMLInputElement>('input[name="cacheLimitGiB"]')!;
+    const input = overlay.querySelector<HTMLInputElement>('input[name="cacheLimitGiB"]')!;
     expect(input.value).toBe('2');
 
-    // 子页打开时消费 Escape 并回到主页。
+    // 弹层打开时消费 Escape 并关掉弹层。
     expect(manage.handleEscape()).toBe(true);
     expect(manage.element.dataset.managePage).toBe('home');
-    expect(subpage.hidden).toBe(true);
+    expect(overlay.hidden).toBe(true);
     expect(manage.handleEscape()).toBe(false);
     manage.destroy();
   });
@@ -221,7 +225,7 @@ describe('createLibraryManage grouped settings page', () => {
     document.body.appendChild(manage.element);
 
     manage.element.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
-    const form = manage.element.querySelector<HTMLFormElement>(
+    const form = document.querySelector<HTMLFormElement>(
       '.lightink-library-cache-limit-form',
     )!;
     (form.elements.namedItem('cacheLimitGiB') as HTMLInputElement).value = '4';
@@ -253,8 +257,9 @@ describe('createLibraryManage grouped settings page', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(options.library.clearCache).toHaveBeenCalledTimes(1);
-    // 缓存统计失败：用量行留空，不阻断其余功能。
-    expect(manage.element.querySelector('.lightink-library-cache-summary')?.textContent).toBe('');
+    const summary = manage.element.querySelector<HTMLElement>('.lightink-library-cache-summary');
+    expect(summary?.textContent).toBe('');
+    expect(summary?.hidden).toBe(true);
     manage.destroy();
   });
 

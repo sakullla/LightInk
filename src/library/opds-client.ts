@@ -523,6 +523,177 @@ export function isOpdsJson(value: unknown, mediaType?: string): boolean {
   return isOpdsJsonObject(value);
 }
 
+/** Reject control characters, embedded credentials, and HTTP unless the user opted in. */
+export function validateRemoteCatalogUrl(raw: string, allowHttp = false): string {
+  if (/[\u0000-\u001f\u007f]/.test(raw)) {
+    throw new Error('URL 包含控制字符');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    throw new Error('URL 格式无效');
+  }
+  if (parsed.hostname === '') {
+    throw new Error('URL 缺少主机名');
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error('URL 不能包含用户名或密码，请使用凭据配置');
+  }
+  parsed.hash = '';
+  if (parsed.protocol === 'https:') return parsed.toString();
+  if (parsed.protocol === 'http:') {
+    if (!allowHttp) {
+      throw new Error('HTTP 源需要由用户明确允许');
+    }
+    return parsed.toString();
+  }
+  throw new Error('仅支持 HTTP(S) 远程资源');
+}
+
+function xmlLocalName(element: Element): string {
+  return element.localName.toLowerCase();
+}
+
+function xmlChildren(parent: Element, name: string): Element[] {
+  return [...parent.children].filter((child) => xmlLocalName(child) === name);
+}
+
+function xmlChild(parent: Element, name: string): Element | undefined {
+  return xmlChildren(parent, name)[0];
+}
+
+function xmlText(element: Element | undefined): string {
+  return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function mapAtomLink(link: Element, baseUrl: string): OpdsLink | undefined {
+  try {
+    return mapLink(
+      {
+        href: link.getAttribute('href'),
+        rel: link.getAttribute('rel') ?? undefined,
+        type: link.getAttribute('type') ?? undefined,
+        title: link.getAttribute('title') ?? undefined,
+        length: link.getAttribute('length') ?? undefined,
+      },
+      baseUrl,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function mapAtomLinks(parent: Element, baseUrl: string): OpdsLink[] {
+  const links: OpdsLink[] = [];
+  for (const link of xmlChildren(parent, 'link')) {
+    const mapped = mapAtomLink(link, baseUrl);
+    if (mapped !== undefined) links.push(mapped);
+  }
+  return links;
+}
+
+function mapAtomEntry(entry: Element, baseUrl: string): OpdsEntry {
+  const title = xmlText(xmlChild(entry, 'title'));
+  const id = xmlText(xmlChild(entry, 'id'));
+  if (id === '' || title === '') {
+    throw new Error('OPDS 条目缺少 id 或 title');
+  }
+  const authors = xmlChildren(entry, 'author')
+    .map((author) => xmlText(xmlChild(author, 'name')) || xmlText(author))
+    .filter((name) => name !== '');
+  const links = mapAtomLinks(entry, baseUrl);
+  const subjects = xmlChildren(entry, 'category')
+    .map((category) => (category.getAttribute('label') ?? category.getAttribute('term') ?? '').trim())
+    .filter((subject) => subject !== '')
+    .slice(0, 64);
+  const coverUrl = links.find((link) => isCoverRel(relTokens(link.rel)))?.href;
+  const navigationUrl = links.find(
+    (link) =>
+      !link.acquisition &&
+      relTokens(link.rel).some(
+        (rel) =>
+          rel === 'subsection' ||
+          (rel === 'alternate' &&
+            (link.mediaType?.startsWith('application/atom+xml') === true ||
+              link.mediaType?.startsWith('application/opds+json') === true)),
+      ),
+  )?.href;
+  return {
+    id,
+    title,
+    authors,
+    updated: xmlText(xmlChild(entry, 'updated')) || undefined,
+    summary: xmlText(xmlChild(entry, 'summary')) || xmlText(xmlChild(entry, 'content')) || undefined,
+    coverUrl,
+    links,
+    kind: links.some((link) => link.acquisition)
+      ? 'publication'
+      : navigationUrl !== undefined
+        ? 'navigation'
+        : 'publication',
+    navigationUrl,
+    subjects,
+    series: xmlText(xmlChild(entry, 'series')) || undefined,
+  };
+}
+
+/** Map an OPDS 1.x Atom feed to the shared OpdsFeed shape. */
+export function mapOpdsAtomFeed(xml: string, sourceUrl: string): OpdsFeed {
+  if (/<!DOCTYPE/i.test(xml)) {
+    throw new Error('OPDS Feed 不允许声明 DTD');
+  }
+  if (typeof DOMParser === 'undefined') {
+    throw new Error('当前环境无法解析 OPDS Atom');
+  }
+  const document = new DOMParser().parseFromString(xml, 'application/xml');
+  if (document.querySelector('parsererror') !== null) {
+    throw new Error('OPDS XML 损坏');
+  }
+  const feed = document.documentElement;
+  if (feed === null || xmlLocalName(feed) !== 'feed') {
+    throw new Error('不是有效的 OPDS Atom 目录');
+  }
+  const title = xmlText(xmlChild(feed, 'title'));
+  if (title === '') {
+    throw new Error('OPDS Feed 缺少标题');
+  }
+  const links = mapAtomLinks(feed, sourceUrl);
+  const pagination = paginationFromLinks(links);
+  const entries = xmlChildren(feed, 'entry').map((entry) => mapAtomEntry(entry, sourceUrl));
+  return {
+    id: xmlText(xmlChild(feed, 'id')) || undefined,
+    title,
+    updated: xmlText(xmlChild(feed, 'updated')) || undefined,
+    entries,
+    links,
+    nextUrl: pagination.nextUrl,
+    previousUrl: pagination.previousUrl,
+    searchTemplate:
+      pagination.searchTemplate ??
+      links.find((link) => relTokens(link.rel).includes('search') && link.href.includes('{searchTerms}'))
+        ?.href,
+    sourceUrl,
+    format: 'opds1',
+  };
+}
+
+/** Parse a catalog body as OPDS 2.0 JSON or OPDS 1.x Atom. */
+export function parseOpdsCatalog(body: string, sourceUrl: string, mediaType?: string): OpdsFeed {
+  if (isOpdsJson(body, mediaType)) {
+    return { ...mapOpdsJsonFeed(body, sourceUrl), format: 'opds2' };
+  }
+  const trimmed = body.trimStart();
+  if (isAtomMediaType(mediaType) || trimmed.startsWith('<')) {
+    return mapOpdsAtomFeed(body, sourceUrl);
+  }
+  try {
+    return { ...mapOpdsJsonFeed(body, sourceUrl), format: 'opds2' };
+  } catch {
+    return mapOpdsAtomFeed(body, sourceUrl);
+  }
+}
+
 /** Map an OPDS 2.0 JSON catalog or publication to the existing Atom-shaped OpdsFeed. */
 export function mapOpdsJsonFeed(catalog: unknown, sourceUrl: string): OpdsFeed {
   const parsed = typeof catalog === 'string' ? parseJsonCatalog(catalog) : catalog;
@@ -619,7 +790,11 @@ export class OpdsClient {
       .then((raw) => feedFromNative(raw, url));
   }
 
-  search(sourceId: string, query: string): Promise<OpdsFeed> {
+  search(
+    sourceId: string,
+    query: string,
+    _init?: { readonly signal?: AbortSignal },
+  ): Promise<OpdsFeed> {
     return this.invoker
       .invoke<unknown>('opds_search', { sourceId, query })
       .then((raw) => feedFromNative(raw));

@@ -18,7 +18,8 @@
   color: var(--lightink-fg);
   font-family: var(--lightink-reader-font-family, var(--lightink-font-body));
   /* 基础字号；阅读缩放走 --lightink-reader-font-scale，不叠全局 --lightink-font-scale。 */
-  font-size: var(--lightink-font-size);
+  --lightink-reader-body-size: var(--lightink-font-size);
+  font-size: var(--lightink-reader-body-size);
   line-height: var(--lightink-reader-line-height, 1.8);
   --lightink-reader-pad-x: 2.25rem;
   --lightink-reader-pad-y: 2rem;
@@ -427,14 +428,25 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   --lightink-reader-pad-x: 0.9rem;
   --lightink-reader-pad-y: 0.85rem;
   --lightink-reader-paged-pad-x: 0.2rem;
+  /* Idle whisper (hairline + 11%) sits on the page; keep the last line above it. */
+  --lightink-reader-whisper-reserve: calc(1.85rem + var(--lightink-safe-bottom, 0px));
+  /*
+   * Phone body: 18px at 100% scale.
+   * Compact display tiers otherwise leave --lightink-font-size at 15px.
+   * Long-form mobile practice is 16px minimum, 17–18px preferred
+   * (editorial / WCAG guidance, reading apps 16–20px, CJK phones ~18–20).
+   */
+  --lightink-reader-body-size: 18px;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-  padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem) 0.75rem;
+  padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem)
+    var(--lightink-reader-whisper-reserve);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-  padding: 0.85rem var(--lightink-reader-pad-x, 0.9rem) 1.6rem;
+  padding: 0.85rem var(--lightink-reader-pad-x, 0.9rem)
+    calc(var(--lightink-reader-whisper-reserve) + 0.35rem);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-bar {
@@ -539,10 +551,18 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
     --lightink-reader-pad-x: 0.9rem;
     --lightink-reader-pad-y: 0.85rem;
     --lightink-reader-paged-pad-x: 0.2rem;
+    --lightink-reader-whisper-reserve: calc(1.85rem + var(--lightink-safe-bottom, 0px));
+    --lightink-reader-body-size: 18px;
   }
 
   .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-    padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem) 0.75rem;
+    padding: 0.2rem var(--lightink-reader-paged-pad-x, 0.2rem)
+      var(--lightink-reader-whisper-reserve);
+  }
+
+  .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
+    padding: 0.85rem var(--lightink-reader-pad-x, 0.9rem)
+      calc(var(--lightink-reader-whisper-reserve) + 0.35rem);
   }
 
   .lightink-reader-chrome-bar {
@@ -1129,6 +1149,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   position: absolute;
   inset: 50% auto auto 50%;
   transform: translate(-50%, -50%);
+  display: grid;
+  gap: 10px;
+  min-width: min(16rem, 80vw);
   max-width: min(90%, 28rem);
   padding: 0.75rem 1rem;
   color: var(--lightink-fg);
@@ -1136,6 +1159,36 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   border: 1px solid var(--lightink-border);
   border-radius: 4px;
   text-align: center;
+}
+
+/* author display:grid 会压过 UA [hidden]，书打开后空卡片会留在正文中间。 */
+.lightink-reader-status[hidden],
+.lightink-reader-load-track[hidden] {
+  display: none;
+}
+
+.lightink-reader-load-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-reader-load-fill {
+  width: 36%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+  animation: lightink-reader-load-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes lightink-reader-load-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
 
 /* 页式格式：canvas（PDF 连续滚动 slot 内 / CBZ 逐页）。 */
@@ -1354,6 +1407,29 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 .lightink-note-footer .lightink-modal-actions {
   flex: 0 0 auto;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-note-dialog {
+  width: 100%;
+  max-width: 100vw;
+  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px)));
+  margin-top: auto;
+  border-radius: 16px 16px 0 0;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-modal-overlay:has(.lightink-note-dialog) {
+  align-items: flex-end;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-note-close,
+:is(html[data-android], html[data-touch-primary]) .lightink-note-dialog .lightink-modal-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-note-textarea {
+  min-height: 8rem;
+  font-size: 16px;
 }
 
 .lightink-reader[data-reader-theme='white'] {

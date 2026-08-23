@@ -1,13 +1,13 @@
 /**
  * Manage page (管理): a grouped settings page — appearance / reading
- * preferences / storage & cache / sync / other — with a full-screen
- * cache-limit subpage on mobile chrome.
+ * preferences / storage & cache / sync / other — with a cache-limit
+ * dialog instead of a second page.
  *
- * Owns the manage DOM and the subpage state machine (`home | cache-limit`).
- * The subpage follows overlay Escape semantics: while it is open, a
+ * Owns the manage DOM and the dialog state machine (`home | cache-limit`).
+ * The dialog follows overlay Escape semantics: while it is open, a
  * (synthetic) Escape — including the Android back key dispatched through
- * ui/back-navigation.ts — is consumed to return to the manage home; on the
- * manage home nothing is consumed and the press falls through.
+ * ui/back-navigation.ts — is consumed to close it; on the manage home
+ * nothing is consumed and the press falls through.
  */
 
 import type { LibraryClient } from './library-client.js';
@@ -15,6 +15,7 @@ import {
   applyLibraryTheme,
   LIBRARY_THEMES,
   loadLibraryTheme,
+  mountLibraryOverlay,
   saveLibraryTheme,
   type LibraryThemeId,
   type LibraryThemeStorage,
@@ -42,12 +43,12 @@ export interface LibraryManageLabels {
   readonly cacheLimit: string;
   readonly changeCacheLimit: string;
   readonly apply: string;
+  readonly cancel: string;
   readonly syncGroup: string;
   readonly webdavSync: string;
   readonly otherGroup: string;
   readonly importLocal: string;
   readonly markdownEditor: string;
-  readonly backToManage: string;
 }
 
 export interface LibraryManageOptions {
@@ -69,9 +70,9 @@ export interface LibraryManageOptions {
 
 export interface LibraryManageView {
   readonly element: HTMLElement;
-  /** Reset the subpage state machine to the manage home. */
+  /** Close the cache-limit dialog and stay on the manage home. */
   showHome(): void;
-  /** Overlay Escape semantics: closes an open subpage; true when consumed. */
+  /** Overlay Escape semantics: closes the open dialog; true when consumed. */
   handleEscape(): boolean;
   refreshCache(): Promise<void>;
   retranslate(): void;
@@ -145,7 +146,7 @@ export function createLibraryManage(
   progressBarLabel.append(progressBarInput, progressBarText);
   readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel);
 
-  // 存储与缓存：用量摘要 + 清理缓存 + 缓存上限（全屏子页入口）。
+  // 存储与缓存：用量摘要 + 清理缓存 + 缓存上限（弹层入口）。
   const storage = doc.createElement('section');
   storage.className = 'lightink-library-manage-group';
   storage.dataset.manageGroup = 'storage';
@@ -153,6 +154,7 @@ export function createLibraryManage(
   storageTitle.className = 'lightink-library-manage-group-title';
   const cacheSummary = doc.createElement('div');
   cacheSummary.className = 'lightink-library-cache-summary';
+  cacheSummary.hidden = true;
   const cacheUsage = doc.createElement('span');
   cacheSummary.append(cacheUsage);
   const clearCacheButton = button(doc, '', 'lightink-library-manage-row');
@@ -161,12 +163,6 @@ export function createLibraryManage(
     '',
     'lightink-library-manage-row lightink-library-cache-limit-entry',
   );
-  const cacheLimitChevron = doc.createElement('span');
-  cacheLimitChevron.className = 'lightink-library-manage-row-chevron';
-  cacheLimitChevron.setAttribute('aria-hidden', 'true');
-  cacheLimitChevron.textContent = '›';
-  const cacheLimitText = doc.createElement('span');
-  cacheLimitButton.append(cacheLimitText, cacheLimitChevron);
   storage.append(storageTitle, cacheSummary, clearCacheButton, cacheLimitButton);
 
   // 同步：WebDAV 同步入口（deps 缺省时整组抑制）。
@@ -198,18 +194,19 @@ export function createLibraryManage(
   }
 
   home.append(appearance, readerPrefs, storage, ...(sync === null ? [] : [sync]), other);
+  element.append(home);
 
-  // 缓存上限子页：移动端全屏，桌面端同结构居中呈现，行为等价。
-  const cacheLimitPage = doc.createElement('section');
-  cacheLimitPage.className = 'lightink-library-manage-subpage';
-  cacheLimitPage.dataset.manageSubpage = 'cache-limit';
-  cacheLimitPage.hidden = true;
-  const subHeader = doc.createElement('header');
-  subHeader.className = 'lightink-library-manage-subpage-header';
-  const backButton = button(doc, '', 'lightink-library-manage-back');
-  const subTitle = doc.createElement('h2');
-  subTitle.className = 'lightink-library-manage-subpage-title';
-  subHeader.append(backButton, subTitle);
+  const cacheLimitOverlay = doc.createElement('div');
+  cacheLimitOverlay.className = 'lightink-modal-overlay lightink-library-cache-limit-modal';
+  cacheLimitOverlay.hidden = true;
+  const cacheLimitDialog = doc.createElement('div');
+  cacheLimitDialog.className = 'lightink-modal-dialog';
+  cacheLimitDialog.setAttribute('role', 'dialog');
+  cacheLimitDialog.setAttribute('aria-modal', 'true');
+  cacheLimitDialog.setAttribute('aria-labelledby', 'lightink-library-cache-limit-title');
+  const cacheLimitTitle = doc.createElement('h2');
+  cacheLimitTitle.id = 'lightink-library-cache-limit-title';
+  cacheLimitTitle.className = 'lightink-library-cache-limit-title';
   const cacheLimitForm = doc.createElement('form');
   cacheLimitForm.className = 'lightink-library-cache-limit-form';
   const cacheLimitLabel = doc.createElement('label');
@@ -223,20 +220,31 @@ export function createLibraryManage(
   cacheLimitInput.step = '0.25';
   cacheLimitInput.required = true;
   cacheLimitLabel.append(cacheLimitLabelText, cacheLimitInput);
+  const cacheLimitActions = doc.createElement('div');
+  cacheLimitActions.className = 'lightink-library-cache-limit-actions';
   const cacheLimitSave = button(doc, '', 'lightink-library-primary');
   cacheLimitSave.type = 'submit';
-  cacheLimitForm.append(cacheLimitLabel, cacheLimitSave);
-  cacheLimitPage.append(subHeader, cacheLimitForm);
+  const cacheLimitCancel = button(doc, '', 'lightink-library-cache-limit-cancel');
+  cacheLimitActions.append(cacheLimitSave, cacheLimitCancel);
+  cacheLimitForm.append(cacheLimitLabel, cacheLimitActions);
+  cacheLimitDialog.append(cacheLimitTitle, cacheLimitForm);
+  cacheLimitOverlay.append(cacheLimitDialog);
 
-  element.append(home, cacheLimitPage);
+  let ignoreCacheBackdrop = true;
 
   function setSubpage(next: ManageSubpage): void {
     subpage = next;
     element.dataset.managePage = next;
-    home.hidden = next !== 'home';
-    cacheLimitPage.hidden = next === 'home';
+    cacheLimitOverlay.hidden = next === 'home';
     if (next === 'cache-limit') {
+      ignoreCacheBackdrop = true;
+      mountLibraryOverlay(cacheLimitOverlay, options.themeRoot);
       cacheLimitInput.focus();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          ignoreCacheBackdrop = false;
+        });
+      });
     }
   }
 
@@ -316,7 +324,18 @@ export function createLibraryManage(
   cacheLimitButton.addEventListener('click', () => {
     setSubpage('cache-limit');
   });
-  backButton.addEventListener('click', () => {
+  cacheLimitCancel.addEventListener('click', () => {
+    setSubpage('home');
+    cacheLimitButton.focus();
+  });
+  cacheLimitOverlay.addEventListener('click', (event) => {
+    if (ignoreCacheBackdrop || event.target !== cacheLimitOverlay) return;
+    setSubpage('home');
+    cacheLimitButton.focus();
+  });
+  cacheLimitOverlay.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
     setSubpage('home');
     cacheLimitButton.focus();
   });
@@ -344,7 +363,7 @@ export function createLibraryManage(
     progressBarLabel.title = l.showProgressBar;
     storageTitle.textContent = l.storageGroup;
     clearCacheButton.textContent = l.clearCache;
-    cacheLimitText.textContent = l.changeCacheLimit;
+    cacheLimitButton.textContent = l.changeCacheLimit;
     cacheLimitButton.title = l.changeCacheLimit;
     cacheLimitButton.setAttribute('aria-label', l.changeCacheLimit);
     if (syncTitle !== null) syncTitle.textContent = l.syncGroup;
@@ -360,12 +379,10 @@ export function createLibraryManage(
       editorButton.title = l.markdownEditor;
       editorButton.setAttribute('aria-label', l.markdownEditor);
     }
-    subTitle.textContent = l.changeCacheLimit;
-    backButton.textContent = l.backToManage;
-    backButton.title = l.backToManage;
-    backButton.setAttribute('aria-label', l.backToManage);
+    cacheLimitTitle.textContent = l.changeCacheLimit;
     cacheLimitLabelText.textContent = l.cacheLimit;
     cacheLimitSave.textContent = l.apply;
+    cacheLimitCancel.textContent = l.cancel;
     renderThemeSwatches();
     syncReaderPrefsFromStorage();
   }
@@ -391,13 +408,15 @@ export function createLibraryManage(
           cacheLimitInput.value = String(cache.limitBytes / 1024 ** 3);
         }
       } catch {
-        // 缓存统计失败沿用现状：用量行留空，不阻断管理页其余功能。
+        // 浏览器预览无 cacheStats：隐藏空用量盒，避免盖住「存储与缓存」。
         cacheUsage.textContent = '';
       }
+      cacheSummary.hidden = cacheUsage.textContent.trim() === '';
     },
     retranslate,
     destroy(): void {
       prefsTarget.removeEventListener('lightink:syncable-storage-change', onReaderPrefsStorage);
+      cacheLimitOverlay.remove();
       element.remove();
     },
   };

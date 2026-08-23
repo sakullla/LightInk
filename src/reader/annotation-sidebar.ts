@@ -16,6 +16,7 @@ import {
   type AnnotationKind,
 } from './annotations.js';
 import type { MessageKey } from '../i18n/messages.js';
+import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 
 type AnnotationFilter = 'all' | AnnotationKind | 'document';
 type ColorFilter = 'all' | AnnotationColor;
@@ -35,12 +36,21 @@ export interface SearchHitView {
   current: boolean;
 }
 
+export interface SearchHitsState {
+  /** Revealed busy chrome; only after the search has taken about a second. */
+  searching?: boolean;
+  /** In-flight but quieter than one second — no empty copy, no extra scrollbar. */
+  pending?: boolean;
+  hasMore?: boolean;
+}
+
 export interface AnnotationSidebarSearch {
   onQuery: (query: string) => void;
   onJump: (key: string) => void;
   onNext: () => void;
   onPrev: () => void;
   onClear: () => void;
+  onLoadMore?: () => void;
 }
 
 export interface AnnotationSidebarDeps {
@@ -60,7 +70,7 @@ export interface AnnotationSidebarDeps {
 export interface AnnotationSidebar {
   readonly element: HTMLElement;
   render(annotations: readonly Annotation[]): void;
-  renderHits(hits: readonly SearchHitView[]): void;
+  renderHits(hits: readonly SearchHitView[], state?: SearchHitsState): void;
   setSearchQuery(query: string): void;
   getSearchQuery(): string;
   focusSearch(): void;
@@ -178,6 +188,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   noteSearchInput.placeholder = deps.t('annotation.search.placeholder');
   noteSearchInput.autocomplete = 'off';
   noteSearchInput.spellcheck = false;
+  noteSearchInput.enterKeyHint = 'search';
   const noteStatus = document.createElement('span');
   noteStatus.className = 'lightink-reader-sidebar-search-status';
   noteStatus.setAttribute('aria-live', 'polite');
@@ -332,19 +343,31 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     renderCombined();
   };
 
-  noteSearchInput.addEventListener('input', () => {
+  const documentSearchScope = (): boolean =>
+    search !== undefined &&
+    (currentFilter === 'document' || (currentFilter === 'all' && currentColor === 'all'));
+
+  const applyLocalQuery = (): void => {
     annotationQuery = noteSearchInput.value;
-    if (search !== undefined) {
-      const documentScope =
-        currentFilter === 'document' || (currentFilter === 'all' && currentColor === 'all');
-      if (documentScope && annotationQuery.trim() !== '') {
-        search.onQuery(annotationQuery);
-      } else if (lastHits !== null) {
-        clearDocumentSearch();
-      }
+    if (search !== undefined && lastHits !== null && !documentSearchScope()) {
+      clearDocumentSearch();
+    }
+    renderCombined();
+  };
+
+  const unbindQuery = bindImeSafeQuery(noteSearchInput, (query) => {
+    annotationQuery = query;
+    if (search !== undefined && documentSearchScope() && query.trim() !== '') {
+      search.onQuery(query);
+      return;
+    }
+    if (search !== undefined && lastHits !== null) {
+      clearDocumentSearch();
     }
     renderCombined();
   });
+
+  noteSearchInput.addEventListener('input', applyLocalQuery);
   noteSearchInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && currentFilter === 'document' && search !== undefined) {
       event.preventDefault();
@@ -491,6 +514,8 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   let lastAnnotations: readonly Annotation[] = [];
+  let lastHitsState: SearchHitsState = {};
+  let moreRelease: (() => void) | null = null;
   applyFilter();
   syncSearchMode();
 
@@ -525,18 +550,45 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   /** 统一渲染：标注分类下为标注列表，「全部」分类有查询时下方合并正文命中。 */
+  const appendMore = (): void => {
+    if (search?.onLoadMore === undefined) return;
+    if (lastHitsState.searching !== true && lastHitsState.hasMore !== true) return;
+    const more = document.createElement('li');
+    more.className = 'lightink-reader-sidebar-more';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent =
+      lastHitsState.searching === true
+        ? deps.t('reader.search.searching')
+        : deps.t('reader.search.more');
+    button.disabled = lastHitsState.searching === true;
+    button.addEventListener('click', () => search.onLoadMore?.());
+    more.appendChild(button);
+    list.appendChild(more);
+    moreRelease = observeLoadMore(list, more, () => search.onLoadMore?.());
+  };
+
   const renderCombined = (): void => {
+    moreRelease?.();
+    moreRelease = null;
     root.classList.toggle('is-searching', lastHits !== null);
     list.replaceChildren();
     if (lastHits !== null) {
       const current = lastHits.findIndex((hit) => hit.current);
-      noteStatus.dataset.searchEmpty = lastHits.length === 0 ? 'true' : 'false';
+      const searching = lastHitsState.searching === true;
+      const pending = lastHitsState.pending === true;
+      const quiet = searching || pending;
+      noteStatus.dataset.searchEmpty = lastHits.length === 0 && !quiet ? 'true' : 'false';
       noteStatus.textContent =
-        lastHits.length === 0
-          ? deps.t('reader.search.empty')
-          : current >= 0
-            ? `${current + 1}/${lastHits.length}`
-            : String(lastHits.length);
+        lastHits.length === 0 && pending
+          ? ''
+          : lastHits.length === 0 && !searching
+            ? deps.t('reader.search.empty')
+            : searching
+              ? `${lastHits.length}+`
+              : current >= 0
+                ? `${current + 1}/${lastHits.length}`
+                : String(lastHits.length);
     } else {
       noteStatus.textContent = '';
       noteStatus.dataset.searchEmpty = 'false';
@@ -549,7 +601,8 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
         list.appendChild(prompt);
         return;
       }
-      appendHits(lastHits, true);
+      appendHits(lastHits, lastHitsState.searching !== true && lastHitsState.pending !== true);
+      appendMore();
       return;
     }
     const kindFilter: AnnotationKind | undefined =
@@ -564,6 +617,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     }
     if (lastHits !== null) {
       appendHits(lastHits, false);
+      appendMore();
     }
     if (visible.length === 0 && (lastHits === null || lastHits.length === 0)) {
       const empty = document.createElement('li');
@@ -582,11 +636,13 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   const renderList = (annotations: readonly Annotation[]): void => {
     lastAnnotations = annotations;
     lastHits = null;
+    lastHitsState = {};
     renderCombined();
   };
 
-  const renderHits = (hits: readonly SearchHitView[]): void => {
+  const renderHits = (hits: readonly SearchHitView[], state: SearchHitsState = {}): void => {
     lastHits = hits;
+    lastHitsState = state;
     renderCombined();
   };
 
@@ -615,6 +671,9 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       noteSearchInput.select();
     },
     destroy() {
+      moreRelease?.();
+      moreRelease = null;
+      unbindQuery();
       root.remove();
     },
   };

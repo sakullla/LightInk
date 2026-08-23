@@ -241,6 +241,8 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).not.toMatch(/lightink-library/);
     expect(css).not.toMatch(/--lightink-measure/);
     expect(css).not.toMatch(/--lightink-page-pad/);
+    // display:grid 会压过 UA [hidden]，加载条必须显式藏掉。
+    expect(css).toMatch(/\.lightink-reader-status\[hidden\][\s\S]*?display:\s*none/);
   });
 
   it('keeps scroll-mode chrome sticky at the start of the reader column', () => {
@@ -410,6 +412,32 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     );
   });
 
+  it('defaults touch reader body type to 18px so phone pages are not compact 15px', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\s*\{[^}]*--lightink-reader-body-size:\s*18px/,
+    );
+    expect(coarsePointerCss(css)).toMatch(
+      /\.lightink-reader\s*\{[^}]*--lightink-reader-body-size:\s*18px/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\s*\{[^}]*--lightink-reader-body-size:\s*var\(--lightink-font-size\)/,
+    );
+  });
+
+  it('reserves page bottom space so the whisper hairline does not strike the last line', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\s*\{[^}]*--lightink-reader-whisper-reserve:\s*calc\(1\.85rem \+ var\(--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*--lightink-reader-whisper-reserve/,
+    );
+    expect(coarsePointerCss(css)).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*--lightink-reader-whisper-reserve/,
+    );
+  });
+
   it('keeps top chrome entries and the progress slider at 44px hit targets on touch', () => {
     const css = readerCss();
     expect(css).toMatch(
@@ -423,13 +451,19 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     );
   });
 
-  it('keeps touch bottom sheets clear of the gesture bar with --lightink-safe-bottom', () => {
+  it('keeps touch bottom sheets above the thumb footer and out of overflow clip', () => {
     const css = panelsCss();
     expect(css).toMatch(
-      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*z-index:\s*40/,
     );
     expect(css).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*var\(--lightink-reader-sheet-inset/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet::after,\s*\.lightink-reader-sidebar\.is-touch-sheet::after\s*\{/,
     );
   });
 
@@ -441,6 +475,21 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(coarse).toMatch(
       /\.lightink-reader-search-sheet-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
     );
+    expect(panelsCss()).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-search-sheet-input,[\s\S]*?min-height:\s*44px[\s\S]*?font-size:\s*16px/,
+    );
+  });
+
+  it('docks the annotation notebook as a touch bottom sheet instead of a side drawer', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-sidebar.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-sidebar-note-search-input\s*\{[^}]*font-size:\s*16px/,
+    );
+    // display:flex 会压过 UA [hidden]；挂到 body 后必须显式藏起来。
+    expect(css).toMatch(/\.lightink-reader-sidebar\[hidden\]\s*\{[^}]*display:\s*none/);
   });
 });
 

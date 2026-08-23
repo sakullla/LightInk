@@ -1,9 +1,125 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 
 const host = process.env.TAURI_DEV_HOST;
+const OPDS_DEV_PROXY_PATH = "/__lightink/opds-proxy";
+const MAX_OPDS_PROXY_BYTES = 80 * 1024 * 1024;
+
+function requestHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function allowedOpdsProxyTarget(raw: string | null): URL | undefined {
+  if (raw === null || raw.trim() === "") return undefined;
+  try {
+    const target = new URL(raw);
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      target.hostname === "" ||
+      target.username !== "" ||
+      target.password !== ""
+    ) {
+      return undefined;
+    }
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleOpdsDevProxy(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    res.end("Method Not Allowed");
+    return;
+  }
+  const incoming = new URL(req.url ?? "/", "http://127.0.0.1");
+  const target = allowedOpdsProxyTarget(incoming.searchParams.get("url"));
+  if (target === undefined) {
+    res.statusCode = 400;
+    res.end("Unsupported OPDS url");
+    return;
+  }
+  const headers = new Headers({
+    Accept:
+      requestHeader(req, "accept") ??
+      "application/atom+xml, application/opds+json, application/json, text/xml, */*",
+  });
+  const authorization = requestHeader(req, "authorization");
+  if (authorization !== undefined) headers.set("Authorization", authorization);
+  try {
+    const response = await fetch(target, {
+      headers,
+      redirect: "follow",
+      signal: AbortSignal.timeout(120_000),
+    });
+    res.statusCode = response.status;
+    const contentType = response.headers.get("content-type");
+    if (contentType !== null) res.setHeader("Content-Type", contentType);
+    const contentLength = response.headers.get("content-length");
+    if (contentLength !== null) res.setHeader("Content-Length", contentLength);
+    if (response.body === null) {
+      res.end();
+      return;
+    }
+    const reader = response.body.getReader();
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_OPDS_PROXY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        res.destroy();
+        return;
+      }
+      if (!res.write(Buffer.from(value))) {
+        await new Promise<void>((resolve, reject) => {
+          res.once("drain", resolve);
+          res.once("error", reject);
+        });
+      }
+    }
+    res.end();
+  } catch (error) {
+    res.statusCode = 502;
+    res.end(error instanceof Error ? error.message : "OPDS proxy fetch failed");
+  }
+}
+
+function lightinkOpdsDevProxy(): Plugin {
+  const middleware = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    next: () => void,
+  ): void => {
+    const path = (req.url ?? "").split("?")[0];
+    if (path !== OPDS_DEV_PROXY_PATH) {
+      next();
+      return;
+    }
+    void handleOpdsDevProxy(req, res);
+  };
+  return {
+    name: "lightink-opds-dev-proxy",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
+  plugins: [lightinkOpdsDevProxy()],
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent vite from obscuring rust errors

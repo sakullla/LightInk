@@ -7,6 +7,7 @@
  */
 
 import { labelModal, mountModalFocus } from '../ui/modal-focus.js';
+import { adoptReaderOverlayTheme } from './reader-chrome-panels.js';
 import type { MessageKey } from '../i18n/messages.js';
 
 export interface NoteDialogDeps {
@@ -116,6 +117,10 @@ export function showNoteDialog(
 
     dialog.append(header, body, footer);
     overlay.appendChild(dialog);
+    const readerHost = doc.querySelector<HTMLElement>('.lightink-reader');
+    if (readerHost !== null) {
+      adoptReaderOverlayTheme(overlay, readerHost);
+    }
 
     textarea.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {

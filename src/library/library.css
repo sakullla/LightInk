@@ -951,11 +951,11 @@ html[data-touch-primary] .lightink-library-header {
   line-height: 1.4;
 }
 
-/* Group editor modal. */
+/* Group editor modal — fixed + body-mounted so overflow:hidden cannot clip it. */
 .lightink-modal-overlay.lightink-library-group-modal {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 200;
   display: grid;
   place-items: center;
   background: var(--lightink-overlay);
@@ -1094,13 +1094,13 @@ html[data-touch-primary] .lightink-library-header {
 
 /* Membership (organize into groups) overlay. */
 .lightink-library-membership-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 200;
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--lightink-bg) 72%, transparent);
+  background: var(--lightink-overlay);
 }
 
 .lightink-library-membership-dialog {
@@ -1220,6 +1220,25 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 18vh;
   padding: 28px 16px;
   font-size: 14px;
+}
+
+.lightink-library-catalog-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  margin: 8px 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lightink-library-catalog-more:disabled {
+  cursor: default;
 }
 
 .lightink-library-status button {
@@ -1352,6 +1371,39 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-items .lightink-library-empty {
   grid-column: 1 / -1;
+}
+
+.lightink-library-item.lightink-library-catalog-folder {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px !important;
+  padding: 10px 12px !important;
+  border-radius: 12px !important;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent) !important;
+  color: var(--lightink-fg);
+  text-align: left;
+}
+
+.lightink-library-catalog-folder svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+.lightink-library-catalog-folder span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--lightink-type-body, 15px);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-catalog-folder .lightink-library-collapse-chevron {
+  color: var(--lightink-muted);
 }
 
 .lightink-library-item {
@@ -1565,6 +1617,14 @@ html[data-touch-primary] .lightink-library-header {
   display: none;
 }
 
+.lightink-library-detail-backdrop {
+  display: none;
+}
+
+.lightink-library-detail-backdrop[hidden] {
+  display: none;
+}
+
 .lightink-library-detail h3 {
   margin: 12px 0 4px;
   font-size: 20px;
@@ -1596,6 +1656,21 @@ html[data-touch-primary] .lightink-library-header {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.lightink-library-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lightink-library-detail-header h2 {
+  flex: 1 1 auto;
+}
+
+.lightink-library-detail-handle {
+  display: none;
 }
 
 .lightink-library-detail-actions {
@@ -1693,7 +1768,7 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-theme-swatch-name {
   color: var(--lightink-muted);
-  font-size: 12px;
+  font-size: var(--lightink-type-caption, 12px);
   text-align: center;
 }
 
@@ -1784,50 +1859,39 @@ html[data-touch-primary] .lightink-library-header {
   font-size: 16px;
 }
 
-/* 缓存上限子页：管理页内的二级页（移动端全屏，见 ≤760px 断点）。 */
-.lightink-library-manage-subpage {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  flex: 1 1 auto;
-  min-height: 0;
+.lightink-modal-overlay.lightink-library-cache-limit-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: var(--lightink-overlay);
 }
 
-.lightink-library-manage-subpage[hidden] {
-  display: none;
+.lightink-modal-overlay.lightink-library-cache-limit-modal[hidden] {
+  display: none !important;
 }
 
-.lightink-library-manage-subpage-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  max-width: var(--lightink-library-manage-max);
+.lightink-library-cache-limit-modal .lightink-modal-dialog {
+  width: min(22rem, calc(100vw - 48px));
+  padding: 18px 16px 14px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 12px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
 }
 
-.lightink-library-manage-subpage-title {
-  margin: 0;
+.lightink-library-cache-limit-title {
+  margin: 0 0 12px;
   color: var(--lightink-fg);
-  font-size: 15px;
+  font-size: var(--lightink-type-subtitle, 15px);
   font-weight: 650;
 }
 
-.lightink-library-manage-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
-  padding: 6px 12px 6px 8px;
-  border-radius: 10px;
-  color: var(--lightink-accent);
-  font-size: 13px;
-}
-
-.lightink-library-manage-back::before {
-  content: '‹';
-  font-size: 16px;
-  line-height: 1;
+.lightink-library-cache-limit-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 @container library-content (min-width: 52rem) {
@@ -1877,12 +1941,10 @@ html[data-touch-primary] .lightink-library-header {
   align-items: stretch;
   gap: 10px;
   width: 100%;
-  max-width: var(--lightink-library-manage-max);
   margin: 0;
-  padding: 14px;
-  border: 1px solid var(--lightink-border);
-  border-radius: 10px;
-  background: var(--lightink-bg-elevated);
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--lightink-fg);
 }
 
@@ -1907,12 +1969,21 @@ html[data-touch-primary] .lightink-library-header {
   padding: 6px 10px;
 }
 
-.lightink-library-cache-limit-form .lightink-library-primary {
+.lightink-library-cache-limit-form .lightink-library-primary,
+.lightink-library-cache-limit-cancel {
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  padding: 6px 12px;
+  min-height: 40px;
+  padding: 8px 12px;
   white-space: nowrap;
+  font-size: var(--lightink-type-ui, 13px);
+}
+
+.lightink-library-cache-limit-cancel {
+  border: 1px solid var(--lightink-border);
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
 }
 
 /* library-view nav contract: data-library-nav = shelf | sources | catalog | manage */
@@ -2088,6 +2159,11 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
   grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
+}
+
+.lightink-library[data-library-nav='catalog'] .lightink-library-empty {
+  min-height: 24vh;
+  padding: 32px 16px;
 }
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-items,
@@ -2429,6 +2505,20 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
  * only applies at the ≤760px breakpoint — wide touch desktops keep the
  * desktop sidebar with collapse/resize.
  */
+/*
+ * Phone type scale. Material 3: title-large 22, body-large 16, label-large 14,
+ * label-medium / body-small 12. iOS HIG: body ~17pt, caption floor 11pt.
+ * rem tracks the 16px root, not the 13px desktop UI body.
+ */
+:is(html[data-android], html[data-touch-primary]) {
+  --lightink-type-title: 1.375rem;
+  --lightink-type-subtitle: 1rem;
+  --lightink-type-body: 1rem;
+  --lightink-type-ui: 0.875rem;
+  --lightink-type-secondary: 0.8125rem;
+  --lightink-type-caption: 0.75rem;
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-library {
   --lightink-library-pad-x: 16px;
   --lightink-library-pad-y: 12px;
@@ -2439,6 +2529,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   --lightink-library-search-max: 100%;
   --lightink-library-manage-max: 100%;
   --lightink-library-detail-min: 0px;
+  font-size: var(--lightink-type-ui);
 }
 
 /*
@@ -2454,21 +2545,15 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   display: none;
 }
 
-/* 目录 Tab 无最近浏览书源时落在书源列表的空态提示。 */
-.lightink-library-catalog-hint {
-  margin: 12px var(--lightink-library-pad-x);
-  color: var(--lightink-muted);
-  font-size: 13px;
-}
 
 @media (max-width: 760px) {
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
-    grid-template-rows: auto auto;
-    align-items: center;
-    column-gap: 8px;
-    row-gap: 8px;
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-header,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav-collapsed='true']
+    .lightink-library-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     min-height: calc(var(--lightink-safe-top, 0px) + 52px);
     padding: calc(var(--lightink-safe-top, 0px) + 8px) 12px
       10px max(12px, var(--lightink-safe-left, 0px));
@@ -2478,21 +2563,97 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     display: none;
   }
 
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-header-main {
-    display: contents;
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-header-main,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav-collapsed='true']
+    .lightink-library-header-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 8px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-header h1 {
     display: block !important;
     grid-column: 1;
     grid-row: 1;
+    flex: none;
+    min-width: 0;
     min-height: 44px;
+    overflow: visible;
     padding: 0;
-    font-size: 18px;
+    font-size: var(--lightink-type-title);
     line-height: 44px;
+    text-overflow: unset;
+    white-space: nowrap;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    .lightink-library-header-main,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf'][data-library-nav-collapsed='true']
+    .lightink-library-header-main {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-header-main,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog'][data-library-nav-collapsed='true']
+    .lightink-library-header-main {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-header
+    .lightink-library-back-to-shelf {
+    display: inline-flex;
+    grid-column: 1;
+    grid-row: 1;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0;
+    padding: 0;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-header
+    h1 {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-back-to-shelf-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-header-import {
+    display: none;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    .lightink-library-header-import {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2506,7 +2667,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary]) .lightink-library-search {
     grid-column: 1 / -1;
     grid-row: 2;
-    flex: 1 1 auto;
+    flex: none;
     width: 100%;
     max-width: none;
     height: 40px;
@@ -2561,7 +2722,19 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library[data-library-nav='catalog']
     .lightink-library-manage,
   :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-catalog-pane,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
+    .lightink-library-breadcrumbs,
+  :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='manage']
+    .lightink-library-nav {
+    display: none;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='catalog']
     .lightink-library-nav {
     display: none;
   }
@@ -2624,7 +2797,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     justify-content: flex-start;
     gap: 8px;
     padding: 5px 10px;
-    font-size: 13px;
+    font-size: var(--lightink-type-ui);
   }
 
   /* 分区操作（筛选/+）无 hover 可依赖，移动常态可见。 */
@@ -2681,7 +2854,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
     color: var(--lightink-fg);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--lightink-type-ui);
     white-space: nowrap;
   }
 
@@ -2711,8 +2884,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 8px 16px calc(28px + var(--lightink-safe-bottom, 0px));
   }
 
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-catalog-more {
+    grid-column: 1 / -1;
+  }
+
   :is(html[data-android], html[data-touch-primary]) .lightink-library-item-text strong {
-    font-size: 12px;
+    font-size: var(--lightink-type-secondary);
     line-height: 1.35;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -2721,11 +2898,19 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-item-text span {
-    font-size: 11px;
+    font-size: var(--lightink-type-caption);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue {
     margin: 8px 16px 4px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 21;
+    background: color-mix(in srgb, var(--lightink-fg) 28%, transparent);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-detail {
@@ -2737,10 +2922,34 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     z-index: 22;
     max-height: min(72vh, calc(100vh - var(--lightink-safe-top, 0px) - 48px));
     overflow-y: auto;
-    padding-bottom: calc(16px + var(--lightink-safe-bottom, 0px));
+    padding: 8px var(--lightink-library-pad-x) calc(16px + var(--lightink-safe-bottom, 0px));
     border-radius: 16px 16px 0 0;
     background: var(--lightink-bg-elevated);
     box-shadow: 0 -12px 40px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-handle {
+    display: block;
+    width: 36px;
+    min-width: 36px;
+    height: 4px;
+    min-height: 4px;
+    margin: 4px auto 10px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-handle:hover:not(:disabled),
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-handle:focus-visible {
+    background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+    color: inherit;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-close {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -2753,30 +2962,37 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 8px 16px calc(28px + var(--lightink-safe-bottom, 0px));
   }
 
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-search input {
+    font-size: var(--lightink-type-body);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-empty,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-status,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-empty,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-nav-empty {
+    font-size: var(--lightink-type-body);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-group-title,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-appearance-title {
+    font-size: var(--lightink-type-subtitle);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-appearance-hint,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-cache-summary {
+    font-size: var(--lightink-type-ui);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-reader-pref,
   :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-row {
     min-height: 48px;
-    font-size: 14px;
+    font-size: var(--lightink-type-body);
   }
 
-  /* 缓存上限子页：移动端全屏呈现，盖住底部 Tab 栏，返回键回到管理首页。 */
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-subpage {
-    position: fixed;
-    inset: 0;
-    z-index: 24;
-    padding: calc(var(--lightink-safe-top, 0px) + 8px) 16px
-      calc(28px + var(--lightink-safe-bottom, 0px));
-    overflow-y: auto;
-    background: var(--lightink-bg);
-  }
-
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-manage-subpage[hidden] {
-    display: none;
-  }
-
-  /* 底部 Tab 栏：书架 / 书源 / 目录 / 管理。 */
+  /* 底部 Tab 栏：书架 / 书源 / 管理。目录是书源内的下钻。 */
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     flex: 0 0 auto;
     padding: 2px 8px calc(2px + var(--lightink-safe-bottom, 0px));
     border-top: 1px solid var(--lightink-border);
@@ -2793,7 +3009,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 4px 2px;
     border-radius: 10px;
     color: var(--lightink-muted);
-    font-size: 11px;
+    font-size: var(--lightink-type-caption);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar-tab.is-active {
@@ -2806,42 +3022,13 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     height: 22px;
   }
 
-  /*
-   * 管理相关 dialog（分组编辑 / 书源编辑 / membership）：移动断点下放宽尺寸，
-   * 输入与按钮触控目标 ≥44px；16px 输入字号避免聚焦自动放大。
-   */
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-group-modal
-    .lightink-modal-dialog,
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-source-modal
-    .lightink-modal-dialog {
-    width: min(26rem, calc(100% - 32px));
-    max-width: calc(100% - 32px);
-    padding: 20px 16px 16px;
-  }
-
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
-    width: min(26rem, calc(100% - 32px));
-    max-height: min(80vh, 560px);
-    padding: 20px 16px 16px;
-  }
-
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form input,
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form select,
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-source-form
-    input:not([type='checkbox']),
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form select {
-    min-height: 44px;
-    font-size: 16px;
-  }
-
   :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form-actions button,
   :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form button,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-form button,
   :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-actions button {
     min-height: 44px;
     padding: 10px 18px;
+    font-size: var(--lightink-type-ui);
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -2858,6 +3045,57 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label,
   :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-options label {
     min-height: 44px;
+    font-size: var(--lightink-type-ui);
   }
+}
+
+/*
+ * Portaled overlays sit on document.body. Phone / ?mobile=1 preview must
+ * follow the viewport — not the 22–26rem desktop card — and use shelf UI type.
+ */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-group-modal
+  .lightink-modal-dialog,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-source-modal
+  .lightink-modal-dialog,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cache-limit-modal
+  .lightink-modal-dialog,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
+  box-sizing: border-box;
+  width: calc(100vw - 24px);
+  max-width: calc(100vw - 24px);
+  padding: 14px 12px 10px;
+  font-family: var(--lightink-font-ui);
+  font-size: var(--lightink-type-ui);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
+  max-height: min(80vh, 560px);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-form,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-form,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-form {
+  gap: 8px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-form input,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-form select,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-source-form
+  input:not([type='checkbox']),
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-form select,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-form input {
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: var(--lightink-type-body);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-field > span,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-form label {
+  font-size: var(--lightink-type-ui);
 }
 

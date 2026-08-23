@@ -465,12 +465,67 @@ function comicChoiceSection(
   return block;
 }
 
+const READER_OVERLAY_THEME_VARS = [
+  '--lightink-bg',
+  '--lightink-bg-elevated',
+  '--lightink-fg',
+  '--lightink-muted',
+  '--lightink-border',
+] as const;
+
+/**
+ * Copy reader paper tokens onto a portaled overlay so it does not inherit
+ * the editor / markdown theme on document.body.
+ */
+export function adoptReaderOverlayTheme(overlay: HTMLElement, host: HTMLElement): void {
+  if (typeof getComputedStyle !== 'function') {
+    return;
+  }
+  const style = getComputedStyle(host);
+  for (const name of READER_OVERLAY_THEME_VARS) {
+    const value = style.getPropertyValue(name).trim();
+    if (value !== '') overlay.style.setProperty(name, value);
+  }
+  const theme = host.dataset.readerTheme;
+  if (theme !== undefined && theme !== '') overlay.dataset.readerTheme = theme;
+  if (style.color !== '') overlay.style.color = style.color;
+  // Reader paper has no accent token; use ink so chips/focus are not editor brown.
+  const ink = overlay.style.getPropertyValue('--lightink-fg').trim() || style.color;
+  const elevated =
+    overlay.style.getPropertyValue('--lightink-bg-elevated').trim() ||
+    style.getPropertyValue('--lightink-bg-elevated').trim();
+  if (ink !== '') overlay.style.setProperty('--lightink-accent', ink);
+  if (elevated !== '') overlay.style.setProperty('--lightink-accent-soft', elevated);
+}
+
+/** Escape #lightink-editor-area overflow:hidden by mounting on document.body. */
+export function mountReaderOverlay(overlay: HTMLElement, host: HTMLElement): void {
+  adoptReaderOverlayTheme(overlay, host);
+  const layer = host.ownerDocument?.body ?? (typeof document !== 'undefined' ? document.body : null);
+  if (layer !== null && overlay.parentNode !== layer) {
+    layer.appendChild(overlay);
+  }
+}
+
+export function readerChromeFooterInset(
+  root: ParentNode | null = typeof document !== 'undefined' ? document : null,
+): number {
+  const footer = root?.querySelector<HTMLElement>('.lightink-reader-chrome-footer');
+  if (footer == null || footer.hidden) return 0;
+  const height = footer.getBoundingClientRect().height;
+  return Number.isFinite(height) ? Math.max(0, Math.round(height)) : 0;
+}
+
 /** Anchor a sheet under its toolbar button, clamped to the reading host. */
 export function positionReaderChromePanel(
   panel: HTMLElement,
   host: HTMLElement,
   anchor: HTMLElement | null,
 ): void {
+  if (isTouchReaderChrome()) {
+    pinFixedOverlay(panel, host);
+    return;
+  }
   if (typeof host.getBoundingClientRect !== 'function') {
     return;
   }
@@ -527,14 +582,19 @@ export function pinFixedOverlay(
     return;
   }
   if (isTouchReaderChrome()) {
+    const box = pane.getBoundingClientRect();
+    const inset = readerChromeFooterInset(overlay.ownerDocument);
+    const bottomGap = Math.max(0, viewport.innerHeight - box.bottom);
     overlay.classList.add('is-touch-sheet');
+    overlay.classList.remove('lightink-reader-chrome-popover');
     overlay.style.position = 'fixed';
-    overlay.style.left = '0';
-    overlay.style.right = '0';
+    overlay.style.left = `${Math.max(0, box.left)}px`;
+    overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
     overlay.style.top = 'auto';
-    overlay.style.bottom = '0';
-    overlay.style.width = '100%';
+    overlay.style.bottom = `${bottomGap + inset}px`;
+    overlay.style.width = 'auto';
     overlay.style.height = 'auto';
+    overlay.style.zIndex = '40';
     return;
   }
   overlay.classList.remove('is-touch-sheet');
@@ -572,6 +632,7 @@ export function unpinFixedOverlay(overlay: HTMLElement): void {
   overlay.style.removeProperty('left');
   overlay.style.removeProperty('width');
   overlay.style.removeProperty('height');
+  overlay.style.removeProperty('z-index');
 }
 
 function section(label: string, kind?: string, hideLabel = false): HTMLElement {

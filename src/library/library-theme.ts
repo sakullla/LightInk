@@ -196,3 +196,42 @@ export function applyLibraryTheme(root: LibraryThemeRoot, theme: LibraryThemeId)
   root.style.backgroundColor = tokens.page;
   return next;
 }
+
+const LIBRARY_OVERLAY_THEME_VARS = [
+  '--lightink-bg',
+  '--lightink-bg-elevated',
+  '--lightink-fg',
+  '--lightink-muted',
+  '--lightink-border',
+  '--lightink-accent',
+  '--lightink-accent-soft',
+  '--lightink-overlay',
+  '--lightink-shadow',
+  '--lightink-danger',
+] as const;
+
+/**
+ * Copy shelf tokens onto a portaled overlay so it does not inherit editor paper.
+ */
+export function adoptLibraryOverlayTheme(overlay: HTMLElement, host: HTMLElement): void {
+  if (typeof getComputedStyle !== 'function') {
+    return;
+  }
+  const style = getComputedStyle(host);
+  for (const name of LIBRARY_OVERLAY_THEME_VARS) {
+    const value = style.getPropertyValue(name).trim();
+    if (value !== '') overlay.style.setProperty(name, value);
+  }
+  const theme = host.dataset.libraryTheme;
+  if (theme !== undefined && theme !== '') overlay.dataset.libraryTheme = theme;
+  if (style.color !== '') overlay.style.color = style.color;
+}
+
+/** Escape library overflow clip by mounting on document.body. */
+export function mountLibraryOverlay(overlay: HTMLElement, host: HTMLElement): void {
+  adoptLibraryOverlayTheme(overlay, host);
+  const layer = host.ownerDocument?.body ?? (typeof document !== 'undefined' ? document.body : null);
+  if (layer !== null && overlay.parentNode !== layer) {
+    layer.appendChild(overlay);
+  }
+}

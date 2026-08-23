@@ -1,4 +1,11 @@
 import { labelModal, mountModalFocus } from '../ui/modal-focus.js';
+import {
+  applyReaderTheme,
+  loadReaderTheme,
+  parseReaderTheme,
+  readerThemeTokens,
+  type ReaderThemeStorage,
+} from '../reader/reader-theme.js';
 import type {
   SyncAuthType,
   SyncCredential,
@@ -27,6 +34,10 @@ export interface SyncPanelDeps {
   };
   readonly locale?: 'en' | 'zh-CN';
   readonly onClose?: () => void;
+  /** Live reading host, when a book is open. */
+  readonly themeHost?: HTMLElement;
+  /** `lightink.reader.theme` store; falls back to the document's localStorage. */
+  readonly themeStorage?: ReaderThemeStorage | null;
 }
 
 type Labels = {
@@ -179,6 +190,36 @@ function migrationLabel(entry: ManagedMigrationEntry): string {
   return `${entry.title}${suffix}`;
 }
 
+function themeStorageOf(deps: SyncPanelDeps): ReaderThemeStorage | null {
+  if (deps.themeStorage !== undefined) {
+    return deps.themeStorage;
+  }
+  try {
+    return deps.doc.defaultView?.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Paint the body-mounted dialog with reader paper, not editor cream/brown.
+ * Overlay keeps a dimmed backdrop; only CSS variables inherit to the dialog.
+ */
+function applySyncPanelReaderTheme(overlay: HTMLElement, deps: SyncPanelDeps): void {
+  const resolved = deps.themeHost?.dataset.readerTheme
+    ? parseReaderTheme(deps.themeHost.dataset.readerTheme)
+    : loadReaderTheme(themeStorageOf(deps));
+  const tokens = readerThemeTokens(resolved);
+  applyReaderTheme(overlay, resolved);
+  overlay.style.backgroundColor = '';
+  overlay.style.setProperty('--lightink-accent', tokens.ink);
+  overlay.style.setProperty('--lightink-accent-soft', tokens.elevated);
+  overlay.style.setProperty(
+    '--lightink-overlay',
+    `color-mix(in srgb, ${tokens.ink} 36%, transparent)`,
+  );
+}
+
 /** Render the complete sync configuration/status surface. */
 export function showSyncPanel(deps: SyncPanelDeps): void {
   const doc = deps.doc;
@@ -317,6 +358,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   body.append(dangerSection);
   dialog.append(header, body, footer);
   overlay.appendChild(dialog);
+  applySyncPanelReaderTheme(overlay, deps);
   doc.body.appendChild(overlay);
 
   let profile: SyncProfile | null = null;

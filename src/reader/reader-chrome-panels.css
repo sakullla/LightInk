@@ -545,21 +545,40 @@
   }
 }
 
-/* Bottom sheet for catalog / typography — thumbs reach it; status bar stays clear. */
+/* Bottom sheet sits above the thumb footer (inset from JS), not under it. */
 .lightink-reader-chrome-panel.is-touch-sheet {
   left: 0;
   right: 0;
   top: auto;
-  bottom: 0;
+  bottom: var(--lightink-reader-sheet-inset, 0px);
+  z-index: 40;
   width: 100%;
   max-width: 100%;
-  max-height: min(72vh, calc(100vh - var(--lightink-safe-top, 0px) - 1.5rem));
+  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
   border-radius: 16px 16px 0 0;
-  padding-bottom: var(--lightink-safe-bottom, 0px);
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  padding-top: 1.15rem;
+  padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
 }
 
 .lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-popover::before {
   display: none;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet::after,
+.lightink-reader-sidebar.is-touch-sheet::after {
+  content: '';
+  position: absolute;
+  top: 0.45rem;
+  left: 50%;
+  width: 2.25rem;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 /* ===== 触屏搜索层（底栏 sheet：查询框 + 命中列表，R5/R6） =====
@@ -567,8 +586,9 @@
  * 点空白关层走 reader-chrome 点击护栏（层内点按被 chrome-panel 类忽略）。 */
 
 .lightink-reader-search-sheet {
-  min-height: min(38vh, 20rem);
-  padding-bottom: var(--lightink-safe-bottom, 0px);
+  min-height: min(42vh, 22rem);
+  overflow: hidden;
+  padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
 }
 
 .lightink-reader-search-sheet-bar {
@@ -591,9 +611,11 @@
   font: inherit;
 }
 
+.lightink-reader-search-sheet-input:focus,
 .lightink-reader-search-sheet-input:focus-visible {
-  outline: 2px solid var(--lightink-accent);
+  outline: 2px solid var(--lightink-fg);
   outline-offset: 1px;
+  border-color: color-mix(in srgb, var(--lightink-fg) 40%, transparent);
 }
 
 .lightink-reader-search-sheet-status {
@@ -669,6 +691,21 @@
   color: var(--lightink-muted);
 }
 
+.lightink-reader-search-sheet-more button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  margin: 0.2rem 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
 /* 触屏（粗指针）：搜索层全部可点目标 ≥44px。 */
 @media (pointer: coarse) {
   .lightink-reader-search-sheet-input,
@@ -680,4 +717,20 @@
     min-width: 44px;
     min-height: 44px;
   }
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-search-sheet-input,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-search-sheet-hit {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-search-sheet-close {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-panel.is-touch-sheet,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
+  font-size: 0.9375rem;
 }

@@ -43,6 +43,7 @@ describe('SyncableStorage', () => {
     expect(isSyncableStorageKey('lightink.reader.prefs')).toBe(true);
     expect(isSyncableStorageKey('lightink.theme.customCss')).toBe(true);
     expect(isSyncableStorageKey('lightink.opds.sources')).toBe(true);
+    expect(isSyncableStorageKey('lightink.opds.credentials')).toBe(false);
     expect(isSyncableStorageKey(PROGRESS_KEY)).toBe(true);
     expect(isSyncableStorageKey('lightink.reader.progress./home/user/book.epub')).toBe(false);
     expect(isSyncableStorageKey('lightink.library.progressAlias.local:/books/a.epub')).toBe(false);

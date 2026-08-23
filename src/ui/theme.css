@@ -2431,6 +2431,56 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   background: var(--lightink-overlay);
 }
 
+.lightink-open-progress-dialog {
+  min-width: min(320px, calc(100vw - 32px));
+}
+
+.lightink-open-progress-track {
+  height: 6px;
+  margin: 12px 0 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-open-progress-fill {
+  width: calc(var(--lightink-open-progress, 0.16) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+}
+
+.lightink-open-progress[data-progress-determinate='false'] .lightink-open-progress-fill {
+  width: 36%;
+  animation: lightink-open-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+.lightink-open-progress-percent {
+  margin: 8px 0 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-open-progress-cancel {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+}
+
+@keyframes lightink-open-progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-open-progress-cancel {
+  min-height: 44px;
+}
+
 .lightink-modal-dialog {
   min-width: 280px;
   max-width: 80vw;
@@ -2462,6 +2512,14 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
 /* 应用内确认弹层（未保存关闭三选一 / 崩溃恢复）：消息 + 右下按钮排。 */
 .lightink-confirm-dialog {
   min-width: 340px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  box-shadow: var(--lightink-shadow, 0 12px 32px #00000026);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-confirm-dialog .lightink-modal-btn {
+  min-height: 44px;
+  font-size: var(--lightink-type-ui, 14px);
 }
 
 .lightink-modal-message {

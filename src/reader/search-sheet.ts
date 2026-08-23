@@ -13,7 +13,8 @@
  */
 
 import type { MessageKey } from '../i18n/messages.js';
-import type { SearchHitView } from './annotation-sidebar.js';
+import type { SearchHitView, SearchHitsState } from './annotation-sidebar.js';
+import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 
 /** 文案闭集（`reader.search.*`）；通过 copy 直传或 t 查询二选一注入。 */
 export interface SearchSheetCopy {
@@ -32,6 +33,8 @@ export interface SearchSheetDeps {
   onQuery: (query: string) => void;
   /** 点命中跳转（层保持打开；宿主定位并以新的 current 重放 renderHits）。 */
   onJump?: (key: string) => void;
+  /** 滚动到底或点「加载更多」时回调（宿主继续扫描 / 放出下一页命中）。 */
+  onLoadMore?: () => void;
   /** 层每次从打开变为关闭时回调一次（同步控件条状态、按需清理会话）。 */
   onClose?: () => void;
 }
@@ -48,7 +51,7 @@ export interface SearchSheet {
   getQuery(): string;
   focusInput(): void;
   /** 渲染命中列表；有查询但空命中时显示空态文案，不回退标注侧栏。 */
-  renderHits(hits: readonly SearchHitView[]): void;
+  renderHits(hits: readonly SearchHitView[], state?: SearchHitsState): void;
   destroy(): void;
 }
 
@@ -102,14 +105,20 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
   root.append(bar, list);
 
   let lastHits: readonly SearchHitView[] = [];
+  let lastState: SearchHitsState = {};
+  let moreRelease: (() => void) | null = null;
 
   const renderList = (): void => {
+    moreRelease?.();
+    moreRelease = null;
     list.replaceChildren();
     if (input.value.trim() === '') {
       status.textContent = '';
       return;
     }
-    if (lastHits.length === 0) {
+    const searching = lastState.searching === true;
+    const pending = lastState.pending === true;
+    if (lastHits.length === 0 && !searching && !pending) {
       status.textContent = label('empty');
       const empty = document.createElement('li');
       empty.className = 'lightink-reader-search-sheet-empty';
@@ -117,9 +126,17 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
       list.appendChild(empty);
       return;
     }
+    if (lastHits.length === 0 && pending) {
+      status.textContent = '';
+      return;
+    }
     const current = lastHits.findIndex((hit) => hit.current);
-    status.textContent =
-      current >= 0 ? `${current + 1}/${lastHits.length}` : String(lastHits.length);
+    const count = String(lastHits.length);
+    status.textContent = searching
+      ? `${count}+`
+      : current >= 0
+        ? `${current + 1}/${count}`
+        : count;
     for (const hit of lastHits) {
       const li = document.createElement('li');
       li.className = 'lightink-reader-search-sheet-hit';
@@ -139,6 +156,20 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
       li.addEventListener('click', () => onJump(hit.key));
       list.appendChild(li);
     }
+    if (searching || lastState.hasMore === true) {
+      const more = document.createElement('li');
+      more.className = 'lightink-reader-search-sheet-more';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = searching
+        ? (deps.t?.('reader.search.searching') ?? 'reader.search.searching')
+        : (deps.t?.('reader.search.more') ?? 'reader.search.more');
+      button.disabled = searching;
+      button.addEventListener('click', () => deps.onLoadMore?.());
+      more.appendChild(button);
+      list.appendChild(more);
+      moreRelease = observeLoadMore(list, more, () => deps.onLoadMore?.());
+    }
   };
 
   const doClose = (): boolean => {
@@ -154,13 +185,12 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     doClose();
   });
 
-  input.addEventListener('input', () => {
-    if (input.value.trim() === '') {
-      // 本地清列表；宿主在 onQuery 收到空查询时清理会话与 overlay 高亮。
+  const unbindQuery = bindImeSafeQuery(input, (query) => {
+    if (query.trim() === '') {
       lastHits = [];
       renderList();
     }
-    deps.onQuery(input.value);
+    deps.onQuery(query);
   });
 
   // Escape（键盘或 Android 返回合成）一次只关本层：本层消费掉事件，
@@ -199,11 +229,15 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
       return input.value;
     },
     focusInput,
-    renderHits(hits: readonly SearchHitView[]): void {
+    renderHits(hits: readonly SearchHitView[], state: SearchHitsState = {}): void {
       lastHits = hits;
+      lastState = state;
       renderList();
     },
     destroy(): void {
+      moreRelease?.();
+      moreRelease = null;
+      unbindQuery();
       root.remove();
     },
   };

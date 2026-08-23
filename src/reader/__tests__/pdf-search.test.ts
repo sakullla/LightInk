@@ -4,16 +4,24 @@
  * PDF 搜索（T6 / R2）测试：命中索引纯函数（多页/大小写/多命中/空查询）、
  * 环形导航、overlay wrap/unwrap 与 offset→Range 定位。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  bindImeSafeQuery,
   canWrapSearchMark,
+  capSearchHits,
+  createSearchBusyReveal,
   findPdfMatches,
   findTextHits,
+  htmlToSearchText,
+  liveSearchMinChars,
+  SEARCH_BUSY_REVEAL_MS,
   nearestMatchIndex,
   nextMatchIndex,
   preserveMatchIndex,
   sanitizeSearchQuery,
+  SEARCH_HIT_CAP,
+  SEARCH_QUERY_DEBOUNCE_MS,
   snippetAround,
   offsetRangeFrom,
   textLengthOf,
@@ -51,6 +59,106 @@ describe('findPdfMatches', () => {
 
   it('无命中返回空数组', () => {
     expect(findPdfMatches(pages, '不存在')).toEqual([]);
+  });
+});
+
+describe('capSearchHits', () => {
+  it('keeps short lists and slices long ones', () => {
+    expect(capSearchHits([1, 2, 3], 5)).toEqual([1, 2, 3]);
+    expect(capSearchHits([1, 2, 3, 4], 2)).toEqual([1, 2]);
+    expect(SEARCH_HIT_CAP).toBe(80);
+  });
+});
+
+describe('liveSearchMinChars', () => {
+  it('accepts one CJK character and still waits for two Latin letters', () => {
+    expect(liveSearchMinChars('漫')).toBe(1);
+    expect(liveSearchMinChars('X')).toBe(2);
+    expect(liveSearchMinChars('ab')).toBe(2);
+  });
+});
+
+describe('htmlToSearchText', () => {
+  it('strips tags so unloaded chapters can be scanned without a frame', () => {
+    expect(htmlToSearchText('<p>Hello <em>world</em></p>')).toBe('Hello world');
+    expect(htmlToSearchText('   ')).toBe('');
+  });
+});
+
+describe('createSearchBusyReveal', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not reveal busy chrome before one second', () => {
+    vi.useFakeTimers();
+    const onReveal = vi.fn();
+    const busy = createSearchBusyReveal(onReveal);
+    busy.start();
+    vi.advanceTimersByTime(SEARCH_BUSY_REVEAL_MS - 1);
+    expect(busy.revealed()).toBe(false);
+    expect(onReveal).not.toHaveBeenCalled();
+    busy.clear();
+    vi.advanceTimersByTime(SEARCH_BUSY_REVEAL_MS);
+    expect(busy.revealed()).toBe(false);
+    expect(onReveal).not.toHaveBeenCalled();
+  });
+
+  it('reveals once the search has actually taken a second', () => {
+    vi.useFakeTimers();
+    const onReveal = vi.fn();
+    const busy = createSearchBusyReveal(onReveal);
+    busy.start();
+    vi.advanceTimersByTime(SEARCH_BUSY_REVEAL_MS);
+    expect(busy.revealed()).toBe(true);
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    busy.clear();
+  });
+});
+
+describe('bindImeSafeQuery', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  it('debounces committed keystrokes and emits an empty query immediately', () => {
+    vi.useFakeTimers();
+    const input = document.createElement('input');
+    const onQuery = vi.fn();
+    const unbind = bindImeSafeQuery(input, onQuery);
+    document.body.appendChild(input);
+
+    input.value = 'a';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.value = 'ab';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(onQuery).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(SEARCH_QUERY_DEBOUNCE_MS);
+    expect(onQuery).toHaveBeenCalledTimes(1);
+    expect(onQuery).toHaveBeenLastCalledWith('ab');
+
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(onQuery).toHaveBeenLastCalledWith('');
+    unbind();
+  });
+
+  it('waits for IME composition to finish before searching', () => {
+    const input = document.createElement('input');
+    const onQuery = vi.fn();
+    const unbind = bindImeSafeQuery(input, onQuery);
+    document.body.appendChild(input);
+
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = 'jian';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    expect(onQuery).not.toHaveBeenCalled();
+    input.value = '鉴';
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    expect(onQuery).toHaveBeenCalledTimes(1);
+    expect(onQuery).toHaveBeenLastCalledWith('鉴');
+    unbind();
   });
 });
 

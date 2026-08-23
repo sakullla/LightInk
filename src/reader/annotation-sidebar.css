@@ -33,6 +33,11 @@
   z-index: 14;
 }
 
+/* author display:flex 会压过 UA [hidden]；挂到 body 后父级 :not(--sidebar) 选择器也不再生效。 */
+.lightink-reader-sidebar[hidden] {
+  display: none;
+}
+
 /* Scroll mode grows the reader with the book. Keep the notebook on the
    visible pane (JS sets fixed top/right/bottom from the editor area). */
 .lightink-reader[data-reading-layout='scroll'] .lightink-reader-sidebar {
@@ -145,6 +150,21 @@
   overscroll-behavior: contain;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.lightink-reader-sidebar-more button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  margin: 0.2rem 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  cursor: pointer;
 }
 
 .lightink-reader-sidebar-item {
@@ -417,7 +437,56 @@
   }
 }
 
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar {
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar:not(.is-touch-sheet) {
   inset: var(--lightink-safe-top, 0px) 0 var(--lightink-safe-bottom, 0px) auto;
+}
+
+.lightink-reader-sidebar.is-touch-sheet {
+  position: fixed;
+  inset: auto 0 var(--lightink-reader-sheet-inset, 0px) 0;
+  z-index: 40;
+  width: 100%;
+  max-width: 100%;
+  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.16);
+  padding-top: 0.55rem;
+  padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
+  inset: auto 0 var(--lightink-reader-sheet-inset, 0px) 0;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-note-search-input,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-item,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-jump,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-edit,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-remove {
+  min-height: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close {
+  min-width: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-note-search-input {
+  font-size: 16px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-color-filter:not([data-color='all']) {
+  width: 44px;
+  height: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter--active {
+  color: var(--lightink-fg);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
 
