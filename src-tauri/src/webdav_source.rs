@@ -334,7 +334,9 @@ const SUPPORTED_BOOK_EXTENSIONS: [&str; 10] = [
     "epub", "pdf", "cbz", "cbr", "rar", "cb7", "7z", "mobi", "fb2", "txt",
 ];
 
-/// PROPFIND href 的单次百分号解码；不把 '+' 当作空格（路径语义，非表单编码）。
+/// 单次百分号解码，仅用于派生显示标题（last_path_segment）；URL 解析绝不做
+/// 整体解码，避免还原出的 '#'/'?'/'%XX' 被解析器二次解释为分隔符或再次解码。
+/// 不把 '+' 当作空格（路径语义，非表单编码）。
 fn percent_decode(raw: &str) -> Result<String, RemoteError> {
     let invalid = || source_error("HREF_INVALID", "PROPFIND href 的百分号编码无效");
     let bytes = raw.as_bytes();
@@ -371,14 +373,20 @@ fn normalize_collection_url(mut url: Url) -> Url {
 
 /// 解析 PROPFIND href（绝对 URL / 服务器绝对路径 / 相对路径，已编码或未编码）。
 /// 结果必须是同源、无内嵌凭据、且不从 HTTPS 降级的合法 URL，否则拒绝。
+///
+/// 必须先对原始 href 做 URL 解析：若先整体百分号解码，`%23`/`%3F`/`%2520`
+/// 会分别被当成 fragment、query 或再次解码，acquisition URL 就会指向错误资源。
 fn resolve_href(base: &Url, root: &Url, raw_href: &str) -> Result<Url, RemoteError> {
-    let decoded = percent_decode(raw_href.trim())?;
-    let joined = if decoded.starts_with("https://") || decoded.starts_with("http://") {
-        Url::parse(&decoded)
-    } else {
-        base.join(&decoded)
+    let trimmed = raw_href.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        return Err(source_error(
+            "HREF_INVALID",
+            "PROPFIND href 为空或包含控制字符",
+        ));
     }
-    .map_err(|_| source_error("HREF_INVALID", "PROPFIND href 不是合法 URL"))?;
+    let joined = base
+        .join(trimmed)
+        .map_err(|_| source_error("HREF_INVALID", "PROPFIND href 不是合法 URL"))?;
     if !matches!(joined.scheme(), "http" | "https") || joined.host_str().is_none() {
         return Err(source_error(
             "HREF_INVALID",
@@ -414,11 +422,9 @@ fn is_self_reference(request: &Url, href: &Url) -> bool {
 }
 
 /// 解码后的最后一个非空路径段；用于目录/文件标题回退。
+/// 从仍编码的 `path()` 取段再单次解码，避免对已解码段再次展开 `%2520` 等。
 fn last_path_segment(url: &Url) -> Option<String> {
-    let segment = url
-        .path_segments()?
-        .filter(|part| !part.is_empty())
-        .next_back()?;
+    let segment = url.path().rsplit('/').find(|part| !part.is_empty())?;
     percent_decode(segment)
         .ok()
         .filter(|value| !value.is_empty())
@@ -1102,6 +1108,84 @@ mod tests {
         let encoded = resolve_href(&root, &root, "/dav/books/%E7%94%BB%E5%86%8C/").unwrap();
         let raw = resolve_href(&root, &root, "/dav/books/画册/").unwrap();
         assert_eq!(encoded, raw);
+        let spaced = resolve_href(&root, &root, "/dav/books/One Piece 01.cbz").unwrap();
+        let spaced_encoded = resolve_href(&root, &root, "/dav/books/One%20Piece%2001.cbz").unwrap();
+        assert_eq!(spaced, spaced_encoded);
+    }
+
+    #[test]
+    fn href_encoded_hash_query_and_literal_percent_are_not_reparsed() {
+        let root = browse_root();
+        let hash = resolve_href(&root, &root, "/dav/books/a%23b.cbz").unwrap();
+        assert_eq!(hash.as_str(), "https://dav.example/dav/books/a%23b.cbz");
+        assert!(hash.fragment().is_none());
+        assert_eq!(last_path_segment(&hash).as_deref(), Some("a#b.cbz"));
+
+        let query = resolve_href(&root, &root, "/dav/books/a%3Fb.cbz").unwrap();
+        assert_eq!(query.as_str(), "https://dav.example/dav/books/a%3Fb.cbz");
+        assert!(query.query().is_none());
+        assert_eq!(last_path_segment(&query).as_deref(), Some("a?b.cbz"));
+
+        let literal_percent = resolve_href(&root, &root, "/dav/books/%2520.cbz").unwrap();
+        assert_eq!(
+            literal_percent.as_str(),
+            "https://dav.example/dav/books/%2520.cbz"
+        );
+        assert_eq!(
+            last_path_segment(&literal_percent).as_deref(),
+            Some("%20.cbz")
+        );
+
+        // 绝对 URL 形态同样不能先解码；集合规范化不得把 %23 再次编码成 %2523。
+        let absolute =
+            resolve_href(&root, &root, "https://dav.example/dav/books/a%23b.cbz").unwrap();
+        assert_eq!(absolute, hash);
+        let collection =
+            normalize_collection_url(resolve_href(&root, &root, "/dav/books/a%23b").unwrap());
+        assert_eq!(collection.as_str(), "https://dav.example/dav/books/a%23b/");
+    }
+
+    #[test]
+    fn browse_preserves_encoded_delimiters_in_acquisition_hrefs() {
+        let source = browse_source();
+        let root = browse_root();
+        let body = r#"<?xml version="1.0"?>
+          <multistatus xmlns="DAV:">
+            <response><href>/dav/books/</href>
+              <propstat><prop><resourcetype><collection/></resourcetype></prop></propstat>
+            </response>
+            <response><href>/dav/books/a%23b.cbz</href>
+              <propstat><prop><resourcetype/></prop></propstat>
+            </response>
+            <response><href>/dav/books/a%3Fb.cbz</href>
+              <propstat><prop><resourcetype/></prop></propstat>
+            </response>
+            <response><href>/dav/books/%2520.cbz</href>
+              <propstat><prop><resourcetype/></prop></propstat>
+            </response>
+          </multistatus>"#;
+        let feed =
+            build_browse_feed(&source, &root, &root, parse_multistatus(body).unwrap()).unwrap();
+        let hrefs: Vec<&str> = feed
+            .entries
+            .iter()
+            .filter_map(|entry| entry.links.first().map(|link| link.href.as_str()))
+            .collect();
+        assert_eq!(
+            hrefs,
+            vec![
+                "https://dav.example/dav/books/%2520.cbz",
+                "https://dav.example/dav/books/a%23b.cbz",
+                "https://dav.example/dav/books/a%3Fb.cbz",
+            ]
+        );
+        assert_eq!(
+            feed.entries
+                .iter()
+                .map(|entry| entry.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["%20.cbz", "a#b.cbz", "a?b.cbz"]
+        );
     }
 
     #[test]
