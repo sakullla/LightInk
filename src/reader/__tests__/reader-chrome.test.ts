@@ -24,6 +24,10 @@
  * Deps: `returnToShelf`, `openOutline`, `openTypography`, `toggleSidebar`,
  * optional `isOverlayOpen`, `dismissOverlay`, `isSidebarVisible`,
  * `isSelectionToolbarVisible`, `hideSelectionToolbar`.
+ *
+ * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
+ * reveal — the chrome only leaves via center tap, Escape, or closing an
+ * overlay. Desktop behavior above is unchanged when the flag is absent.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -348,6 +352,85 @@ describe('createReaderChrome auto-hide', () => {
     expect(chrome.isRevealed()).toBe(false);
     chrome.syncStayRevealed();
     expect(chrome.isRevealed()).toBe(true);
+  });
+});
+
+describe('createReaderChrome touch mode', () => {
+  it('never auto-hides after idle or pointer leave when touchMode is true', () => {
+    vi.useFakeTimers();
+    const { host, chrome } = mount({ touchMode: true });
+
+    chrome.reveal();
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 4);
+    expect(chrome.isRevealed()).toBe(true);
+
+    host.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    chrome.handlePointerLeave();
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 4);
+    expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('does not reveal from edge hover: pointermove is a no-op', () => {
+    const { host, chrome } = mount({ touchMode: true });
+
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
+
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 394 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
+
+    chrome.handlePointerMove({ clientY: 4 });
+    chrome.handlePointerMove({ clientY: 396 });
+    expect(chrome.isRevealed()).toBe(false);
+  });
+
+  it('toggles with center taps and stays up between them', () => {
+    vi.useFakeTimers();
+    const { page, chrome } = mount({ touchMode: true });
+
+    clickPage(page, 200);
+    expect(chrome.isRevealed()).toBe(true);
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
+    expect(chrome.isRevealed()).toBe(true);
+
+    clickPage(page, 200);
+    expect(chrome.isRevealed()).toBe(false);
+  });
+
+  it('hides via Escape and brings the whisper progress line back', () => {
+    const { chrome, deps } = mount({ touchMode: true });
+    chrome.reveal();
+    expect(chrome.whisper.hidden).toBe(true);
+
+    expect(chrome.handleEscape()).toBe(true);
+    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.whisper.hidden).toBe(false);
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('closes an open sheet on tap without leaving the book', () => {
+    const { page, chrome, deps } = mount({
+      touchMode: true,
+      isOverlayOpen: vi.fn(() => true),
+    });
+    chrome.reveal();
+    clickPage(page, 200);
+    expect(deps.dismissOverlay).toHaveBeenCalledTimes(1);
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+    expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('keeps the whisper visible while the chrome is hidden', () => {
+    const { chrome } = mount({ touchMode: true });
+    expect(chrome.whisper.hidden).toBe(false);
+    chrome.setProgress({ chapterTitle: '第一章', location: '2 / 10', progress: 0.25 });
+    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
+      '25%',
+    );
   });
 });
 

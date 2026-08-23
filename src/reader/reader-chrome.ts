@@ -8,6 +8,9 @@
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
  * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
  * 控件条。「返回书架」是顶栏起始侧唯一合书入口。
+ *
+ * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
+ * 唤出；只由中部点按 / Escape / 收浮层收起，whisper 进度线照常显示。
  */
 
 import { formatReaderPercent } from './reader-progress-ui.js';
@@ -88,6 +91,12 @@ export interface ReaderChromeDeps {
   hideSelectionToolbar?: () => void;
   /** When true, an already-revealed bar does not auto-hide (e.g. scroll at top). */
   stayRevealed?: () => boolean;
+  /**
+   * Touch-primary platform (data-android / data-touch-primary). Disables the
+   * idle auto-hide timer and edge-hover reveal; dismissal happens only via
+   * center tap, Escape, or closing an overlay. Desktop passes false/omits.
+   */
+  touchMode?: boolean;
   /** Drag the footer scrubber to a 0..1 book position. */
   onSeekProgress?: (progress: number) => void;
 }
@@ -263,6 +272,7 @@ export function createReaderChrome(
   const labels = readerChromeLabels(deps.locale ?? 'zh-CN', deps.labels);
   const hideDelayMs = deps.hideDelayMs ?? READER_CHROME_HIDE_DELAY_MS;
   const edgePx = deps.edgePx ?? READER_CHROME_EDGE_PX;
+  const touchMode = deps.touchMode === true;
   const schedule = deps.schedule ?? defaultSchedule;
   const cancel = deps.cancel ?? defaultCancel;
 
@@ -404,6 +414,7 @@ export function createReaderChrome(
 
   const scheduleHide = (): void => {
     if (
+      touchMode ||
       destroyed ||
       overlayOpen() ||
       pointerInsideBar ||
@@ -510,7 +521,7 @@ export function createReaderChrome(
   };
 
   const handlePointerMove = (event: { clientY: number }, bounds?: ReaderChromeBounds): void => {
-    if (destroyed) {
+    if (destroyed || touchMode) {
       return;
     }
     const box = resolveBounds(attachedHost, bounds);

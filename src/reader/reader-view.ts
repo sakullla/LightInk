@@ -174,6 +174,19 @@ function canMountReaderChrome(): boolean {
   return typeof probe.classList?.toggle === 'function';
 }
 
+/**
+ * Touch chrome mode comes from the mobile platform flags stamped on the
+ * document root (`mobile-platform.ts`). Desktop has neither flag → false,
+ * keeping the 2.5s idle auto-hide and edge-hover reveal byte-identical.
+ */
+function readerChromeTouchMode(): boolean {
+  const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
+  if (rootEl == null || typeof rootEl.hasAttribute !== 'function') {
+    return false;
+  }
+  return rootEl.hasAttribute('data-android') || rootEl.hasAttribute('data-touch-primary');
+}
+
 function dispatchReaderTypographyPref(typography: ReaderTypography): void {
   if (
     typeof document === 'undefined' ||
@@ -2842,6 +2855,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   if (canMountReaderChrome()) {
     readerChrome = createReaderChrome(root, {
+      touchMode: readerChromeTouchMode(),
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
