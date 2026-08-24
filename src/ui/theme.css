@@ -2429,6 +2429,8 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   align-items: center;
   justify-content: center;
   background: var(--lightink-overlay);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .lightink-open-progress-dialog {
@@ -2466,6 +2468,8 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   display: block;
   width: 100%;
   margin-top: 14px;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 @keyframes lightink-open-progress-indeterminate {

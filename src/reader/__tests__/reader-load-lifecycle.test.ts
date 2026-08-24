@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { COMIC_PREFERENCES_STORAGE_KEY } from '../comic-preferences.js';
 import { createReaderView } from '../reader-view.js';
 import type { ReaderInputSource } from '../formats/index.js';
 import { saveLibraryProgressAlias } from '../../library/library-progress.js';
@@ -18,6 +19,7 @@ import {
   REMOTE_IMAGE_CONSENT_LIMIT,
   SessionRemoteImagePolicy,
 } from '../../media/remote-image-policy.js';
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 
 /** R7 同标签格式切换回归：PDF 渲染走 mock（真实栅格化留手工验证）。 */
 const pdfMock = vi.hoisted(() => ({ renderPdfInto: vi.fn() }));
@@ -173,6 +175,27 @@ function clearReaderStorage(): void {
   } catch {
     // jsdom / Node without Storage.
   }
+}
+
+async function buildTinyCbz(): Promise<Uint8Array> {
+  const zip = new ZipWriter(new Uint8ArrayWriter());
+  await zip.add(
+    '001.png',
+    new Uint8ArrayReader(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    { level: 0 },
+  );
+  return zip.close();
+}
+
+function stubComicObjectUrls(): void {
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => 'blob:cbz-page'),
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  });
 }
 
 beforeEach(() => {
@@ -379,6 +402,171 @@ describe('Reader load lifecycle', () => {
     );
     expect(readBytes).not.toHaveBeenCalled();
     await view.destroy();
+  });
+
+  it('loads a local CBZ through bounded random reads instead of copying the whole file', async () => {
+    stubComicObjectUrls();
+    const archive = await buildTinyCbz();
+    const readBytes = vi.fn(async () => {
+      throw new Error('must not be read');
+    });
+    const readSize = vi.fn(async () => archive.byteLength);
+    const readChunk = vi.fn(async (_path: string, offset: number, length: number) =>
+      archive.slice(offset, offset + length),
+    );
+    const host = document.createElement('div');
+    const view = createReaderView(host, { readBytes, readSize, readChunk });
+
+    await view.load('/books/local.cbz');
+
+    expect(readSize).toHaveBeenCalledWith('/books/local.cbz', expect.any(AbortSignal));
+    expect(readChunk).toHaveBeenCalled();
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(view.state).toMatchObject({ phase: 'ready', total: 1 });
+    await view.destroy();
+  });
+
+  it('reveals the window caption while comic chrome is visible', async () => {
+    stubComicObjectUrls();
+    const archive = await buildTinyCbz();
+    const app = document.createElement('div');
+    app.id = 'app';
+    const host = document.createElement('div');
+    app.append(host);
+    document.body.append(app);
+    const view = createReaderView(host, {
+      readBytes: async () => {
+        throw new Error('must not be read');
+      },
+      readSize: async () => archive.byteLength,
+      readChunk: async (_path, offset, length) => archive.slice(offset, offset + length),
+    });
+
+    await view.load('/books/local.cbz');
+    const pages = host.querySelector<HTMLElement>('.lightink-reader-pages');
+    expect(pages?.dataset.comicChrome).toBe('visible');
+    expect(app.classList.contains('is-reader-chrome-revealed')).toBe(true);
+    pages!.dataset.comicChrome = 'hidden';
+    await Promise.resolve();
+    expect(app.classList.contains('is-reader-chrome-revealed')).toBe(false);
+    const whisper = host.querySelector<HTMLElement>('.lightink-reader-chrome-whisper');
+    expect(whisper?.hidden).toBe(false);
+    pages!.dataset.comicChrome = 'visible';
+    await Promise.resolve();
+    expect(whisper?.hidden).toBe(true);
+    await view.destroy();
+  });
+
+  it('saves comic page progress without hashing the archive and restores it', async () => {
+    // 假时钟不能包住 load()：加载路径靠 yieldReaderLoad 的 setTimeout(0) 让出
+    // 主线程，假时钟下永不触发。只在推进保存防抖时启用。
+    stubComicObjectUrls();
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    for (const name of ['001.png', '002.png', '003.png']) {
+      await zip.add(
+        name,
+        new Uint8ArrayReader(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+        { level: 0 },
+      );
+    }
+    const archive = await zip.close();
+    const store: Record<string, string> = {
+      [COMIC_PREFERENCES_STORAGE_KEY]: JSON.stringify({
+        mode: 'paged',
+        direction: 'ltr',
+        spread: 'single',
+        fitWidth: true,
+      }),
+    };
+    const progressStorage: ProgressStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const getContentHash = vi.fn(async () => {
+      throw new Error('must not hash a comic archive');
+    });
+    const host = document.createElement('div');
+    const first = createReaderView(host, {
+      readBytes: async () => {
+        throw new Error('must not be read');
+      },
+      readSize: async () => archive.byteLength,
+      readChunk: async (_path, offset, length) => archive.slice(offset, offset + length),
+      progressStorage,
+      preferenceStorage: progressStorage,
+      getContentHash,
+      readAnnotations: async () => '',
+    });
+
+    await first.load('/comics/vol.cbz');
+    expect(getContentHash).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    expect(first.advanceReading(1)).toBe(true);
+    expect(first.advanceReading(1)).toBe(true);
+    expect(first.state.current).toBe(3);
+    await vi.advanceTimersByTimeAsync(400);
+    vi.useRealTimers();
+    await first.destroy();
+
+    const host2 = document.createElement('div');
+    const second = createReaderView(host2, {
+      readBytes: async () => {
+        throw new Error('must not be read');
+      },
+      readSize: async () => archive.byteLength,
+      readChunk: async (_path, offset, length) => archive.slice(offset, offset + length),
+      progressStorage,
+      preferenceStorage: progressStorage,
+      getContentHash,
+      readAnnotations: async () => '',
+    });
+    await second.load('/comics/vol.cbz');
+    expect(getContentHash).not.toHaveBeenCalled();
+    expect(second.state.current).toBe(3);
+    await second.destroy();
+  });
+
+  it('loads a remote CBZ through the existing range source without a full download', async () => {
+    stubComicObjectUrls();
+    const archive = await buildTinyCbz();
+    const close = vi.fn(async () => undefined);
+    const readRange = vi.fn(async (offset: number, length: number) =>
+      archive.slice(offset, offset + length),
+    );
+    const readBytes = vi.fn(async () => {
+      throw new Error('must not be read');
+    });
+    const openRemoteSource = vi.fn(async () => ({
+      size: archive.byteLength,
+      identity: { id: 'item-cbz' },
+      access: 'remote' as const,
+      readRange,
+      close,
+    }));
+    const host = document.createElement('div');
+    const view = createReaderView(host, { readBytes, openRemoteSource });
+
+    await view.load({
+      kind: 'remote',
+      itemId: 'item-cbz',
+      resourceId: 'remote-cbz',
+      identity: { id: 'item-cbz' },
+      displayName: 'Remote Comic.cbz',
+      extension: 'cbz',
+      mimeType: 'application/vnd.comicbook+zip',
+    });
+
+    expect(openRemoteSource).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: 'remote-cbz', extension: 'cbz' }),
+      expect.any(AbortSignal),
+    );
+    expect(readRange).toHaveBeenCalled();
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(view.state).toMatchObject({ phase: 'ready', total: 1 });
+    await view.destroy();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('publishes immutable phase, chapter, progress, and scale snapshots', async () => {

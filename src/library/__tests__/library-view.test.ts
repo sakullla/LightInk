@@ -10,6 +10,7 @@ import {
   type LibraryProgressQuery,
 } from '../library-progress.js';
 import { classifyLibraryKind } from '../library-kind.js';
+import { OPEN_PROGRESS_APPEAR_MS } from '../../ui/open-progress.js';
 import { createLibraryView, type LibraryViewDependencies } from '../library-view.js';
 import {
   type LibraryGroup,
@@ -706,6 +707,7 @@ function itemCard(host: ParentNode, itemId: string): HTMLElement {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-android');
   document.documentElement.removeAttribute('data-touch-primary');
@@ -1163,8 +1165,14 @@ describe('LibraryView my-books home', () => {
       new MouseEvent('click', { bubbles: true }),
     );
     await settle();
+    expect(document.querySelector('.lightink-open-progress')).toBeNull();
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('.lightink-open-progress')).not.toBeNull();
+      },
+      { timeout: OPEN_PROGRESS_APPEAR_MS + 500 },
+    );
     const overlay = document.querySelector<HTMLElement>('.lightink-open-progress');
-    expect(overlay).not.toBeNull();
     expect(overlay?.textContent).toContain('正在打开');
     expect(overlay?.querySelector('[role="progressbar"]')).not.toBeNull();
 
@@ -1203,6 +1211,13 @@ describe('LibraryView my-books home', () => {
     await settle();
     shownButtonWithText(host.querySelector('.lightink-library-detail')!, '打开阅读').click();
     await settle();
+    expect(document.querySelector('.lightink-open-progress')).toBeNull();
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('.lightink-open-progress')).not.toBeNull();
+      },
+      { timeout: OPEN_PROGRESS_APPEAR_MS + 500 },
+    );
     const overlay = document.querySelector<HTMLElement>('.lightink-open-progress');
     expect(overlay?.dataset.progressDeterminate).toBe('true');
     expect(overlay?.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('0');
@@ -1213,6 +1228,44 @@ describe('LibraryView my-books home', () => {
 
     finishOpen();
     await settle();
+    view.destroy();
+  });
+
+  it('aborts the open when the delayed progress overlay is cancelled', async () => {
+    let operationSignal: AbortSignal | undefined;
+    const onOpen = vi.fn(
+      async (_request: unknown, signal?: AbortSignal): Promise<void> =>
+        new Promise<void>((resolve) => {
+          operationSignal = signal;
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        }),
+    );
+    const unread = localItem({ coverUrl: 'https://covers.example/novel.jpg' });
+    const deps = dependencies({
+      onOpen,
+      library: { ...dependencies().library, listItems: vi.fn(async () => [unread]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    itemRow(host, unread.id).querySelector('.lightink-library-cover')!.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    await settle();
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('.lightink-open-progress-cancel')).not.toBeNull();
+      },
+      { timeout: OPEN_PROGRESS_APPEAR_MS + 500 },
+    );
+    document.querySelector<HTMLButtonElement>('.lightink-open-progress-cancel')!.click();
+    await settle();
+
+    expect(operationSignal?.aborted).toBe(true);
+    expect(document.querySelector('.lightink-open-progress')).toBeNull();
+    expect(deps.notify).not.toHaveBeenCalled();
     view.destroy();
   });
 
@@ -2772,6 +2825,8 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(bodyRule).not.toBeNull();
     expect(bodyRule![1]).toMatch(/display:\s*grid/);
     expect(bodyRule![1]).toMatch(/grid-template-columns/);
+    expect(bodyRule![1]).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+    expect(bodyRule![1]).toMatch(/overflow:\s*hidden/);
     // catalog 内容区存在明确的 grid/flex 布局规则（等价于原 data-library-page='catalog' 断言）
     expect(css).toMatch(
       /\[data-library-nav=['"]?catalog['"]?\][^{]*\{[^}]*(display:\s*(grid|flex)|grid-template-columns|flex-direction)/,
@@ -2781,8 +2836,21 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(itemsRule).not.toBeNull();
     expect(itemsRule![1]).toMatch(/display:\s*flex/);
     expect(itemsRule![1]).toMatch(/flex-direction:\s*column/);
+    const wallRule = css.match(/\.lightink-library-cover-wall\s*\{([^}]*)\}/);
+    expect(wallRule).not.toBeNull();
+    expect(wallRule![1]).toMatch(/display:\s*grid/);
+    expect(wallRule![1]).toMatch(/grid-template-columns/);
+    expect(wallRule![1]).toMatch(/overflow-y:\s*auto/);
+    expect(wallRule![1]).toMatch(/grid-auto-rows:\s*max-content/);
     expect(css).toMatch(
-      /\.lightink-library-cover-wall\s*\{[^}]*display:\s*grid[^}]*grid-template-columns/,
+      /\.lightink-library-cover-wall\s*>\s*\.lightink-library-item:not\(\.lightink-library-catalog-folder\)\s*\{[^}]*min-height:\s*max-content/,
+    );
+    const workareaRule = css.match(/\.lightink-library-workarea\s*\{([^}]*)\}/);
+    expect(workareaRule).not.toBeNull();
+    expect(workareaRule![1]).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+    expect(workareaRule![1]).toMatch(/overflow:\s*hidden/);
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?catalog['"]?\] \.lightink-library-cover-wall\s*\{[^}]*overflow-y:\s*auto/,
     );
     // 导航分区不收缩（防止内容溢出与后续分区重叠），由导航容器整体滚动
     const navSectionRule = css.match(/\.lightink-library-nav-section\s*\{([^}]*)\}/);
@@ -3023,7 +3091,7 @@ describe('LibraryView sources, manage, and catalog', () => {
       '--lightink-library-pad-y': '10px',
       '--lightink-library-nav-width': '120px',
       '--lightink-library-nav-min': '120px',
-      '--lightink-library-cover-min': '96px',
+      '--lightink-library-cover-min': '128px',
       '--lightink-library-search-max': '100%',
       '--lightink-library-manage-max': '100%',
     };
@@ -4078,8 +4146,19 @@ describe('LibraryView mobile shelf', () => {
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/,
     );
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(3/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(\s*auto-fill/,
     );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*overflow-y:\s*auto/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*-webkit-overflow-scrolling:\s*touch/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-workarea\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/,
+    );
+    expect(css).not.toMatch(/--lightink-library-cover-min:\s*0px/);
+    expect(css).not.toMatch(/--lightink-library-cover-max:\s*1fr/);
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header[\s\S]*?\{[^}]*--lightink-safe-top/,
     );
@@ -4108,7 +4187,7 @@ describe('LibraryView mobile shelf', () => {
     );
     // 书源/目录：nav 与封面墙各自 overflow-y:auto，外层 body overflow:hidden。
     expect(css).toMatch(
-      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*overflow:\s*hidden/,
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/,
     );
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-nav\s*\{[^}]*overflow-y:\s*auto/,

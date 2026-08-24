@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 
+import { createMemorySource } from '../../reader/sources/memory-source.js';
 import { extractLocalBookMeta, isShelfCoverUrl } from '../local-book-meta.js';
 
 const JP_DC_TITLE = 'ヘルモード～特殊な実績が好きなプレイヤーは廃設定の異世界で無双する～';
@@ -159,6 +160,18 @@ describe('extractLocalBookMeta', () => {
     expect(withDecoration.title).toBe('地狱模式 - 01');
     expect(withDecoration.seriesStem).toBe('地狱模式');
     expect(withDecoration.seriesVolume).toBe('01');
+  });
+
+  it('extracts a CBZ cover from a random-access source', async () => {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      '001.png',
+      new Uint8ArrayReader(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])),
+      { level: 0 },
+    );
+    const bytes = await zip.close();
+    const meta = await extractLocalBookMeta('vol.cbz', createMemorySource(bytes));
+    expect(meta.coverUrl?.startsWith('data:image/png;base64,')).toBe(true);
   });
 });
 

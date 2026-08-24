@@ -106,14 +106,26 @@ export async function revealExistingWindow(
   if (win === null) {
     return true;
   }
+  let shown = false;
   try {
     await win.unminimize();
-    await win.show();
-    await win.setFocus();
-    return true;
+    shown = true;
   } catch {
-    return false;
+    /* window may already be visible */
   }
+  try {
+    await win.show();
+    shown = true;
+  } catch {
+    /* show can fail independently of unminimize */
+  }
+  try {
+    await win.setFocus();
+  } catch {
+    // Windows often denies focus steal when the app is already in the
+    // foreground or another window owns the input queue.
+  }
+  return shown;
 }
 
 /** Tab title, or the last path segment when the title is empty. */

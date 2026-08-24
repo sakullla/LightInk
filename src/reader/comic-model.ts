@@ -69,6 +69,104 @@ export function comicImageMimeType(path: string): string | undefined {
   return COMIC_IMAGE_MIME_TYPES[extensionOf(path)];
 }
 
+/** Prefer magic bytes so garbled ZIP names still decode as the real image. */
+export function sniffComicImageMime(bytes: Uint8Array): string | undefined {
+  if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.byteLength >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (bytes.byteLength >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return 'image/gif';
+  }
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  if (bytes.byteLength >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    return 'image/bmp';
+  }
+  return undefined;
+}
+
+function comicImageBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
+/** Object URL from the viewed bytes only — never the backing ArrayBuffer. */
+export function comicImageObjectUrl(bytes: Uint8Array, filename: string): string {
+  return URL.createObjectURL(comicImageBlob(bytes, filename));
+}
+
+export function comicImageBlob(bytes: Uint8Array, filename: string): Blob {
+  const mime = sniffComicImageMime(bytes) ?? comicImageMimeType(filename);
+  if (mime === undefined) {
+    throw new Error('COMIC_IMAGE_TYPE_UNSUPPORTED');
+  }
+  return new Blob([comicImageBytes(bytes)], { type: mime });
+}
+
+export function comicDisplayWidthPx(slot: HTMLElement | undefined, fallback = 800): number {
+  const css = slot?.clientWidth || slot?.parentElement?.clientWidth || fallback;
+  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+  return Math.min(4096, Math.max(1, Math.round(css * dpr)));
+}
+
+export interface ComicPageElement {
+  readonly element: HTMLElement;
+  readonly url: string;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Paint with an async &lt;img&gt;. createImageBitmap + canvas draw of a 3–4MB
+ * manga JPEG can occupy WebView2's renderer thread long enough that cancel
+ * and CDP both die, even when Rust is idle.
+ */
+export async function createComicPageElement(
+  bytes: Uint8Array,
+  filename: string,
+  options: { readonly resizeWidth?: number; readonly signal?: AbortSignal } = {},
+): Promise<ComicPageElement> {
+  if (options.signal?.aborted === true) {
+    throw new DOMException('The operation was aborted', 'AbortError');
+  }
+  const blob = comicImageBlob(bytes, filename);
+  const url = URL.createObjectURL(blob);
+  const image = document.createElement('img');
+  image.className = 'lightink-reader-page';
+  image.alt = filename;
+  image.draggable = false;
+  image.decoding = 'async';
+  image.loading = 'eager';
+  image.src = url;
+  return {
+    element: image,
+    url,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  };
+}
+
 export function isIgnoredComicPath(path: string): boolean {
   const segments = normalizedSegments(path);
   if (segments.length === 0) return true;

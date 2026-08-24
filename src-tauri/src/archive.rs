@@ -27,11 +27,12 @@ use zip::result::ZipError;
 use zip::ZipArchive;
 
 const MAX_ARCHIVE_ENTRIES: usize = 5_000;
-const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO: u64 = 200;
 const MAX_NESTED_DEPTH: u8 = 3;
 const MAX_DECODE_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const ZIP_HANDLE_POOL_CAP: usize = 4;
 
 const RAR4_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x00";
 const RAR5_SIGNATURE: &[u8] = b"Rar!\x1a\x07\x01\x00";
@@ -63,6 +64,38 @@ enum NativeFormat {
 
 trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
+
+struct CancellableIo<R> {
+    inner: R,
+    cancelled: Arc<AtomicBool>,
+}
+
+fn cancelled_io_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, "archive range read cancelled")
+}
+
+fn is_cancelled_io(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Interrupted
+        || error.to_string().contains("archive range read cancelled")
+}
+
+impl<R: Read> Read for CancellableIo<R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(cancelled_io_error());
+        }
+        self.inner.read(output)
+    }
+}
+
+impl<R: Seek> Seek for CancellableIo<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(cancelled_io_error());
+        }
+        self.inner.seek(pos)
+    }
+}
 
 #[derive(Debug, Clone)]
 enum ArchiveSource {
@@ -105,9 +138,12 @@ impl ArchiveSource {
     ) -> Result<Box<dyn ReadSeek + Send>, ArchiveError> {
         match self {
             Self::Local { path, .. } => {
-                Ok(Box::new(File::open(path).map_err(|_| {
-                    ArchiveError::new("ARCHIVE_IO", "无法打开归档文件")
-                })?))
+                let file = File::open(path)
+                    .map_err(|_| ArchiveError::new("ARCHIVE_IO", "无法打开归档文件"))?;
+                Ok(Box::new(CancellableIo {
+                    inner: file,
+                    cancelled,
+                }))
             }
             Self::Remote {
                 resource_id, size, ..
@@ -244,6 +280,45 @@ struct InspectedArchive {
     entries: Vec<NativeArchiveEntry>,
 }
 
+struct ZipHandlePool {
+    handles: Mutex<Vec<ZipArchive<Box<dyn ReadSeek + Send>>>>,
+}
+
+impl ZipHandlePool {
+    fn take(
+        &self,
+        source: &ArchiveSource,
+        app: Option<&AppHandle>,
+        request_id: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<ZipArchive<Box<dyn ReadSeek + Send>>, ArchiveError> {
+        if let Some(archive) = self
+            .handles
+            .lock()
+            .map_err(|_| ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档缓存状态不可用"))?
+            .pop()
+        {
+            return Ok(archive);
+        }
+        let reader = source.reader(app, request_id, cancelled)?;
+        ZipArchive::new(reader).map_err(map_zip_error)
+    }
+
+    fn restore(&self, archive: ZipArchive<Box<dyn ReadSeek + Send>>) {
+        if let Ok(mut handles) = self.handles.lock() {
+            if handles.len() < ZIP_HANDLE_POOL_CAP {
+                handles.push(archive);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for ZipHandlePool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZipHandlePool").finish()
+    }
+}
+
 #[derive(Debug)]
 struct ArchiveSession {
     source: ArchiveSource,
@@ -255,6 +330,7 @@ struct ArchiveSession {
     cumulative_uncompressed_bytes: u64,
     decode_lock: Arc<Mutex<()>>,
     decoded: Arc<Mutex<DecodedEntryCache>>,
+    zip_handles: Arc<ZipHandlePool>,
     active_cancels: Vec<Arc<AtomicBool>>,
     progress: Arc<Mutex<ArchiveProgress>>,
 }
@@ -334,6 +410,7 @@ pub struct ArchiveState {
     sessions: Mutex<HashMap<String, Arc<Mutex<ArchiveSession>>>>,
     staged: Mutex<HashMap<String, StagedArchive>>,
     temporary_paths: Mutex<HashMap<PathBuf, usize>>,
+    pending_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     sequence: AtomicU64,
 }
 
@@ -343,9 +420,24 @@ impl Default for ArchiveState {
             sessions: Mutex::new(HashMap::new()),
             staged: Mutex::new(HashMap::new()),
             temporary_paths: Mutex::new(HashMap::new()),
+            pending_cancels: Mutex::new(HashMap::new()),
             sequence: AtomicU64::new(1),
         }
     }
+}
+
+fn source_cancel_key(source: &ArchiveSource) -> String {
+    match source {
+        ArchiveSource::Local { path, .. } => format!("path:{}", path.to_string_lossy()),
+        ArchiveSource::Remote { resource_id, .. } => format!("resource:{resource_id}"),
+    }
+}
+
+fn args_cancel_key(path: Option<&str>, resource_id: Option<&str>) -> Option<String> {
+    if let Some(path) = path {
+        return Some(format!("path:{path}"));
+    }
+    resource_id.map(|resource_id| format!("resource:{resource_id}"))
 }
 
 pub fn detect_archive_format(prefix: &[u8]) -> Option<DetectedArchiveFormat> {
@@ -389,9 +481,13 @@ fn read_source_magic(
 ) -> Result<DetectedArchiveFormat, ArchiveError> {
     let mut reader = source.reader(app, request_id, cancelled)?;
     let mut prefix = [0_u8; 8];
-    let read = reader
-        .read(&mut prefix)
-        .map_err(|_| ArchiveError::new("ARCHIVE_IO", "无法读取归档文件"))?;
+    let read = reader.read(&mut prefix).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消")
+        } else {
+            ArchiveError::new("ARCHIVE_IO", "无法读取归档文件")
+        }
+    })?;
     detect_archive_format(&prefix[..read]).ok_or_else(|| {
         ArchiveError::new(
             "ARCHIVE_FORMAT_UNSUPPORTED",
@@ -460,7 +556,7 @@ fn validate_entries(
 fn map_zip_error(error: ZipError) -> ArchiveError {
     match error {
         ZipError::FileNotFound => ArchiveError::new("ARCHIVE_ENTRY_NOT_FOUND", "ZIP 条目不存在"),
-        ZipError::Io(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+        ZipError::Io(error) if is_cancelled_io(&error) => {
             ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消")
         }
         ZipError::Io(error)
@@ -642,11 +738,18 @@ fn inspect_zip_source(
     source: &ArchiveSource,
     app: Option<&AppHandle>,
     parent_uncompressed_bytes: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(InspectedArchive, u64), ArchiveError> {
-    let reader = source.reader(app, "archive-zip-inspect", Arc::new(AtomicBool::new(false)))?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消"));
+    }
+    let reader = source.reader(app, "archive-zip-inspect", Arc::clone(&cancelled))?;
     let mut archive = ZipArchive::new(reader).map_err(map_zip_error)?;
     let mut entries = Vec::with_capacity(archive.len());
     for index in 0..archive.len() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消"));
+        }
         let entry = archive.by_index(index).map_err(map_zip_error)?;
         entries.push(NativeArchiveEntry {
             id: format!("entry-{index}"),
@@ -689,6 +792,7 @@ fn inspect_sevenz_source(
     app: Option<&AppHandle>,
     password: Option<&str>,
     parent_uncompressed_bytes: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(InspectedArchive, u64), ArchiveError> {
     if looks_like_split_sevenz(source.display_path()) {
         return Err(ArchiveError::new(
@@ -696,13 +800,7 @@ fn inspect_sevenz_source(
             "暂不支持多卷 7z 归档",
         ));
     }
-    let reader = open_sevenz_reader(
-        source,
-        app,
-        "archive-inspect",
-        Arc::new(AtomicBool::new(false)),
-        password,
-    )?;
+    let reader = open_sevenz_reader(source, app, "archive-inspect", cancelled, password)?;
     let archive = reader.archive();
     let entries: Vec<NativeArchiveEntry> = archive
         .files
@@ -759,6 +857,7 @@ fn inspect_sevenz(path: &Path, password: Option<&str>) -> Result<InspectedArchiv
         None,
         password,
         0,
+        Arc::new(AtomicBool::new(false)),
     )
     .map(|(inspected, _)| inspected)
 }
@@ -777,6 +876,7 @@ fn inspect_path(path: &Path, password: Option<&str>) -> Result<InspectedArchive,
             },
             None,
             0,
+            Arc::new(AtomicBool::new(false)),
         )
         .map(|(inspected, _)| inspected),
     }
@@ -787,13 +887,12 @@ fn inspect_source(
     app: Option<&AppHandle>,
     password: Option<&str>,
     parent_uncompressed_bytes: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(InspectedArchive, u64), ArchiveError> {
-    let format = read_source_magic(
-        source,
-        app,
-        "archive-magic",
-        Arc::new(AtomicBool::new(false)),
-    )?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消"));
+    }
+    let format = read_source_magic(source, app, "archive-magic", Arc::clone(&cancelled))?;
     match format {
         DetectedArchiveFormat::Rar4 | DetectedArchiveFormat::Rar5 => {
             if matches!(
@@ -811,9 +910,11 @@ fn inspect_source(
             inspect_rar(source.cache_path(), password, parent_uncompressed_bytes)
         }
         DetectedArchiveFormat::SevenZ => {
-            inspect_sevenz_source(source, app, password, parent_uncompressed_bytes)
+            inspect_sevenz_source(source, app, password, parent_uncompressed_bytes, cancelled)
         }
-        DetectedArchiveFormat::Zip => inspect_zip_source(source, app, parent_uncompressed_bytes),
+        DetectedArchiveFormat::Zip => {
+            inspect_zip_source(source, app, parent_uncompressed_bytes, cancelled)
+        }
     }
 }
 
@@ -1306,23 +1407,32 @@ fn read_zip_entry_source(
     request_id: &str,
     cancelled: Arc<AtomicBool>,
     index: usize,
+    pool: &ZipHandlePool,
 ) -> Result<Vec<u8>, ArchiveError> {
-    let reader = source.reader(app, request_id, Arc::clone(&cancelled))?;
-    let mut archive = ZipArchive::new(reader).map_err(map_zip_error)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消"));
+    }
+    let mut archive = pool.take(source, app, request_id, Arc::clone(&cancelled))?;
     let mut entry = archive.by_index(index).map_err(map_zip_error)?;
     if entry.is_dir() {
+        drop(entry);
+        pool.restore(archive);
         return Ok(Vec::new());
     }
     let (mut writer, data, overflowed) = shared_writer(cancelled);
-    std::io::copy(&mut entry, &mut writer).map_err(|error| {
+    let copied = std::io::copy(&mut entry, &mut writer).map_err(|error| {
         if error.kind() == std::io::ErrorKind::Interrupted {
             ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消")
         } else {
             ArchiveError::new("ARCHIVE_IO", "读取 ZIP 条目失败")
         }
-    })?;
+    });
     drop(entry);
     drop(writer);
+    if copied.is_ok() {
+        pool.restore(archive);
+    }
+    copied?;
     take_shared_data(data, &overflowed)
 }
 
@@ -1394,17 +1504,34 @@ async fn open_archive_source(
     let inspect_password = password
         .as_deref()
         .map(|value| Zeroizing::new(value.to_owned()));
-    let (inspected, cumulative_uncompressed_bytes) =
-        tauri::async_runtime::spawn_blocking(move || {
-            inspect_source(
-                &parse_source,
-                Some(&parse_app),
-                inspect_password.as_deref().map(String::as_str),
-                parent_uncompressed_bytes,
-            )
-        })
-        .await
-        .map_err(|_| ArchiveError::new("ARCHIVE_TASK_FAILED", "归档解析任务异常终止"))??;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancel_key = source_cancel_key(&source);
+    {
+        let mut pending = state
+            .pending_cancels
+            .lock()
+            .map_err(|_| ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档会话状态不可用"))?;
+        pending.insert(cancel_key.clone(), Arc::clone(&cancelled));
+    }
+    let inspect_cancelled = Arc::clone(&cancelled);
+    let inspected = tauri::async_runtime::spawn_blocking(move || {
+        inspect_source(
+            &parse_source,
+            Some(&parse_app),
+            inspect_password.as_deref().map(String::as_str),
+            parent_uncompressed_bytes,
+            inspect_cancelled,
+        )
+    })
+    .await
+    .map_err(|_| ArchiveError::new("ARCHIVE_TASK_FAILED", "归档解析任务异常终止"));
+    if let Ok(mut pending) = state.pending_cancels.lock() {
+        pending.remove(&cancel_key);
+    }
+    let (inspected, cumulative_uncompressed_bytes) = inspected??;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(ArchiveError::new("ARCHIVE_CANCELLED", "归档读取已取消"));
+    }
     let archive_id = format!("archive-{}", state.sequence.fetch_add(1, Ordering::Relaxed));
     let result = ArchiveOpenResult {
         archive_id: archive_id.clone(),
@@ -1437,6 +1564,9 @@ async fn open_archive_source(
                 cumulative_uncompressed_bytes,
                 decode_lock: Arc::new(Mutex::new(())),
                 decoded: Arc::new(Mutex::new(DecodedEntryCache::default())),
+                zip_handles: Arc::new(ZipHandlePool {
+                    handles: Mutex::new(Vec::new()),
+                }),
                 active_cancels: Vec::new(),
                 progress: Arc::new(Mutex::new(ArchiveProgress::default())),
             })),
@@ -1535,7 +1665,17 @@ async fn decode_session_entry(
     index: usize,
     supplied_password: Option<Zeroizing<String>>,
 ) -> Result<Vec<u8>, ArchiveError> {
-    let (source, format, solid, session_password, decode_lock, decoded, cancelled, progress) = {
+    let (
+        source,
+        format,
+        solid,
+        session_password,
+        decode_lock,
+        decoded,
+        zip_handles,
+        cancelled,
+        progress,
+    ) = {
         let mut session = session
             .lock()
             .map_err(|_| ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档会话状态不可用"))?;
@@ -1562,6 +1702,7 @@ async fn decode_session_entry(
             session.password.clone(),
             Arc::clone(&session.decode_lock),
             Arc::clone(&session.decoded),
+            Arc::clone(&session.zip_handles),
             cancelled,
             Arc::clone(&session.progress),
         )
@@ -1575,9 +1716,14 @@ async fn decode_session_entry(
     let decode_cancel = Arc::clone(&cancelled);
     let decode_progress = Arc::clone(&progress);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = decode_lock
-            .lock()
-            .map_err(|_| ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档解码队列不可用"))?;
+        // ZIP pages are independent seeks. Do not serialize them behind the
+        // solid-archive lock the way RAR/7z must be.
+        let _guard = match format {
+            NativeFormat::Zip => None,
+            NativeFormat::Rar | NativeFormat::SevenZ => Some(decode_lock.lock().map_err(|_| {
+                ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档解码队列不可用")
+            })?),
+        };
         if let Some(bytes) = decoded
             .lock()
             .map_err(|_| ArchiveError::new("ARCHIVE_STATE_UNAVAILABLE", "归档缓存状态不可用"))?
@@ -1636,6 +1782,7 @@ async fn decode_session_entry(
                 &request_id,
                 Arc::clone(&decode_cancel),
                 index,
+                zip_handles.as_ref(),
             ),
         }?;
         if decode_cancel.load(Ordering::Relaxed) {
@@ -1881,7 +2028,7 @@ pub fn archive_discard_staged(
 }
 
 #[tauri::command]
-pub fn archive_cancel(
+pub async fn archive_cancel(
     state: State<'_, ArchiveState>,
     remote_state: State<'_, RemoteState>,
     archive_id: String,
@@ -1915,7 +2062,28 @@ pub fn archive_cancel(
 }
 
 #[tauri::command]
-pub fn archive_progress(
+pub async fn archive_cancel_open(
+    state: State<'_, ArchiveState>,
+    remote_state: State<'_, RemoteState>,
+    path: Option<String>,
+    resource_id: Option<String>,
+) -> Result<(), ArchiveError> {
+    if let Some(key) = args_cancel_key(path.as_deref(), resource_id.as_deref()) {
+        if let Ok(pending) = state.pending_cancels.lock() {
+            if let Some(cancelled) = pending.get(&key) {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+    if let Some(resource_id) = resource_id {
+        remote::cancel_requests(remote_state.inner(), Some(&resource_id), None)
+            .map_err(|error| ArchiveError::new(error.code, error.message))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn archive_progress(
     state: State<'_, ArchiveState>,
     archive_id: String,
 ) -> Result<ArchiveProgress, ArchiveError> {
@@ -1937,7 +2105,7 @@ pub fn archive_progress(
 }
 
 #[tauri::command]
-pub fn archive_close(
+pub async fn archive_close(
     state: State<'_, ArchiveState>,
     archive_id: String,
 ) -> Result<(), ArchiveError> {
@@ -2223,6 +2391,9 @@ mod tests {
             path: path.clone(),
             identity: "nested:test".to_string(),
         };
+        let pool = ZipHandlePool {
+            handles: Mutex::new(Vec::new()),
+        };
         assert_eq!(
             read_zip_entry_source(
                 &source,
@@ -2230,9 +2401,35 @@ mod tests {
                 "zip-test",
                 Arc::new(AtomicBool::new(false)),
                 1,
+                &pool,
             )
             .unwrap(),
             b"zip-second"
+        );
+        let cancelled = Arc::new(AtomicBool::new(true));
+        assert_eq!(
+            inspect_zip_source(&source, None, 0, Arc::clone(&cancelled))
+                .expect_err("cancelled inspect")
+                .code,
+            "ARCHIVE_CANCELLED"
+        );
+        assert_eq!(
+            read_zip_entry_source(&source, None, "zip-test", cancelled, 1, &pool)
+                .expect_err("cancelled read")
+                .code,
+            "ARCHIVE_CANCELLED"
+        );
+        assert_eq!(
+            read_zip_entry_source(
+                &source,
+                None,
+                "zip-test-reuse",
+                Arc::new(AtomicBool::new(false)),
+                0,
+                &pool,
+            )
+            .unwrap(),
+            b"zip-first"
         );
     }
 

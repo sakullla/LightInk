@@ -279,6 +279,53 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-whisper \.lightink-reader-chrome-scrubber,\s*html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-scrubber\s*\{[^}]*display:\s*none/,
     );
     expect(css).not.toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-whisper,[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).not.toMatch(/lightink-reader-comic-hud/);
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)\s*\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*flex/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\],[\s\S]*?\.lightink-reader-cbz-slot > \.lightink-reader-page\s*\{[^}]*user-select:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-cbz-slot > \.lightink-reader-page\s*\{[^}]*pointer-events:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-comic-mode='vertical'\]\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-comic-pages\s*\{[^}]*overflow:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-comic-chrome\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/,
+    );
+    expect(css).toMatch(/\.lightink-reader-cbz-slot\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-cbz-slot\s*\{[^}]*flex:\s*0 0 100%[^}]*aspect-ratio:\s*2 \/ 3/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-cbz-slot > \.lightink-reader-page\s*\{[^}]*object-fit:\s*contain/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-spread='double'\]\[data-comic-mode='vertical'\][\s\S]*?\.lightink-reader-comic-pages\s*\{[^}]*grid-template-columns:\s*repeat\(2/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*2 \/ 3/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-comic-topbar\s*\{[^}]*-webkit-app-region:\s*drag/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-comic-topbar\s*\{[^}]*padding:[^;]*--lightink-titlebar-caption/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-comic-back,\s*\.lightink-reader-comic-page,\s*\.lightink-reader-comic-tool\s*\{[^}]*-webkit-app-region:\s*no-drag/,
+    );
+    expect(css).not.toMatch(
       /html\[data-reader-progress-bar='off'\]\s*\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(

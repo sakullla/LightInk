@@ -148,6 +148,7 @@ pub fn run() {
             archive::archive_discard_staged,
             archive::archive_read_entry,
             archive::archive_cancel,
+            archive::archive_cancel_open,
             archive::archive_progress,
             archive::archive_close,
             opds::opds_add_source,

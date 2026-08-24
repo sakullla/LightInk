@@ -205,6 +205,54 @@ describe('createReaderChrome reveal', () => {
     }
   });
 
+  it('hides the flow whisper while comic chrome would cover it', () => {
+    const { chrome } = mount({ suppressProgressDock: () => true });
+    expect(chrome.whisper.hidden).toBe(true);
+    expect(chrome.footer.hidden).toBe(true);
+    chrome.reveal();
+    expect(chrome.whisper.hidden).toBe(true);
+    expect(chrome.footer.hidden).toBe(true);
+    chrome.dismiss();
+    expect(chrome.whisper.hidden).toBe(true);
+  });
+
+  it('shows the idle whisper after comic chrome no longer covers it', () => {
+    let covering = true;
+    const { chrome } = mount({ suppressProgressDock: () => covering });
+    expect(chrome.whisper.hidden).toBe(true);
+    covering = false;
+    chrome.dismiss();
+    expect(chrome.whisper.hidden).toBe(false);
+  });
+
+  it('keeps the touch footer tools when comic progress docks are suppressed', () => {
+    const { chrome } = mount({
+      touchMode: true,
+      suppressProgressDock: () => true,
+    });
+    expect(chrome.whisper.hidden).toBe(true);
+    chrome.reveal();
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
+  });
+
+  it('does not steal comic page clicks or hover for the flow chrome', () => {
+    const { host, chrome } = mount();
+    const page = document.createElement('div');
+    page.dataset.comicReader = 'true';
+    page.className = 'lightink-reader-pages';
+    host.append(page);
+    stubRect(page, { width: 720, height: 400 });
+
+    clickPage(page, 120);
+    expect(chrome.isRevealed()).toBe(false);
+
+    page.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
+  });
+
   it('reveals when the pointer rests near the top or bottom edge', () => {
     const { host, chrome } = mount();
 
@@ -511,6 +559,22 @@ describe('createReaderChrome touch mode', () => {
     expect(deps.dismissOverlay).toHaveBeenCalledTimes(1);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
     expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('does not rewrite unchanged reveal attributes (mutation-observer loop guard)', () => {
+    // reader-view 用 MutationObserver 监听 element 的 data-revealed/class 并在
+    // 回调里调回 setProgress。等值 setAttribute 也会产生 mutation record，
+    // 一旦稳态下仍重写属性，就会形成永不排空的微任务死循环把主线程卡死。
+    const { chrome } = mount();
+    const snapshot = { chapterTitle: '第一章', location: '2 / 10', progress: 0.25 };
+    chrome.setProgress(snapshot);
+    const setAttribute = vi.spyOn(chrome.element, 'setAttribute');
+    chrome.setProgress(snapshot);
+    const rewritten = setAttribute.mock.calls.filter(([name]) =>
+      ['data-revealed', 'aria-hidden', 'class'].includes(name),
+    );
+    expect(rewritten).toHaveLength(0);
+    setAttribute.mockRestore();
   });
 
   it('keeps the whisper visible while the chrome is hidden', () => {

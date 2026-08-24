@@ -104,6 +104,61 @@ describe('openDocumentPath', () => {
     expect(order).toEqual(['close', 'report']);
   });
 
+  it('closes a cancelled Reader load without reporting an error', async () => {
+    const created = {
+      kind: 'reader',
+      id: 'reader-cancel',
+      filePath: '/books/slow.cbz',
+      reader: {
+        load: vi.fn(async () => undefined),
+        state: { phase: 'cancelled' },
+      },
+    } as unknown as ReaderTabState;
+    const closeTab = vi.fn(async () => true);
+    const onReaderLoadError = vi.fn();
+    const controller = new AbortController();
+    const deps = {
+      manager: manager({ openReader: vi.fn(async () => created), closeTab }),
+      onReaderOpenError: vi.fn(),
+      onReaderLoadError,
+      signal: controller.signal,
+    };
+
+    await expect(openDocumentPath('/books/slow.cbz', deps)).resolves.toBeNull();
+    expect(created.reader.load).toHaveBeenCalledWith('/books/slow.cbz', {
+      signal: controller.signal,
+    });
+    expect(closeTab).toHaveBeenCalledWith('reader-cancel');
+    expect(onReaderLoadError).not.toHaveBeenCalled();
+  });
+
+  it('closes a thrown abort without reporting an error', async () => {
+    const created = {
+      kind: 'reader',
+      id: 'reader-abort',
+      filePath: '/books/slow.cbz',
+      reader: {
+        load: vi.fn(async () => {
+          throw new DOMException('The operation was aborted', 'AbortError');
+        }),
+      },
+    } as unknown as ReaderTabState;
+    const closeTab = vi.fn(async () => true);
+    const onReaderLoadError = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    const deps = {
+      manager: manager({ openReader: vi.fn(async () => created), closeTab }),
+      onReaderOpenError: vi.fn(),
+      onReaderLoadError,
+      signal: controller.signal,
+    };
+
+    await expect(openDocumentPath('/books/slow.cbz', deps)).resolves.toBeNull();
+    expect(closeTab).toHaveBeenCalledWith('reader-abort');
+    expect(onReaderLoadError).not.toHaveBeenCalled();
+  });
+
   it.each(['comic.cbr', 'comic.cb7', 'archive.rar', 'archive.7z'])(
     'routes native comic archive %s to the read-only Reader',
     async (name) => {

@@ -1319,7 +1319,7 @@ pub fn library_upsert_item(app: AppHandle, item: LibraryItem) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn library_update_comic_metadata(
+pub async fn library_update_comic_metadata(
     app: AppHandle,
     item_id: String,
     metadata: LibraryComicMetadata,

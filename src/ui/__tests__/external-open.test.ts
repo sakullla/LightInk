@@ -160,11 +160,12 @@ describe('revealExistingWindow', () => {
     expect(order).toEqual(['unminimize', 'show', 'setFocus']);
   });
 
-  it('returns false when focus cannot be stolen', async () => {
+  it('still treats the window as shown when focus cannot be stolen', async () => {
     const order: string[] = [];
     await expect(
       revealExistingWindow(async () => fakeWindow(order, 'setFocus')),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
+    expect(order).toEqual(['unminimize', 'show', 'setFocus']);
   });
 
   it('treats a missing native window as already visible', async () => {

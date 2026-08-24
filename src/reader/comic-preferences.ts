@@ -1,4 +1,4 @@
-export const COMIC_PREFERENCES_STORAGE_KEY = 'lightink.reader.comic.preferences';
+export const COMIC_PREFERENCES_STORAGE_KEY = 'lightink.reader.comic.preferences.v2';
 
 export type ComicReadingMode = 'vertical' | 'paged';
 export type ComicReadingDirection = 'ltr' | 'rtl';
@@ -19,7 +19,7 @@ export interface ComicPreferenceStorage {
 export function defaultComicPreferences(
   direction: ComicReadingDirection = 'ltr',
 ): ComicPreferences {
-  return { mode: 'vertical', direction, spread: 'single', fitWidth: true };
+  return { mode: 'paged', direction, spread: 'double', fitWidth: true };
 }
 
 export function parseComicPreferences(

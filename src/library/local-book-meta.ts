@@ -1,6 +1,7 @@
 /**
- * Shelf metadata for a local book. EPUB covers stay in the package until
- * import; this module reads title / authors / cover without opening the reader.
+ * Shelf metadata for a local book. EPUB/CBZ covers stay in the package until
+ * import; this module reads title / authors / cover from a ranged archive
+ * source without copying the whole file into the WebView.
  *
  * Informative local EPUB filenames win over `dc:title`. Series stem and
  * volume stay on this object for later smart groups; they are not
@@ -9,7 +10,7 @@
 
 import { bytesToBase64 } from '../asset/asset-service.js';
 import { extOfPath } from '../file/path-ext.js';
-import { openSafeArchive } from '../reader/formats/safe-archive.js';
+import { openSafeArchive, type ArchiveInput } from '../reader/formats/safe-archive.js';
 import { SAFE_READER_IMAGE_MIME_TYPES } from '../reader/formats/resource-limits.js';
 import { decodeReaderText } from '../reader/formats/text-encoding.js';
 import { parseFilenameSeries } from './filename-series.js';
@@ -79,14 +80,40 @@ function mimeFromPath(path: string): string | undefined {
   return undefined;
 }
 
-function toCoverDataUrl(bytes: Uint8Array, mime: string): string | undefined {
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_SHELF_COVER_BYTES) {
+const MAX_SHELF_COVER_EDGE = 512;
+
+async function toCoverDataUrl(bytes: Uint8Array, mime: string): Promise<string | undefined> {
+  if (bytes.byteLength === 0 || !SAFE_READER_IMAGE_MIME_TYPES.has(mime)) {
     return undefined;
   }
-  if (!SAFE_READER_IMAGE_MIME_TYPES.has(mime)) {
+  if (bytes.byteLength <= MAX_SHELF_COVER_BYTES) {
+    return `data:${mime};base64,${bytesToBase64(bytes)}`;
+  }
+  if (typeof createImageBitmap !== 'function') {
     return undefined;
   }
-  return `data:${mime};base64,${bytesToBase64(bytes)}`;
+  try {
+    const blob = new Blob([bytes.slice()], { type: mime });
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, MAX_SHELF_COVER_EDGE / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (context === null) {
+      bitmap.close();
+      return undefined;
+    }
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } catch {
+    return undefined;
+  }
 }
 
 function collectText(xml: string, tag: string): string[] {
@@ -147,8 +174,8 @@ function coverItem(opf: string, items: readonly ManifestItem[]): ManifestItem | 
   );
 }
 
-async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
-  const archive = await openSafeArchive(bytes, 'EPUB');
+async function extractEpubMeta(source: ArchiveInput): Promise<LocalBookMeta> {
+  const archive = await openSafeArchive(source, 'EPUB');
   try {
     let opfPath: string | null = null;
     const container = archive.file('META-INF/container.xml');
@@ -177,7 +204,7 @@ async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
       const path = resolvePackagePath(opfPath, chosen.href);
       const file = path === null ? null : archive.file(path);
       if (file !== null) {
-        coverUrl = toCoverDataUrl(await file.readBytes(), chosen.mediaType);
+        coverUrl = await toCoverDataUrl(await file.readBytes(), chosen.mediaType);
       }
     }
     if (coverUrl === undefined) {
@@ -188,7 +215,7 @@ async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
         const file = archive.file(fallback);
         const mime = mimeFromPath(fallback);
         if (file !== null && mime !== undefined) {
-          coverUrl = toCoverDataUrl(await file.readBytes(), mime);
+          coverUrl = await toCoverDataUrl(await file.readBytes(), mime);
         }
       }
     }
@@ -202,8 +229,8 @@ async function extractEpubMeta(bytes: Uint8Array): Promise<LocalBookMeta> {
   }
 }
 
-async function extractCbzCover(bytes: Uint8Array): Promise<LocalBookMeta> {
-  const archive = await openSafeArchive(bytes, 'CBZ');
+async function extractCbzCover(source: ArchiveInput): Promise<LocalBookMeta> {
+  const archive = await openSafeArchive(source, 'CBZ');
   try {
     const image = [...archive.entries]
       .map((entry) => entry.filename)
@@ -217,7 +244,7 @@ async function extractCbzCover(bytes: Uint8Array): Promise<LocalBookMeta> {
     if (file === null || mime === undefined) {
       return { authors: [] };
     }
-    return { authors: [], coverUrl: toCoverDataUrl(await file.readBytes(), mime) };
+    return { authors: [], coverUrl: await toCoverDataUrl(await file.readBytes(), mime) };
   } finally {
     await archive.close().catch(() => undefined);
   }
@@ -259,14 +286,14 @@ function applyFilenameSeries(path: string, pack: LocalBookMeta): LocalBookMeta {
 
 export async function extractLocalBookMeta(
   path: string,
-  bytes: Uint8Array,
+  source: ArchiveInput,
 ): Promise<LocalBookMeta> {
   const extension = extOfPath(path);
   if (extension === 'epub') {
-    return applyFilenameSeries(path, await extractEpubMeta(bytes));
+    return applyFilenameSeries(path, await extractEpubMeta(source));
   }
   if (extension === 'cbz') {
-    return extractCbzCover(bytes);
+    return extractCbzCover(source);
   }
   return { authors: [] };
 }

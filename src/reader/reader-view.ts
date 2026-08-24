@@ -20,6 +20,7 @@ import {
   type ReaderTarget,
   type RemoteReaderTarget,
 } from './sources/types.js';
+import { createLocalFileSource } from './sources/file-source.js';
 import type { ReaderChapter, ReaderContent } from './formats/types.js';
 import { ParseError } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
@@ -133,6 +134,7 @@ import { attachRemoteSource } from './sources/remote-source.js';
 import {
   NATIVE_ARCHIVE_EXTENSIONS,
   openNativeArchive,
+  usesNativeArchive,
   type ArchivePasswordProvider,
 } from './sources/native-archive.js';
 import { loadLibraryProgressAlias } from '../library/library-progress.js';
@@ -173,6 +175,10 @@ import {
 } from './reader-typography.js';
 
 const PAGE_EXTS = new Set(['pdf', 'cbz', ...NATIVE_ARCHIVE_EXTENSIONS]);
+
+function isComicReaderExt(ext: string): boolean {
+  return ext === 'cbz' || NATIVE_ARCHIVE_EXTENSIONS.has(ext);
+}
 
 function canMountReaderChrome(): boolean {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
@@ -284,7 +290,7 @@ export interface ReaderViewDeps {
     length: number,
     signal?: AbortSignal,
   ) => Promise<Uint8Array>;
-  /** 读取本地阅读文件大小，不扫描或传输正文；用于 EPUB 随机读取源。 */
+  /** 读取本地阅读文件大小，不扫描或传输正文；用于 EPUB/CBZ/PDF 随机读取源。 */
   readSize?: (filePath: string, signal?: AbortSignal) => Promise<number>;
   /** 翻译 i18n key（生产为 i18n.t）。 */
   t?: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string;
@@ -398,6 +404,23 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   let readerChrome: ReaderChrome | null = null;
   let chromePanel: 'toc' | 'typography' | null = null;
   let chromeRevealObserver: MutationObserver | null = null;
+  let pageChromeObserver: MutationObserver | null = null;
+
+  const watchPageChrome = (): void => {
+    pageChromeObserver?.disconnect();
+    if (typeof MutationObserver !== 'function') {
+      return;
+    }
+    pageChromeObserver = new MutationObserver(syncChromeRevealAttr);
+    try {
+      pageChromeObserver.observe(pageHost, {
+        attributes: true,
+        attributeFilter: ['data-comic-chrome', 'data-comic-reader'],
+      });
+    } catch {
+      pageChromeObserver = null;
+    }
+  };
   const tocPanel = document.createElement('div');
   tocPanel.className = 'lightink-reader-chrome-panel lightink-reader-chrome-toc';
   tocPanel.hidden = true;
@@ -695,7 +718,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const persistReadingProgress = (): void => {
-    if (progressId === '' || readerState.phase !== 'ready' || pendingRestore !== null) {
+    if (
+      progressId === '' ||
+      pendingRestore !== null ||
+      (readerState.phase !== 'ready' && readerState.phase !== 'loading')
+    ) {
       return;
     }
     rememberFlowProgress();
@@ -1146,6 +1173,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const current = pdfHandle?.controller.page ?? cbzHandle?.currentPage ?? 0;
     const total = pdfHandle?.controller.totalPages ?? cbzHandle?.totalPages ?? 0;
     const scale = pdfHandle?.controller.scale ?? 1;
+    if (cbzHandle !== null) {
+      root.dataset.comicReader = 'true';
+    } else {
+      delete root.dataset.comicReader;
+    }
     updateReaderState({
       current,
       total,
@@ -1498,15 +1530,26 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     syncVisibleFlowFrames();
   }
 
+  const comicChromeVisible = (): boolean =>
+    pageHost.dataset.comicReader === 'true' && pageHost.dataset.comicChrome !== 'hidden';
+
+  // 本函数是 chromeRevealObserver/pageChromeObserver 的回调；这里的每次 DOM
+  // 属性写都必须是"变化才写"，否则等值 setAttribute 触发新 mutation record，
+  // 微任务队列永不排空，渲染主线程死循环卡死（打开漫画时曾整机冻结）。
   const syncChromeRevealAttr = (): void => {
-    if (readerChrome === null) {
-      syncReaderTitlebarReveal(root, false);
-      return;
+    const chromeShown = readerChrome?.isRevealed() === true;
+    if (readerChrome !== null) {
+      const chromeEl = readerChrome.element;
+      if (chromeEl.hidden === chromeShown) {
+        chromeEl.hidden = !chromeShown;
+      }
+      const ariaHidden = chromeShown ? 'false' : 'true';
+      if (chromeEl.getAttribute('aria-hidden') !== ariaHidden) {
+        chromeEl.setAttribute('aria-hidden', ariaHidden);
+      }
     }
-    const shown = readerChrome.isRevealed();
-    readerChrome.element.hidden = !shown;
-    readerChrome.element.setAttribute('aria-hidden', shown ? 'false' : 'true');
-    syncReaderTitlebarReveal(root, shown);
+    syncReaderTitlebarReveal(root, chromeShown || comicChromeVisible());
+    syncChromeProgress();
   };
 
   const syncChromeActionState = (): void => {
@@ -2532,7 +2575,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return { host: stagedHost, pdf, cbz: null };
     }
     stagedHost.dataset.readerFormat = ext;
-    const archiveSource = NATIVE_ARCHIVE_EXTENSIONS.has(ext)
+    const archiveSource = usesNativeArchive(ext)
       ? await (deps.openArchiveProvider?.(target, signal) ??
         openNativeArchive(target, {
           signal,
@@ -2544,6 +2587,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       preferenceStorage,
       requestPassword: deps.requestArchivePassword,
       labels: {
+        backToShelf: t('reader.comic.backToShelf'),
         previous: t('reader.comic.previous'),
         next: t('reader.comic.next'),
         vertical: t('reader.comic.vertical'),
@@ -2553,9 +2597,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         singlePage: t('reader.comic.single'),
         doublePage: t('reader.comic.double'),
         fitWidth: t('reader.comic.fitWidth'),
+        pageSlider: t('reader.comic.pageSlider'),
+        toggleChrome: t('reader.comic.toggleChrome'),
         imageDecodeFailed: t('reader.comic.imageDecodeFailed'),
         retry: t('reader.comic.retry'),
       },
+      onReturnToShelf: returnToShelf,
       onPageChange: () => {
         if (cbzHandle !== null) {
           syncPageState();
@@ -2586,7 +2633,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
       },
     });
-    void Promise.resolve(deps.onComicMetadata?.(target, cbz.metadata)).catch(() => undefined);
+    queueMicrotask(() => {
+      void Promise.resolve(deps.onComicMetadata?.(target, cbz.metadata)).catch(() => undefined);
+    });
     return { host: stagedHost, pdf: null, cbz };
   };
 
@@ -2617,6 +2666,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     cancelFontScaleRefresh = null;
     pageHost.replaceWith(staged.host);
     pageHost = staged.host;
+    watchPageChrome();
+    syncChromeRevealAttr();
     pageHost.addEventListener('scroll', schedulePageScroll, { passive: true });
     closestPane()?.addEventListener('scroll', schedulePageScroll, { passive: true });
     pageHost.addEventListener('mouseup', onPageHostSelection);
@@ -2634,9 +2685,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     generation: number,
     signal: AbortSignal,
   ): Promise<void> => {
+    const localExt = target.kind === 'local' ? extOfPath(target.path) : '';
     if (
       !annotationsEnabled ||
-      (target.kind === 'local' && deps.getContentHash === undefined)
+      (target.kind === 'local' && deps.getContentHash === undefined) ||
+      (target.kind === 'local' && isComicReaderExt(localExt))
     ) {
       return;
     }
@@ -3226,7 +3279,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
       hideSelectionToolbar,
       stayRevealed: () =>
-        !flowIsPaginated() && flowScrollContainer().scrollTop <= 16,
+        cbzHandle === null && !flowIsPaginated() && flowScrollContainer().scrollTop <= 16,
+      suppressProgressDock: () => comicChromeVisible(),
       onSeekProgress: goToProgress,
     });
     syncChromeProgress();
@@ -3235,6 +3289,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     root.addEventListener('click', syncChromeRevealAttr);
     root.addEventListener('pointermove', syncChromeRevealAttr);
     readerChrome.syncStayRevealed();
+    watchPageChrome();
     syncChromeRevealAttr();
     syncChromeActionState();
     if (typeof MutationObserver === 'function') {
@@ -3269,7 +3324,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       const target = normalizeReaderTarget(targetOrPath);
       const filePath = target.kind === 'local' ? target.path : target.displayName;
       const nextExt = (target.extension || extOfPath(filePath)).toLowerCase();
-      const nativeArchive = NATIVE_ARCHIVE_EXTENSIONS.has(nextExt);
+      const nativeArchive = usesNativeArchive(nextExt);
       const readBytes = deps.readBytes;
       if (target.kind === 'local' && readBytes === undefined && !nativeArchive) {
         throw new Error('reader-view load requires the readBytes dependency');
@@ -3318,12 +3373,24 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           throwIfReaderLoadCancelled(controller.signal);
         }
         if (PAGE_EXTS.has(nextExt)) {
+          const localPageSource =
+            target.kind === 'local' &&
+            !nativeArchive &&
+            deps.readChunk !== undefined &&
+            deps.readSize !== undefined
+              ? createLocalFileSource({
+                  size: await deps.readSize(filePath, controller.signal),
+                  identity: target.identity,
+                  readRange: (offset, length, readSignal) =>
+                    deps.readChunk!(filePath, offset, length, readSignal ?? controller.signal),
+                })
+              : null;
           const pageSource =
             nativeArchive
               ? null
               : target.kind === 'remote'
               ? pendingRemoteSource!
-              : await readBytes!(filePath, controller.signal);
+              : localPageSource ?? (await readBytes!(filePath, controller.signal));
           throwIfReaderLoadCancelled(controller.signal);
           if (!isCurrent()) {
             return;
@@ -3360,6 +3427,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           if (!isCurrent()) {
             return;
           }
+          if (isComicReaderExt(nextExt)) {
+            progressId = target.kind === 'remote' ? target.itemId : filePath;
+            pendingRestore = loadReadingProgressFromIds(progressStorage, [
+              progressId,
+              target.kind === 'local' ? filePath : '',
+              loadLibraryProgressAlias(
+                progressStorage,
+                target.kind === 'remote' ? target.itemId : target.identity.id,
+              ) ?? '',
+            ]);
+            if (!applySavedProgress()) {
+              scheduleRestoreRetry();
+            }
+          }
         } else {
           // TXT 分块顺序读；EPUB 通过带 read-ahead 的 ZIP 随机源读取，避免先把
           // 整本书跨 IPC 复制进 WebView。依赖缺失时保留整读回退供测试/浏览器使用。
@@ -3372,13 +3453,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             nextExt === 'epub' &&
             readChunk !== undefined &&
             deps.readSize !== undefined
-              ? {
+              ? createLocalFileSource({
                   size: await deps.readSize(filePath, controller.signal),
                   identity: target.identity,
                   readRange: (offset, length, readSignal) =>
                     readChunk(filePath, offset, length, readSignal ?? controller.signal),
-                  close: async () => undefined,
-                }
+                })
               : null;
           const source: ReaderInputSource =
             target.kind === 'remote'
@@ -3576,6 +3656,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pageHost.removeEventListener('click', onPageHostNoteClick);
       chromeRevealObserver?.disconnect();
       chromeRevealObserver = null;
+      pageChromeObserver?.disconnect();
+      pageChromeObserver = null;
       closeChromePanel();
       if (readerChrome !== null) {
         root.removeEventListener('click', syncChromeRevealAttr);

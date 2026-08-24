@@ -14,7 +14,8 @@ use tauri::AppHandle;
 
 const MANAGED_DIRECTORY: &str = "library-content";
 const HASH_DIRECTORY: &str = "sha256";
-const COPY_BUFFER_BYTES: usize = 128 * 1024;
+/// Heap buffer: a 1 MiB stack array overflows the default Windows thread stack.
+const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +86,45 @@ fn extension_for(path: &Path) -> String {
     }
 }
 
+fn is_comic_archive_path(path: &Path) -> bool {
+    matches!(extension_for(path).as_str(), "cbz" | "cbr" | "cb7")
+}
+
+fn local_reference_id(path: &Path) -> String {
+    format!("local:{}", path.to_string_lossy())
+}
+
+fn insert_local_reference_item(connection: &Connection, source: &Path) -> Result<String, String> {
+    if !source.is_file() {
+        return Err(format!("无法读取待入库书籍 {}", source.display()));
+    }
+    let size = source
+        .metadata()
+        .map_err(|error| format!("无法读取书籍信息 {}: {error}", source.display()))?
+        .len();
+    if size > MAX_READER_FILE_BYTES {
+        return Err(format!("FILE_TOO_LARGE:{size}:{}", MAX_READER_FILE_BYTES));
+    }
+    let id = local_reference_id(source);
+    let title = display_name(source);
+    let extension = extension_for(source);
+    let now = library::now_ms();
+    let path = source.to_string_lossy().into_owned();
+    connection
+        .execute(
+            "INSERT INTO library_items(
+               id, source_kind, title, authors_json, local_path, extension, size,
+               availability, offline_pinned, subjects_json, updated_at
+             ) VALUES (?1,'local',?2,'[]',?3,?4,?5,'local',0,'[]',?6)
+             ON CONFLICT(id) DO UPDATE SET local_path=?3, size=?5, extension=?4,
+               availability='local', updated_at=?6",
+            params![id, title, path, extension, size as i64, now],
+        )
+        .map_err(|error| format!("无法保存本地书籍条目: {error}"))?;
+    sync::write_library_item_record_at(connection, &id, true)?;
+    Ok(id)
+}
+
 fn display_name(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -104,7 +144,7 @@ fn hash_file(path: &Path) -> Result<(String, u64), String> {
         return Err(format!("FILE_TOO_LARGE:{size}:{}", MAX_READER_FILE_BYTES));
     }
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     loop {
         let read = file
             .read(&mut buffer)
@@ -277,7 +317,7 @@ fn store_blob_at(
         .map_err(|error| format!("无法创建书籍临时文件: {error}"))?;
     let mut hasher = Sha256::new();
     let mut copied = 0_u64;
-    let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     loop {
         let read = input
             .read(&mut buffer)
@@ -411,6 +451,9 @@ fn migrate_item_at(
         )
         .map_err(|error| format!("无法读取待迁移书籍 {item_id}: {error}"))?;
     let source = PathBuf::from(source_path);
+    if is_comic_archive_path(&source) {
+        return Err("漫画档案按本地引用保存，无需复制到受管库".to_string());
+    }
     let blob = store_blob_at(&transaction, app_data_dir, &source)?;
     let cleanup_path = blob.absolute_path.clone();
     let cleanup_blob = blob.created_file;
@@ -544,6 +587,9 @@ fn preview_at(connection: &Connection) -> Result<ManagedMigrationPreview, String
         let (item_id, title, raw_path) =
             row.map_err(|error| format!("无法解析待迁移书籍: {error}"))?;
         let path = PathBuf::from(&raw_path);
+        if is_comic_archive_path(&path) {
+            continue;
+        }
         let mut entry = ManagedMigrationEntry {
             item_id,
             title,
@@ -584,6 +630,16 @@ fn import_managed_book_at(
     app_data_dir: &Path,
     source: &Path,
 ) -> Result<String, String> {
+    if is_comic_archive_path(source) {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("无法开启本地书籍事务: {error}"))?;
+        let id = insert_local_reference_item(&transaction, source)?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交本地书籍: {error}"))?;
+        return Ok(id);
+    }
     let transaction = connection
         .transaction()
         .map_err(|error| format!("无法开启受管书籍事务: {error}"))?;
@@ -666,7 +722,7 @@ pub fn library_apply_managed_migration(
 }
 
 #[tauri::command]
-pub fn library_materialize_item(
+pub async fn library_materialize_item(
     app: AppHandle,
     item_id: String,
 ) -> Result<ManagedItemLocation, String> {
@@ -860,5 +916,56 @@ mod tests {
         assert!(records.iter().any(|record| {
             record.object_id.ends_with(&format!(":{}", alias.item_id)) && !record.tombstone
         }));
+    }
+
+    #[test]
+    fn comic_import_references_the_source_without_copying() {
+        let app_data = tempfile::tempdir().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("vol.cbz");
+        fs::write(&source, vec![0_u8; 4096]).unwrap();
+        let mut connection = library::open_database_at(app_data.path()).unwrap();
+
+        let id = import_managed_book_at(&mut connection, app_data.path(), &source).unwrap();
+
+        assert_eq!(id, format!("local:{}", source.to_string_lossy()));
+        let (kind, path, hash): (String, String, Option<String>) = connection
+            .query_row(
+                "SELECT source_kind, local_path, blob_hash FROM library_items WHERE id=?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "local");
+        assert_eq!(path, source.to_string_lossy());
+        assert!(hash.is_none());
+        assert!(!app_data.path().join(MANAGED_DIRECTORY).exists());
+        assert!(preview_at(&connection).unwrap().entries.is_empty());
+        let error = migrate_item_at(&mut connection, app_data.path(), &id).unwrap_err();
+        assert!(error.contains("本地引用"));
+        assert!(!app_data.path().join(MANAGED_DIRECTORY).exists());
+    }
+
+    #[test]
+    fn epub_import_still_copies_into_managed_storage() {
+        let app_data = tempfile::tempdir().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("book.epub");
+        fs::write(&source, b"epub bytes").unwrap();
+        let mut connection = library::open_database_at(app_data.path()).unwrap();
+
+        let id = import_managed_book_at(&mut connection, app_data.path(), &source).unwrap();
+
+        assert!(id.starts_with("managed:"));
+        let path: String = connection
+            .query_row(
+                "SELECT local_path FROM library_items WHERE id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(path.contains(MANAGED_DIRECTORY));
+        assert!(PathBuf::from(&path).is_file());
+        assert_eq!(fs::read(&source).unwrap(), b"epub bytes");
     }
 }

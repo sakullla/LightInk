@@ -591,16 +591,32 @@ function reportReaderLoadError(error: unknown): void {
  * reader 标签：openReader 后调用 reader.load；解析失败（DRM/损坏）弹 i18n 错误提示，
  * 失败标签会立即清理。菜单打开 / 最近打开 / 拖入 / CLI 与文件关联入口共用此分发。
  */
-async function openPathByKind(path: string): Promise<TabState | null> {
+async function openPathByKind(
+  path: string,
+  options: { readonly title?: string; readonly signal?: AbortSignal } = {},
+): Promise<TabState | null> {
+  const controller = new AbortController();
+  const abortFromParent = (): void => controller.abort();
+  if (options.signal?.aborted === true) {
+    controller.abort();
+  } else {
+    options.signal?.addEventListener('abort', abortFromParent, { once: true });
+  }
   const progress = isReaderPath(path)
     ? beginOpenProgress({
-        title: displayNameOfPath(path),
+        title:
+          options.title !== undefined && options.title.trim() !== ''
+            ? options.title
+            : displayNameOfPath(path),
         label: i18n.t('reader.opening'),
+        cancelLabel: i18n.t('dialog.cancel'),
+        onCancel: () => controller.abort(),
       })
     : null;
   try {
     const tab = await openDocumentPath(path, {
       manager,
+      signal: controller.signal,
       onReaderOpenError: (failedPath, error) => {
         // eslint-disable-next-line no-console
         console.error(`[lightink] 打开阅读文件失败: ${failedPath}`, error);
@@ -610,6 +626,9 @@ async function openPathByKind(path: string): Promise<TabState | null> {
         reportReaderLoadError(error);
       },
     });
+    if (controller.signal.aborted) {
+      return null;
+    }
     // File→Open / recents / drop share this helper. A reader tab opened while
     // the shelf is showing must flip hasOpenBook so the book is not left under
     // the library. Markdown opened from the shelf must enter the editor.
@@ -621,6 +640,7 @@ async function openPathByKind(path: string): Promise<TabState | null> {
     }
     return tab;
   } finally {
+    options.signal?.removeEventListener('abort', abortFromParent);
     progress?.close();
   }
 }
@@ -994,7 +1014,10 @@ async function openLibraryItem(
     if (item.sourceKind === 'managed') {
       managedItemIdsByPath.set(location.path, location.itemId);
     }
-    const tab = await openPathByKind(location.path);
+    const tab = await openPathByKind(location.path, { title: item.title, signal });
+    if (signal?.aborted === true) {
+      return;
+    }
     if (tab === null) {
       throw new Error(i18n.t('reader.loadFailed', { detail: item.title }));
     }
@@ -1031,7 +1054,10 @@ async function openLibraryItem(
           });
     reportProgress({ phase: 'open' });
     const path = registerBrowserFile(file);
-    const tab = await openPathByKind(path);
+    const tab = await openPathByKind(path, { signal });
+    if (signal?.aborted === true) {
+      return;
+    }
     if (tab === null) {
       throw new Error(i18n.t('reader.loadFailed', { detail: item.title }));
     }
@@ -1075,7 +1101,11 @@ async function openLibraryItem(
       return;
     }
     reportProgress({ phase: 'open' });
-    await tab.reader.load(target);
+    await tab.reader.load(target, { signal });
+    if (signal?.aborted === true || tab.reader.state.phase === 'cancelled') {
+      await manager.closeTab(tab.id).catch(() => false);
+      return;
+    }
     workspace.openBook();
     tab.reader.restoreReadingProgress?.();
   } catch (error) {
@@ -1107,9 +1137,10 @@ async function cacheLibraryItem(
 async function enrichLocalLibraryItem(
   item: import('./library/library-client.js').LibraryItem,
 ): Promise<import('./library/library-client.js').LibraryItem> {
+  const localPath = item.localPath;
   if (
     (item.sourceKind !== 'local' && item.sourceKind !== 'managed') ||
-    item.localPath == null || item.localPath === ''
+    localPath == null || localPath === ''
   ) {
     return item;
   }
@@ -1122,12 +1153,18 @@ async function enrichLocalLibraryItem(
     return item;
   }
   try {
-    const bytes = await readReaderBytes(item.localPath);
-    const meta = await extractLocalBookMeta(item.localPath, bytes);
+    const { createLocalFileSource } = await import('./reader/sources/file-source.js');
+    const source = createLocalFileSource({
+      size: await readReaderFileSize(localPath),
+      identity: { id: localPath },
+      readRange: (offset, length, signal) =>
+        readReaderChunk(localPath, offset, length, signal),
+    });
+    const meta = await extractLocalBookMeta(localPath, source);
     let title = meta.title !== undefined && meta.title !== '' ? meta.title : item.title;
     if (extension === 'epub') {
       const { resolveImportedEpubTitle } = await import('./library/filename-series.js');
-      const resolved = resolveImportedEpubTitle(item.title, item.localPath, meta.title);
+      const resolved = resolveImportedEpubTitle(item.title, localPath, meta.title);
       if (resolved !== '') {
         title = resolved;
       }
@@ -3413,11 +3450,13 @@ window.addEventListener(
     }
     const readerTab = activeReaderTab();
     if (readerTab !== null) {
-      // PDF/CBZ 连续滚动仍走页宿主自身；只对流式分页劫持窗口滚轮。
+      // PDF and vertical comics scroll the page host. Paged comics have no
+      // overflow range, so the window listener must turn the spread.
       const target = event.target;
       if (
         target instanceof Element &&
-        target.closest('.lightink-reader-pages') !== null
+        target.closest('.lightink-reader-pages') !== null &&
+        target.closest('[data-comic-reader="true"][data-comic-mode="paged"]') === null
       ) {
         return;
       }

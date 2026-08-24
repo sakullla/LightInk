@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 
+import { isTauriRuntime } from '../../file/browser-file-store.js';
 import type {
   ArchiveEntryMetadata,
   ArchiveProvider,
@@ -15,6 +16,22 @@ export const NATIVE_ARCHIVE_EXTENSIONS: ReadonlySet<string> = new Set([
   'rar',
   '7z',
 ]);
+
+const NATIVE_ZIP_EXTENSIONS: ReadonlySet<string> = new Set(['cbz', 'zip']);
+
+/**
+ * RAR/7z always use the Rust session. Local CBZ/ZIP do too in Tauri so inflate
+ * stays off the WebView thread (OpenPanel / Readest). The browser build keeps
+ * zip.js with CompressionStream workers.
+ */
+export function usesNativeArchive(
+  extension: string,
+  runtime: Window | undefined = typeof window === 'undefined' ? undefined : window,
+): boolean {
+  const ext = extension.toLowerCase();
+  if (NATIVE_ARCHIVE_EXTENSIONS.has(ext)) return true;
+  return NATIVE_ZIP_EXTENSIONS.has(ext) && isTauriRuntime(runtime);
+}
 
 export interface NativeArchiveEntry extends ArchiveEntryMetadata {
   readonly id: string;
@@ -67,9 +84,22 @@ const defaultInvoker: NativeArchiveInvoker = {
   invoke: (command, args, options) => invoke(command, args, options),
 };
 
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted', 'AbortError');
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted === true) {
-    throw new DOMException('The operation was aborted', 'AbortError');
+    throw abortError();
+  }
+}
+
+function throwIfCancelled(error: unknown, signal?: AbortSignal): never | void {
+  if (signal?.aborted === true) {
+    throw abortError();
+  }
+  if (error instanceof NativeArchiveError && error.code === 'ARCHIVE_CANCELLED') {
+    throw abortError();
   }
 }
 
@@ -189,7 +219,12 @@ function providerFromOpened(
   };
 
   const startProgressPolling = (): (() => void) => {
-    if (listeners.size === 0) return () => undefined;
+    // Random ZIP/CBZ pages are independent seeks. Polling the sync
+    // archive_progress command while archive_read_entry is still shipping
+    // bytes deadlocks WebView2's renderer thread — cancel and CDP both die.
+    if (listeners.size === 0 || opened.accessMode !== 'sequential') {
+      return () => undefined;
+    }
     let active = true;
     const poll = async (): Promise<void> => {
       if (!active || listeners.size === 0) return;
@@ -226,8 +261,9 @@ function providerFromOpened(
             throwIfAborted(signal);
             return bytesFromIpc(raw);
           } catch (error) {
-            if (signal?.aborted === true) throwIfAborted(signal);
+            throwIfCancelled(error, signal);
             const structured = archiveError(error);
+            throwIfCancelled(structured, signal);
             if (!isPasswordError(structured)) throw structured;
             password = await requestPassword(
               options.requestPassword,
@@ -262,8 +298,9 @@ function providerFromOpened(
               { parentArchiveId: opened.archiveId, entryId, password: nestedPassword },
             );
           } catch (error) {
-            if (signal?.aborted === true) throwIfAborted(signal);
+            throwIfCancelled(error, signal);
             const structured = archiveError(error);
+            throwIfCancelled(structured, signal);
             if (!isPasswordError(structured)) throw structured;
             nestedPassword = await requestPassword(
               options.requestPassword,
@@ -366,23 +403,35 @@ export async function openNativeArchive(
       : { path: undefined, resourceId: target.resourceId };
   let password: string | undefined;
   let opened: NativeArchiveOpenResult;
-  while (true) {
-    throwIfAborted(options.signal);
-    try {
-      opened = await invoker.invoke<NativeArchiveOpenResult>('archive_open', {
-        ...sourceArgs,
-        password,
-      });
-      break;
-    } catch (error) {
-      const structured = archiveError(error);
-      if (!isPasswordError(structured)) throw structured;
-      password = await requestPassword(
-        options.requestPassword,
-        target.displayName,
-        structured.code === 'ARCHIVE_PASSWORD_INCORRECT',
-      );
+  const cancelOpen = (): void => {
+    void invoker
+      .invoke<void>('archive_cancel_open', sourceArgs)
+      .catch(() => undefined);
+  };
+  options.signal?.addEventListener('abort', cancelOpen, { once: true });
+  try {
+    while (true) {
+      throwIfAborted(options.signal);
+      try {
+        opened = await invoker.invoke<NativeArchiveOpenResult>('archive_open', {
+          ...sourceArgs,
+          password,
+        });
+        break;
+      } catch (error) {
+        throwIfCancelled(error, options.signal);
+        const structured = archiveError(error);
+        throwIfCancelled(structured, options.signal);
+        if (!isPasswordError(structured)) throw structured;
+        password = await requestPassword(
+          options.requestPassword,
+          target.displayName,
+          structured.code === 'ARCHIVE_PASSWORD_INCORRECT',
+        );
+      }
     }
+  } finally {
+    options.signal?.removeEventListener('abort', cancelOpen);
   }
 
   const provider = providerFromOpened(opened, {

@@ -4,6 +4,7 @@ import {
   NativeArchiveError,
   openNativeArchive,
   openNativeNestedPayload,
+  usesNativeArchive,
   type NativeArchiveInvoker,
 } from '../native-archive.js';
 import type { ReaderTarget } from '../types.js';
@@ -39,6 +40,19 @@ function openResult() {
   };
 }
 
+describe('usesNativeArchive', () => {
+  it('keeps RAR/7z native and uses the Rust ZIP session for CBZ in Tauri', () => {
+    const tauri = { __TAURI_INTERNALS__: {} } as unknown as Window;
+    const browser = {} as Window;
+    expect(usesNativeArchive('cbr')).toBe(true);
+    expect(usesNativeArchive('cb7')).toBe(true);
+    expect(usesNativeArchive('cbz', tauri)).toBe(true);
+    expect(usesNativeArchive('zip', tauri)).toBe(true);
+    expect(usesNativeArchive('cbz', browser)).toBe(false);
+    expect(usesNativeArchive('epub', tauri)).toBe(false);
+  });
+});
+
 describe('native archive source', () => {
   it('keeps archive bytes behind an opaque session and closes idempotently', async () => {
     const invoke = vi.fn(async (command: string) => {
@@ -65,6 +79,67 @@ describe('native archive source', () => {
       password: undefined,
     });
     expect(invoke.mock.calls.filter(([command]) => command === 'archive_close')).toHaveLength(1);
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('archive_progress');
+  });
+
+  it('does not poll archive_progress while reading random ZIP pages', async () => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'archive_open') {
+        return { ...openResult(), format: 'zip', accessMode: 'random' as const };
+      }
+      if (command === 'archive_read_entry') return new Uint8Array([4, 5]);
+      return undefined;
+    });
+    const archive = await openNativeArchive(
+      { ...localTarget, path: '/books/comic.cbz', extension: 'cbz' },
+      { invoker: { invoke } as NativeArchiveInvoker },
+    );
+    archive.subscribeProgress?.(() => undefined);
+    await archive.readEntry('entry-0');
+    expect(invoke.mock.calls.map(([command]) => command)).not.toContain('archive_progress');
+  });
+
+  it('polls archive_progress only for sequential solid archives', async () => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'archive_open') {
+        return {
+          ...openResult(),
+          format: 'rar5',
+          accessMode: 'sequential' as const,
+          solid: true,
+        };
+      }
+      if (command === 'archive_progress') {
+        return { phase: 'sequential', currentEntry: 0, targetEntry: 0, decodedBytes: 0 };
+      }
+      if (command === 'archive_read_entry') return new Uint8Array([9]);
+      return undefined;
+    });
+    const archive = await openNativeArchive(localTarget, {
+      invoker: { invoke } as NativeArchiveInvoker,
+    });
+    archive.subscribeProgress?.(() => undefined);
+    await archive.readEntry('entry-0');
+    expect(invoke).toHaveBeenCalledWith('archive_progress', { archiveId: 'archive-1' });
+  });
+
+  it('closes a freshly opened session when the caller aborts', async () => {
+    const controller = new AbortController();
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'archive_open') {
+        controller.abort();
+        return openResult();
+      }
+      return undefined;
+    });
+
+    await expect(
+      openNativeArchive(localTarget, {
+        invoker: { invoke } as NativeArchiveInvoker,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(invoke).toHaveBeenCalledWith('archive_close', { archiveId: 'archive-1' });
   });
 
   it('requests a session password and retries a failed entry without persisting it', async () => {
@@ -202,6 +277,32 @@ describe('native archive source', () => {
     expect(child.cumulativeUncompressedBytes).toBe(128);
     expect(invoke).not.toHaveBeenCalledWith('archive_discard_staged', expect.anything());
     await child.close();
+  });
+
+  it('cancels an in-flight archive_open through archive_cancel_open', async () => {
+    let finishOpen: ((value: ReturnType<typeof openResult>) => void) | undefined;
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'archive_open') {
+        return new Promise<ReturnType<typeof openResult>>((resolve) => {
+          finishOpen = resolve;
+        });
+      }
+      if (command === 'archive_cancel_open') {
+        finishOpen?.(openResult());
+      }
+      return undefined;
+    });
+    const controller = new AbortController();
+    const opening = openNativeArchive(localTarget, {
+      signal: controller.signal,
+      invoker: { invoke } as NativeArchiveInvoker,
+    });
+    controller.abort();
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(invoke).toHaveBeenCalledWith('archive_cancel_open', {
+      path: '/books/comic.cbr',
+      resourceId: undefined,
+    });
   });
 
   it('cancels an in-flight sequential read when its page is no longer wanted', async () => {

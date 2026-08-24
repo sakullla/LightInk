@@ -636,6 +636,20 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
     font-size: 0.68rem;
   }
 
+  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
+    display: flex;
+  }
+
+  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
+    .lightink-reader-chrome-footer
+    :is(
+      .lightink-reader-chrome-chapter,
+      .lightink-reader-chrome-scrubber,
+      .lightink-reader-chrome-footer-stats
+    ) {
+    display: none;
+  }
+
   .lightink-reader-chrome-whisper {
     gap: 0.5rem;
     padding: 0.14rem 0.75rem calc(0.2rem + var(--lightink-safe-bottom, 0px));
@@ -990,10 +1004,26 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   background: var(--lightink-bg-elevated);
 }
 
+.lightink-reader-cbz-slot[hidden] {
+  display: none !important;
+}
+
+.lightink-reader-pages[data-comic-reader='true'],
+.lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages,
+.lightink-reader-cbz-slot,
 .lightink-reader-cbz-slot > .lightink-reader-page {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightink-reader-cbz-slot > .lightink-reader-page {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  image-rendering: auto;
+  pointer-events: none;
 }
 
 .lightink-reader-nested-archive {
@@ -1008,25 +1038,177 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 }
 
 .lightink-reader-pages[data-comic-reader='true'][data-reader-active='true'] {
+  position: relative;
   align-items: stretch;
-  padding-top: 0;
+  padding: 0;
+  min-height: 0;
+  height: 100%;
 }
 
-.lightink-reader-comic-toolbar {
-  position: sticky;
+.lightink-reader-pages[data-comic-reader='true'][data-comic-mode='vertical'] {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lightink-reader-comic-chrome {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  direction: ltr;
+}
+
+/* Comic chips own the revealed footer. Keep the idle whisper hairline. */
+.lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome-footer,
+.lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
+  display: none;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
+  .lightink-reader-chrome-footer {
+  display: flex;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
+  .lightink-reader-chrome-footer
+  :is(
+    .lightink-reader-chrome-chapter,
+    .lightink-reader-chrome-scrubber,
+    .lightink-reader-chrome-footer-stats
+  ) {
+  display: none;
+}
+
+.lightink-reader-comic-topbar,
+.lightink-reader-comic-bottombar {
+  pointer-events: auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--lightink-fg);
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, transparent);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.12);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.lightink-reader-comic-topbar {
   top: 0;
-  z-index: 3;
+  min-height: 48px;
+  padding: 8px calc(var(--lightink-titlebar-caption, 32px) * 3 + 20px) 8px 14px;
+  justify-content: space-between;
+  -webkit-app-region: drag;
+}
+
+.lightink-reader-comic-back,
+.lightink-reader-comic-page,
+.lightink-reader-comic-tool {
+  -webkit-app-region: no-drag;
+}
+
+.lightink-reader-comic-bottombar {
+  bottom: 0;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+
+.lightink-reader-pages[data-comic-chrome='hidden'] .lightink-reader-comic-topbar {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-100%);
+}
+
+.lightink-reader-pages[data-comic-chrome='hidden'] .lightink-reader-comic-bottombar {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(100%);
+}
+
+.lightink-reader-comic-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: 600 13px/1 var(--lightink-font-ui);
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-reader-comic-back::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 0.95rem;
+  height: 0.95rem;
+  background: currentColor;
+  opacity: 0.78;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M14.7 5.3 8 12l6.7 6.7 1.4-1.4L10.8 12l5.3-5.3z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M14.7 5.3 8 12l6.7 6.7 1.4-1.4L10.8 12l5.3-5.3z'/></svg>");
+}
+
+.lightink-reader-comic-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--lightink-fg);
+  font: 600 14px/1.3 var(--lightink-font-ui);
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-reader-comic-page {
+  flex: none;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+  font: 650 13px/1.2 var(--lightink-font-ui);
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.lightink-reader-comic-scrub,
+.lightink-reader-comic-modes {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 42px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--lightink-border);
-  background: var(--lightink-bg-elevated);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  direction: ltr;
+  gap: 8px;
+}
+
+.lightink-reader-comic-scrub {
+  width: 100%;
+}
+
+.lightink-reader-comic-slider {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  height: 4px;
+  margin: 0;
+  accent-color: var(--lightink-accent);
+  cursor: pointer;
 }
 
 .lightink-reader-comic-tool-group {
@@ -1037,25 +1219,41 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-comic-tool {
   display: grid;
   place-items: center;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  padding: 0;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--lightink-border);
   border-radius: 0;
   background: var(--lightink-bg);
   color: var(--lightink-fg);
-  font: 600 14px/1 var(--lightink-font-ui);
+  font: 600 12px/1 var(--lightink-font-ui);
   letter-spacing: 0;
   cursor: pointer;
 }
 
+.lightink-reader-comic-nav {
+  width: 34px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.lightink-reader-comic-chip {
+  max-width: 7.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lightink-reader-comic-tool:first-child {
-  border-radius: 4px 0 0 4px;
+  border-radius: 8px 0 0 8px;
 }
 
 .lightink-reader-comic-tool:last-child {
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.lightink-reader-comic-tool:only-child {
+  border-radius: 8px;
 }
 
 .lightink-reader-comic-tool + .lightink-reader-comic-tool {
@@ -1071,7 +1269,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   color: var(--lightink-accent);
 }
 
-.lightink-reader-comic-tool:focus-visible {
+.lightink-reader-comic-tool:focus-visible,
+.lightink-reader-comic-page:focus-visible,
+.lightink-reader-comic-slider:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 1px;
 }
@@ -1090,48 +1290,103 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding-top: var(--lightink-reader-pad-y, 2rem);
 }
 
+.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-comic-pages {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  align-items: center;
+  overflow: auto;
+  zoom: 1;
+}
+
+/* One screen per page so the whole bitmap stays visible. Width follows
+ * the 2/3 fallback or the inline ratio set after decode. */
+.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-cbz-slot {
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  aspect-ratio: 2 / 3;
+}
+
+.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-cbz-slot > .lightink-reader-page {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .lightink-reader-pages[data-comic-spread='double'][data-comic-mode='vertical']
   .lightink-reader-comic-pages {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 1rem;
+  grid-auto-rows: 100%;
+  width: 100%;
+  align-items: stretch;
+  justify-items: center;
+  gap: 0;
+}
+
+.lightink-reader-pages[data-comic-spread='double'][data-comic-mode='vertical']
+  .lightink-reader-cbz-slot {
+  flex: none;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-comic-pages {
   display: flex;
-  min-height: max(32rem, calc(100vh - 8rem));
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  padding: 1rem;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-cbz-slot {
-  width: min(100%, 64rem);
-  max-height: calc(100vh - 10rem);
+  flex: 0 1 auto;
+  width: auto;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 2 / 3;
   margin: 0;
 }
 
-.lightink-reader-pages[data-comic-mode='paged'][data-comic-spread='double']
+.lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-cbz-slot > .lightink-reader-page {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-spread='double'][data-comic-visible='2']
   .lightink-reader-cbz-slot {
-  width: min(calc(50% - 0.5rem), 40rem);
+  height: 100%;
+  max-width: 50%;
 }
 
 .lightink-reader-pages[data-comic-direction='rtl'] .lightink-reader-cbz-slot {
   direction: ltr;
 }
 
-.lightink-reader-pages[data-comic-fit-width='false'] .lightink-reader-cbz-slot {
-  width: var(--lightink-comic-natural-width, min(100%, 64rem));
-  max-width: none;
-}
-
-.lightink-reader-pages[data-comic-fit-width='false']
-  .lightink-reader-cbz-slot > .lightink-reader-page {
-  width: auto;
-  max-width: none;
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']
+  .lightink-reader-cbz-slot {
+  width: min(100%, var(--lightink-comic-natural-width, 64rem));
+  max-width: 100%;
 }
 
 .lightink-reader-comic-error {

@@ -17,7 +17,7 @@ describe('reader file byte budgets', () => {
 
   it('keeps dot-file text names on the text limit after wiring extOfPath', () => {
     // 回归（T3 advisory）：extOfPath 对点文件返回 ''，但历史上 `.txt` 这类点文件
-    // 名按首点后的段走 32MB 文本上限——接线后不得静默落入 128MB 二进制上限。
+    // 名按首点后的段走 32MB 文本上限——接线后不得静默落入 2GB 二进制上限。
     expect(readerByteLimitForPath('.txt')).toBe(MAX_TEXT_READER_BYTES);
     expect(readerByteLimitForPath('.md')).toBe(MAX_TEXT_READER_BYTES);
     expect(readerByteLimitForPath('C:\\books\\.markdown')).toBe(MAX_TEXT_READER_BYTES);
@@ -39,7 +39,7 @@ describe('reader file byte budgets', () => {
     expect(() => readerBytesFromIpc('notes.txt', textBytes)).toThrow(
       ReaderFileTooLargeError,
     );
-    // 二进制格式仍走 128MB 上限。
+    // 二进制格式仍走 2GB 上限。
     expect(readerBytesFromIpc('book.pdf', new Uint8Array(1))).toHaveLength(1);
   });
 });

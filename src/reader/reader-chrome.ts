@@ -102,6 +102,12 @@ export interface ReaderChromeDeps {
   /** When true, an already-revealed bar does not auto-hide (e.g. scroll at top). */
   stayRevealed?: () => boolean;
   /**
+   * Hide the flow footer/whisper while comic chrome (slider + chips) is
+   * up, so the hairline cannot cover those controls. Idle comics still
+   * show the progress dock in the reserved bottom strip.
+   */
+  suppressProgressDock?: () => boolean;
+  /**
    * Touch-primary platform (data-android / data-touch-primary). Disables the
    * idle auto-hide timer and edge-hover reveal; dismissal happens only via
    * center tap, Escape, or closing an overlay. Desktop passes false/omits.
@@ -241,6 +247,13 @@ function applyButtonLayout(button: HTMLButtonElement): void {
   button.style.pointerEvents = 'auto';
   button.style.whiteSpace = 'nowrap';
   button.style.flex = '0 0 auto';
+}
+
+function isComicReaderSurface(target: EventTarget | null): boolean {
+  if (!(target instanceof Element) || typeof target.closest !== 'function') {
+    return false;
+  }
+  return target.closest('[data-comic-reader="true"]') !== null;
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -399,6 +412,7 @@ export function createReaderChrome(
 
   const overlayOpen = (): boolean => deps.isOverlayOpen?.() === true;
   const stayRevealed = (): boolean => deps.stayRevealed?.() === true;
+  const suppressProgressDock = (): boolean => deps.suppressProgressDock?.() === true;
 
   const clearHideTimer = (): void => {
     if (hideTimer !== null) {
@@ -407,18 +421,31 @@ export function createReaderChrome(
     }
   };
 
+  // 只在值变化时写属性：reader-view 用 MutationObserver 监听 element 的
+  // data-revealed/class 并回调进 setProgress→syncDom；等值 setAttribute 仍会
+  // 产生 mutation record，会形成永不排空的微任务死循环（主线程 100% 卡死）。
+  const writeAttr = (target: HTMLElement, name: string, value: string): void => {
+    if (target.getAttribute(name) !== value) {
+      target.setAttribute(name, value);
+    }
+  };
+
   const syncDom = (): void => {
-    element.hidden = !revealed;
-    element.setAttribute('aria-hidden', revealed ? 'false' : 'true');
-    element.setAttribute('data-revealed', revealed ? 'true' : 'false');
+    if (element.hidden === revealed) {
+      element.hidden = !revealed;
+    }
+    writeAttr(element, 'aria-hidden', revealed ? 'false' : 'true');
+    writeAttr(element, 'data-revealed', revealed ? 'true' : 'false');
     element.classList.toggle('is-revealed', revealed);
     bar.hidden = !revealed;
-    bar.setAttribute('aria-hidden', revealed ? 'false' : 'true');
+    writeAttr(bar, 'aria-hidden', revealed ? 'false' : 'true');
     bar.style.display = revealed ? 'flex' : 'none';
-    footer.hidden = !revealed;
-    footer.setAttribute('aria-hidden', revealed ? 'false' : 'true');
-    whisper.hidden = revealed;
-    whisper.setAttribute('aria-hidden', revealed ? 'true' : 'false');
+    const hideProgress = suppressProgressDock();
+    const hideFooter = !revealed || (hideProgress && !touchMode);
+    footer.hidden = hideFooter;
+    writeAttr(footer, 'aria-hidden', hideFooter ? 'true' : 'false');
+    whisper.hidden = hideProgress || revealed;
+    writeAttr(whisper, 'aria-hidden', hideProgress || revealed ? 'true' : 'false');
     for (const button of [backButton, tocButton, typographyButton, searchButton, annotationsButton]) {
       button.hidden = !revealed;
     }
@@ -525,6 +552,9 @@ export function createReaderChrome(
     ) {
       return;
     }
+    if (isComicReaderSurface(target)) {
+      return;
+    }
     if (isInteractiveTarget(target) || hasNonCollapsedSelection()) {
       return;
     }
@@ -559,6 +589,9 @@ export function createReaderChrome(
   };
 
   const onHostPointerMove = (event: Event): void => {
+    if (isComicReaderSurface(event.target)) {
+      return;
+    }
     handlePointerMove(event as PointerEvent);
   };
 
@@ -708,6 +741,7 @@ export function createReaderChrome(
     if (typeof document === 'undefined' || document.activeElement !== slider) {
       slider.value = String(Math.round(ratio * 1000));
     }
+    syncDom();
   };
 
   const pinDocks = (

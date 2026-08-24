@@ -3,11 +3,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  comicDisplayWidthPx,
+  comicImageBlob,
+  comicImageObjectUrl,
   compareComicPaths,
   isComicImagePath,
   orderComicPages,
   parseComicInfo,
   selectComicCacheWindow,
+  sniffComicImageMime,
   type ComicPageCandidate,
 } from '../comic-model.js';
 import {
@@ -81,6 +85,14 @@ describe('comic page model', () => {
       .map((entry) => entry.filename)).toEqual(['page3.jpg', 'page1.jpg', 'page2.jpg']);
   });
 
+  it('caps display decode width by the slot CSS size and device pixels', () => {
+    const slot = document.createElement('div');
+    Object.defineProperty(slot, 'clientWidth', { configurable: true, value: 640 });
+    expect(comicDisplayWidthPx(slot, 800)).toBe(Math.min(4096, Math.round(640 * (window.devicePixelRatio || 1))));
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x1, 0x2]);
+    expect(comicImageBlob(jpeg, 'page.jpg').type).toBe('image/jpeg');
+  });
+
   it('rejects unsafe ComicInfo and bounds the decoded page window by bytes', () => {
     expect(parseComicInfo('<!DOCTYPE ComicInfo><ComicInfo/>')).toBeNull();
     expect([...selectComicCacheWindow([5, 5, 20, 5], [1], 15)]).toEqual([1, 0, 3]);
@@ -114,5 +126,26 @@ describe('comic preferences', () => {
     };
     saveComicPreferences(storage, preferences);
     expect(loadComicPreferences(storage)).toEqual(preferences);
+  });
+
+  it('sniffs JPEG/PNG even when the ZIP name is garbled', () => {
+    expect(sniffComicImageMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+    expect(sniffComicImageMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(
+      'image/png',
+    );
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x00, 0x01]);
+    const view = new Uint8Array(jpeg.buffer, 0, 3);
+    const originalCreate = URL.createObjectURL;
+    const created: Blob[] = [];
+    URL.createObjectURL = ((blob: Blob) => {
+      created.push(blob);
+      return 'blob:comic';
+    }) as typeof URL.createObjectURL;
+    try {
+      expect(comicImageObjectUrl(view, '???')).toBe('blob:comic');
+      expect(created[0]?.type).toBe('image/jpeg');
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
   });
 });

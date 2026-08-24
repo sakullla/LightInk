@@ -10,7 +10,9 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 pub const MAX_TEXT_FILE_BYTES: u64 = 32 * 1024 * 1024;
-pub const MAX_READER_FILE_BYTES: u64 = 128 * 1024 * 1024;
+/// Whole-file cap for import, size checks, and full-file reads. Comic/EPUB
+/// readers stream by range and must not materialize this budget in the WebView.
+pub const MAX_READER_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 fn file_limit_error(actual: u64, limit: u64) -> String {
     format!("FILE_TOO_LARGE:{actual}:{limit}")
@@ -199,7 +201,7 @@ pub fn reader_file_size(path: String) -> Result<u64, String> {
 
 /// 读取文件字节并经 tauri raw IPC 返回（`InvokeResponseBody::Raw`，前端 `invoke`
 /// 直接得到 ArrayBuffer）。不再走 base64 字符串编码与前端 atob 逐字节解码：
-/// Rust 侧峰值从 N + 4N/3 降到 N，JS 侧从 ~10N/3 降到 N。128MB/32MB 上限与
+/// Rust 侧峰值从 N + 4N/3 降到 N，JS 侧从 ~10N/3 降到 N。2GB/32MB 上限与
 /// 错误语义与 `read_file_bytes_impl` 完全一致。
 ///
 /// T8：附带 offset+length（必须成对）时走分块读取，只读

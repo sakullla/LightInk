@@ -1,9 +1,14 @@
 /**
  * Full-screen open/download progress overlay used while a book is fetched
  * or parsed. One instance at a time; nested begins share the same card.
+ * The card waits {@link OPEN_PROGRESS_APPEAR_MS} before mounting so fast
+ * opens never flash a dialog. Cancel aborts the in-flight open immediately.
  */
 
 import { adoptDialogSurfaceTheme, inferDialogThemeHost } from './confirm-dialog.js';
+
+/** Wait this long before showing the overlay. Faster opens stay silent. */
+export const OPEN_PROGRESS_APPEAR_MS = 1500;
 
 export interface OpenProgressUpdate {
   readonly title?: string;
@@ -16,6 +21,8 @@ export interface OpenProgressUpdate {
 export interface OpenProgressOptions extends OpenProgressUpdate {
   readonly cancelLabel?: string;
   readonly onCancel?: () => void;
+  /** Override the appear delay. Tests pass `0` to mount immediately. */
+  readonly appearAfterMs?: number;
 }
 
 export interface OpenProgressHandle {
@@ -24,7 +31,7 @@ export interface OpenProgressHandle {
 }
 
 interface OpenProgressSession {
-  readonly overlay: HTMLElement;
+  readonly overlay: HTMLElement | null;
   update(next: OpenProgressUpdate): void;
   setCancel(onCancel: (() => void) | undefined): void;
   destroy(): void;
@@ -39,14 +46,17 @@ function clampRatio(value: number | undefined): number | undefined {
 }
 
 function currentSession(): OpenProgressSession | null {
-  if (session !== null && !session.overlay.isConnected) {
+  if (session !== null && session.overlay !== null && !session.overlay.isConnected) {
     session = null;
     depth = 0;
   }
   return session;
 }
 
-function mountSession(options: OpenProgressOptions): OpenProgressSession {
+function mountDialog(
+  options: OpenProgressOptions,
+  onCancelRef: { current: (() => void) | undefined },
+): { overlay: HTMLElement; paint: (next: OpenProgressUpdate) => void } {
   const doc = document;
   const overlay = doc.createElement('div');
   overlay.className = 'lightink-modal-overlay lightink-open-progress';
@@ -88,8 +98,13 @@ function mountSession(options: OpenProgressOptions): OpenProgressSession {
   if (themeHost !== null) adoptDialogSurfaceTheme(overlay, themeHost);
   doc.body.appendChild(overlay);
 
-  let onCancel = options.onCancel;
-  cancel.addEventListener('click', () => onCancel?.());
+  cancel.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cancel.disabled = true;
+    onCancelRef.current?.();
+    overlay.remove();
+  });
 
   const paint = (next: OpenProgressUpdate): void => {
     if (next.title !== undefined) {
@@ -125,14 +140,57 @@ function mountSession(options: OpenProgressOptions): OpenProgressSession {
     ratio: options.ratio,
   });
 
+  return { overlay, paint };
+}
+
+function createSession(options: OpenProgressOptions): OpenProgressSession {
+  const onCancelRef: { current: (() => void) | undefined } = { current: options.onCancel };
+  let snapshot: OpenProgressOptions = { ...options };
+  let mounted: { overlay: HTMLElement; paint: (next: OpenProgressUpdate) => void } | null = null;
+  let appearTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+  const delay = options.appearAfterMs ?? OPEN_PROGRESS_APPEAR_MS;
+
+  const ensureMounted = (): void => {
+    if (destroyed || mounted !== null) return;
+    mounted = mountDialog(snapshot, onCancelRef);
+  };
+
+  if (delay <= 0) {
+    ensureMounted();
+  } else {
+    appearTimer = globalThis.setTimeout(() => {
+      appearTimer = null;
+      ensureMounted();
+    }, delay);
+  }
+
   return {
-    overlay,
-    update: paint,
+    get overlay() {
+      return mounted?.overlay ?? null;
+    },
+    update(next) {
+      snapshot = { ...snapshot, ...next };
+      mounted?.paint(next);
+    },
     setCancel(next) {
-      onCancel = next;
+      const previous = onCancelRef.current;
+      onCancelRef.current =
+        next === undefined
+          ? previous
+          : () => {
+              previous?.();
+              next();
+            };
     },
     destroy() {
-      overlay.remove();
+      destroyed = true;
+      if (appearTimer !== null) {
+        globalThis.clearTimeout(appearTimer);
+        appearTimer = null;
+      }
+      mounted?.overlay.remove();
+      mounted = null;
     },
   };
 }
@@ -141,7 +199,7 @@ function mountSession(options: OpenProgressOptions): OpenProgressSession {
 export function beginOpenProgress(options: OpenProgressOptions = {}): OpenProgressHandle {
   const existing = currentSession();
   if (existing === null) {
-    session = mountSession(options);
+    session = createSession(options);
   } else {
     existing.update(options);
     if (options.onCancel !== undefined) existing.setCancel(options.onCancel);

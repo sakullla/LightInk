@@ -37,7 +37,7 @@ describe('reader archive limits', () => {
   it('publishes the product safety budgets', () => {
     expect(READER_ARCHIVE_LIMITS).toEqual({
       maxEntries: 5_000,
-      maxTotalUncompressedBytes: 512 * 1024 * 1024,
+      maxTotalUncompressedBytes: 2 * 1024 * 1024 * 1024,
       maxEntryUncompressedBytes: 64 * 1024 * 1024,
       maxCompressionRatio: 200,
     });
