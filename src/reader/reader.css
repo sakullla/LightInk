@@ -1001,7 +1001,18 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-cbz-slot {
   width: min(100%, 64rem);
   aspect-ratio: 2 / 3;
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-comic-canvas, #111);
+}
+
+.lightink-reader-pages[data-comic-reader='true'] {
+  --lightink-comic-canvas: #111;
+  --lightink-comic-fg: #e6e6e6;
+  --lightink-comic-muted: #9a9a9a;
+  --lightink-comic-overlay: color-mix(in srgb, #111 70%, transparent);
+}
+
+.lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'][data-reader-active='true']) {
+  background: var(--lightink-comic-canvas, #111);
 }
 
 .lightink-reader-cbz-slot[hidden] {
@@ -1032,7 +1043,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   height: 100%;
   place-items: center;
   padding: 24px;
-  color: var(--lightink-muted);
+  color: var(--lightink-comic-muted, var(--lightink-muted));
   overflow-wrap: anywhere;
   text-align: center;
 }
@@ -1043,9 +1054,19 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 0;
   min-height: 0;
   height: 100%;
+  background: var(--lightink-comic-canvas, #111);
+  color: var(--lightink-comic-fg, #e6e6e6);
 }
 
-.lightink-reader-pages[data-comic-reader='true'][data-comic-mode='vertical'] {
+.lightink-reader-pages[data-comic-reader='true'] .lightink-reader-cbz-slot {
+  background: var(--lightink-comic-canvas, #111);
+}
+
+.lightink-reader-pages[data-comic-reader='true'] .lightink-reader-page {
+  box-shadow: none;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-mode='strip'] {
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -1091,10 +1112,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--lightink-fg);
-  background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, transparent);
+  color: var(--lightink-comic-fg, #e6e6e6);
+  background: var(--lightink-comic-overlay, color-mix(in srgb, #111 70%, transparent));
   backdrop-filter: blur(18px);
-  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.12);
+  box-shadow: none;
   transition:
     opacity 160ms ease,
     transform 160ms ease;
@@ -1170,7 +1191,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--lightink-fg);
+  color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 14px/1.3 var(--lightink-font-ui);
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -1182,8 +1203,8 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 4px 10px;
   border: 0;
   border-radius: 999px;
-  background: var(--lightink-accent-soft);
-  color: var(--lightink-accent);
+  background: color-mix(in srgb, #ffffff 10%, transparent);
+  color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 13px/1.2 var(--lightink-font-ui);
   letter-spacing: 0;
   cursor: pointer;
@@ -1214,6 +1235,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-comic-tool-group {
   display: inline-flex;
   align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #ffffff 7%, transparent);
 }
 
 .lightink-reader-comic-tool {
@@ -1222,10 +1247,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   min-width: 34px;
   min-height: 34px;
   padding: 0 10px;
-  border: 1px solid var(--lightink-border);
-  border-radius: 0;
-  background: var(--lightink-bg);
-  color: var(--lightink-fg);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 12px/1 var(--lightink-font-ui);
   letter-spacing: 0;
   cursor: pointer;
@@ -1244,29 +1269,12 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   white-space: nowrap;
 }
 
-.lightink-reader-comic-tool:first-child {
-  border-radius: 8px 0 0 8px;
-}
-
-.lightink-reader-comic-tool:last-child {
-  border-radius: 0 8px 8px 0;
-}
-
-.lightink-reader-comic-tool:only-child {
-  border-radius: 8px;
-}
-
-.lightink-reader-comic-tool + .lightink-reader-comic-tool {
-  margin-left: -1px;
-}
-
 .lightink-reader-comic-tool:hover:not(:disabled),
 .lightink-reader-comic-tool:focus-visible,
 .lightink-reader-comic-tool[aria-pressed='true'] {
   position: relative;
-  border-color: var(--lightink-accent);
-  background: var(--lightink-accent-soft);
-  color: var(--lightink-accent);
+  background: color-mix(in srgb, #ffffff 14%, transparent);
+  color: var(--lightink-comic-fg, #e6e6e6);
 }
 
 .lightink-reader-comic-tool:focus-visible,
@@ -1290,56 +1298,36 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding-top: var(--lightink-reader-pad-y, 2rem);
 }
 
-.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-comic-pages {
+.lightink-reader-pages[data-comic-mode='strip'] .lightink-reader-comic-pages {
   flex: 1;
+  flex-direction: column;
   width: 100%;
   min-height: 0;
   height: 100%;
   padding: 0;
-  align-items: center;
+  align-items: stretch;
   overflow: auto;
   zoom: 1;
 }
 
-/* One screen per page so the whole bitmap stays visible. Width follows
- * the 2/3 fallback or the inline ratio set after decode. */
-.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-cbz-slot {
-  flex: 0 0 100%;
+/* Width-fit continuous strip: slots stack, height follows the bitmap. */
+.lightink-reader-pages[data-comic-mode='strip'] .lightink-reader-cbz-slot {
+  flex: 0 0 auto;
   box-sizing: border-box;
-  width: auto;
+  width: 100%;
   max-width: 100%;
-  height: 100%;
+  height: auto;
   min-height: 0;
-  margin: 0 auto;
+  margin: 0;
   aspect-ratio: 2 / 3;
 }
 
-.lightink-reader-pages[data-comic-mode='vertical'] .lightink-reader-cbz-slot > .lightink-reader-page {
+.lightink-reader-pages[data-comic-mode='strip'] .lightink-reader-cbz-slot > .lightink-reader-page {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   max-width: 100%;
-  max-height: 100%;
   object-fit: contain;
-}
-
-.lightink-reader-pages[data-comic-spread='double'][data-comic-mode='vertical']
-  .lightink-reader-comic-pages {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: 100%;
-  width: 100%;
-  align-items: stretch;
-  justify-items: center;
-  gap: 0;
-}
-
-.lightink-reader-pages[data-comic-spread='double'][data-comic-mode='vertical']
-  .lightink-reader-cbz-slot {
-  flex: none;
-  width: 100%;
-  max-width: 100%;
-  height: 100%;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-comic-pages {
@@ -1373,6 +1361,13 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   object-fit: contain;
 }
 
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-visible='1']
+  .lightink-reader-cbz-slot {
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+}
+
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-spread='double'][data-comic-visible='2']
   .lightink-reader-cbz-slot {
   height: 100%;
@@ -1397,17 +1392,17 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   justify-content: center;
   gap: 0.75rem;
   padding: 1rem;
-  color: var(--lightink-muted);
+  color: var(--lightink-comic-muted, var(--lightink-muted));
   text-align: center;
 }
 
 .lightink-reader-comic-error button {
   min-height: 30px;
   padding: 4px 10px;
-  border: 1px solid var(--lightink-border);
+  border: 1px solid color-mix(in srgb, #ffffff 16%, transparent);
   border-radius: 4px;
-  background: var(--lightink-bg);
-  color: var(--lightink-fg);
+  background: color-mix(in srgb, #ffffff 8%, transparent);
+  color: var(--lightink-comic-fg, var(--lightink-fg));
   font: inherit;
   letter-spacing: 0;
   cursor: pointer;

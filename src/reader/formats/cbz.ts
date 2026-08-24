@@ -43,8 +43,10 @@ import {
   comicVisiblePages,
   loadComicPreferences,
   saveComicPreferences,
+  type ComicFit,
   type ComicPreferenceStorage,
   type ComicPreferences,
+  type ComicReadingMode,
 } from '../comic-preferences.js';
 
 const COMIC_ARCHIVE_EXTS = new Set(['zip', 'cbz', 'rar', 'cbr', '7z', 'cb7']);
@@ -65,12 +67,16 @@ export interface ComicToolbarLabels {
   readonly previous: string;
   readonly next: string;
   readonly vertical: string;
+  readonly strip?: string;
   readonly paged: string;
   readonly leftToRight: string;
   readonly rightToLeft: string;
   readonly singlePage: string;
   readonly doublePage: string;
   readonly fitWidth: string;
+  readonly fitScreen?: string;
+  readonly fitHeight?: string;
+  readonly fitOriginal?: string;
   readonly pageSlider: string;
   readonly toggleChrome: string;
   readonly imageDecodeFailed: string;
@@ -80,6 +86,12 @@ export interface ComicToolbarLabels {
   readonly retry: string;
 }
 
+/** Accepts the current contract plus v2 `vertical` / `fitWidth` patches. */
+export type ComicPreferencesPatch = Partial<ComicPreferences> & {
+  readonly mode?: ComicReadingMode | 'vertical';
+  readonly fitWidth?: boolean;
+};
+
 export interface CbzRenderHandle {
   readonly totalPages: number;
   readonly currentPage: number;
@@ -88,7 +100,7 @@ export interface CbzRenderHandle {
   scrollToPage(page: number): void;
   nextPage(): boolean;
   previousPage(): boolean;
-  setPreferences(patch: Partial<ComicPreferences>): void;
+  setPreferences(patch: ComicPreferencesPatch): void;
   destroy(): Promise<void>;
 }
 
@@ -101,8 +113,68 @@ export interface CbzRenderOptions {
   readonly onPageListChange?: (totalPages: number, metadata: ComicMetadata) => void;
   readonly cacheBudgetBytes?: number;
   readonly preferenceStorage?: ComicPreferenceStorage | null;
+  readonly progressId?: string | null;
   readonly labels?: Partial<ComicToolbarLabels>;
   readonly onReturnToShelf?: () => void;
+}
+
+const COMIC_FIT_CYCLE: readonly ComicFit[] = ['screen', 'width', 'height', 'original'];
+
+function resolveComicMode(
+  value: unknown,
+  fallback: ComicReadingMode,
+): ComicReadingMode {
+  if (value === 'strip' || value === 'vertical') return 'strip';
+  if (value === 'paged') return 'paged';
+  return fallback;
+}
+
+function resolveComicFit(patch: ComicPreferencesPatch, fallback: ComicFit): ComicFit {
+  if (
+    patch.fit === 'screen' ||
+    patch.fit === 'width' ||
+    patch.fit === 'height' ||
+    patch.fit === 'original'
+  ) {
+    return patch.fit;
+  }
+  if (patch.fitWidth === true) return 'width';
+  if (patch.fitWidth === false) return fallback === 'width' ? 'screen' : fallback;
+  return fallback;
+}
+
+function mergeComicPreferences(
+  current: ComicPreferences,
+  patch: ComicPreferencesPatch,
+): ComicPreferences {
+  const mode = resolveComicMode(patch.mode, current.mode);
+  const enteringStrip = mode === 'strip' && current.mode !== 'strip';
+  const fit =
+    enteringStrip && patch.fit === undefined && patch.fitWidth === undefined
+      ? 'width'
+      : resolveComicFit(patch, current.fit);
+  return {
+    mode,
+    direction:
+      patch.direction === 'rtl' || patch.direction === 'ltr'
+        ? patch.direction
+        : current.direction,
+    spread:
+      patch.spread === 'double' || patch.spread === 'single'
+        ? patch.spread
+        : current.spread,
+    fit,
+  };
+}
+
+function nextComicFit(current: ComicFit): ComicFit {
+  const index = COMIC_FIT_CYCLE.indexOf(current);
+  return COMIC_FIT_CYCLE[(index + 1) % COMIC_FIT_CYCLE.length]!;
+}
+
+function stripCacheCenters(center: number, totalPages: number): number[] {
+  if (totalPages <= 0) return [];
+  return [Math.min(Math.max(0, Math.floor(center)), totalPages - 1)];
 }
 
 function isArchiveProvider(source: ComicArchiveInput): source is ArchiveProvider {
@@ -227,13 +299,17 @@ function defaultLabels(): ComicToolbarLabels {
         backToShelf: '返回书架',
         previous: '上一页',
         next: '下一页',
-        vertical: '竖向滚动',
+        vertical: '连续条',
+        strip: '连续条',
         paged: '横向翻页',
         leftToRight: '从左到右',
         rightToLeft: '从右到左',
         singlePage: '单页',
         doublePage: '双页',
         fitWidth: '适合宽度',
+        fitScreen: '适合屏幕',
+        fitHeight: '适合高度',
+        fitOriginal: '原图',
         pageSlider: '页码',
         toggleChrome: '显示或隐藏阅读控件',
         imageDecodeFailed: '无法解码此图片',
@@ -246,13 +322,17 @@ function defaultLabels(): ComicToolbarLabels {
         backToShelf: 'Back to Shelf',
         previous: 'Previous page',
         next: 'Next page',
-        vertical: 'Vertical scroll',
+        vertical: 'Continuous strip',
+        strip: 'Continuous strip',
         paged: 'Horizontal pages',
         leftToRight: 'Left to right',
         rightToLeft: 'Right to left',
         singlePage: 'Single page',
         doublePage: 'Double page',
         fitWidth: 'Fit width',
+        fitScreen: 'Fit screen',
+        fitHeight: 'Fit height',
+        fitOriginal: 'Original size',
         pageSlider: 'Page',
         toggleChrome: 'Show or hide reader controls',
         imageDecodeFailed: 'This image could not be decoded',
@@ -347,14 +427,20 @@ export async function renderCbzInto(
     });
     const labels = { ...defaultLabels(), ...options.labels };
     const storage = preferenceStorage(options.preferenceStorage);
-    let preferences = loadComicPreferences(storage, metadata.readingDirection ?? 'ltr');
+    let preferences = loadComicPreferences(
+      storage,
+      metadata.readingDirection ?? 'ltr',
+      options.progressId,
+    );
     const cacheBudget = Math.max(1, options.cacheBudgetBytes ?? DEFAULT_COMIC_CACHE_BUDGET);
 
     container.replaceChildren();
     container.dataset.comicReader = 'true';
     container.dataset.comicChrome = 'visible';
+    container.dataset.comicCanvas = 'near-black';
+    container.style.backgroundColor = 'var(--lightink-comic-canvas, #121212)';
     const chrome = document.createElement('div');
-    chrome.className = 'lightink-reader-comic-chrome';
+    chrome.className = 'lightink-reader-comic-chrome lightink-reader-comic-overlay';
     const topbar = document.createElement('div');
     topbar.className = 'lightink-reader-comic-topbar';
     topbar.setAttribute('data-tauri-drag-region', '');
@@ -397,13 +483,38 @@ export async function renderCbzInto(
     const chip = (visible: string, label: string): HTMLButtonElement =>
       toolbarButton(visible, label, 'lightink-reader-comic-chip');
     const chineseChrome = labels.paged === '横向翻页';
-    const verticalButton = chip(chineseChrome ? '滚动' : 'Scroll', labels.vertical);
+    const stripLabel = labels.strip ?? labels.vertical;
+    const verticalButton = chip(chineseChrome ? '连续' : 'Strip', stripLabel);
     const pagedButton = chip(chineseChrome ? '翻页' : 'Pages', labels.paged);
     const ltrButton = chip(chineseChrome ? '左到右' : 'LTR', labels.leftToRight);
     const rtlButton = chip(chineseChrome ? '右到左' : 'RTL', labels.rightToLeft);
     const singleButton = chip(chineseChrome ? '单页' : '1', labels.singlePage);
     const doubleButton = chip(chineseChrome ? '双页' : '2', labels.doublePage);
-    const fitButton = chip(chineseChrome ? '适宽' : 'Fit', labels.fitWidth);
+    const fitLabelFor = (fit: ComicFit): string => {
+      if (fit === 'width') return labels.fitWidth;
+      if (fit === 'height') return labels.fitHeight ?? labels.fitWidth;
+      if (fit === 'original') return labels.fitOriginal ?? labels.fitWidth;
+      return labels.fitScreen ?? labels.fitWidth;
+    };
+    const fitChipFor = (fit: ComicFit): string => {
+      if (chineseChrome) {
+        return fit === 'width'
+          ? '适宽'
+          : fit === 'height'
+            ? '适高'
+            : fit === 'original'
+              ? '原图'
+              : '适屏';
+      }
+      return fit === 'width'
+        ? 'Width'
+        : fit === 'height'
+          ? 'Height'
+          : fit === 'original'
+            ? '1:1'
+            : 'Fit';
+    };
+    const fitButton = chip(fitChipFor(preferences.fit), fitLabelFor(preferences.fit));
     const group = (...buttons: HTMLButtonElement[]): HTMLDivElement => {
       const element = document.createElement('div');
       element.className = 'lightink-reader-comic-tool-group';
@@ -411,11 +522,12 @@ export async function renderCbzInto(
       element.append(...buttons);
       return element;
     };
+    const spreadGroup = group(singleButton, doubleButton);
     scrub.append(previousButton, pageSlider, nextButton);
     modes.append(
       group(pagedButton, verticalButton),
       group(ltrButton, rtlButton),
-      group(singleButton, doubleButton),
+      spreadGroup,
       group(fitButton),
     );
 
@@ -424,6 +536,7 @@ export async function renderCbzInto(
       slot.className = 'lightink-reader-page-slot lightink-reader-cbz-slot';
       slot.dataset.pageIndex = String(index);
       slot.dataset.pagePath = page.virtualPath;
+      slot.style.background = 'transparent';
       slot.setAttribute('aria-label', `${index + 1} / ${images.length}`);
       if (page.kind === 'archive') {
         slot.dataset.nestedArchive = 'true';
@@ -479,13 +592,17 @@ export async function renderCbzInto(
 
     const updateToolbar = (): void => {
       const progress = `${currentPage} / ${images.length}`;
-      verticalButton.setAttribute('aria-pressed', String(preferences.mode === 'vertical'));
+      verticalButton.setAttribute('aria-pressed', String(preferences.mode === 'strip'));
       pagedButton.setAttribute('aria-pressed', String(preferences.mode === 'paged'));
       ltrButton.setAttribute('aria-pressed', String(preferences.direction === 'ltr'));
       rtlButton.setAttribute('aria-pressed', String(preferences.direction === 'rtl'));
       singleButton.setAttribute('aria-pressed', String(preferences.spread === 'single'));
       doubleButton.setAttribute('aria-pressed', String(preferences.spread === 'double'));
-      fitButton.setAttribute('aria-pressed', String(preferences.fitWidth));
+      fitButton.setAttribute('aria-pressed', String(preferences.fit === 'width'));
+      fitButton.textContent = fitChipFor(preferences.fit);
+      fitButton.title = fitLabelFor(preferences.fit);
+      fitButton.setAttribute('aria-label', fitLabelFor(preferences.fit));
+      spreadGroup.hidden = preferences.mode === 'strip';
       previousButton.disabled = currentPage <= 1;
       nextButton.disabled =
         advanceComicPage(currentPage - 1, images.length, 1, preferences) === currentPage - 1;
@@ -497,11 +614,53 @@ export async function renderCbzInto(
 
     const applySlotWidth = (index: number): void => {
       const width = naturalWidths.get(index);
-      if (!preferences.fitWidth && width !== undefined) {
+      if (preferences.fit === 'original' && width !== undefined) {
         slots[index]!.style.setProperty('--lightink-comic-natural-width', `${width}px`);
       } else {
         slots[index]!.style.removeProperty('--lightink-comic-natural-width');
       }
+    };
+
+    const applyStripSlotMetrics = (slot: HTMLElement): void => {
+      slot.style.flex = '0 0 auto';
+      slot.style.width = '100%';
+      slot.style.maxWidth = '100%';
+      slot.style.height = 'auto';
+      slot.style.minHeight = '0';
+      slot.style.background = 'transparent';
+    };
+
+    const clearStripSlotMetrics = (slot: HTMLElement): void => {
+      slot.style.removeProperty('flex');
+      slot.style.removeProperty('width');
+      slot.style.removeProperty('max-width');
+      slot.style.removeProperty('height');
+      slot.style.removeProperty('min-height');
+      slot.style.background = 'transparent';
+    };
+
+    const applySurfaceMetrics = (): void => {
+      if (preferences.mode === 'strip') {
+        container.style.minHeight = '0';
+        container.style.height = '100%';
+        container.style.overflow = 'hidden';
+        pagesRoot.style.overflow = 'auto';
+        pagesRoot.style.height = '100%';
+        pagesRoot.style.flex = '1';
+        pagesRoot.style.width = '100%';
+        pagesRoot.style.alignItems = 'stretch';
+        slots.forEach((slot) => applyStripSlotMetrics(slot));
+        return;
+      }
+      container.style.removeProperty('min-height');
+      container.style.removeProperty('height');
+      container.style.removeProperty('overflow');
+      pagesRoot.style.removeProperty('overflow');
+      pagesRoot.style.removeProperty('height');
+      pagesRoot.style.removeProperty('flex');
+      pagesRoot.style.removeProperty('width');
+      pagesRoot.style.removeProperty('align-items');
+      slots.forEach((slot) => clearStripSlotMetrics(slot));
     };
 
     const releasePage = (index: number): void => {
@@ -743,13 +902,6 @@ export async function renderCbzInto(
     let prefetchNeighbors = false;
     const scroller = pagesRoot;
 
-    const verticalSpreadPages = (center: number): number[] => {
-      const index = Math.min(Math.max(0, center), Math.max(0, images.length - 1));
-      if (preferences.spread !== 'double') return [index];
-      const start = index - (index % 2);
-      return start + 1 < images.length ? [start, start + 1] : [start];
-    };
-
     const viewportPageIndex = (fallback: number): number => {
       const top = scroller.getBoundingClientRect().top;
       const slotTops = slots.map((slot) => slot.getBoundingClientRect().top);
@@ -764,7 +916,7 @@ export async function renderCbzInto(
       const centers =
         preferences.mode === 'paged'
           ? comicVisiblePages(center, images.length, preferences)
-          : verticalSpreadPages(center);
+          : stripCacheCenters(center, images.length);
       const wanted = prefetchNeighbors
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
         : new Set(centers);
@@ -799,13 +951,15 @@ export async function renderCbzInto(
       container.dataset.comicMode = preferences.mode;
       container.dataset.comicDirection = preferences.direction;
       container.dataset.comicSpread = preferences.spread;
-      container.dataset.comicFitWidth = String(preferences.fitWidth);
+      container.dataset.comicFit = preferences.fit;
+      container.dataset.comicFitWidth = String(preferences.fit === 'width');
       container.dataset.comicVisible = String(
         preferences.mode === 'paged'
           ? comicVisiblePages(currentIndex, images.length, preferences).length
           : 0,
       );
       pagesRoot.dir = preferences.direction;
+      applySurfaceMetrics();
       if (preferences.mode === 'paged') {
         const shown = new Set(comicVisiblePages(currentIndex, images.length, preferences));
         slots.forEach((slot, index) => {
@@ -825,20 +979,9 @@ export async function renderCbzInto(
       if (notify && previousPage !== currentPage) options.onPageChange?.();
     };
 
-    const setPreferences = (patch: Partial<ComicPreferences>): void => {
-      preferences = {
-        mode: patch.mode === 'paged' || patch.mode === 'vertical' ? patch.mode : preferences.mode,
-        direction:
-          patch.direction === 'rtl' || patch.direction === 'ltr'
-            ? patch.direction
-            : preferences.direction,
-        spread:
-          patch.spread === 'double' || patch.spread === 'single'
-            ? patch.spread
-            : preferences.spread,
-        fitWidth: typeof patch.fitWidth === 'boolean' ? patch.fitWidth : preferences.fitWidth,
-      };
-      saveComicPreferences(storage, preferences);
+    const setPreferences = (patch: ComicPreferencesPatch): void => {
+      preferences = mergeComicPreferences(preferences, patch);
+      saveComicPreferences(storage, preferences, options.progressId);
       applyLayout();
     };
 
@@ -867,13 +1010,13 @@ export async function renderCbzInto(
 
     previousButton.addEventListener('click', () => advancePage(-1));
     nextButton.addEventListener('click', () => advancePage(1));
-    verticalButton.addEventListener('click', () => setPreferences({ mode: 'vertical' }));
+    verticalButton.addEventListener('click', () => setPreferences({ mode: 'strip' }));
     pagedButton.addEventListener('click', () => setPreferences({ mode: 'paged' }));
     ltrButton.addEventListener('click', () => setPreferences({ direction: 'ltr' }));
     rtlButton.addEventListener('click', () => setPreferences({ direction: 'rtl' }));
     singleButton.addEventListener('click', () => setPreferences({ spread: 'single' }));
     doubleButton.addEventListener('click', () => setPreferences({ spread: 'double' }));
-    fitButton.addEventListener('click', () => setPreferences({ fitWidth: !preferences.fitWidth }));
+    fitButton.addEventListener('click', () => setPreferences({ fit: nextComicFit(preferences.fit) }));
     pageSlider.addEventListener('input', () => {
       const next = Number.parseInt(pageSlider.value, 10);
       if (Number.isSafeInteger(next)) scrollToIndex(next - 1);
@@ -1014,7 +1157,7 @@ export async function renderCbzInto(
     const firstPages =
       preferences.mode === 'paged'
         ? comicVisiblePages(currentPage - 1, images.length, preferences)
-        : verticalSpreadPages(currentPage - 1);
+        : stripCacheCenters(currentPage - 1, images.length);
     await Promise.all(firstPages.map((index) => loadPage(index)));
     const prefetchTimer = setTimeout(() => {
       if (destroyed) return;

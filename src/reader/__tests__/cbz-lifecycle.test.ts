@@ -23,6 +23,8 @@ class ControlledIntersectionObserver {
 }
 
 const originalIntersectionObserver = globalThis.IntersectionObserver;
+const originalNaturalWidth = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalWidth');
+const originalNaturalHeight = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalHeight');
 const createObjectUrl = vi.fn<(blob: Blob) => string>();
 const revokeObjectUrl = vi.fn<(url: string) => void>();
 
@@ -52,13 +54,41 @@ afterEach(() => {
   globalThis.IntersectionObserver = originalIntersectionObserver;
   document.documentElement.removeAttribute('lang');
   document.body.replaceChildren();
+  if (originalNaturalWidth !== undefined) {
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', originalNaturalWidth);
+  }
+  if (originalNaturalHeight !== undefined) {
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', originalNaturalHeight);
+  }
 });
 
-const verticalStorage = {
+const legacyVerticalStorage = {
   getItem: () =>
     JSON.stringify({ mode: 'vertical', direction: 'ltr', spread: 'single', fitWidth: true }),
   setItem: () => undefined,
 };
+
+function visiblePageIndices(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'))
+    .filter((slot) => !slot.hidden)
+    .map((slot) => slot.dataset.pageIndex ?? '');
+}
+
+function pagedStorage(
+  overrides: Record<string, unknown> = {},
+): { getItem: () => string; setItem: () => undefined } {
+  return {
+    getItem: () =>
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'ltr',
+        spread: 'single',
+        fit: 'screen',
+        ...overrides,
+      }),
+    setItem: () => undefined,
+  };
+}
 
 async function buildCbz(pageCount: number): Promise<Uint8Array> {
   const writer = new ZipWriter(new Uint8ArrayWriter());
@@ -123,11 +153,11 @@ async function buildMetadataCbz(): Promise<Uint8Array> {
 }
 
 describe('CBZ page materialization', () => {
-  it('loads the vertical double spread that entered the viewport', async () => {
+  it('loads the strip page that entered the viewport without pairing a double spread', async () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const handle = await renderCbzInto(await buildCbz(8), container, undefined, {
-      cacheBudgetBytes: 6,
+      cacheBudgetBytes: 3,
       preferenceStorage: {
         getItem: () =>
           JSON.stringify({
@@ -139,17 +169,18 @@ describe('CBZ page materialization', () => {
         setItem: () => undefined,
       },
     });
-    expect(createObjectUrl).toHaveBeenCalledTimes(2);
+    expect(handle.preferences).toMatchObject({ mode: 'strip', spread: 'double', fit: 'width' });
+    expect(container.dataset.comicMode).toBe('strip');
+    expect(container.dataset.comicReader).toBe('true');
+    expect(visiblePageIndices(container)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(container.querySelector('[data-page-index="2"] img')).toBeNull();
+    expect(container.querySelector('[data-page-index="3"] img')).toBeNull();
 
     observerCallback?.(
       [
         {
           target: container.querySelector('[data-page-index="2"]')!,
-          isIntersecting: true,
-        } as unknown as IntersectionObserverEntry,
-        {
-          target: container.querySelector('[data-page-index="3"]')!,
           isIntersecting: true,
         } as unknown as IntersectionObserverEntry,
       ],
@@ -158,17 +189,17 @@ describe('CBZ page materialization', () => {
 
     await vi.waitFor(() => {
       expect(container.querySelector('[data-page-index="2"] img')).not.toBeNull();
-      expect(container.querySelector('[data-page-index="3"] img')).not.toBeNull();
     });
+    expect(container.querySelector('[data-page-index="3"] img')).toBeNull();
     expect(handle.currentPage).toBe(3);
     await handle.destroy();
   });
 
-  it('paints the current spread before filling the neighbor cache', async () => {
+  it('paints the current strip page before filling the neighbor cache', async () => {
     const container = document.createElement('div');
     const handle = await renderCbzInto(await buildCbz(6), container, undefined, {
       cacheBudgetBytes: 96,
-      preferenceStorage: verticalStorage,
+      preferenceStorage: legacyVerticalStorage,
     });
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(6));
@@ -180,7 +211,7 @@ describe('CBZ page materialization', () => {
     document.body.appendChild(container);
     const handle = await renderCbzInto(await buildCbz(6), container, undefined, {
       cacheBudgetBytes: 9,
-      preferenceStorage: verticalStorage,
+      preferenceStorage: legacyVerticalStorage,
     });
 
     await vi.waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(3));
@@ -208,7 +239,7 @@ describe('CBZ page materialization', () => {
     const container = document.createElement('div');
     const handle = await renderCbzInto(await buildCbz(10), container, undefined, {
       cacheBudgetBytes: 9,
-      preferenceStorage: verticalStorage,
+      preferenceStorage: legacyVerticalStorage,
     });
     await vi.waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(3));
 
@@ -217,13 +248,10 @@ describe('CBZ page materialization', () => {
     expect(handle.currentPage).toBe(10);
     expect(container.querySelectorAll('img')).toHaveLength(3);
 
-    handle.setPreferences({ mode: 'vertical' });
-    expect(container.dataset.comicMode).toBe('vertical');
-    expect(
-      [...container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')].every(
-        (slot) => !slot.hidden,
-      ),
-    ).toBe(true);
+    handle.setPreferences({ mode: 'strip' });
+    expect(container.dataset.comicMode).toBe('strip');
+    expect(handle.preferences.mode).toBe('strip');
+    expect(visiblePageIndices(container)).toHaveLength(10);
 
     await handle.destroy();
   });
@@ -231,7 +259,7 @@ describe('CBZ page materialization', () => {
   it('opens a nested ZIP only when its virtual page is reached', async () => {
     const container = document.createElement('div');
     const handle = await renderCbzInto(await buildNestedCbz(), container, undefined, {
-      preferenceStorage: verticalStorage,
+      preferenceStorage: legacyVerticalStorage,
     });
 
     await vi.waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(1));
@@ -271,7 +299,7 @@ describe('CBZ page materialization', () => {
     await handle.destroy();
   });
 
-  it('supports paged double spreads, RTL, and preference persistence', async () => {
+  it('keeps the paged cover alone, then pairs the remaining pages', async () => {
     document.documentElement.lang = 'en';
     const values = new Map<string, string>();
     const storage = {
@@ -286,22 +314,25 @@ describe('CBZ page materialization', () => {
 
     container.querySelector<HTMLButtonElement>('[aria-label="Horizontal pages"]')!.click();
     container.querySelector<HTMLButtonElement>('[aria-label="Double page"]')!.click();
+    expect(handle.currentPage).toBe(1);
+    expect(visiblePageIndices(container)).toEqual(['0']);
+    expect(handle.nextPage()).toBe(true);
+    expect(handle.currentPage).toBe(2);
+    expect(visiblePageIndices(container)).toEqual(['1', '2']);
     container.querySelector<HTMLButtonElement>('[aria-label="Right to left"]')!.click();
     handle.scrollToPage(3);
     expect(handle.currentPage).toBe(2);
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'))
-        .filter((slot) => !slot.hidden)
-        .map((slot) => slot.dataset.pageIndex),
-    ).toEqual(['1', '2']);
+    expect(visiblePageIndices(container)).toEqual(['1', '2']);
     expect(handle.nextPage()).toBe(true);
     expect(handle.currentPage).toBe(4);
+    expect(visiblePageIndices(container)).toEqual(['3', '4']);
     expect(handle.nextPage()).toBe(false);
     expect(container.dataset.comicDirection).toBe('rtl');
     expect(JSON.parse([...values.values()][0] ?? '{}')).toMatchObject({
       mode: 'paged',
       direction: 'rtl',
       spread: 'double',
+      fit: 'screen',
     });
     await handle.destroy();
   });
@@ -324,7 +355,7 @@ describe('CBZ page materialization', () => {
     await handle.destroy();
   });
 
-  it('uses overlay chrome with a page slider and edge-tap navigation', async () => {
+  it('uses a hideable overlay on the comic canvas instead of a persistent chip wall', async () => {
     document.documentElement.lang = 'en';
     const container = document.createElement('div');
     Object.defineProperty(container, 'getBoundingClientRect', {
@@ -333,14 +364,15 @@ describe('CBZ page materialization', () => {
     });
     const onReturnToShelf = vi.fn();
     const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
-      preferenceStorage: {
-        getItem: () =>
-          JSON.stringify({ mode: 'paged', direction: 'ltr', spread: 'single', fitWidth: true }),
-        setItem: () => undefined,
-      },
+      preferenceStorage: pagedStorage({ fit: 'width' }),
       onReturnToShelf,
     });
 
+    expect(container.dataset.comicReader).toBe('true');
+    const chrome = container.querySelector('.lightink-reader-comic-chrome');
+    expect(chrome).not.toBeNull();
+    expect(container.querySelector('.lightink-reader-comic-hud')).toBeNull();
+    expect(container.querySelector('.lightink-reader-comic-modes')?.closest('.lightink-reader-comic-chrome')).not.toBeNull();
     expect(container.querySelector('.lightink-reader-comic-title')).not.toBeNull();
     const topbar = container.querySelector('.lightink-reader-comic-topbar');
     expect(topbar?.getAttribute('data-tauri-drag-region')).toBe('');
@@ -359,7 +391,7 @@ describe('CBZ page materialization', () => {
     expect(handle.currentPage).toBe(2);
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('hidden');
-    expect(container.querySelector('.lightink-reader-comic-hud')).toBeNull();
+    expect(chrome?.getAttribute('aria-hidden')).toBe('true');
     const selectStart = new Event('selectstart', { cancelable: true });
     expect(container.dispatchEvent(selectStart)).toBe(false);
     const wheel = new WheelEvent('wheel', {
@@ -369,6 +401,69 @@ describe('CBZ page materialization', () => {
     });
     expect(container.dispatchEvent(wheel)).toBe(false);
     expect(handle.currentPage).toBe(3);
+    await handle.destroy();
+  });
+
+  it('turns paged edges with the reading direction and only toggles chrome in the center', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800 }),
+    });
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'rtl', spread: 'single' }),
+    });
+
+    expect(handle.currentPage).toBe(1);
+    container.dispatchEvent(new MouseEvent('click', { clientX: 50, clientY: 400, bubbles: true }));
+    expect(handle.currentPage).toBe(2);
+    container.dispatchEvent(new MouseEvent('click', { clientX: 950, clientY: 400, bubbles: true }));
+    expect(handle.currentPage).toBe(1);
+    container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
+    expect(container.dataset.comicChrome).toBe('hidden');
+    expect(handle.currentPage).toBe(1);
+    await handle.destroy();
+  });
+
+  it('stacks strip pages at content height and lets the wheel scroll', async () => {
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get: () => 200,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get: () => 500,
+    });
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800 }),
+    });
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      cacheBudgetBytes: 96,
+      preferenceStorage: legacyVerticalStorage,
+    });
+
+    expect(container.dataset.comicMode).toBe('strip');
+    expect(handle.preferences.fit).toBe('width');
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    expect(slots).toHaveLength(3);
+    expect(slots.every((slot) => !slot.hidden)).toBe(true);
+    expect(slots.every((slot) => slot.style.height !== '100%' && !slot.style.flex.includes('100%'))).toBe(
+      true,
+    );
+    await vi.waitFor(() => {
+      expect(slots[0]?.style.aspectRatio).toBe('200 / 500');
+    });
+    const before = handle.currentPage;
+    const wheel = new WheelEvent('wheel', {
+      deltaY: 80,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(container.dispatchEvent(wheel)).toBe(true);
+    expect(handle.currentPage).toBe(before);
     await handle.destroy();
   });
 });

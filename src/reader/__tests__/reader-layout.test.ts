@@ -295,24 +295,9 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader-cbz-slot > \.lightink-reader-page\s*\{[^}]*pointer-events:\s*none/,
     );
     expect(css).toMatch(
-      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-comic-mode='vertical'\]\s*\{[^}]*overflow:\s*hidden/,
-    );
-    expect(css).toMatch(
-      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-comic-pages\s*\{[^}]*overflow:\s*auto/,
-    );
-    expect(css).toMatch(
       /\.lightink-reader-comic-chrome\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/,
     );
     expect(css).toMatch(/\.lightink-reader-cbz-slot\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
-    expect(css).toMatch(
-      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-cbz-slot\s*\{[^}]*flex:\s*0 0 100%[^}]*aspect-ratio:\s*2 \/ 3/,
-    );
-    expect(css).toMatch(
-      /\.lightink-reader-pages\[data-comic-mode='vertical'\] \.lightink-reader-cbz-slot > \.lightink-reader-page\s*\{[^}]*object-fit:\s*contain/,
-    );
-    expect(css).toMatch(
-      /\[data-comic-spread='double'\]\[data-comic-mode='vertical'\][\s\S]*?\.lightink-reader-comic-pages\s*\{[^}]*grid-template-columns:\s*repeat\(2/,
-    );
     expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*2 \/ 3/,
     );
@@ -382,6 +367,82 @@ describe('readerPageInnerPadPx', () => {
     expect(flow).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
     expect(view).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
     expect(view).toMatch(/flowRenderer\.advancePage\(direction\)/);
+  });
+});
+
+describe('comic surface layout (R1/R3/R4)', () => {
+  const readerCss = (): string =>
+    readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+
+  it('paints only the comic host with a dedicated near-black canvas token', () => {
+    const css = readerCss();
+    expect(css).toMatch(/--lightink-comic-canvas:\s*#111\b/);
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\][^{]*\{[^}]*background:\s*var\(--lightink-comic-canvas/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\][^{]*\{[^}]*background:\s*var\(--lightink-bg-elevated/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-cbz-slot\s*\{[^}]*background:\s*var\(--lightink-bg-elevated/,
+    );
+    expect(css).not.toMatch(
+      /:not\(\[data-comic-reader[^\]]*\]\)[^{]*\{[^}]*--lightink-comic-canvas/,
+    );
+  });
+
+  it('keeps chrome a hideable overlay instead of a persistent chip wall', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-comic-chrome\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-topbar\s*\{[^}]*opacity:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-bottombar\s*\{[^}]*opacity:\s*0/,
+    );
+    expect(css).not.toMatch(/lightink-reader-comic-hud/);
+  });
+
+  it('lets a paged cover occupy the face alone, then pairs later pages', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='paged'\]\[data-comic-spread='double'\]\[data-comic-visible='2'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*max-width:\s*50%/,
+    );
+    expect(css).not.toMatch(/\[data-comic-visible='1'\][\s\S]{0,160}?max-width:\s*50%/);
+  });
+
+  it('lays strip pages out as a fit-width continuous run, not one screen per page', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-comic-mode='strip'\]\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-comic-pages\s*\{[^}]*flex-direction:\s*column/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-comic-pages\s*\{[^}]*overflow:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot\s*\{[^}]*width:\s*100%/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot(?:\s*>\s*\.lightink-reader-page)?\s*\{[^}]*height:\s*auto/,
+    );
+    expect(css).not.toMatch(/data-comic-mode='vertical'/);
+    expect(css).not.toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot\s*\{[^}]*flex:\s*0 0 100%/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot\s*\{[^}]*height:\s*100%/,
+    );
+    expect(css).not.toMatch(
+      /\[data-comic-spread='double'\]\[data-comic-mode='strip'\][\s\S]*?grid-template-columns:\s*repeat\(2/,
+    );
+    expect(css).not.toMatch(
+      /\[data-comic-mode='strip'\]\[data-comic-spread='double'\][\s\S]*?grid-template-columns:\s*repeat\(2/,
+    );
   });
 });
 
