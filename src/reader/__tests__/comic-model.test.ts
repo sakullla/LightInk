@@ -110,10 +110,10 @@ describe('comic page model', () => {
       .map((entry) => entry.filename)).toEqual(['page3.jpg', 'page1.jpg', 'page2.jpg']);
   });
 
-  it('caps display decode width by the slot CSS size and device pixels', () => {
+  it('caps display width by the slot CSS size, not device pixels', () => {
     const slot = document.createElement('div');
     Object.defineProperty(slot, 'clientWidth', { configurable: true, value: 640 });
-    expect(comicDisplayWidthPx(slot, 800)).toBe(Math.min(4096, Math.round(640 * (window.devicePixelRatio || 1))));
+    expect(comicDisplayWidthPx(slot, 800)).toBe(640);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x1, 0x2]);
     expect(comicImageBlob(jpeg, 'page.jpg').type).toBe('image/jpeg');
   });
@@ -132,12 +132,10 @@ const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01, 0x02]);
 
 function displayConstraintPx(image: HTMLImageElement): number | undefined {
   const candidates = [
-    image.sizes,
-    image.getAttribute('sizes'),
-    image.getAttribute('width'),
     image.style.maxWidth,
     image.style.width,
     image.style.getPropertyValue('--lightink-comic-display-width'),
+    image.getAttribute('width'),
     image.dataset.displayWidth,
     image.dataset.resizeWidth,
   ];
@@ -266,13 +264,17 @@ describe('comic page paint', () => {
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
     try {
       const resizeWidth = comicDisplayWidthPx(slot);
-      expect(resizeWidth).toBe(1280);
+      expect(resizeWidth).toBe(640);
       const mounted = await createComicPageElement(jpegBytes, 'page.jpg', { resizeWidth });
-      expect(mounted.element).toBeInstanceOf(HTMLImageElement);
+      const image = mounted.element as HTMLImageElement;
+      expect(image).toBeInstanceOf(HTMLImageElement);
       expect(mounted.width).toBe(2000);
       expect(mounted.height).toBe(2800);
       expect(mounted.width).toBeGreaterThanOrEqual(resizeWidth);
-      expect(displayConstraintPx(mounted.element as HTMLImageElement)).toBe(resizeWidth);
+      expect(image.sizes).toBe('');
+      expect(image.getAttribute('sizes')).toBeNull();
+      expect(image.style.maxWidth).toBe('640px');
+      expect(displayConstraintPx(image)).toBe(resizeWidth);
       expect(createImageBitmap).not.toHaveBeenCalled();
     } finally {
       if (originalDpr === undefined) {

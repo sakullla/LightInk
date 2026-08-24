@@ -124,10 +124,10 @@ export function comicImageBlob(bytes: Uint8Array, filename: string): Blob {
   return new Blob([comicImageBytes(bytes)], { type: mime });
 }
 
+/** Slot CSS width used as the page display cap. Device pixels stay in the decoded bitmap. */
 export function comicDisplayWidthPx(slot: HTMLElement | undefined, fallback = 800): number {
   const css = slot?.clientWidth || slot?.parentElement?.clientWidth || fallback;
-  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
-  return Math.min(4096, Math.max(1, Math.round(css * dpr)));
+  return Math.min(4096, Math.max(1, Math.round(css)));
 }
 
 export interface ComicPageElement {
@@ -150,7 +150,9 @@ function applyComicDisplayConstraint(
     return;
   }
   const displayWidth = Math.min(4096, Math.max(1, Math.round(resizeWidth)));
-  image.sizes = `${displayWidth}px`;
+  const cssWidth = `${displayWidth}px`;
+  image.style.maxWidth = cssWidth;
+  image.style.setProperty('--lightink-comic-display-width', cssWidth);
 }
 
 function decodeComicImage(image: HTMLImageElement, signal: AbortSignal | undefined): Promise<void> {
