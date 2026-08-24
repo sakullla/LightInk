@@ -30,7 +30,7 @@ const EXACT_SYNC_KEYS = new Set([
   'lightink.reader.prefs',
   'lightink.library.theme',
   'lightink.library.navCollapsed',
-  'lightink.reader.comic.preferences',
+  'lightink.reader.comic.preferences.v2',
   'lightink.autosave.enabled',
   'lightink.chrome.pinned',
   'lightink.statusBar.visible',
@@ -40,6 +40,7 @@ const EXACT_SYNC_KEYS = new Set([
 ]);
 
 const READING_PROGRESS_PREFIX = 'lightink.reader.progress.';
+const COMIC_BOOK_PREFS_PREFIX = 'lightink.reader.comic.book.';
 const PROGRESS_ALIAS_PREFIX = 'lightink.library.progressAlias.';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const HASH64_PATTERN = /^[0-9a-f]{16}$/i;
@@ -86,6 +87,9 @@ export function isSyncableStorageKey(key: string): boolean {
   if (EXACT_SYNC_KEYS.has(key)) return true;
   if (key.startsWith(READING_PROGRESS_PREFIX)) {
     return portableProgressId(key.slice(READING_PROGRESS_PREFIX.length));
+  }
+  if (key.startsWith(COMIC_BOOK_PREFS_PREFIX)) {
+    return portableProgressId(key.slice(COMIC_BOOK_PREFS_PREFIX.length));
   }
   if (key.startsWith(PROGRESS_ALIAS_PREFIX)) {
     return portableLibraryItemId(key.slice(PROGRESS_ALIAS_PREFIX.length));

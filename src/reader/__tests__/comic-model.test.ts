@@ -15,10 +15,14 @@ import {
   type ComicPageCandidate,
 } from '../comic-model.js';
 import {
+  COMIC_PREFERENCES_STORAGE_KEY,
   advanceComicPage,
   comicVisiblePages,
+  defaultComicPreferences,
   loadComicPreferences,
+  parseComicPreferences,
   saveComicPreferences,
+  type ComicPreferences,
 } from '../comic-preferences.js';
 
 function page(id: string, filename: string): ComicPageCandidate {
@@ -29,6 +33,26 @@ function page(id: string, filename: string): ComicPageCandidate {
     compressedSize: 1,
     uncompressedSize: 2,
   };
+}
+
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map<string, string>(Object.entries(initial));
+  return {
+    values,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+}
+
+function comicPrefs(value: {
+  mode: 'paged' | 'strip';
+  direction: 'ltr' | 'rtl';
+  spread: 'single' | 'double';
+  fit: 'screen' | 'width' | 'height' | 'original';
+}): ComicPreferences {
+  return value;
 }
 
 describe('comic page model', () => {
@@ -112,20 +136,153 @@ describe('comic preferences', () => {
     expect(advanceComicPage(1, 5, -1, doublePaged)).toBe(0);
   });
 
-  it('persists layout, direction, spread, and fit-width without throwing', () => {
-    const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => values.set(key, value),
-    };
-    const preferences = {
-      mode: 'paged' as const,
-      direction: 'rtl' as const,
-      spread: 'double' as const,
-      fitWidth: false,
-    };
+  it('treats strip mode as a continuous run and ignores spread pairing', () => {
+    const stripDouble = comicPrefs({
+      mode: 'strip',
+      direction: 'ltr',
+      spread: 'double',
+      fit: 'width',
+    });
+    expect(comicVisiblePages(0, 5, stripDouble)).toEqual([0, 1, 2, 3, 4]);
+    expect(advanceComicPage(0, 5, 1, stripDouble)).toBe(1);
+    expect(advanceComicPage(2, 5, -1, stripDouble)).toBe(1);
+  });
+
+  it('persists paged or strip mode, direction, spread, and each fit without throwing', () => {
+    const storage = memoryStorage();
+    const preferences = comicPrefs({
+      mode: 'paged',
+      direction: 'rtl',
+      spread: 'double',
+      fit: 'height',
+    });
     saveComicPreferences(storage, preferences);
     expect(loadComicPreferences(storage)).toEqual(preferences);
+    for (const fit of ['screen', 'width', 'height', 'original'] as const) {
+      const next = comicPrefs({ mode: 'strip', direction: 'ltr', spread: 'single', fit });
+      saveComicPreferences(storage, next);
+      expect(loadComicPreferences(storage)).toEqual(next);
+    }
+  });
+
+  it('migrates v2 vertical and fitWidth JSON to strip and the matching fit', () => {
+    expect(
+      parseComicPreferences(
+        JSON.stringify({
+          mode: 'vertical',
+          direction: 'rtl',
+          spread: 'double',
+          fitWidth: true,
+        }),
+      ),
+    ).toEqual(comicPrefs({ mode: 'strip', direction: 'rtl', spread: 'double', fit: 'width' }));
+    const migratedOffWidth = parseComicPreferences(
+      JSON.stringify({
+        mode: 'vertical',
+        direction: 'ltr',
+        spread: 'single',
+        fitWidth: false,
+      }),
+    );
+    expect(migratedOffWidth).toMatchObject({
+      mode: 'strip',
+      direction: 'ltr',
+      spread: 'single',
+    });
+    expect(['screen', 'original']).toContain(migratedOffWidth.fit);
+    const storage = memoryStorage({
+      [COMIC_PREFERENCES_STORAGE_KEY]: JSON.stringify({
+        mode: 'vertical',
+        direction: 'rtl',
+        spread: 'double',
+        fitWidth: true,
+      }),
+    });
+    expect(loadComicPreferences(storage, 'ltr')).toEqual(
+      comicPrefs({ mode: 'strip', direction: 'rtl', spread: 'double', fit: 'width' }),
+    );
+  });
+
+  it('remembers mode, direction, spread, and fit per progressId without crossing books', () => {
+    const storage = memoryStorage();
+    const globalPrefs = comicPrefs({
+      mode: 'paged',
+      direction: 'ltr',
+      spread: 'double',
+      fit: 'screen',
+    });
+    const bookA = '0123456789abcdef';
+    const bookB = 'C:/comics/other.cbz';
+    const prefsA = comicPrefs({
+      mode: 'strip',
+      direction: 'rtl',
+      spread: 'single',
+      fit: 'width',
+    });
+    const prefsB = comicPrefs({
+      mode: 'paged',
+      direction: 'ltr',
+      spread: 'double',
+      fit: 'original',
+    });
+    saveComicPreferences(storage, globalPrefs);
+    const globalRaw = storage.values.get(COMIC_PREFERENCES_STORAGE_KEY);
+    saveComicPreferences(storage, prefsA, bookA);
+    saveComicPreferences(storage, prefsB, bookB);
+    expect(storage.values.get(COMIC_PREFERENCES_STORAGE_KEY)).toBe(globalRaw);
+    expect(loadComicPreferences(storage, 'ltr', bookA)).toEqual(prefsA);
+    expect(loadComicPreferences(storage, 'ltr', bookB)).toEqual(prefsB);
+    expect(loadComicPreferences(storage)).toEqual(globalPrefs);
+  });
+
+  it('updates only the global default when progressId is missing', () => {
+    const storage = memoryStorage();
+    const bookA = '0123456789abcdef';
+    const globalPrefs = comicPrefs({
+      mode: 'paged',
+      direction: 'rtl',
+      spread: 'single',
+      fit: 'height',
+    });
+    const laterGlobal = comicPrefs({
+      mode: 'strip',
+      direction: 'ltr',
+      spread: 'double',
+      fit: 'width',
+    });
+    const bookPrefs = comicPrefs({
+      mode: 'paged',
+      direction: 'rtl',
+      spread: 'double',
+      fit: 'original',
+    });
+    saveComicPreferences(storage, globalPrefs);
+    expect(loadComicPreferences(storage, 'ltr', bookA)).toEqual(globalPrefs);
+    saveComicPreferences(storage, bookPrefs, bookA);
+    saveComicPreferences(storage, laterGlobal);
+    saveComicPreferences(storage, laterGlobal, '');
+    expect(loadComicPreferences(storage)).toEqual(laterGlobal);
+    expect(loadComicPreferences(storage, 'rtl')).toEqual(laterGlobal);
+    expect(loadComicPreferences(storage, 'ltr', bookA)).toEqual(bookPrefs);
+  });
+
+  it('falls back to defaults for damaged JSON or unknown enums without throwing', () => {
+    expect(defaultComicPreferences('rtl')).toEqual(
+      comicPrefs({ mode: 'paged', direction: 'rtl', spread: 'double', fit: 'screen' }),
+    );
+    expect(() => parseComicPreferences('{not-json', 'rtl')).not.toThrow();
+    expect(parseComicPreferences('{not-json', 'rtl')).toEqual(defaultComicPreferences('rtl'));
+    expect(
+      parseComicPreferences(
+        JSON.stringify({ mode: 'magazine', direction: 'up', spread: 'triple', fit: 'zoom' }),
+        'rtl',
+      ),
+    ).toEqual(defaultComicPreferences('rtl'));
+    const storage = memoryStorage({
+      [COMIC_PREFERENCES_STORAGE_KEY]: '{not-json',
+    });
+    expect(() => loadComicPreferences(storage, 'rtl')).not.toThrow();
+    expect(loadComicPreferences(storage, 'rtl')).toEqual(defaultComicPreferences('rtl'));
   });
 
   it('sniffs JPEG/PNG even when the ZIP name is garbled', () => {
