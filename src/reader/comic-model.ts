@@ -137,6 +137,42 @@ export interface ComicPageElement {
   readonly height: number;
 }
 
+function comicAbortError(): DOMException {
+  return new DOMException('The operation was aborted', 'AbortError');
+}
+
+/** Apply resizeWidth as a CSS display cap; do not resample the decoded bitmap. */
+function applyComicDisplayConstraint(
+  image: HTMLImageElement,
+  resizeWidth: number | undefined,
+): void {
+  if (resizeWidth === undefined || !Number.isFinite(resizeWidth) || resizeWidth < 1) {
+    return;
+  }
+  const displayWidth = Math.min(4096, Math.max(1, Math.round(resizeWidth)));
+  image.sizes = `${displayWidth}px`;
+}
+
+function decodeComicImage(image: HTMLImageElement, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(comicAbortError());
+  }
+  if (typeof image.decode !== 'function') {
+    // jsdom has no decode() and never fires load for blob URLs. Real browsers expose decode().
+    return Promise.resolve();
+  }
+  const decoded = image.decode();
+  if (signal === undefined) {
+    return decoded;
+  }
+  return Promise.race([
+    decoded,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => reject(comicAbortError()), { once: true });
+    }),
+  ]);
+}
+
 /**
  * Paint with an async &lt;img&gt;. createImageBitmap + canvas draw of a 3–4MB
  * manga JPEG can occupy WebView2's renderer thread long enough that cancel
@@ -148,7 +184,7 @@ export async function createComicPageElement(
   options: { readonly resizeWidth?: number; readonly signal?: AbortSignal } = {},
 ): Promise<ComicPageElement> {
   if (options.signal?.aborted === true) {
-    throw new DOMException('The operation was aborted', 'AbortError');
+    throw comicAbortError();
   }
   const blob = comicImageBlob(bytes, filename);
   const url = URL.createObjectURL(blob);
@@ -159,12 +195,23 @@ export async function createComicPageElement(
   image.decoding = 'async';
   image.loading = 'eager';
   image.src = url;
-  return {
-    element: image,
-    url,
-    width: image.naturalWidth,
-    height: image.naturalHeight,
-  };
+  try {
+    await decodeComicImage(image, options.signal);
+    if (options.signal?.aborted === true) {
+      throw comicAbortError();
+    }
+    applyComicDisplayConstraint(image, options.resizeWidth);
+    return {
+      element: image,
+      url,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+    };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    image.removeAttribute('src');
+    throw error;
+  }
 }
 
 export function isIgnoredComicPath(path: string): boolean {

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   comicDisplayWidthPx,
   comicImageBlob,
   comicImageObjectUrl,
   compareComicPaths,
+  createComicPageElement,
   isComicImagePath,
   orderComicPages,
   parseComicInfo,
@@ -121,6 +122,178 @@ describe('comic page model', () => {
     expect(parseComicInfo('<!DOCTYPE ComicInfo><ComicInfo/>')).toBeNull();
     expect([...selectComicCacheWindow([5, 5, 20, 5], [1], 15)]).toEqual([1, 0, 3]);
     expect(selectComicCacheWindow([1], [], 10).size).toBe(0);
+    expect([...selectComicCacheWindow([40, 5, 5], [0], 10)]).toEqual([0]);
+    expect([...selectComicCacheWindow([5, 5, 5, 5], [0], 15)]).toEqual([0, 1, 2]);
+    expect([...selectComicCacheWindow([10, 10, 10, 10], [1, 2], 20)]).toEqual([1, 2]);
+  });
+});
+
+const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01, 0x02]);
+
+function displayConstraintPx(image: HTMLImageElement): number | undefined {
+  const candidates = [
+    image.sizes,
+    image.getAttribute('sizes'),
+    image.getAttribute('width'),
+    image.style.maxWidth,
+    image.style.width,
+    image.style.getPropertyValue('--lightink-comic-display-width'),
+    image.dataset.displayWidth,
+    image.dataset.resizeWidth,
+  ];
+  for (const value of candidates) {
+    if (value === undefined || value === null || value === '') continue;
+    const match = String(value).match(/(\d+(?:\.\d+)?)/);
+    if (match !== null) return Number(match[1]);
+  }
+  if (image.width > 0 && image.width !== image.naturalWidth) return image.width;
+  return undefined;
+}
+
+describe('comic page paint', () => {
+  const originalDecode = HTMLImageElement.prototype.decode;
+  const originalNaturalWidth = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalWidth');
+  const originalNaturalHeight = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalHeight');
+  const originalCreateObjectUrl = URL.createObjectURL;
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
+  const originalCreateImageBitmap = globalThis.createImageBitmap;
+
+  let decodeGate: Promise<void> = Promise.resolve();
+  let decodeShouldFail = false;
+  const decodedImages = new WeakSet<HTMLImageElement>();
+  const revokedUrls: string[] = [];
+  const createImageBitmap = vi.fn(async () => {
+    throw new Error('createImageBitmap must not paint comic pages');
+  });
+
+  function installImageDecode(options: {
+    width: number;
+    height: number;
+    gate?: Promise<void>;
+    fail?: boolean;
+  }): void {
+    decodeGate = options.gate ?? Promise.resolve();
+    decodeShouldFail = options.fail === true;
+    HTMLImageElement.prototype.decode = function (this: HTMLImageElement) {
+      return decodeGate.then(() => {
+        if (decodeShouldFail) {
+          throw new DOMException('The source image cannot be decoded', 'EncodingError');
+        }
+        decodedImages.add(this);
+      });
+    };
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get() {
+        return decodedImages.has(this as HTMLImageElement) ? options.width : 0;
+      },
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get() {
+        return decodedImages.has(this as HTMLImageElement) ? options.height : 0;
+      },
+    });
+  }
+
+  beforeEach(() => {
+    revokedUrls.length = 0;
+    createImageBitmap.mockClear();
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    let nextUrl = 0;
+    URL.createObjectURL = ((blob: Blob) => {
+      expect(blob.type).toBe('image/jpeg');
+      return `blob:comic-paint-${++nextUrl}`;
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = ((url: string) => {
+      revokedUrls.push(url);
+    }) as typeof URL.revokeObjectURL;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    HTMLImageElement.prototype.decode = originalDecode;
+    if (originalNaturalWidth !== undefined) {
+      Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', originalNaturalWidth);
+    }
+    if (originalNaturalHeight !== undefined) {
+      Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', originalNaturalHeight);
+    }
+    URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+    if (originalCreateImageBitmap === undefined) {
+      Reflect.deleteProperty(globalThis, 'createImageBitmap');
+    } else {
+      globalThis.createImageBitmap = originalCreateImageBitmap;
+    }
+  });
+
+  it('waits for decode before reporting width and height', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    installImageDecode({ width: 1600, height: 2400, gate });
+
+    const pending = createComicPageElement(jpegBytes, 'page.jpg');
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    release();
+    const mounted = await pending;
+    expect(mounted.width).toBe(1600);
+    expect(mounted.height).toBe(2400);
+    expect(mounted.element).toBeInstanceOf(HTMLImageElement);
+    expect(mounted.element.tagName).toBe('IMG');
+    expect(mounted.url).toBe('blob:comic-paint-1');
+  });
+
+  it('applies resizeWidth as a display constraint and keeps full decoded pixels', async () => {
+    installImageDecode({ width: 2000, height: 2800 });
+    const slot = document.createElement('div');
+    Object.defineProperty(slot, 'clientWidth', { configurable: true, value: 640 });
+    const originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    try {
+      const resizeWidth = comicDisplayWidthPx(slot);
+      expect(resizeWidth).toBe(1280);
+      const mounted = await createComicPageElement(jpegBytes, 'page.jpg', { resizeWidth });
+      expect(mounted.element).toBeInstanceOf(HTMLImageElement);
+      expect(mounted.width).toBe(2000);
+      expect(mounted.height).toBe(2800);
+      expect(mounted.width).toBeGreaterThanOrEqual(resizeWidth);
+      expect(displayConstraintPx(mounted.element as HTMLImageElement)).toBe(resizeWidth);
+      expect(createImageBitmap).not.toHaveBeenCalled();
+    } finally {
+      if (originalDpr === undefined) {
+        Reflect.deleteProperty(window, 'devicePixelRatio');
+      } else {
+        Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+      }
+    }
+  });
+
+  it('rejects a failed decode so a later call can retry without leaking the url', async () => {
+    installImageDecode({ width: 800, height: 1200, fail: true });
+    await expect(createComicPageElement(jpegBytes, 'page.jpg')).rejects.toThrow();
+    expect(revokedUrls).toEqual(['blob:comic-paint-1']);
+
+    installImageDecode({ width: 800, height: 1200 });
+    const mounted = await createComicPageElement(jpegBytes, 'page.jpg');
+    expect(mounted.width).toBe(800);
+    expect(mounted.height).toBe(1200);
+    expect(mounted.url).toBe('blob:comic-paint-2');
+    expect(createImageBitmap).not.toHaveBeenCalled();
   });
 });
 
