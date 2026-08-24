@@ -90,6 +90,131 @@ function pagedStorage(
   };
 }
 
+function sizeCanvas(container: HTMLElement, width = 1000, height = 800): void {
+  Object.defineProperty(container, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
+  });
+}
+
+function comicSurface(container: HTMLElement): HTMLElement {
+  return container.querySelector<HTMLElement>('.lightink-reader-comic-pages') ?? container;
+}
+
+function clickCanvas(container: HTMLElement, clientX: number, clientY = 400): void {
+  container.dispatchEvent(new MouseEvent('click', { clientX, clientY, bubbles: true }));
+}
+
+function pointerOn(
+  target: EventTarget,
+  type: string,
+  init: PointerEventInit,
+): void {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    }),
+  );
+}
+
+function readComicScale(container: HTMLElement): number {
+  for (const node of [container, comicSurface(container)]) {
+    const data = Number.parseFloat(node.dataset.comicScale ?? '');
+    if (Number.isFinite(data)) return data;
+    const css = Number.parseFloat(node.style.getPropertyValue('--lightink-comic-scale'));
+    if (Number.isFinite(css)) return css;
+    const styleScale = Number.parseFloat(node.style.scale);
+    if (Number.isFinite(styleScale)) return styleScale;
+    const matched = node.style.transform.match(/scale\(\s*([-\d.]+)/);
+    if (matched) {
+      const value = Number.parseFloat(matched[1]!);
+      if (Number.isFinite(value)) return value;
+    }
+  }
+  return 1;
+}
+
+function readComicPan(container: HTMLElement): { x: number; y: number } {
+  const node = comicSurface(container);
+  const transform = node.style.transform || container.style.transform;
+  const matched = transform.match(/translate(?:3d)?\(\s*([-\d.]+)(?:px)?\s*,\s*([-\d.]+)(?:px)?/);
+  if (matched) {
+    return { x: Number(matched[1]), y: Number(matched[2]) };
+  }
+  const x = Number.parseFloat(node.style.getPropertyValue('--lightink-comic-translate-x'));
+  const y = Number.parseFloat(node.style.getPropertyValue('--lightink-comic-translate-y'));
+  if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+  return { x: node.scrollLeft, y: node.scrollTop };
+}
+
+function zoomByDoubleClick(container: HTMLElement): void {
+  const surface = comicSurface(container);
+  surface.dispatchEvent(new MouseEvent('dblclick', { clientX: 500, clientY: 400, bubbles: true }));
+}
+
+function pinchByPointers(container: HTMLElement, expand: boolean): void {
+  const surface = comicSurface(container);
+  const left = 400;
+  const start = expand ? 560 : 700;
+  const end = expand ? 720 : 500;
+  pointerOn(surface, 'pointerdown', {
+    pointerId: 1,
+    pointerType: 'touch',
+    clientX: left,
+    clientY: 400,
+  });
+  pointerOn(surface, 'pointerdown', {
+    pointerId: 2,
+    pointerType: 'touch',
+    clientX: start,
+    clientY: 400,
+  });
+  pointerOn(surface, 'pointermove', {
+    pointerId: 2,
+    pointerType: 'touch',
+    clientX: end,
+    clientY: 400,
+  });
+  pointerOn(surface, 'pointerup', {
+    pointerId: 2,
+    pointerType: 'touch',
+    clientX: end,
+    clientY: 400,
+  });
+  pointerOn(surface, 'pointerup', {
+    pointerId: 1,
+    pointerType: 'touch',
+    clientX: left,
+    clientY: 400,
+  });
+}
+
+function dragCanvas(container: HTMLElement, pointerType: 'mouse' | 'touch'): void {
+  const surface = comicSurface(container);
+  pointerOn(surface, 'pointerdown', {
+    pointerId: 1,
+    pointerType,
+    buttons: 1,
+    clientX: 500,
+    clientY: 400,
+  });
+  pointerOn(surface, 'pointermove', {
+    pointerId: 1,
+    pointerType,
+    buttons: 1,
+    clientX: 620,
+    clientY: 470,
+  });
+  pointerOn(surface, 'pointerup', {
+    pointerId: 1,
+    pointerType,
+    clientX: 620,
+    clientY: 470,
+  });
+}
+
 async function buildCbz(pageCount: number): Promise<Uint8Array> {
   const writer = new ZipWriter(new Uint8ArrayWriter());
   for (let index = 1; index <= pageCount; index += 1) {
@@ -464,6 +589,190 @@ describe('CBZ page materialization', () => {
     });
     expect(container.dispatchEvent(wheel)).toBe(true);
     expect(handle.currentPage).toBe(before);
+    await handle.destroy();
+  });
+
+  it('cycles paged screen, width, height, and original, and keeps strip on width', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'screen' }),
+    });
+
+    expect(handle.preferences.fit).toBe('screen');
+    expect(container.dataset.comicFit).toBe('screen');
+    const fit = container.querySelector<HTMLButtonElement>('[aria-label="Fit screen"]')!;
+    const cycle = [
+      ['width', 'Fit width'],
+      ['height', 'Fit height'],
+      ['original', 'Original size'],
+      ['screen', 'Fit screen'],
+    ] as const;
+    for (const [value, label] of cycle) {
+      fit.click();
+      expect(handle.preferences.fit).toBe(value);
+      expect(container.dataset.comicFit).toBe(value);
+      expect(fit.getAttribute('aria-label')).toBe(label);
+    }
+
+    handle.setPreferences({ fit: 'original' });
+    container.querySelector<HTMLButtonElement>('button[aria-label="Continuous strip"]')!.click();
+    expect(handle.preferences.mode).toBe('strip');
+    expect(handle.preferences.fit).toBe('width');
+    expect(container.dataset.comicFit).toBe('width');
+    await handle.destroy();
+  });
+
+  it('double-click zooms so edge taps do not turn the page until fit is restored', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    expect(handle.currentPage).toBe(1);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(1);
+    dragCanvas(container, 'mouse');
+    expect(handle.currentPage).toBe(1);
+    const pan = readComicPan(container);
+    expect(Math.abs(pan.x) + Math.abs(pan.y)).toBeGreaterThan(0);
+
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    await handle.destroy();
+  });
+
+  it('pinch-zooms on touch pointers and pans without turning the page', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    const page = handle.currentPage;
+    dragCanvas(container, 'touch');
+    expect(handle.currentPage).toBe(page);
+    const pan = readComicPan(container);
+    expect(Math.abs(pan.x) + Math.abs(pan.y)).toBeGreaterThan(0);
+    clickCanvas(container, 50);
+    expect(handle.currentPage).toBe(page);
+
+    pinchByPointers(container, false);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(page + 1);
+    await handle.destroy();
+  });
+
+  it('zooms with a modifier wheel in paged mode without advancing', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    const wheel = new WheelEvent('wheel', {
+      deltaY: -120,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    container.dispatchEvent(wheel);
+    expect(handle.currentPage).toBe(1);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    await handle.destroy();
+  });
+
+  it('resets zoom when the reading mode changes', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Continuous strip"]')!.click();
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Horizontal pages"]')!.click();
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    await handle.destroy();
+  });
+
+  it('completes paging, fit, jump, and zoom with only mouse input', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'screen' }),
+    });
+
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Fit screen"]')!.click();
+    expect(handle.preferences.fit).toBe('width');
+    container.querySelector<HTMLButtonElement>('button[aria-label="Double page"]')!.click();
+    expect(handle.preferences.spread).toBe('double');
+    const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
+    slider.value = '4';
+    slider.dispatchEvent(new Event('input'));
+    expect(handle.currentPage).toBe(4);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    dragCanvas(container, 'mouse');
+    expect(handle.currentPage).toBe(4);
+    await handle.destroy();
+  });
+
+  it('completes paging, mode, jump, and zoom with only touch and no hover', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    clickCanvas(container, 500);
+    expect(container.dataset.comicChrome).toBe('hidden');
+    pointerOn(container, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 500,
+      clientY: 20,
+    });
+    expect(container.dataset.comicChrome).toBe('hidden');
+    clickCanvas(container, 500);
+    expect(container.dataset.comicChrome).toBe('visible');
+
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Continuous strip"]')!.click();
+    expect(handle.preferences.mode).toBe('strip');
+    container.querySelector<HTMLButtonElement>('button[aria-label="Horizontal pages"]')!.click();
+    expect(handle.preferences.mode).toBe('paged');
+    const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
+    slider.value = '3';
+    slider.dispatchEvent(new Event('input'));
+    expect(handle.currentPage).toBe(3);
+
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    const page = handle.currentPage;
+    dragCanvas(container, 'touch');
+    expect(handle.currentPage).toBe(page);
     await handle.destroy();
   });
 });

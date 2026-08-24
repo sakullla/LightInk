@@ -694,6 +694,29 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
     flex: 1 1 calc(25% - 0.2rem);
     order: -1;
   }
+
+  .lightink-reader-comic-topbar {
+    padding: calc(8px + var(--lightink-safe-top, 0px)) 14px 8px;
+    -webkit-app-region: no-drag;
+  }
+
+  .lightink-reader-comic-bottombar {
+    padding: 10px 14px calc(12px + var(--lightink-safe-bottom, 0px));
+  }
+
+  .lightink-reader-comic-back,
+  .lightink-reader-comic-page,
+  .lightink-reader-comic-tool,
+  .lightink-reader-comic-error button {
+    min-width: 44px;
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  .lightink-reader-comic-slider {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
 }
 
 /* 流式滚动：行长优先用阅读偏好 --lightink-reader-measure。
@@ -811,6 +834,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 /* 漫画是位图，字号缩放只作用于页面，不放大工具栏。 */
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages {
   zoom: var(--lightink-font-scale, 1);
+  transform: translate3d(var(--lightink-comic-translate-x), var(--lightink-comic-translate-y), 0)
+    scale(var(--lightink-comic-scale));
+  transform-origin: var(--lightink-comic-origin-x) var(--lightink-comic-origin-y);
 }
 
 /* PDF 连续滚动：每页一个 slot 占位，懒栅格化 canvas + 文本层。 */
@@ -1009,6 +1035,12 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   --lightink-comic-fg: #e6e6e6;
   --lightink-comic-muted: #9a9a9a;
   --lightink-comic-overlay: color-mix(in srgb, #111 70%, transparent);
+  --lightink-comic-scale: 1;
+  --lightink-comic-translate-x: 0px;
+  --lightink-comic-translate-y: 0px;
+  --lightink-comic-origin-x: 50%;
+  --lightink-comic-origin-y: 50%;
+  touch-action: manipulation;
 }
 
 .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'][data-reader-active='true']) {
@@ -1101,6 +1133,29 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
     .lightink-reader-chrome-footer-stats
   ) {
   display: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-topbar {
+  padding: calc(8px + var(--lightink-safe-top, 0px)) 14px 8px;
+  -webkit-app-region: no-drag;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-bottombar {
+  padding: 10px 14px calc(12px + var(--lightink-safe-bottom, 0px));
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-back,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-page,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-tool,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-error button {
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-slider {
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .lightink-reader-comic-topbar,
@@ -1269,12 +1324,19 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   white-space: nowrap;
 }
 
-.lightink-reader-comic-tool:hover:not(:disabled),
 .lightink-reader-comic-tool:focus-visible,
 .lightink-reader-comic-tool[aria-pressed='true'] {
   position: relative;
   background: color-mix(in srgb, #ffffff 14%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lightink-reader-comic-tool:hover:not(:disabled) {
+    position: relative;
+    background: color-mix(in srgb, #ffffff 14%, transparent);
+    color: var(--lightink-comic-fg, #e6e6e6);
+  }
 }
 
 .lightink-reader-comic-tool:focus-visible,
@@ -1307,6 +1369,8 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 0;
   align-items: stretch;
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   zoom: 1;
 }
 
@@ -1378,10 +1442,141 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   direction: ltr;
 }
 
-.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']
-  .lightink-reader-cbz-slot {
-  width: min(100%, var(--lightink-comic-natural-width, 64rem));
+/* 翻页四档适配。连续条主路径仍是适宽（上一段 strip 槽规则）。
+   缩放拖拽：JS 写 --lightink-comic-scale / translate，放大后设 data-comic-zoomed。 */
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='screen'] .lightink-reader-comic-pages,
+.lightink-reader-pages[data-comic-mode='paged']:not([data-comic-fit]) .lightink-reader-comic-pages {
+  touch-action: none;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='screen'] .lightink-reader-cbz-slot,
+.lightink-reader-pages[data-comic-mode='paged']:not([data-comic-fit]) .lightink-reader-cbz-slot {
+  width: auto;
   max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='screen']
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page,
+.lightink-reader-pages[data-comic-mode='paged']:not([data-comic-fit])
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='width'] .lightink-reader-comic-pages {
+  align-items: flex-start;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='width'] .lightink-reader-cbz-slot {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='width']
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='width'][data-comic-spread='double'][data-comic-visible='2']
+  .lightink-reader-cbz-slot {
+  width: 50%;
+  max-width: 50%;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='height'] .lightink-reader-comic-pages {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='height'] .lightink-reader-cbz-slot {
+  width: auto;
+  max-width: none;
+  height: 100%;
+  max-height: 100%;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='height']
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page {
+  width: auto;
+  height: 100%;
+  max-width: none;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='original'] .lightink-reader-comic-pages,
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']:not([data-comic-fit])
+  .lightink-reader-comic-pages {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='original'] .lightink-reader-cbz-slot,
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']:not([data-comic-fit])
+  .lightink-reader-cbz-slot {
+  width: var(--lightink-comic-natural-width, auto);
+  max-width: none;
+  height: auto;
+  max-height: none;
+}
+
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='original']
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page,
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']:not([data-comic-fit])
+  .lightink-reader-cbz-slot
+  > .lightink-reader-page {
+  width: var(--lightink-comic-natural-width, 100%);
+  height: auto;
+  max-width: none;
+  max-height: none;
+  object-fit: none;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-zoomed='true'],
+.lightink-reader-pages[data-comic-reader='true'][data-comic-scale]:not([data-comic-scale='1']),
+.lightink-reader-pages[data-comic-reader='true'][data-comic-zoomed='true'] .lightink-reader-comic-pages,
+.lightink-reader-pages[data-comic-reader='true'][data-comic-scale]:not([data-comic-scale='1'])
+  .lightink-reader-comic-pages {
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-zoomed='true'],
+.lightink-reader-pages[data-comic-reader='true'][data-comic-scale]:not([data-comic-scale='1']) {
+  cursor: grab;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-zoomed='true'][data-comic-panning='true'],
+.lightink-reader-pages[data-comic-reader='true'][data-comic-panning='true'] {
+  cursor: grabbing;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-zoomed='true'] .lightink-reader-comic-pages,
+.lightink-reader-pages[data-comic-reader='true'][data-comic-scale]:not([data-comic-scale='1'])
+  .lightink-reader-comic-pages {
+  will-change: transform;
 }
 
 .lightink-reader-comic-error {

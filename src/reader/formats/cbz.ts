@@ -54,6 +54,13 @@ const DEFAULT_COMIC_CACHE_BUDGET = 96 * 1024 * 1024;
 const MAX_COMIC_INFO_BYTES = 1024 * 1024;
 const COMIC_CHROME_IDLE_MS = 2800;
 const COMIC_EDGE_ZONE = 0.28;
+const COMIC_ZOOM_MIN = 1;
+const COMIC_ZOOM_MAX = 5;
+const COMIC_ZOOM_TOGGLE = 2;
+const COMIC_DOUBLE_TAP_MS = 280;
+const COMIC_PAN_SLOP = 8;
+const COMIC_INTERACTIVE_SELECTOR =
+  '.lightink-reader-comic-chrome, .lightink-reader-comic-error, input, button, a';
 
 export const naturalCompare = compareComicPaths;
 
@@ -170,6 +177,21 @@ function mergeComicPreferences(
 function nextComicFit(current: ComicFit): ComicFit {
   const index = COMIC_FIT_CYCLE.indexOf(current);
   return COMIC_FIT_CYCLE[(index + 1) % COMIC_FIT_CYCLE.length]!;
+}
+
+function clampComicZoom(value: number): number {
+  return Math.min(COMIC_ZOOM_MAX, Math.max(COMIC_ZOOM_MIN, value));
+}
+
+function comicPointerDistance(
+  left: { readonly x: number; readonly y: number },
+  right: { readonly x: number; readonly y: number },
+): number {
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function isComicInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(COMIC_INTERACTIVE_SELECTOR) !== null;
 }
 
 function stripCacheCenters(center: number, totalPages: number): number[] {
@@ -586,6 +608,9 @@ export async function renderCbzInto(
     const naturalWidths = new Map<number, number>();
     let wantedPages = new Set<number>();
     let currentPage = 1;
+    let viewScale = 1;
+    let viewX = 0;
+    let viewY = 0;
     let destroyed = false;
     let destruction: Promise<void> | null = null;
     let observer: IntersectionObserver | null = null;
@@ -621,22 +646,95 @@ export async function renderCbzInto(
       }
     };
 
-    const applyStripSlotMetrics = (slot: HTMLElement): void => {
-      slot.style.flex = '0 0 auto';
-      slot.style.width = '100%';
-      slot.style.maxWidth = '100%';
-      slot.style.height = 'auto';
-      slot.style.minHeight = '0';
-      slot.style.background = 'transparent';
+    const applyPageFit = (element: HTMLElement | null, fit: ComicFit): void => {
+      if (element === null) return;
+      element.style.objectFit = 'contain';
+      if (fit === 'width') {
+        element.style.width = '100%';
+        element.style.height = 'auto';
+        element.style.maxWidth = '100%';
+        element.style.maxHeight = 'none';
+        return;
+      }
+      if (fit === 'height') {
+        element.style.width = 'auto';
+        element.style.height = '100%';
+        element.style.maxWidth = 'none';
+        element.style.maxHeight = '100%';
+        return;
+      }
+      if (fit === 'original') {
+        element.style.width = 'auto';
+        element.style.height = 'auto';
+        element.style.maxWidth = 'none';
+        element.style.maxHeight = 'none';
+        return;
+      }
+      element.style.width = '100%';
+      element.style.height = '100%';
+      element.style.maxWidth = '100%';
+      element.style.maxHeight = '100%';
     };
 
-    const clearStripSlotMetrics = (slot: HTMLElement): void => {
+    const applySlotFit = (index: number): void => {
+      const slot = slots[index];
+      if (slot === undefined) return;
+      applySlotWidth(index);
+      const page = slot.querySelector<HTMLElement>('.lightink-reader-page');
+      if (preferences.mode === 'strip') {
+        slot.style.flex = '0 0 auto';
+        slot.style.minHeight = '0';
+        slot.style.background = 'transparent';
+        if (preferences.fit === 'original') {
+          const width = naturalWidths.get(index);
+          slot.style.width = width === undefined ? 'auto' : `${width}px`;
+          slot.style.maxWidth = 'none';
+          slot.style.height = 'auto';
+        } else if (preferences.fit === 'height') {
+          slot.style.width = 'auto';
+          slot.style.maxWidth = '100%';
+          slot.style.height = 'auto';
+          slot.style.maxHeight = '100%';
+        } else if (preferences.fit === 'screen') {
+          slot.style.width = 'auto';
+          slot.style.maxWidth = '100%';
+          slot.style.height = 'auto';
+          slot.style.maxHeight = '100%';
+        } else {
+          slot.style.width = '100%';
+          slot.style.maxWidth = '100%';
+          slot.style.height = 'auto';
+          slot.style.removeProperty('max-height');
+        }
+        applyPageFit(page, preferences.fit === 'screen' ? 'width' : preferences.fit);
+        return;
+      }
       slot.style.removeProperty('flex');
-      slot.style.removeProperty('width');
-      slot.style.removeProperty('max-width');
-      slot.style.removeProperty('height');
       slot.style.removeProperty('min-height');
       slot.style.background = 'transparent';
+      if (preferences.fit === 'width') {
+        slot.style.width = '100%';
+        slot.style.maxWidth = '100%';
+        slot.style.height = 'auto';
+        slot.style.maxHeight = 'none';
+      } else if (preferences.fit === 'height') {
+        slot.style.width = 'auto';
+        slot.style.maxWidth = 'none';
+        slot.style.height = '100%';
+        slot.style.maxHeight = '100%';
+      } else if (preferences.fit === 'original') {
+        const width = naturalWidths.get(index);
+        slot.style.width = width === undefined ? 'auto' : `${width}px`;
+        slot.style.maxWidth = 'none';
+        slot.style.height = 'auto';
+        slot.style.maxHeight = 'none';
+      } else {
+        slot.style.width = 'auto';
+        slot.style.maxWidth = '100%';
+        slot.style.height = '100%';
+        slot.style.maxHeight = '100%';
+      }
+      applyPageFit(page, preferences.fit);
     };
 
     const applySurfaceMetrics = (): void => {
@@ -644,23 +742,76 @@ export async function renderCbzInto(
         container.style.minHeight = '0';
         container.style.height = '100%';
         container.style.overflow = 'hidden';
-        pagesRoot.style.overflow = 'auto';
+        pagesRoot.style.overflow = viewScale > 1 ? 'hidden' : 'auto';
         pagesRoot.style.height = '100%';
         pagesRoot.style.flex = '1';
         pagesRoot.style.width = '100%';
-        pagesRoot.style.alignItems = 'stretch';
-        slots.forEach((slot) => applyStripSlotMetrics(slot));
+        pagesRoot.style.alignItems = preferences.fit === 'width' ? 'stretch' : 'center';
+        slots.forEach((_slot, index) => applySlotFit(index));
         return;
       }
       container.style.removeProperty('min-height');
       container.style.removeProperty('height');
       container.style.removeProperty('overflow');
-      pagesRoot.style.removeProperty('overflow');
+      pagesRoot.style.overflow =
+        viewScale > 1 ? 'hidden' : preferences.fit === 'screen' ? '' : 'auto';
       pagesRoot.style.removeProperty('height');
       pagesRoot.style.removeProperty('flex');
       pagesRoot.style.removeProperty('width');
-      pagesRoot.style.removeProperty('align-items');
-      slots.forEach((slot) => clearStripSlotMetrics(slot));
+      pagesRoot.style.alignItems = 'center';
+      slots.forEach((_slot, index) => applySlotFit(index));
+    };
+
+    const applyViewTransform = (): void => {
+      const zoomed = viewScale > 1;
+      const scaleText = String(viewScale);
+      container.dataset.comicZoomed = String(zoomed);
+      container.dataset.comicScale = scaleText;
+      pagesRoot.dataset.comicScale = scaleText;
+      container.style.setProperty('--lightink-comic-scale', scaleText);
+      container.style.setProperty('--lightink-comic-translate-x', `${viewX}px`);
+      container.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
+      pagesRoot.style.setProperty('--lightink-comic-scale', scaleText);
+      pagesRoot.style.setProperty('--lightink-comic-translate-x', `${viewX}px`);
+      pagesRoot.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
+      pagesRoot.style.transformOrigin = '0 0';
+      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      const touchAction = zoomed ? 'none' : preferences.mode === 'strip' ? 'pan-y' : 'manipulation';
+      container.style.touchAction = touchAction;
+      pagesRoot.style.touchAction = touchAction;
+      if (preferences.mode === 'strip') {
+        pagesRoot.style.overflow = zoomed ? 'hidden' : 'auto';
+      } else {
+        pagesRoot.style.overflow = zoomed ? 'hidden' : preferences.fit === 'screen' ? '' : 'auto';
+      }
+    };
+
+    const resetViewTransform = (): void => {
+      viewScale = 1;
+      viewX = 0;
+      viewY = 0;
+      applyViewTransform();
+    };
+
+    const zoomAt = (clientX: number, clientY: number, nextScale: number): void => {
+      const rect = container.getBoundingClientRect();
+      const pointX = clientX - rect.left;
+      const pointY = clientY - rect.top;
+      const contentX = (pointX - viewX) / viewScale;
+      const contentY = (pointY - viewY) / viewScale;
+      viewScale = clampComicZoom(nextScale);
+      if (viewScale <= 1) {
+        viewX = 0;
+        viewY = 0;
+      } else {
+        viewX = pointX - contentX * viewScale;
+        viewY = pointY - contentY * viewScale;
+      }
+      applyViewTransform();
+    };
+
+    const toggleZoomAt = (clientX: number, clientY: number): void => {
+      zoomAt(clientX, clientY, viewScale > 1 ? 1 : COMIC_ZOOM_TOGGLE);
     };
 
     const releasePage = (index: number): void => {
@@ -861,7 +1012,7 @@ export async function renderCbzInto(
             slots[index]!.style.aspectRatio = `${mounted.width} / ${mounted.height}`;
             naturalWidths.set(index, mounted.width);
           }
-          applySlotWidth(index);
+          applySlotFit(index);
           mounted.element.addEventListener(
             'error',
             () => {
@@ -973,7 +1124,8 @@ export async function renderCbzInto(
         });
         visible.clear();
       }
-      slots.forEach((_slot, index) => applySlotWidth(index));
+      slots.forEach((_slot, index) => applySlotFit(index));
+      applyViewTransform();
       updateToolbar();
       refreshCacheWindow(currentIndex);
       if (notify && previousPage !== currentPage) options.onPageChange?.();
@@ -982,6 +1134,7 @@ export async function renderCbzInto(
     const setPreferences = (patch: ComicPreferencesPatch): void => {
       preferences = mergeComicPreferences(preferences, patch);
       saveComicPreferences(storage, preferences, options.progressId);
+      resetViewTransform();
       applyLayout();
     };
 
@@ -1048,22 +1201,38 @@ export async function renderCbzInto(
       setChromeVisible(true);
       scheduleChromeHide();
     };
-    const onSurfaceClick = (event: MouseEvent): void => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (
-        target.closest(
-          '.lightink-reader-comic-chrome, .lightink-reader-comic-error, input, button, a',
-        ) !== null
-      ) {
-        return;
-      }
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let pinchDistance = 0;
+    let pinchScale = 1;
+    let panOrigin: { x: number; y: number; viewX: number; viewY: number } | null = null;
+    let gestureMoved = false;
+    let lastGestureUp: { x: number; y: number } | null = null;
+    let pendingTap: ReturnType<typeof setTimeout> | null = null;
+    let lastTap: { x: number; y: number; at: number } | null = null;
+
+    const setPanning = (panning: boolean): void => {
+      if (panning) container.dataset.comicPanning = 'true';
+      else delete container.dataset.comicPanning;
+    };
+
+    const cancelPendingTap = (): void => {
+      if (pendingTap === null) return;
+      clearTimeout(pendingTap);
+      pendingTap = null;
+    };
+
+    const handleSurfaceTap = (clientX: number, clientY: number): void => {
       const rect = container.getBoundingClientRect();
       if (rect.width < 8) {
         setChromeVisible(!chromeVisible);
         return;
       }
-      const ratio = (event.clientX - rect.left) / rect.width;
+      if (viewScale > 1) {
+        setChromeVisible(!chromeVisible);
+        if (chromeVisible) scheduleChromeHide();
+        return;
+      }
+      const ratio = (clientX - rect.left) / rect.width;
       const backward = preferences.direction === 'rtl' ? ratio > 1 - COMIC_EDGE_ZONE : ratio < COMIC_EDGE_ZONE;
       const forward = preferences.direction === 'rtl' ? ratio < COMIC_EDGE_ZONE : ratio > 1 - COMIC_EDGE_ZONE;
       if (backward) advancePage(-1);
@@ -1071,7 +1240,125 @@ export async function renderCbzInto(
       else setChromeVisible(!chromeVisible);
       if (chromeVisible) scheduleChromeHide();
     };
-    const onPointerMove = (event: PointerEvent): void => {
+
+    const onSurfaceClick = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element)) return;
+      if (isComicInteractiveTarget(event.target)) return;
+      if (lastGestureUp !== null) {
+        const nearGesture = comicPointerDistance(lastGestureUp, {
+          x: event.clientX,
+          y: event.clientY,
+        }) <= 40;
+        lastGestureUp = null;
+        if (nearGesture) return;
+      }
+      if (event.detail >= 2) return;
+      if (event.isTrusted) {
+        cancelPendingTap();
+        const { clientX, clientY } = event;
+        pendingTap = setTimeout(() => {
+          pendingTap = null;
+          if (!destroyed) handleSurfaceTap(clientX, clientY);
+        }, COMIC_DOUBLE_TAP_MS);
+        return;
+      }
+      handleSurfaceTap(event.clientX, event.clientY);
+    };
+
+    const onDoubleClick = (event: MouseEvent): void => {
+      if (isComicInteractiveTarget(event.target)) return;
+      event.preventDefault();
+      cancelPendingTap();
+      lastGestureUp = null;
+      toggleZoomAt(event.clientX, event.clientY);
+    };
+
+    const onPointerDown = (event: PointerEvent): void => {
+      if (isComicInteractiveTarget(event.target)) return;
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      gestureMoved = false;
+      if (activePointers.size === 2) {
+        cancelPendingTap();
+        lastGestureUp = { x: event.clientX, y: event.clientY };
+        const points = [...activePointers.values()];
+        pinchDistance = comicPointerDistance(points[0]!, points[1]!);
+        pinchScale = viewScale;
+        panOrigin = null;
+        return;
+      }
+      if (viewScale > 1) {
+        panOrigin = { x: event.clientX, y: event.clientY, viewX, viewY };
+        container.setPointerCapture?.(event.pointerId);
+      }
+    };
+
+    const onGesturePointerMove = (event: PointerEvent): void => {
+      const tracked = activePointers.get(event.pointerId);
+      if (tracked === undefined) return;
+      tracked.x = event.clientX;
+      tracked.y = event.clientY;
+      if (activePointers.size >= 2) {
+        const points = [...activePointers.values()];
+        const distance = comicPointerDistance(points[0]!, points[1]!);
+        if (pinchDistance > 0 && distance > 0) {
+          const midX = (points[0]!.x + points[1]!.x) / 2;
+          const midY = (points[0]!.y + points[1]!.y) / 2;
+          zoomAt(midX, midY, pinchScale * (distance / pinchDistance));
+          gestureMoved = true;
+          lastGestureUp = { x: event.clientX, y: event.clientY };
+          event.preventDefault();
+        }
+        return;
+      }
+      if (panOrigin !== null && viewScale > 1) {
+        const dx = event.clientX - panOrigin.x;
+        const dy = event.clientY - panOrigin.y;
+        if (Math.hypot(dx, dy) >= COMIC_PAN_SLOP) {
+          gestureMoved = true;
+          setPanning(true);
+        }
+        viewX = panOrigin.viewX + dx;
+        viewY = panOrigin.viewY + dy;
+        applyViewTransform();
+        event.preventDefault();
+      }
+    };
+
+    const onPointerUp = (event: PointerEvent): void => {
+      if (!activePointers.has(event.pointerId)) return;
+      activePointers.delete(event.pointerId);
+      if (activePointers.size < 2) {
+        pinchDistance = 0;
+        pinchScale = viewScale;
+      }
+      if (activePointers.size === 0) {
+        panOrigin = null;
+        setPanning(false);
+        if (gestureMoved) {
+          lastGestureUp = { x: event.clientX, y: event.clientY };
+          lastTap = null;
+        } else if (event.pointerType === 'touch') {
+          const now = performance.now();
+          const previous = lastTap;
+          lastTap = { x: event.clientX, y: event.clientY, at: now };
+          if (
+            previous !== null &&
+            now - previous.at <= COMIC_DOUBLE_TAP_MS &&
+            comicPointerDistance(previous, lastTap) <= 36
+          ) {
+            cancelPendingTap();
+            lastGestureUp = { x: event.clientX, y: event.clientY };
+            lastTap = null;
+            toggleZoomAt(event.clientX, event.clientY);
+          }
+        }
+      }
+      if (container.hasPointerCapture?.(event.pointerId) === true) {
+        container.releasePointerCapture(event.pointerId);
+      }
+    };
+
+    const onHoverPointerMove = (event: PointerEvent): void => {
       if (event.pointerType === 'touch') return;
       const target = event.target;
       if (target instanceof Element && chrome.contains(target)) {
@@ -1092,17 +1379,37 @@ export async function renderCbzInto(
     container.addEventListener('selectstart', blockNativeSelect);
     container.addEventListener('dragstart', blockNativeSelect);
     container.addEventListener('click', onSurfaceClick);
-    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('dblclick', onDoubleClick);
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onGesturePointerMove, { passive: false });
+    container.addEventListener('pointermove', onHoverPointerMove);
+    container.addEventListener('pointerup', onPointerUp);
+    container.addEventListener('pointercancel', onPointerUp);
     chrome.addEventListener('pointerenter', revealChrome);
     const gatePagedWheel = createPagedWheelGate();
     const onWheel = (event: WheelEvent): void => {
-      if (event.ctrlKey || event.metaKey || preferences.mode !== 'paged') {
-        return;
-      }
       if (
         event.target instanceof Element &&
         event.target.closest('input, textarea, select') !== null
       ) {
+        return;
+      }
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+        zoomAt(event.clientX, event.clientY, viewScale * factor);
+        return;
+      }
+      if (viewScale > 1) {
+        event.preventDefault();
+        event.stopPropagation();
+        viewX -= event.deltaX;
+        viewY -= event.deltaY;
+        applyViewTransform();
+        return;
+      }
+      if (preferences.mode !== 'paged') {
         return;
       }
       const delta =
@@ -1170,8 +1477,14 @@ export async function renderCbzInto(
       destroyed = true;
       clearTimeout(prefetchTimer);
       if (chromeTimer !== null) clearTimeout(chromeTimer);
+      cancelPendingTap();
       container.removeEventListener('click', onSurfaceClick);
-      container.removeEventListener('pointermove', onPointerMove);
+      container.removeEventListener('dblclick', onDoubleClick);
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointermove', onGesturePointerMove);
+      container.removeEventListener('pointermove', onHoverPointerMove);
+      container.removeEventListener('pointerup', onPointerUp);
+      container.removeEventListener('pointercancel', onPointerUp);
       container.removeEventListener('selectstart', blockNativeSelect);
       container.removeEventListener('dragstart', blockNativeSelect);
       container.removeEventListener('wheel', onWheel);
