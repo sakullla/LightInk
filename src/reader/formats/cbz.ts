@@ -711,29 +711,11 @@ export async function renderCbzInto(
       }
       slot.style.removeProperty('flex');
       slot.style.removeProperty('min-height');
+      slot.style.removeProperty('width');
+      slot.style.removeProperty('max-width');
+      slot.style.removeProperty('height');
+      slot.style.removeProperty('max-height');
       slot.style.background = 'transparent';
-      if (preferences.fit === 'width') {
-        slot.style.width = '100%';
-        slot.style.maxWidth = '100%';
-        slot.style.height = 'auto';
-        slot.style.maxHeight = 'none';
-      } else if (preferences.fit === 'height') {
-        slot.style.width = 'auto';
-        slot.style.maxWidth = 'none';
-        slot.style.height = '100%';
-        slot.style.maxHeight = '100%';
-      } else if (preferences.fit === 'original') {
-        const width = naturalWidths.get(index);
-        slot.style.width = width === undefined ? 'auto' : `${width}px`;
-        slot.style.maxWidth = 'none';
-        slot.style.height = 'auto';
-        slot.style.maxHeight = 'none';
-      } else {
-        slot.style.width = 'auto';
-        slot.style.maxWidth = '100%';
-        slot.style.height = '100%';
-        slot.style.maxHeight = '100%';
-      }
       applyPageFit(page, preferences.fit);
     };
 

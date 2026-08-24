@@ -712,6 +712,36 @@ describe('CBZ page materialization', () => {
     await handle.destroy();
   });
 
+  it('leaves paged double-spread slot width to CSS pairing for screen and width fit', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    const handle = await renderCbzInto(await buildCbz(5), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'double', fit: 'screen' }),
+    });
+
+    expect(handle.nextPage()).toBe(true);
+    expect(container.dataset.comicVisible).toBe('2');
+    expect(visiblePageIndices(container)).toEqual(['1', '2']);
+    const paired = (): HTMLElement[] =>
+      Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')).filter(
+        (slot) => !slot.hidden,
+      );
+    for (const slot of paired()) {
+      expect(slot.style.width).toBe('');
+      expect(slot.style.maxWidth).toBe('');
+    }
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Fit screen"]')!.click();
+    expect(handle.preferences.fit).toBe('width');
+    expect(container.dataset.comicFit).toBe('width');
+    expect(container.dataset.comicVisible).toBe('2');
+    for (const slot of paired()) {
+      expect(slot.style.width).toBe('');
+      expect(slot.style.maxWidth).toBe('');
+    }
+    await handle.destroy();
+  });
+
   it('completes paging, fit, jump, and zoom with only mouse input', async () => {
     document.documentElement.lang = 'en';
     const container = document.createElement('div');
