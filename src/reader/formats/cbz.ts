@@ -994,7 +994,6 @@ export async function renderCbzInto(
             slots[index]!.style.aspectRatio = `${mounted.width} / ${mounted.height}`;
             naturalWidths.set(index, mounted.width);
           }
-          applySlotFit(index);
           mounted.element.addEventListener(
             'error',
             () => {
@@ -1012,6 +1011,7 @@ export async function renderCbzInto(
             decodedBytes: estimatedBytes[index] ?? data.byteLength,
           });
           slots[index]!.replaceChildren(mounted.element);
+          applySlotFit(index);
         } catch (error) {
           if (
             destroyed ||
