@@ -180,6 +180,11 @@ function isComicReaderExt(ext: string): boolean {
   return ext === 'cbz' || NATIVE_ARCHIVE_EXTENSIONS.has(ext);
 }
 
+/** Same identity page progress already uses: remote itemId, local path. */
+function comicProgressIdForTarget(target: ReaderTarget): string {
+  return target.kind === 'remote' ? target.itemId : target.path;
+}
+
 function canMountReaderChrome(): boolean {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
     return false;
@@ -2585,6 +2590,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (archiveSource === null) throw new ParseError('漫画归档字节源不可用');
     const cbz = await renderCbzInto(archiveSource, stagedHost, signal, {
       preferenceStorage,
+      progressId: comicProgressIdForTarget(target),
       requestPassword: deps.requestArchivePassword,
       labels: {
         backToShelf: t('reader.comic.backToShelf'),
@@ -3428,7 +3434,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             return;
           }
           if (isComicReaderExt(nextExt)) {
-            progressId = target.kind === 'remote' ? target.itemId : filePath;
+            progressId = comicProgressIdForTarget(target);
             pendingRestore = loadReadingProgressFromIds(progressStorage, [
               progressId,
               target.kind === 'local' ? filePath : '',
@@ -3705,6 +3711,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           loadComicPreferences(
             preferenceStorage,
             cbzHandle.metadata.readingDirection ?? 'ltr',
+            progressId,
           ),
         );
       }

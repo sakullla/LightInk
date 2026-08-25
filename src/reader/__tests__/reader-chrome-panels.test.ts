@@ -16,6 +16,13 @@ import {
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
 
+function findLabeledButton(panel: HTMLElement, label: string): HTMLButtonElement | undefined {
+  return [...panel.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) =>
+      button.getAttribute('aria-label') === label || button.textContent?.includes(label) === true,
+  );
+}
+
 describe('reader chrome panels', () => {
   afterEach(() => {
     document.documentElement.removeAttribute('data-touch-primary');
@@ -198,21 +205,82 @@ describe('reader chrome panels', () => {
     expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(0);
     expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(0);
     expect(panel.querySelectorAll('[disabled], [aria-disabled="true"]')).toHaveLength(0);
-    const paged = [...panel.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) =>
-        button.getAttribute('aria-label') === '横向翻页' ||
-        button.textContent?.includes('横向翻页') === true,
-    );
+    const paged = findLabeledButton(panel, '横向翻页');
+    const strip = findLabeledButton(panel, '连续条');
     expect(paged).toBeDefined();
+    expect(strip).toBeDefined();
     paged!.click();
-    expect(onPreferences).toHaveBeenCalledTimes(1);
-    const patch = onPreferences.mock.calls[0]![0] as Record<string, unknown>;
-    for (const key of Object.keys(patch)) {
+    strip!.click();
+    findLabeledButton(panel, '从右到左')!.click();
+    findLabeledButton(panel, '单页')!.click();
+    findLabeledButton(panel, '适合屏幕')!.click();
+    findLabeledButton(panel, '适合宽度')!.click();
+    findLabeledButton(panel, '适合高度')!.click();
+    findLabeledButton(panel, '原图')!.click();
+    expect(onPreferences.mock.calls.map((call) => call[0])).toEqual([
+      { mode: 'paged' },
+      { mode: 'strip' },
+      { direction: 'rtl' },
+      { spread: 'single' },
+      { fit: 'screen' },
+      { fit: 'width' },
+      { fit: 'height' },
+      { fit: 'original' },
+    ]);
+    for (const patch of onPreferences.mock.calls.map((call) => call[0] as Record<string, unknown>)) {
       // Only existing comic preference keys — the sheet adds no new capability.
-      expect(['mode', 'direction', 'spread', 'fitWidth']).toContain(key);
+      for (const key of Object.keys(patch)) {
+        expect(['mode', 'direction', 'spread', 'fit']).toContain(key);
+      }
+      expect(patch).not.toHaveProperty('fitWidth');
+      expect(patch.mode).not.toBe('vertical');
     }
     // No flow typography patches can originate from a comic panel.
     expect(onTypography).not.toHaveBeenCalled();
+    expect(panel.dataset.comicReader).toBeUndefined();
+    expect(panel.dataset.comicCanvas).toBeUndefined();
+  });
+
+  it('still maps v2 host copy onto strip and the four fit values', () => {
+    const panel = document.createElement('div');
+    const onPreferences = vi.fn();
+    const copy = defaultReaderChromePanelCopy();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      {
+        ...copy,
+        comic: {
+          direction: '方向',
+          spread: '页面',
+          vertical: '竖向滚动',
+          paged: '横向翻页',
+          leftToRight: '从左到右',
+          rightToLeft: '从右到左',
+          singlePage: '单页',
+          doublePage: '双页',
+          fitWidth: '适合宽度',
+        },
+      },
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      'paginated',
+      vi.fn(),
+      'comic',
+      { preferences: defaultComicPreferences(), onPreferences },
+    );
+    findLabeledButton(panel, '竖向滚动')!.click();
+    expect(onPreferences).toHaveBeenCalledWith({ mode: 'strip' });
+    expect(panel.querySelectorAll('[data-type-section="comic-fit"] button')).toHaveLength(4);
+    findLabeledButton(panel, '适合宽度')!.click();
+    expect(onPreferences).toHaveBeenLastCalledWith({ fit: 'width' });
+    for (const patch of onPreferences.mock.calls.map((call) => call[0] as Record<string, unknown>)) {
+      for (const key of Object.keys(patch)) {
+        expect(['mode', 'direction', 'spread', 'fit']).toContain(key);
+      }
+    }
   });
 
   it('falls back to the full flow sheet when comic capabilities are not injected', () => {
@@ -231,6 +299,32 @@ describe('reader chrome panels', () => {
     );
     for (const kind of ['size', 'theme', 'font', 'layout', 'spacing', 'measure']) {
       expect(panel.querySelector(`[data-type-section="${kind}"]`), kind).not.toBeNull();
+    }
+  });
+
+  it('does not paint a comic near-black canvas on flow, pdf, or uninjected comic sheets', () => {
+    for (const formatKind of ['flow', 'pdf', 'comic', undefined] as const) {
+      const panel = document.createElement('div');
+      fillReaderTypographyPanel(
+        panel,
+        DEFAULT_READER_TYPOGRAPHY,
+        'white',
+        defaultReaderChromePanelCopy(),
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+        'paginated',
+        vi.fn(),
+        formatKind,
+      );
+      expect(panel.dataset.comicReader, String(formatKind)).toBeUndefined();
+      expect(panel.dataset.comicCanvas, String(formatKind)).toBeUndefined();
+      expect(panel.getAttribute('data-comic-reader')).toBeNull();
+      expect(panel.style.getPropertyValue('--lightink-comic-canvas')).toBe('');
+      expect(panel.querySelector('[data-comic-reader], [data-comic-canvas]')).toBeNull();
+      expect(panel.querySelector('[data-type-section="comic-direction"]')).toBeNull();
+      expect(panel.querySelector('[data-type-section="comic-spread"]')).toBeNull();
+      expect(panel.querySelector('[data-type-section="comic-fit"]')).toBeNull();
     }
   });
 
@@ -338,7 +432,10 @@ describe('reader chrome panels', () => {
     mountReaderOverlay(overlay, host);
     expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('rgb(246, 246, 246)');
     expect(overlay.style.getPropertyValue('--lightink-accent')).toBe('rgb(26, 26, 26)');
+    expect(overlay.style.getPropertyValue('--lightink-comic-canvas')).toBe('');
     expect(overlay.dataset.readerTheme).toBe('white');
+    expect(overlay.dataset.comicReader).toBeUndefined();
+    expect(overlay.dataset.comicCanvas).toBeUndefined();
     expect(overlay.parentElement).toBe(document.body);
     overlay.remove();
     host.remove();

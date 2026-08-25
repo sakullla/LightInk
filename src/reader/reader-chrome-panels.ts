@@ -36,13 +36,19 @@ export interface ReaderTypographyComicControls {
 export interface ReaderChromePanelComicCopy {
   direction: string;
   spread: string;
+  /** Host copy may still send the v2 key; the sheet treats it as strip. */
   vertical: string;
+  strip?: string;
   paged: string;
   leftToRight: string;
   rightToLeft: string;
   singlePage: string;
   doublePage: string;
+  fit?: string;
   fitWidth: string;
+  fitScreen?: string;
+  fitHeight?: string;
+  fitOriginal?: string;
 }
 
 export interface ReaderChromePanelCopy {
@@ -71,13 +77,18 @@ export function defaultReaderChromePanelComicCopy(): ReaderChromePanelComicCopy 
   return {
     direction: '方向',
     spread: '页面',
-    vertical: '竖向滚动',
+    vertical: '连续条',
+    strip: '连续条',
     paged: '横向翻页',
     leftToRight: '从左到右',
     rightToLeft: '从右到左',
     singlePage: '单页',
     doublePage: '双页',
+    fit: '适配',
     fitWidth: '适合宽度',
+    fitScreen: '适合屏幕',
+    fitHeight: '适合高度',
+    fitOriginal: '原图',
   };
 }
 
@@ -370,9 +381,8 @@ function appendFontSection(
 }
 
 /**
- * Comic sheet: only the preferences the comic renderer already persists via
- * comic-preferences.ts (mode, direction, spread, fit width). No flow controls,
- * and hidden items are simply not rendered — no disabled placeholders.
+ * Comic sheet: only ComicPreferences (mode, direction, spread, fit).
+ * No flow controls, and hidden items are not rendered — no disabled placeholders.
  */
 function fillComicTypographySections(
   panel: HTMLElement,
@@ -380,7 +390,9 @@ function fillComicTypographySections(
   comic: ReaderTypographyComicControls,
 ): void {
   const comicCopy = copy.comic ?? defaultReaderChromePanelComicCopy();
+  const defaults = defaultReaderChromePanelComicCopy();
   const preferences = comic.preferences;
+  const stripLabel = comicCopy.strip ?? comicCopy.vertical;
 
   const layoutSection = section(copy.layout, 'layout');
   const modes = document.createElement('div');
@@ -391,8 +403,8 @@ function fillComicTypographySections(
     modeCard(comicCopy.paged, 'paginated', preferences.mode === 'paged', () =>
       comic.onPreferences({ mode: 'paged' }),
     ),
-    modeCard(comicCopy.vertical, 'scroll', preferences.mode === 'vertical', () =>
-      comic.onPreferences({ mode: 'vertical' }),
+    modeCard(stripLabel, 'scroll', preferences.mode === 'strip', () =>
+      comic.onPreferences({ mode: 'strip' }),
     ),
   );
   layoutSection.appendChild(modes);
@@ -427,11 +439,26 @@ function fillComicTypographySections(
     ]),
   );
   panel.appendChild(
-    comicChoiceSection(comicCopy.fitWidth, 'comic-fit', [
+    comicChoiceSection(comicCopy.fit ?? defaults.fit ?? '适配', 'comic-fit', [
+      {
+        label: comicCopy.fitScreen ?? defaults.fitScreen ?? comicCopy.fitWidth,
+        selected: preferences.fit === 'screen',
+        apply: () => comic.onPreferences({ fit: 'screen' }),
+      },
       {
         label: comicCopy.fitWidth,
-        selected: preferences.fitWidth,
-        apply: () => comic.onPreferences({ fitWidth: !preferences.fitWidth }),
+        selected: preferences.fit === 'width',
+        apply: () => comic.onPreferences({ fit: 'width' }),
+      },
+      {
+        label: comicCopy.fitHeight ?? defaults.fitHeight ?? comicCopy.fitWidth,
+        selected: preferences.fit === 'height',
+        apply: () => comic.onPreferences({ fit: 'height' }),
+      },
+      {
+        label: comicCopy.fitOriginal ?? defaults.fitOriginal ?? comicCopy.fitWidth,
+        selected: preferences.fit === 'original',
+        apply: () => comic.onPreferences({ fit: 'original' }),
       },
     ]),
   );

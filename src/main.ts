@@ -3392,6 +3392,25 @@ function advanceMarkdownReading(direction: 1 | -1): boolean {
     : advanceScrolledScroller(editorScroller, direction);
 }
 
+/**
+ * PDF and strip comics own page-host scroll. Paged comics have no overflow
+ * range, so the window listener turns the spread — unless the surface is
+ * zoomed and is panning. EPUB/editor never set data-comic-reader.
+ */
+function readerPageHostOwnsWindowWheel(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  if (target.closest('.lightink-reader-pages') === null) {
+    return false;
+  }
+  const pagedComic = target.closest('[data-comic-reader="true"][data-comic-mode="paged"]');
+  if (pagedComic === null) {
+    return true;
+  }
+  return pagedComic.getAttribute('data-comic-zoomed') === 'true';
+}
+
 // 触屏优先设备（pointer: coarse）不注册阅读翻页键全局劫持——无实体键盘时
 // 方向键/空格劫持只会拦截无障碍与遥控输入；桌面键鼠路径逐字节保持现状。
 if (!isTouchPrimary) {
@@ -3450,14 +3469,7 @@ window.addEventListener(
     }
     const readerTab = activeReaderTab();
     if (readerTab !== null) {
-      // PDF and vertical comics scroll the page host. Paged comics have no
-      // overflow range, so the window listener must turn the spread.
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest('.lightink-reader-pages') !== null &&
-        target.closest('[data-comic-reader="true"][data-comic-mode="paged"]') === null
-      ) {
+      if (readerPageHostOwnsWindowWheel(event.target)) {
         return;
       }
       event.preventDefault();

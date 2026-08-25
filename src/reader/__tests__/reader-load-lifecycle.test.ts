@@ -2,7 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COMIC_PREFERENCES_STORAGE_KEY } from '../comic-preferences.js';
+import {
+  COMIC_PREFERENCES_STORAGE_KEY,
+  comicBookPreferencesKey,
+} from '../comic-preferences.js';
 import { createReaderView } from '../reader-view.js';
 import type { ReaderInputSource } from '../formats/index.js';
 import { saveLibraryProgressAlias } from '../../library/library-progress.js';
@@ -178,14 +181,64 @@ function clearReaderStorage(): void {
 }
 
 async function buildTinyCbz(): Promise<Uint8Array> {
+  return buildPagedCbz(1);
+}
+
+async function buildPagedCbz(pageCount = 3): Promise<Uint8Array> {
   const zip = new ZipWriter(new Uint8ArrayWriter());
-  await zip.add(
-    '001.png',
-    new Uint8ArrayReader(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
-    { level: 0 },
-  );
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  for (let index = 1; index <= pageCount; index += 1) {
+    await zip.add(
+      `${String(index).padStart(3, '0')}.png`,
+      new Uint8ArrayReader(png),
+      { level: 0 },
+    );
+  }
   return zip.close();
 }
+
+function memoryProgressStore(): ProgressStorage & { readonly values: Record<string, string> } {
+  const values: Record<string, string> = {};
+  return {
+    values,
+    getItem: (key: string) => values[key] ?? null,
+    setItem: (key: string, value: string) => {
+      values[key] = value;
+    },
+  };
+}
+
+function localComicSourceDeps(
+  archive: Uint8Array,
+  extras: Record<string, unknown> = {},
+): Parameters<typeof createReaderView>[1] {
+  return {
+    readBytes: async () => {
+      throw new Error('must not be read');
+    },
+    readSize: async () => archive.byteLength,
+    readChunk: async (_path: string, offset: number, length: number) =>
+      archive.slice(offset, offset + length),
+    getContentHash: async () => {
+      throw new Error('must not hash a comic archive');
+    },
+    readAnnotations: async () => '',
+    ...extras,
+  } as Parameters<typeof createReaderView>[1];
+}
+
+function clickComicStripMode(host: HTMLElement): void {
+  const button = [...host.querySelectorAll<HTMLButtonElement>('.lightink-reader-comic-modes button')].find(
+    (el) => /Vertical|竖向|连续|Strip/i.test(`${el.getAttribute('aria-label') ?? ''} ${el.textContent ?? ''}`),
+  );
+  expect(button).toBeDefined();
+  button!.click();
+}
+
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'scrollIntoView',
+);
 
 function stubComicObjectUrls(): void {
   Object.defineProperty(URL, 'createObjectURL', {
@@ -193,6 +246,10 @@ function stubComicObjectUrls(): void {
     value: vi.fn(() => 'blob:cbz-page'),
   });
   Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     value: vi.fn(),
   });
@@ -208,6 +265,11 @@ afterEach(() => {
   pdfMock.renderPdfInto.mockReset();
   document.body.replaceChildren();
   clearReaderStorage();
+  if (originalScrollIntoView === undefined) {
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  } else {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+  }
 });
 
 describe('Reader load lifecycle', () => {
@@ -526,6 +588,153 @@ describe('Reader load lifecycle', () => {
     expect(getContentHash).not.toHaveBeenCalled();
     expect(second.state.current).toBe(3);
     await second.destroy();
+  });
+
+  it('hands the current progressId to the comic surface and restores page progress by identity', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    const getContentHash = vi.fn(async () => {
+      throw new Error('must not hash a comic archive');
+    });
+    const hostA = document.createElement('div');
+    document.body.appendChild(hostA);
+    const first = createReaderView(
+      hostA,
+      localComicSourceDeps(archive, { progressStorage, preferenceStorage: progressStorage, getContentHash }),
+    );
+
+    await first.load('/comics/alpha.cbz');
+    expect(getContentHash).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    expect(first.advanceReading(1)).toBe(true);
+    expect(first.state.current).toBe(2);
+    await vi.advanceTimersByTimeAsync(400);
+    vi.useRealTimers();
+    clickComicStripMode(hostA);
+    expect(hostA.querySelector<HTMLElement>('.lightink-reader-pages')?.dataset.comicMode).toBe('strip');
+    expect(progressStorage.values[comicBookPreferencesKey('/comics/alpha.cbz')]).toContain(
+      '"mode":"strip"',
+    );
+    expect(progressStorage.values[COMIC_PREFERENCES_STORAGE_KEY]).toBeUndefined();
+    await first.destroy();
+    expect(progressStorage.values[`${READING_PROGRESS_KEY_PREFIX}/comics/alpha.cbz`]).toContain(
+      '"kind":"page"',
+    );
+    expect(progressStorage.values[`${READING_PROGRESS_KEY_PREFIX}/comics/alpha.cbz`]).toContain(
+      '"index":2',
+    );
+
+    const hostB = document.createElement('div');
+    document.body.appendChild(hostB);
+    const other = createReaderView(
+      hostB,
+      localComicSourceDeps(archive, { progressStorage, preferenceStorage: progressStorage, getContentHash }),
+    );
+    await other.load('/comics/beta.cbz');
+    expect(hostB.querySelector<HTMLElement>('.lightink-reader-pages')?.dataset.comicMode).toBe('paged');
+    expect(progressStorage.values[comicBookPreferencesKey('/comics/beta.cbz')]).toBeUndefined();
+    await other.destroy();
+
+    const hostAgain = document.createElement('div');
+    document.body.appendChild(hostAgain);
+    const again = createReaderView(
+      hostAgain,
+      localComicSourceDeps(archive, { progressStorage, preferenceStorage: progressStorage, getContentHash }),
+    );
+    await again.load('/comics/alpha.cbz');
+    expect(getContentHash).not.toHaveBeenCalled();
+    expect(again.state.current).toBe(2);
+    expect(hostAgain.querySelector<HTMLElement>('.lightink-reader-pages')?.dataset.comicMode).toBe(
+      'strip',
+    );
+    await again.destroy();
+  });
+
+  it('keys remote comic preferences and page progress by itemId', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    const getContentHash = vi.fn(async () => {
+      throw new Error('must not hash a comic archive');
+    });
+    const close = vi.fn(async () => undefined);
+    const readRange = vi.fn(async (offset: number, length: number) =>
+      archive.slice(offset, offset + length),
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => {
+        throw new Error('must not be read');
+      },
+      openRemoteSource: async () => ({
+        size: archive.byteLength,
+        identity: { id: 'item-cbz' },
+        access: 'remote' as const,
+        readRange,
+        close,
+      }),
+      progressStorage,
+      preferenceStorage: progressStorage,
+      getContentHash,
+      readAnnotations: async () => '',
+    });
+
+    await view.load({
+      kind: 'remote',
+      itemId: 'item-cbz',
+      resourceId: 'remote-cbz',
+      identity: { id: 'item-cbz' },
+      displayName: 'Remote Comic.cbz',
+      extension: 'cbz',
+      mimeType: 'application/vnd.comicbook+zip',
+    });
+    vi.useFakeTimers();
+    expect(view.advanceReading(1)).toBe(true);
+    await vi.advanceTimersByTimeAsync(400);
+    vi.useRealTimers();
+    clickComicStripMode(host);
+    expect(progressStorage.values[comicBookPreferencesKey('item-cbz')]).toContain('"mode":"strip"');
+    expect(progressStorage.values[COMIC_PREFERENCES_STORAGE_KEY]).toBeUndefined();
+    await view.destroy();
+    expect(getContentHash).not.toHaveBeenCalled();
+    expect(progressStorage.values[`${READING_PROGRESS_KEY_PREFIX}item-cbz`]).toContain('"kind":"page"');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply the comic near-black overlay to EPUB, PDF, or the editor pane', async () => {
+    pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
+      const slot = document.createElement('div');
+      slot.className = 'lightink-reader-page-slot';
+      slot.dataset.pageIndex = '0';
+      stagedHost.appendChild(slot);
+      return fakePdfHandle(1, 3);
+    });
+    const pane = document.createElement('div');
+    pane.id = 'lightink-editor-area';
+    const host = document.createElement('div');
+    pane.appendChild(host);
+    document.body.appendChild(pane);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [{ title: 'One', html: '<p>one</p>' }],
+      }),
+    });
+
+    await view.load('book.epub');
+    expect(host.querySelector('[data-comic-reader="true"]')).toBeNull();
+    expect(host.querySelector('.lightink-reader-comic-chrome')).toBeNull();
+    expect(host.querySelector('[data-comic-canvas]')).toBeNull();
+    expect(pane.querySelector('[data-comic-reader="true"]')).toBeNull();
+
+    await view.load('book.pdf');
+    expect(host.querySelector('[data-comic-reader="true"]')).toBeNull();
+    expect(host.querySelector('.lightink-reader-comic-chrome')).toBeNull();
+    expect(host.querySelector('[data-comic-canvas]')).toBeNull();
+    expect(pane.querySelector('.lightink-reader-comic-overlay')).toBeNull();
+    await view.destroy();
   });
 
   it('loads a remote CBZ through the existing range source without a full download', async () => {
