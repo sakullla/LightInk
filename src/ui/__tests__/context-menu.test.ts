@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  allowEditorContextMenu,
   buildEditorContextMenuItems,
   buildTabContextMenuItems,
   createContextMenu,
@@ -253,5 +254,21 @@ describe('createContextMenu onClose lifecycle', () => {
     } else {
       (globalThis as { window: unknown }).window = originalWindow;
     }
+  });
+});
+
+describe('allowEditorContextMenu', () => {
+  function fakeRoot(attrs: string[] = []): HTMLElement {
+    const set = new Set(attrs);
+    return {
+      hasAttribute: (name: string) => set.has(name),
+    } as HTMLElement;
+  }
+
+  it('keeps the desktop editor menu and hides it on phone chrome', () => {
+    expect(allowEditorContextMenu(null)).toBe(true);
+    expect(allowEditorContextMenu(fakeRoot())).toBe(true);
+    expect(allowEditorContextMenu(fakeRoot(['data-android']))).toBe(false);
+    expect(allowEditorContextMenu(fakeRoot(['data-touch-primary']))).toBe(false);
   });
 });

@@ -553,6 +553,9 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\]\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+    );
     const coarse = coarsePointerCss(css);
     expect(coarse).toMatch(
       /\.lightink-reader-chrome-footer\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
@@ -560,6 +563,20 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     expect(coarse).toMatch(
       /\.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
+  });
+
+  it('lifts the add-note sheet above the IME and keeps the textarea visible', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-modal-overlay:has\(\.lightink-note-dialog\)\s*\{[^}]*padding-bottom:\s*max\([^;]*--lightink-keyboard-inset/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-note-dialog\s*\{[^}]*max-height:\s*calc\(\s*100dvh/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-note-field:has\(\.lightink-note-textarea\)\s*\{[^}]*flex:\s*1 1 auto/,
+    );
+    expect(css).toMatch(/html\[data-keyboard\] \.lightink-note-textarea\s*\{[^}]*min-height:\s*6\.5rem/);
   });
 
   it('defaults touch reader body type to 18px so phone pages are not compact 15px', () => {

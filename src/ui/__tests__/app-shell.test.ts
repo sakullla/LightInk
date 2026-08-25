@@ -501,6 +501,10 @@ describe('createAppShell immersive chrome', () => {
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(true);
     expect(readBtn?.textContent).toBe('阅读/书架');
     expect(readBtn?.hidden).toBe(true);
+    const mobileBack = fakeRoot.querySelector('#lightink-mobile-back-to-shelf');
+    expect(mobileBack?.textContent).toBe('返回书架');
+    mobileBack?.click();
+    expect(calls).toEqual(['editor', 'shelf']);
     expect(readBtn?.className).toContain('lightink-workspace-travel');
     expect(fakeRoot.querySelector('#lightink-toolbar')?.contains(readBtn)).toBe(true);
     expect(
@@ -510,7 +514,7 @@ describe('createAppShell immersive chrome', () => {
     ).toBe(true);
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
     readBtn?.click();
-    expect(calls).toEqual(['editor', 'shelf']);
+    expect(calls).toEqual(['editor', 'shelf', 'shelf']);
   });
 
   it('R6：Android 阅读侧裁剪——「编辑」travel 按钮不挂载，阅读侧 chrome 正常', () => {
@@ -532,6 +536,7 @@ describe('createAppShell immersive chrome', () => {
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
     // 反向「阅读/书架」travel 按钮与书架 chrome 不受影响。
     expect(fakeRoot.querySelector('#lightink-enter-reader-home')).not.toBeNull();
+    expect(fakeRoot.querySelector('#lightink-mobile-back-to-shelf')?.textContent).toBe('返回书架');
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(false);
   });
 

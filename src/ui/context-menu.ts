@@ -35,6 +35,20 @@ export interface ContextMenuOptions {
   onClose?: () => void;
 }
 
+/**
+ * Phone long-press already shows the format toolbar (bold/note/copy).
+ * A second editor menu covers the page; keep the native event cancelled
+ * but do not open this menu on Android / touch-primary.
+ */
+export function allowEditorContextMenu(
+  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
+): boolean {
+  if (root === null) {
+    return true;
+  }
+  return !root.hasAttribute('data-android') && !root.hasAttribute('data-touch-primary');
+}
+
 /** 在 (x,y) 处渲染一个浮动上下文菜单；外部 pointerdown / Esc / 滚动关闭。 */
 export function createContextMenu(
   items: MenuItem[],

@@ -4177,13 +4177,19 @@ describe('LibraryView mobile shelf', () => {
     );
     expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap[^}]*overflow:\s*visible/,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/,
     );
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-height:\s*44px/,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-height:\s*36px/,
     );
     expect(css).toMatch(
       /\[data-library-tab=['"]?shelf['"]?\]\s+\.lightink-library-header-import\s*\{[^}]*display:\s*inline-flex/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-search input\s*\{[^}]*line-height:\s*1\.25/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
     // 书源/目录：nav 与封面墙各自 overflow-y:auto，外层 body overflow:hidden。
     expect(css).toMatch(

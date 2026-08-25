@@ -9,6 +9,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.concurrent.Executors
@@ -117,36 +118,29 @@ class MainActivity : TauriActivity() {
     // 前端契约见 src/file/file-dialog.ts（SAF 桥通道）。
     webView.addJavascriptInterface(SafBridgeJsInterface(), "LightInkSafBridge")
     // Older WebViews report env(safe-area-inset-*) as 0. Push system-bar
-    // insets as CSS pixels so the reader chrome sits below the status bar.
+    // and IME insets as CSS pixels so chrome sits below the status bar and
+    // note dialogs stay above the keyboard (edge-to-edge does not resize).
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, windowInsets ->
-      val bars = windowInsets.getInsets(
-        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-      )
-      val density = view.resources.displayMetrics.density.coerceAtLeast(0.01f)
-      val top = bars.top / density
-      val right = bars.right / density
-      val bottom = bars.bottom / density
-      val left = bars.left / density
-      val script =
-        "(function(){" +
-          "var r=document.documentElement;" +
-          "r.style.setProperty('--lightink-safe-top','${top}px');" +
-          "r.style.setProperty('--lightink-safe-right','${right}px');" +
-          "r.style.setProperty('--lightink-safe-bottom','${bottom}px');" +
-          "r.style.setProperty('--lightink-safe-left','${left}px');" +
-          "window.__lightinkSafeArea={top:$top,right:$right,bottom:$bottom,left:$left};" +
-          "if(window.__lightinkApplySafeArea){" +
-          "window.__lightinkApplySafeArea(window.__lightinkSafeArea);" +
-          "}" +
-          "})()"
-      view.post {
-        val live = this.webView
-        if (live != null && live === view) {
-          live.evaluateJavascript(script, null)
-        }
-      }
+      pushSafeArea(view as WebView, windowInsets)
       windowInsets
     }
+    ViewCompat.setWindowInsetsAnimationCallback(
+      webView,
+      object : WindowInsetsAnimationCompat.Callback(
+        WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE,
+      ) {
+        override fun onProgress(
+          insets: WindowInsetsCompat,
+          runningAnimations: MutableList<WindowInsetsAnimationCompat>,
+        ): WindowInsetsCompat {
+          val live = this@MainActivity.webView
+          if (live != null) {
+            pushSafeArea(live, insets)
+          }
+          return insets
+        }
+      },
+    )
     ViewCompat.requestApplyInsets(webView)
   }
 
@@ -193,6 +187,50 @@ class MainActivity : TauriActivity() {
               .put("message", ex.message ?: "Failed to launch file picker"),
           )
         }
+      }
+    }
+  }
+
+  /**
+   * 把系统栏 / 手势条 / IME 高度写成 CSS 像素。safe-bottom 不含键盘，
+   * 键盘单独走 --lightink-keyboard-inset，避免底栏与弹层重复抬高。
+   */
+  private fun pushSafeArea(view: WebView, windowInsets: WindowInsetsCompat) {
+    val bars = windowInsets.getInsets(
+      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+    )
+    val tappable = windowInsets.getInsets(WindowInsetsCompat.Type.tappableElement())
+    val gestures = windowInsets.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures())
+    val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime())
+    val density = view.resources.displayMetrics.density.coerceAtLeast(0.01f)
+    val top = maxOf(bars.top, tappable.top) / density
+    val right = maxOf(bars.right, tappable.right) / density
+    // Gesture nav often reports systemBars().bottom = 0 while the home
+    // indicator still covers the last 16–48 dp. Floor matches tokens.css.
+    val bottom = maxOf(bars.bottom, tappable.bottom, gestures.bottom, (16 * density).toInt()) / density
+    val left = maxOf(bars.left, tappable.left) / density
+    val keyboard = maxOf(0, ime.bottom) / density
+    val script =
+      "(function(){" +
+        "var r=document.documentElement;" +
+        "r.style.setProperty('--lightink-safe-top','${top}px');" +
+        "r.style.setProperty('--lightink-safe-right','${right}px');" +
+        "r.style.setProperty('--lightink-safe-bottom','${bottom}px');" +
+        "r.style.setProperty('--lightink-safe-left','${left}px');" +
+        "r.style.setProperty('--lightink-keyboard-inset','${keyboard}px');" +
+        "window.__lightinkSafeArea={top:$top,right:$right,bottom:$bottom,left:$left};" +
+        "window.__lightinkKeyboardInset=$keyboard;" +
+        "if(window.__lightinkApplySafeArea){" +
+        "window.__lightinkApplySafeArea(window.__lightinkSafeArea);" +
+        "}" +
+        "if(window.__lightinkApplyKeyboardInset){" +
+        "window.__lightinkApplyKeyboardInset($keyboard);" +
+        "}" +
+        "})()"
+    view.post {
+      val live = this.webView
+      if (live != null && live === view) {
+        live.evaluateJavascript(script, null)
       }
     }
   }

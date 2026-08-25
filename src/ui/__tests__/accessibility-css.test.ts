@@ -27,6 +27,10 @@ describe('accessibility media preferences', () => {
     expect(themeCss).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-context-menu__shortcut\s*\{[^}]*display:\s*none/,
     );
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-editor \.lightink-mobile-back-to-shelf/,
+    );
+    expect(themeCss).toContain('.lightink-mobile-back-to-shelf {\n  display: none;\n}');
     expect(readerCss).toContain('--lightink-keyboard-inset');
   });
 });

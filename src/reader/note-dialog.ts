@@ -27,10 +27,14 @@ export function showNoteDialog(
 ): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     let settled = false;
+    let revealTimer = 0;
     let releaseModal = (): void => overlay.remove();
     const settle = (value: string | null): void => {
       if (settled) return;
       settled = true;
+      if (typeof window !== 'undefined') {
+        window.clearTimeout(revealTimer);
+      }
       releaseModal();
       resolve(value);
     };
@@ -122,6 +126,18 @@ export function showNoteDialog(
       adoptReaderOverlayTheme(overlay, readerHost);
     }
 
+    const revealInput = (): void => {
+      if (typeof textarea.scrollIntoView === 'function') {
+        textarea.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    };
+    textarea.addEventListener('focus', () => {
+      revealInput();
+      if (typeof window !== 'undefined') {
+        window.clearTimeout(revealTimer);
+        revealTimer = window.setTimeout(revealInput, 320);
+      }
+    });
     textarea.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();

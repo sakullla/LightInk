@@ -273,6 +273,84 @@ fn with_linux_caption_provider(f: impl FnOnce(&gtk::CssProvider)) {
     PROVIDER.with(f);
 }
 
+/// Monitor / work-area rectangles as `(left, top, right, bottom)`.
+pub fn constrain_max_extent(
+    monitor: (i32, i32, i32, i32),
+    work: (i32, i32, i32, i32),
+) -> ((i32, i32), (i32, i32)) {
+    (
+        (work.0 - monitor.0, work.1 - monitor.1),
+        (work.2.saturating_sub(work.0), work.3.saturating_sub(work.1)),
+    )
+}
+
+pub fn work_area_needs_fit(
+    position: (i32, i32),
+    size: (u32, u32),
+    work_position: (i32, i32),
+    work_size: (u32, u32),
+) -> bool {
+    const SLACK: i32 = 2;
+    (position.0 - work_position.0).abs() > SLACK
+        || (position.1 - work_position.1).abs() > SLACK
+        || (size.0 as i32 - work_size.0 as i32).abs() > SLACK
+        || (size.1 as i32 - work_size.1 as i32).abs() > SLACK
+}
+
+/// Windows 11 often leaves the taskbar on top after F11. Tao already marks
+/// fullscreen via `ITaskbarList2::MarkFullscreenWindow` and clamps maximize
+/// through `WM_NCCALCSIZE` + `rcWork`. Do not subclass `WM_GETMINMAXINFO`.
+/// If the shell still shows the taskbar, shrink only the fullscreen window
+/// to the monitor work area (MSDN / Raymond Chen: covering the screen is
+/// what triggers fullscreen autodetection).
+#[cfg(windows)]
+pub fn install_main_window_work_area(app: &tauri::App) {
+    use tauri::Manager;
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let tracked = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            fit_fullscreen_to_visible_work_area(&tracked);
+        }
+    });
+    fit_fullscreen_to_visible_work_area(&window);
+}
+
+#[cfg(windows)]
+fn fit_fullscreen_to_visible_work_area(window: &tauri::WebviewWindow) {
+    if !window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let work = monitor.work_area();
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    if !work_area_needs_fit(
+        (position.x, position.y),
+        (size.width, size.height),
+        (work.position.x, work.position.y),
+        (work.size.width, work.size.height),
+    ) {
+        return;
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        work.position.x,
+        work.position.y,
+    ));
+    let _ = window.set_size(tauri::PhysicalSize::new(work.size.width, work.size.height));
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(any(
@@ -283,7 +361,7 @@ mod tests {
         target_os = "openbsd"
     ))]
     use super::linux_caption_css;
-    use super::{parse_hex_colorref, parse_hex_rgb};
+    use super::{constrain_max_extent, parse_hex_colorref, parse_hex_rgb, work_area_needs_fit};
 
     #[test]
     fn parses_sepia_page_to_colorref() {
@@ -309,5 +387,33 @@ mod tests {
         assert!(css.contains("#5c4a32"));
         assert!(linux_caption_css(None, None).is_empty());
         assert!(linux_caption_css(Some("nope"), Some("#121212")).is_empty());
+    }
+
+    #[test]
+    fn fullscreen_extent_stays_inside_the_taskbar_work_area() {
+        assert_eq!(
+            constrain_max_extent((0, 0, 1920, 1080), (0, 0, 1920, 1032)),
+            ((0, 0), (1920, 1032))
+        );
+        assert_eq!(
+            constrain_max_extent((0, 0, 1920, 1080), (48, 0, 1920, 1080)),
+            ((48, 0), (1872, 1080))
+        );
+        expect_no_fit_when_already_on_work_area();
+    }
+
+    fn expect_no_fit_when_already_on_work_area() {
+        assert!(!work_area_needs_fit(
+            (0, 0),
+            (1920, 1032),
+            (0, 0),
+            (1920, 1032)
+        ));
+        assert!(work_area_needs_fit(
+            (0, 0),
+            (1920, 1080),
+            (0, 0),
+            (1920, 1032)
+        ));
     }
 }

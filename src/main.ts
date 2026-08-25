@@ -41,6 +41,7 @@ import {
 import {
   buildEditorContextMenuItems,
   buildTabContextMenuItems,
+  allowEditorContextMenu,
   createContextMenu,
 } from './ui/context-menu.js';
 import { showLinkDialog, showOpenLinkConfirm } from './ui/link-dialog.js';
@@ -1791,7 +1792,12 @@ shell = createAppShell(
     onSetWorkspaceMode,
     onEnterEditor: () => workspace.enterEditor(),
     isEditorEntrySuppressed: () => isAndroidApp,
-    onEnterReaderHome: () => workspace.enterReaderHome(),
+    onEnterReaderHome: () => {
+      workspace.enterReaderHome();
+      if (isAndroidApp || isTouchPrimary) {
+        void libraryView?.show();
+      }
+    },
     isReaderBookOpen: () => workspace.mode === 'reader' && workspace.hasOpenBook,
     listRecents: () =>
       isTauriRuntime() ? invoke<string[]>('list_recents') : Promise.resolve([]),
@@ -3382,6 +3388,12 @@ function consumeLayeredEscapeLeftover(): boolean {
     return false;
   }
   if (!workspace.hasOpenBook) {
+    // Phone: opening Markdown hides the shelf overlay without flipping
+    // workspace. Restore the cover wall instead of exiting the app.
+    if (isAndroidApp && libraryView?.element.hidden === true) {
+      void libraryView.show();
+      return true;
+    }
     return false;
   }
   workspace.returnToShelf();
@@ -3645,6 +3657,9 @@ function showTabContextMenu(tabId: string, x: number, y: number): void {
 
 shell.editorArea.addEventListener('contextmenu', (event) => {
   event.preventDefault();
+  if (!allowEditorContextMenu()) {
+    return;
+  }
   showEditorContextMenu(event.clientX, event.clientY);
 });
 shell.tabBar.addEventListener('contextmenu', (event) => {

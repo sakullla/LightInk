@@ -1098,6 +1098,11 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   color: var(--lightink-comic-fg, #e6e6e6);
 }
 
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-pages[data-comic-reader='true'][data-reader-active='true'] {
+  padding-bottom: var(--lightink-safe-bottom, 0px);
+}
+
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-cbz-slot {
   background: var(--lightink-comic-canvas, #111);
 }
@@ -1917,11 +1922,11 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 :is(html[data-android], html[data-touch-primary]) .lightink-note-dialog {
   width: 100%;
   max-width: 100vw;
-  max-height: min(
-    78vh,
-    calc(
-      100dvh - var(--lightink-safe-top, 0px) - var(--lightink-keyboard-inset, 0px) - 12px
-    )
+  max-height: calc(
+    100dvh - var(--lightink-safe-top, 0px) - max(
+      var(--lightink-keyboard-inset, 0px),
+      var(--lightink-safe-bottom, 0px)
+    ) - 8px
   );
   margin-top: auto;
   border-radius: 16px 16px 0 0;
@@ -1929,7 +1934,11 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 :is(html[data-android], html[data-touch-primary]) .lightink-modal-overlay:has(.lightink-note-dialog) {
   align-items: flex-end;
-  padding-bottom: var(--lightink-keyboard-inset, 0px);
+  padding-top: var(--lightink-safe-top, 0px);
+  padding-bottom: max(
+    var(--lightink-keyboard-inset, 0px),
+    var(--lightink-safe-bottom, 0px)
+  );
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-note-close,
@@ -1938,9 +1947,26 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   min-height: 44px;
 }
 
+:is(html[data-android], html[data-touch-primary]) .lightink-note-field:has(.lightink-note-textarea) {
+  flex: 1 1 auto;
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-note-textarea {
-  min-height: 8rem;
+  flex: 1 1 auto;
+  min-height: 5.5rem;
   font-size: 16px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-note-hint {
+  display: none;
+}
+
+html[data-keyboard] .lightink-note-quote {
+  max-height: 3.25rem;
+}
+
+html[data-keyboard] .lightink-note-textarea {
+  min-height: 6.5rem;
 }
 
 .lightink-reader[data-reader-theme='white'] {

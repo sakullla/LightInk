@@ -62,6 +62,8 @@ pub fn run() {
         // 无条件调用即可保持桌面行为不变且无警告。
         .setup(|app| {
             credential_store::init_mobile_store(app.handle());
+            #[cfg(windows)]
+            window_chrome::install_main_window_work_area(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

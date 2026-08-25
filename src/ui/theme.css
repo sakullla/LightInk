@@ -153,7 +153,7 @@ html[data-display='xuhd'] {
 #app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
 }
 
 :is(html[data-android], html[data-touch-primary]) html,
@@ -412,6 +412,41 @@ html[data-display='xuhd'] {
 
 .lightink-workspace-travel[hidden] {
   display: none !important;
+}
+
+.lightink-mobile-back-to-shelf {
+  display: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor .lightink-mobile-back-to-shelf,
+:is(html[data-android], html[data-touch-primary])
+  #app.is-workspace-shelf:has(.lightink-library[hidden])
+  .lightink-mobile-back-to-shelf {
+  position: fixed;
+  top: calc(var(--lightink-safe-top, 0px) + 8px);
+  left: max(8px, var(--lightink-safe-left, 0px));
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: var(--lightink-type-ui, 0.875rem);
+  font-weight: 600;
+}
+
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor #lightink-editor-area,
+:is(html[data-android], html[data-touch-primary])
+  #app.is-workspace-shelf:has(.lightink-library[hidden])
+  #lightink-editor-area {
+  padding-top: calc(var(--lightink-safe-top, 0px) + 56px);
 }
 
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */

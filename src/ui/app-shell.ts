@@ -1127,16 +1127,26 @@ export function createAppShell(
     readerShell.appendChild(enterEditorBtn);
   }
 
+  const mobileBackToShelf = document.createElement('button');
+  mobileBackToShelf.type = 'button';
+  mobileBackToShelf.id = 'lightink-mobile-back-to-shelf';
+  mobileBackToShelf.className = 'lightink-mobile-back-to-shelf';
+  mobileBackToShelf.addEventListener('click', () => enterReaderHomeWorkspace(actions));
+
   function syncTravelLabels(): void {
     const locale = actions.getLocale();
     const editorLabel = workspaceTravelLabel('editor', locale);
     const readerHomeLabel = workspaceTravelLabel('readerHome', locale);
+    const backToShelfLabel = locale === 'en' ? 'Back to Shelf' : '返回书架';
     enterEditorBtn.textContent = editorLabel;
     enterEditorBtn.title = editorLabel;
     enterEditorBtn.setAttribute('aria-label', editorLabel);
     enterReaderHomeBtn.textContent = readerHomeLabel;
     enterReaderHomeBtn.title = readerHomeLabel;
     enterReaderHomeBtn.setAttribute('aria-label', readerHomeLabel);
+    mobileBackToShelf.textContent = backToShelfLabel;
+    mobileBackToShelf.title = backToShelfLabel;
+    mobileBackToShelf.setAttribute('aria-label', backToShelfLabel);
   }
   syncTravelLabels();
 
@@ -1214,7 +1224,15 @@ export function createAppShell(
 
   chromeHost.replaceChildren(menuTrigger, toolbar);
   tabsHost.replaceChildren(tabsTrigger, tabBar);
-  root.replaceChildren(titlebar.element, chromeHost, tabsHost, readerShell, mainRow, statusBarHost);
+  root.replaceChildren(
+    titlebar.element,
+    chromeHost,
+    tabsHost,
+    readerShell,
+    mainRow,
+    mobileBackToShelf,
+    statusBarHost,
+  );
   root.classList.add('lightink-immersive');
 
   let lastWorkspaceSurface: WorkspaceSnapshot['surface'] | null = null;
