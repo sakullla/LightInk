@@ -6,6 +6,7 @@ import {
   COMIC_PREFERENCES_STORAGE_KEY,
   comicBookPreferencesKey,
 } from '../comic-preferences.js';
+import { translate, type MessageKey } from '../../i18n/messages.js';
 import { createReaderView } from '../reader-view.js';
 import type { ReaderInputSource } from '../formats/index.js';
 import { saveLibraryProgressAlias } from '../../library/library-progress.js';
@@ -704,6 +705,8 @@ describe('Reader load lifecycle', () => {
   });
 
   it('does not apply the comic near-black overlay to EPUB, PDF, or the editor pane', async () => {
+    stubComicObjectUrls();
+    const archive = await buildTinyCbz();
     pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
       const slot = document.createElement('div');
       slot.className = 'lightink-reader-page-slot';
@@ -716,15 +719,46 @@ describe('Reader load lifecycle', () => {
     const host = document.createElement('div');
     pane.appendChild(host);
     document.body.appendChild(pane);
-    const view = createReaderView(host, {
-      readBytes: async () => bytes('unused'),
-      parseContent: async () => ({
-        chapters: [{ title: 'One', html: '<p>one</p>' }],
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        parseContent: async () => ({
+          chapters: [{ title: 'One', html: '<p>one</p>' }],
+        }),
+        getContentHash: async (path: string) => {
+          if (/\.(cbz|cbr|cb7)$/i.test(path)) {
+            throw new Error('must not hash a comic archive');
+          }
+          return 'hash-flow';
+        },
+        readBytes: async (path: string) => {
+          if (/\.(cbz|cbr|cb7)$/i.test(path)) {
+            throw new Error('must not be read');
+          }
+          return bytes('unused');
+        },
+        readSize: async (path: string) =>
+          /\.(cbz|cbr|cb7)$/i.test(path) ? archive.byteLength : 4,
+        readChunk: async (path: string, offset: number, length: number) => {
+          if (/\.(cbz|cbr|cb7)$/i.test(path)) {
+            return archive.slice(offset, offset + length);
+          }
+          return bytes('unused');
+        },
+        t: (key: MessageKey) => translate('zh-CN', key),
       }),
-    });
+    );
+
+    await view.load('/comics/vol.cbz');
+    expect(host.querySelector('[data-comic-reader="true"]')).not.toBeNull();
+    expect(host.querySelector('.lightink-reader')?.dataset.comicReader).toBe('true');
+    expect(host.querySelector('[data-comic-canvas]')).not.toBeNull();
 
     await view.load('book.epub');
     expect(host.querySelector('[data-comic-reader="true"]')).toBeNull();
+    expect(host.querySelector('.lightink-reader')?.getAttribute('data-comic-reader')).toBeNull();
+    expect(host.querySelector('.lightink-reader-pages')?.getAttribute('data-comic-reader')).toBeNull();
+    expect(host.querySelector('.lightink-reader-pages')?.getAttribute('data-comic-canvas')).toBeNull();
     expect(host.querySelector('.lightink-reader-comic-chrome')).toBeNull();
     expect(host.querySelector('[data-comic-canvas]')).toBeNull();
     expect(pane.querySelector('[data-comic-reader="true"]')).toBeNull();
@@ -734,6 +768,36 @@ describe('Reader load lifecycle', () => {
     expect(host.querySelector('.lightink-reader-comic-chrome')).toBeNull();
     expect(host.querySelector('[data-comic-canvas]')).toBeNull();
     expect(pane.querySelector('.lightink-reader-comic-overlay')).toBeNull();
+    await view.destroy();
+  });
+
+  it('injects strip and four-fit labels into the live comic typography sheet', async () => {
+    stubComicObjectUrls();
+    const archive = await buildTinyCbz();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        t: (key: MessageKey) => translate('zh-CN', key),
+      }),
+    );
+
+    await view.load('/comics/vol.cbz');
+    revealReaderChrome(host);
+    const typography = chromeControlByLabel(host, '排版');
+    expect(typography).toBeDefined();
+    typography!.click();
+    const panel = document.querySelector<HTMLElement>('[data-panel="typography"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.hidden).toBe(false);
+    expect(panel!.textContent).toContain('连续条');
+    expect(panel!.textContent).not.toContain('竖向滚动');
+    expect(panel!.textContent).toContain('适合屏幕');
+    expect(panel!.textContent).toContain('适合宽度');
+    expect(panel!.textContent).toContain('适合高度');
+    expect(panel!.textContent).toContain('原图');
+    expect(panel!.querySelectorAll('[data-type-section="comic-fit"] button')).toHaveLength(4);
     await view.destroy();
   });
 

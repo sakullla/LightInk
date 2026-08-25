@@ -185,6 +185,55 @@ function comicProgressIdForTarget(target: ReaderTarget): string {
   return target.kind === 'remote' ? target.itemId : target.path;
 }
 
+const COMIC_HOST_DATASET_KEYS = [
+  'comicReader',
+  'comicChrome',
+  'comicCanvas',
+  'comicMode',
+  'comicDirection',
+  'comicSpread',
+  'comicFit',
+  'comicFitWidth',
+  'comicVisible',
+  'comicZoomed',
+  'comicScale',
+  'comicPanning',
+] as const;
+
+/** Drop leftover comic surface attrs so EPUB/PDF do not keep :has() / dock rules. */
+function clearComicHostDataset(element: HTMLElement): void {
+  for (const key of COMIC_HOST_DATASET_KEYS) {
+    delete element.dataset[key];
+  }
+}
+
+/** Strip/fit copy the i18n table does not own; sniff locale from an existing key. */
+function comicLocaleLabels(t: (key: MessageKey) => string): {
+  strip: string;
+  fit: string;
+  fitScreen: string;
+  fitHeight: string;
+  fitOriginal: string;
+} {
+  const chineseChrome = t('reader.comic.paged') === '横向翻页';
+  if (chineseChrome) {
+    return {
+      strip: '连续条',
+      fit: '适配',
+      fitScreen: '适合屏幕',
+      fitHeight: '适合高度',
+      fitOriginal: '原图',
+    };
+  }
+  return {
+    strip: 'Continuous strip',
+    fit: 'Fit',
+    fitScreen: 'Fit screen',
+    fitHeight: 'Fit height',
+    fitOriginal: 'Original',
+  };
+}
+
 function canMountReaderChrome(): boolean {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
     return false;
@@ -2542,7 +2591,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     textLayerObserver = null;
     scrollHost.hidden = false;
     pageHost.hidden = true;
+    const leavingComic =
+      pageHost.dataset.comicReader === 'true' || root.dataset.comicReader === 'true';
     delete pageHost.dataset.readerActive;
+    if (leavingComic) {
+      clearComicHostDataset(pageHost);
+      delete root.dataset.comicReader;
+      pageHost.replaceChildren();
+      syncChromeRevealAttr();
+    }
     // 页宿主滚动合并帧作废（T3 review 遗留：交换点与 destroy 对称 cancel）。
     pageScrollCoordinator?.cancel();
     // T6 review P3：新文档渲染前作废待 settle 的缩放刷新与推迟中的锚点恢复
@@ -2588,6 +2645,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }))
       : source;
     if (archiveSource === null) throw new ParseError('漫画归档字节源不可用');
+    const extraComicLabels = comicLocaleLabels(t);
     const cbz = await renderCbzInto(archiveSource, stagedHost, signal, {
       preferenceStorage,
       progressId: comicProgressIdForTarget(target),
@@ -2597,12 +2655,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         previous: t('reader.comic.previous'),
         next: t('reader.comic.next'),
         vertical: t('reader.comic.vertical'),
+        strip: extraComicLabels.strip,
         paged: t('reader.comic.paged'),
         leftToRight: t('reader.comic.ltr'),
         rightToLeft: t('reader.comic.rtl'),
         singlePage: t('reader.comic.single'),
         doublePage: t('reader.comic.double'),
         fitWidth: t('reader.comic.fitWidth'),
+        fitScreen: extraComicLabels.fitScreen,
+        fitHeight: extraComicLabels.fitHeight,
+        fitOriginal: extraComicLabels.fitOriginal,
         pageSlider: t('reader.comic.pageSlider'),
         toggleChrome: t('reader.comic.toggleChrome'),
         imageDecodeFailed: t('reader.comic.imageDecodeFailed'),
@@ -3114,7 +3176,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     renderTypographyPanel();
   };
 
-  const readerPanelCopy = (): ReaderChromePanelCopy => ({
+  const readerPanelCopy = (): ReaderChromePanelCopy => {
+    const extraComicLabels = comicLocaleLabels(t);
+    return {
     tocTitle: t('reader.toc.title'),
     tocEmpty: t('outline.empty'),
     typeTitle: t('reader.type.title'),
@@ -3157,14 +3221,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       direction: t('reader.comic.direction'),
       spread: t('reader.comic.spread'),
       vertical: t('reader.comic.vertical'),
+      strip: extraComicLabels.strip,
       paged: t('reader.comic.paged'),
       leftToRight: t('reader.comic.ltr'),
       rightToLeft: t('reader.comic.rtl'),
       singlePage: t('reader.comic.single'),
       doublePage: t('reader.comic.double'),
+      fit: extraComicLabels.fit,
       fitWidth: t('reader.comic.fitWidth'),
+      fitScreen: extraComicLabels.fitScreen,
+      fitHeight: extraComicLabels.fitHeight,
+      fitOriginal: extraComicLabels.fitOriginal,
     },
-  });
+  };
+  };
 
   const renderTocPanel = (): void => {
     const current =
