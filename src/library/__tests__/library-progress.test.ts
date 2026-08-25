@@ -96,6 +96,37 @@ describe('projectLibraryProgress', () => {
     });
   });
 
+  it('does not let a managed shelf row inherit another book\'s path-keyed progress', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, '/books/shared.epub', flowProgress({ index: 473, ratio: 1, total: 474 }));
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'managed:book-a',
+        localPath: '/books/shared.epub',
+      }),
+    ).toEqual({ status: 'not-started' });
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'managed:book-b',
+        localPath: '/books/shared.epub',
+      }),
+    ).toEqual({ status: 'not-started' });
+
+    saveLibraryProgressAlias(storage, 'managed:book-a', '/books/shared.epub');
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'managed:book-a',
+        localPath: '/books/shared.epub',
+      }),
+    ).toMatchObject({ status: 'in-progress', index: 473 });
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'managed:book-b',
+        localPath: '/books/shared.epub',
+      }),
+    ).toEqual({ status: 'not-started' });
+  });
+
   it('joins through the item.id alias after open, not another book\'s path', () => {
     const storage = memoryStorage();
     saveReadingProgress(storage, 'content-hash-a', flowProgress({ index: 3, ratio: 0.2 }));
@@ -110,6 +141,10 @@ describe('projectLibraryProgress', () => {
       index: 3,
       ratio: 0.2,
     });
+    expect(
+      projectLibraryProgress(storage, { id: 'item-b', localPath: '/books/b.epub' }),
+    ).toEqual({ status: 'not-started' });
+    saveLibraryProgressAlias(storage, 'item-b', '/books/b.epub');
     expect(
       projectLibraryProgress(storage, { id: 'item-b', localPath: '/books/b.epub' }),
     ).toEqual({

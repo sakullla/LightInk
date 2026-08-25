@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 
-import { applySafeAreaInsets, bindSafeAreaBridge } from '../safe-area.js';
+import { applySafeAreaInsets, bindSafeAreaBridge, bindVisualViewportInsets } from '../safe-area.js';
 
 describe('applySafeAreaInsets', () => {
   it('writes CSS pixel variables used by reader chrome', () => {
@@ -26,5 +26,30 @@ describe('bindSafeAreaBridge', () => {
     expect(root.style.getPropertyValue('--lightink-safe-left')).toBe('4px');
     release();
     expect(host.__lightinkApplySafeArea).toBeUndefined();
+  });
+});
+
+describe('bindVisualViewportInsets', () => {
+  it('writes the obscured keyboard height from visualViewport', () => {
+    const root = document.createElement('html');
+    const listeners: Array<(type: string, fn: () => void) => void> = [];
+    const viewport = {
+      height: 400,
+      offsetTop: 0,
+      addEventListener: (type: string, fn: () => void) => {
+        listeners.push(() => fn());
+        void type;
+      },
+      removeEventListener: () => undefined,
+    };
+    const host = {
+      innerHeight: 720,
+      visualViewport: viewport,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    } as unknown as Window;
+    const release = bindVisualViewportInsets(root, host);
+    expect(root.style.getPropertyValue('--lightink-keyboard-inset')).toBe('320px');
+    release();
   });
 });

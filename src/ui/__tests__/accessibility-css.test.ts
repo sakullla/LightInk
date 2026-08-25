@@ -18,4 +18,15 @@ describe('accessibility media preferences', () => {
     expect(readerCss).toContain('@media (forced-colors: active)');
     expect(readerCss).toContain('color: HighlightText');
   });
+
+  it('locks the mobile viewport and lifts note/selection chrome above the keyboard', () => {
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\s*\{[^}]*height:\s*100dvh[^}]*overflow:\s*hidden/,
+    );
+    expect(themeCss).toContain('.lightink-context-menu__shortcut');
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-context-menu__shortcut\s*\{[^}]*display:\s*none/,
+    );
+    expect(readerCss).toContain('--lightink-keyboard-inset');
+  });
 });

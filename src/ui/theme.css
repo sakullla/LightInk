@@ -156,6 +156,20 @@ html[data-display='xuhd'] {
   height: 100vh;
 }
 
+:is(html[data-android], html[data-touch-primary]) html,
+:is(html[data-android], html[data-touch-primary]) body {
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) #app {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
 #lightink-status-bar-host[hidden] {
   display: none;
 }
@@ -3239,6 +3253,29 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
     min-height: 40px;
     padding: 8px 16px;
   }
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-context-menu {
+  left: 8px !important;
+  right: 8px !important;
+  bottom: calc(8px + var(--lightink-safe-bottom, 0px) + var(--lightink-keyboard-inset, 0px)) !important;
+  top: auto !important;
+  width: auto;
+  max-width: none;
+  max-height: min(46dvh, calc(100dvh - var(--lightink-keyboard-inset, 0px) - 24px));
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 16px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-context-menu__shortcut {
+  display: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-context-menu__item {
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 15px;
 }
 
 /* 360dp 竖屏：上下文菜单与模态不出屏、可滚动。 */

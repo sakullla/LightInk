@@ -105,10 +105,21 @@ function resolveProgressId(
   if (alias !== null) {
     return alias;
   }
-  if (query.localPath != null && query.localPath !== '') {
+  // Path fallback is only for the local: identity itself. Managed / OPDS
+  // rows must wait for an open-book alias, or two books that share a path
+  // (common on Android imports) will show the same chapter and percent.
+  if (query.localPath != null && query.localPath !== '' && canUseLocalPathFallback(query)) {
     return query.localPath;
   }
   return null;
+}
+
+function canUseLocalPathFallback(query: LibraryProgressQuery): boolean {
+  const path = query.localPath;
+  if (path == null || path === '') {
+    return false;
+  }
+  return query.id === path || query.id === `local:${path}` || query.id.startsWith('local:');
 }
 
 function progressPercent(

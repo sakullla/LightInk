@@ -61,9 +61,49 @@ export function bindSafeAreaBridge(
   ) {
     apply(existing);
   }
+  const unbindKeyboard = bindVisualViewportInsets(root, host);
   return () => {
+    unbindKeyboard();
     if (host.__lightinkApplySafeArea === apply) {
       delete host.__lightinkApplySafeArea;
     }
+  };
+}
+
+/**
+ * IME / visualViewport overlap. Official WebView practice is to resize the
+ * visual viewport; we expose the obscured bottom as `--lightink-keyboard-inset`
+ * so fixed dialogs can sit above the keyboard.
+ */
+export function bindVisualViewportInsets(
+  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
+  host: Window | null = typeof window !== 'undefined' ? window : null,
+): () => void {
+  if (root === null || host === null) {
+    return () => undefined;
+  }
+  const viewport = host.visualViewport;
+  const apply = (): void => {
+    const keyboard =
+      viewport == null
+        ? 0
+        : Math.max(0, host.innerHeight - viewport.height - viewport.offsetTop);
+    root.style.setProperty('--lightink-keyboard-inset', cssPx(keyboard));
+  };
+  apply();
+  const canListen =
+    viewport != null &&
+    typeof viewport.addEventListener === 'function' &&
+    typeof host.addEventListener === 'function';
+  if (!canListen || viewport == null) {
+    return () => undefined;
+  }
+  viewport.addEventListener('resize', apply);
+  viewport.addEventListener('scroll', apply);
+  host.addEventListener('resize', apply);
+  return () => {
+    viewport.removeEventListener('resize', apply);
+    viewport.removeEventListener('scroll', apply);
+    host.removeEventListener('resize', apply);
   };
 }

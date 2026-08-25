@@ -1879,13 +1879,19 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 :is(html[data-android], html[data-touch-primary]) .lightink-note-dialog {
   width: 100%;
   max-width: 100vw;
-  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px)));
+  max-height: min(
+    78vh,
+    calc(
+      100dvh - var(--lightink-safe-top, 0px) - var(--lightink-keyboard-inset, 0px) - 12px
+    )
+  );
   margin-top: auto;
   border-radius: 16px 16px 0 0;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-modal-overlay:has(.lightink-note-dialog) {
   align-items: flex-end;
+  padding-bottom: var(--lightink-keyboard-inset, 0px);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-note-close,

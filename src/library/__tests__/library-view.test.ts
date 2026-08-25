@@ -4146,7 +4146,7 @@ describe('LibraryView mobile shelf', () => {
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/,
     );
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(\s*auto-fill/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(\s*2,\s*minmax\(0,\s*1fr\)/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*overflow-y:\s*auto/,
@@ -4177,7 +4177,7 @@ describe('LibraryView mobile shelf', () => {
     );
     expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*max-height:\s*52px[^}]*overflow-x:\s*auto/,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap[^}]*overflow:\s*visible/,
     );
     expect(css).toMatch(
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-height:\s*44px/,

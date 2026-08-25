@@ -2622,9 +2622,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    min-height: calc(var(--lightink-safe-top, 0px) + 52px);
+    min-height: 0;
+    height: auto;
+    overflow: visible;
     padding: calc(var(--lightink-safe-top, 0px) + 8px) 12px
-      10px max(12px, var(--lightink-safe-left, 0px));
+      8px max(12px, var(--lightink-safe-left, 0px));
+    row-gap: 10px;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-brand {
@@ -2640,7 +2643,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     grid-template-rows: auto auto;
     align-items: center;
     column-gap: 8px;
-    row-gap: 8px;
+    row-gap: 10px;
     width: 100%;
     min-width: 0;
     min-height: 0;
@@ -2905,13 +2908,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library-shelf-chips {
     display: flex;
     flex: 0 0 auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    max-height: 52px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 4px 16px 2px;
+    max-height: none;
+    overflow: visible;
+    padding: 2px 16px 10px;
     -webkit-overflow-scrolling: touch;
   }
 
@@ -2952,10 +2954,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-cover-wall {
     flex: 1 1 auto;
-    grid-template-columns: repeat(
-      auto-fill,
-      minmax(var(--lightink-library-cover-min), var(--lightink-library-cover-max))
-    );
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-auto-rows: max-content;
     justify-content: start;
     align-content: start;
@@ -2967,6 +2966,14 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 8px 16px calc(28px + var(--lightink-safe-bottom, 0px));
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cover-wall
+    > .lightink-library-item:not(.lightink-library-catalog-folder) {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-workarea {
