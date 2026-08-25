@@ -2792,7 +2792,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const gatePagedWheel = createPagedWheelGate();
 
-  const advanceReading = (direction: 1 | -1): boolean => {
+  const advanceReading = (direction: 1 | -1, navKey?: string): boolean => {
     if (pdfHandle !== null) {
       pdfHandle.scrollToPage(pdfHandle.controller.page + direction);
       syncPageState();
@@ -2801,11 +2801,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return true;
     }
     if (cbzHandle !== null) {
-      if (direction > 0) cbzHandle.nextPage();
+      const pageDelta =
+        (navKey === 'ArrowLeft' || navKey === 'ArrowRight') &&
+        cbzHandle.preferences.direction === 'rtl'
+          ? ((direction === 1 ? -1 : 1) as 1 | -1)
+          : direction;
+      if (pageDelta > 0) cbzHandle.nextPage();
       else cbzHandle.previousPage();
       syncPageState();
       schedulePersistReadingProgress();
-      playReaderPageTurn(root, direction);
+      playReaderPageTurn(root, pageDelta);
       return true;
     }
     const moved = advanceReadingContent(direction);

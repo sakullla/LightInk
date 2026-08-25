@@ -3432,7 +3432,7 @@ if (!isTouchPrimary) {
       }
       const readerTab = activeReaderTab();
       if (readerTab !== null) {
-        if (readerTab.reader.advanceReading(direction)) {
+        if (readerTab.reader.advanceReading(direction, event.key)) {
           event.preventDefault();
         }
         return;

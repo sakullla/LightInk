@@ -704,6 +704,42 @@ describe('Reader load lifecycle', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('inverts only ArrowLeft/ArrowRight for RTL comics', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    progressStorage.setItem(
+      COMIC_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'rtl',
+        spread: 'single',
+        fit: 'screen',
+      }),
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        progressStorage,
+        preferenceStorage: progressStorage,
+      }),
+    );
+
+    await view.load('/comics/rtl.cbz');
+    expect(view.state.current).toBe(1);
+    expect(view.advanceReading(-1, 'ArrowLeft')).toBe(true);
+    expect(view.state.current).toBe(2);
+    expect(view.advanceReading(1, 'ArrowRight')).toBe(true);
+    expect(view.state.current).toBe(1);
+    expect(view.advanceReading(1)).toBe(true);
+    expect(view.state.current).toBe(2);
+    expect(view.advanceReading(1, ' ')).toBe(true);
+    expect(view.state.current).toBe(3);
+    await view.destroy();
+  });
+
   it('does not apply the comic near-black overlay to EPUB, PDF, or the editor pane', async () => {
     stubComicObjectUrls();
     const archive = await buildTinyCbz();

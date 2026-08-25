@@ -59,6 +59,7 @@ const COMIC_ZOOM_MAX = 5;
 const COMIC_ZOOM_TOGGLE = 2;
 const COMIC_DOUBLE_TAP_MS = 280;
 const COMIC_PAN_SLOP = 8;
+const COMIC_SWIPE_SLOP = 40;
 const COMIC_INTERACTIVE_SELECTOR =
   '.lightink-reader-comic-chrome, .lightink-reader-comic-error, input, button, a';
 
@@ -1187,6 +1188,7 @@ export async function renderCbzInto(
     let pinchDistance = 0;
     let pinchScale = 1;
     let panOrigin: { x: number; y: number; viewX: number; viewY: number } | null = null;
+    let swipeOrigin: { x: number; y: number } | null = null;
     let gestureMoved = false;
     let lastGestureUp: { x: number; y: number } | null = null;
     let pendingTap: ReturnType<typeof setTimeout> | null = null;
@@ -1266,11 +1268,14 @@ export async function renderCbzInto(
         pinchDistance = comicPointerDistance(points[0]!, points[1]!);
         pinchScale = viewScale;
         panOrigin = null;
+        swipeOrigin = null;
         return;
       }
       if (viewScale > 1) {
         panOrigin = { x: event.clientX, y: event.clientY, viewX, viewY };
         container.setPointerCapture?.(event.pointerId);
+      } else if (preferences.mode === 'paged') {
+        swipeOrigin = { x: event.clientX, y: event.clientY };
       }
     };
 
@@ -1303,6 +1308,15 @@ export async function renderCbzInto(
         viewY = panOrigin.viewY + dy;
         applyViewTransform();
         event.preventDefault();
+        return;
+      }
+      if (swipeOrigin !== null && viewScale <= 1 && preferences.mode === 'paged') {
+        const dx = event.clientX - swipeOrigin.x;
+        const dy = event.clientY - swipeOrigin.y;
+        if (Math.abs(dx) >= COMIC_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
+          gestureMoved = true;
+          lastGestureUp = { x: event.clientX, y: event.clientY };
+        }
       }
     };
 
@@ -1314,9 +1328,25 @@ export async function renderCbzInto(
         pinchScale = viewScale;
       }
       if (activePointers.size === 0) {
+        const swipeStart = swipeOrigin;
         panOrigin = null;
+        swipeOrigin = null;
         setPanning(false);
-        if (gestureMoved) {
+        if (
+          gestureMoved &&
+          swipeStart !== null &&
+          viewScale <= 1 &&
+          preferences.mode === 'paged'
+        ) {
+          const dx = event.clientX - swipeStart.x;
+          const dy = event.clientY - swipeStart.y;
+          lastGestureUp = { x: event.clientX, y: event.clientY };
+          lastTap = null;
+          if (Math.abs(dx) >= COMIC_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
+            const forward = preferences.direction === 'rtl' ? dx > 0 : dx < 0;
+            advancePage(forward ? 1 : -1);
+          }
+        } else if (gestureMoved) {
           lastGestureUp = { x: event.clientX, y: event.clientY };
           lastTap = null;
         } else if (event.pointerType === 'touch') {

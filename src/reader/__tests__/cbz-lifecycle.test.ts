@@ -191,6 +191,34 @@ function pinchByPointers(container: HTMLElement, expand: boolean): void {
   });
 }
 
+function swipeCanvas(
+  container: HTMLElement,
+  fromX: number,
+  toX: number,
+  pointerType: 'mouse' | 'touch' = 'touch',
+): void {
+  pointerOn(container, 'pointerdown', {
+    pointerId: 1,
+    pointerType,
+    buttons: 1,
+    clientX: fromX,
+    clientY: 400,
+  });
+  pointerOn(container, 'pointermove', {
+    pointerId: 1,
+    pointerType,
+    buttons: 1,
+    clientX: toX,
+    clientY: 400,
+  });
+  pointerOn(container, 'pointerup', {
+    pointerId: 1,
+    pointerType,
+    clientX: toX,
+    clientY: 400,
+  });
+}
+
 function dragCanvas(container: HTMLElement, pointerType: 'mouse' | 'touch'): void {
   const surface = comicSurface(container);
   pointerOn(surface, 'pointerdown', {
@@ -547,6 +575,45 @@ describe('CBZ page materialization', () => {
     expect(handle.currentPage).toBe(1);
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('hidden');
+    expect(handle.currentPage).toBe(1);
+    await handle.destroy();
+  });
+
+  it('turns paged scale-1 swipes with the reading direction and ignores the release click', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+
+    swipeCanvas(container, 800, 200);
+    expect(handle.currentPage).toBe(2);
+    clickCanvas(container, 200);
+    expect(handle.currentPage).toBe(2);
+    swipeCanvas(container, 200, 800);
+    expect(handle.currentPage).toBe(1);
+    await handle.destroy();
+
+    const rtl = document.createElement('div');
+    sizeCanvas(rtl);
+    const rtlHandle = await renderCbzInto(await buildCbz(4), rtl, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'rtl', spread: 'single' }),
+    });
+    swipeCanvas(rtl, 200, 800);
+    expect(rtlHandle.currentPage).toBe(2);
+    clickCanvas(rtl, 800);
+    expect(rtlHandle.currentPage).toBe(2);
+    await rtlHandle.destroy();
+  });
+
+  it('does not treat a scale-1 strip swipe as a page turn', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ mode: 'strip' }),
+    });
+    swipeCanvas(container, 800, 200);
     expect(handle.currentPage).toBe(1);
     await handle.destroy();
   });
