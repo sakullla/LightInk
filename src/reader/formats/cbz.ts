@@ -27,20 +27,31 @@ import {
   rafFrameScheduler,
 } from '../../ui/reading-layout.js';
 import {
+  applyComicCropDisplay,
   comicDisplayWidthPx,
+  COMIC_CROP_NONE,
+  comicCroppedSize,
   createComicPageElement,
   compareComicPaths,
+  detectComicCropInsets,
+  isComicCropEmpty,
   isComicImagePath,
   isIgnoredComicPath,
   orderComicPages,
   parseComicInfo,
   selectComicCacheWindow,
+  type ComicCropInsets,
   type ComicMetadata,
 } from '../comic-model.js';
 import {
   advanceComicPage,
+  clampComicViewOffset,
+  comicPageFromProgress,
+  comicSpreadIndex,
+  comicSpreadList,
   comicSpreadStart,
   comicVisiblePages,
+  isComicLandscapeSize,
   loadComicPreferences,
   saveComicPreferences,
   type ComicFit,
@@ -54,6 +65,7 @@ const DEFAULT_COMIC_CACHE_BUDGET = 96 * 1024 * 1024;
 const MAX_COMIC_INFO_BYTES = 1024 * 1024;
 const COMIC_CHROME_IDLE_MS = 2800;
 const COMIC_EDGE_ZONE = 0.28;
+const COMIC_SYSTEM_EDGE_PX = 24;
 const COMIC_ZOOM_MIN = 1;
 const COMIC_ZOOM_MAX = 5;
 const COMIC_ZOOM_TOGGLE = 2;
@@ -85,6 +97,9 @@ export interface ComicToolbarLabels {
   readonly fitScreen?: string;
   readonly fitHeight?: string;
   readonly fitOriginal?: string;
+  readonly cropMargins: string;
+  readonly keepMargins?: string;
+  readonly margins?: string;
   readonly pageSlider: string;
   readonly toggleChrome: string;
   readonly imageDecodeFailed: string;
@@ -106,9 +121,12 @@ export interface CbzRenderHandle {
   readonly metadata: ComicMetadata;
   readonly preferences: ComicPreferences;
   scrollToPage(page: number): void;
+  scrollToProgress(progress: number): void;
   nextPage(): boolean;
   previousPage(): boolean;
   setPreferences(patch: ComicPreferencesPatch): void;
+  hideChrome(): boolean;
+  adjustZoom(action: 'in' | 'out' | 'reset'): void;
   destroy(): Promise<void>;
 }
 
@@ -172,6 +190,10 @@ function mergeComicPreferences(
         ? patch.spread
         : current.spread,
     fit,
+    cropMargins:
+      patch.cropMargins === true || patch.cropMargins === false
+        ? patch.cropMargins
+        : current.cropMargins,
   };
 }
 
@@ -333,6 +355,9 @@ function defaultLabels(): ComicToolbarLabels {
         fitScreen: '适合屏幕',
         fitHeight: '适合高度',
         fitOriginal: '原图',
+        cropMargins: '裁白边',
+        keepMargins: '保留边距',
+        margins: '边距',
         pageSlider: '页码',
         toggleChrome: '显示或隐藏阅读控件',
         imageDecodeFailed: '无法解码此图片',
@@ -356,6 +381,9 @@ function defaultLabels(): ComicToolbarLabels {
         fitScreen: 'Fit screen',
         fitHeight: 'Fit height',
         fitOriginal: 'Original size',
+        cropMargins: 'Crop margins',
+        keepMargins: 'Keep margins',
+        margins: 'Margins',
         pageSlider: 'Page',
         toggleChrome: 'Show or hide reader controls',
         imageDecodeFailed: 'This image could not be decoded',
@@ -538,6 +566,7 @@ export async function renderCbzInto(
             : 'Fit';
     };
     const fitButton = chip(fitChipFor(preferences.fit), fitLabelFor(preferences.fit));
+    const cropButton = chip(chineseChrome ? '裁边' : 'Crop', labels.cropMargins);
     const group = (...buttons: HTMLButtonElement[]): HTMLDivElement => {
       const element = document.createElement('div');
       element.className = 'lightink-reader-comic-tool-group';
@@ -552,6 +581,7 @@ export async function renderCbzInto(
       group(ltrButton, rtlButton),
       spreadGroup,
       group(fitButton),
+      group(cropButton),
     );
 
     const createSlot = (page: ComicPageEntry, index: number): HTMLDivElement => {
@@ -607,6 +637,9 @@ export async function renderCbzInto(
     const visible = new Set<number>();
     const estimatedBytes = images.map((page) => Math.max(1, page.entry.uncompressedSize));
     const naturalWidths = new Map<number, number>();
+    const naturalHeights = new Map<number, number>();
+    const landscapePages = new Set<number>();
+    const cropInsets = new Map<number, ComicCropInsets>();
     let wantedPages = new Set<number>();
     let currentPage = 1;
     let viewScale = 1;
@@ -624,22 +657,99 @@ export async function renderCbzInto(
       rtlButton.setAttribute('aria-pressed', String(preferences.direction === 'rtl'));
       singleButton.setAttribute('aria-pressed', String(preferences.spread === 'single'));
       doubleButton.setAttribute('aria-pressed', String(preferences.spread === 'double'));
-      fitButton.setAttribute('aria-pressed', String(preferences.fit === 'width'));
+      fitButton.removeAttribute('aria-pressed');
       fitButton.textContent = fitChipFor(preferences.fit);
       fitButton.title = fitLabelFor(preferences.fit);
       fitButton.setAttribute('aria-label', fitLabelFor(preferences.fit));
+      cropButton.setAttribute('aria-pressed', String(preferences.cropMargins));
       spreadGroup.hidden = preferences.mode === 'strip';
       previousButton.disabled = currentPage <= 1;
       nextButton.disabled =
-        advanceComicPage(currentPage - 1, images.length, 1, preferences) === currentPage - 1;
-      pageSlider.max = String(Math.max(1, images.length));
-      pageSlider.value = String(currentPage);
+        advanceComicPage(currentPage - 1, images.length, 1, preferences, landscapePages) ===
+        currentPage - 1;
+      const sliderMax =
+        preferences.mode === 'paged' && preferences.spread === 'double'
+          ? Math.max(1, comicSpreadList(images.length, preferences, landscapePages).length)
+          : Math.max(1, images.length);
+      const sliderValue =
+        preferences.mode === 'paged' && preferences.spread === 'double'
+          ? comicSpreadIndex(currentPage - 1, images.length, preferences, landscapePages) + 1
+          : currentPage;
+      pageSlider.max = String(sliderMax);
+      pageSlider.value = String(sliderValue);
       pageButton.textContent = progress;
       pageButton.setAttribute('aria-label', `${labels.pageSlider}: ${progress}`);
     };
 
-    const applySlotWidth = (index: number): void => {
+    const peekInsets = (index: number): ComicCropInsets => {
+      if (preferences.cropMargins !== true) return COMIC_CROP_NONE;
+      return cropInsets.get(index) ?? COMIC_CROP_NONE;
+    };
+
+    const cropFallbackAspect = (): 'natural' | 'none' =>
+      preferences.mode === 'strip' || preferences.fit !== 'screen' ? 'natural' : 'none';
+
+    const cropQueue: number[] = [];
+    let cropPumping = false;
+    let cropGeneration = 0;
+
+    const enqueueCropScan = (index: number): void => {
+      if (preferences.cropMargins !== true || destroyed) return;
+      if (cropInsets.has(index) || cropQueue.includes(index)) return;
+      const image = materialized.get(index)?.image;
+      if (!(image instanceof HTMLImageElement) || image.naturalWidth < 8) return;
+      cropQueue.push(index);
+      void pumpCropScans();
+    };
+
+    const pumpCropScans = async (): Promise<void> => {
+      if (cropPumping) return;
+      cropPumping = true;
+      const generation = cropGeneration;
+      try {
+        while (cropQueue.length > 0) {
+          if (destroyed || generation !== cropGeneration || preferences.cropMargins !== true) {
+            cropQueue.length = 0;
+            return;
+          }
+          const index = cropQueue.shift();
+          if (index === undefined || cropInsets.has(index)) continue;
+          const image = materialized.get(index)?.image;
+          if (!(image instanceof HTMLImageElement) || image.naturalWidth < 8) continue;
+          await yieldReaderLoad();
+          if (destroyed || generation !== cropGeneration || preferences.cropMargins !== true) {
+            cropQueue.length = 0;
+            return;
+          }
+          if (cropInsets.has(index) || materialized.get(index)?.image !== image) continue;
+          const insets = detectComicCropInsets(image);
+          cropInsets.set(index, insets);
+          if (!isComicCropEmpty(insets) && preferences.cropMargins === true && !destroyed) {
+            applySlotFit(index);
+          }
+        }
+      } finally {
+        cropPumping = false;
+        if (cropQueue.length > 0 && !destroyed) void pumpCropScans();
+      }
+    };
+
+    const scheduleVisibleCropScans = (): void => {
+      if (preferences.cropMargins !== true) return;
+      const rest = [...wantedPages].filter((index) => !visible.has(index));
+      for (const index of [...visible, ...rest]) enqueueCropScan(index);
+    };
+
+    const displayWidth = (index: number): number | undefined => {
       const width = naturalWidths.get(index);
+      const height = naturalHeights.get(index);
+      if (width === undefined) return undefined;
+      if (height === undefined) return width;
+      return comicCroppedSize(width, height, peekInsets(index)).width;
+    };
+
+    const applySlotWidth = (index: number): void => {
+      const width = displayWidth(index);
       if (preferences.fit === 'original' && width !== undefined) {
         slots[index]!.style.setProperty('--lightink-comic-natural-width', `${width}px`);
       } else {
@@ -655,6 +765,8 @@ export async function renderCbzInto(
         element.style.height = 'auto';
         element.style.maxWidth = '100%';
         element.style.maxHeight = 'none';
+        element.style.minWidth = '0';
+        element.style.minHeight = '0';
         return;
       }
       if (fit === 'height') {
@@ -662,6 +774,8 @@ export async function renderCbzInto(
         element.style.height = '100%';
         element.style.maxWidth = 'none';
         element.style.maxHeight = '100%';
+        element.style.minWidth = '0';
+        element.style.minHeight = '0';
         return;
       }
       if (fit === 'original') {
@@ -669,12 +783,16 @@ export async function renderCbzInto(
         element.style.height = 'auto';
         element.style.maxWidth = 'none';
         element.style.maxHeight = 'none';
+        element.style.removeProperty('min-width');
+        element.style.removeProperty('min-height');
         return;
       }
       element.style.width = '100%';
       element.style.height = '100%';
       element.style.maxWidth = '100%';
       element.style.maxHeight = '100%';
+      element.style.minWidth = '0';
+      element.style.minHeight = '0';
     };
 
     const applySlotFit = (index: number): void => {
@@ -687,7 +805,7 @@ export async function renderCbzInto(
         slot.style.minHeight = '0';
         slot.style.background = 'transparent';
         if (preferences.fit === 'original') {
-          const width = naturalWidths.get(index);
+          const width = displayWidth(index);
           slot.style.width = width === undefined ? 'auto' : `${width}px`;
           slot.style.maxWidth = 'none';
           slot.style.height = 'auto';
@@ -708,16 +826,33 @@ export async function renderCbzInto(
           slot.style.removeProperty('max-height');
         }
         applyPageFit(page, preferences.fit === 'screen' ? 'width' : preferences.fit);
+        applyComicCropDisplay(
+          slot,
+          page,
+          naturalWidths.get(index) ?? 0,
+          naturalHeights.get(index) ?? 0,
+          peekInsets(index),
+          { fallbackAspect: cropFallbackAspect() },
+        );
         return;
       }
       slot.style.removeProperty('flex');
-      slot.style.removeProperty('min-height');
+      slot.style.minWidth = '0';
+      slot.style.minHeight = '0';
       slot.style.removeProperty('width');
       slot.style.removeProperty('max-width');
       slot.style.removeProperty('height');
       slot.style.removeProperty('max-height');
       slot.style.background = 'transparent';
       applyPageFit(page, preferences.fit);
+      applyComicCropDisplay(
+        slot,
+        page,
+        naturalWidths.get(index) ?? 0,
+        naturalHeights.get(index) ?? 0,
+        peekInsets(index),
+        { fallbackAspect: cropFallbackAspect() },
+      );
     };
 
     const applySurfaceMetrics = (): void => {
@@ -745,7 +880,28 @@ export async function renderCbzInto(
       slots.forEach((_slot, index) => applySlotFit(index));
     };
 
+    const clampViewOffset = (): void => {
+      if (viewScale <= 1) {
+        viewX = 0;
+        viewY = 0;
+        return;
+      }
+      const viewport = container.getBoundingClientRect();
+      const clamped = clampComicViewOffset(
+        { x: viewX, y: viewY },
+        viewScale,
+        { width: viewport.width, height: viewport.height },
+        {
+          width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+          height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+        },
+      );
+      viewX = clamped.x;
+      viewY = clamped.y;
+    };
+
     const applyViewTransform = (): void => {
+      clampViewOffset();
       const zoomed = viewScale > 1;
       const scaleText = String(viewScale);
       container.dataset.comicZoomed = String(zoomed);
@@ -994,6 +1150,15 @@ export async function renderCbzInto(
           if (mounted.width > 0 && mounted.height > 0) {
             slots[index]!.style.aspectRatio = `${mounted.width} / ${mounted.height}`;
             naturalWidths.set(index, mounted.width);
+            naturalHeights.set(index, mounted.height);
+            enqueueCropScan(index);
+            const wasLandscape = landscapePages.has(index);
+            const nowLandscape = isComicLandscapeSize(mounted.width, mounted.height);
+            if (nowLandscape) landscapePages.add(index);
+            else landscapePages.delete(index);
+            if (wasLandscape !== nowLandscape && preferences.mode === 'paged') {
+              applyLayout(false);
+            }
           }
           mounted.element.addEventListener(
             'error',
@@ -1049,7 +1214,7 @@ export async function renderCbzInto(
     function refreshCacheWindow(center: number): void {
       const centers =
         preferences.mode === 'paged'
-          ? comicVisiblePages(center, images.length, preferences)
+          ? comicVisiblePages(center, images.length, preferences, landscapePages)
           : stripCacheCenters(center, images.length);
       const wanted = prefetchNeighbors
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
@@ -1080,22 +1245,30 @@ export async function renderCbzInto(
 
     const applyLayout = (notify = true): void => {
       const previousPage = currentPage;
-      const currentIndex = comicSpreadStart(currentPage - 1, images.length, preferences);
+      const currentIndex = comicSpreadStart(
+        currentPage - 1,
+        images.length,
+        preferences,
+        landscapePages,
+      );
       currentPage = currentIndex + 1;
       container.dataset.comicMode = preferences.mode;
       container.dataset.comicDirection = preferences.direction;
       container.dataset.comicSpread = preferences.spread;
       container.dataset.comicFit = preferences.fit;
       container.dataset.comicFitWidth = String(preferences.fit === 'width');
+      container.dataset.comicCropMargins = String(preferences.cropMargins);
       container.dataset.comicVisible = String(
         preferences.mode === 'paged'
-          ? comicVisiblePages(currentIndex, images.length, preferences).length
+          ? comicVisiblePages(currentIndex, images.length, preferences, landscapePages).length
           : 0,
       );
       pagesRoot.dir = preferences.direction;
       applySurfaceMetrics();
       if (preferences.mode === 'paged') {
-        const shown = new Set(comicVisiblePages(currentIndex, images.length, preferences));
+        const shown = new Set(
+          comicVisiblePages(currentIndex, images.length, preferences, landscapePages),
+        );
         slots.forEach((slot, index) => {
           slot.hidden = !shown.has(index);
         });
@@ -1111,18 +1284,27 @@ export async function renderCbzInto(
       applyViewTransform();
       updateToolbar();
       refreshCacheWindow(currentIndex);
+      scheduleVisibleCropScans();
       if (notify && previousPage !== currentPage) options.onPageChange?.();
     };
 
     const setPreferences = (patch: ComicPreferencesPatch): void => {
+      const cropChanged =
+        patch.cropMargins !== undefined && patch.cropMargins !== preferences.cropMargins;
+      const cropOnly = cropChanged && Object.keys(patch).every((key) => key === 'cropMargins');
       preferences = mergeComicPreferences(preferences, patch);
       saveComicPreferences(storage, preferences, options.progressId);
-      resetViewTransform();
+      if (cropChanged) {
+        cropGeneration += 1;
+        cropInsets.clear();
+        cropQueue.length = 0;
+      }
+      if (!cropOnly) resetViewTransform();
       applyLayout();
     };
 
     const scrollToIndex = (requestedIndex: number): boolean => {
-      const index = comicSpreadStart(requestedIndex, images.length, preferences);
+      const index = comicSpreadStart(requestedIndex, images.length, preferences, landscapePages);
       const changed = currentPage !== index + 1;
       currentPage = index + 1;
       if (preferences.mode === 'paged') {
@@ -1139,7 +1321,13 @@ export async function renderCbzInto(
     };
 
     const advancePage = (direction: 1 | -1): boolean => {
-      const next = advanceComicPage(currentPage - 1, images.length, direction, preferences);
+      const next = advanceComicPage(
+        currentPage - 1,
+        images.length,
+        direction,
+        preferences,
+        landscapePages,
+      );
       if (next === currentPage - 1) return false;
       return scrollToIndex(next);
     };
@@ -1153,9 +1341,19 @@ export async function renderCbzInto(
     singleButton.addEventListener('click', () => setPreferences({ spread: 'single' }));
     doubleButton.addEventListener('click', () => setPreferences({ spread: 'double' }));
     fitButton.addEventListener('click', () => setPreferences({ fit: nextComicFit(preferences.fit) }));
+    cropButton.addEventListener('click', () =>
+      setPreferences({ cropMargins: !preferences.cropMargins }),
+    );
     pageSlider.addEventListener('input', () => {
       const next = Number.parseInt(pageSlider.value, 10);
-      if (Number.isSafeInteger(next)) scrollToIndex(next - 1);
+      if (!Number.isSafeInteger(next)) return;
+      if (preferences.mode === 'paged' && preferences.spread === 'double') {
+        const spreads = comicSpreadList(images.length, preferences, landscapePages);
+        const page = spreads[Math.min(spreads.length, Math.max(1, next)) - 1]?.[0];
+        if (page !== undefined) scrollToIndex(page);
+        return;
+      }
+      scrollToIndex(next - 1);
     });
     pageButton.addEventListener('click', () => {
       setChromeVisible(true);
@@ -1191,6 +1389,7 @@ export async function renderCbzInto(
     let swipeOrigin: { x: number; y: number } | null = null;
     let gestureMoved = false;
     let lastGestureUp: { x: number; y: number } | null = null;
+    let lastPointerType: string = 'mouse';
     let pendingTap: ReturnType<typeof setTimeout> | null = null;
     let lastTap: { x: number; y: number; at: number } | null = null;
 
@@ -1205,7 +1404,7 @@ export async function renderCbzInto(
       pendingTap = null;
     };
 
-    const handleSurfaceTap = (clientX: number, clientY: number): void => {
+    const handleSurfaceTap = (clientX: number): void => {
       const rect = container.getBoundingClientRect();
       if (rect.width < 8) {
         setChromeVisible(!chromeVisible);
@@ -1216,7 +1415,16 @@ export async function renderCbzInto(
         if (chromeVisible) scheduleChromeHide();
         return;
       }
-      const ratio = (clientX - rect.left) / rect.width;
+      const x = clientX - rect.left;
+      if (
+        lastPointerType === 'touch' &&
+        (x < COMIC_SYSTEM_EDGE_PX || rect.width - x < COMIC_SYSTEM_EDGE_PX)
+      ) {
+        setChromeVisible(!chromeVisible);
+        if (chromeVisible) scheduleChromeHide();
+        return;
+      }
+      const ratio = x / rect.width;
       const backward = preferences.direction === 'rtl' ? ratio > 1 - COMIC_EDGE_ZONE : ratio < COMIC_EDGE_ZONE;
       const forward = preferences.direction === 'rtl' ? ratio < COMIC_EDGE_ZONE : ratio > 1 - COMIC_EDGE_ZONE;
       if (backward) advancePage(-1);
@@ -1237,16 +1445,16 @@ export async function renderCbzInto(
         if (nearGesture) return;
       }
       if (event.detail >= 2) return;
-      if (event.isTrusted) {
+      if (event.isTrusted && lastPointerType === 'touch') {
         cancelPendingTap();
-        const { clientX, clientY } = event;
+        const { clientX } = event;
         pendingTap = setTimeout(() => {
           pendingTap = null;
-          if (!destroyed) handleSurfaceTap(clientX, clientY);
+          if (!destroyed) handleSurfaceTap(clientX);
         }, COMIC_DOUBLE_TAP_MS);
         return;
       }
-      handleSurfaceTap(event.clientX, event.clientY);
+      handleSurfaceTap(event.clientX);
     };
 
     const onDoubleClick = (event: MouseEvent): void => {
@@ -1259,6 +1467,7 @@ export async function renderCbzInto(
 
     const onPointerDown = (event: PointerEvent): void => {
       if (isComicInteractiveTarget(event.target)) return;
+      lastPointerType = event.pointerType || lastPointerType;
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       gestureMoved = false;
       if (activePointers.size === 2) {
@@ -1475,7 +1684,7 @@ export async function renderCbzInto(
     applyLayout(false);
     const firstPages =
       preferences.mode === 'paged'
-        ? comicVisiblePages(currentPage - 1, images.length, preferences)
+        ? comicVisiblePages(currentPage - 1, images.length, preferences, landscapePages)
         : stripCacheCenters(currentPage - 1, images.length);
     await Promise.all(firstPages.map((index) => loadPage(index)));
     const prefetchTimer = setTimeout(() => {
@@ -1487,6 +1696,8 @@ export async function renderCbzInto(
     const destroy = (): Promise<void> => {
       if (destruction !== null) return destruction;
       destroyed = true;
+      cropGeneration += 1;
+      cropQueue.length = 0;
       clearTimeout(prefetchTimer);
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
@@ -1543,9 +1754,28 @@ export async function renderCbzInto(
       scrollToPage(page) {
         scrollToIndex(Math.min(images.length - 1, Math.max(0, Math.floor(page) - 1)));
       },
+      scrollToProgress(progress) {
+        scrollToIndex(
+          comicPageFromProgress(progress, images.length, preferences, landscapePages) - 1,
+        );
+      },
       nextPage: () => advancePage(1),
       previousPage: () => advancePage(-1),
       setPreferences,
+      hideChrome() {
+        if (!chromeVisible) return false;
+        setChromeVisible(false);
+        return true;
+      },
+      adjustZoom(action) {
+        if (action === 'reset') {
+          resetViewTransform();
+          return;
+        }
+        const rect = container.getBoundingClientRect();
+        const factor = action === 'in' ? 1.25 : 1 / 1.25;
+        zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, viewScale * factor);
+      },
       destroy: async () => {
         signal?.removeEventListener('abort', onAbort);
         await destroy();

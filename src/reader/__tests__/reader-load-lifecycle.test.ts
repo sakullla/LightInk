@@ -513,7 +513,7 @@ describe('Reader load lifecycle', () => {
     await Promise.resolve();
     expect(app.classList.contains('is-reader-chrome-revealed')).toBe(false);
     const whisper = host.querySelector<HTMLElement>('.lightink-reader-chrome-whisper');
-    expect(whisper?.hidden).toBe(false);
+    expect(whisper?.hidden).toBe(true);
     pages!.dataset.comicChrome = 'visible';
     await Promise.resolve();
     expect(whisper?.hidden).toBe(true);
@@ -737,6 +737,10 @@ describe('Reader load lifecycle', () => {
     expect(view.state.current).toBe(2);
     expect(view.advanceReading(1, ' ')).toBe(true);
     expect(view.state.current).toBe(3);
+    expect(host.getAttribute('data-page-anim')).toBeNull();
+    expect(host.querySelector('[data-page-anim]')).toBeNull();
+    expect(view.adjustDisplayScale?.('in')).toBe(true);
+    expect(view.adjustDisplayScale?.('reset')).toBe(true);
     await view.destroy();
   });
 
@@ -787,7 +791,7 @@ describe('Reader load lifecycle', () => {
 
     await view.load('/comics/vol.cbz');
     expect(host.querySelector('[data-comic-reader="true"]')).not.toBeNull();
-    expect(host.querySelector('.lightink-reader')?.dataset.comicReader).toBe('true');
+    expect(host.querySelector('.lightink-reader')?.getAttribute('data-comic-reader')).toBe('true');
     expect(host.querySelector('[data-comic-canvas]')).not.toBeNull();
 
     await view.load('book.epub');

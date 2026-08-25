@@ -278,7 +278,7 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).toMatch(
       /html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-whisper \.lightink-reader-chrome-scrubber,\s*html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-scrubber\s*\{[^}]*display:\s*none/,
     );
-    expect(css).not.toMatch(
+    expect(css).toMatch(
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-whisper,[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
@@ -374,6 +374,26 @@ describe('comic surface layout (R1/R3/R4)', () => {
   const readerCss = (): string =>
     readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
 
+  it('clips cropped comic pages inside the slot instead of resampling the bitmap', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-cbz-slot\[data-comic-cropped='true'\]\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-cbz-slot\[data-comic-cropped='true'\]\s*\{[^}]*width:\s*auto/,
+    );
+  });
+
+  it('does not apply editor font-scale zoom to comic bitmaps', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\] \.lightink-reader-comic-pages\s*\{[^}]*zoom:\s*1/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\] \.lightink-reader-comic-pages\s*\{[^}]*zoom:\s*var\(--lightink-font-scale/,
+    );
+  });
+
   it('paints only the comic host with a dedicated near-black canvas token', () => {
     const css = readerCss();
     expect(css).toMatch(/--lightink-comic-canvas:\s*#111\b/);
@@ -403,6 +423,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-bottombar\s*\{[^}]*opacity:\s*0/,
     );
     expect(css).not.toMatch(/lightink-reader-comic-hud/);
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-comic-modes\s*\{[^}]*display:\s*none/,
+    );
   });
 
   it('lets a paged cover occupy the face alone, then pairs later pages', () => {
@@ -411,6 +434,25 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\.lightink-reader-pages\[data-comic-mode='paged'\]\[data-comic-spread='double'\]\[data-comic-visible='2'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*max-width:\s*50%/,
     );
     expect(css).not.toMatch(/\[data-comic-visible='1'\][\s\S]{0,160}?max-width:\s*50%/);
+    expect(css).toMatch(
+      /\[data-comic-visible='1'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*auto/,
+    );
+  });
+
+  it('contains a single paged screen-fit page in the viewport instead of clipping the foot', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-cbz-slot\s*\{[^}]*min-height:\s*0/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-visible='1'\]\s*\.lightink-reader-cbz-slot\s*\{[^}]*width:\s*100%/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-fit='screen'\]\[data-comic-visible='1'\]\s*\.lightink-reader-cbz-slot,\s*\.lightink-reader-pages\[data-comic-mode='paged'\]:not\(\[data-comic-fit\]\)\[data-comic-visible='1'\]\s*\.lightink-reader-cbz-slot\s*\{[^}]*width:\s*100%[^}]*height:\s*100%/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-fit='screen'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page\s*\{[^}]*object-fit:\s*contain/,
+    );
   });
 
   it('lays strip pages out as a fit-width continuous run, not one screen per page', () => {

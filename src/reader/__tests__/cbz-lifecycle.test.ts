@@ -232,14 +232,14 @@ function dragCanvas(container: HTMLElement, pointerType: 'mouse' | 'touch'): voi
     pointerId: 1,
     pointerType,
     buttons: 1,
-    clientX: 620,
-    clientY: 470,
+    clientX: 380,
+    clientY: 330,
   });
   pointerOn(surface, 'pointerup', {
     pointerId: 1,
     pointerType,
-    clientX: 620,
-    clientY: 470,
+    clientX: 380,
+    clientY: 330,
   });
 }
 
@@ -472,6 +472,17 @@ describe('CBZ page materialization', () => {
     expect(handle.nextPage()).toBe(true);
     expect(handle.currentPage).toBe(2);
     expect(visiblePageIndices(container)).toEqual(['1', '2']);
+    const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
+    expect(slider.max).toBe('3');
+    expect(slider.value).toBe('2');
+    slider.value = '3';
+    slider.dispatchEvent(new Event('input'));
+    expect(handle.currentPage).toBe(4);
+    handle.scrollToProgress(0);
+    expect(handle.currentPage).toBe(1);
+    handle.scrollToProgress(1);
+    expect(handle.currentPage).toBe(4);
+    handle.scrollToPage(2);
     container.querySelector<HTMLButtonElement>('[aria-label="Right to left"]')!.click();
     handle.scrollToPage(3);
     expect(handle.currentPage).toBe(2);
@@ -545,6 +556,11 @@ describe('CBZ page materialization', () => {
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('hidden');
     expect(chrome?.getAttribute('aria-hidden')).toBe('true');
+    expect(handle.hideChrome()).toBe(false);
+    container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
+    expect(container.dataset.comicChrome).toBe('visible');
+    expect(handle.hideChrome()).toBe(true);
+    expect(container.dataset.comicChrome).toBe('hidden');
     const selectStart = new Event('selectstart', { cancelable: true });
     expect(container.dispatchEvent(selectStart)).toBe(false);
     const wheel = new WheelEvent('wheel', {
@@ -576,6 +592,51 @@ describe('CBZ page materialization', () => {
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('hidden');
     expect(handle.currentPage).toBe(1);
+    await handle.destroy();
+  });
+
+  it('gives the outer 24px on touch to chrome instead of a page turn', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+
+    pointerOn(container, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      buttons: 1,
+      clientX: 10,
+      clientY: 400,
+    });
+    pointerOn(container, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 400,
+    });
+    clickCanvas(container, 10);
+    expect(handle.currentPage).toBe(1);
+    expect(container.dataset.comicChrome).toBe('hidden');
+
+    pointerOn(container, 'pointerdown', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: 10,
+      clientY: 400,
+    });
+    pointerOn(container, 'pointerup', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 10,
+      clientY: 400,
+    });
+    clickCanvas(container, 10);
+    expect(handle.currentPage).toBe(1);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
     await handle.destroy();
   });
 
@@ -669,6 +730,7 @@ describe('CBZ page materialization', () => {
     expect(handle.preferences.fit).toBe('screen');
     expect(container.dataset.comicFit).toBe('screen');
     const fit = container.querySelector<HTMLButtonElement>('[aria-label="Fit screen"]')!;
+    expect(fit.hasAttribute('aria-pressed')).toBe(false);
     const cycle = [
       ['width', 'Fit width'],
       ['height', 'Fit height'],
@@ -681,6 +743,18 @@ describe('CBZ page materialization', () => {
       expect(container.dataset.comicFit).toBe(value);
       expect(fit.getAttribute('aria-label')).toBe(label);
     }
+
+    expect(handle.preferences.cropMargins).toBe(false);
+    expect(container.dataset.comicCropMargins).toBe('false');
+    expect(container.querySelector('[data-comic-cropped="true"]')).toBeNull();
+    const crop = container.querySelector<HTMLButtonElement>('[aria-label="Crop margins"]')!;
+    crop.click();
+    expect(handle.preferences.cropMargins).toBe(true);
+    expect(container.dataset.comicCropMargins).toBe('true');
+    expect(crop.getAttribute('aria-pressed')).toBe('true');
+    crop.click();
+    expect(handle.preferences.cropMargins).toBe(false);
+    expect(container.dataset.comicCropMargins).toBe('false');
 
     handle.setPreferences({ fit: 'original' });
     container.querySelector<HTMLButtonElement>('button[aria-label="Continuous strip"]')!.click();
@@ -707,9 +781,35 @@ describe('CBZ page materialization', () => {
     dragCanvas(container, 'mouse');
     expect(handle.currentPage).toBe(1);
     const pan = readComicPan(container);
-    expect(Math.abs(pan.x) + Math.abs(pan.y)).toBeGreaterThan(0);
-
-    zoomByDoubleClick(container);
+    expect(pan.x).toBeLessThan(0);
+    expect(pan.y).toBeLessThan(0);
+    const surface = comicSurface(container);
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: 500,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: 4000,
+      clientY: 3000,
+    });
+    pointerOn(surface, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      clientX: 4000,
+      clientY: 3000,
+    });
+    const over = readComicPan(container);
+    expect(over.x).toBe(0);
+    expect(over.y).toBe(0);
+    handle.adjustZoom('in');
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    handle.adjustZoom('reset');
     expect(readComicScale(container)).toBeCloseTo(1, 3);
     clickCanvas(container, 950);
     expect(handle.currentPage).toBe(2);
@@ -824,7 +924,8 @@ describe('CBZ page materialization', () => {
     container.querySelector<HTMLButtonElement>('button[aria-label="Double page"]')!.click();
     expect(handle.preferences.spread).toBe('double');
     const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
-    slider.value = '4';
+    expect(slider.max).toBe('3');
+    slider.value = '3';
     slider.dispatchEvent(new Event('input'));
     expect(handle.currentPage).toBe(4);
     zoomByDoubleClick(container);

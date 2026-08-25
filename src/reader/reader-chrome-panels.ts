@@ -49,6 +49,9 @@ export interface ReaderChromePanelComicCopy {
   fitScreen?: string;
   fitHeight?: string;
   fitOriginal?: string;
+  cropMargins?: string;
+  keepMargins?: string;
+  margins?: string;
 }
 
 export interface ReaderChromePanelCopy {
@@ -89,6 +92,9 @@ export function defaultReaderChromePanelComicCopy(): ReaderChromePanelComicCopy 
     fitScreen: '适合屏幕',
     fitHeight: '适合高度',
     fitOriginal: '原图',
+    cropMargins: '裁白边',
+    keepMargins: '保留边距',
+    margins: '边距',
   };
 }
 
@@ -381,7 +387,7 @@ function appendFontSection(
 }
 
 /**
- * Comic sheet: only ComicPreferences (mode, direction, spread, fit).
+ * Comic sheet: ComicPreferences (mode, direction, spread, fit, cropMargins).
  * No flow controls, and hidden items are not rendered — no disabled placeholders.
  */
 function fillComicTypographySections(
@@ -459,6 +465,20 @@ function fillComicTypographySections(
         label: comicCopy.fitOriginal ?? defaults.fitOriginal ?? comicCopy.fitWidth,
         selected: preferences.fit === 'original',
         apply: () => comic.onPreferences({ fit: 'original' }),
+      },
+    ]),
+  );
+  panel.appendChild(
+    comicChoiceSection(comicCopy.margins ?? defaults.margins ?? '边距', 'comic-margins', [
+      {
+        label: comicCopy.keepMargins ?? defaults.keepMargins ?? '保留边距',
+        selected: preferences.cropMargins !== true,
+        apply: () => comic.onPreferences({ cropMargins: false }),
+      },
+      {
+        label: comicCopy.cropMargins ?? defaults.cropMargins ?? '裁白边',
+        selected: preferences.cropMargins === true,
+        apply: () => comic.onPreferences({ cropMargins: true }),
       },
     ]),
   );

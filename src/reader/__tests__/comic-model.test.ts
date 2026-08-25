@@ -3,7 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyComicCropDisplay,
+  comicCropInsetsFromRgba,
+  comicCroppedSize,
   comicDisplayWidthPx,
+  COMIC_CROP_NONE,
+  isComicCropEmpty,
   comicImageBlob,
   comicImageObjectUrl,
   compareComicPaths,
@@ -18,6 +23,9 @@ import {
 import {
   COMIC_PREFERENCES_STORAGE_KEY,
   advanceComicPage,
+  clampComicViewOffset,
+  comicPageFromProgress,
+  comicSpreadIndex,
   comicVisiblePages,
   defaultComicPreferences,
   loadComicPreferences,
@@ -52,8 +60,9 @@ function comicPrefs(value: {
   direction: 'ltr' | 'rtl';
   spread: 'single' | 'double';
   fit: 'screen' | 'width' | 'height' | 'original';
+  cropMargins?: boolean;
 }): ComicPreferences {
-  return value;
+  return { cropMargins: false, ...value };
 }
 
 describe('comic page model', () => {
@@ -110,10 +119,82 @@ describe('comic page model', () => {
       .map((entry) => entry.filename)).toEqual(['page3.jpg', 'page1.jpg', 'page2.jpg']);
   });
 
-  it('caps display width by the slot CSS size, not device pixels', () => {
+  it('crops uniform scan margins in CSS and leaves tight pages alone', () => {
+    const fill = (width: number, height: number, paint: (x: number, y: number) => [number, number, number]) => {
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const [r, g, b] = paint(x, y);
+          const offset = (y * width + x) * 4;
+          data[offset] = r;
+          data[offset + 1] = g;
+          data[offset + 2] = b;
+          data[offset + 3] = 255;
+        }
+      }
+      return data;
+    };
+    const scanned = comicCropInsetsFromRgba(
+      fill(100, 140, (x, y) => (x >= 14 && x < 88 && y >= 18 && y < 124 ? [20, 20, 20] : [250, 250, 250])),
+      100,
+      140,
+    );
+    expect(scanned.left).toBeGreaterThan(0.08);
+    expect(scanned.right).toBeGreaterThan(0.08);
+    expect(scanned.top).toBeGreaterThan(0.08);
+    expect(scanned.bottom).toBeGreaterThan(0.08);
+    expect(isComicCropEmpty(scanned)).toBe(false);
+    expect(comicCroppedSize(2000, 2800, scanned).width).toBeLessThan(2000);
+
+    const bleed = comicCropInsetsFromRgba(
+      fill(80, 80, () => [12, 12, 12]),
+      80,
+      80,
+    );
+    expect(bleed).toEqual(COMIC_CROP_NONE);
+
+    const mixed = comicCropInsetsFromRgba(
+      fill(80, 80, (x) => (x < 40 ? [250, 250, 250] : [12, 12, 12])),
+      80,
+      80,
+    );
+    expect(mixed).toEqual(COMIC_CROP_NONE);
+
+    const sideMargins = comicCropInsetsFromRgba(
+      fill(100, 80, (x) => (x >= 16 && x < 86 ? [18, 18, 18] : [248, 248, 248])),
+      100,
+      80,
+    );
+    expect(sideMargins.left).toBeGreaterThan(0.08);
+    expect(sideMargins.right).toBeGreaterThan(0.08);
+    expect(sideMargins.top).toBeLessThan(0.03);
+    expect(sideMargins.bottom).toBeLessThan(0.03);
+
+    const slot = document.createElement('div');
+    const image = document.createElement('img');
+    applyComicCropDisplay(slot, image, 2000, 2800, {
+      top: 0.1,
+      right: 0.1,
+      bottom: 0.1,
+      left: 0.1,
+    });
+    expect(slot.dataset.comicCropped).toBe('true');
+    expect(slot.style.aspectRatio).toBe('1600 / 2240');
+    expect(image.style.width).toBe('125%');
+    expect(image.style.marginLeft).toBe('-12.5%');
+    applyComicCropDisplay(slot, image, 2000, 2800, COMIC_CROP_NONE);
+    expect(slot.dataset.comicCropped).toBeUndefined();
+    expect(slot.style.aspectRatio).toBe('');
+    expect(image.style.marginLeft).toBe('');
+    applyComicCropDisplay(slot, image, 2000, 2800, COMIC_CROP_NONE, { fallbackAspect: 'natural' });
+    expect(slot.style.aspectRatio).toBe('2000 / 2800');
+  });
+
+  it('scales the display budget by devicePixelRatio and keeps CSS layout on the slot', () => {
     const slot = document.createElement('div');
     Object.defineProperty(slot, 'clientWidth', { configurable: true, value: 640 });
-    expect(comicDisplayWidthPx(slot, 800)).toBe(640);
+    expect(comicDisplayWidthPx(slot, 800, { devicePixelRatio: 1 })).toBe(640);
+    expect(comicDisplayWidthPx(slot, 800, { devicePixelRatio: 2 })).toBe(1280);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x1, 0x2]);
     expect(comicImageBlob(jpeg, 'page.jpg').type).toBe('image/jpeg');
   });
@@ -264,17 +345,16 @@ describe('comic page paint', () => {
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
     try {
       const resizeWidth = comicDisplayWidthPx(slot);
-      expect(resizeWidth).toBe(640);
+      expect(resizeWidth).toBe(1280);
       const mounted = await createComicPageElement(jpegBytes, 'page.jpg', { resizeWidth });
       const image = mounted.element as HTMLImageElement;
       expect(image).toBeInstanceOf(HTMLImageElement);
       expect(mounted.width).toBe(2000);
       expect(mounted.height).toBe(2800);
       expect(mounted.width).toBeGreaterThanOrEqual(resizeWidth);
-      expect(image.sizes).toBe('');
-      expect(image.getAttribute('sizes')).toBeNull();
+      expect(image.sizes).toBe('640px');
       expect(image.style.maxWidth).toBe('640px');
-      expect(displayConstraintPx(image)).toBe(resizeWidth);
+      expect(displayConstraintPx(image)).toBe(640);
       expect(createImageBitmap).not.toHaveBeenCalled();
     } finally {
       if (originalDpr === undefined) {
@@ -309,6 +389,38 @@ describe('comic preferences', () => {
     expect(advanceComicPage(3, 5, 1, doublePaged)).toBe(3);
     expect(advanceComicPage(3, 5, -1, doublePaged)).toBe(1);
     expect(advanceComicPage(1, 5, -1, doublePaged)).toBe(0);
+    expect(comicSpreadIndex(0, 5, doublePaged)).toBe(0);
+    expect(comicSpreadIndex(1, 5, doublePaged)).toBe(1);
+    expect(comicSpreadIndex(3, 5, doublePaged)).toBe(2);
+    expect(comicPageFromProgress(0, 5, doublePaged)).toBe(1);
+    expect(comicPageFromProgress(0.5, 5, doublePaged)).toBe(2);
+    expect(comicPageFromProgress(1, 5, doublePaged)).toBe(4);
+    expect(clampComicViewOffset({ x: -4000, y: 80 }, 2, { width: 1000, height: 800 }, { width: 600, height: 800 })).toEqual(
+      { x: -200, y: 0 },
+    );
+    expect(clampComicViewOffset({ x: 80, y: 80 }, 1, { width: 1000, height: 800 }, { width: 600, height: 800 })).toEqual(
+      { x: 0, y: 0 },
+    );
+  });
+
+  it('pairs from page one when cover isolation is off', () => {
+    const flush = { mode: 'paged' as const, spread: 'double' as const, coverAlone: false };
+    expect(comicVisiblePages(0, 5, flush)).toEqual([0, 1]);
+    expect(comicVisiblePages(2, 5, flush)).toEqual([2, 3]);
+    expect(comicVisiblePages(4, 5, flush)).toEqual([4]);
+    expect(advanceComicPage(0, 5, 1, flush)).toBe(2);
+    expect(advanceComicPage(2, 5, -1, flush)).toBe(0);
+  });
+
+  it('keeps a landscape bitmap alone so it does not split an artist spread', () => {
+    const doublePaged = { mode: 'paged' as const, spread: 'double' as const };
+    const landscape = new Set([2]);
+    expect(comicVisiblePages(0, 5, doublePaged, landscape)).toEqual([0]);
+    expect(comicVisiblePages(1, 5, doublePaged, landscape)).toEqual([1]);
+    expect(comicVisiblePages(2, 5, doublePaged, landscape)).toEqual([2]);
+    expect(comicVisiblePages(3, 5, doublePaged, landscape)).toEqual([3, 4]);
+    expect(advanceComicPage(1, 5, 1, doublePaged, landscape)).toBe(2);
+    expect(advanceComicPage(2, 5, 1, doublePaged, landscape)).toBe(3);
   });
 
   it('treats strip mode as a continuous run and ignores spread pairing', () => {
@@ -333,6 +445,9 @@ describe('comic preferences', () => {
     });
     saveComicPreferences(storage, preferences);
     expect(loadComicPreferences(storage)).toEqual(preferences);
+    saveComicPreferences(storage, { ...preferences, cropMargins: true });
+    expect(loadComicPreferences(storage).cropMargins).toBe(true);
+    expect(parseComicPreferences('{}').cropMargins).toBe(false);
     for (const fit of ['screen', 'width', 'height', 'original'] as const) {
       const next = comicPrefs({ mode: 'strip', direction: 'ltr', spread: 'single', fit });
       saveComicPreferences(storage, next);

@@ -11,7 +11,15 @@ export interface ComicPreferences {
   readonly direction: ComicReadingDirection;
   readonly spread: ComicSpread;
   readonly fit: ComicFit;
+  readonly cropMargins: boolean;
 }
+
+export type ComicSpreadPreferences = Pick<ComicPreferences, 'mode' | 'spread'> & {
+  readonly coverAlone?: boolean;
+};
+
+/** Wider than this is treated as an already-complete double-page bitmap. */
+export const COMIC_LANDSCAPE_RATIO = 1.15;
 
 export interface ComicPreferenceStorage {
   getItem(key: string): string | null;
@@ -25,7 +33,7 @@ export function comicBookPreferencesKey(progressId: string): string {
 export function defaultComicPreferences(
   direction: ComicReadingDirection = 'ltr',
 ): ComicPreferences {
-  return { mode: 'paged', direction, spread: 'double', fit: 'screen' };
+  return { mode: 'paged', direction, spread: 'double', fit: 'screen', cropMargins: false };
 }
 
 export function parseComicPreferences(
@@ -40,6 +48,7 @@ export function parseComicPreferences(
     direction: parseDirection(value.direction) ?? fallback.direction,
     spread: parseSpread(value.spread),
     fit: parseFit(value),
+    cropMargins: value.cropMargins === true,
   };
 }
 
@@ -82,54 +91,146 @@ export function saveComicPreferences(
   }
 }
 
+export function isComicLandscapeSize(width: number, height: number): boolean {
+  return height > 0 && width / height >= COMIC_LANDSCAPE_RATIO;
+}
+
+export function comicSpreadList(
+  totalPages: number,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
+): number[][] {
+  if (totalPages <= 0) return [];
+  if (preferences.mode !== 'paged' || preferences.spread !== 'double') {
+    return Array.from({ length: totalPages }, (_value, index) => [index]);
+  }
+  const spreads: number[][] = [];
+  let index = 0;
+  if (preferences.coverAlone !== false) {
+    spreads.push([0]);
+    index = 1;
+  }
+  while (index < totalPages) {
+    if (landscapePages?.has(index) === true) {
+      spreads.push([index]);
+      index += 1;
+      continue;
+    }
+    const pair = index + 1;
+    if (pair < totalPages && landscapePages?.has(pair) !== true) {
+      spreads.push([index, pair]);
+      index += 2;
+      continue;
+    }
+    spreads.push([index]);
+    index += 1;
+  }
+  return spreads;
+}
+
+function spreadContaining(
+  pageIndex: number,
+  totalPages: number,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
+): number[] {
+  const index = clampComicPageIndex(pageIndex, totalPages);
+  return (
+    comicSpreadList(totalPages, preferences, landscapePages).find((spread) =>
+      spread.includes(index),
+    ) ?? [index]
+  );
+}
+
 export function comicSpreadStart(
   pageIndex: number,
   totalPages: number,
-  preferences: Pick<ComicPreferences, 'mode' | 'spread'>,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
 ): number {
-  const index = Math.min(Math.max(0, Math.floor(pageIndex)), Math.max(0, totalPages - 1));
-  if (preferences.mode !== 'paged' || preferences.spread !== 'double' || index === 0) {
-    return index;
-  }
-  return 1 + Math.floor((index - 1) / 2) * 2;
+  return spreadContaining(pageIndex, totalPages, preferences, landscapePages)[0] ?? 0;
 }
 
 export function comicVisiblePages(
   pageIndex: number,
   totalPages: number,
-  preferences: Pick<ComicPreferences, 'mode' | 'spread'>,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
 ): number[] {
   if (totalPages <= 0) return [];
   if (preferences.mode !== 'paged') {
     return Array.from({ length: totalPages }, (_value, index) => index);
   }
-  const start = comicSpreadStart(pageIndex, totalPages, preferences);
-  if (preferences.spread !== 'double' || start === 0 || start + 1 >= totalPages) {
-    return [start];
+  return spreadContaining(pageIndex, totalPages, preferences, landscapePages);
+}
+
+export function comicSpreadIndex(
+  pageIndex: number,
+  totalPages: number,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
+): number {
+  const start = comicSpreadStart(pageIndex, totalPages, preferences, landscapePages);
+  const spreads = comicSpreadList(totalPages, preferences, landscapePages);
+  const at = spreads.findIndex((spread) => spread[0] === start);
+  return Math.max(0, at);
+}
+
+/** Map 0–1 progress onto the first page of the matching spread. */
+export function comicPageFromProgress(
+  progress: number,
+  totalPages: number,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
+): number {
+  const spreads = comicSpreadList(totalPages, preferences, landscapePages);
+  if (spreads.length === 0) return 1;
+  const clamped = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+  const slot = Math.min(spreads.length, Math.max(1, Math.round(clamped * spreads.length) || 1));
+  return (spreads[slot - 1]?.[0] ?? 0) + 1;
+}
+
+export function clampComicViewOffset(
+  offset: { readonly x: number; readonly y: number },
+  scale: number,
+  viewport: { readonly width: number; readonly height: number },
+  content: { readonly width: number; readonly height: number },
+): { x: number; y: number } {
+  if (scale <= 1 || viewport.width <= 0 || viewport.height <= 0) {
+    return { x: 0, y: 0 };
   }
-  return [start, start + 1];
+  const scaledWidth = Math.max(1, content.width) * scale;
+  const scaledHeight = Math.max(1, content.height) * scale;
+  const clampAxis = (value: number, scaled: number, view: number): number => {
+    if (scaled <= view) return (view - scaled) / 2;
+    return Math.min(0, Math.max(view - scaled, value));
+  };
+  return {
+    x: clampAxis(offset.x, scaledWidth, viewport.width),
+    y: clampAxis(offset.y, scaledHeight, viewport.height),
+  };
 }
 
 export function advanceComicPage(
   pageIndex: number,
   totalPages: number,
   direction: 1 | -1,
-  preferences: Pick<ComicPreferences, 'mode' | 'spread'>,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
 ): number {
   if (totalPages <= 0) return 0;
-  const current = comicSpreadStart(pageIndex, totalPages, preferences);
   if (preferences.mode !== 'paged' || preferences.spread !== 'double') {
-    return Math.min(totalPages - 1, Math.max(0, current + direction));
+    return clampComicPageIndex(pageIndex + direction, totalPages);
   }
-  const next =
-    direction > 0
-      ? current === 0
-        ? 1
-        : current + 2
-      : current <= 1
-        ? 0
-        : current - 2;
-  return comicSpreadStart(Math.min(totalPages - 1, Math.max(0, next)), totalPages, preferences);
+  const spreads = comicSpreadList(totalPages, preferences, landscapePages);
+  const current = spreadContaining(pageIndex, totalPages, preferences, landscapePages)[0] ?? 0;
+  const at = spreads.findIndex((spread) => spread[0] === current);
+  const next = spreads[at + direction];
+  return next?.[0] ?? current;
+}
+
+function clampComicPageIndex(pageIndex: number, totalPages: number): number {
+  return Math.min(Math.max(0, Math.floor(pageIndex)), Math.max(0, totalPages - 1));
 }
 
 function resolveProgressId(progressId: string | null | undefined): string | undefined {
@@ -144,6 +245,7 @@ function normalizeComicPreferences(preferences: ComicPreferences): ComicPreferen
     direction: preferences.direction === 'rtl' ? 'rtl' : 'ltr',
     spread: preferences.spread === 'single' ? 'single' : 'double',
     fit: parseFit({ fit: preferences.fit }),
+    cropMargins: preferences.cropMargins === true,
   };
 }
 

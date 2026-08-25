@@ -90,7 +90,14 @@ import {
 import { type RemoteOpenResult } from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
-import { applyReaderTheme, loadReaderTheme, readerNativeWindowChrome } from './reader/reader-theme.js';
+import {
+  applyReaderTheme,
+  COMIC_NATIVE_WINDOW_CHROME,
+  hostShowsComicReader,
+  syncComicWindowChromeClass,
+  loadReaderTheme,
+  readerNativeWindowChrome,
+} from './reader/reader-theme.js';
 import { applyReaderPrefs, loadReaderPrefs } from './reader/reader-prefs.js';
 import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
 import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
@@ -799,15 +806,19 @@ workspace.subscribe((state) => {
 function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot()): void {
   const titlebar = shell?.titlebar;
   if (state.surface === 'reader') {
+    const comicOpen = hostShowsComicReader(activeReaderTab()?.hostElement);
+    syncComicWindowChromeClass(app, comicOpen);
     const theme = loadReaderTheme(syncableStorage);
-    const chrome = readerNativeWindowChrome(theme);
+    const chrome = comicOpen ? COMIC_NATIVE_WINDOW_CHROME : readerNativeWindowChrome(theme);
     if (titlebar !== undefined) {
-      applyReaderTheme(titlebar, theme);
+      applyReaderTheme(titlebar, comicOpen ? 'night' : theme);
+      titlebar.style.backgroundColor = 'transparent';
     }
     void setNativeTheme(chrome.dark);
     void setNativeCaptionColors({ caption: chrome.caption, text: chrome.text });
     return;
   }
+  syncComicWindowChromeClass(app, false);
   if (state.surface === 'shelf') {
     const theme = loadLibraryTheme(syncableStorage);
     const chrome = libraryNativeWindowChrome(theme);
@@ -2354,16 +2365,18 @@ manager = new TabManager({
       }
     }
     if (tab === null) {
+      syncNativeWindowChrome();
       return;
     }
     if (tab.kind === 'reader') {
       tab.reader.restoreReadingProgress?.();
+      syncNativeWindowChrome();
       return;
     }
-    if (tab.kind !== 'markdown') {
-      return;
+    if (tab.kind === 'markdown') {
+      editorScroller.scrollTop = manager.getScrollPosition(tab.id);
     }
-    editorScroller.scrollTop = manager.getScrollPosition(tab.id);
+    syncNativeWindowChrome();
   },
   // T4/R2：编辑器内点折叠三角切换后，立即刷新大纲的折叠标记态。
   onFoldChanged: () => {
@@ -2692,6 +2705,10 @@ function isReaderZoomContext(): boolean {
 }
 
 function changeReadingScale(action: 'in' | 'out' | 'reset'): number {
+  if (isReaderZoomContext() && activeReaderTab()?.reader.adjustDisplayScale?.(action) === true) {
+    statusBar?.refresh(getActiveStatusSnapshot);
+    return 1;
+  }
   if (isReaderZoomContext()) {
     const fontScaleStep = nextReaderFontScaleStep(
       loadReaderTypography(syncableStorage).fontScaleStep,

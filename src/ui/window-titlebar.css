@@ -45,7 +45,10 @@ html[data-display='xuhd'] {
   padding: 0 8px;
   user-select: none;
   pointer-events: none;
-  background: transparent;
+  /* Paper/shelf apply*Theme paints inline backgroundColor. Chips are an
+   * overlay, not a caption plate — a white block on comic chrome looks
+   * like leftover Windows decorations. */
+  background: transparent !important;
   color: var(--lightink-muted);
   font-family: var(--lightink-font-ui);
 }
@@ -94,6 +97,19 @@ html[data-display='xuhd'] {
 #app.is-workspace-reader .lightink-window-titlebar:focus-within {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Comic canvas is near-black. Paper-theme ink would stay dark on dark.
+   `#app.is-comic-reader` is stamped from the active tab only. */
+#app.is-comic-reader .lightink-window-titlebar {
+  color: #e6e6e6 !important;
+  --lightink-fg: #e6e6e6;
+  --lightink-muted: #9a9a9a;
+}
+
+#app.is-comic-reader .lightink-window-caption:hover,
+#app.is-comic-reader .lightink-window-caption:focus-visible {
+  background: color-mix(in srgb, #ffffff 14%, transparent);
 }
 
 /* Phones have no desktop caption. Keep min/max/close off the status bar. */

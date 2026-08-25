@@ -217,6 +217,8 @@ describe('reader chrome panels', () => {
     findLabeledButton(panel, '适合宽度')!.click();
     findLabeledButton(panel, '适合高度')!.click();
     findLabeledButton(panel, '原图')!.click();
+    findLabeledButton(panel, '裁白边')!.click();
+    findLabeledButton(panel, '保留边距')!.click();
     expect(onPreferences.mock.calls.map((call) => call[0])).toEqual([
       { mode: 'paged' },
       { mode: 'strip' },
@@ -226,11 +228,12 @@ describe('reader chrome panels', () => {
       { fit: 'width' },
       { fit: 'height' },
       { fit: 'original' },
+      { cropMargins: true },
+      { cropMargins: false },
     ]);
     for (const patch of onPreferences.mock.calls.map((call) => call[0] as Record<string, unknown>)) {
-      // Only existing comic preference keys — the sheet adds no new capability.
       for (const key of Object.keys(patch)) {
-        expect(['mode', 'direction', 'spread', 'fit']).toContain(key);
+        expect(['mode', 'direction', 'spread', 'fit', 'cropMargins']).toContain(key);
       }
       expect(patch).not.toHaveProperty('fitWidth');
       expect(patch.mode).not.toBe('vertical');
@@ -278,7 +281,7 @@ describe('reader chrome panels', () => {
     expect(onPreferences).toHaveBeenLastCalledWith({ fit: 'width' });
     for (const patch of onPreferences.mock.calls.map((call) => call[0] as Record<string, unknown>)) {
       for (const key of Object.keys(patch)) {
-        expect(['mode', 'direction', 'spread', 'fit']).toContain(key);
+        expect(['mode', 'direction', 'spread', 'fit', 'cropMargins']).toContain(key);
       }
     }
   });

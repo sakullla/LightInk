@@ -831,9 +831,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   margin: 0;
 }
 
-/* 漫画是位图，字号缩放只作用于页面，不放大工具栏。 */
+/* 漫画是位图：字号 zoom 会再采样一层，线条发糊。放大只走 pinch 的 --lightink-comic-scale。 */
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages {
-  zoom: var(--lightink-font-scale, 1);
+  zoom: 1;
   transform: translate3d(var(--lightink-comic-translate-x), var(--lightink-comic-translate-y), 0)
     scale(var(--lightink-comic-scale));
   transform-origin: var(--lightink-comic-origin-x) var(--lightink-comic-origin-y);
@@ -1069,6 +1069,14 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   pointer-events: none;
 }
 
+.lightink-reader-cbz-slot[data-comic-cropped='true'] {
+  overflow: hidden;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
 .lightink-reader-nested-archive {
   display: grid;
   width: 100%;
@@ -1112,9 +1120,15 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   direction: ltr;
 }
 
-/* Comic chips own the revealed footer. Keep the idle whisper hairline. */
+/* Comic overlay owns page/slider chrome. Hide the flow footer and idle
+ * whisper so a sparse "第 N 页 · ── · N%" dock does not sit under the pages. */
 .lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome-footer,
 .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
+  display: none;
+}
+
+.lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome-whisper,
+.lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-whisper {
   display: none;
 }
 
@@ -1142,6 +1156,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-bottombar {
   padding: 10px 14px calc(12px + var(--lightink-safe-bottom, 0px));
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-modes {
+  display: none;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-back,
@@ -1179,7 +1197,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-comic-topbar {
   top: 0;
   min-height: 48px;
-  padding: 8px calc(var(--lightink-titlebar-caption, 32px) * 3 + 20px) 8px 14px;
+  padding: 8px calc(var(--lightink-titlebar-caption, 36px) * 3 + 36px) 8px 14px;
   justify-content: space-between;
   -webkit-app-region: drag;
 }
@@ -1413,6 +1431,8 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   height: 100%;
   max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   aspect-ratio: 2 / 3;
   margin: 0;
 }
@@ -1422,14 +1442,20 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   height: 100%;
   max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-visible='1']
   .lightink-reader-cbz-slot {
-  width: auto;
+  width: 100%;
   max-width: 100%;
   height: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  aspect-ratio: auto;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-spread='double'][data-comic-visible='2']
@@ -1455,6 +1481,18 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   max-width: 100%;
   height: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Single-page screen fit: the slot is the contain viewport. Do not size it
+ * from the bitmap's intrinsic height or overflow:hidden will clip the foot. */
+.lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='screen'][data-comic-visible='1']
+  .lightink-reader-cbz-slot,
+.lightink-reader-pages[data-comic-mode='paged']:not([data-comic-fit])[data-comic-visible='1']
+  .lightink-reader-cbz-slot {
+  width: 100%;
+  height: 100%;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='screen']

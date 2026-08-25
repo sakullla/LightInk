@@ -194,6 +194,7 @@ const COMIC_HOST_DATASET_KEYS = [
   'comicSpread',
   'comicFit',
   'comicFitWidth',
+  'comicCropMargins',
   'comicVisible',
   'comicZoomed',
   'comicScale',
@@ -1223,14 +1224,25 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     updateReaderState({ current, total, progress, scale: 1, locationKind: 'chapter' });
   };
 
+  const notifyReaderWindowChrome = (): void => {
+    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('lightink:reader-theme'));
+    }
+  };
+
   const syncPageState = (): void => {
     const current = pdfHandle?.controller.page ?? cbzHandle?.currentPage ?? 0;
     const total = pdfHandle?.controller.totalPages ?? cbzHandle?.totalPages ?? 0;
     const scale = pdfHandle?.controller.scale ?? 1;
-    if (cbzHandle !== null) {
+    const comicOpen = cbzHandle !== null;
+    const wasComic = root.dataset.comicReader === 'true';
+    if (comicOpen) {
       root.dataset.comicReader = 'true';
     } else {
       delete root.dataset.comicReader;
+    }
+    if (wasComic !== comicOpen) {
+      notifyReaderWindowChrome();
     }
     updateReaderState({
       current,
@@ -1499,9 +1511,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     if (cbzHandle !== null) {
-      const total = cbzHandle.totalPages;
-      if (total > 0) {
-        cbzHandle.scrollToPage(Math.max(1, Math.min(total, Math.round(clamped * total) || 1)));
+      if (cbzHandle.totalPages > 0) {
+        cbzHandle.scrollToProgress(clamped);
         syncPageState();
         schedulePersistReadingProgress();
       }
@@ -1638,7 +1649,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (readerChrome !== null) {
       const closed = readerChrome.handleEscape();
       syncChromeRevealAttr();
-      return closed;
+      if (closed) return true;
+    }
+    if (cbzHandle?.hideChrome() === true) {
+      return true;
     }
     if (selectionToolbar?.isVisible() === true) {
       hideSelectionToolbar();
@@ -2599,6 +2613,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       delete root.dataset.comicReader;
       pageHost.replaceChildren();
       syncChromeRevealAttr();
+      notifyReaderWindowChrome();
     }
     // 页宿主滚动合并帧作废（T3 review 遗留：交换点与 destroy 对称 cancel）。
     pageScrollCoordinator?.cancel();
@@ -2665,6 +2680,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         fitScreen: extraComicLabels.fitScreen,
         fitHeight: extraComicLabels.fitHeight,
         fitOriginal: extraComicLabels.fitOriginal,
+        cropMargins: t('reader.comic.cropMargins'),
+        keepMargins: t('reader.comic.keepMargins'),
+        margins: t('reader.comic.margins'),
         pageSlider: t('reader.comic.pageSlider'),
         toggleChrome: t('reader.comic.toggleChrome'),
         imageDecodeFailed: t('reader.comic.imageDecodeFailed'),
@@ -2810,7 +2828,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       else cbzHandle.previousPage();
       syncPageState();
       schedulePersistReadingProgress();
-      playReaderPageTurn(root, pageDelta);
       return true;
     }
     const moved = advanceReadingContent(direction);
@@ -3175,9 +3192,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       applyReaderTheme(pane, next);
     }
     flowRenderer.syncTheme();
-    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-      document.dispatchEvent(new CustomEvent('lightink:reader-theme', { detail: next }));
-    }
+    notifyReaderWindowChrome();
     renderTypographyPanel();
   };
 
@@ -3237,6 +3252,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       fitScreen: extraComicLabels.fitScreen,
       fitHeight: extraComicLabels.fitHeight,
       fitOriginal: extraComicLabels.fitOriginal,
+      cropMargins: t('reader.comic.cropMargins'),
+      keepMargins: t('reader.comic.keepMargins'),
+      margins: t('reader.comic.margins'),
     },
   };
   };
@@ -3361,7 +3379,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       hideSelectionToolbar,
       stayRevealed: () =>
         cbzHandle === null && !flowIsPaginated() && flowScrollContainer().scrollTop <= 16,
-      suppressProgressDock: () => comicChromeVisible(),
+      suppressProgressDock: () =>
+        pageHost.dataset.comicReader === 'true' || root.dataset.comicReader === 'true',
       onSeekProgress: goToProgress,
     });
     syncChromeProgress();
@@ -3792,6 +3811,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
     },
     advanceReading,
+    adjustDisplayScale: (action: 'in' | 'out' | 'reset'): boolean => {
+      if (cbzHandle === null) return false;
+      cbzHandle.adjustZoom(action);
+      return true;
+    },
     getOutline: () => readerOutline,
     jumpToOutlineItem,
     isAnnotationEnabled: () => annotationsEnabled,

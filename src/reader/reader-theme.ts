@@ -104,6 +104,28 @@ export function readerNativeWindowChrome(theme: ReaderThemeId): {
   };
 }
 
+/** Caption pairing for the comic canvas, not EPUB paper. */
+export const COMIC_NATIVE_WINDOW_CHROME = {
+  dark: true,
+  caption: '#111111',
+  text: '#e6e6e6',
+} as const;
+
+/** Stamped on `#app` so caption CSS does not follow a hidden comic tab. */
+export const COMIC_WINDOW_CHROME_CLASS = 'is-comic-reader';
+
+export function hostShowsComicReader(host: ParentNode | null | undefined): boolean {
+  return host instanceof Element && host.querySelector('[data-comic-reader="true"]') !== null;
+}
+
+export function syncComicWindowChromeClass(
+  root: Element | null | undefined,
+  comicOpen: boolean,
+): void {
+  if (root == null) return;
+  root.classList.toggle(COMIC_WINDOW_CHROME_CLASS, comicOpen);
+}
+
 export function loadReaderTheme(storage: ReaderThemeStorage | null | undefined): ReaderThemeId {
   if (storage == null) {
     return DEFAULT_READER_THEME;

@@ -5,12 +5,16 @@ import { describe, expect, it } from 'vitest';
 import { THEME_STORAGE_KEY } from '../../theme/theme-service.js';
 import {
   applyReaderTheme,
+  COMIC_NATIVE_WINDOW_CHROME,
+  COMIC_WINDOW_CHROME_CLASS,
   DEFAULT_READER_THEME,
+  hostShowsComicReader,
   loadReaderTheme,
   parseReaderTheme,
   READER_THEME_STORAGE_KEY,
   readerNativeWindowChrome,
   saveReaderTheme,
+  syncComicWindowChromeClass,
 } from '../reader-theme.js';
 
 describe('reader paper themes', () => {
@@ -52,5 +56,34 @@ describe('reader paper themes', () => {
       caption: '#121212',
       text: '#c8c8c8',
     });
+    expect(COMIC_NATIVE_WINDOW_CHROME).toEqual({
+      dark: true,
+      caption: '#111111',
+      text: '#e6e6e6',
+    });
+  });
+
+  it('only treats the active host as a comic window', () => {
+    const comic = document.createElement('div');
+    const pages = document.createElement('div');
+    pages.dataset.comicReader = 'true';
+    comic.appendChild(pages);
+    comic.style.display = 'none';
+    const epub = document.createElement('div');
+    epub.appendChild(document.createElement('div'));
+    document.body.append(comic, epub);
+
+    expect(hostShowsComicReader(comic)).toBe(true);
+    expect(hostShowsComicReader(epub)).toBe(false);
+    expect(hostShowsComicReader(null)).toBe(false);
+    expect(document.querySelector('[data-comic-reader="true"]')).not.toBeNull();
+
+    const app = document.createElement('div');
+    syncComicWindowChromeClass(app, hostShowsComicReader(epub));
+    expect(app.classList.contains(COMIC_WINDOW_CHROME_CLASS)).toBe(false);
+    syncComicWindowChromeClass(app, hostShowsComicReader(comic));
+    expect(app.classList.contains(COMIC_WINDOW_CHROME_CLASS)).toBe(true);
+    comic.remove();
+    epub.remove();
   });
 });

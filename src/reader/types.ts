@@ -90,6 +90,8 @@ export interface ReaderInstance {
    * 与 Markdown 的 R1 对齐——悬停大纲/chrome/空白区也应翻正文，不限中间章节容器。
    */
   advanceReading(direction: 1 | -1, navKey?: string): boolean;
+  /** Comic bitmap zoom. Returns true when this view consumed the command. */
+  adjustDisplayScale?(action: 'in' | 'out' | 'reset'): boolean;
   /** 当前文档大纲（PDF 书签 / 流式章节 / CBZ 页）；未就绪为空。 */
   getOutline(): readonly OutlineItem[];
   /** 跳转到大纲条目（PDF 按页，流式按章节）。 */

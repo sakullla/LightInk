@@ -77,6 +77,13 @@ describe('window titlebar', () => {
     expect(css).toMatch(
       /html\[data-android\] \.lightink-window-titlebar,\s*html\[data-touch-primary\] \.lightink-window-titlebar\s*\{[^}]*display:\s*none/,
     );
+    expect(css).toMatch(
+      /\.lightink-window-titlebar\s*\{[^}]*background:\s*transparent\s*!important/,
+    );
+    expect(css).toMatch(
+      /#app\.is-comic-reader \.lightink-window-titlebar\s*\{[^}]*color:\s*#e6e6e6/,
+    );
+    expect(css).not.toMatch(/#app:has\(\[data-comic-reader=/);
   });
 
   it('keeps editor caption chips on the right so they do not cover the menu bar', () => {

@@ -102,9 +102,9 @@ export interface ReaderChromeDeps {
   /** When true, an already-revealed bar does not auto-hide (e.g. scroll at top). */
   stayRevealed?: () => boolean;
   /**
-   * Hide the flow footer/whisper while comic chrome (slider + chips) is
-   * up, so the hairline cannot cover those controls. Idle comics still
-   * show the progress dock in the reserved bottom strip.
+   * Hide the flow footer/whisper for comics. Page/slider live on the
+   * comic overlay; a persistent "第 N 页 · ── · N%" dock is too sparse
+   * for a bitmap canvas and duplicates the overlay chrome.
    */
   suppressProgressDock?: () => boolean;
   /**

@@ -216,7 +216,7 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.whisper.hidden).toBe(true);
   });
 
-  it('shows the idle whisper after comic chrome no longer covers it', () => {
+  it('shows the idle whisper only when progress docks are not suppressed', () => {
     let covering = true;
     const { chrome } = mount({ suppressProgressDock: () => covering });
     expect(chrome.whisper.hidden).toBe(true);
