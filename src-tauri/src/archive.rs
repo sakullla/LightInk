@@ -71,7 +71,7 @@ struct CancellableIo<R> {
 }
 
 fn cancelled_io_error() -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, "archive range read cancelled")
+    std::io::Error::other("archive range read cancelled")
 }
 
 fn is_cancelled_io(error: &std::io::Error) -> bool {
