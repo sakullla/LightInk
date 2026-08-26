@@ -8,9 +8,13 @@
  * 复杂版式与 HUFF/CDIC 压缩不在本任务范围（遇 HUFF 报错）。
  *
  * 纯二进制 + 字符串实现，node 可测（测试合成最小 PalmDOC MOBI）。
+ *
+ * 正文解码经 text-encoding 的共享 decodeReaderText；label 由 MOBI codepage 声明
+ * （65001→UTF-8，其余→windows-1252），不参与编码嗅探。
  */
 
 import { sanitizeHtml } from '../sanitize.js';
+import { decodeReaderText } from './text-encoding.js';
 import {
   ParseError,
   ReaderCapabilityError,
@@ -58,15 +62,6 @@ function palmDocDecompress(input: Uint8Array): Uint8Array {
     }
   }
   return Uint8Array.from(out);
-}
-
-function decodeMobiText(bytes: Uint8Array, codepage: number): string {
-  const label = codepage === 65001 ? 'utf-8' : 'windows-1252';
-  try {
-    return new TextDecoder(label, { fatal: false }).decode(bytes);
-  } catch {
-    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  }
 }
 
 /** 取首块 HTML 的首个 <h1>/<h2> 文本作标题（无则空串）。 */
@@ -153,7 +148,10 @@ export function parseMobi(bytes: Uint8Array): ReaderContent {
   }
   const limit = textLength > 0 ? textLength : textBytes.length;
   const full = Uint8Array.from(textBytes.slice(0, limit));
-  const html = decodeMobiText(full, codepage);
+  // codepage→label 决策留在 mobi 解析内；以声明 label 调用共享 decode（不参与
+  // 嗅探，嗅探顺序调整不影响 mobi 输出）。运行时缺该 label 时共享 decode 按
+  // UTF-8 尽力显示。
+  const html = decodeReaderText(full, codepage === 65001 ? 'utf-8' : 'windows-1252');
 
   // 按 <mbp:pagebreak/>（MOBI 分页符）切章；无则整篇一章。
   const pieces = html.split(/<mbp:pagebreak\s*\/?>/i);

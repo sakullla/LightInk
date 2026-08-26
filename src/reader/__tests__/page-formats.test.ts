@@ -1,13 +1,18 @@
+// @vitest-environment jsdom
+
 /**
  * 页格式解析测试（ebook-reader T5）。
  *
  * 纯逻辑单测：CBZ 图片条目过滤 + 自然序排序（listImageEntries/naturalCompare）、
- * PDF 页码/缩放状态机（createPdfPageController：next/prev/setPage/zoom/clamp）。
- * 真实 canvas/zip 渲染（renderPdfInto/renderCbzInto）留手工验证。
+ * PDF 页码/缩放状态机（createPdfPageController：next/prev/setPage/zoom/clamp）、
+ * ComicInfo 共享解码（readComicInfo）。真实 canvas/zip 渲染（renderPdfInto/
+ * renderCbzInto）留手工验证。
  */
 import { describe, expect, it } from 'vitest';
 
-import { listImageEntries, naturalCompare } from '../formats/cbz.js';
+import { listImageEntries, naturalCompare, readComicInfo } from '../formats/cbz.js';
+import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
+import type { ArchiveProvider } from '../sources/types.js';
 import {
   enforcePageCount,
   MAX_CBZ_PAGES,
@@ -150,5 +155,89 @@ describe('reader page limits', () => {
         expect(error).toMatchObject({ kind, actual: limit + 1, limit });
       }
     }
+  });
+});
+
+describe('readComicInfo 共享解码', () => {
+  /** 单条 ComicInfo.xml 的随机访问 provider（readComicInfo 的测试替身）。 */
+  function comicInfoArchive(bytes: Uint8Array) {
+    const entries = [
+      {
+        id: 'comicinfo',
+        filename: 'ComicInfo.xml',
+        directory: false,
+        compressedSize: bytes.byteLength,
+        uncompressedSize: bytes.byteLength,
+      },
+    ];
+    const provider: ArchiveProvider = {
+      entries,
+      accessMode: 'random',
+      readEntry: async () => bytes,
+      close: async () => undefined,
+    };
+    return { provider, entries };
+  }
+
+  it('洁净 UTF-8 ComicInfo 元数据解析不变', async () => {
+    const xml =
+      '<?xml version="1.0"?><ComicInfo><Title>第十卷</Title><Series>示例系列</Series></ComicInfo>';
+    const { provider, entries } = comicInfoArchive(new TextEncoder().encode(xml));
+    const metadata = await readComicInfo(provider, entries);
+    expect(metadata?.title).toBe('第十卷');
+    expect(metadata?.series).toBe('示例系列');
+  });
+
+  it('GBK 编码的 ComicInfo 经共享嗅探解码为可读文本（D1 行为差）', async () => {
+    let gbkDecoded = false;
+    try {
+      new TextDecoder('gbk');
+      gbkDecoded = true;
+    } catch {
+      gbkDecoded = false;
+    }
+    if (!gbkDecoded) {
+      return; // 运行时无 GBK，跳过本例（UTF-8 兜底路径在其它用例覆盖）。
+    }
+    // “书名”(CAE9 C3FB) 的 GBK 字节 + ASCII 结构。
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode('<?xml version="1.0"?><ComicInfo><Title>'),
+      0xca, 0xe9, 0xc3, 0xfb,
+      ...new TextEncoder().encode('</Title></ComicInfo>'),
+    ]);
+    const { provider, entries } = comicInfoArchive(bytes);
+    const metadata = await readComicInfo(provider, entries);
+    expect(metadata?.title).toBe('书名');
+  });
+
+  it('UTF-8 与 GBK 均无法解码的字节按 UTF-8 尽力显示，不抛新错误', async () => {
+    // 0xFF 在两种编码下都非法：嗅探落回 UTF-8，标题显示替换字符。
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode('<?xml version="1.0"?><ComicInfo><Title>A'),
+      0xff,
+      ...new TextEncoder().encode('B</Title></ComicInfo>'),
+    ]);
+    const { provider, entries } = comicInfoArchive(bytes);
+    const metadata = await readComicInfo(provider, entries);
+    expect(metadata?.title).toBe('A�B');
+  });
+
+  it('改变嗅探顺序后 ComicInfo 输出同步变化（探针传播）', async () => {
+    const xml =
+      '<?xml version="1.0"?><ComicInfo><Title>书名</Title><Series>系列</Series></ComicInfo>';
+    const bytes = new TextEncoder().encode(xml);
+    const { provider, entries } = comicInfoArchive(bytes);
+    const before = await readComicInfo(provider, entries);
+    expect(before?.title).toBe('书名');
+    // windows-1252 前置：UTF-8 中文改道解码为 mojibake，元数据同步变化。
+    const restore = injectEncodingSniffOrder(['windows-1252', 'utf-8', 'gbk']);
+    try {
+      const after = await readComicInfo(provider, entries);
+      expect(after?.title).not.toBe('书名');
+      expect(after?.title).not.toBe(undefined);
+    } finally {
+      restore();
+    }
+    expect((await readComicInfo(provider, entries))?.title).toBe('书名');
   });
 });

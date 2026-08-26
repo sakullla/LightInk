@@ -6,6 +6,7 @@ import {
   MAX_READER_IMAGE_BYTES,
   SAFE_READER_IMAGE_MIME_TYPES,
 } from './resource-limits.js';
+import { decodeReaderText } from './text-encoding.js';
 import { ParseError, ReaderLimitError, type ReaderContent } from './types.js';
 
 const HTML_TAGS = new Set([
@@ -39,10 +40,6 @@ const FB2_TAG_MAP: Readonly<Record<string, string>> = {
   subtitle: 'p',
   v: 'p',
 };
-
-function decodeText(bytes: Uint8Array): string {
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-}
 
 function attribute(element: Element, names: readonly string[]): string | null {
   for (const name of names) {
@@ -230,7 +227,8 @@ function chapterHtml(section: Element, resources: Fb2Resources): string {
 
 /** Parse an FB2 document into chapters and lazily owned embedded-image URLs. */
 export function parseFb2(bytes: Uint8Array): ReaderContent {
-  const xml = new DOMParser().parseFromString(decodeText(bytes), 'application/xml');
+  // 无声明编码：走共享嗅探（UTF-8 优先、GBK 回退），GBK 打包的 FB2 不再乱码。
+  const xml = new DOMParser().parseFromString(decodeReaderText(bytes), 'application/xml');
   if (xml.querySelector('parsererror') !== null) {
     throw new ParseError('FB2 XML 损坏或无法解析');
   }

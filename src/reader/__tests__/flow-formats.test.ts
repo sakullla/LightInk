@@ -14,6 +14,7 @@ import { parseEpub } from '../formats/epub.js';
 import { parseFb2 } from '../formats/fb2.js';
 import { parseMobi } from '../formats/mobi.js';
 import { parseTxt, parseTxtFromSource } from '../formats/txt.js';
+import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
 import type { ReaderByteSource } from '../formats/types.js';
 import type { RandomAccessSource } from '../sources/types.js';
 import { ParseError, ReaderCapabilityError } from '../formats/types.js';
@@ -289,6 +290,44 @@ describe('parseFb2', () => {
 </FictionBook>`),
     );
     expect(content.chapters[0]!.html).not.toContain('<img');
+  });
+
+  it('GBK 编码的 FB2 经共享嗅探解码为可读文本（D1 行为差）', () => {
+    let gbkDecoded = false;
+    try {
+      new TextDecoder('gbk');
+      gbkDecoded = true;
+    } catch {
+      gbkDecoded = false;
+    }
+    if (!gbkDecoded) {
+      return; // 运行时无 GBK，跳过本例（UTF-8 兜底路径在其它用例覆盖）。
+    }
+    // “第一章”(B5DA D2BB D5C2) 与 “正文”(D5FD CEC4) 的 GBK 字节 + ASCII 结构。
+    const gbkBytes = new Uint8Array([
+      ...enc('<?xml version="1.0"?>\n<FictionBook><body>'),
+      ...enc('<section><title><p>'),
+      0xb5, 0xda, 0xd2, 0xbb, 0xd5, 0xc2,
+      ...enc('</p></title><p>'),
+      0xd5, 0xfd, 0xce, 0xc4,
+      ...enc('</p></section></body></FictionBook>'),
+    ]);
+    const content = parseFb2(gbkBytes);
+    expect(content.chapters[0]!.title).toBe('第一章');
+    expect(content.chapters[0]!.html).toContain('<p>正文</p>');
+  });
+
+  it('UTF-8 与 GBK 均无法解码的字节按 UTF-8 尽力显示，不抛新错误', () => {
+    // 0xFF 在两种编码下都非法：嗅探落回 UTF-8，标题显示替换字符且照常成章。
+    const bytes = new Uint8Array([
+      ...enc('<?xml version="1.0"?>\n<FictionBook><body>'),
+      ...enc('<section><title><p>'),
+      0xff, 0xff,
+      ...enc('</p></title><p>ok</p></section></body></FictionBook>'),
+    ]);
+    const content = parseFb2(bytes);
+    expect(content.chapters[0]!.title).toContain('�');
+    expect(content.chapters[0]!.html).toContain('<p>ok</p>');
   });
 });
 
@@ -864,70 +903,70 @@ describe('parseEpub', () => {
   });
 });
 
+const u16 = (n: number): number[] => [(n >> 8) & 0xff, n & 0xff];
+const u32 = (n: number): number[] => [(n >>> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+/** ASCII 字符串填充到固定长度（其余填零）。 */
+function asciiPadded(s: string, len: number): number[] {
+  const out = new Array(len).fill(0);
+  for (let i = 0; i < s.length && i < len; i++) {
+    out[i] = s.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+/** ASCII 字符串字节（无填充）。 */
+function asciiCodes(s: string): number[] {
+  return [...s].map((ch) => ch.charCodeAt(0) & 0xff);
+}
+function concat(parts: Array<number[] | Uint8Array>): Uint8Array {
+  const flat: number[] = [];
+  for (const p of parts) {
+    for (const b of p) {
+      flat.push(b);
+    }
+  }
+  return new Uint8Array(flat);
+}
+
+/** 合成最小 PalmDOC MOBI。record 默认为 html 的 UTF-8（compression=1）；可传压缩记录（compression=2）。 */
+function buildMobi(
+  html: string,
+  opts: {
+    encryption?: number;
+    compression?: number;
+    record?: number[];
+    textLength?: number;
+    fileVersion?: number;
+  } = {},
+): Uint8Array {
+  const encryption = opts.encryption ?? 0;
+  const compression = opts.compression ?? 1;
+  const record = opts.record ?? [...enc(html)];
+  const textLength = opts.textLength ?? record.length;
+  const header = asciiPadded('TESTBOOK', 78); // 78 字节 PalmDB 头（name 占 32，其余填零）
+  header[76] = u16(2)[0]!; // numRecords = 2（大端）
+  header[77] = u16(2)[1]!;
+  const index = new Array(18).fill(0); // 2 条记录索引（各 8 字节）+ 2 填充
+  const rec0Offset = 78 + 18; // 96
+  // PalmDOC 头(16) + MOBI 头标识(MOBI)+headerLength+type+codepage(=65001 UTF-8)。
+  const mobi = [
+    ...asciiCodes('MOBI'),
+    ...u32(232),
+    ...u32(2),
+    ...u32(65001),
+    ...u32(0),
+    ...u32(opts.fileVersion ?? 6),
+  ];
+  const rec0 = [
+    ...u16(compression), ...u16(0), ...u32(textLength), ...u16(1), ...u16(4096), ...u16(encryption), ...u16(0),
+    ...mobi,
+  ];
+  const rec1Offset = rec0Offset + rec0.length;
+  index[0] = u32(rec0Offset)[0]!; index[1] = u32(rec0Offset)[1]!; index[2] = u32(rec0Offset)[2]!; index[3] = u32(rec0Offset)[3]!;
+  index[8] = u32(rec1Offset)[0]!; index[9] = u32(rec1Offset)[1]!; index[10] = u32(rec1Offset)[2]!; index[11] = u32(rec1Offset)[3]!;
+  return concat([header, index, rec0, record]);
+}
+
 describe('parseMobi', () => {
-  const u16 = (n: number): number[] => [(n >> 8) & 0xff, n & 0xff];
-  const u32 = (n: number): number[] => [(n >>> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
-  /** ASCII 字符串填充到固定长度（其余填零）。 */
-  function asciiPadded(s: string, len: number): number[] {
-    const out = new Array(len).fill(0);
-    for (let i = 0; i < s.length && i < len; i++) {
-      out[i] = s.charCodeAt(i) & 0xff;
-    }
-    return out;
-  }
-  /** ASCII 字符串字节（无填充）。 */
-  function asciiCodes(s: string): number[] {
-    return [...s].map((ch) => ch.charCodeAt(0) & 0xff);
-  }
-  function concat(parts: Array<number[] | Uint8Array>): Uint8Array {
-    const flat: number[] = [];
-    for (const p of parts) {
-      for (const b of p) {
-        flat.push(b);
-      }
-    }
-    return new Uint8Array(flat);
-  }
-
-  /** 合成最小 PalmDOC MOBI。record 默认为 html 的 UTF-8（compression=1）；可传压缩记录（compression=2）。 */
-  function buildMobi(
-    html: string,
-    opts: {
-      encryption?: number;
-      compression?: number;
-      record?: number[];
-      textLength?: number;
-      fileVersion?: number;
-    } = {},
-  ): Uint8Array {
-    const encryption = opts.encryption ?? 0;
-    const compression = opts.compression ?? 1;
-    const record = opts.record ?? [...enc(html)];
-    const textLength = opts.textLength ?? record.length;
-    const header = asciiPadded('TESTBOOK', 78); // 78 字节 PalmDB 头（name 占 32，其余填零）
-    header[76] = u16(2)[0]!; // numRecords = 2（大端）
-    header[77] = u16(2)[1]!;
-    const index = new Array(18).fill(0); // 2 条记录索引（各 8 字节）+ 2 填充
-    const rec0Offset = 78 + 18; // 96
-    // PalmDOC 头(16) + MOBI 头标识(MOBI)+headerLength+type+codepage(=65001 UTF-8)。
-    const mobi = [
-      ...asciiCodes('MOBI'),
-      ...u32(232),
-      ...u32(2),
-      ...u32(65001),
-      ...u32(0),
-      ...u32(opts.fileVersion ?? 6),
-    ];
-    const rec0 = [
-      ...u16(compression), ...u16(0), ...u32(textLength), ...u16(1), ...u16(4096), ...u16(encryption), ...u16(0),
-      ...mobi,
-    ];
-    const rec1Offset = rec0Offset + rec0.length;
-    index[0] = u32(rec0Offset)[0]!; index[1] = u32(rec0Offset)[1]!; index[2] = u32(rec0Offset)[2]!; index[3] = u32(rec0Offset)[3]!;
-    index[8] = u32(rec1Offset)[0]!; index[9] = u32(rec1Offset)[1]!; index[10] = u32(rec1Offset)[2]!; index[11] = u32(rec1Offset)[3]!;
-    return concat([header, index, rec0, record]);
-  }
-
   it('无压缩 MOBI 提取正文 HTML 为一章', () => {
     const content = parseMobi(buildMobi('<h1>标题</h1><p>正文内容</p>'));
     expect(content.chapters).toHaveLength(1);
@@ -975,5 +1014,84 @@ describe('parseMobi', () => {
     const bad = asciiPadded('X', 78);
     bad[76] = 0xff; bad[77] = 0xff; // numRecords = 65535，远超文件长度
     expect(() => parseMobi(new Uint8Array(bad))).toThrow(ParseError);
+  });
+});
+
+describe('共享解码嗅探顺序传播（shared-decode）', () => {
+  /** 单章中文 EPUB（嗅探传播探针的最小输入）。 */
+  async function buildProbeEpub(): Promise<Uint8Array> {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package><manifest>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '</manifest><spine><itemref idref="ch1"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(
+        enc(
+          '<html><head><title>第一章</title></head><body><h1>一</h1><p>甲</p></body></html>',
+        ),
+      ),
+    );
+    return zip.close();
+  }
+
+  it('改变嗅探顺序后 txt/epub/fb2 输出同步变化，mobi 声明编码不受影响', async () => {
+    const txtBytes = enc('第一段 中文\n\nsecond para');
+    const fb2Bytes = enc(
+      '<?xml version="1.0"?>\n<FictionBook><body>' +
+        '<section><title><p>第一章</p></title><p>正文</p></section>' +
+        '</body></FictionBook>',
+    );
+    const mobiBytes = buildMobi('<h1>标题</h1><p>正文内容</p>');
+    const epubBytes = await buildProbeEpub();
+
+    const txtBefore = parseTxt(txtBytes).chapters[0]!.html;
+    const fb2Before = parseFb2(fb2Bytes);
+    const epubBefore = await parseEpub(epubBytes);
+    const mobiBefore = parseMobi(mobiBytes);
+    expect(txtBefore).toContain('中文');
+    expect(fb2Before.chapters[0]!.title).toBe('第一章');
+    expect(epubBefore.chapters[0]!.html).toContain('<p>甲</p>');
+    expect(mobiBefore.chapters[0]!.html).toContain('<p>正文内容</p>');
+
+    // windows-1252 对任意字节流都不产生替换字符：前置后所有无声明编码的
+    // 格式改由它解码（UTF-8 中文变成 mojibake）；mobi 以声明 label 解码，
+    // 不走嗅探，输出保持不变。
+    const restore = injectEncodingSniffOrder(['windows-1252', 'utf-8', 'gbk']);
+    try {
+      const txtAfter = parseTxt(txtBytes).chapters[0]!.html;
+      expect(txtAfter).not.toBe(txtBefore);
+      expect(txtAfter).not.toContain('中文');
+      const fb2After = parseFb2(fb2Bytes);
+      expect(fb2After.chapters[0]!.title).not.toBe('第一章');
+      expect(fb2After.chapters[0]!.html).not.toBe(fb2Before.chapters[0]!.html);
+      const epubAfter = await parseEpub(epubBytes);
+      expect(epubAfter.chapters[0]!.html).not.toBe(epubBefore.chapters[0]!.html);
+      expect(epubAfter.chapters[0]!.html).not.toContain('<p>甲</p>');
+      const mobiAfter = parseMobi(mobiBytes);
+      expect(mobiAfter.chapters[0]!.html).toBe(mobiBefore.chapters[0]!.html);
+      expect(mobiAfter.chapters[0]!.html).toContain('<p>正文内容</p>');
+    } finally {
+      restore();
+    }
+    // 恢复默认顺序后输出回到基线。
+    expect(parseTxt(txtBytes).chapters[0]!.html).toBe(txtBefore);
   });
 });

@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '../../file/browser-file-store.js';
 import { ParseError } from './types.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
+import { decodeReaderText } from './text-encoding.js';
 import type {
   ArchiveEntryMetadata,
   ArchiveProvider,
@@ -318,7 +319,8 @@ function isComicInfoPath(path: string): boolean {
   return normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase() === 'comicinfo.xml';
 }
 
-async function readComicInfo(
+/** Read and decode the archive's ComicInfo.xml via the shared encoding sniff. */
+export async function readComicInfo(
   provider: ArchiveProvider,
   entries: readonly ComicArchiveEntry[],
   signal?: AbortSignal,
@@ -345,7 +347,8 @@ async function readComicInfo(
     const bytes = await provider.readEntry(candidate.id, signal);
     throwIfReaderLoadCancelled(signal);
     if (bytes.byteLength > MAX_COMIC_INFO_BYTES) return null;
-    return parseComicInfo(new TextDecoder('utf-8', { fatal: false }).decode(bytes));
+    // 无声明编码：共享嗅探解码（UTF-8 优先、GBK 回退）。
+    return parseComicInfo(decodeReaderText(bytes));
   } catch (error) {
     if (isReaderLoadCancelled(error, signal)) throw error;
     return null;
