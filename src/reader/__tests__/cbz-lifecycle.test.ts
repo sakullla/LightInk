@@ -994,7 +994,7 @@ describe('CBZ page materialization', () => {
 function androidTauriHost(
   extras: ComicSystemBarsHost = {},
 ): Window & ComicSystemBarsHost {
-  return { __TAURI_INTERNALS__: {}, ...extras } as Window & ComicSystemBarsHost;
+  return { __TAURI_INTERNALS__: {}, ...extras } as unknown as Window & ComicSystemBarsHost;
 }
 
 describe('CBZ chrome overlay and system bars (R4)', () => {
@@ -1089,7 +1089,7 @@ describe('CBZ chrome overlay and system bars (R4)', () => {
     expect(invokeMock).not.toHaveBeenCalled();
     syncComicSystemBarsVisible(
       false,
-      { LightInkSystemBars: { setVisible } } as Window & ComicSystemBarsHost,
+      { LightInkSystemBars: { setVisible } } as unknown as Window & ComicSystemBarsHost,
       document.documentElement,
     );
     expect(setVisible).not.toHaveBeenCalled();
