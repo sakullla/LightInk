@@ -274,6 +274,8 @@ fn with_linux_caption_provider(f: impl FnOnce(&gtk::CssProvider)) {
 }
 
 /// Monitor / work-area rectangles as `(left, top, right, bottom)`.
+/// 仅单元测试使用；生产路径已改为直接套 work area，避免非测试 lib 死代码。
+#[cfg(test)]
 pub fn constrain_max_extent(
     monitor: (i32, i32, i32, i32),
     work: (i32, i32, i32, i32),
@@ -284,6 +286,8 @@ pub fn constrain_max_extent(
     )
 }
 
+/// 与 `fit_fullscreen_to_visible_work_area` 对齐；非 Windows lib 仅测试引用。
+#[cfg(any(windows, test))]
 pub fn work_area_needs_fit(
     position: (i32, i32),
     size: (u32, u32),
