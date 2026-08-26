@@ -4498,6 +4498,103 @@ describe('LibraryView mobile shelf', () => {
     expect(bodyRule![1]).toMatch(/grid-template-columns/);
   });
 
+  function cssRuleBodies(css: string, selector: RegExp): string[] {
+    const bodies: string[] = [];
+    const matcher = new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`, selector.flags.includes('g') ? selector.flags : `${selector.flags}g`);
+    for (const match of css.matchAll(matcher)) {
+      bodies.push(match[1]);
+    }
+    return bodies;
+  }
+
+  function cssDeclaration(block: string, property: string): string | undefined {
+    const match = block.match(new RegExp(`(?:^|[;\\s])${property}\\s*:\\s*([^;]+)`, 'i'));
+    return match?.[1]?.trim();
+  }
+
+  function cssLengthPx(value: string | undefined): number[] {
+    if (!value) return [];
+    return [...value.matchAll(/(\d+(?:\.\d+)?)(px|rem)/g)].map((match) => {
+      const amount = Number(match[1]);
+      return match[2] === 'rem' ? amount * 16 : amount;
+    });
+  }
+
+  it('spaces phone chips, continue banner, and cover wall so the last row clears the tab bar', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+
+    // 桌面规则保持：芯片隐藏、横幅单行、墙底 56px、封面–标题 10px。
+    expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
+    const desktopContinueTitle = cssRuleBodies(css, /\.lightink-library-continue-text strong/)[0];
+    expect(desktopContinueTitle).toMatch(/white-space:\s*nowrap/);
+    expect(desktopContinueTitle).not.toMatch(/-webkit-line-clamp/);
+    const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0];
+    expect(desktopWall).toMatch(/padding:\s*8px var\(--lightink-library-pad-x\) 56px/);
+    const desktopItem = cssRuleBodies(css, /\.lightink-library-item(?![\w-])/)[0];
+    expect(cssLengthPx(cssDeclaration(desktopItem, 'gap'))[0]).toBe(10);
+    const desktopContinue = cssRuleBodies(css, /\.lightink-library-continue/)[0];
+    expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBe(6);
+
+    // 触控芯片：热区之间有比当前 8px 更大的空隙。
+    const chipBlocks = cssRuleBodies(
+      css,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips/,
+    );
+    const chipGap = cssLengthPx(cssDeclaration(chipBlocks[chipBlocks.length - 1] ?? '', 'gap'));
+    expect(chipGap[0]).toBeGreaterThan(8);
+
+    // 继续阅读条：内边距加大，条与芯片/封面墙不再只剩 4px。
+    const continueBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-continue/,
+    );
+    expect(continueBlocks.length).toBeGreaterThan(0);
+    const continueBlock = continueBlocks[continueBlocks.length - 1] ?? '';
+    const continuePadding = cssLengthPx(cssDeclaration(continueBlock, 'padding'));
+    expect(Math.max(0, ...continuePadding)).toBeGreaterThan(6);
+    const continueMargin = cssLengthPx(cssDeclaration(continueBlock, 'margin'));
+    expect(continueMargin[continueMargin.length - 1] ?? 0).toBeGreaterThan(4);
+
+    // 横幅标题最多两行；封面墙标题仍两行。
+    const bannerTitleBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]{0,80}?\.lightink-library-continue-text strong/,
+    );
+    expect(bannerTitleBlocks.join('\n')).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(bannerTitleBlocks.join('\n')).toMatch(/white-space:\s*normal/);
+    expect(css).toMatch(/\.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/);
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/,
+    );
+
+    // 两列 gutter 与封面–标题 gap 加大。
+    const itemBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item(?![\w-])/,
+    );
+    const itemGap = cssLengthPx(cssDeclaration(itemBlocks[itemBlocks.length - 1] ?? '', 'gap'));
+    expect(itemGap[0]).toBeGreaterThan(10);
+    const wallBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall/,
+    );
+    const wallBlock = wallBlocks[wallBlocks.length - 1] ?? '';
+    const wallColumnGap =
+      cssLengthPx(cssDeclaration(wallBlock, 'column-gap'))[0] ??
+      cssLengthPx(cssDeclaration(wallBlock, 'gap'))[1] ??
+      cssLengthPx(cssDeclaration(wallBlock, 'gap'))[0];
+    expect(wallColumnGap).toBeGreaterThan(12);
+
+    // 墙底 padding ≥ 底栏 min-height 48px + safe-bottom，末行不被 Tab 挡住。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar-tab\s*\{[^}]*min-height:\s*48px/,
+    );
+    const wallPad = cssDeclaration(wallBlock, 'padding-bottom') ?? cssDeclaration(wallBlock, 'padding') ?? '';
+    expect(wallPad).toMatch(/48px/);
+    expect(wallPad).toMatch(/--lightink-safe-bottom/);
+    expect(wallPad).not.toMatch(/28px\s*\+\s*var\(--lightink-safe-bottom/);
+  });
+
   it('gives the manage dialogs near-full viewport width and compact UI type on phone chrome', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     // 分组/书源 dialog：移动断点下放宽宽度并接近全屏边距。
@@ -4628,6 +4725,56 @@ describe('LibraryView mobile shelf', () => {
       'manage section did not activate',
     );
     expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
+    view.destroy();
+  });
+
+  it('keeps phone chip, continue, and cover-wall hit targets as separate controls', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const unread = localItem();
+    const novel = localItem({
+      id: 'local:/books/c.epub',
+      title: '续读小说',
+      localPath: '/books/c.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === unread.id) return { status: 'not-started' as const };
+      return { status: 'in-progress' as const, unit: 'chapter' as const, index: 2, ratio: 0.4, percent: 21 };
+    });
+    const base = dependencies();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(
+      host,
+      dependencies({
+        getProgress,
+        library: { ...base.library, listItems: vi.fn(async () => [unread, novel]) },
+      }),
+    );
+    await view.show();
+
+    const content = libraryRoot(host).querySelector('.lightink-library-content');
+    const chips = Array.from(content?.querySelectorAll<HTMLButtonElement>('.lightink-library-shelf-chip') ?? []);
+    expect(chips.length).toBeGreaterThan(1);
+    expect(new Set(chips.map((chip) => chip.dataset.shelfGroup)).size).toBe(chips.length);
+
+    const bar = host.querySelector<HTMLElement>('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    const open = bar?.querySelector<HTMLButtonElement>('.lightink-library-continue-open');
+    const dismiss = bar?.querySelector<HTMLButtonElement>('.lightink-library-continue-dismiss');
+    expect(open).not.toBeNull();
+    expect(dismiss).not.toBeNull();
+    expect(open).not.toBe(dismiss);
+    expect(open?.contains(bar!.querySelector('.lightink-library-cover'))).toBe(true);
+    expect(open?.querySelector('.lightink-library-continue-text strong')?.textContent).toContain('续读小说');
+    expect(open?.querySelector('.lightink-library-continue-cue')?.textContent).toBe('继续阅读');
+    expect(dismiss?.contains(open!)).toBe(false);
+
+    const covers = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('.lightink-library-cover-wall .lightink-library-item'),
+    );
+    expect(covers.length).toBeGreaterThan(1);
+    expect(new Set(covers.map((card) => card.dataset.itemId)).size).toBe(covers.length);
+
     view.destroy();
   });
 
