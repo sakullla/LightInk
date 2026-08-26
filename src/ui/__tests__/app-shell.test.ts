@@ -238,6 +238,15 @@ function restoreDocument(): void {
   }
 }
 
+/** R5：常驻浮层 = 已挂载且未 hidden/inert。阅读表面不得如此；未挂载也算没有。 */
+function hasPersistentMobileBack(root: FakeEl): boolean {
+  const btn = root.querySelector('#lightink-mobile-back-to-shelf');
+  if (btn === null) {
+    return false;
+  }
+  return btn.hidden !== true && btn.inert !== true;
+}
+
 describe('createAppShell immersive chrome', () => {
   afterEach(() => {
     restoreDocument();
@@ -429,6 +438,7 @@ describe('createAppShell immersive chrome', () => {
     expect(tabsHost?.hidden).toBe(true);
     expect(readerShell?.hidden).toBe(true);
     expect(statusHost?.hidden).toBe(false);
+    expect(hasPersistentMobileBack(fakeRoot)).toBe(false);
   });
 
   it('reveals the editor menu and tab bar when opening Markdown even if chrome is unpinned', () => {
@@ -501,9 +511,8 @@ describe('createAppShell immersive chrome', () => {
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(true);
     expect(readBtn?.textContent).toBe('阅读/书架');
     expect(readBtn?.hidden).toBe(true);
-    const mobileBack = fakeRoot.querySelector('#lightink-mobile-back-to-shelf');
-    expect(mobileBack?.textContent).toBe('返回书架');
-    mobileBack?.click();
+    // R5：往返走「阅读/书架」，不再点常驻「返回书架」浮层。
+    readBtn?.click();
     expect(calls).toEqual(['editor', 'shelf']);
     expect(readBtn?.className).toContain('lightink-workspace-travel');
     expect(fakeRoot.querySelector('#lightink-toolbar')?.contains(readBtn)).toBe(true);
@@ -513,6 +522,10 @@ describe('createAppShell immersive chrome', () => {
         ?.children.some((child) => child.className.includes('lightink-chrome-drag')),
     ).toBe(true);
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(hasPersistentMobileBack(fakeRoot)).toBe(false);
+    shell.applyWorkspace({ mode: 'editor', surface: 'editor' });
+    expect(fakeRoot.querySelector('#lightink-enter-editor')).not.toBeNull();
     readBtn?.click();
     expect(calls).toEqual(['editor', 'shelf', 'shelf']);
   });
@@ -536,8 +549,50 @@ describe('createAppShell immersive chrome', () => {
     expect(shell.enterEditorButton.id).toBe('lightink-enter-editor');
     // 反向「阅读/书架」travel 按钮与书架 chrome 不受影响。
     expect(fakeRoot.querySelector('#lightink-enter-reader-home')).not.toBeNull();
-    expect(fakeRoot.querySelector('#lightink-mobile-back-to-shelf')?.textContent).toBe('返回书架');
+    expect(hasPersistentMobileBack(fakeRoot)).toBe(false);
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(false);
+  });
+
+  it('R5：触控 reader 表面不常驻「返回书架」浮层；桌面打开 Markdown 仍进编辑器并保留编辑入口', () => {
+    installFakeDocument();
+    const androidRoot = document.createElement('div') as unknown as HTMLElement;
+    const androidShell = createAppShell(
+      androidRoot,
+      {
+        ...stubActions(),
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'shelf' }),
+        getWorkspaceMode: () => 'reader',
+        isEditorEntrySuppressed: () => true,
+      },
+      { shortcutBindings: () => [], storage: null, touchPrimary: true },
+    );
+    const androidFake = androidRoot as unknown as FakeEl;
+    expect(hasPersistentMobileBack(androidFake)).toBe(false);
+
+    androidShell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(androidFake.classList.contains('is-workspace-reader')).toBe(true);
+    expect(hasPersistentMobileBack(androidFake)).toBe(false);
+    expect(androidFake.querySelector('#lightink-chrome-host')?.hidden).toBe(true);
+    expect(androidFake.querySelector('#lightink-enter-editor')).toBeNull();
+    expect(androidShell.enterEditorButton.id).toBe('lightink-enter-editor');
+
+    const desktopRoot = document.createElement('div') as unknown as HTMLElement;
+    const desktopShell = createAppShell(
+      desktopRoot,
+      {
+        ...stubActions(),
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'shelf' }),
+        getWorkspaceMode: () => 'reader',
+      },
+      { shortcutBindings: () => [], storage: null },
+    );
+    desktopShell.applyWorkspace({ mode: 'editor', surface: 'editor' });
+    const desktopFake = desktopRoot as unknown as FakeEl;
+    expect(desktopFake.classList.contains('is-workspace-editor')).toBe(true);
+    expect(desktopFake.querySelector('#lightink-chrome-host')?.hidden).toBe(false);
+    expect(desktopFake.querySelector('#lightink-tabs-host')?.hidden).toBe(false);
+    expect(desktopFake.querySelector('#lightink-enter-editor')).not.toBeNull();
+    expect(desktopShell.enterEditorButton.id).toBe('lightink-enter-editor');
   });
 
   it('setReaderTypography persists reader scale without writing lightink.fontScale', () => {

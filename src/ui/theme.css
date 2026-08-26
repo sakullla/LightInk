@@ -418,10 +418,19 @@ html[data-display='xuhd'] {
   display: none;
 }
 
-:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor .lightink-mobile-back-to-shelf,
+.lightink-mobile-back-to-shelf[hidden] {
+  display: none !important;
+}
+
+/* R5：阅读态不用常驻浮层；桌面编辑器工作区可保留。 */
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-reader .lightink-mobile-back-to-shelf,
 :is(html[data-android], html[data-touch-primary])
   #app.is-workspace-shelf:has(.lightink-library[hidden])
   .lightink-mobile-back-to-shelf {
+  display: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor .lightink-mobile-back-to-shelf {
   position: fixed;
   top: calc(var(--lightink-safe-top, 0px) + 8px);
   left: max(8px, var(--lightink-safe-left, 0px));
@@ -442,11 +451,15 @@ html[data-display='xuhd'] {
   font-weight: 600;
 }
 
-:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor #lightink-editor-area,
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-editor #lightink-editor-area {
+  padding-top: calc(var(--lightink-safe-top, 0px) + 56px);
+}
+
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-reader #lightink-editor-area,
 :is(html[data-android], html[data-touch-primary])
   #app.is-workspace-shelf:has(.lightink-library[hidden])
   #lightink-editor-area {
-  padding-top: calc(var(--lightink-safe-top, 0px) + 56px);
+  padding-top: 0;
 }
 
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */

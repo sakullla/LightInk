@@ -9,11 +9,16 @@
  * Surfaces:
  *   - editor: Markdown editor and existing markdown tabs
  *   - shelf:  library as the reader-mode home (a workspace panel, not an overlay)
- *   - reader: an opened book; return-to-shelf stays in reader mode
+ *   - reader: an opened book or immersive markdown; return-to-shelf stays
+ *     in reader mode
  *
  * Round-trip is only `enterEditor()` (labeled 编辑) and
  * `enterReaderHome()` (labeled 阅读/书架). `toggleLibraryEntry` must
  * not send the shelf to the editor.
+ *
+ * R5: Android/touch opens Markdown with `applyMarkdownOpenSurface(..., true)`
+ * so surface is reader (editor root stays visible via `markdownOpen`).
+ * Desktop still `enterEditor()`.
  */
 
 export type WorkspaceMode = 'editor' | 'reader';
@@ -54,6 +59,15 @@ export interface WorkspaceSurfaceRoots {
   editor?: { hidden: boolean };
   shelf?: { hidden: boolean };
   reader?: { hidden: boolean };
+}
+
+/**
+ * Extra visibility context. `markdownOpen` is the R5 case: reader surface
+ * showing a markdown tab, so the editor root stays on screen and the
+ * ebook host stays hidden.
+ */
+export interface WorkspaceVisibilityContext {
+  readonly markdownOpen?: boolean;
 }
 
 export interface WorkspaceModeController {
@@ -112,16 +126,37 @@ export function workspaceChrome(surface: WorkspaceSurface): WorkspaceChrome {
   return surface === 'editor' ? 'editor' : 'reader';
 }
 
-export function workspaceVisibility(surface: WorkspaceSurface): WorkspaceVisibility {
+export function workspaceVisibility(
+  surface: WorkspaceSurface,
+  context?: WorkspaceVisibilityContext,
+): WorkspaceVisibility {
+  const markdownAsReader = surface === 'reader' && context?.markdownOpen === true;
   const editorChromeVisible = surface === 'editor';
   return {
-    editorVisible: surface === 'editor',
+    editorVisible: surface === 'editor' || markdownAsReader,
     shelfVisible: surface === 'shelf',
-    readerVisible: surface === 'reader',
+    readerVisible: surface === 'reader' && !markdownAsReader,
     outlineHidden: surface !== 'editor',
     editorChromeVisible,
     readerChromeVisible: !editorChromeVisible,
   };
+}
+
+/**
+ * Android/touch: land Markdown on the reader surface (`openBook`).
+ * Desktop: keep the editor. Does not change `editorEnabled`.
+ */
+export function applyMarkdownOpenSurface(
+  workspace: Pick<WorkspaceModeController, 'openBook' | 'enterEditor' | 'enterReader'>,
+  immersive: boolean,
+): 'reader' | 'editor' {
+  if (immersive) {
+    workspace.enterReader();
+    workspace.openBook();
+    return 'reader';
+  }
+  workspace.enterEditor();
+  return 'editor';
 }
 
 export function applyWorkspaceSurface(
@@ -145,8 +180,9 @@ export function applyWorkspaceSurface(
 export function applyWorkspaceVisibility(
   roots: WorkspaceSurfaceRoots,
   surface: WorkspaceSurface,
+  context?: WorkspaceVisibilityContext,
 ): void {
-  const vis = workspaceVisibility(surface);
+  const vis = workspaceVisibility(surface, context);
   if (roots.editor !== undefined) {
     roots.editor.hidden = !vis.editorVisible;
   }

@@ -33,4 +33,33 @@ describe('accessibility media preferences', () => {
     expect(themeCss).toContain('.lightink-mobile-back-to-shelf {\n  display: none;\n}');
     expect(readerCss).toContain('--lightink-keyboard-inset');
   });
+
+  it('R5: mobile reader/markdown has no persistent 返回书架 overlay or 56px pad', () => {
+    expect(themeCss).toContain('.lightink-mobile-back-to-shelf {\n  display: none;\n}');
+
+    const readerOverlay = themeCss.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-reader \.lightink-mobile-back-to-shelf[\s\S]*?\{[^}]*\}/,
+    )?.[0];
+    expect(readerOverlay).toMatch(/display:\s*none/);
+    expect(readerOverlay).not.toMatch(/display:\s*inline-flex/);
+    expect(readerOverlay).toMatch(
+      /#app\.is-workspace-shelf:has\(\.lightink-library\[hidden\]\)\s*\.lightink-mobile-back-to-shelf/,
+    );
+
+    const readerPad = themeCss.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-reader #lightink-editor-area[\s\S]*?\{[^}]*\}/,
+    )?.[0];
+    expect(readerPad).toMatch(/padding-top:\s*0/);
+    expect(readerPad).not.toMatch(/56px/);
+    expect(readerPad).toMatch(
+      /#app\.is-workspace-shelf:has\(\.lightink-library\[hidden\]\)\s*#lightink-editor-area/,
+    );
+
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-editor \.lightink-mobile-back-to-shelf\s*\{[^}]*display:\s*inline-flex/,
+    );
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-editor #lightink-editor-area\s*\{[^}]*padding-top:\s*calc\(var\(--lightink-safe-top,\s*0px\) \+ 56px\)/,
+    );
+  });
 });

@@ -1249,6 +1249,8 @@ export function createAppShell(
     setChromeSetVisible(tabsHost, editorChrome);
     setChromeSetVisible(readerShell, shelfChrome);
     setChromeSetVisible(statusBarHost, !shelfChrome);
+    // R5：阅读表面走 createReaderChrome backToShelf，不常驻浮层返回。
+    setChromeSetVisible(mobileBackToShelf, editorChrome);
     if (!editorChrome) {
       menuBar.closeAll();
     } else if (enteringEditor) {

@@ -114,12 +114,14 @@ import { createStyleTagSlot, ThemeService } from './theme/theme-service.js';
 import type { CheatBinding } from './ui/help-cheatsheet.js';
 import { createAppShell } from './ui/app-shell.js';
 import {
+  applyMarkdownOpenSurface,
   applyWorkspaceVisibility,
   createWorkspaceMode,
   workspaceVisibility,
   type WorkspaceMode,
   type WorkspaceSnapshot,
 } from './ui/workspace-mode.js';
+import { createReaderChrome, type ReaderChrome } from './reader/reader-chrome.js';
 import {
   handleExternalOpen,
   revealExistingWindow,
@@ -465,6 +467,14 @@ let autosave: AutosaveController;
 let libraryView: LibraryView | undefined;
 // R6：Android 阅读侧裁剪——编辑器不可达，默认书架、enterEditor 空操作（桌面不变）。
 const workspace = createWorkspaceMode({ editorEnabled: !isAndroidApp });
+
+/** R5：Android / 触控打开 Markdown 走 reader 表面 + createReaderChrome，桌面仍进编辑器。 */
+function isImmersiveMarkdownPlatform(): boolean {
+  return isAndroidApp || isTouchPrimary;
+}
+
+let markdownReaderChrome: ReaderChrome | null = null;
+let markdownReaderChromeHost: HTMLElement | null = null;
 // Cold start is the reader cover wall, not the Markdown editor.
 workspace.enterReaderHome();
 let applyingWorkspaceSurfaces = false;
@@ -639,12 +649,13 @@ async function openPathByKind(
     }
     // File→Open / recents / drop share this helper. A reader tab opened while
     // the shelf is showing must flip hasOpenBook so the book is not left under
-    // the library. Markdown opened from the shelf must enter the editor.
+    // the library. Markdown on Android/touch lands on the reader surface
+    // (R5); desktop still enters the editor.
     if (tab?.kind === 'reader') {
       workspace.openBook();
       tab.reader.restoreReadingProgress?.();
     } else if (tab !== null && isMarkdownTab(tab)) {
-      workspace.enterEditor();
+      applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
     }
     return tab;
   } finally {
@@ -690,6 +701,10 @@ async function openExternalAssociationPath(
     restoreWindow: () => revealExistingWindow(),
     locale: i18n.locale,
   });
+  // handleExternalOpen maps markdown → enterEditor; immersive phones stay on reader.
+  if (isImmersiveMarkdownPlatform() && activeMarkdownTab() !== null) {
+    applyMarkdownOpenSurface(workspace, true);
+  }
 }
 
 let outlineVisibilityBeforeLibrary: import('./outline/outline-view.js').OutlineVisibility | null = null;
@@ -729,14 +744,103 @@ function revealReaderBookTab(): void {
 
 let appliedWorkspaceSurface: WorkspaceSnapshot['surface'] = workspace.surface;
 
+function markdownOpenAsReader(): boolean {
+  return (
+    isImmersiveMarkdownPlatform() &&
+    workspace.surface === 'reader' &&
+    workspace.hasOpenBook &&
+    activeMarkdownTab() !== null
+  );
+}
+
+function disposeMarkdownReaderChrome(): void {
+  if (markdownReaderChromeHost !== null) {
+    markdownReaderChromeHost.removeEventListener('click', onMarkdownReaderChromeClick);
+    markdownReaderChromeHost = null;
+  }
+  markdownReaderChrome?.destroy();
+  markdownReaderChrome = null;
+}
+
+function onMarkdownReaderChromeClick(event: Event): void {
+  if (markdownReaderChrome === null || event.defaultPrevented) {
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Node) {
+    if (
+      markdownReaderChrome.element.contains(target) ||
+      markdownReaderChrome.footer.contains(target) ||
+      markdownReaderChrome.whisper.contains(target)
+    ) {
+      return;
+    }
+  }
+  if (target instanceof Element && typeof target.closest === 'function') {
+    if (target.closest('a, button, input, textarea, select, .lightink-reader-chrome-panel') !== null) {
+      return;
+    }
+  }
+  const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+  if (selection !== null && selection.toString().trim() !== '') {
+    return;
+  }
+  markdownReaderChrome.toggle();
+}
+
+function syncMarkdownReaderChrome(): void {
+  const tab = activeMarkdownTab();
+  if (!markdownOpenAsReader() || tab === null) {
+    disposeMarkdownReaderChrome();
+    return;
+  }
+  const host = tab.hostElement;
+  if (markdownReaderChrome !== null && markdownReaderChromeHost === host) {
+    return;
+  }
+  disposeMarkdownReaderChrome();
+  try {
+    markdownReaderChrome = createReaderChrome(host, {
+      touchMode: true,
+      locale: i18n.locale,
+      returnToShelf: () => {
+        workspace.returnToShelf();
+      },
+      suppressProgressDock: () => true,
+      toggleSidebar: () => {
+        annotationHostFor(tab).toggleSidebar();
+      },
+      isSidebarVisible: () => annotationHostFor(tab).isSidebarVisible(),
+      isOverlayOpen: () => annotationHostFor(tab).isSidebarVisible(),
+      dismissOverlay: () => {
+        const notes = annotationHostFor(tab);
+        if (notes.isSidebarVisible()) {
+          notes.toggleSidebar();
+          return true;
+        }
+        return false;
+      },
+    });
+    markdownReaderChromeHost = host;
+    host.addEventListener('click', onMarkdownReaderChromeClick);
+  } catch {
+    // Failure: no persistent overlay; system back / returnToShelf still works.
+    markdownReaderChrome = null;
+    markdownReaderChromeHost = null;
+  }
+}
+
 function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): void {
   applyingWorkspaceSurfaces = true;
   try {
     shell?.applyWorkspace(state);
-    const vis = workspaceVisibility(state.surface);
+    const markdownOpen = activeMarkdownTab() !== null;
+    const vis = workspaceVisibility(state.surface, { markdownOpen });
     setLibraryVisibility(vis.outlineHidden);
     if (libraryView !== undefined) {
-      applyWorkspaceVisibility({ shelf: libraryView.element }, state.surface);
+      applyWorkspaceVisibility({ shelf: libraryView.element }, state.surface, {
+        markdownOpen,
+      });
     }
     if (state.surface === 'shelf') {
       void libraryView?.show();
@@ -749,7 +853,8 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
       if (appliedWorkspaceSurface !== 'editor') {
         revealEditorMarkdownTab();
       }
-    } else if (state.surface === 'reader') {
+    } else if (state.surface === 'reader' && activeMarkdownTab() === null) {
+      // Leftover EPUB must not steal an immersive markdown session.
       revealReaderBookTab();
       activeReaderTab()?.reader.restoreReadingProgress?.();
     }
@@ -764,6 +869,7 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
         tab.hostElement.setAttribute('aria-hidden', shelf ? 'true' : 'false');
       }
     }
+    syncMarkdownReaderChrome();
   } catch {
     // Stay on the current workspace; do not dispose tab-manager state.
   } finally {
@@ -1036,7 +1142,7 @@ async function openLibraryItem(
     if (tab.kind === 'reader') {
       workspace.openBook();
     } else if (isMarkdownTab(tab)) {
-      workspace.enterEditor();
+      applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
     }
     return;
   }
@@ -1462,7 +1568,7 @@ async function handleOsFileDrop(paths: readonly string[]): Promise<void> {
     }
   }
   if (openedMarkdown) {
-    workspace.enterEditor();
+    applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
   }
   for (const path of plan.reader) {
     await openPathByKind(path);
@@ -2060,8 +2166,8 @@ function renderTabBar(): void {
     onSwitch: (id) => {
       const tab = manager.tabList.find((item) => item.id === id);
       manager.switchTab(id);
-      if (tab?.kind === 'markdown' && workspace.mode === 'reader') {
-        workspace.enterEditor();
+      if (tab?.kind === 'markdown') {
+        applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
       } else if (tab?.kind === 'reader') {
         workspace.openBook();
         workspace.enterReader();
@@ -2109,8 +2215,8 @@ function cycleActiveTab(delta: 1 | -1): void {
   const next = tabs[(index + delta + tabs.length) % tabs.length];
   if (next !== undefined) {
     manager.switchTab(next.id);
-    if (next.kind === 'markdown' && workspace.mode === 'reader') {
-      workspace.enterEditor();
+    if (next.kind === 'markdown') {
+      applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
     } else if (next.kind === 'reader') {
       workspace.openBook();
       workspace.enterReader();
@@ -2382,6 +2488,7 @@ manager = new TabManager({
     if (tab.kind === 'markdown') {
       editorScroller.scrollTop = manager.getScrollPosition(tab.id);
     }
+    syncMarkdownReaderChrome();
     syncNativeWindowChrome();
   },
   // T4/R2：编辑器内点折叠三角切换后，立即刷新大纲的折叠标记态。
@@ -3384,6 +3491,9 @@ shortcuts.attach(document);
  * 的合成 Escape 走同一监听链，不复制分层逻辑。
  */
 function consumeLayeredEscapeLeftover(): boolean {
+  if (markdownReaderChrome?.handleEscape() === true) {
+    return true;
+  }
   if (workspace.mode !== 'reader') {
     return false;
   }

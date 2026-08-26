@@ -381,3 +381,73 @@ describe('applyWorkspaceVisibility', () => {
     expect(reader.hidden).toBe(true);
   });
 });
+
+describe('R5 markdown chrome: Android/touch opens Markdown as reader', () => {
+  it('Android (editorEnabled:false) openBook lands on reader, not the editor', () => {
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    expect(workspace.enterEditor()).toEqual({
+      mode: 'reader',
+      hasOpenBook: false,
+      surface: 'shelf',
+    });
+    expect(workspace.openBook()).toEqual({
+      mode: 'reader',
+      hasOpenBook: true,
+      surface: 'reader',
+    });
+    expect(workspace.surface).not.toBe('editor');
+    expect(workspaceChrome(workspace.surface)).toBe('reader');
+    expect(workspaceVisibility(workspace.surface).readerChromeVisible).toBe(true);
+    expect(workspaceVisibility(workspace.surface).editorChromeVisible).toBe(false);
+  });
+
+  it('tapping createReaderChrome backToShelf is returnToShelf → shelf', () => {
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    workspace.openBook();
+    expect(workspace.returnToShelf()).toEqual({
+      mode: 'reader',
+      hasOpenBook: false,
+      surface: 'shelf',
+    });
+    expect(workspace.enterEditor().surface).toBe('shelf');
+  });
+
+  it('desktop still enters the editor for Markdown and keeps the editor entry', () => {
+    const workspace = createWorkspaceMode();
+    expect(workspace.enterEditor()).toEqual({
+      mode: 'editor',
+      hasOpenBook: false,
+      surface: 'editor',
+    });
+    expect(workspaceChrome(workspace.surface)).toBe('editor');
+    expect(workspaceVisibility('editor').editorChromeVisible).toBe(true);
+    expect(workspaceVisibility('editor').readerChromeVisible).toBe(false);
+    expect(workspace.openBook().surface).toBe('editor');
+    expect(createWorkspaceMode({ editorEnabled: true }).enterEditor().surface).toBe('editor');
+  });
+
+  it('stamps is-workspace-reader for an open Markdown book, not is-workspace-editor', () => {
+    const classNames = new Set<string>();
+    const root = {
+      dataset: {} as DOMStringMap,
+      classList: {
+        toggle(name: string, force?: boolean) {
+          if (force === true) classNames.add(name);
+          else classNames.delete(name);
+          return force === true;
+        },
+      } as unknown as DOMTokenList,
+    };
+    const workspace = createWorkspaceMode({ editorEnabled: false });
+    applyWorkspaceSurface(root, workspace.openBook());
+    expect(root.dataset.workspaceSurface).toBe('reader');
+    expect(classNames.has('is-workspace-reader')).toBe(true);
+    expect(classNames.has('is-workspace-editor')).toBe(false);
+    expect(classNames.has('is-reader-chrome-revealed')).toBe(false);
+
+    applyWorkspaceSurface(root, workspace.returnToShelf());
+    expect(classNames.has('is-workspace-shelf')).toBe(true);
+    expect(classNames.has('is-workspace-reader')).toBe(false);
+    expect(classNames.has('is-reader-chrome-revealed')).toBe(false);
+  });
+});
