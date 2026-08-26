@@ -1450,6 +1450,284 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('shows 继续阅读 for the book with the newer reading clock, not the newer library item', async () => {
+    const importedLater = localItem({
+      id: 'local:/books/imported-later.epub',
+      title: '后导入仍停在旧进度',
+      localPath: '/books/imported-later.epub',
+      updatedAt: 9_000,
+    });
+    const justRead = localItem({
+      id: 'local:/books/just-read.epub',
+      title: '刚读过的书',
+      localPath: '/books/just-read.epub',
+      updatedAt: 1,
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === importedLater.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 1,
+          ratio: 0.2,
+          percent: 10,
+          updatedAt: 100,
+        };
+      }
+      if (item.id === justRead.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 4,
+          ratio: 0.5,
+          percent: 40,
+          updatedAt: 500,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const deps = dependencies({
+      getProgress,
+      library: { ...dependencies().library, listItems: vi.fn(async () => [importedLater, justRead]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const bar = host.querySelector('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    expect(bar?.textContent).toContain('刚读过的书');
+    expect(bar?.textContent).not.toContain('后导入仍停在旧进度');
+    view.destroy();
+  });
+
+  it('picks 继续阅读 from bindLibraryProgress by reading-progress clock', async () => {
+    const store: Record<string, string> = {};
+    const storage: ProgressStorage = {
+      getItem: (key) => store[key] ?? null,
+      setItem: (key, value) => {
+        store[key] = value;
+      },
+      removeItem: (key) => {
+        delete store[key];
+      },
+    };
+    const importedLater = localItem({
+      id: 'local:/books/imported-later-bound.epub',
+      title: '书库更新的旧进度',
+      localPath: '/books/imported-later-bound.epub',
+      updatedAt: 9_000,
+    });
+    const justRead = localItem({
+      id: 'local:/books/just-read-bound.epub',
+      title: '绑定进度刚读过',
+      localPath: '/books/just-read-bound.epub',
+      updatedAt: 1,
+    });
+    saveReadingProgress(storage, importedLater.localPath!, {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.2,
+      total: 10,
+      updatedAt: 100,
+    });
+    saveReadingProgress(storage, justRead.localPath!, {
+      version: 1,
+      kind: 'flow',
+      index: 4,
+      ratio: 0.5,
+      total: 10,
+      updatedAt: 500,
+    });
+    const deps = dependencies({
+      getProgress: bindLibraryProgress(storage),
+      progressStorage: storage,
+      library: { ...dependencies().library, listItems: vi.fn(async () => [importedLater, justRead]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const bar = host.querySelector('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    expect(bar?.textContent).toContain('绑定进度刚读过');
+    expect(bar?.textContent).not.toContain('书库更新的旧进度');
+    view.destroy();
+  });
+
+  it('keeps 继续阅读 hidden when only the progress clock changes after dismiss', async () => {
+    const novel = localItem({
+      id: 'local:/books/clock-dismiss.epub',
+      title: '时钟不变不重现',
+      localPath: '/books/clock-dismiss.epub',
+    });
+    const progress = {
+      status: 'in-progress' as const,
+      unit: 'chapter' as const,
+      index: 2,
+      ratio: 0.25,
+      percent: 40,
+      updatedAt: 100,
+    };
+    const getProgress = vi.fn(() => progress);
+    const store: Record<string, string> = {};
+    const deps = dependencies({
+      getProgress,
+      progressStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+        removeItem: (key) => {
+          delete store[key];
+        },
+      },
+      library: { ...dependencies().library, listItems: vi.fn(async () => [novel]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    shownControl(host.querySelector('.lightink-library-continue')!, '关闭').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    getProgress.mockReturnValue({
+      ...progress,
+      updatedAt: 9_999,
+    });
+    await view.refresh();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    view.destroy();
+  });
+
+  it('shows 继续阅读 again when another book becomes the latest in-progress', async () => {
+    const first = localItem({
+      id: 'local:/books/first-read.epub',
+      title: '先读的书',
+      localPath: '/books/first-read.epub',
+      updatedAt: 9_000,
+    });
+    const second = localItem({
+      id: 'local:/books/second-read.epub',
+      title: '后读的书',
+      localPath: '/books/second-read.epub',
+      updatedAt: 1,
+    });
+    const firstProgress = {
+      status: 'in-progress' as const,
+      unit: 'chapter' as const,
+      index: 2,
+      ratio: 0.1,
+      percent: 20,
+      updatedAt: 200,
+    };
+    const secondProgress = {
+      status: 'in-progress' as const,
+      unit: 'chapter' as const,
+      index: 5,
+      ratio: 0.4,
+      percent: 50,
+      updatedAt: 50,
+    };
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === first.id) return firstProgress;
+      if (item.id === second.id) return secondProgress;
+      return { status: 'not-started' as const };
+    });
+    const store: Record<string, string> = {};
+    const deps = dependencies({
+      getProgress,
+      progressStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+        removeItem: (key) => {
+          delete store[key];
+        },
+      },
+      library: { ...dependencies().library, listItems: vi.fn(async () => [first, second]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('先读的书');
+    shownControl(host.querySelector('.lightink-library-continue')!, '关闭').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    getProgress.mockImplementation((item: LibraryProgressQuery) => {
+      if (item.id === first.id) return firstProgress;
+      if (item.id === second.id) return { ...secondProgress, updatedAt: 400 };
+      return { status: 'not-started' as const };
+    });
+    await view.refresh();
+    const bar = host.querySelector('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    expect(bar?.textContent).toContain('后读的书');
+    expect(bar?.textContent).not.toContain('先读的书');
+    view.destroy();
+  });
+
+  it('treats a missing or non-finite reading clock as 0 when choosing 继续阅读', async () => {
+    const missingClock = localItem({
+      id: 'local:/books/missing-clock.epub',
+      title: '缺时钟的书',
+      localPath: '/books/missing-clock.epub',
+      updatedAt: 9_000,
+    });
+    const finiteClock = localItem({
+      id: 'local:/books/finite-clock.epub',
+      title: '有时钟的书',
+      localPath: '/books/finite-clock.epub',
+      updatedAt: 1,
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === missingClock.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 1,
+          ratio: 0,
+          percent: 10,
+          updatedAt: Number.NaN,
+        };
+      }
+      if (item.id === finiteClock.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 3,
+          ratio: 0.2,
+          percent: 30,
+          updatedAt: 1,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const deps = dependencies({
+      getProgress,
+      library: { ...dependencies().library, listItems: vi.fn(async () => [missingClock, finiteClock]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const bar = host.querySelector('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    expect(bar?.textContent).toContain('有时钟的书');
+    expect(bar?.textContent).not.toContain('缺时钟的书');
+    view.destroy();
+  });
+
   it('shows series on the cover card without opening a detail pane', async () => {
     const comic = comicItem({
       series: '墨色档案',

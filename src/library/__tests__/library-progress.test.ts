@@ -4,6 +4,7 @@ import {
   bindLibraryProgress,
   coverProgressFillPercent,
   libraryProgressAliasKey,
+  libraryProgressUpdatedAt,
   loadLibraryProgressAlias,
   migrateLibraryProgressAliases,
   projectLibraryProgress,
@@ -70,6 +71,7 @@ describe('projectLibraryProgress', () => {
       index: 3,
       ratio: 0.5,
       percent: 35,
+      updatedAt: 10,
     });
     expect(
       coverProgressFillPercent({
@@ -93,6 +95,7 @@ describe('projectLibraryProgress', () => {
       unit: 'chapter',
       index: 2,
       ratio: 0.4,
+      updatedAt: 10,
     });
   });
 
@@ -118,7 +121,7 @@ describe('projectLibraryProgress', () => {
         id: 'managed:book-a',
         localPath: '/books/shared.epub',
       }),
-    ).toMatchObject({ status: 'in-progress', index: 473 });
+      ).toMatchObject({ status: 'in-progress', index: 473, updatedAt: 10 });
     expect(
       projectLibraryProgress(storage, {
         id: 'managed:book-b',
@@ -140,6 +143,7 @@ describe('projectLibraryProgress', () => {
       unit: 'chapter',
       index: 3,
       ratio: 0.2,
+      updatedAt: 10,
     });
     expect(
       projectLibraryProgress(storage, { id: 'item-b', localPath: '/books/b.epub' }),
@@ -152,6 +156,7 @@ describe('projectLibraryProgress', () => {
       unit: 'chapter',
       index: 8,
       ratio: 0.9,
+      updatedAt: 10,
     });
   });
 
@@ -186,6 +191,7 @@ describe('projectLibraryProgress', () => {
       index: 12,
       ratio: 0,
       percent: 30,
+      updatedAt: 10,
     });
   });
 
@@ -215,7 +221,83 @@ describe('projectLibraryProgress', () => {
       unit: 'page',
       index: 0,
       ratio: 0,
+      updatedAt: 10,
     });
+  });
+
+  it('forwards ReadingProgress.updatedAt onto in-progress projections', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(
+      storage,
+      '/books/a.epub',
+      flowProgress({ updatedAt: 1_700_000_000_000 }),
+    );
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
+    ).toEqual({
+      status: 'in-progress',
+      unit: 'chapter',
+      index: 2,
+      ratio: 0.4,
+      updatedAt: 1_700_000_000_000,
+    });
+  });
+
+  it('keeps each in-progress item on its own reading clock', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, '/books/older.epub', flowProgress({ updatedAt: 100 }));
+    saveReadingProgress(storage, '/books/newer.epub', flowProgress({ index: 5, updatedAt: 200 }));
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'local:/books/older.epub',
+        localPath: '/books/older.epub',
+      }),
+    ).toMatchObject({ status: 'in-progress', updatedAt: 100 });
+    expect(
+      projectLibraryProgress(storage, {
+        id: 'local:/books/newer.epub',
+        localPath: '/books/newer.epub',
+      }),
+    ).toMatchObject({ status: 'in-progress', index: 5, updatedAt: 200 });
+  });
+
+  it('treats missing or non-finite progress clocks as 0 without throwing', () => {
+    const storage = memoryStorage();
+    const query = { id: 'local:/books/a.epub', localPath: '/books/a.epub' };
+    const expected = {
+      status: 'in-progress' as const,
+      unit: 'chapter' as const,
+      index: 2,
+      ratio: 0.4,
+      updatedAt: 0,
+    };
+
+    expect(() => {
+      storage.setItem(
+        readingProgressKey('/books/a.epub'),
+        JSON.stringify({ version: 1, kind: 'flow', index: 2, ratio: 0.4 }),
+      );
+      expect(projectLibraryProgress(storage, query)).toEqual(expected);
+    }).not.toThrow();
+
+    storage.setItem(
+      readingProgressKey('/books/a.epub'),
+      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":1e1000}',
+    );
+    expect(() => projectLibraryProgress(storage, query)).not.toThrow();
+    expect(projectLibraryProgress(storage, query)).toEqual(expected);
+
+    storage.setItem(
+      readingProgressKey('/books/a.epub'),
+      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":-1e1000}',
+    );
+    expect(projectLibraryProgress(storage, query)).toEqual(expected);
+
+    storage.setItem(
+      readingProgressKey('/books/a.epub'),
+      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":null}',
+    );
+    expect(projectLibraryProgress(storage, query)).toEqual(expected);
   });
 
   it('returns not-started when storage is missing or throws', () => {
@@ -269,6 +351,65 @@ describe('library progress alias', () => {
 
     expect(loadLibraryProgressAlias(storage, 'managed:hash-a')).toBe('content-hash-a');
     expect(loadLibraryProgressAlias(storage, 'managed:hash-b')).toBe('/books/b.epub');
+  });
+});
+
+describe('libraryProgressUpdatedAt', () => {
+  it('returns the finite reading clock and treats missing or non-finite as 0', () => {
+    expect(
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'chapter',
+        index: 2,
+        ratio: 0.4,
+        updatedAt: 42,
+      }),
+    ).toBe(42);
+    expect(libraryProgressUpdatedAt({ status: 'not-started' })).toBe(0);
+    expect(
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'chapter',
+        index: 2,
+        ratio: 0.4,
+      }),
+    ).toBe(0);
+    expect(() =>
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'page',
+        index: 1,
+        ratio: 0,
+        updatedAt: Number.NaN,
+      }),
+    ).not.toThrow();
+    expect(
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'page',
+        index: 1,
+        ratio: 0,
+        updatedAt: Number.NaN,
+      }),
+    ).toBe(0);
+    expect(
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'page',
+        index: 1,
+        ratio: 0,
+        updatedAt: Number.POSITIVE_INFINITY,
+      }),
+    ).toBe(0);
+    expect(
+      libraryProgressUpdatedAt({
+        status: 'in-progress',
+        unit: 'page',
+        index: 1,
+        ratio: 0,
+        updatedAt: Number.NEGATIVE_INFINITY,
+      }),
+    ).toBe(0);
   });
 });
 

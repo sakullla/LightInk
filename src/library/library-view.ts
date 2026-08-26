@@ -803,6 +803,12 @@ function isDisplayablePercent(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value > 0;
 }
 
+/** Reading clock from projected progress. Missing or non-finite values count as 0. */
+function progressClock(progress: Extract<LibraryProgress, { status: 'in-progress' }>): number {
+  const raw = (progress as { readonly updatedAt?: unknown }).updatedAt;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+}
+
 function displayLocation(progress: Extract<LibraryProgress, { status: 'in-progress' }>): {
   readonly kind: 'page' | 'chapter';
   readonly current: number;
@@ -1852,10 +1858,14 @@ export function createLibraryView(
 
   function latestInProgress(): DisplayItem | null {
     let latest: DisplayItem | null = null;
+    let latestClock = Number.NEGATIVE_INFINITY;
     for (const display of items) {
-      if (progressFor(display)?.status !== 'in-progress') continue;
-      if (latest === null || display.item.updatedAt > latest.item.updatedAt) {
+      const progress = progressFor(display);
+      if (progress?.status !== 'in-progress') continue;
+      const clock = progressClock(progress);
+      if (latest === null || clock > latestClock) {
         latest = display;
+        latestClock = clock;
       }
     }
     return latest;

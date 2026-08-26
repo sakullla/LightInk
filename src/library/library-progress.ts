@@ -31,6 +31,11 @@ export interface LibraryProgressInProgress {
   readonly ratio: number;
   /** Present only when a real positive percent can be derived. Never 0. */
   readonly percent?: number;
+  /**
+   * Reading-progress clock from `ReadingProgress.updatedAt`.
+   * Missing or non-finite source values are stored as 0.
+   */
+  readonly updatedAt?: number;
 }
 
 export type LibraryProgress = LibraryProgressNotStarted | LibraryProgressInProgress;
@@ -164,6 +169,18 @@ function isFinitePercent(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value > 0;
 }
 
+/** Banner clock: missing or non-finite `updatedAt` is 0 and never throws. */
+export function libraryProgressUpdatedAt(progress: LibraryProgress): number {
+  if (progress.status !== 'in-progress') {
+    return 0;
+  }
+  return readingProgressUpdatedAt(progress.updatedAt);
+}
+
+function readingProgressUpdatedAt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 function projectRecord(
   progress: ReadingProgress,
   pageCount: number | undefined,
@@ -174,6 +191,7 @@ function projectRecord(
     unit: progress.kind === 'page' ? 'page' : 'chapter',
     index: progress.index,
     ratio: progress.ratio,
+    updatedAt: readingProgressUpdatedAt(progress.updatedAt),
     ...(percent === undefined ? {} : { percent }),
   };
 }
