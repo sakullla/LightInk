@@ -4455,10 +4455,13 @@ describe('LibraryView mobile shelf', () => {
     );
     expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/,
+      /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/,
     );
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-height:\s*36px/,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
+    );
+    expect(css).not.toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-(?:width|height):\s*36px/,
     );
     expect(css).toMatch(
       /\[data-library-tab=['"]?shelf['"]?\]\s+\.lightink-library-header-import\s*\{[^}]*display:\s*inline-flex/,
@@ -4535,13 +4538,20 @@ describe('LibraryView mobile shelf', () => {
     const desktopContinue = cssRuleBodies(css, /\.lightink-library-continue/)[0];
     expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBe(6);
 
-    // 触控芯片：热区之间有比当前 8px 更大的空隙。
+    // 触控芯片：可点区域至少 48×48，相邻热区间距至少 8px。
     const chipBlocks = cssRuleBodies(
       css,
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips/,
     );
     const chipGap = cssLengthPx(cssDeclaration(chipBlocks[chipBlocks.length - 1] ?? '', 'gap'));
-    expect(chipGap[0]).toBeGreaterThan(8);
+    expect(chipGap[0]).toBeGreaterThanOrEqual(8);
+    const chipItemBlocks = cssRuleBodies(
+      css,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip(?![\w-])/,
+    );
+    const chipItem = chipItemBlocks[chipItemBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(chipItem, 'min-width'))[0]).toBeGreaterThanOrEqual(48);
+    expect(cssLengthPx(cssDeclaration(chipItem, 'min-height'))[0]).toBeGreaterThanOrEqual(48);
 
     // 继续阅读条：内边距加大，条与芯片/封面墙不再只剩 4px。
     const continueBlocks = cssRuleBodies(
@@ -4701,11 +4711,36 @@ describe('LibraryView mobile shelf', () => {
     expect(chips).not.toBeNull();
     expect(chips?.hidden).toBe(false);
     expect(content?.contains(chips!)).toBe(true);
-    expect(
-      Array.from(chips!.querySelectorAll<HTMLButtonElement>('[data-shelf-group]')).map(
-        (chip) => chip.dataset.shelfGroup,
-      ),
-    ).toEqual(['all', 'in-progress', 'unread', 'text', 'comic']);
+    expect(chips?.getAttribute('role')).toBe('radiogroup');
+    const chipButtons = (): HTMLButtonElement[] =>
+      Array.from(chips!.querySelectorAll<HTMLButtonElement>('[data-shelf-group]'));
+    expect(chipButtons().map((chip) => chip.dataset.shelfGroup)).toEqual([
+      'all',
+      'in-progress',
+      'unread',
+      'text',
+      'comic',
+    ]);
+    expect(chipButtons().map((chip) => chip.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      '全部',
+      '在读',
+      '未读',
+      '文字书',
+      '漫画',
+    ]);
+    const currentChips = (): string[] =>
+      chipButtons()
+        .filter(
+          (chip) =>
+            chip.classList.contains('is-active') || chip.getAttribute('aria-current') !== null,
+        )
+        .map((chip) => chip.dataset.shelfGroup ?? '');
+    expect(currentChips()).toEqual(['all']);
+    expect(chips!.querySelector('[data-shelf-group="all"]')?.getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).not.toBeNull();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).not.toBeNull();
 
     const reading = chips!.querySelector<HTMLButtonElement>('[data-shelf-group="in-progress"]');
     expect(reading).not.toBeNull();
@@ -4718,6 +4753,11 @@ describe('LibraryView mobile shelf', () => {
         ?.querySelector('[data-shelf-group="in-progress"]')
         ?.classList.contains('is-active'),
     ).toBe(true);
+    expect(currentChips()).toEqual(['in-progress']);
+    expect(
+      chips!.querySelector('[data-shelf-group="in-progress"]')?.getAttribute('aria-current'),
+    ).toBe('true');
+    expect(chips!.querySelector('[data-shelf-group="all"]')?.getAttribute('aria-current')).toBeNull();
 
     tabButton(host, 'manage').click();
     await waitForShown(
@@ -5019,6 +5059,38 @@ describe('LibraryView mobile shelf', () => {
     view.destroy();
   });
 
+  it('keeps custom and smart group names off the phone chip strip', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const novel = localItem({
+      id: 'local:/ebook/hell-01.epub',
+      title: '地狱模式 - 01',
+      authors: ['海猫'],
+      localPath: '/ebook/文库版/地狱模式 - 01.epub',
+      extension: 'epub',
+    });
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    await library.createGroup!('夏日书单');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const chips = libraryRoot(host).querySelector(
+      '.lightink-library-content .lightink-library-shelf-chips',
+    );
+    expect(chips).not.toBeNull();
+    const chipLabels = Array.from(
+      chips!.querySelectorAll<HTMLButtonElement>('[data-shelf-group]'),
+    ).map((chip) => chip.textContent?.replace(/\s+/g, ' ').trim());
+    expect(chipLabels).toEqual(['全部', '在读', '未读', '文字书', '漫画']);
+    expect(chips!.textContent).not.toContain('夏日书单');
+    expect(chips!.textContent).not.toContain('EPUB');
+    expect(
+      chips!.querySelector('[data-library-group-id], [data-group-id], [data-smart-group-id]'),
+    ).toBeNull();
+    view.destroy();
+  });
+
   it('does not mount the tab bar without the mobile chrome flags', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -5027,7 +5099,29 @@ describe('LibraryView mobile shelf', () => {
 
     expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
     expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
+    expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-nav'))).toBe(true);
+    expect(host.querySelector('[data-shelf-group="all"]')).toBeTruthy();
     expect(libraryRoot(host).dataset.libraryNav).toBe('shelf');
     view.destroy();
+  });
+
+  it('does not promote the phone tab bar or chip strip as primary navigation beyond 760px', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(/\.lightink-library-tabbar\s*\{\s*display:\s*none/);
+    expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*display:\s*grid/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-nav\s*\{[^}]*display:\s*none/,
+    );
+    const bodyRule = css.match(/\.lightink-library-body\s*\{([^}]*)\}/);
+    expect(bodyRule).not.toBeNull();
+    expect(bodyRule![1]).toMatch(/display:\s*grid/);
+    expect(bodyRule![1]).toMatch(/grid-template-columns/);
   });
 });

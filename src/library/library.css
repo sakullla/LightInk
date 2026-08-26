@@ -2567,11 +2567,11 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
 /*
  * Phone shell (Kindle / Apple Books / 微信读书):
- * a bottom tab bar (书架/书源/目录/管理) replaces the drawer; the nav pane
+ * a bottom tab bar (书架/书源/管理) replaces the drawer; the nav pane
  * becomes an in-page block above the content. Desktop two-column nav is
  * unchanged unless these document flags are set, and the layout switch
  * only applies at the ≤760px breakpoint — wide touch desktops keep the
- * desktop sidebar with collapse/resize.
+ * desktop sidebar with collapse/resize. Catalog stays a sources drill-down.
  */
 /*
  * Phone type scale. Material 3: title-large 22, body-large 16, label-large 14,
@@ -2907,7 +2907,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     -webkit-overflow-scrolling: touch;
   }
 
-  /* 书架筛选：封面墙顶上一行 chip，承接被隐藏的页内「全部/在读」等。 */
+  /* 书架筛选：封面墙顶上一行 48px 单选 chip，只承接五个内置筛选。
+   * 本规则叠在 @media (max-width: 760px) 内；无 flag 或宽屏仍走
+   * 基线 display:none，桌面侧栏保持主导航。 */
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-chips {
@@ -2916,10 +2918,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     flex-wrap: nowrap;
     align-items: center;
     gap: 12px;
+    min-height: 48px;
     max-height: none;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 10px 16px 16px;
+    padding: 8px max(16px, var(--lightink-safe-right, 0px)) 12px
+      max(16px, var(--lightink-safe-left, 0px));
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
@@ -2934,9 +2938,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-chip {
     flex: 0 0 auto;
-    min-width: 36px;
-    min-height: 36px;
-    padding: 0 12px;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 0 16px;
     border: 0;
     border-radius: 999px;
     background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);

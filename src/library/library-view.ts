@@ -1319,6 +1319,7 @@ export function createLibraryView(
   continueHost.hidden = true;
   const chipRow = doc.createElement('nav');
   chipRow.className = 'lightink-library-shelf-chips';
+  chipRow.setAttribute('role', 'radiogroup');
   chipRow.hidden = true;
   const workArea = doc.createElement('div');
   workArea.className = 'lightink-library-workarea';
@@ -2393,6 +2394,7 @@ export function createLibraryView(
     shelfHeading.textContent = labels().library;
     groupTitle.textContent = labels().groups;
     groupPane.setAttribute('aria-label', labels().groups);
+    chipRow.setAttribute('role', 'radiogroup');
     chipRow.setAttribute('aria-label', labels().library);
     addGroupButton.title = labels().newGroup;
     addGroupButton.setAttribute('aria-label', labels().newGroup);
@@ -2404,6 +2406,7 @@ export function createLibraryView(
       labels().smartGroups,
     );
     syncSectionFilterLabels(groupFilter, labels().filterGroups);
+    // 手机筛选行只渲染五个内置项；自定义/智能分组名不进入同一行。
     for (const group of SHELF_GROUPS) {
       const caption = groupLabel(labels(), group);
       const active = shelfGroupIsActive(group);
@@ -2419,6 +2422,8 @@ export function createLibraryView(
       filterList.appendChild(row);
       const chip = button(doc, caption, 'lightink-library-shelf-chip');
       chip.dataset.shelfGroup = group;
+      chip.setAttribute('role', 'radio');
+      chip.setAttribute('aria-checked', active ? 'true' : 'false');
       chip.classList.toggle('is-active', active);
       if (active) chip.setAttribute('aria-current', 'true');
       chip.addEventListener('click', () => {
