@@ -318,7 +318,7 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     );
     expect(css).toMatch(/\.lightink-reader-chrome-tools\s*\{[^}]*display:\s*flex/);
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*48px/,
     );
   });
 
@@ -577,7 +577,7 @@ function coarsePointerCss(css: string): string {
   return cssAtMediaBodies(css, '(pointer: coarse)').join('\n');
 }
 
-describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () => {
+describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () => {
   const readerCss = (): string =>
     readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
   const panelsCss = (): string =>
@@ -670,16 +670,16 @@ describe('touch reader chrome safe areas and 44px hit targets (R2/R7/R9)', () =>
     );
   });
 
-  it('keeps top chrome entries and the progress slider at 44px hit targets on touch', () => {
+  it('keeps top chrome entries and the progress slider at 48px hit targets on touch', () => {
     const css = readerCss();
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*48px/,
     );
     expect(coarsePointerCss(css)).toMatch(
-      /\.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+      /\.lightink-reader-chrome-action\s*\{[^}]*min-width:\s*48px[^}]*min-height:\s*48px/,
     );
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-scrubber,\s*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-progress\s*\{[^}]*min-height:\s*44px/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-scrubber,\s*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-progress\s*\{[^}]*min-height:\s*48px/,
     );
   });
 
