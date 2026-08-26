@@ -293,6 +293,12 @@ function isShown(el: Element | null): boolean {
   return style.display !== 'none' && style.visibility !== 'hidden';
 }
 
+/** In-tree phone chrome is gated by [hidden] + the 760px CSS rule, not computed display. */
+function isMountedChrome(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  return !el.hidden && el.closest('[hidden]') === null;
+}
+
 function shownButtonWithText(root: ParentNode, text: string): HTMLButtonElement {
   const candidate = Array.from(root.querySelectorAll('button')).find(
     (button) => button.textContent === text && isShown(button),
@@ -4686,7 +4692,7 @@ describe('LibraryView mobile shelf', () => {
     );
     if (
       marked instanceof HTMLButtonElement &&
-      isShown(marked) &&
+      isMountedChrome(marked) &&
       marked.dataset.shelfGroup === undefined
     ) {
       return marked;
@@ -4697,7 +4703,7 @@ describe('LibraryView mobile shelf', () => {
       return (
         (text === '分组' || aria === '分组') &&
         button.dataset.shelfGroup === undefined &&
-        isShown(button)
+        isMountedChrome(button)
       );
     });
     if (!(labeled instanceof HTMLButtonElement)) {
@@ -5206,12 +5212,15 @@ describe('LibraryView mobile shelf', () => {
       'comic',
     ]);
     const entry = shelfGroupsEntry(host);
+    const toolbar = libraryRoot(host).querySelector<HTMLElement>('.lightink-library-shelf-toolbar');
     expect(entry.dataset.shelfGroup).toBeUndefined();
     expect(entry.getAttribute('role')).not.toBe('radio');
     expect(chips.contains(entry)).toBe(false);
     expect(entry.textContent?.replace(/\s+/g, ' ').trim() === '分组' || entry.getAttribute('aria-label') === '分组').toBe(
       true,
     );
+    expect(entry.style.display).toBe('');
+    expect(toolbar?.style.display).toBe('');
     view.destroy();
   });
 
@@ -5307,7 +5316,7 @@ describe('LibraryView mobile shelf', () => {
     const emptySheet = await openShelfGroupsSheet(emptyHost);
     expect(emptySheet.textContent).toMatch(/没有分组|No collections yet/);
     expect(currentShelfChips(shelfChipRow(emptyHost))).toEqual(['all']);
-    expect(isShown(shelfGroupsEntry(emptyHost))).toBe(true);
+    expect(isMountedChrome(shelfGroupsEntry(emptyHost))).toBe(true);
     emptyView.destroy();
     emptyHost.remove();
 
@@ -5372,7 +5381,7 @@ describe('LibraryView mobile shelf', () => {
     const view = createLibraryView(host, dependencies());
     await view.show();
 
-    expect(isShown(shelfGroupsEntry(host))).toBe(true);
+    expect(isMountedChrome(shelfGroupsEntry(host))).toBe(true);
 
     tabButton(host, 'manage').click();
     await waitForShown(
@@ -5399,7 +5408,7 @@ describe('LibraryView mobile shelf', () => {
       () => libraryRoot(host).dataset.libraryNav === 'shelf',
       'shelf tab did not activate',
     );
-    expect(isShown(shelfGroupsEntry(host))).toBe(true);
+    expect(isMountedChrome(shelfGroupsEntry(host))).toBe(true);
     view.destroy();
   });
 

@@ -2466,21 +2466,6 @@ export function createLibraryView(
     groupsButton.setAttribute('aria-expanded', String(!groupsSheet.hidden));
     groupsSheetDialog.setAttribute('aria-label', labels().groups);
     groupsSheetTitle.textContent = labels().groups;
-    if (mobileShelf) {
-      // 基线 CSS 把入口/面板标成桌面隐藏；手机书架用行内显示，避免被全局 none 吃掉。
-      shelfToolbar.style.display = 'flex';
-      shelfToolbar.style.alignItems = 'center';
-      shelfToolbar.style.gap = '8px';
-      shelfToolbar.style.minWidth = '0';
-      chipRow.style.flex = '1 1 auto';
-      chipRow.style.minWidth = '0';
-      groupsButton.style.display = 'inline-flex';
-      groupsButton.style.alignItems = 'center';
-      groupsButton.style.justifyContent = 'center';
-    } else {
-      shelfToolbar.style.removeProperty('display');
-      groupsButton.style.removeProperty('display');
-    }
   }
 
   function closeGroupsSheet(): void {
