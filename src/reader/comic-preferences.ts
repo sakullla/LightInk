@@ -3,7 +3,8 @@ export const COMIC_BOOK_PREFERENCES_KEY_PREFIX = 'lightink.reader.comic.book.';
 
 export type ComicReadingMode = 'paged' | 'strip';
 export type ComicReadingDirection = 'ltr' | 'rtl';
-export type ComicSpread = 'single' | 'double';
+export type ComicSpread = 'single' | 'double' | 'auto';
+export type ComicResolvedSpread = 'single' | 'double';
 export type ComicFit = 'screen' | 'width' | 'height' | 'original';
 
 export interface ComicPreferences {
@@ -30,10 +31,34 @@ export function comicBookPreferencesKey(progressId: string): string {
   return `${COMIC_BOOK_PREFERENCES_KEY_PREFIX}${progressId}`;
 }
 
+export function isTouchPrimaryDocument(root?: Pick<Document, 'documentElement'> | null): boolean {
+  const element =
+    root?.documentElement ?? (typeof document === 'undefined' ? null : document.documentElement);
+  if (element === null) return false;
+  return element.hasAttribute('data-android') || element.hasAttribute('data-touch-primary');
+}
+
 export function defaultComicPreferences(
   direction: ComicReadingDirection = 'ltr',
 ): ComicPreferences {
-  return { mode: 'paged', direction, spread: 'double', fit: 'screen', cropMargins: false };
+  return {
+    mode: 'paged',
+    direction,
+    spread: isTouchPrimaryDocument() ? 'auto' : 'double',
+    fit: 'screen',
+    cropMargins: false,
+  };
+}
+
+/** Portrait stays single; landscape pairs pages. Explicit single/double win. */
+export function resolveComicSpread(
+  spread: ComicSpread,
+  viewport?: { readonly width: number; readonly height: number },
+): ComicResolvedSpread {
+  if (spread === 'single' || spread === 'double') return spread;
+  const width = viewport?.width ?? 0;
+  const height = viewport?.height ?? 0;
+  return width > 0 && height > 0 && width > height ? 'double' : 'single';
 }
 
 export function parseComicPreferences(
@@ -243,7 +268,10 @@ function normalizeComicPreferences(preferences: ComicPreferences): ComicPreferen
   return {
     mode: preferences.mode === 'strip' ? 'strip' : 'paged',
     direction: preferences.direction === 'rtl' ? 'rtl' : 'ltr',
-    spread: preferences.spread === 'single' ? 'single' : 'double',
+    spread:
+      preferences.spread === 'single' || preferences.spread === 'auto'
+        ? preferences.spread
+        : 'double',
     fit: parseFit({ fit: preferences.fit }),
     cropMargins: preferences.cropMargins === true,
   };
@@ -270,7 +298,7 @@ function parseDirection(value: unknown): ComicReadingDirection | undefined {
 }
 
 function parseSpread(value: unknown): ComicSpread {
-  if (value === 'single') return 'single';
+  if (value === 'single' || value === 'auto') return value;
   return 'double';
 }
 

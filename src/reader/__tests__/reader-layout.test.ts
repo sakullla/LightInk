@@ -424,7 +424,7 @@ describe('comic surface layout (R1/R3/R4)', () => {
     );
     expect(css).not.toMatch(/lightink-reader-comic-hud/);
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-comic-modes\s*\{[^}]*display:\s*none/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-comic-modes\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/,
     );
   });
 

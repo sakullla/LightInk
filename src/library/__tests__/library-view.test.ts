@@ -1682,6 +1682,62 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('shows 继续阅读 for the book just opened even if another clock is newer', async () => {
+    const first = localItem({
+      id: 'local:/books/older-clock.epub',
+      title: '时钟更新的第一本',
+      localPath: '/books/older-clock.epub',
+      updatedAt: 9_000,
+    });
+    const second = localItem({
+      id: 'local:/books/just-opened.epub',
+      title: '刚打开的第二本',
+      localPath: '/books/just-opened.epub',
+      updatedAt: 1,
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === first.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 2,
+          ratio: 0.1,
+          percent: 20,
+          updatedAt: 900,
+        };
+      }
+      if (item.id === second.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 1,
+          ratio: 0,
+          percent: 5,
+          updatedAt: 100,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const deps = dependencies({
+      getProgress,
+      library: { ...dependencies().library, listItems: vi.fn(async () => [first, second]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('时钟更新的第一本');
+
+    itemRow(host, second.id).click();
+    await settle();
+    await view.show();
+    const bar = host.querySelector('.lightink-library-continue');
+    expect(isShown(bar)).toBe(true);
+    expect(bar?.textContent).toContain('刚打开的第二本');
+    expect(bar?.textContent).not.toContain('时钟更新的第一本');
+    view.destroy();
+  });
+
   it('treats a missing or non-finite reading clock as 0 when choosing 继续阅读', async () => {
     const missingClock = localItem({
       id: 'local:/books/missing-clock.epub',
@@ -4445,6 +4501,9 @@ describe('LibraryView mobile shelf', () => {
     expect(css).not.toMatch(/--lightink-library-cover-max:\s*1fr/);
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header[\s\S]*?\{[^}]*--lightink-safe-top/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header[\s\S]*?\{[^}]*flex-shrink:\s*0/,
     );
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header-main[\s\S]*?\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto auto/,

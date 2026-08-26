@@ -30,6 +30,7 @@ import {
   defaultComicPreferences,
   loadComicPreferences,
   parseComicPreferences,
+  resolveComicSpread,
   saveComicPreferences,
   type ComicPreferences,
 } from '../comic-preferences.js';
@@ -58,7 +59,7 @@ function memoryStorage(initial: Record<string, string> = {}) {
 function comicPrefs(value: {
   mode: 'paged' | 'strip';
   direction: 'ltr' | 'rtl';
-  spread: 'single' | 'double';
+  spread: 'single' | 'double' | 'auto';
   fit: 'screen' | 'width' | 'height' | 'original';
   cropMargins?: boolean;
 }): ComicPreferences {
@@ -66,6 +67,11 @@ function comicPrefs(value: {
 }
 
 describe('comic page model', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
+
   it('sorts each path segment naturally and deterministically', () => {
     const paths = [
       'chapter10/page1.jpg',
@@ -557,9 +563,16 @@ describe('comic preferences', () => {
   });
 
   it('falls back to defaults for damaged JSON or unknown enums without throwing', () => {
+    expect(resolveComicSpread('auto', { width: 390, height: 844 })).toBe('single');
+    expect(resolveComicSpread('auto', { width: 844, height: 390 })).toBe('double');
+    expect(resolveComicSpread('single', { width: 844, height: 390 })).toBe('single');
+    expect(resolveComicSpread('double', { width: 390, height: 844 })).toBe('double');
     expect(defaultComicPreferences('rtl')).toEqual(
       comicPrefs({ mode: 'paged', direction: 'rtl', spread: 'double', fit: 'screen' }),
     );
+    document.documentElement.setAttribute('data-android', '');
+    expect(defaultComicPreferences('ltr').spread).toBe('auto');
+    document.documentElement.removeAttribute('data-android');
     expect(() => parseComicPreferences('{not-json', 'rtl')).not.toThrow();
     expect(parseComicPreferences('{not-json', 'rtl')).toEqual(defaultComicPreferences('rtl'));
     expect(

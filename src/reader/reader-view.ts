@@ -192,6 +192,7 @@ const COMIC_HOST_DATASET_KEYS = [
   'comicMode',
   'comicDirection',
   'comicSpread',
+  'comicSpreadPref',
   'comicFit',
   'comicFitWidth',
   'comicCropMargins',
@@ -215,6 +216,7 @@ function comicLocaleLabels(t: (key: MessageKey) => string): {
   fitScreen: string;
   fitHeight: string;
   fitOriginal: string;
+  autoPage: string;
 } {
   const chineseChrome = t('reader.comic.paged') === '横向翻页';
   if (chineseChrome) {
@@ -224,6 +226,7 @@ function comicLocaleLabels(t: (key: MessageKey) => string): {
       fitScreen: '适合屏幕',
       fitHeight: '适合高度',
       fitOriginal: '原图',
+      autoPage: '自动',
     };
   }
   return {
@@ -232,6 +235,7 @@ function comicLocaleLabels(t: (key: MessageKey) => string): {
     fitScreen: 'Fit screen',
     fitHeight: 'Fit height',
     fitOriginal: 'Original',
+    autoPage: 'Auto',
   };
 }
 
@@ -772,17 +776,25 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
   };
 
-  const persistReadingProgress = (): void => {
-    if (
-      progressId === '' ||
-      pendingRestore !== null ||
-      (readerState.phase !== 'ready' && readerState.phase !== 'loading')
-    ) {
+  const persistReadingProgress = (force = false): void => {
+    if (progressId === '') {
+      return;
+    }
+    if (!force && pendingRestore !== null) {
+      return;
+    }
+    if (!force && readerState.phase !== 'ready' && readerState.phase !== 'loading') {
       return;
     }
     rememberFlowProgress();
-    if (lastFlowProgress !== null) {
-      saveReadingProgress(progressStorage, progressId, lastFlowProgress);
+    const snapshot =
+      lastFlowProgress ??
+      (force && pendingRestore !== null ? { ...pendingRestore, updatedAt: Date.now() } : null);
+    if (snapshot !== null) {
+      saveReadingProgress(progressStorage, progressId, {
+        ...snapshot,
+        updatedAt: Date.now(),
+      });
     }
   };
 
@@ -2676,6 +2688,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         rightToLeft: t('reader.comic.rtl'),
         singlePage: t('reader.comic.single'),
         doublePage: t('reader.comic.double'),
+        autoPage: extraComicLabels.autoPage,
         fitWidth: t('reader.comic.fitWidth'),
         fitScreen: extraComicLabels.fitScreen,
         fitHeight: extraComicLabels.fitHeight,
@@ -3144,7 +3157,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   // 书签 / 笔记改由菜单触发（见 ReaderInstance.addBookmark/addNote），不再挂浮动工具栏。
 
   const returnToShelf = (): void => {
-    persistReadingProgress();
+    persistReadingProgress(true);
     closeChromePanel();
     readerChrome?.dismiss();
     syncChromeRevealAttr();

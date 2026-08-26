@@ -684,6 +684,28 @@ describe('CBZ page materialization', () => {
     await rtlHandle.destroy();
   });
 
+  it('turns the page from a hidden-chrome edge tap and exposes RTL / auto spread chips', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'auto' }),
+    });
+
+    expect(container.dataset.comicSpreadPref).toBe('auto');
+    expect(container.querySelector('[aria-label="Auto"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(container.querySelector('[aria-label="Right to left"]')).not.toBeNull();
+    handle.hideChrome();
+    expect(container.dataset.comicChrome).toBe('hidden');
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    container.querySelector<HTMLButtonElement>('[aria-label="Right to left"]')!.click();
+    expect(handle.preferences.direction).toBe('rtl');
+    container.querySelector<HTMLButtonElement>('[aria-label="Single page"]')!.click();
+    expect(handle.preferences.spread).toBe('single');
+    await handle.destroy();
+  });
+
   it('does not treat a scale-1 strip swipe as a page turn', async () => {
     const container = document.createElement('div');
     sizeCanvas(container);

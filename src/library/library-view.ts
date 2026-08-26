@@ -604,6 +604,7 @@ export interface LibraryViewDependencies {
 }
 
 export const CONTINUE_DISMISS_KEY = 'lightink.library.continueDismissed';
+export const CONTINUE_LAST_OPENED_KEY = 'lightink.library.lastOpenedItemId';
 
 export interface LibraryHideOptions {
   /** When false, conceal the shelf without leaving the reader workspace. */
@@ -1886,7 +1887,29 @@ export function createLibraryView(
     }
   }
 
+  function readLastOpenedItemId(): string | null {
+    const storage = continueStorage();
+    if (storage === null) return null;
+    try {
+      const raw = storage.getItem(CONTINUE_LAST_OPENED_KEY);
+      return raw === null || raw === '' ? null : raw;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeLastOpenedItemId(itemId: string): void {
+    const storage = continueStorage();
+    if (storage === null) return;
+    try {
+      storage.setItem(CONTINUE_LAST_OPENED_KEY, itemId);
+    } catch {
+      /* ignore quota / private-mode failures */
+    }
+  }
+
   let dismissedContinue = readDismissedContinue();
+  let lastOpenedItemId = readLastOpenedItemId();
 
   function matchesGroup(display: DisplayItem): boolean {
     if (selectedSmartGroupId !== null) {
@@ -1917,6 +1940,19 @@ export function createLibraryView(
   }
 
   function latestInProgress(): DisplayItem | null {
+    const opened =
+      lastOpenedItemId === null
+        ? null
+        : (items.find((display) => display.item.id === lastOpenedItemId) ?? null);
+    if (opened !== null) {
+      const progress = progressFor(opened);
+      if (progress?.status === 'in-progress') {
+        const fingerprint = continueFingerprint(opened);
+        if (fingerprint !== null && fingerprint !== dismissedContinue) {
+          return opened;
+        }
+      }
+    }
     let latest: DisplayItem | null = null;
     let latestClock = Number.NEGATIVE_INFINITY;
     for (const display of items) {
@@ -3538,6 +3574,8 @@ export function createLibraryView(
       },
     };
     try {
+      lastOpenedItemId = resolved.item.id;
+      writeLastOpenedItemId(resolved.item.id);
       await deps.onOpen(requestWithProgress, controller.signal);
       if (controller.signal.aborted) return;
       activeOperations.delete(controller);
@@ -4868,7 +4906,9 @@ export function createLibraryView(
       searchInput.value = '';
       syncSearchClear();
       await initialLoad();
-      searchInput.focus();
+      if (!isMobileLibraryChrome()) {
+        searchInput.focus();
+      }
     },
     hide,
     async toggle() {

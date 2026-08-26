@@ -1147,6 +1147,18 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-modes {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-modes::-webkit-scrollbar {
   display: none;
 }
 

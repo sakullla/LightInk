@@ -1,5 +1,6 @@
 package com.lightink.app
 
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -107,6 +108,7 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     super.onCreate(savedInstanceState)
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
