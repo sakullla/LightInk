@@ -3112,9 +3112,8 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     min-height: 48px;
   }
 
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-groups-sheet-title {
+  /* mountLibraryOverlay 把面板挂到 body，选择器不能依赖 .lightink-library 祖先。 */
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-title {
     margin: 0;
     flex: 1 1 auto;
     min-width: 0;
@@ -3144,9 +3143,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     letter-spacing: 0.06em;
   }
 
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-groups-sheet-list {
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-list {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
@@ -3157,14 +3154,34 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     -webkit-overflow-scrolling: touch;
   }
 
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-item {
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    width: 100%;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 8px 12px;
+    overflow: hidden;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--lightink-fg);
+    font: inherit;
+    font-size: var(--lightink-type-ui);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
     .lightink-library-groups-sheet
     .lightink-library-group,
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
     .lightink-library-groups-sheet
     .lightink-library-smart-group {
+    min-width: 48px;
     min-height: 48px;
     padding: 8px 12px;
     border-radius: 10px;
@@ -3172,10 +3189,26 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   }
 
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-groups-sheet-empty,
+    .lightink-library-groups-sheet-item:hover:not(:disabled),
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-item:focus-visible {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-item:focus-visible {
+    outline: 2px solid var(--lightink-accent);
+    outline-offset: 2px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-item.is-active {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+    font-weight: 600;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-empty,
+  :is(html[data-android], html[data-touch-primary])
     .lightink-library-groups-sheet
     .lightink-library-nav-empty {
     margin: 8px 4px 12px;

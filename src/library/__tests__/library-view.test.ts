@@ -5260,6 +5260,49 @@ describe('LibraryView mobile shelf', () => {
     view.destroy();
   });
 
+  it('styles the portaled Groups list as a 48px column without a library ancestor', async () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    const listBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-groups-sheet-list/,
+    );
+    const listBlock = listBlocks[listBlocks.length - 1] ?? '';
+    expect(listBlock).toMatch(/flex-direction:\s*column/);
+    expect(cssLengthPx(cssDeclaration(listBlock, 'gap'))[0]).toBeGreaterThanOrEqual(8);
+
+    const itemBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-groups-sheet-item(?![\w-])/,
+    );
+    const itemBlock = itemBlocks[itemBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(itemBlock, 'min-width'))[0]).toBeGreaterThanOrEqual(48);
+    expect(cssLengthPx(cssDeclaration(itemBlock, 'min-height'))[0]).toBeGreaterThanOrEqual(48);
+
+    document.documentElement.setAttribute('data-android', '');
+    const grouped = localItem({
+      id: 'local:/books/grouped-sheet.epub',
+      title: '分组小说',
+      localPath: '/books/grouped-sheet.epub',
+    });
+    const { deps, library } = collectionDependencies({ items: [grouped] });
+    const created = await library.createGroup!('夏日书单');
+    await library.setGroupMember!(created.id, grouped.id, true);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const sheet = await openShelfGroupsSheet(host);
+    expect(sheet.parentElement).toBe(document.body);
+    expect(libraryRoot(host).contains(sheet)).toBe(false);
+    const list = sheet.querySelector('.lightink-library-groups-sheet-list');
+    expect(list).not.toBeNull();
+    const item = sheetGroupButton(sheet, '夏日书单');
+    expect(item.classList.contains('lightink-library-groups-sheet-item')).toBe(true);
+    expect(list?.contains(item)).toBe(true);
+    view.destroy();
+  });
+
   it('opens a smart group cover wall from the Groups bottom sheet', async () => {
     document.documentElement.setAttribute('data-android', '');
     const novel = localItem({
