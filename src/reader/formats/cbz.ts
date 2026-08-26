@@ -5,6 +5,9 @@
  * decoded-byte budget are materialized in the WebView.
  */
 
+import { invoke } from '@tauri-apps/api/core';
+
+import { isTauriRuntime } from '../../file/browser-file-store.js';
 import { ParseError } from './types.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
 import type {
@@ -142,6 +145,56 @@ export interface CbzRenderOptions {
   readonly progressId?: string | null;
   readonly labels?: Partial<ComicToolbarLabels>;
   readonly onReturnToShelf?: () => void;
+  /**
+   * Android 系统栏成对显隐。未注入时走 MainActivity 桥 / Tauri invoke；
+   * 失败忽略。桌面默认不调用。
+   */
+  readonly setSystemBarsVisible?: (visible: boolean) => void | Promise<void>;
+}
+
+/**
+ * 系统栏桥契约（owner：MainActivity + 一条 invoke；本文件是漫画 consumer）。
+ * `visible=false` 隐藏 status/navigation，并让画面贴边；`true` 再显示。
+ * 桌面不调用；桥缺失或 reject 时只藏应用 chrome。
+ */
+export const SET_SYSTEM_BARS_VISIBLE_COMMAND = 'set_system_bars_visible';
+
+export interface ComicSystemBarsBridge {
+  setVisible(visible: boolean): void;
+}
+
+export interface ComicSystemBarsHost {
+  LightInkSystemBars?: ComicSystemBarsBridge;
+}
+
+function androidReaderRoot(
+  root: HTMLElement | null = typeof document === 'undefined' ? null : document.documentElement,
+): HTMLElement | null {
+  if (root === null || !root.hasAttribute('data-android')) return null;
+  return root;
+}
+
+/** 成对显隐系统栏；非 Android、桥缺失或 invoke 失败均为 no-op。 */
+export function syncComicSystemBarsVisible(
+  visible: boolean,
+  host: (Window & ComicSystemBarsHost) | null = typeof window === 'undefined'
+    ? null
+    : (window as Window & ComicSystemBarsHost),
+  root: HTMLElement | null = typeof document === 'undefined' ? null : document.documentElement,
+): void {
+  if (androidReaderRoot(root) === null) return;
+  try {
+    const bridge = host?.LightInkSystemBars;
+    if (bridge !== undefined && typeof bridge.setVisible === 'function') {
+      bridge.setVisible(visible);
+      return;
+    }
+    if (host !== null && isTauriRuntime(host)) {
+      void invoke(SET_SYSTEM_BARS_VISIBLE_COMMAND, { visible }).catch(() => undefined);
+    }
+  } catch {
+    // invoke 失败仍只藏应用 chrome，阅读不中断。
+  }
 }
 
 const COMIC_FIT_CYCLE: readonly ComicFit[] = ['screen', 'width', 'height', 'original'];
@@ -1362,7 +1415,27 @@ export async function renderCbzInto(
 
     let chromeVisible = true;
     let chromeTimer: ReturnType<typeof setTimeout> | null = null;
+    const syncSystemBars = (visible: boolean): void => {
+      try {
+        if (options.setSystemBarsVisible !== undefined) {
+          void Promise.resolve(options.setSystemBarsVisible(visible)).catch(() => undefined);
+          return;
+        }
+        syncComicSystemBarsVisible(visible);
+      } catch {
+        // invoke 失败仍只藏应用 chrome，阅读不中断。
+      }
+    };
+    const applyEdgeToEdge = (chromeShown: boolean): void => {
+      if (chromeShown) {
+        container.style.removeProperty('padding');
+      } else {
+        // 阅读中画面贴边：chrome 与系统栏隐藏时不再吃 safe-area 底垫。
+        container.style.padding = '0';
+      }
+    };
     const setChromeVisible = (visible: boolean): void => {
+      const changed = chromeVisible !== visible;
       chromeVisible = visible;
       // data-comic-chrome 被 reader-view 的 MutationObserver 监听；等值重写
       // 也会触发回调，只在变化时写。
@@ -1371,6 +1444,8 @@ export async function renderCbzInto(
         container.dataset.comicChrome = state;
       }
       chrome.setAttribute('aria-hidden', String(!visible));
+      applyEdgeToEdge(visible);
+      if (changed) syncSystemBars(visible);
     };
     const scheduleChromeHide = (): void => {
       if (chromeTimer !== null) clearTimeout(chromeTimer);
@@ -1701,6 +1776,8 @@ export async function renderCbzInto(
       clearTimeout(prefetchTimer);
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
+      applyEdgeToEdge(true);
+      if (!chromeVisible) syncSystemBars(true);
       container.removeEventListener('click', onSurfaceClick);
       container.removeEventListener('dblclick', onDoubleClick);
       container.removeEventListener('pointerdown', onPointerDown);

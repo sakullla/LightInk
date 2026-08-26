@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
 
+import { invoke } from '@tauri-apps/api/core';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderCbzInto } from '../formats/cbz.js';
+import {
+  renderCbzInto,
+  SET_SYSTEM_BARS_VISIBLE_COMMAND,
+  syncComicSystemBarsVisible,
+  type ComicSystemBarsHost,
+} from '../formats/cbz.js';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+
+const invokeMock = vi.mocked(invoke);
 
 let observerCallback: IntersectionObserverCallback | null = null;
 
@@ -50,9 +62,13 @@ beforeEach(() => {
 afterEach(() => {
   createObjectUrl.mockReset();
   revokeObjectUrl.mockReset();
+  invokeMock.mockReset();
+  invokeMock.mockResolvedValue(undefined);
   observerCallback = null;
   globalThis.IntersectionObserver = originalIntersectionObserver;
   document.documentElement.removeAttribute('lang');
+  document.documentElement.removeAttribute('data-android');
+  document.documentElement.removeAttribute('data-touch-primary');
   document.body.replaceChildren();
   if (originalNaturalWidth !== undefined) {
     Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', originalNaturalWidth);
@@ -972,5 +988,152 @@ describe('CBZ page materialization', () => {
     dragCanvas(container, 'touch');
     expect(handle.currentPage).toBe(page);
     await handle.destroy();
+  });
+});
+
+function androidTauriHost(
+  extras: ComicSystemBarsHost = {},
+): Window & ComicSystemBarsHost {
+  return { __TAURI_INTERNALS__: {}, ...extras } as Window & ComicSystemBarsHost;
+}
+
+describe('CBZ chrome overlay and system bars (R4)', () => {
+  it('keeps a single comic overlay and no EPUB footer actions', async () => {
+    document.documentElement.lang = 'en';
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    expect(container.querySelectorAll('.lightink-reader-comic-chrome')).toHaveLength(1);
+    expect(container.querySelector('.lightink-reader-comic-hud')).toBeNull();
+    expect(container.querySelector('.lightink-reader-chrome-footer')).toBeNull();
+    expect(container.querySelector('[data-reader-chrome-action="toc"]')).toBeNull();
+    expect(container.querySelector('[data-reader-chrome-action="typography"]')).toBeNull();
+    expect(container.querySelector('[data-reader-chrome-action="search"]')).toBeNull();
+    expect(container.querySelector('[data-reader-chrome-action="annotations"]')).toBeNull();
+    expect(container.querySelector('.lightink-reader-comic-back')).not.toBeNull();
+    await handle.destroy();
+  });
+
+  it('flushes page padding when chrome hides so the canvas sits edge to edge', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    expect(container.dataset.comicChrome).toBe('visible');
+    expect(handle.hideChrome()).toBe(true);
+    expect(container.dataset.comicChrome).toBe('hidden');
+    expect(container.style.padding).toBe('0px');
+    clickCanvas(container, 500);
+    expect(container.dataset.comicChrome).toBe('visible');
+    expect(container.style.padding).toBe('');
+    await handle.destroy();
+  });
+
+  it('pairs chrome hide/show with system bars and does not invoke twice for a no-op hide', async () => {
+    const setSystemBarsVisible = vi.fn();
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+      setSystemBarsVisible,
+    });
+
+    expect(setSystemBarsVisible).not.toHaveBeenCalled();
+    expect(handle.hideChrome()).toBe(true);
+    expect(setSystemBarsVisible).toHaveBeenCalledTimes(1);
+    expect(setSystemBarsVisible).toHaveBeenCalledWith(false);
+    expect(handle.hideChrome()).toBe(false);
+    expect(setSystemBarsVisible).toHaveBeenCalledTimes(1);
+    clickCanvas(container, 500);
+    expect(container.dataset.comicChrome).toBe('visible');
+    expect(setSystemBarsVisible).toHaveBeenCalledTimes(2);
+    expect(setSystemBarsVisible).toHaveBeenLastCalledWith(true);
+    await handle.destroy();
+  });
+
+  it('hides app chrome and still turns pages when the system-bar hook rejects', async () => {
+    const setSystemBarsVisible = vi.fn(() => {
+      throw new Error('bridge down');
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+      setSystemBarsVisible,
+    });
+
+    expect(handle.hideChrome()).toBe(true);
+    expect(container.dataset.comicChrome).toBe('hidden');
+    expect(container.style.padding).toBe('0px');
+    expect(handle.currentPage).toBe(1);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    await handle.destroy();
+  });
+
+  it('does not call the Android bridge on desktop', async () => {
+    const setVisible = vi.fn();
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+
+    expect(handle.hideChrome()).toBe(true);
+    expect(invokeMock).not.toHaveBeenCalled();
+    syncComicSystemBarsVisible(
+      false,
+      { LightInkSystemBars: { setVisible } } as Window & ComicSystemBarsHost,
+      document.documentElement,
+    );
+    expect(setVisible).not.toHaveBeenCalled();
+    await handle.destroy();
+  });
+});
+
+describe('syncComicSystemBarsVisible', () => {
+  it('forwards visible=false/true to the JS bridge on Android', () => {
+    document.documentElement.setAttribute('data-android', '');
+    const setVisible = vi.fn();
+    const host = androidTauriHost({ LightInkSystemBars: { setVisible } });
+    syncComicSystemBarsVisible(false, host, document.documentElement);
+    syncComicSystemBarsVisible(true, host, document.documentElement);
+    expect(setVisible.mock.calls).toEqual([[false], [true]]);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('invokes set_system_bars_visible when Android has Tauri but no JS bridge', () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = androidTauriHost();
+    syncComicSystemBarsVisible(false, host, document.documentElement);
+    syncComicSystemBarsVisible(true, host, document.documentElement);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, SET_SYSTEM_BARS_VISIBLE_COMMAND, {
+      visible: false,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, SET_SYSTEM_BARS_VISIBLE_COMMAND, {
+      visible: true,
+    });
+  });
+
+  it('swallows a missing or rejecting bridge so reading chrome can still hide', () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = androidTauriHost({
+      LightInkSystemBars: {
+        setVisible: () => {
+          throw new Error('no plugin');
+        },
+      },
+    });
+    expect(() => syncComicSystemBarsVisible(false, host, document.documentElement)).not.toThrow();
+    invokeMock.mockRejectedValue(new Error('invoke failed'));
+    expect(() =>
+      syncComicSystemBarsVisible(true, androidTauriHost(), document.documentElement),
+    ).not.toThrow();
   });
 });

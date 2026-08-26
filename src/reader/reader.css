@@ -636,20 +636,6 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
     font-size: 0.68rem;
   }
 
-  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
-    display: flex;
-  }
-
-  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
-    .lightink-reader-chrome-footer
-    :is(
-      .lightink-reader-chrome-chapter,
-      .lightink-reader-chrome-scrubber,
-      .lightink-reader-chrome-footer-stats
-    ) {
-    display: none;
-  }
-
   .lightink-reader-chrome-whisper {
     gap: 0.5rem;
     padding: 0.14rem 0.75rem calc(0.2rem + var(--lightink-safe-bottom, 0px));
@@ -1098,6 +1084,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   color: var(--lightink-comic-fg, #e6e6e6);
 }
 
+/* Reading canvas stays edge-to-edge except for --lightink-safe-* (system bars).
+ * Chrome hide/show pairs with those insets: bars hidden → tokens are 0 → flush;
+ * invoke failure still eats the inset so the page is not under a live nav bar. */
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-pages[data-comic-reader='true'][data-reader-active='true'] {
   padding-bottom: var(--lightink-safe-bottom, 0px);
@@ -1126,7 +1115,8 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 }
 
 /* Comic overlay owns page/slider chrome. Hide the flow footer and idle
- * whisper so a sparse "第 N 页 · ── · N%" dock does not sit under the pages. */
+ * whisper on every surface (including touch) so toc/排版/搜索/标注 do not
+ * stack a second dock under .lightink-reader-comic-*. */
 .lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome-footer,
 .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
   display: none;
@@ -1140,17 +1130,6 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
   .lightink-reader-chrome-footer {
-  display: flex;
-}
-
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
-  .lightink-reader-chrome-footer
-  :is(
-    .lightink-reader-chrome-chapter,
-    .lightink-reader-chrome-scrubber,
-    .lightink-reader-chrome-footer-stats
-  ) {
   display: none;
 }
 

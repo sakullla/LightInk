@@ -285,7 +285,7 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
     );
     expect(css).not.toMatch(/lightink-reader-comic-hud/);
-    expect(css).toMatch(
+    expect(css).not.toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)\s*\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*flex/,
     );
     expect(css).toMatch(
@@ -485,6 +485,54 @@ describe('comic surface layout (R1/R3/R4)', () => {
     expect(css).not.toMatch(
       /\[data-comic-mode='strip'\]\[data-comic-spread='double'\][\s\S]*?grid-template-columns:\s*repeat\(2/,
     );
+  });
+
+  it('keeps the EPUB footer hidden on touch comics so only comic chrome remains (R4)', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\) \.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).not.toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)\s*\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*flex/,
+    );
+    expect(coarsePointerCss(css)).not.toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)\s*\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*flex/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)[\s\S]{0,220}?\.lightink-reader-chrome-footer-stats/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)[\s\S]{0,280}?\.lightink-reader-chrome-action--(?:toc|typography|search|annotations)/,
+    );
+  });
+
+  it('lets a chrome-hidden comic page sit edge-to-edge without a second EPUB dock', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\]\s*\{[^}]*padding:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-active='true'\]:not\(\[data-comic-reader='true'\]\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-comic-chrome\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-topbar\s*\{[^}]*opacity:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-bottombar\s*\{[^}]*opacity:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\) \.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(/--lightink-comic-canvas:\s*#111\b/);
   });
 });
 

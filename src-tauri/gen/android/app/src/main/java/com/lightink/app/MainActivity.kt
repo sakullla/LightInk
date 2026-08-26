@@ -9,8 +9,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.util.concurrent.Executors
 import org.json.JSONArray
@@ -53,6 +55,18 @@ import org.json.JSONObject
  *   `{status:'ok',path}` / `{status:'cancelled'}` / `{status:'error',message}`。
  * - WebView 已销毁时回传丢失，前端 Promise 悬挂；该窗口仅在 Activity
  *   销毁期间出现，下一次选择会重新拉起，不做持久化重投。
+ *
+ * 系统栏显隐桥（R4 / comic-mobile，前端契约见 src/reader/formats/cbz.ts
+ * `syncComicSystemBarsVisible` / `LightInkSystemBars`）：
+ * - JS → Kotlin：`addJavascriptInterface` 暴露
+ *   `window.LightInkSystemBars.setVisible(visible)`。
+ *   `visible=false` 隐藏状态栏与导航条（`WindowInsetsCompat.Type.systemBars()`，
+ *   `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`），并
+ *   `WindowCompat.setDecorFitsSystemWindows(window, false)` 让画面贴边；
+ *   `visible=true` 再显示系统栏。成对显隐由阅读 chrome 调用。
+ * - 失败吞掉、不向 JS 抛：invoke 失败仍只藏应用 chrome，阅读不中断。
+ * - 桌面不调用该桥。`ReaderTypography.hideStatusBar` 不复用为本桥。
+ * - 前端另有 `invoke('set_system_bars_visible')` 回落；本 Activity 只落地 JS 桥。
  */
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
@@ -60,6 +74,12 @@ class MainActivity : TauriActivity() {
   /** 进行中的 SAF 请求 id（单飞）；null 表示空闲。 */
   private var pendingSafRequestId: String? = null
   private val safCopyExecutor = Executors.newSingleThreadExecutor()
+
+  /**
+   * 阅读 chrome 期望的系统栏可见性。false 时 pushSafeArea 只保留 displayCutout，
+   * 不把 16dp 手势底垫或已隐藏的 systemBars 写回 CSS，画面才能贴边。
+   */
+  private var systemBarsWanted = true
 
   private val safOpenDocument =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -117,6 +137,8 @@ class MainActivity : TauriActivity() {
     this.webView = webView
     // 前端契约见 src/file/file-dialog.ts（SAF 桥通道）。
     webView.addJavascriptInterface(SafBridgeJsInterface(), "LightInkSafBridge")
+    // 前端契约见 src/reader/formats/cbz.ts `LightInkSystemBars.setVisible`。
+    webView.addJavascriptInterface(SystemBarsJsInterface(), "LightInkSystemBars")
     // Older WebViews report env(safe-area-inset-*) as 0. Push system-bar
     // and IME insets as CSS pixels so chrome sits below the status bar and
     // note dialogs stay above the keyboard (edge-to-edge does not resize).
@@ -144,12 +166,55 @@ class MainActivity : TauriActivity() {
     ViewCompat.requestApplyInsets(webView)
   }
 
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    // 失焦后系统常把栏拉回来；阅读仍要藏栏时成对再藏一次。
+    if (hasFocus && !systemBarsWanted) {
+      applySystemBarsVisible(false)
+    }
+  }
+
   override fun onDestroy() {
+    // 离开前恢复系统栏，避免 Activity 销毁时窗口停在 immersive hide。
+    applySystemBarsVisible(true)
     // 清空 webView 引用：销毁后完成的后台复制会走 resolveSaf 的 null-guard
     // 直接 no-op，避免对已销毁 WebView 调 evaluateJavascript。
     webView = null
     safCopyExecutor.shutdown()
     super.onDestroy()
+  }
+
+  /** JS 可见的系统栏桥入口（运行在 WebView 私有线程，必须切回 UI 线程）。 */
+  private inner class SystemBarsJsInterface {
+    @JavascriptInterface
+    fun setVisible(visible: Boolean) {
+      runOnUiThread { applySystemBarsVisible(visible) }
+    }
+  }
+
+  /**
+   * 与阅读 chrome 成对显隐系统栏。失败吞掉，不向 JS 抛。
+   * 全屏阅读时才强制 decor 不 fit system windows，使画面贴边。
+   */
+  private fun applySystemBarsVisible(visible: Boolean) {
+    try {
+      val controller = WindowCompat.getInsetsController(window, window.decorView)
+      if (visible) {
+        controller.show(WindowInsetsCompat.Type.systemBars())
+      } else {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        controller.systemBarsBehavior =
+          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+      }
+      systemBarsWanted = visible
+      val view = webView
+      if (view != null) {
+        ViewCompat.requestApplyInsets(view)
+      }
+    } catch (_: Exception) {
+      // invoke 失败不阻断阅读：前端仍只藏应用 chrome。
+    }
   }
 
   /** JS 可见的 SAF 桥入口（运行在 WebView 私有线程，必须切回 UI 线程）。 */
@@ -196,20 +261,34 @@ class MainActivity : TauriActivity() {
    * 键盘单独走 --lightink-keyboard-inset，避免底栏与弹层重复抬高。
    */
   private fun pushSafeArea(view: WebView, windowInsets: WindowInsetsCompat) {
-    val bars = windowInsets.getInsets(
-      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-    )
-    val tappable = windowInsets.getInsets(WindowInsetsCompat.Type.tappableElement())
-    val gestures = windowInsets.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures())
     val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime())
     val density = view.resources.displayMetrics.density.coerceAtLeast(0.01f)
-    val top = maxOf(bars.top, tappable.top) / density
-    val right = maxOf(bars.right, tappable.right) / density
-    // Gesture nav often reports systemBars().bottom = 0 while the home
-    // indicator still covers the last 16–48 dp. Floor matches tokens.css.
-    val bottom = maxOf(bars.bottom, tappable.bottom, gestures.bottom, (16 * density).toInt()) / density
-    val left = maxOf(bars.left, tappable.left) / density
     val keyboard = maxOf(0, ime.bottom) / density
+    val top: Float
+    val right: Float
+    val bottom: Float
+    val left: Float
+    if (!systemBarsWanted) {
+      // 阅读全屏：只避开物理挖孔。忽略 transient swipe 带回的 systemBars，
+      // 也不再垫 16dp 手势底，否则画面无法贴边。
+      val cutout = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
+      top = cutout.top / density
+      right = cutout.right / density
+      bottom = cutout.bottom / density
+      left = cutout.left / density
+    } else {
+      val bars = windowInsets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+      )
+      val tappable = windowInsets.getInsets(WindowInsetsCompat.Type.tappableElement())
+      val gestures = windowInsets.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures())
+      top = maxOf(bars.top, tappable.top) / density
+      right = maxOf(bars.right, tappable.right) / density
+      // Gesture nav often reports systemBars().bottom = 0 while the home
+      // indicator still covers the last 16–48 dp. Floor matches tokens.css.
+      bottom = maxOf(bars.bottom, tappable.bottom, gestures.bottom, (16 * density).toInt()) / density
+      left = maxOf(bars.left, tappable.left) / density
+    }
     val script =
       "(function(){" +
         "var r=document.documentElement;" +
@@ -220,9 +299,15 @@ class MainActivity : TauriActivity() {
         "r.style.setProperty('--lightink-keyboard-inset','${keyboard}px');" +
         "window.__lightinkSafeArea={top:$top,right:$right,bottom:$bottom,left:$left};" +
         "window.__lightinkKeyboardInset=$keyboard;" +
-        "if(window.__lightinkApplySafeArea){" +
-        "window.__lightinkApplySafeArea(window.__lightinkSafeArea);" +
-        "}" +
+        // 藏栏时只写 CSS 变量。__lightinkApplySafeArea 会把 bottom=0 垫回 16px，
+        // 破坏阅读贴边；显栏时仍走该回调以复用前端手势底垫。
+        (if (systemBarsWanted) {
+          "if(window.__lightinkApplySafeArea){" +
+            "window.__lightinkApplySafeArea(window.__lightinkSafeArea);" +
+            "}"
+        } else {
+          ""
+        }) +
         "if(window.__lightinkApplyKeyboardInset){" +
         "window.__lightinkApplyKeyboardInset($keyboard);" +
         "}" +
