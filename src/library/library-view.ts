@@ -1321,6 +1321,48 @@ export function createLibraryView(
   chipRow.className = 'lightink-library-shelf-chips';
   chipRow.setAttribute('role', 'radiogroup');
   chipRow.hidden = true;
+  const shelfToolbar = doc.createElement('div');
+  shelfToolbar.className = 'lightink-library-shelf-toolbar';
+  shelfToolbar.hidden = true;
+  const groupsButton = button(doc, '', 'lightink-library-shelf-groups');
+  groupsButton.hidden = true;
+  groupsButton.dataset.libraryShelfGroups = '';
+  groupsButton.setAttribute('aria-haspopup', 'dialog');
+  groupsButton.setAttribute('aria-expanded', 'false');
+  groupsButton.style.minWidth = '48px';
+  groupsButton.style.minHeight = '48px';
+  shelfToolbar.append(chipRow, groupsButton);
+  const groupsSheet = doc.createElement('div');
+  groupsSheet.className = 'lightink-library-groups-sheet';
+  groupsSheet.dataset.libraryGroupsSheet = '';
+  groupsSheet.hidden = true;
+  groupsSheet.style.position = 'fixed';
+  groupsSheet.style.inset = '0';
+  groupsSheet.style.zIndex = '200';
+  groupsSheet.style.flexDirection = 'column';
+  groupsSheet.style.justifyContent = 'flex-end';
+  const groupsSheetBackdrop = doc.createElement('div');
+  groupsSheetBackdrop.className = 'lightink-library-groups-sheet-backdrop';
+  groupsSheetBackdrop.style.position = 'absolute';
+  groupsSheetBackdrop.style.inset = '0';
+  groupsSheetBackdrop.style.background = 'var(--lightink-overlay)';
+  const groupsSheetDialog = doc.createElement('div');
+  groupsSheetDialog.className = 'lightink-library-groups-sheet-dialog';
+  groupsSheetDialog.setAttribute('role', 'dialog');
+  groupsSheetDialog.setAttribute('aria-modal', 'true');
+  groupsSheetDialog.style.position = 'relative';
+  groupsSheetDialog.style.width = '100%';
+  groupsSheetDialog.style.maxHeight = 'min(70vh, 520px)';
+  groupsSheetDialog.style.overflow = 'auto';
+  groupsSheetDialog.style.padding = '16px 16px calc(16px + var(--lightink-safe-bottom, 0px))';
+  groupsSheetDialog.style.borderRadius = '16px 16px 0 0';
+  groupsSheetDialog.style.background = 'var(--lightink-bg-elevated)';
+  const groupsSheetTitle = doc.createElement('h2');
+  groupsSheetTitle.className = 'lightink-library-groups-sheet-title';
+  const groupsSheetList = doc.createElement('div');
+  groupsSheetList.className = 'lightink-library-groups-sheet-list';
+  groupsSheetDialog.append(groupsSheetTitle, groupsSheetList);
+  groupsSheet.append(groupsSheetBackdrop, groupsSheetDialog);
   const workArea = doc.createElement('div');
   workArea.className = 'lightink-library-workarea';
   const itemList = doc.createElement('div');
@@ -1353,7 +1395,15 @@ export function createLibraryView(
   membershipActions.append(membershipSave, membershipCancel);
   membershipForm.append(membershipTitle, membershipOptions, membershipActions);
   membershipOverlay.appendChild(membershipForm);
-  root.append(header, body, detailBackdrop, membershipOverlay, groupOverlay, sourceOverlay);
+  root.append(
+    header,
+    body,
+    detailBackdrop,
+    membershipOverlay,
+    groupOverlay,
+    sourceOverlay,
+    groupsSheet,
+  );
   host.appendChild(root);
 
   let navRailCollapsed = loadNavCollapsed(deps.themeStorage);
@@ -1751,7 +1801,16 @@ export function createLibraryView(
       !smartGroups.some((group) => group.id === selectedSmartGroupId)
     ) {
       selectedSmartGroupId = null;
+      selectedGroup = 'all';
     }
+  }
+
+  function forgetMissingCustomGroup(): void {
+    if (selectedCustomGroupId === null) return;
+    if (groups.some((group) => group.id === selectedCustomGroupId)) return;
+    selectedCustomGroupId = null;
+    selectedGroup = 'all';
+    closeGroupsSheet();
   }
 
   function progressFor(display: DisplayItem): LibraryProgress | null {
@@ -1929,9 +1988,11 @@ export function createLibraryView(
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       chipRow.hidden = !isMobileLibraryChrome();
+      syncMobileGroupsChrome();
       if (isMobileLibraryChrome()) {
-        content.replaceChildren(chipRow, continueHost, status, itemList);
+        content.replaceChildren(shelfToolbar, continueHost, status, itemList);
       } else {
+        closeGroupsSheet();
         content.replaceChildren(continueHost, status, itemList);
       }
       detail.hidden = true;
@@ -1941,6 +2002,8 @@ export function createLibraryView(
       heading.textContent = labels().manage;
       toolbar.replaceChildren();
       chipRow.hidden = true;
+      closeGroupsSheet();
+      syncMobileGroupsChrome();
       itemList.classList.remove('lightink-library-cover-wall');
       content.replaceChildren(status, manage.element);
     } else if (inCatalog) {
@@ -1948,6 +2011,8 @@ export function createLibraryView(
       heading.textContent = catalogTitle();
       toolbar.replaceChildren();
       chipRow.hidden = true;
+      closeGroupsSheet();
+      syncMobileGroupsChrome();
       itemList.classList.add('lightink-library-cover-wall');
       workArea.replaceChildren(itemList, detail);
       content.replaceChildren(navigation, status, workArea);
@@ -1956,6 +2021,8 @@ export function createLibraryView(
       heading.textContent = labels().sources;
       toolbar.replaceChildren();
       chipRow.hidden = true;
+      closeGroupsSheet();
+      syncMobileGroupsChrome();
       itemList.classList.remove('lightink-library-cover-wall');
       content.replaceChildren(status);
     }
@@ -2057,6 +2124,7 @@ export function createLibraryView(
   async function reloadGroups(): Promise<void> {
     groups = (await deps.library.listGroups?.()) ?? [];
     for (const group of groups) expandedGroupIds.add(group.id);
+    forgetMissingCustomGroup();
     renderGroups();
     renderContinueBar();
     renderItems();
@@ -2375,6 +2443,7 @@ export function createLibraryView(
     selectedGroup = group;
     selectedCustomGroupId = null;
     selectedSmartGroupId = null;
+    closeGroupsSheet();
     void activateShelf();
   }
 
@@ -2385,6 +2454,131 @@ export function createLibraryView(
       selectedSmartGroupId === null &&
       selectedGroup === group
     );
+  }
+
+  function syncMobileGroupsChrome(): void {
+    const mobileShelf = isMobileLibraryChrome() && activeSection === 'shelf';
+    shelfToolbar.hidden = !mobileShelf;
+    groupsButton.hidden = !mobileShelf;
+    groupsButton.textContent = labels().groups;
+    groupsButton.title = labels().groups;
+    groupsButton.setAttribute('aria-label', labels().groups);
+    groupsButton.setAttribute('aria-expanded', String(!groupsSheet.hidden));
+    groupsSheetDialog.setAttribute('aria-label', labels().groups);
+    groupsSheetTitle.textContent = labels().groups;
+    if (mobileShelf) {
+      // 基线 CSS 把入口/面板标成桌面隐藏；手机书架用行内显示，避免被全局 none 吃掉。
+      shelfToolbar.style.display = 'flex';
+      shelfToolbar.style.alignItems = 'center';
+      shelfToolbar.style.gap = '8px';
+      shelfToolbar.style.minWidth = '0';
+      chipRow.style.flex = '1 1 auto';
+      chipRow.style.minWidth = '0';
+      groupsButton.style.display = 'inline-flex';
+      groupsButton.style.alignItems = 'center';
+      groupsButton.style.justifyContent = 'center';
+    } else {
+      shelfToolbar.style.removeProperty('display');
+      groupsButton.style.removeProperty('display');
+    }
+  }
+
+  function closeGroupsSheet(): void {
+    groupsSheet.hidden = true;
+    groupsSheet.style.removeProperty('display');
+    groupsSheetBackdrop.style.removeProperty('display');
+    groupsButton.setAttribute('aria-expanded', 'false');
+  }
+
+  function openGroupsSheet(): void {
+    if (!isMobileLibraryChrome() || activeSection !== 'shelf') return;
+    renderGroupsSheet();
+    mountLibraryOverlay(groupsSheet, root);
+    groupsSheet.hidden = false;
+    groupsSheet.style.display = 'flex';
+    groupsSheetBackdrop.style.display = 'block';
+    groupsButton.setAttribute('aria-expanded', 'true');
+  }
+
+  function flattenCustomGroupNodes(nodes: readonly LibraryGroupNode[]): LibraryGroupNode[] {
+    const flat: LibraryGroupNode[] = [];
+    const walk = (list: readonly LibraryGroupNode[]): void => {
+      for (const node of list) {
+        flat.push(node);
+        walk(node.children);
+      }
+    };
+    walk(nodes);
+    return flat;
+  }
+
+  function applyCustomGroup(groupId: string): void {
+    if (!groups.some((group) => group.id === groupId)) {
+      selectedCustomGroupId = null;
+      selectedSmartGroupId = null;
+      selectedGroup = 'all';
+      closeGroupsSheet();
+      void activateShelf();
+      return;
+    }
+    selectedCustomGroupId = groupId;
+    selectedSmartGroupId = null;
+    closeGroupsSheet();
+    void activateShelf();
+  }
+
+  function applySmartGroup(groupId: string): void {
+    if (!smartGroups.some((group) => group.id === groupId)) {
+      selectedCustomGroupId = null;
+      selectedSmartGroupId = null;
+      selectedGroup = 'all';
+      closeGroupsSheet();
+      void activateShelf();
+      return;
+    }
+    selectedSmartGroupId = groupId;
+    selectedCustomGroupId = null;
+    closeGroupsSheet();
+    void activateShelf();
+  }
+
+  function renderGroupsSheet(): void {
+    groupsSheetTitle.textContent = labels().groups;
+    groupsSheetDialog.setAttribute('aria-label', labels().groups);
+    groupsSheetList.replaceChildren();
+    const customNodes = flattenCustomGroupNodes(customGroupTree(groups));
+    // 书目为空时内置智能组仍在模型里，但封面墙没有可打开的组，面板按空态说明。
+    const sheetSmartGroups = items.length === 0 ? [] : smartGroups;
+    for (const node of customNodes) {
+      const item = button(doc, node.group.name, 'lightink-library-groups-sheet-item');
+      item.dataset.libraryGroupId = node.group.id;
+      item.style.minHeight = '48px';
+      const active = activeSection === 'shelf' && selectedCustomGroupId === node.group.id;
+      item.classList.toggle('is-active', active);
+      if (active) item.setAttribute('aria-current', 'true');
+      item.addEventListener('click', () => {
+        applyCustomGroup(node.group.id);
+      });
+      groupsSheetList.appendChild(item);
+    }
+    for (const group of sheetSmartGroups) {
+      const item = button(doc, smartGroupName(group), 'lightink-library-groups-sheet-item');
+      item.dataset.smartGroupId = group.id;
+      item.style.minHeight = '48px';
+      const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
+      item.classList.toggle('is-active', active);
+      if (active) item.setAttribute('aria-current', 'true');
+      item.addEventListener('click', () => {
+        applySmartGroup(group.id);
+      });
+      groupsSheetList.appendChild(item);
+    }
+    if (groupsSheetList.childElementCount === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-library-groups-sheet-empty';
+      empty.textContent = labels().emptyGroups;
+      groupsSheetList.appendChild(empty);
+    }
   }
 
   function renderGroups(): void {
@@ -2443,6 +2637,8 @@ export function createLibraryView(
     }
     renderSmartGroups();
     renderGroupEditor();
+    renderGroupsSheet();
+    syncMobileGroupsChrome();
   }
 
   function renderSmartGroups(): void {
@@ -3614,6 +3810,7 @@ export function createLibraryView(
       shelfItems = items;
       groups = loadedGroups;
       memberships = loadedMemberships;
+      forgetMissingCustomGroup();
       refreshSmartGroups();
       for (const group of groups) expandedGroupIds.add(group.id);
       selected = null;
@@ -4506,6 +4703,16 @@ export function createLibraryView(
     }
   });
   groupEditorCancel.addEventListener('click', () => closeGroupEditor());
+  groupsButton.addEventListener('click', () => {
+    if (!groupsSheet.hidden) {
+      closeGroupsSheet();
+      return;
+    }
+    openGroupsSheet();
+  });
+  groupsSheetBackdrop.addEventListener('click', () => {
+    closeGroupsSheet();
+  });
   groupOverlay.addEventListener('click', (event) => {
     if (ignoreGroupBackdrop || event.target !== groupOverlay) return;
     closeGroupEditor();
@@ -4553,6 +4760,11 @@ export function createLibraryView(
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
   root.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !groupsSheet.hidden) {
+      event.preventDefault();
+      closeGroupsSheet();
+      return;
+    }
     if (event.key === 'Escape' && !groupOverlay.hidden) {
       event.preventDefault();
       closeGroupEditor();
@@ -4667,6 +4879,7 @@ export function createLibraryView(
       selectedGroup = 'all';
       selectedSmartGroupId = null;
       selectedCustomGroupId = null;
+      closeGroupsSheet();
       searchInput.value = '';
       syncSearchClear();
       await initialLoad();
@@ -4694,6 +4907,7 @@ export function createLibraryView(
       membershipOverlay.remove();
       groupOverlay.remove();
       sourceOverlay.remove();
+      groupsSheet.remove();
       root.remove();
     },
   };

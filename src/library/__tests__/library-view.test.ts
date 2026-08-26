@@ -4460,6 +4460,9 @@ describe('LibraryView mobile shelf', () => {
     expect(css).toMatch(
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
     );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+(?:\[data-library-shelf-groups\]|\.lightink-library-shelf-groups)\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
+    );
     expect(css).not.toMatch(
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chip\s*\{[^}]*min-(?:width|height):\s*36px/,
     );
@@ -4553,6 +4556,14 @@ describe('LibraryView mobile shelf', () => {
     expect(cssLengthPx(cssDeclaration(chipItem, 'min-width'))[0]).toBeGreaterThanOrEqual(48);
     expect(cssLengthPx(cssDeclaration(chipItem, 'min-height'))[0]).toBeGreaterThanOrEqual(48);
 
+    const groupsEntryBlocks = cssRuleBodies(
+      css,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+(?:\[data-library-shelf-groups\]|\.lightink-library-shelf-groups(?![\w-]))/,
+    );
+    const groupsEntry = groupsEntryBlocks[groupsEntryBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-width'))[0]).toBeGreaterThanOrEqual(48);
+    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-height'))[0]).toBeGreaterThanOrEqual(48);
+
     // 继续阅读条：内边距加大，条与芯片/封面墙不再只剩 4px。
     const continueBlocks = cssRuleBodies(
       css,
@@ -4643,6 +4654,94 @@ describe('LibraryView mobile shelf', () => {
     const button = host.querySelector<HTMLButtonElement>(`[data-library-tab-item="${tab}"]`);
     if (!(button instanceof HTMLButtonElement)) throw new Error(`tab not found: ${tab}`);
     return button;
+  }
+
+  function shelfChipRow(host: ParentNode): HTMLElement {
+    const chips = libraryRoot(host).querySelector<HTMLElement>(
+      '.lightink-library-content .lightink-library-shelf-chips',
+    );
+    if (!(chips instanceof HTMLElement)) throw new Error('shelf chip row not found');
+    return chips;
+  }
+
+  function shelfChipButtons(chips: ParentNode): HTMLButtonElement[] {
+    return Array.from(chips.querySelectorAll<HTMLButtonElement>('[data-shelf-group]'));
+  }
+
+  function currentShelfChips(chips: ParentNode): string[] {
+    return shelfChipButtons(chips)
+      .filter(
+        (chip) =>
+          chip.classList.contains('is-active') || chip.getAttribute('aria-current') !== null,
+      )
+      .map((chip) => chip.dataset.shelfGroup ?? '');
+  }
+
+  /** 首页「分组」入口：筛选行外侧独立控件，不是第六个 data-shelf-group。 */
+  function shelfGroupsEntry(host: ParentNode): HTMLButtonElement {
+    const content =
+      libraryRoot(host).querySelector('.lightink-library-content') ?? libraryRoot(host);
+    const marked = content.querySelector<HTMLButtonElement>(
+      '[data-library-shelf-groups], .lightink-library-shelf-groups',
+    );
+    if (
+      marked instanceof HTMLButtonElement &&
+      isShown(marked) &&
+      marked.dataset.shelfGroup === undefined
+    ) {
+      return marked;
+    }
+    const labeled = Array.from(content.querySelectorAll('button')).find((button) => {
+      const text = button.textContent?.replace(/\s+/g, ' ').trim();
+      const aria = button.getAttribute('aria-label')?.trim();
+      return (
+        (text === '分组' || aria === '分组') &&
+        button.dataset.shelfGroup === undefined &&
+        isShown(button)
+      );
+    });
+    if (!(labeled instanceof HTMLButtonElement)) {
+      throw new Error('shelf groups entry not found');
+    }
+    return labeled;
+  }
+
+  function shelfGroupsSheetQuery(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      '[data-library-groups-sheet], .lightink-library-groups-sheet',
+    );
+  }
+
+  function shelfGroupsSheet(): HTMLElement {
+    const sheet = shelfGroupsSheetQuery();
+    if (!(sheet instanceof HTMLElement) || !isShown(sheet)) {
+      throw new Error('shelf groups sheet not found');
+    }
+    return sheet;
+  }
+
+  async function openShelfGroupsSheet(host: ParentNode): Promise<HTMLElement> {
+    shelfGroupsEntry(host).click();
+    await waitForShown(
+      () => isShown(shelfGroupsSheetQuery()),
+      'shelf groups sheet did not open',
+    );
+    return shelfGroupsSheet();
+  }
+
+  function sheetGroupButton(sheet: HTMLElement, name: string): HTMLButtonElement {
+    const labeled = Array.from(sheet.querySelectorAll('button')).find((button) => {
+      const text = button.textContent?.replace(/\s+/g, ' ').trim();
+      return (
+        (text === name || text?.endsWith(name) === true) &&
+        button.dataset.shelfGroup === undefined &&
+        isShown(button)
+      );
+    });
+    if (!(labeled instanceof HTMLButtonElement)) {
+      throw new Error(`groups sheet item not found: ${name}`);
+    }
+    return labeled;
   }
 
   it('renders the bottom tab bar instead of the hamburger drawer under mobile chrome', async () => {
@@ -5091,6 +5190,219 @@ describe('LibraryView mobile shelf', () => {
     view.destroy();
   });
 
+  it('exposes an independent Groups entry outside the five built-in chips', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    const chips = shelfChipRow(host);
+    expect(shelfChipButtons(chips).map((chip) => chip.dataset.shelfGroup)).toEqual([
+      'all',
+      'in-progress',
+      'unread',
+      'text',
+      'comic',
+    ]);
+    const entry = shelfGroupsEntry(host);
+    expect(entry.dataset.shelfGroup).toBeUndefined();
+    expect(entry.getAttribute('role')).not.toBe('radio');
+    expect(chips.contains(entry)).toBe(false);
+    expect(entry.textContent?.replace(/\s+/g, ' ').trim() === '分组' || entry.getAttribute('aria-label') === '分组').toBe(
+      true,
+    );
+    view.destroy();
+  });
+
+  it('opens a custom group cover wall from the Groups bottom sheet', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const grouped = localItem({
+      id: 'local:/books/grouped.epub',
+      title: '分组小说',
+      localPath: '/books/grouped.epub',
+    });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '未分组小说',
+      localPath: '/books/other.epub',
+    });
+    const { deps, library } = collectionDependencies({ items: [grouped, other] });
+    const created = await library.createGroup!('夏日书单');
+    await library.setGroupMember!(created.id, grouped.id, true);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const chips = shelfChipRow(host);
+    expect(chips.textContent).not.toContain('夏日书单');
+    const sheet = await openShelfGroupsSheet(host);
+    expect(sheet.textContent).toContain('夏日书单');
+    expect(chips.contains(sheetGroupButton(sheet, '夏日书单'))).toBe(false);
+
+    sheetGroupButton(sheet, '夏日书单').click();
+    await settle();
+    expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+    expect(itemRow(host, grouped.id).textContent).toContain('分组小说');
+    expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
+    expect(currentShelfChips(chips)).toEqual([]);
+    expect(chips.textContent).not.toContain('夏日书单');
+    view.destroy();
+  });
+
+  it('opens a smart group cover wall from the Groups bottom sheet', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const novel = localItem({
+      id: 'local:/ebook/hell-01.epub',
+      title: '地狱模式 - 01',
+      authors: ['海猫'],
+      localPath: '/ebook/文库版/地狱模式 - 01.epub',
+      extension: 'epub',
+    });
+    const comic = comicItem({
+      id: 'local:/ebook/hell-comic.cbz',
+      title: '地狱漫画',
+      localPath: '/ebook/hell-comic.cbz',
+    });
+    const { deps } = collectionDependencies({ items: [novel, comic] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const chips = shelfChipRow(host);
+    expect(chips.textContent).not.toContain('EPUB');
+    const sheet = await openShelfGroupsSheet(host);
+    expect(sheet.textContent).toContain('EPUB');
+
+    sheetGroupButton(sheet, 'EPUB').click();
+    await settle();
+    expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+    expect(currentShelfChips(chips)).toEqual([]);
+    expect(chips.textContent).not.toContain('EPUB');
+    view.destroy();
+  });
+
+  it('keeps the current filter when the Groups sheet is empty or not used', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const unread = localItem();
+    const novel = localItem({
+      id: 'local:/books/c.epub',
+      title: '续读小说',
+      localPath: '/books/c.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === unread.id) return { status: 'not-started' as const };
+      return { status: 'in-progress' as const, unit: 'chapter' as const, index: 2, ratio: 0.4, percent: 21 };
+    });
+    const emptyHost = document.createElement('div');
+    document.body.appendChild(emptyHost);
+    const emptyView = createLibraryView(emptyHost, collectionDependencies({ items: [] }).deps);
+    await emptyView.show();
+
+    expect(currentShelfChips(shelfChipRow(emptyHost))).toEqual(['all']);
+    const emptySheet = await openShelfGroupsSheet(emptyHost);
+    expect(emptySheet.textContent).toMatch(/没有分组|No collections yet/);
+    expect(currentShelfChips(shelfChipRow(emptyHost))).toEqual(['all']);
+    expect(isShown(shelfGroupsEntry(emptyHost))).toBe(true);
+    emptyView.destroy();
+    emptyHost.remove();
+
+    const { deps } = collectionDependencies({ items: [unread, novel], getProgress });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    shelfChipRow(host).querySelector<HTMLButtonElement>('[data-shelf-group="in-progress"]')!.click();
+    await settle();
+    expect(currentShelfChips(shelfChipRow(host))).toEqual(['in-progress']);
+    expect(itemRow(host, novel.id).textContent).toContain('续读小说');
+
+    await openShelfGroupsSheet(host);
+    expect(currentShelfChips(shelfChipRow(host))).toEqual(['in-progress']);
+    expect(itemRow(host, novel.id).textContent).toContain('续读小说');
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
+    view.destroy();
+  });
+
+  it('returns to All when the selected group is no longer available', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const grouped = localItem({
+      id: 'local:/books/grouped.epub',
+      title: '分组小说',
+      localPath: '/books/grouped.epub',
+    });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '未分组小说',
+      localPath: '/books/other.epub',
+    });
+    const { deps, library } = collectionDependencies({ items: [grouped, other] });
+    const created = await library.createGroup!('夏日书单');
+    await library.setGroupMember!(created.id, grouped.id, true);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const sheet = await openShelfGroupsSheet(host);
+    sheetGroupButton(sheet, '夏日书单').click();
+    await settle();
+    expect(itemRow(host, grouped.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
+
+    await library.deleteGroup!(created.id);
+    await view.refresh();
+    expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+    expect(currentShelfChips(shelfChipRow(host))).toEqual(['all']);
+    expect(itemRow(host, grouped.id)).toBeTruthy();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    expect(() => collectionButton(host, '夏日书单')).toThrow(/collection button not found/);
+    view.destroy();
+  });
+
+  it('hides the Groups entry when leaving the shelf tab', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+
+    expect(isShown(shelfGroupsEntry(host))).toBe(true);
+
+    tabButton(host, 'manage').click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'manage',
+      'manage section did not activate',
+    );
+    expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
+    expect(isShown(host.querySelector('[data-library-shelf-groups], .lightink-library-shelf-groups'))).toBe(
+      false,
+    );
+    expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+
+    tabButton(host, 'sources').click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'sources',
+      'sources tab did not activate',
+    );
+    expect(isShown(host.querySelector('[data-library-shelf-groups], .lightink-library-shelf-groups'))).toBe(
+      false,
+    );
+
+    tabButton(host, 'shelf').click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'shelf',
+      'shelf tab did not activate',
+    );
+    expect(isShown(shelfGroupsEntry(host))).toBe(true);
+    view.destroy();
+  });
+
   it('does not mount the tab bar without the mobile chrome flags', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -5100,6 +5412,10 @@ describe('LibraryView mobile shelf', () => {
     expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
     expect(host.querySelector('.lightink-library-nav-menu')).toBeNull();
     expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
+    expect(isShown(host.querySelector('[data-library-shelf-groups], .lightink-library-shelf-groups'))).toBe(
+      false,
+    );
+    expect(isShown(shelfGroupsSheetQuery())).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-nav'))).toBe(true);
     expect(host.querySelector('[data-shelf-group="all"]')).toBeTruthy();
     expect(libraryRoot(host).dataset.libraryNav).toBe('shelf');
@@ -5110,11 +5426,16 @@ describe('LibraryView mobile shelf', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     expect(css).toMatch(/\.lightink-library-tabbar\s*\{\s*display:\s*none/);
     expect(css).toMatch(/\.lightink-library-shelf-chips\s*\{\s*display:\s*none/);
+    expect(css).toMatch(/\.lightink-library-shelf-groups\s*\{\s*display:\s*none/);
+    expect(css).toMatch(/\.lightink-library-groups-sheet\s*\{\s*display:\s*none/);
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*display:\s*grid/,
     );
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-groups\s*\{[^}]*display:\s*(?:flex|inline-flex|grid|block)/,
     );
     expect(css).toMatch(
       /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-nav\s*\{[^}]*display:\s*none/,

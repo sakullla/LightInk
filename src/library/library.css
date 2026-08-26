@@ -1164,8 +1164,25 @@ html[data-touch-primary] .lightink-library-header {
   container-name: library-content;
 }
 
-/* Desktop keeps shelf filters in the left nav; the cover-wall chip row is phone-only. */
+/* Desktop keeps shelf filters in the left nav; the cover-wall chip row,
+ * 「分组」入口 and groups bottom-sheet are phone-only. */
 .lightink-library-shelf-chips {
+  display: none;
+}
+
+.lightink-library-shelf-toolbar {
+  display: none;
+}
+
+.lightink-library-shelf-groups {
+  display: none;
+}
+
+.lightink-library-groups-sheet {
+  display: none;
+}
+
+.lightink-library-groups-sheet-backdrop {
   display: none;
 }
 
@@ -2956,6 +2973,229 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     background: var(--lightink-accent-soft);
     color: var(--lightink-accent);
     font-weight: 600;
+  }
+
+  /*
+   * 「分组」入口：筛选行外侧的独立控件，不是第六个 data-shelf-group。
+   * 行容器把横滑 chip 与入口并排；入口不进入 chip 滚动，避免挤进筛选行。
+   * 书源 / 管理 / 目录下钻不展示入口与面板。无 flag 或宽屏仍走基线 display:none。
+   */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 8px max(16px, var(--lightink-safe-right, 0px)) 12px
+      max(16px, var(--lightink-safe-left, 0px));
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-toolbar
+    .lightink-library-shelf-chips {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    gap: 4px;
+    min-width: 48px;
+    min-height: 48px;
+    margin: 0 max(16px, var(--lightink-safe-right, 0px)) 12px auto;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+    color: var(--lightink-fg);
+    font: inherit;
+    font-size: var(--lightink-type-ui);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-toolbar
+    .lightink-library-shelf-groups {
+    margin: 0;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups.is-active,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups[aria-expanded='true'] {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 21;
+    background: color-mix(in srgb, var(--lightink-fg) 28%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 22;
+    gap: 8px;
+    width: 100%;
+    max-height: min(72vh, calc(100vh - var(--lightink-safe-top, 0px) - 48px));
+    overflow: hidden;
+    padding: 8px max(16px, var(--lightink-safe-right, 0px))
+      calc(16px + var(--lightink-safe-bottom, 0px) + var(--lightink-keyboard-inset, 0px))
+      max(16px, var(--lightink-safe-left, 0px));
+    border-radius: 16px 16px 0 0;
+    background: var(--lightink-bg-elevated);
+    box-shadow: 0 -12px 40px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-handle {
+    display: block;
+    width: 36px;
+    min-width: 36px;
+    height: 4px;
+    min-height: 4px;
+    margin: 4px auto 2px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-handle:hover:not(:disabled),
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-handle:focus-visible {
+    background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+    color: inherit;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 48px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-title {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--lightink-fg);
+    font-size: var(--lightink-type-subtitle);
+    font-weight: 650;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-close {
+    display: inline-grid;
+    place-items: center;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 0;
+    border-radius: 10px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-heading {
+    margin: 8px 0 0;
+    color: var(--lightink-muted);
+    font-size: var(--lightink-type-caption);
+    font-weight: 650;
+    letter-spacing: 0.06em;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-list {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet
+    .lightink-library-group,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet
+    .lightink-library-smart-group {
+    min-height: 48px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: var(--lightink-type-ui);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-empty,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet
+    .lightink-library-nav-empty {
+    margin: 8px 4px 12px;
+    color: var(--lightink-muted);
+    font-size: var(--lightink-type-body);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-shelf-toolbar,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-shelf-groups,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-groups-sheet,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-groups-sheet-backdrop {
+    display: none;
   }
 
   :is(html[data-android], html[data-touch-primary])
