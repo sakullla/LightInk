@@ -32,19 +32,27 @@
  * reveal — the chrome only leaves via center tap, Escape, or closing an
  * overlay. Desktop behavior above is unchanged when the flag is absent.
  * toc / typography / search / annotations live in the footer thumb zone
- * (hit target ≥44px) so they stay reachable after the top bar is dismissed.
- * backToShelf may remain on the top bar or an edge.
+ * (hit target ≥48×48, adjacent gap ≥8px) so they stay reachable after the
+ * top bar is dismissed. backToShelf stays on the top bar with the same
+ * 48×48 hit. Text books and comics share this reveal/dismiss chrome.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createReaderChrome, READER_CHROME_ACTIONS } from '../reader-chrome.js';
+import {
+  createReaderChrome,
+  READER_CHROME_ACTIONS,
+  READER_CHROME_TOUCH_GAP_PX,
+  READER_CHROME_TOUCH_HIT_PX,
+} from '../reader-chrome.js';
 
 const LABELS = ['返回书架', '目录', '排版', '搜索', '本书标注'] as const;
 const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
+const PRIMARY_TOUCH_ACTIONS = ['backToShelf', ...THUMB_ACTIONS] as const;
 const AUTO_HIDE_MS = 2500;
-const MIN_HIT_PX = 44;
+const MIN_HIT_PX = READER_CHROME_TOUCH_HIT_PX;
+const MIN_GAP_PX = READER_CHROME_TOUCH_GAP_PX;
 
 function stubRect(
   el: HTMLElement,
@@ -152,6 +160,44 @@ function applyTouchReaderCss(): void {
   document.head.append(style);
 }
 
+function cssRuleBodies(css: string, selector: RegExp): string[] {
+  const bodies: string[] = [];
+  const matcher = new RegExp(
+    `${selector.source}\\s*\\{([^}]*)\\}`,
+    selector.flags.includes('g') ? selector.flags : `${selector.flags}g`,
+  );
+  for (const match of css.matchAll(matcher)) {
+    bodies.push(match[1] ?? '');
+  }
+  return bodies;
+}
+
+function cssDeclaration(block: string, property: string): string | undefined {
+  const match = block.match(new RegExp(`(?:^|[;\\s])${property}\\s*:\\s*([^;]+)`, 'i'));
+  return match?.[1]?.trim();
+}
+
+function cssLengthPx(value: string | undefined): number[] {
+  if (!value) {
+    return [];
+  }
+  return [...value.matchAll(/(\d+(?:\.\d+)?)(px|rem)/g)].map((match) => {
+    const amount = Number(match[1]);
+    return match[2] === 'rem' ? amount * 16 : amount;
+  });
+}
+
+function declaredGapPx(el: HTMLElement): number {
+  const computed = getComputedStyle(el);
+  for (const raw of [el.style.gap, el.style.columnGap, computed.gap, computed.columnGap]) {
+    const values = cssLengthPx(raw);
+    if (values.length > 0) {
+      return Math.max(...values);
+    }
+  }
+  return 0;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
@@ -226,14 +272,21 @@ describe('createReaderChrome reveal', () => {
   });
 
   it('keeps the touch footer tools when comic progress docks are suppressed', () => {
-    const { chrome } = mount({
+    const { host, chrome } = mount({
       touchMode: true,
       suppressProgressDock: () => true,
     });
+    expect(chrome.isRevealed()).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
     chrome.reveal();
     expect(chrome.footer.hidden).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
+    expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
+    expect(actionButton(host, 'backToShelf').hidden).toBe(false);
+    for (const action of THUMB_ACTIONS) {
+      expect(chrome.footer.contains(actionButton(host, action))).toBe(true);
+      expect(actionButton(host, action).hidden).toBe(false);
+    }
   });
 
   it('does not steal comic page clicks or hover for the flow chrome', () => {
@@ -493,6 +546,25 @@ describe('createReaderChrome auto-hide', () => {
 });
 
 describe('createReaderChrome touch mode', () => {
+  it('starts immersive: chrome hidden, no desktop menus, and no hover-only path', () => {
+    const { host, chrome } = mount({ touchMode: true });
+
+    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.bar.hidden).toBe(true);
+    expect(host.querySelector('#lightink-toolbar')).toBeNull();
+    expect(host.querySelector('#lightink-tabbar')).toBeNull();
+    expect(host.querySelector('#lightink-chrome-host')).toBeNull();
+    expect(host.textContent).not.toContain('文件');
+    expect(host.textContent).not.toContain('插入');
+    for (const action of PRIMARY_TOUCH_ACTIONS) {
+      expect(actionButton(host, action).hidden).toBe(true);
+    }
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
+  });
+
   it('never auto-hides after idle or pointer leave when touchMode is true', () => {
     vi.useFakeTimers();
     const { host, chrome } = mount({ touchMode: true });
@@ -527,15 +599,31 @@ describe('createReaderChrome touch mode', () => {
 
   it('toggles with center taps and stays up between them', () => {
     vi.useFakeTimers();
-    const { page, chrome } = mount({ touchMode: true });
+    const { host, page, chrome } = mount({ touchMode: true });
+    const before = page.getBoundingClientRect();
 
     clickPage(page, 200);
     expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
+    expect(actionButton(host, 'backToShelf').hidden).toBe(false);
+    for (const action of THUMB_ACTIONS) {
+      expect(chrome.footer.contains(actionButton(host, action))).toBe(true);
+      expect(actionButton(host, action).hidden).toBe(false);
+    }
+    const shown = page.getBoundingClientRect();
+    expect(shown.top).toBe(before.top);
+    expect(shown.height).toBe(before.height);
     vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
     expect(chrome.isRevealed()).toBe(true);
 
     clickPage(page, 200);
     expect(chrome.isRevealed()).toBe(false);
+    for (const action of PRIMARY_TOUCH_ACTIONS) {
+      expect(actionButton(host, action).hidden).toBe(true);
+    }
+    const hidden = page.getBoundingClientRect();
+    expect(hidden.top).toBe(before.top);
+    expect(hidden.height).toBe(before.height);
   });
 
   it('hides via Escape and brings the whisper progress line back', () => {
@@ -626,26 +714,71 @@ describe('createReaderChrome touch mode', () => {
     expect(deps.returnToShelf).not.toHaveBeenCalled();
   });
 
-  it('gives footer thumb actions a hit target of at least 44px', () => {
+  it('gives backToShelf and footer thumb actions a 48×48 hit target with 8px gaps', () => {
+    expect(READER_CHROME_TOUCH_HIT_PX).toBe(48);
+    expect(READER_CHROME_TOUCH_GAP_PX).toBe(8);
     applyTouchReaderCss();
     const { host, chrome } = mount({ touchMode: true });
     chrome.reveal();
 
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
-    for (const action of THUMB_ACTIONS) {
+    for (const action of PRIMARY_TOUCH_ACTIONS) {
       const button = actionButton(host, action);
-      expect(chrome.footer.contains(button), `${action} must be in the footer to measure`).toBe(
-        true,
-      );
+      if (action === 'backToShelf') {
+        expect(chrome.bar.contains(button), 'backToShelf stays on the top bar').toBe(true);
+      } else {
+        expect(chrome.footer.contains(button), `${action} must be in the footer to measure`).toBe(
+          true,
+        );
+      }
       const size = declaredHitPx(button);
       if (size > 0) {
         expect(size, `${action} hit target`).toBeGreaterThanOrEqual(MIN_HIT_PX);
-      } else {
-        expect(css).toMatch(
-          /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
-        );
       }
+      expect(Number(button.dataset.readerChromeHit ?? size)).toBeGreaterThanOrEqual(MIN_HIT_PX);
     }
+
+    const zone = footerThumbZone(chrome.footer);
+    const zoneGap = declaredGapPx(zone);
+    if (zoneGap > 0) {
+      expect(zoneGap, 'footer thumb gap').toBeGreaterThanOrEqual(MIN_GAP_PX);
+    }
+
+    const actionBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action(?![\w-])/,
+    );
+    expect(actionBlocks.length).toBeGreaterThan(0);
+    for (const block of actionBlocks) {
+      expect(cssLengthPx(cssDeclaration(block, 'min-width'))[0]).toBeGreaterThanOrEqual(MIN_HIT_PX);
+      expect(cssLengthPx(cssDeclaration(block, 'min-height'))[0]).toBeGreaterThanOrEqual(MIN_HIT_PX);
+      expect(block).not.toMatch(/(?:min-width|min-height|width|height):\s*44px/);
+    }
+
+    const footerActionBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--annotations/,
+    );
+    expect(footerActionBlocks.length).toBeGreaterThan(0);
+    for (const block of footerActionBlocks) {
+      expect(cssLengthPx(cssDeclaration(block, 'min-width'))[0]).toBeGreaterThanOrEqual(MIN_HIT_PX);
+      expect(cssLengthPx(cssDeclaration(block, 'min-height'))[0]).toBeGreaterThanOrEqual(MIN_HIT_PX);
+    }
+
+    const footerToolsBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-tools/,
+    );
+    const footerTools = footerToolsBlocks[footerToolsBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(footerTools, 'gap'))[0]).toBeGreaterThanOrEqual(MIN_GAP_PX);
+
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-bar\s*\{[^}]*--lightink-safe-top/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer\s*\{[^}]*--lightink-safe-bottom/,
+    );
+    expect(css).toContain('--lightink-keyboard-inset');
   });
 });
 

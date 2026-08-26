@@ -13,8 +13,9 @@
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
  * 唤出；只由中部点按 / Escape / 收浮层收起，whisper 进度线照常显示。
  * 目录 / 排版 / 搜索 / 本书标注挪到 `.lightink-reader-chrome-footer` 拇指区
- *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。显隐仍走既有
- * reveal / dismiss，不另造一套 chrome 状态机。
+ *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
+ * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
+ * 一套 chrome 状态机。文字书与漫画共用这套点按显隐。
  */
 
 import { formatReaderPercent } from './reader-progress-ui.js';
@@ -51,6 +52,10 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
 
 export const READER_CHROME_HIDE_DELAY_MS = 2500;
 export const READER_CHROME_EDGE_PX = 32;
+/** Touch-primary hit target for backToShelf + footer tools (R5). */
+export const READER_CHROME_TOUCH_HIT_PX = 48;
+/** Minimum gap between adjacent touch-primary chrome actions (R5). */
+export const READER_CHROME_TOUCH_GAP_PX = 8;
 
 export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels> = {
   en: {
@@ -110,7 +115,8 @@ export interface ReaderChromeDeps {
   /**
    * Touch-primary platform (data-android / data-touch-primary). Disables the
    * idle auto-hide timer and edge-hover reveal; dismissal happens only via
-   * center tap, Escape, or closing an overlay. Desktop passes false/omits.
+   * center tap, Escape, or closing an overlay. Primary actions use a 48×48
+   * hit target with 8px gaps. Desktop passes false/omits.
    */
   touchMode?: boolean;
   /** Drag the footer scrubber to a 0..1 book position. */
@@ -243,10 +249,18 @@ function applyBarLayout(bar: HTMLElement): void {
   bar.style.boxSizing = 'border-box';
 }
 
-function applyButtonLayout(button: HTMLButtonElement): void {
+function applyButtonLayout(button: HTMLButtonElement, touchHit = false): void {
   button.style.pointerEvents = 'auto';
   button.style.whiteSpace = 'nowrap';
   button.style.flex = '0 0 auto';
+  if (!touchHit) {
+    return;
+  }
+  const size = `${READER_CHROME_TOUCH_HIT_PX}px`;
+  button.style.boxSizing = 'border-box';
+  button.style.minWidth = size;
+  button.style.minHeight = size;
+  button.dataset.readerChromeHit = String(READER_CHROME_TOUCH_HIT_PX);
 }
 
 function isComicReaderSurface(target: EventTarget | null): boolean {
@@ -322,7 +336,7 @@ export function createReaderChrome(
       button.setAttribute('aria-haspopup', 'dialog');
       button.setAttribute('aria-expanded', 'false');
     }
-    applyButtonLayout(button);
+    applyButtonLayout(button, touchMode);
     return button;
   };
 
@@ -339,6 +353,16 @@ export function createReaderChrome(
   tools.className = 'lightink-reader-chrome-tools';
   tools.append(tocButton, typographyButton, searchButton, annotationsButton);
   if (touchMode) {
+    const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
+    const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
+    element.dataset.touchMode = 'true';
+    bar.dataset.touchMode = 'true';
+    bar.style.minHeight = hit;
+    tools.classList.add('lightink-reader-chrome-thumb');
+    tools.style.gap = gap;
+    tools.style.minHeight = hit;
+    element.style.setProperty('--lightink-reader-chrome-hit', hit);
+    element.style.setProperty('--lightink-reader-chrome-gap', gap);
     bar.append(backButton, drag);
   } else {
     bar.append(backButton, tools, drag);
@@ -379,6 +403,9 @@ export function createReaderChrome(
   slider.setAttribute('aria-label', labels.progress);
   scrubber.append(footerTrack, footerTicks, slider);
   if (touchMode) {
+    footer.dataset.touchMode = 'true';
+    footer.style.setProperty('--lightink-reader-chrome-hit', `${READER_CHROME_TOUCH_HIT_PX}px`);
+    footer.style.setProperty('--lightink-reader-chrome-gap', `${READER_CHROME_TOUCH_GAP_PX}px`);
     footer.append(tools, footerChapter, scrubber, footerStats);
   } else {
     footer.append(footerChapter, scrubber, footerStats);

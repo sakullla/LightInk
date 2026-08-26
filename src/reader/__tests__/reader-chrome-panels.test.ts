@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { defaultComicPreferences } from '../comic-preferences.js';
+import { createReaderChrome } from '../reader-chrome.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 import {
   adoptReaderOverlayTheme,
@@ -16,6 +19,18 @@ import {
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
 
+const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
+const MIN_HIT_PX = 48;
+const MIN_GAP_PX = 8;
+
+function readerCss(): string {
+  return readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+}
+
+function panelsCss(): string {
+  return readFileSync(resolve(process.cwd(), 'src/reader/reader-chrome-panels.css'), 'utf-8');
+}
+
 function findLabeledButton(panel: HTMLElement, label: string): HTMLButtonElement | undefined {
   return [...panel.querySelectorAll<HTMLButtonElement>('button')].find(
     (button) =>
@@ -23,8 +38,50 @@ function findLabeledButton(panel: HTMLElement, label: string): HTMLButtonElement
   );
 }
 
+function stubRect(
+  el: HTMLElement,
+  box: { width: number; height: number; top?: number; left?: number },
+): void {
+  const top = box.top ?? 0;
+  const left = box.left ?? 0;
+  el.getBoundingClientRect = () =>
+    ({
+      x: left,
+      y: top,
+      top,
+      left,
+      width: box.width,
+      height: box.height,
+      right: left + box.width,
+      bottom: top + box.height,
+      toJSON() {
+        return {};
+      },
+    }) as DOMRect;
+}
+
+function actionButton(root: ParentNode, action: string): HTMLButtonElement {
+  const match = [...root.querySelectorAll<HTMLButtonElement>('[data-reader-chrome-action]')].find(
+    (button) => button.dataset.readerChromeAction === action,
+  );
+  expect(match, `missing chrome action "${action}"`).toBeTruthy();
+  return match!;
+}
+
+function declaredHitPx(el: HTMLElement): number {
+  const computed = getComputedStyle(el);
+  for (const raw of [el.style.minHeight, el.style.minWidth, computed.minHeight, computed.minWidth]) {
+    const value = parseFloat(raw);
+    if (Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return 0;
+}
+
 describe('reader chrome panels', () => {
   afterEach(() => {
+    document.body.replaceChildren();
     document.documentElement.removeAttribute('data-touch-primary');
     document.documentElement.removeAttribute('data-android');
   });
@@ -443,5 +500,198 @@ describe('reader chrome panels', () => {
     overlay.remove();
     host.remove();
     document.body.style.removeProperty('--lightink-bg-elevated');
+  });
+
+  it('reveals footer four tools and top-bar 回书架 by tap, then docks the sheet above the footer', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    const page = document.createElement('div');
+    page.className = 'lightink-reader-page';
+    host.append(page);
+    document.body.append(host);
+    const viewportHeight = window.innerHeight;
+    stubRect(host, { width: 390, height: viewportHeight });
+    stubRect(page, { width: 390, height: viewportHeight });
+    const deps = {
+      returnToShelf: vi.fn(),
+      openOutline: vi.fn(),
+      openTypography: vi.fn(),
+      openSearch: vi.fn(),
+      toggleSidebar: vi.fn(),
+    };
+    const chrome = createReaderChrome(host, { touchMode: true, ...deps });
+
+    expect(chrome.isRevealed()).toBe(false);
+    expect(host.querySelector('#lightink-toolbar')).toBeNull();
+    expect(host.querySelector('#lightink-tabbar')).toBeNull();
+    expect(host.querySelector('#lightink-chrome-host')).toBeNull();
+    const before = page.getBoundingClientRect();
+
+    page.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 180, clientY: 280 }),
+    );
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
+    expect(chrome.footer.contains(actionButton(host, 'backToShelf'))).toBe(false);
+    for (const action of THUMB_ACTIONS) {
+      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action)), action).toBe(false);
+    }
+    const shown = page.getBoundingClientRect();
+    expect(shown.top).toBe(before.top);
+    expect(shown.height).toBe(before.height);
+
+    chrome.footer.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: viewportHeight - 72,
+        width: 390,
+        height: 72,
+        right: 390,
+        bottom: viewportHeight,
+      }) as DOMRect;
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-chrome-panel';
+    positionReaderChromePanel(panel, host, actionButton(host, 'toc'));
+    expect(panel.classList.contains('is-touch-sheet')).toBe(true);
+    expect(panel.style.bottom).toBe('72px');
+    expect(panel.style.top).toBe('auto');
+
+    page.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 180, clientY: 280 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
+    const hidden = page.getBoundingClientRect();
+    expect(hidden.top).toBe(before.top);
+    expect(hidden.height).toBe(before.height);
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+    chrome.destroy();
+  });
+
+  it('uses the same footer-above sheet for flow and comic hosts', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const footer = document.createElement('div');
+    footer.className = 'lightink-reader-chrome-footer';
+    footer.getBoundingClientRect = () =>
+      ({ left: 0, top: 700, width: 390, height: 80, right: 390, bottom: 780 }) as DOMRect;
+    document.body.append(footer);
+
+    for (const kind of ['flow', 'comic'] as const) {
+      const host = document.createElement('div');
+      host.className = 'lightink-reader';
+      if (kind === 'comic') {
+        host.dataset.comicReader = 'true';
+      }
+      host.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 390, height: 780, right: 390, bottom: 780 }) as DOMRect;
+      const panel = document.createElement('div');
+      panel.className = 'lightink-reader-chrome-panel';
+      const overlay = document.createElement('div');
+      positionReaderChromePanel(panel, host, document.createElement('button'));
+      pinFixedOverlay(overlay, host, { innerWidth: 390, innerHeight: 780 });
+      expect(panel.classList.contains('is-touch-sheet'), kind).toBe(true);
+      expect(overlay.classList.contains('is-touch-sheet'), kind).toBe(true);
+      expect(panel.style.bottom, kind).toBe('80px');
+      expect(overlay.style.bottom, kind).toBe('80px');
+      expect(panel.style.top, kind).toBe('auto');
+      expect(overlay.style.top, kind).toBe('auto');
+    }
+  });
+
+  it('keeps comic progress-dock suppression from hiding the shared footer tools', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.append(host);
+    stubRect(host, { width: 390, height: window.innerHeight });
+    const chrome = createReaderChrome(host, {
+      touchMode: true,
+      suppressProgressDock: () => true,
+      returnToShelf: vi.fn(),
+      openOutline: vi.fn(),
+      openTypography: vi.fn(),
+      openSearch: vi.fn(),
+      toggleSidebar: vi.fn(),
+    });
+    chrome.reveal();
+    expect(chrome.footer.hidden).toBe(false);
+    for (const action of THUMB_ACTIONS) {
+      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(true);
+    }
+    chrome.footer.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: window.innerHeight - 64,
+        width: 390,
+        height: 64,
+        right: 390,
+        bottom: window.innerHeight,
+      }) as DOMRect;
+    const panel = document.createElement('div');
+    positionReaderChromePanel(panel, host, actionButton(host, 'typography'));
+    expect(panel.classList.contains('is-touch-sheet')).toBe(true);
+    expect(panel.style.bottom).toBe('64px');
+    chrome.destroy();
+  });
+
+  it('sizes back-to-shelf and the four footer tools at least 48×48 on touch', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--(?:toc|typography|search|annotations)[\s\S]*?\{[^}]*min-(?:width|height):\s*48px/,
+    );
+    expect(css).not.toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
+    );
+
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const chrome = createReaderChrome(host, { touchMode: true, returnToShelf: vi.fn() });
+    chrome.reveal();
+    for (const action of ['backToShelf', ...THUMB_ACTIONS]) {
+      const button = actionButton(host, action);
+      const size = declaredHitPx(button);
+      if (size > 0) {
+        expect(size, `${action} hit target`).toBeGreaterThanOrEqual(MIN_HIT_PX);
+      }
+    }
+    chrome.destroy();
+    style.remove();
+  });
+
+  it('keeps at least 8px between the four footer tools', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-tools\s*\{[^}]*gap:\s*(?:8px|0\.5rem|[1-9]\d?px)/,
+    );
+    const toolsRule = css.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-tools\s*\{[^}]*\}/,
+    )?.[0];
+    expect(toolsRule).toBeTruthy();
+    const gap = toolsRule!.match(/gap:\s*([^;]+)/)?.[1]?.trim();
+    expect(gap, 'footer tools gap').toBeTruthy();
+    const px = gap!.endsWith('rem') ? parseFloat(gap!) * 16 : parseFloat(gap!);
+    expect(px).toBeGreaterThanOrEqual(MIN_GAP_PX);
+  });
+
+  it('consumes safe-area and keyboard inset on the touch sheet instead of inventing a new stack', () => {
+    const sheet = panelsCss();
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-safe-top/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:[^;]*--lightink-safe-bottom/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+    );
+    expect(readerCss()).toContain('--lightink-keyboard-inset');
+    expect(sheet + readerCss()).toMatch(/--lightink-keyboard-inset/);
   });
 });
