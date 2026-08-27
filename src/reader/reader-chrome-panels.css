@@ -550,11 +550,14 @@
   left: 0;
   right: 0;
   top: auto;
-  bottom: var(--lightink-reader-sheet-inset, 0px);
+  bottom: calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px));
   z-index: 40;
   width: 100%;
   max-width: 100%;
-  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
+  max-height: min(
+    78vh,
+    calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem - var(--lightink-keyboard-inset, 0px))
+  );
   border-radius: 16px 16px 0 0;
   border-left: 0;
   border-right: 0;
@@ -602,7 +605,9 @@
 .lightink-reader-search-sheet {
   min-height: min(42vh, 22rem);
   overflow: hidden;
-  padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
+  padding-bottom: calc(
+    12px + var(--lightink-safe-bottom, 0px) + var(--lightink-keyboard-inset, 0px)
+  );
 }
 
 .lightink-reader-search-sheet-bar {

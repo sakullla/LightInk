@@ -443,11 +443,15 @@
 
 .lightink-reader-sidebar.is-touch-sheet {
   position: fixed;
-  inset: auto 0 var(--lightink-reader-sheet-inset, 0px) 0;
+  inset: auto 0 calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px))
+    0;
   z-index: 40;
   width: 100%;
   max-width: 100%;
-  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
+  max-height: min(
+    78vh,
+    calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem - var(--lightink-keyboard-inset, 0px))
+  );
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
   border-radius: 16px 16px 0 0;
@@ -457,7 +461,8 @@
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
-  inset: auto 0 var(--lightink-reader-sheet-inset, 0px) 0;
+  inset: auto 0 calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px))
+    0;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,

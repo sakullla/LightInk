@@ -751,7 +751,10 @@ describe('reader chrome panels', () => {
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:[^;]*--lightink-safe-bottom/,
     );
     expect(sheet).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(\s*12px \+ var\(--lightink-safe-bottom,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,
     );
     expect(readerCss()).toContain('--lightink-keyboard-inset');
     expect(sheet + readerCss()).toMatch(/--lightink-keyboard-inset/);
