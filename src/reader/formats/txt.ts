@@ -12,6 +12,7 @@
 
 import type { ReaderByteSource, ReaderContent } from './types.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
+import { escapeHtml } from '../html-escape.js';
 import { decodeReaderText, detectTextLabel } from './text-encoding.js';
 
 /** 分块解析的块大小：原始字节峰值有界，不整文件驻留。 */
@@ -23,13 +24,6 @@ const TXT_MAX_PENDING_CHARS = TXT_CHUNK_BYTES;
 
 function decodeText(bytes: Uint8Array, label: string): string {
   return decodeReaderText(bytes, label);
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 function paragraphHtml(raw: string): string | null {

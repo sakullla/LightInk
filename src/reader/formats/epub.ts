@@ -16,19 +16,15 @@ import { sanitizeParsedHtml } from '../sanitize.js';
 import { sanitizeReaderCss } from '../sanitize-css.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
-import type { RandomAccessSource } from '../sources/types.js';
+import { isRandomAccessSource } from '../sources/types.js';
 import { decodeReaderText } from './text-encoding.js';
 import { isUsableEpubChapterTitle } from '../chapter-title.js';
+import { READER_LIMITS } from '../reader-limits.js';
 import {
   ParseError,
   ReaderLimitError,
   type ReaderContent,
 } from './types.js';
-import {
-  MAX_READER_CSS_BYTES,
-  MAX_READER_IMAGE_BYTES,
-  SAFE_READER_IMAGE_MIME_TYPES,
-} from './resource-limits.js';
 
 interface ManifestItem {
   id: string;
@@ -38,11 +34,6 @@ interface ManifestItem {
 
 const EPUB_EAGER_CHAPTER_LIMIT = 64;
 const EPUB_INITIAL_CHAPTERS = 2;
-const EPUB_REMOTE_MAX_STYLESHEETS = 2;
-
-function isRandomAccessSource(source: ArchiveInput): source is RandomAccessSource {
-  return typeof (source as RandomAccessSource).readRange === 'function';
-}
 
 function isRemoteArchiveInput(source: ArchiveInput): boolean {
   return isRandomAccessSource(source) && source.access === 'remote';
@@ -267,18 +258,18 @@ export async function parseEpub(
       if (imageReference === null || manifestItem === undefined) {
         return null;
       }
-      if (!SAFE_READER_IMAGE_MIME_TYPES.has(manifestItem.mediaType)) {
+      if (!READER_LIMITS.safeImageMimeTypes.has(manifestItem.mediaType)) {
         return null;
       }
       const file = archive.file(imageReference.path);
       if (file === null) {
         return null;
       }
-      if (file.uncompressedSize > MAX_READER_IMAGE_BYTES) {
+      if (file.uncompressedSize > READER_LIMITS.maxImageBytes) {
         throw new ReaderLimitError(
           'readerImageBytes',
           file.uncompressedSize,
-          MAX_READER_IMAGE_BYTES,
+          READER_LIMITS.maxImageBytes,
         );
       }
       return imageReference.path;
@@ -521,10 +512,10 @@ export async function parseEpub(
         continue;
       }
       const cssFile = archive.file(reference.path);
-      if (cssFile === null || cssFile.uncompressedSize > MAX_READER_CSS_BYTES) {
+      if (cssFile === null || cssFile.uncompressedSize > READER_LIMITS.maxCssBytes) {
         continue;
       }
-      if (stylesheetBytes + cssFile.uncompressedSize > MAX_READER_CSS_BYTES) {
+      if (stylesheetBytes + cssFile.uncompressedSize > READER_LIMITS.maxCssBytes) {
         break;
       }
       const cssText = await cssFile.readText(signal);
@@ -532,7 +523,7 @@ export async function parseEpub(
       stylesheetBytes += cssFile.uncompressedSize;
       stylesheetParts.push(cssText);
       stylesheetCount += 1;
-      if (remote && stylesheetCount >= EPUB_REMOTE_MAX_STYLESHEETS) {
+      if (remote && stylesheetCount >= READER_LIMITS.epubRemoteMaxStylesheets) {
         break;
       }
     }

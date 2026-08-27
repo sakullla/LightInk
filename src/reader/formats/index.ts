@@ -12,7 +12,7 @@ import { parseTxt, parseTxtFromSource } from './txt.js';
 import { ParseError, type ReaderByteSource, type ReaderContent } from './types.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
 import { extOfPath } from '../../file/path-ext.js';
-import type { RandomAccessSource } from '../sources/types.js';
+import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
 
 /** epub/mobi/fb2 保持整读；只有 txt 走分块字节源（T8）。 */
 export type ReaderInputSource = Uint8Array | ReaderByteSource | RandomAccessSource;
@@ -20,10 +20,6 @@ export type ReaderInputSource = Uint8Array | ReaderByteSource | RandomAccessSour
 function isReaderByteSource(source: ReaderInputSource): source is ReaderByteSource {
   // 结构化判定：跨 realm（jsdom/node）Uint8Array instanceof 不可靠。
   return typeof (source as ReaderByteSource).read === 'function';
-}
-
-function isRandomAccessSource(source: ReaderInputSource): source is RandomAccessSource {
-  return typeof (source as RandomAccessSource).readRange === 'function';
 }
 
 function requireBytes(source: ReaderInputSource, ext: string): Uint8Array {

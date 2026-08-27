@@ -17,7 +17,7 @@ import type {
   ArchiveReadProgress,
 } from '../sources/types.js';
 import type { ArchivePasswordProvider } from '../sources/native-archive.js';
-import { enforcePageCount } from './page-limits.js';
+import { enforcePageCount, READER_LIMITS } from '../reader-limits.js';
 import {
   isReaderLoadCancelled,
   throwIfReaderLoadCancelled,
@@ -68,7 +68,6 @@ import {
 
 const COMIC_ARCHIVE_EXTS = new Set(['zip', 'cbz', 'rar', 'cbr', '7z', 'cb7']);
 const DEFAULT_COMIC_CACHE_BUDGET = 96 * 1024 * 1024;
-const MAX_COMIC_INFO_BYTES = 1024 * 1024;
 const COMIC_CHROME_IDLE_MS = 2800;
 const COMIC_EDGE_ZONE = 0.28;
 const COMIC_SYSTEM_EDGE_PX = 24;
@@ -328,7 +327,8 @@ export async function readComicInfo(
   const candidate = entries
     .filter(
       (entry) =>
-        isComicInfoPath(entry.filename) && entry.uncompressedSize <= MAX_COMIC_INFO_BYTES,
+        isComicInfoPath(entry.filename) &&
+        entry.uncompressedSize <= READER_LIMITS.maxComicInfoBytes,
     )
     .sort((left, right) => compareComicPaths(left.filename, right.filename))[0];
   if (candidate === undefined) return null;
@@ -346,7 +346,7 @@ export async function readComicInfo(
   try {
     const bytes = await provider.readEntry(candidate.id, signal);
     throwIfReaderLoadCancelled(signal);
-    if (bytes.byteLength > MAX_COMIC_INFO_BYTES) return null;
+    if (bytes.byteLength > READER_LIMITS.maxComicInfoBytes) return null;
     // 无声明编码：共享嗅探解码（UTF-8 优先、GBK 回退）。
     return parseComicInfo(decodeReaderText(bytes));
   } catch (error) {

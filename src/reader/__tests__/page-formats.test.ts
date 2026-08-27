@@ -15,9 +15,9 @@ import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
 import type { ArchiveProvider } from '../sources/types.js';
 import {
   enforcePageCount,
-  MAX_CBZ_PAGES,
-  MAX_PDF_PAGES,
-} from '../formats/page-limits.js';
+  injectReaderLimit,
+  READER_LIMITS,
+} from '../reader-limits.js';
 import {
   createPdfPageController,
   PDF_SCALE_STEPS,
@@ -138,14 +138,14 @@ describe('pdf viewport-centered zoom', () => {
 
 describe('reader page limits', () => {
   it('accepts PDF and CBZ counts exactly at their limits', () => {
-    expect(() => enforcePageCount('pdf', MAX_PDF_PAGES)).not.toThrow();
-    expect(() => enforcePageCount('cbz', MAX_CBZ_PAGES)).not.toThrow();
+    expect(() => enforcePageCount('pdf', READER_LIMITS.maxPdfPages)).not.toThrow();
+    expect(() => enforcePageCount('cbz', READER_LIMITS.maxCbzPages)).not.toThrow();
   });
 
   it('rejects one page over each limit with structured details', () => {
     for (const [format, limit, kind] of [
-      ['pdf', MAX_PDF_PAGES, 'pdfPages'],
-      ['cbz', MAX_CBZ_PAGES, 'cbzPages'],
+      ['pdf', READER_LIMITS.maxPdfPages, 'pdfPages'],
+      ['cbz', READER_LIMITS.maxCbzPages, 'cbzPages'],
     ] as const) {
       try {
         enforcePageCount(format, limit + 1);
@@ -155,6 +155,27 @@ describe('reader page limits', () => {
         expect(error).toMatchObject({ kind, actual: limit + 1, limit });
       }
     }
+  });
+
+  it('注册表单项收紧后 pdf/cbz 页数校验同步以同错误种类拒绝（传播探针）', () => {
+    // shared-utils：页数上限唯一事实源在限额注册表——单项收紧后 pdf 与 cbz
+    // 同步拒绝，错误种类（pdfPages/cbzPages）不变，不静默截断。
+    expect(() => enforcePageCount('pdf', 3)).not.toThrow();
+    const restore = injectReaderLimit('maxPdfPages', 2);
+    try {
+      expect(() => enforcePageCount('pdf', 3)).toThrow(
+        expect.objectContaining<Partial<ReaderLimitError>>({
+          kind: 'pdfPages',
+          actual: 3,
+          limit: 2,
+        }),
+      );
+      // cbz 上限不受单项调整影响。
+      expect(() => enforcePageCount('cbz', 3)).not.toThrow();
+    } finally {
+      restore();
+    }
+    expect(() => enforcePageCount('pdf', 3)).not.toThrow();
   });
 });
 
@@ -235,6 +256,22 @@ describe('readComicInfo 共享解码', () => {
       const after = await readComicInfo(provider, entries);
       expect(after?.title).not.toBe('书名');
       expect(after?.title).not.toBe(undefined);
+    } finally {
+      restore();
+    }
+    expect((await readComicInfo(provider, entries))?.title).toBe('书名');
+  });
+
+  it('注册表单项收紧后 ComicInfo 同步按新限值跳过元数据（传播探针）', async () => {
+    // shared-utils：ComicInfo 体积上限唯一事实源在限额注册表——收紧后 cbz 读取
+    // 同步丢弃超限元数据（现行"超限忽略"语义不变），恢复后照常解析。
+    const xml = '<?xml version="1.0"?><ComicInfo><Title>书名</Title></ComicInfo>';
+    const bytes = new TextEncoder().encode(xml);
+    const { provider, entries } = comicInfoArchive(bytes);
+    expect((await readComicInfo(provider, entries))?.title).toBe('书名');
+    const restore = injectReaderLimit('maxComicInfoBytes', bytes.byteLength - 1);
+    try {
+      expect(await readComicInfo(provider, entries)).toBeNull();
     } finally {
       restore();
     }

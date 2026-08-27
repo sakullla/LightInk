@@ -16,8 +16,9 @@ import { parseMobi } from '../formats/mobi.js';
 import { parseTxt, parseTxtFromSource } from '../formats/txt.js';
 import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
 import type { ReaderByteSource } from '../formats/types.js';
-import type { RandomAccessSource } from '../sources/types.js';
-import { ParseError, ReaderCapabilityError } from '../formats/types.js';
+import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
+import { injectReaderLimit } from '../reader-limits.js';
+import { ParseError, ReaderCapabilityError, ReaderLimitError } from '../formats/types.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -215,6 +216,33 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
     await expect(
       parseTxtFromSource(source, controller.signal, { chunkBytes: 4 }),
     ).rejects.toThrow();
+  });
+
+  it('分块路径与整读共用同一转义（escapeHtml 单点）', async () => {
+    // shared-utils：txt 分段与整读成章引用同一 escapeHtml——含 & < > 的段落
+    // 在两条路径下产出一致，无第二份转义实现。
+    const text = 'a < b & c > d';
+    const expected = parseTxt(enc(text)).chapters[0]!.html;
+    const content = await parseTxtFromSource(sourceFromBytes(enc(text)), undefined, {
+      chunkBytes: 3,
+    });
+    expect(content.chapters[0]!.html).toBe(expected);
+    expect(content.chapters[0]!.html).toContain('a &lt; b &amp; c &gt; d');
+  });
+});
+
+describe('isRandomAccessSource 字节源判定单点（shared-utils）', () => {
+  it('暴露 readRange 的源判真，整读字节与分块 read 源判否', () => {
+    const random: RandomAccessSource = {
+      size: 4,
+      identity: { id: 'probe' },
+      readRange: async () => new Uint8Array(4),
+      close: async () => undefined,
+    };
+    expect(isRandomAccessSource(random)).toBe(true);
+    expect(isRandomAccessSource(new Uint8Array(4))).toBe(false);
+    expect(isRandomAccessSource({ read: async () => new Uint8Array(4) })).toBe(false);
+    expect(isRandomAccessSource({})).toBe(false);
   });
 });
 
@@ -1093,5 +1121,174 @@ describe('共享解码嗅探顺序传播（shared-decode）', () => {
     }
     // 恢复默认顺序后输出回到基线。
     expect(parseTxt(txtBytes).chapters[0]!.html).toBe(txtBefore);
+  });
+});
+
+describe('资源限额注册表传播（shared-utils）', () => {
+  /** 单章 + 一张 4 字节包内 PNG 的最小 EPUB（图字节探针输入）。 */
+  async function buildImageEpub(): Promise<Uint8Array> {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package><manifest>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '<item id="pic" href="images/pic.png" media-type="image/png"/>' +
+            '</manifest><spine><itemref idref="ch1"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(
+        enc(
+          '<html><head><title>第一章</title></head><body><p>甲</p>' +
+            '<img src="images/pic.png"></body></html>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/images/pic.png',
+      new Uint8ArrayReader(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+      { level: 0 },
+    );
+    return zip.close();
+  }
+
+  it('收紧图字节限额后 EPUB 与 FB2 同步以 readerImageBytes 拒绝', async () => {
+    const epubBytes = await buildImageEpub();
+    // "aGVsbG8=" 解码 5 字节（"hello"）的 FB2 embedded 图。
+    const fb2Bytes = enc(
+      '<?xml version="1.0"?>\n<FictionBook xmlns:l="http://www.w3.org/1999/xlink">\n' +
+        '<body><section><p>正文</p><image l:href="#cover"/></section></body>\n' +
+        '<binary id="cover" content-type="image/png">aGVsbG8=</binary>\n' +
+        '</FictionBook>',
+    );
+
+    // 基线：默认限额下 EPUB 保留包内路径占位、FB2 物化 embedded 图。
+    const epubBaseline = await parseEpub(epubBytes);
+    expect(epubBaseline.chapters[0]!.html).toContain('OEBPS/images/pic.png');
+    epubBaseline.dispose?.();
+
+    const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const originalRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: () => 'blob:fb2-limit-probe',
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: () => undefined,
+    });
+    try {
+      const fb2Baseline = parseFb2(fb2Bytes);
+      expect(fb2Baseline.chapters[0]!.html).toContain('blob:fb2-limit-probe');
+      fb2Baseline.dispose?.();
+
+      // 单点收紧：4 字节 EPUB 占位图与 5 字节 FB2 binary 同步超限，两种格式
+      // 以同一错误种类 readerImageBytes 拒绝——改一处、全格式生效。
+      const restore = injectReaderLimit('maxImageBytes', 3);
+      try {
+        await expect(parseEpub(epubBytes)).rejects.toThrow(
+          expect.objectContaining<Partial<ReaderLimitError>>({
+            kind: 'readerImageBytes',
+            actual: 4,
+            limit: 3,
+          }),
+        );
+        expect(() => parseFb2(fb2Bytes)).toThrow(
+          expect.objectContaining<Partial<ReaderLimitError>>({
+            kind: 'readerImageBytes',
+            actual: 5,
+            limit: 3,
+          }),
+        );
+      } finally {
+        restore();
+      }
+
+      // 恢复后两格式回到基线行为。
+      const epubAfter = await parseEpub(epubBytes);
+      expect(epubAfter.chapters[0]!.html).toContain('OEBPS/images/pic.png');
+      epubAfter.dispose?.();
+      const fb2After = parseFb2(fb2Bytes);
+      expect(fb2After.chapters[0]!.html).toContain('blob:fb2-limit-probe');
+      fb2After.dispose?.();
+    } finally {
+      if (originalCreate === undefined) Reflect.deleteProperty(URL, 'createObjectURL');
+      else Object.defineProperty(URL, 'createObjectURL', originalCreate);
+      if (originalRevoke === undefined) Reflect.deleteProperty(URL, 'revokeObjectURL');
+      else Object.defineProperty(URL, 'revokeObjectURL', originalRevoke);
+    }
+  });
+
+  it('收紧远程样式份数后远程 EPUB 首载样式同步减少（传播探针）', async () => {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package><manifest>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '<item id="css1" href="styles/one.css" media-type="text/css"/>' +
+            '<item id="css2" href="styles/two.css" media-type="text/css"/>' +
+            '</manifest><spine><itemref idref="ch1"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(enc('<html><body><p>甲</p></body></html>')),
+    );
+    await zip.add('OEBPS/styles/one.css', new Uint8ArrayReader(enc('body{color:red}')));
+    await zip.add('OEBPS/styles/two.css', new Uint8ArrayReader(enc('h1{color:blue}')));
+    const bytes = await zip.close();
+    const source: RandomAccessSource = {
+      size: bytes.length,
+      identity: { id: 'epub-remote-css' },
+      access: 'remote',
+      readRange: async (offset, length) => bytes.slice(offset, offset + length),
+      close: async () => undefined,
+    };
+
+    // 基线：默认 2 份预算内两份样式都保留。
+    const baseline = await parseEpub(source);
+    expect(baseline.stylesheet).toContain('color:red');
+    expect(baseline.stylesheet).toContain('color:blue');
+    baseline.dispose?.();
+
+    const restore = injectReaderLimit('epubRemoteMaxStylesheets', 1);
+    try {
+      const capped = await parseEpub(source);
+      expect(capped.stylesheet).toContain('color:red');
+      expect(capped.stylesheet).not.toContain('color:blue');
+      capped.dispose?.();
+    } finally {
+      restore();
+    }
+    const after = await parseEpub(source);
+    expect(after.stylesheet).toContain('color:blue');
+    after.dispose?.();
   });
 });

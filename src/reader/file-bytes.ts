@@ -1,7 +1,5 @@
 import { extOfPath } from '../file/path-ext.js';
-
-export const MAX_TEXT_READER_BYTES = 32 * 1024 * 1024;
-export const MAX_BINARY_READER_BYTES = 2 * 1024 * 1024 * 1024;
+import { READER_LIMITS } from './reader-limits.js';
 
 const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt']);
 
@@ -23,7 +21,9 @@ export function readerByteLimitForPath(path: string): number {
     // 参与上限判定，点文件命名的文本文件不因此从 32MB 文本上限落入 2GB 二进制上限。
     extension = base.slice(1).toLowerCase();
   }
-  return TEXT_EXTENSIONS.has(extension) ? MAX_TEXT_READER_BYTES : MAX_BINARY_READER_BYTES;
+  return TEXT_EXTENSIONS.has(extension)
+    ? READER_LIMITS.maxTextReaderBytes
+    : READER_LIMITS.maxBinaryReaderBytes;
 }
 
 /**

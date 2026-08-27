@@ -45,6 +45,15 @@ export interface RandomAccessSource {
   close(): Promise<void>;
 }
 
+/**
+ * 字节源判定谓词唯一实现（R4）：暴露 `readRange` 即随机访问源。结构化判定，
+ * 跨 realm（jsdom/node/WebView）`instanceof` 不可靠；formats 调度、epub、
+ * safe-archive、pdf 共用，不得再各留一份局部判定。
+ */
+export function isRandomAccessSource(source: unknown): source is RandomAccessSource {
+  return typeof (source as RandomAccessSource).readRange === 'function';
+}
+
 /** Metadata shared by ZIP and native archive providers. */
 export interface ArchiveEntryMetadata {
   /** Provider-specific stable id; ZIP providers use the filename. */

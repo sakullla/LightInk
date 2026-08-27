@@ -11,7 +11,7 @@
 import type { OutlineItem } from '../../outline/outline-model.js';
 import { outlineFromPdf } from '../outline.js';
 import { ParseError } from './types.js';
-import { enforcePageCount } from './page-limits.js';
+import { enforcePageCount } from '../reader-limits.js';
 import { findPdfMatches, type PdfSearchMatch } from '../search-panel.js';
 import { bindTextLayerSelection } from '../text-layer-selection.js';
 import {
@@ -24,7 +24,7 @@ import {
   nearestVisibleSlot,
   rafFrameScheduler,
 } from '../../ui/reading-layout.js';
-import type { RandomAccessSource } from '../sources/types.js';
+import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
 
 /** 缩放档位（与字号缩放独立，PDF 像素级）。 */
 export const PDF_SCALE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
@@ -233,10 +233,7 @@ export async function renderPdfInto(
   throwIfReaderLoadCancelled(signal);
   pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default;
 
-  const randomSource =
-    typeof (input as RandomAccessSource).readRange === 'function'
-      ? (input as RandomAccessSource)
-      : null;
+  const randomSource = isRandomAccessSource(input) ? input : null;
   let rangeFailure: unknown = null;
   let rangeController: AbortController | null = null;
   let loadingTask: ReturnType<typeof pdfjs.getDocument>;

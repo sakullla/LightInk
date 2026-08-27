@@ -1908,6 +1908,26 @@ describe('窗口级翻页（R1：不限中间章节容器）', () => {
     expect(headed).not.toContain('<h1 class="lightink-export-bookmark">');
     await view.destroy();
   });
+
+  it('escapes special characters in the hidden bookmark title via the shared escapeHtml', async () => {
+    // shared-utils：导出书签标题（原 reader-view 内联转义链）改引 html-escape
+    // 单点实现——& < > 转义、引号原样，与 txt 分段转义同一行为。
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [{ title: 'A & B <注> "c"', html: '<p>body</p>' }],
+      }),
+    });
+    await view.load('book3.epub');
+    const exported = await view.getExportHtml?.();
+    expect(exported).toContain(
+      '<h1 class="lightink-export-bookmark">A &amp; B &lt;注&gt; "c"</h1>',
+    );
+    await view.destroy();
+  });
 });
 
 describe('流式触屏划选与版式切换（R6/R7）', () => {

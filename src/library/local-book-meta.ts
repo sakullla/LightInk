@@ -11,7 +11,7 @@
 import { bytesToBase64 } from '../asset/asset-service.js';
 import { extOfPath } from '../file/path-ext.js';
 import { openSafeArchive, type ArchiveInput } from '../reader/formats/safe-archive.js';
-import { SAFE_READER_IMAGE_MIME_TYPES } from '../reader/formats/resource-limits.js';
+import { READER_LIMITS } from '../reader/reader-limits.js';
 import { decodeReaderText } from '../reader/formats/text-encoding.js';
 import { parseFilenameSeries } from './filename-series.js';
 
@@ -83,7 +83,7 @@ function mimeFromPath(path: string): string | undefined {
 const MAX_SHELF_COVER_EDGE = 512;
 
 async function toCoverDataUrl(bytes: Uint8Array, mime: string): Promise<string | undefined> {
-  if (bytes.byteLength === 0 || !SAFE_READER_IMAGE_MIME_TYPES.has(mime)) {
+  if (bytes.byteLength === 0 || !READER_LIMITS.safeImageMimeTypes.has(mime)) {
     return undefined;
   }
   if (bytes.byteLength <= MAX_SHELF_COVER_BYTES) {
@@ -156,20 +156,20 @@ function parseManifest(opf: string): ManifestItem[] {
 function coverItem(opf: string, items: readonly ManifestItem[]): ManifestItem | undefined {
   const propertyHit = items.find(
     (item) =>
-      /\bcover-image\b/i.test(item.properties) && SAFE_READER_IMAGE_MIME_TYPES.has(item.mediaType),
+      /\bcover-image\b/i.test(item.properties) && READER_LIMITS.safeImageMimeTypes.has(item.mediaType),
   );
   if (propertyHit !== undefined) return propertyHit;
   const meta = opf.match(/<meta\b[^>]*\bname\s*=\s*["']cover["'][^>]*>/i)?.[0];
   const coverId = meta === undefined ? null : attr(meta, 'content');
   if (coverId !== null) {
     const byId = items.find((item) => item.id === coverId);
-    if (byId !== undefined && SAFE_READER_IMAGE_MIME_TYPES.has(byId.mediaType)) {
+    if (byId !== undefined && READER_LIMITS.safeImageMimeTypes.has(byId.mediaType)) {
       return byId;
     }
   }
   return items.find(
     (item) =>
-      SAFE_READER_IMAGE_MIME_TYPES.has(item.mediaType) &&
+      READER_LIMITS.safeImageMimeTypes.has(item.mediaType) &&
       (/cover/i.test(item.id) || /cover\.(jpe?g|png|gif|webp)$/i.test(item.href)),
   );
 }
@@ -256,7 +256,7 @@ export function isShelfCoverUrl(value: string | null | undefined): boolean {
   }
   if (value.startsWith('data:image/')) {
     const mime = value.slice('data:'.length, value.indexOf(';'));
-    return SAFE_READER_IMAGE_MIME_TYPES.has(mime);
+    return READER_LIMITS.safeImageMimeTypes.has(mime);
   }
   try {
     const url = new URL(value);

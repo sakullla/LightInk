@@ -24,6 +24,7 @@ import { createLocalFileSource } from './sources/file-source.js';
 import type { ReaderChapter, ReaderContent } from './formats/types.js';
 import { ParseError } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
+import { escapeHtml } from './html-escape.js';
 import { renderCbzInto, type CbzRenderHandle } from './formats/cbz.js';
 import { renderPdfInto, type PdfRenderHandle } from './formats/pdf.js';
 import {
@@ -3851,7 +3852,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         const title = chapter.title.trim() || t('reader.chapter', { n: String(index + 1) });
         const bookmark = /<h[1-6]\b/i.test(chapter.html)
           ? ''
-          : `<h1 class="lightink-export-bookmark">${title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>`;
+          : `<h1 class="lightink-export-bookmark">${escapeHtml(title)}</h1>`;
         let markup = `<section class="lightink-export-chapter">${bookmark}${chapter.html}</section>`;
         if (exportEmbedImages !== null) {
           const embedded = await exportEmbedImages(markup, mode);

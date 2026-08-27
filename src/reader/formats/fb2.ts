@@ -2,10 +2,7 @@
 
 import { bytesToBase64 } from '../../asset/asset-service.js';
 import { sanitizeHtml } from '../sanitize.js';
-import {
-  MAX_READER_IMAGE_BYTES,
-  SAFE_READER_IMAGE_MIME_TYPES,
-} from './resource-limits.js';
+import { READER_LIMITS } from '../reader-limits.js';
 import { decodeReaderText } from './text-encoding.js';
 import { ParseError, ReaderLimitError, type ReaderContent } from './types.js';
 
@@ -58,11 +55,11 @@ function decodeEmbeddedImage(base64: string): Uint8Array | null {
   }
   const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
   const expectedBytes = Math.floor((compact.length * 3) / 4) - padding;
-  if (expectedBytes > MAX_READER_IMAGE_BYTES) {
+  if (expectedBytes > READER_LIMITS.maxImageBytes) {
     throw new ReaderLimitError(
       'readerImageBytes',
       expectedBytes,
-      MAX_READER_IMAGE_BYTES,
+      READER_LIMITS.maxImageBytes,
     );
   }
   let binary: string;
@@ -71,11 +68,11 @@ function decodeEmbeddedImage(base64: string): Uint8Array | null {
   } catch {
     return null;
   }
-  if (binary.length > MAX_READER_IMAGE_BYTES) {
+  if (binary.length > READER_LIMITS.maxImageBytes) {
     throw new ReaderLimitError(
       'readerImageBytes',
       binary.length,
-      MAX_READER_IMAGE_BYTES,
+      READER_LIMITS.maxImageBytes,
     );
   }
   const bytes = new Uint8Array(binary.length);
@@ -112,7 +109,7 @@ function createResources(xml: XMLDocument): Fb2Resources {
         return null;
       }
       const mediaType = (binary.getAttribute('content-type') ?? '').trim().toLowerCase();
-      if (!SAFE_READER_IMAGE_MIME_TYPES.has(mediaType)) {
+      if (!READER_LIMITS.safeImageMimeTypes.has(mediaType)) {
         return null;
       }
       const data = decodeEmbeddedImage(binary.textContent ?? '');

@@ -13,7 +13,8 @@ import type {
   ArchiveProvider,
   RandomAccessSource,
 } from '../sources/types.js';
-import { readerIdentityKey } from '../sources/types.js';
+import { isRandomAccessSource, readerIdentityKey } from '../sources/types.js';
+import { READER_LIMITS } from '../reader-limits.js';
 import { createMemorySource } from '../sources/memory-source.js';
 import type {
   ArchivePasswordProvider,
@@ -34,12 +35,18 @@ export interface ArchiveLimits {
   maxCompressionRatio: number;
 }
 
-export const READER_ARCHIVE_LIMITS: Readonly<ArchiveLimits> = {
-  maxEntries: 5_000,
-  maxTotalUncompressedBytes: 2 * 1024 * 1024 * 1024,
-  maxEntryUncompressedBytes: 64 * 1024 * 1024,
-  maxCompressionRatio: 200,
-};
+/**
+ * 从限额注册表取归档预算（调用时读取，探针改写单项后同步生效）。
+ * 数值唯一事实源在 `src/reader/reader-limits.ts`，本模块不再自持常量。
+ */
+function readerArchiveLimits(): ArchiveLimits {
+  return {
+    maxEntries: READER_LIMITS.maxArchiveEntries,
+    maxTotalUncompressedBytes: READER_LIMITS.maxArchiveTotalUncompressedBytes,
+    maxEntryUncompressedBytes: READER_LIMITS.maxArchiveEntryUncompressedBytes,
+    maxCompressionRatio: READER_LIMITS.maxArchiveCompressionRatio,
+  };
+}
 
 export interface ArchiveEntryMetadata extends CommonArchiveEntryMetadata {
   directory: boolean;
@@ -100,7 +107,7 @@ class ArchiveBudgetTracker {
 /** Validate synthetic metadata independently of ZIP parsing for boundary tests. */
 export function validateArchiveMetadata(
   entries: readonly ArchiveEntryMetadata[],
-  limits: Readonly<ArchiveLimits> = READER_ARCHIVE_LIMITS,
+  limits: Readonly<ArchiveLimits> = readerArchiveLimits(),
 ): void {
   const tracker = new ArchiveBudgetTracker(limits);
   for (const entry of entries) {
@@ -142,10 +149,6 @@ function zipEngineOptions(): {
   };
 }
 
-function isRandomAccessSource(input: ArchiveInput): input is RandomAccessSource {
-  return typeof (input as RandomAccessSource).readRange === 'function';
-}
-
 /** Open and validate an archive without decompressing its entries. */
 export async function openSafeArchive(
   input: ArchiveInput,
@@ -184,7 +187,7 @@ export async function openSafeArchive(
   }
   const reader = new zip.ZipReader(new SourceReader());
   const files: FileEntry[] = [];
-  const budget = new ArchiveBudgetTracker(READER_ARCHIVE_LIMITS);
+  const budget = new ArchiveBudgetTracker(readerArchiveLimits());
   const depth = options.depth ?? 0;
   const parentUncompressedBytes = options.parentUncompressedBytes ?? 0;
   const identity = options.identity ?? readerIdentityKey(source.identity);
@@ -221,13 +224,13 @@ export async function openSafeArchive(
     (total, entry) => total + entry.uncompressedSize,
     parentUncompressedBytes,
   );
-  if (cumulativeUncompressedBytes > READER_ARCHIVE_LIMITS.maxTotalUncompressedBytes) {
+  if (cumulativeUncompressedBytes > READER_LIMITS.maxArchiveTotalUncompressedBytes) {
     await reader.close().catch(() => undefined);
     await source.close().catch(() => undefined);
     throw new ReaderLimitError(
       'archiveTotalBytes',
       cumulativeUncompressedBytes,
-      READER_ARCHIVE_LIMITS.maxTotalUncompressedBytes,
+      READER_LIMITS.maxArchiveTotalUncompressedBytes,
     );
   }
 

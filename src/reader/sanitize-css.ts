@@ -6,7 +6,7 @@
  * out of the wrapping `<style>` element.
  */
 
-import { MAX_READER_CSS_BYTES } from './formats/resource-limits.js';
+import { READER_LIMITS } from './reader-limits.js';
 
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const CSS_COMMENTS = /\/\*[\s\S]*?\*\//g;
@@ -51,7 +51,10 @@ export function decodeCssEscapes(input: string): string {
 
 /** Return publisher CSS that is safe to embed in a reader `<style>` tag. */
 export function sanitizeReaderCss(input: string): string {
-  const bounded = input.length > MAX_READER_CSS_BYTES ? input.slice(0, MAX_READER_CSS_BYTES) : input;
+  const bounded =
+    input.length > READER_LIMITS.maxCssBytes
+      ? input.slice(0, READER_LIMITS.maxCssBytes)
+      : input;
   const decoded = decodeCssEscapes(bounded);
   return decoded
     .replace(CSS_COMMENTS, '')
