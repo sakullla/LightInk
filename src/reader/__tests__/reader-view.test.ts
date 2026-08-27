@@ -2175,3 +2175,58 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     await view.destroy();
   });
 });
+
+describe('搜索会话接线（session-search 收口：世代失效/无命中空态）', () => {
+  const loadSearchBook = async (
+    chapters: Array<{ title: string; html: string }>,
+  ): Promise<{ host: HTMLDivElement; view: ReturnType<typeof createReaderView> }> => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new TextEncoder().encode('unused'),
+      parseContent: async () => ({ chapters }),
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    return { host, view };
+  };
+
+  it('新查询使旧结果世代失效：旧命中列表清空、不误跳章；无命中保持空态不报错', async () => {
+    // jsdom 不解析 iframe srcdoc 正文（帧内 overlay 无法观察），帧内命中解包由
+    // pdf-search.test.ts 的会话核心用例与共享幂等引擎用例覆盖；此处观察侧栏表面。
+    const { host, view } = await loadSearchBook([
+      { title: 'One', html: '<p>alpha keyword beta keyword</p>' },
+      { title: 'Two', html: '<p>keyword again</p>' },
+    ]);
+
+    view.openSearch?.('keyword');
+    const sidebar = host.querySelector<HTMLElement>('.lightink-reader-sidebar')!;
+    expect(sidebar.hidden).toBe(false);
+    await vi.waitFor(() => {
+      expect(sidebar.querySelectorAll('.lightink-reader-sidebar-hit').length).toBeGreaterThan(0);
+    });
+    expect(view.state.current).toBe(1);
+
+    // 新查询（全书无命中）：旧世代结果世代失效——命中列表被新会话整体取代。
+    view.openSearch?.('全书都不存在的词');
+    await vi.waitFor(() => {
+      expect(sidebar.querySelectorAll('.lightink-reader-sidebar-hit')).toHaveLength(0);
+    });
+    expect(sidebar.hidden).toBe(false);
+    expect(sidebar.classList.contains('is-searching')).toBe(true);
+    await vi.waitFor(() => {
+      expect(
+        sidebar
+          .querySelector<HTMLElement>('.lightink-reader-sidebar-search-status')
+          ?.getAttribute('data-search-empty'),
+      ).toBe('true');
+    });
+    expect(sidebar.querySelector('.lightink-reader-sidebar-more')).toBeNull();
+    // 不误跳、不报错：阅读位置保持、阶段仍 ready。
+    expect(view.state.current).toBe(1);
+    expect(view.state.phase).toBe('ready');
+    await view.destroy();
+  });
+});
