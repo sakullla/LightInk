@@ -147,8 +147,10 @@ describe('keyboard-inset overlay consumers', () => {
       t: (key, vars) => translate('zh-CN', key, vars),
     });
     const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay')!;
+    const dialog = document.querySelector<HTMLElement>('.lightink-link-dialog')!;
     const input = document.querySelector<HTMLInputElement>('#lightink-archive-password')!;
-    expect(overlay.style.paddingBottom).toContain('--lightink-keyboard-inset');
+    expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    expect(dialog.style.maxHeight).toBe('calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))');
     expect(input).toBeInstanceOf(HTMLInputElement);
     applyKeyboardInset(280);
     expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe(

@@ -3586,6 +3586,16 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   max-height: min(80vh, 560px, calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px)));
 }
 
+:is(html[data-android], html[data-touch-primary])
+  .lightink-modal-overlay:has(#lightink-archive-password) {
+  padding-bottom: var(--lightink-keyboard-inset, 0px);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-link-dialog:has(#lightink-archive-password) {
+  max-height: calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px));
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form-actions,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form-actions,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-actions,
