@@ -295,7 +295,7 @@ function isShown(el: Element | null): boolean {
 }
 
 /** In-tree phone chrome is gated by [hidden] + the 760px CSS rule, not computed display. */
-function isMountedChrome(el: Element | null): boolean {
+function isMountedChrome(el: Element | null): el is HTMLElement {
   if (!(el instanceof HTMLElement)) return false;
   return !el.hidden && el.closest('[hidden]') === null;
 }
