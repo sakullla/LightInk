@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { SHEET_DRAG_THRESHOLD_PX } from '../../ui/touch/sheet-drag.js';
+import { createAnnotationSidebar } from '../annotation-sidebar.js';
 import { defaultComicPreferences } from '../comic-preferences.js';
 import { createReaderChrome } from '../reader-chrome.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
@@ -18,6 +20,7 @@ import {
   readerChromeFooterInset,
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
+import { createSearchSheet } from '../search-sheet.js';
 
 const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
 const MIN_HIT_PX = 48;
@@ -66,6 +69,65 @@ function actionButton(root: ParentNode, action: string): HTMLButtonElement {
   );
   expect(match, `missing chrome action "${action}"`).toBeTruthy();
   return match!;
+}
+
+const SHEET_HANDLE_SELECTOR =
+  '.lightink-reader-sheet-handle, .lightink-reader-search-sheet-handle, .lightink-reader-chrome-sheet-handle, [data-sheet-handle]';
+
+function querySheetHandle(root: HTMLElement): HTMLElement {
+  const handle = root.querySelector<HTMLElement>(SHEET_HANDLE_SELECTOR);
+  expect(handle, 'sheet must expose a real drag handle node').not.toBeNull();
+  return handle!;
+}
+
+function expectPointerCapableHandle(handle: HTMLElement, sheetRoot: HTMLElement): void {
+  expect(handle, 'handle must be a child node, not the sheet ::after').not.toBe(sheetRoot);
+  expect(sheetRoot.contains(handle)).toBe(true);
+  expect(handle.hidden).toBe(false);
+  const inline = handle.style.pointerEvents;
+  if (inline) {
+    expect(inline).not.toBe('none');
+  }
+  const computed = getComputedStyle(handle).pointerEvents;
+  if (computed !== '' && computed !== 'auto') {
+    expect(computed).not.toBe('none');
+  }
+}
+
+function pointerEvent(
+  type: string,
+  point: { clientX: number; clientY: number },
+): PointerEvent {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+    pointerId: 1,
+    pointerType: 'touch',
+    clientX: point.clientX,
+    clientY: point.clientY,
+  });
+}
+
+function dragHandlePastThreshold(handle: HTMLElement): void {
+  if (typeof handle.setPointerCapture !== 'function') {
+    Object.defineProperty(handle, 'setPointerCapture', {
+      value: () => undefined,
+      configurable: true,
+    });
+  }
+  if (typeof handle.releasePointerCapture !== 'function') {
+    Object.defineProperty(handle, 'releasePointerCapture', {
+      value: () => undefined,
+      configurable: true,
+    });
+  }
+  const startY = 10;
+  const endY = startY + SHEET_DRAG_THRESHOLD_PX;
+  handle.dispatchEvent(pointerEvent('pointerdown', { clientX: 20, clientY: startY }));
+  handle.dispatchEvent(pointerEvent('pointermove', { clientX: 20, clientY: endY }));
+  handle.dispatchEvent(pointerEvent('pointerup', { clientX: 20, clientY: endY }));
 }
 
 function declaredHitPx(el: HTMLElement): number {
@@ -693,5 +755,149 @@ describe('reader chrome panels', () => {
     );
     expect(readerCss()).toContain('--lightink-keyboard-inset');
     expect(sheet + readerCss()).toMatch(/--lightink-keyboard-inset/);
+  });
+
+  it('gives annotation, search, catalog, and typography sheets a real pointer handle', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    const page = document.createElement('div');
+    page.className = 'lightink-reader-page';
+    host.append(page);
+    document.body.append(host);
+    stubRect(host, { width: 390, height: 700 });
+
+    const catalog = document.createElement('div');
+    catalog.className = 'lightink-reader-chrome-panel';
+    fillReaderTocPanel(
+      catalog,
+      [{ level: 1, text: '第一章', anchor: 0, chapter: 0 }],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      vi.fn(),
+    );
+    host.append(catalog);
+    positionReaderChromePanel(catalog, host, document.createElement('button'));
+
+    const typography = document.createElement('div');
+    typography.className = 'lightink-reader-chrome-panel';
+    fillReaderTypographyPanel(
+      typography,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+    );
+    host.append(typography);
+    positionReaderChromePanel(typography, host, document.createElement('button'));
+
+    const annotation = createAnnotationSidebar({
+      t: (key) => key,
+      onJump: vi.fn(),
+      onClose: vi.fn(),
+    });
+    host.append(annotation.element);
+    pinFixedOverlay(annotation.element, host, { innerWidth: 390, innerHeight: 700 });
+
+    const search = createSearchSheet({
+      t: (key) => key,
+      onQuery: vi.fn(),
+      onClose: vi.fn(),
+    });
+    host.append(search.element);
+    search.open('keyword');
+
+    for (const sheet of [catalog, typography, annotation.element, search.element]) {
+      expect(sheet.classList.contains('is-touch-sheet'), sheet.className).toBe(true);
+      const handle = querySheetHandle(sheet);
+      expectPointerCapableHandle(handle, sheet);
+    }
+
+    expect(search.element.querySelector('.lightink-reader-search-sheet-close')).not.toBeNull();
+    expect(annotation.element.querySelector('.lightink-reader-sidebar-close')).not.toBeNull();
+    search.destroy();
+    annotation.destroy();
+  });
+
+  it('closes the search sheet from a downward handle drag and still honors the close button', () => {
+    const onClose = vi.fn();
+    const sheet = createSearchSheet({
+      t: (key) => key,
+      onQuery: vi.fn(),
+      onClose,
+    });
+    document.body.append(sheet.element);
+    sheet.open('keyword');
+    const handle = querySheetHandle(sheet.element);
+    expectPointerCapableHandle(handle, sheet.element);
+
+    dragHandlePastThreshold(handle);
+    expect(sheet.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    sheet.open('keyword');
+    expect(sheet.isOpen()).toBe(true);
+    sheet.element.querySelector<HTMLButtonElement>('.lightink-reader-search-sheet-close')!.click();
+    expect(sheet.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(2);
+    sheet.destroy();
+  });
+
+  it('closes annotation, catalog, and typography sheets from a downward handle drag', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    const page = document.createElement('div');
+    page.className = 'lightink-reader-page';
+    host.append(page);
+    document.body.append(host);
+    stubRect(host, { width: 390, height: 700 });
+
+    const onAnnotationClose = vi.fn();
+    const annotation = createAnnotationSidebar({
+      t: (key) => key,
+      onJump: vi.fn(),
+      onClose: onAnnotationClose,
+    });
+    host.append(annotation.element);
+    pinFixedOverlay(annotation.element, host, { innerWidth: 390, innerHeight: 700 });
+    dragHandlePastThreshold(querySheetHandle(annotation.element));
+    expect(onAnnotationClose).toHaveBeenCalledTimes(1);
+    annotation.element.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')!.click();
+    expect(onAnnotationClose).toHaveBeenCalledTimes(2);
+
+    const catalog = document.createElement('div');
+    catalog.className = 'lightink-reader-chrome-panel';
+    fillReaderTocPanel(
+      catalog,
+      [{ level: 1, text: '第一章', anchor: 0, chapter: 0 }],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      vi.fn(),
+    );
+    host.append(catalog);
+    positionReaderChromePanel(catalog, host, document.createElement('button'));
+    dragHandlePastThreshold(querySheetHandle(catalog));
+    expect(catalog.hidden).toBe(true);
+
+    const typography = document.createElement('div');
+    typography.className = 'lightink-reader-chrome-panel';
+    fillReaderTypographyPanel(
+      typography,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+    );
+    host.append(typography);
+    positionReaderChromePanel(typography, host, document.createElement('button'));
+    dragHandlePastThreshold(querySheetHandle(typography));
+    expect(typography.hidden).toBe(true);
+
+    annotation.destroy();
   });
 });

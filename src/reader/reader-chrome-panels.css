@@ -559,7 +559,7 @@
   border-left: 0;
   border-right: 0;
   border-bottom: 0;
-  padding-top: 1.15rem;
+  padding-top: 0;
   padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
 }
 
@@ -567,18 +567,32 @@
   display: none;
 }
 
-.lightink-reader-chrome-panel.is-touch-sheet::after,
-.lightink-reader-sidebar.is-touch-sheet::after {
+.lightink-reader-sheet-handle {
+  flex: 0 0 auto;
+  position: relative;
+  align-self: stretch;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 1.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.lightink-reader-sheet-handle::before {
   content: '';
   position: absolute;
-  top: 0.45rem;
+  top: 50%;
   left: 50%;
   width: 2.25rem;
   height: 0.28rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
-  transform: translateX(-50%);
-  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
 /* ===== 触屏搜索层（底栏 sheet：查询框 + 命中列表，R5/R6） =====

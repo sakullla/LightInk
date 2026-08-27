@@ -1,0 +1,256 @@
+/**
+ * `touch/sheet-drag` — 底栏 sheet 把手下拖关闭。
+ *
+ * 只负责把手按下后跟随位移与关闭判定；关闭走调用方注入的 onClose
+ * （与关闭按钮 / 遮罩同一条路径）。本模块不创建把手、不画假条子；
+ * 无把手的层由调用方决定不绑定。
+ *
+ * 判定：
+ *   - 仅跟随向下位移（translateY）；
+ *   - 松手时位移 ≥ 阈值或向下快甩 → onClose；
+ *   - 未过阈值 → 弹回，不关闭。
+ *
+ * 只依赖 EventTarget 与指针/触摸坐标，jsdom 可用伪造 pointer/touch 事件测试。
+ */
+
+export interface SheetDragOptions {
+  sheet: HTMLElement;
+  onClose: () => void;
+  /** 下拖关闭阈值（px），默认 80。 */
+  thresholdPx?: number;
+}
+
+/** 默认下拖关闭阈值（px）。 */
+export const SHEET_DRAG_THRESHOLD_PX = 80;
+/** 向下快甩速度阈值（px/ms）。 */
+export const SHEET_DRAG_FLICK_PX_PER_MS = 0.5;
+/** 快甩至少要有一段向下位移，避免原地抖动误关。 */
+export const SHEET_DRAG_FLICK_MIN_DY_PX = 16;
+
+interface TouchPointLike {
+  clientX: number;
+  clientY: number;
+}
+
+interface TouchEventLike extends Event {
+  touches?: ArrayLike<TouchPointLike>;
+  changedTouches?: ArrayLike<TouchPointLike>;
+}
+
+interface PointerLike {
+  pointerId?: number;
+  button?: number;
+  clientX: number;
+  clientY: number;
+}
+
+interface DragState {
+  pointerId: number | null;
+  startY: number;
+  startAt: number;
+  lastY: number;
+}
+
+function firstTouch(event: Event, ended: boolean): TouchPointLike | undefined {
+  const touchEvent = event as TouchEventLike;
+  const points = ended ? touchEvent.changedTouches : touchEvent.touches;
+  if (points === undefined || points.length !== 1) {
+    return undefined;
+  }
+  return points[0];
+}
+
+function applySheetOffset(sheet: HTMLElement, dy: number): void {
+  const offset = Math.max(0, dy);
+  if (offset === 0) {
+    sheet.style.transform = '';
+    return;
+  }
+  sheet.style.transform = `translateY(${offset}px)`;
+}
+
+function snapBack(sheet: HTMLElement): void {
+  sheet.style.transform = '';
+}
+
+function shouldClose(dy: number, durationMs: number, thresholdPx: number): boolean {
+  if (dy >= thresholdPx) {
+    return true;
+  }
+  if (dy >= SHEET_DRAG_FLICK_MIN_DY_PX && durationMs > 0) {
+    return dy / durationMs >= SHEET_DRAG_FLICK_PX_PER_MS;
+  }
+  return false;
+}
+
+function trySetPointerCapture(handle: HTMLElement, pointerId: number): void {
+  if (typeof handle.setPointerCapture !== 'function') {
+    return;
+  }
+  try {
+    handle.setPointerCapture(pointerId);
+  } catch {
+    // jsdom / already-released pointers
+  }
+}
+
+function tryReleasePointerCapture(handle: HTMLElement, pointerId: number): void {
+  if (typeof handle.releasePointerCapture !== 'function') {
+    return;
+  }
+  try {
+    if (handle.hasPointerCapture?.(pointerId) === true) {
+      handle.releasePointerCapture(pointerId);
+    }
+  } catch {
+    // jsdom / already-released pointers
+  }
+}
+
+/** 绑定把手下拖关闭；返回解绑函数。 */
+export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): () => void {
+  const thresholdPx = options.thresholdPx ?? SHEET_DRAG_THRESHOLD_PX;
+  const sheet = options.sheet;
+  let drag: DragState | null = null;
+
+  const finish = (clientY: number, at: number): void => {
+    if (drag === null) {
+      return;
+    }
+    const dy = clientY - drag.startY;
+    const durationMs = at - drag.startAt;
+    const pointerId = drag.pointerId;
+    drag = null;
+    if (pointerId !== null) {
+      tryReleasePointerCapture(handle, pointerId);
+    }
+    if (shouldClose(dy, durationMs, thresholdPx)) {
+      options.onClose();
+      return;
+    }
+    snapBack(sheet);
+  };
+
+  const onPointerDown = (event: Event): void => {
+    if (drag !== null) {
+      return;
+    }
+    const pointer = event as PointerEvent & PointerLike;
+    if (typeof pointer.button === 'number' && pointer.button !== 0) {
+      return;
+    }
+    if (typeof pointer.clientY !== 'number') {
+      return;
+    }
+    const pointerId = typeof pointer.pointerId === 'number' ? pointer.pointerId : 1;
+    drag = {
+      pointerId,
+      startY: pointer.clientY,
+      startAt: Date.now(),
+      lastY: pointer.clientY,
+    };
+    if (typeof pointer.pointerId === 'number') {
+      trySetPointerCapture(handle, pointer.pointerId);
+    }
+    applySheetOffset(sheet, 0);
+  };
+
+  const onPointerMove = (event: Event): void => {
+    if (drag === null || drag.pointerId === null) {
+      return;
+    }
+    const pointer = event as PointerEvent & PointerLike;
+    if (typeof pointer.pointerId === 'number' && pointer.pointerId !== drag.pointerId) {
+      return;
+    }
+    if (typeof pointer.clientY !== 'number') {
+      return;
+    }
+    drag.lastY = pointer.clientY;
+    applySheetOffset(sheet, pointer.clientY - drag.startY);
+  };
+
+  const onPointerUp = (event: Event): void => {
+    if (drag === null || drag.pointerId === null) {
+      return;
+    }
+    const pointer = event as PointerEvent & PointerLike;
+    if (typeof pointer.pointerId === 'number' && pointer.pointerId !== drag.pointerId) {
+      return;
+    }
+    const y = typeof pointer.clientY === 'number' ? pointer.clientY : drag.lastY;
+    finish(y, Date.now());
+  };
+
+  const onTouchStart = (event: Event): void => {
+    if (drag !== null) {
+      return;
+    }
+    const touch = firstTouch(event, false);
+    if (touch === undefined) {
+      return;
+    }
+    drag = {
+      pointerId: null,
+      startY: touch.clientY,
+      startAt: Date.now(),
+      lastY: touch.clientY,
+    };
+    applySheetOffset(sheet, 0);
+  };
+
+  const onTouchMove = (event: Event): void => {
+    if (drag === null || drag.pointerId !== null) {
+      return;
+    }
+    const touch = firstTouch(event, false);
+    if (touch === undefined) {
+      return;
+    }
+    drag.lastY = touch.clientY;
+    applySheetOffset(sheet, touch.clientY - drag.startY);
+    if (typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+  };
+
+  const onTouchEnd = (event: Event): void => {
+    if (drag === null || drag.pointerId !== null) {
+      return;
+    }
+    const touch = firstTouch(event, true);
+    const y = touch !== undefined ? touch.clientY : drag.lastY;
+    finish(y, Date.now());
+  };
+
+  handle.addEventListener('pointerdown', onPointerDown);
+  handle.addEventListener('pointermove', onPointerMove);
+  handle.addEventListener('pointerup', onPointerUp);
+  handle.addEventListener('pointercancel', onPointerUp);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+  handle.addEventListener('touchstart', onTouchStart, { passive: true });
+  handle.addEventListener('touchmove', onTouchMove, { passive: false });
+  handle.addEventListener('touchend', onTouchEnd, { passive: true });
+  handle.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  return () => {
+    if (drag !== null && drag.pointerId !== null) {
+      tryReleasePointerCapture(handle, drag.pointerId);
+    }
+    drag = null;
+    snapBack(sheet);
+    handle.removeEventListener('pointerdown', onPointerDown);
+    handle.removeEventListener('pointermove', onPointerMove);
+    handle.removeEventListener('pointerup', onPointerUp);
+    handle.removeEventListener('pointercancel', onPointerUp);
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+    handle.removeEventListener('touchstart', onTouchStart);
+    handle.removeEventListener('touchmove', onTouchMove);
+    handle.removeEventListener('touchend', onTouchEnd);
+    handle.removeEventListener('touchcancel', onTouchEnd);
+  };
+}

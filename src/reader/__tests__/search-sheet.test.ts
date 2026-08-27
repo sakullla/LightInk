@@ -18,7 +18,9 @@
  *   - `element`: the sheet root itself carries `lightink-reader-search-sheet`,
  *     `lightink-reader-chrome-panel` and `is-touch-sheet`, so the existing
  *     chrome click-guard ignores taps inside it and the touch-sheet CSS
- *     (safe-area bottom padding) applies. Hidden while closed.
+ *     (safe-area bottom padding) applies. Hidden while closed. A real handle
+ *     node (not `is-touch-sheet::after`) sits in the sheet and can receive
+ *     pointer events so drag-close can bind it.
  *   - `isOpen()` / `open(seed?)` / `close()`: `open` reveals the layer,
  *     prefills the query box with a non-empty seed (selection prefill) and
  *     focuses it; an empty/omitted seed keeps the previous query. `close`
@@ -72,6 +74,28 @@ function queryInput(sheet: { element: HTMLElement }): HTMLInputElement {
   return input!;
 }
 
+function querySheetHandle(root: HTMLElement): HTMLElement {
+  const handle = root.querySelector<HTMLElement>(
+    '.lightink-reader-sheet-handle, .lightink-reader-search-sheet-handle, .lightink-reader-chrome-sheet-handle, [data-sheet-handle]',
+  );
+  expect(handle, 'search sheet must expose a real drag handle node').not.toBeNull();
+  return handle!;
+}
+
+function expectPointerCapableHandle(handle: HTMLElement, sheetRoot: HTMLElement): void {
+  expect(handle, 'handle must be a child node, not the sheet ::after').not.toBe(sheetRoot);
+  expect(sheetRoot.contains(handle)).toBe(true);
+  expect(handle.hidden).toBe(false);
+  const inline = handle.style.pointerEvents;
+  if (inline) {
+    expect(inline).not.toBe('none');
+  }
+  const computed = getComputedStyle(handle).pointerEvents;
+  if (computed !== '' && computed !== 'auto') {
+    expect(computed).not.toBe('none');
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
@@ -87,6 +111,8 @@ describe('createSearchSheet layer', () => {
     expect(sheet.element.classList.contains('lightink-reader-chrome-panel')).toBe(true);
     expect(sheet.element.classList.contains('is-touch-sheet')).toBe(true);
     expect(sheet.element.querySelector('input')).toBeTruthy();
+    const handle = querySheetHandle(sheet.element);
+    expectPointerCapableHandle(handle, sheet.element);
   });
 
   it('open() reveals the layer, prefills the selection seed and focuses the query box', () => {

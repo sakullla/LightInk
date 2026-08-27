@@ -13,6 +13,7 @@
  */
 
 import type { MessageKey } from '../i18n/messages.js';
+import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
 import type { SearchHitView, SearchHitsState } from './annotation-sidebar.js';
 import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 
@@ -73,6 +74,13 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
   root.setAttribute('aria-modal', 'true');
   root.setAttribute('aria-label', label('title'));
 
+  const handle = document.createElement('button');
+  handle.type = 'button';
+  handle.className = 'lightink-reader-sheet-handle';
+  handle.dataset.sheetHandle = '';
+  handle.setAttribute('aria-label', label('close'));
+  handle.setAttribute('title', label('close'));
+
   const bar = document.createElement('div');
   bar.className = 'lightink-reader-search-sheet-bar';
   bar.setAttribute('role', 'search');
@@ -102,7 +110,7 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
   const list = document.createElement('ul');
   list.className = 'lightink-reader-search-sheet-list';
 
-  root.append(bar, list);
+  root.append(handle, bar, list);
 
   let lastHits: readonly SearchHitView[] = [];
   let lastState: SearchHitsState = {};
@@ -172,13 +180,33 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     }
   };
 
+  let unbindDrag: (() => void) | null = null;
+
+  const releaseDrag = (): void => {
+    unbindDrag?.();
+    unbindDrag = null;
+  };
+
   const doClose = (): boolean => {
     if (root.hidden) {
       return false;
     }
+    releaseDrag();
     root.hidden = true;
     deps.onClose?.();
     return true;
+  };
+
+  const bindDrag = (): void => {
+    if (unbindDrag !== null) {
+      return;
+    }
+    unbindDrag = bindSheetDrag(handle, {
+      sheet: root,
+      onClose: () => {
+        doClose();
+      },
+    });
   };
 
   close.addEventListener('click', () => {
@@ -213,6 +241,7 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     element: root,
     open(seed?: string): void {
       root.hidden = false;
+      bindDrag();
       if (seed !== undefined && seed.trim() !== '') {
         input.value = seed;
       }
@@ -237,6 +266,7 @@ export function createSearchSheet(deps: SearchSheetDeps): SearchSheet {
     destroy(): void {
       moreRelease?.();
       moreRelease = null;
+      releaseDrag();
       unbindQuery();
       root.remove();
     },

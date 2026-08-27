@@ -694,8 +694,15 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
     );
-    expect(css).toMatch(
-      /\.lightink-reader-chrome-panel\.is-touch-sheet::after,\s*\.lightink-reader-sidebar\.is-touch-sheet::after\s*\{/,
+    // Real handle node is the grabber; decorative ::after is not the only hit target.
+    const handleBlocks =
+      css.match(/\.lightink-reader[\w-]*sheet-handle[^{]*\{[^}]+\}/g) ?? [];
+    expect(handleBlocks.length, 'touch sheet CSS must style a real handle node').toBeGreaterThan(0);
+    for (const block of handleBlocks) {
+      expect(block).not.toMatch(/pointer-events:\s*none/);
+    }
+    expect(css).not.toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet::after,\s*\.lightink-reader-sidebar\.is-touch-sheet::after\s*\{[^}]*pointer-events:\s*none/,
     );
   });
 

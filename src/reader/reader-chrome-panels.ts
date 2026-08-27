@@ -7,6 +7,7 @@
  */
 
 import { FONT_SCALE_STEPS } from '../ui/font-scale.js';
+import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
 import type { OutlineItem } from '../outline/outline-model.js';
 import {
   READER_FONT_FAMILY_PRESETS,
@@ -611,11 +612,70 @@ export function positionReaderChromePanel(
   panel.style.setProperty('--lightink-reader-popover-arrow', `${Math.round(arrow)}px`);
 }
 
+const READER_SHEET_HANDLE_CLASS = 'lightink-reader-sheet-handle';
+const sheetDragUnbinds = new WeakMap<HTMLElement, () => void>();
+
 /** Pin an overlay to the visible reading pane so scroll mode cannot carry it away. */
 function isTouchReaderChrome(
   root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
 ): boolean {
   return root !== null && (root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary'));
+}
+
+function releaseTouchSheetDrag(overlay: HTMLElement): void {
+  const unbind = sheetDragUnbinds.get(overlay);
+  if (unbind !== undefined) {
+    unbind();
+    sheetDragUnbinds.delete(overlay);
+  }
+  overlay.querySelector<HTMLElement>(`.${READER_SHEET_HANDLE_CLASS}[data-reader-pin-handle]`)?.remove();
+  overlay.style.removeProperty('transform');
+}
+
+function closePinnedTouchSheet(sheet: HTMLElement): void {
+  sheet.style.removeProperty('transform');
+  const closer = sheet.querySelector<HTMLElement>(
+    '.lightink-reader-search-sheet-close, .lightink-reader-sidebar-close',
+  );
+  if (closer !== null) {
+    closer.click();
+    return;
+  }
+  const host =
+    (typeof sheet.closest === 'function' ? sheet.closest<HTMLElement>('.lightink-reader') : null) ??
+    sheet.ownerDocument?.querySelector<HTMLElement>('.lightink-reader') ??
+    null;
+  const surface = host?.querySelector<HTMLElement>('.lightink-reader-page') ?? host;
+  if (surface !== null) {
+    surface.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    if (sheet.hidden) {
+      return;
+    }
+  }
+  sheet.hidden = true;
+}
+
+function bindTouchSheetDrag(overlay: HTMLElement): void {
+  const existingUnbind = sheetDragUnbinds.get(overlay);
+  if (existingUnbind !== undefined) {
+    existingUnbind();
+    sheetDragUnbinds.delete(overlay);
+  }
+  let handle = overlay.querySelector<HTMLElement>(`.${READER_SHEET_HANDLE_CLASS}`);
+  if (handle === null) {
+    handle = overlay.ownerDocument.createElement('div');
+    handle.className = READER_SHEET_HANDLE_CLASS;
+    handle.dataset.readerPinHandle = '';
+    handle.setAttribute('aria-hidden', 'true');
+    overlay.insertBefore(handle, overlay.firstChild);
+  }
+  const unbind = bindSheetDrag(handle, {
+    sheet: overlay,
+    onClose: () => {
+      closePinnedTouchSheet(overlay);
+    },
+  });
+  sheetDragUnbinds.set(overlay, unbind);
 }
 
 export function pinFixedOverlay(
@@ -642,8 +702,10 @@ export function pinFixedOverlay(
     overlay.style.width = 'auto';
     overlay.style.height = 'auto';
     overlay.style.zIndex = '40';
+    bindTouchSheetDrag(overlay);
     return;
   }
+  releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
   const box = pane.getBoundingClientRect();
   const titlebar = titlebarOffsetPx();
@@ -671,6 +733,7 @@ function titlebarOffsetPx(): number {
 }
 
 export function unpinFixedOverlay(overlay: HTMLElement): void {
+  releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
   overlay.style.removeProperty('position');
   overlay.style.removeProperty('top');
