@@ -1,10 +1,20 @@
-/** Structured FictionBook 2 parser with bounded embedded-image support. */
+/**
+ * Structured FictionBook 2 parser with bounded embedded-image support.
+ * Native <section> chapters win; a body with no sections is split via
+ * splitPlainTextChapters. More than 8 native sections lazy-sanitize html.
+ */
 
 import { bytesToBase64 } from '../../asset/asset-service.js';
 import { sanitizeHtml } from '../sanitize.js';
 import { READER_LIMITS } from '../reader-limits.js';
 import { decodeReaderText } from './text-encoding.js';
-import { ParseError, ReaderLimitError, type ReaderContent } from './types.js';
+import { EAGER_CHAPTER_COUNT, splitPlainTextChapters } from './chapter-headings.js';
+import {
+  ParseError,
+  ReaderLimitError,
+  type ReaderChapter,
+  type ReaderContent,
+} from './types.js';
 
 const HTML_TAGS = new Set([
   'a',
@@ -222,6 +232,93 @@ function chapterHtml(section: Element, resources: Fb2Resources): string {
   return sanitizeHtml(container.innerHTML);
 }
 
+const PLAIN_TEXT_BREAKS = new Set([
+  'cite',
+  'empty-line',
+  'epigraph',
+  'p',
+  'poem',
+  'section',
+  'stanza',
+  'subtitle',
+  'text-author',
+  'title',
+  'v',
+]);
+
+/** Line-oriented plain text so chapter-headings can see 第0001章 on its own line. */
+function elementPlainText(root: Element): string {
+  const chunks: string[] = [];
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      chunks.push(node.nodeValue ?? '');
+      return;
+    }
+    if (!(node instanceof Element)) {
+      return;
+    }
+    const name = node.localName.toLowerCase();
+    if (name === 'empty-line') {
+      chunks.push('\n');
+      return;
+    }
+    for (const child of node.childNodes) {
+      visit(child);
+    }
+    if (PLAIN_TEXT_BREAKS.has(name)) {
+      chunks.push('\n');
+    }
+  };
+  visit(root);
+  return chunks.join('').replace(/\r\n?/g, '\n');
+}
+
+function sectionTitle(section: Element, index: number, bookTitle: string): string {
+  return (
+    Array.from(section.children)
+      .find((child) => child.localName.toLowerCase() === 'title')
+      ?.textContent?.replace(/\s+/g, ' ')
+      .trim() ||
+    (index === 0 ? bookTitle : '') ||
+    `Section ${index + 1}`
+  );
+}
+
+function materializeNativeChapters(
+  sections: readonly Element[],
+  bookTitle: string,
+  resources: Fb2Resources,
+): ReaderChapter[] {
+  const lazy = sections.length > 8;
+  return sections.map((section, index) => {
+    const title = sectionTitle(section, index, bookTitle);
+    const eager = !lazy || index < EAGER_CHAPTER_COUNT;
+    const chapter: ReaderChapter = {
+      title,
+      html: eager ? chapterHtml(section, resources) : '',
+    };
+    if (eager) {
+      return chapter;
+    }
+    let loaded = false;
+    let inflight: Promise<void> | null = null;
+    chapter.load = (): Promise<void> => {
+      if (loaded) {
+        return Promise.resolve();
+      }
+      if (inflight !== null) {
+        return inflight;
+      }
+      inflight = Promise.resolve().then(() => {
+        chapter.html = chapterHtml(section, resources);
+        loaded = true;
+      });
+      return inflight;
+    };
+    return chapter;
+  });
+}
+
 /** Parse an FB2 document into chapters and lazily owned embedded-image URLs. */
 export function parseFb2(bytes: Uint8Array): ReaderContent {
   // 无声明编码：走共享嗅探（UTF-8 优先、GBK 回退），GBK 打包的 FB2 不再乱码。
@@ -241,17 +338,10 @@ export function parseFb2(bytes: Uint8Array): ReaderContent {
     const sections = Array.from(mainBody.children).filter(
       (child) => child.localName.toLowerCase() === 'section',
     );
-    const chapterSources = sections.length === 0 ? [mainBody] : sections;
-    const chapters = chapterSources.map((section, index) => {
-      const title =
-        Array.from(section.children)
-          .find((child) => child.localName.toLowerCase() === 'title')
-          ?.textContent?.replace(/\s+/g, ' ')
-          .trim() ||
-        (index === 0 ? bookTitle : '') ||
-        `Section ${index + 1}`;
-      return { title, html: chapterHtml(section, resources) };
-    });
+    const chapters =
+      sections.length === 0
+        ? splitPlainTextChapters(elementPlainText(mainBody)).chapters
+        : materializeNativeChapters(sections, bookTitle, resources);
     returnedContent = true;
     return {
       chapters,

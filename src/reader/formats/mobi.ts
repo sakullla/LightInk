@@ -4,8 +4,10 @@
  * 解包 PalmDB（PDB 头 + 记录索引），读 record 0 的 PalmDOC 头得到压缩方式、正文
  * 总长、文本记录数与加密标志；DRM（encryption≠0）立即报错。按记录拼装正文字节，
  * PalmDOC LZ77（compression==2）逐记录解压；无压缩（==1）原样。正文为 HTML，
- * 按 <mbp:pagebreak/> 切章并消毒。仅支持无 DRM 的经典 PalmDOC MOBI；KF8/MOBI8
- * 复杂版式与 HUFF/CDIC 压缩不在本任务范围（遇 HUFF 报错）。
+ * 按 <mbp:pagebreak/> 切章；章数 ≥ 4 不重切，只懒 sanitizeHtml（>8 章仅前 2
+ * 急切）。无 pagebreak 时把解出文本折行后交给 splitPlainTextChapters。仅支持
+ * 无 DRM 的经典 PalmDOC MOBI；KF8/MOBI8 复杂版式与 HUFF/CDIC 压缩不在本任务
+ * 范围（遇 HUFF 报错）。
  *
  * 纯二进制 + 字符串实现，node 可测（测试合成最小 PalmDOC MOBI）。
  *
@@ -14,10 +16,12 @@
  */
 
 import { sanitizeHtml } from '../sanitize.js';
+import { EAGER_CHAPTER_COUNT, splitPlainTextChapters } from './chapter-headings.js';
 import { decodeReaderText } from './text-encoding.js';
 import {
   ParseError,
   ReaderCapabilityError,
+  type ReaderChapter,
   type ReaderContent,
 } from './types.js';
 
@@ -68,6 +72,100 @@ function palmDocDecompress(input: Uint8Array): Uint8Array {
 function firstHeadingOrEmpty(html: string): string {
   const m = html.match(/<h[12]\b[^>]*>([\s\S]*?)<\/h[12]>/i);
   return m && m[1] !== undefined ? m[1].replace(/<[^>]+>/g, '').trim() : '';
+}
+
+/** 块级标签折成换行，供 splitPlainTextChapters 按行识别标题。不复制标题正则。 */
+function foldHtmlToPlainText(html: string): string {
+  return decodeBasicEntities(
+    html
+      .replace(/\r\n?/g, '\n')
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<mbp:pagebreak\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote|section|title|pre)\b[^>]*>/gi, '\n')
+      .replace(/<(?:p|div|h[1-6]|li|blockquote|section|title|pre)\b[^>]*>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  );
+}
+
+function decodeBasicEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:x[0-9a-f]+|\d+);/gi, (entity) => {
+      const hex = /^&#x/i.test(entity);
+      const value = Number.parseInt(entity.slice(hex ? 3 : 2, -1), hex ? 16 : 10);
+      return Number.isFinite(value) && value > 0 && value <= 0x10ffff
+        ? String.fromCodePoint(value)
+        : entity;
+    })
+    .replace(/&amp;/gi, '&');
+}
+
+function pieceHasBody(piece: string): boolean {
+  return piece.replace(/<[^>]+>/g, '').trim().length > 0;
+}
+
+function lazySanitizeChapters(
+  pieces: readonly { title: string; raw: string }[],
+): ReaderChapter[] {
+  const lazy = pieces.length > 8;
+  return pieces.map((piece, index) => {
+    const eager = !lazy || index < EAGER_CHAPTER_COUNT;
+    const chapter: ReaderChapter = {
+      title: piece.title,
+      html: eager ? sanitizeHtml(piece.raw) : '',
+    };
+    if (eager) {
+      return chapter;
+    }
+    let loaded = false;
+    let inflight: Promise<void> | null = null;
+    chapter.load = (): Promise<void> => {
+      if (loaded) {
+        return Promise.resolve();
+      }
+      if (inflight !== null) {
+        return inflight;
+      }
+      inflight = Promise.resolve().then(() => {
+        chapter.html = sanitizeHtml(piece.raw);
+        loaded = true;
+      });
+      return inflight;
+    };
+    return chapter;
+  });
+}
+
+function chaptersFromHtml(html: string): ReaderChapter[] {
+  const pieces = html.split(/<mbp:pagebreak\s*\/?>/i);
+  const native: { title: string; raw: string }[] = [];
+  pieces.forEach((piece, idx) => {
+    if (!pieceHasBody(piece)) {
+      return;
+    }
+    const title = idx === 0 ? firstHeadingOrEmpty(piece) : `Section ${idx + 1}`;
+    native.push({ title, raw: piece });
+  });
+
+  // ≥4 不重切；2–3 章同样保持原生 pagebreak，避免有结构的书被标题规则再切。
+  if (native.length > 1) {
+    return lazySanitizeChapters(native);
+  }
+
+  const split = splitPlainTextChapters(foldHtmlToPlainText(html));
+  if (split.chapters.length > 1) {
+    return split.chapters;
+  }
+
+  const body = sanitizeHtml(html);
+  if (body.trim().length === 0) {
+    return [];
+  }
+  return [{ title: firstHeadingOrEmpty(html), html: body }];
 }
 
 /**
@@ -153,18 +251,7 @@ export function parseMobi(bytes: Uint8Array): ReaderContent {
   // UTF-8 尽力显示。
   const html = decodeReaderText(full, codepage === 65001 ? 'utf-8' : 'windows-1252');
 
-  // 按 <mbp:pagebreak/>（MOBI 分页符）切章；无则整篇一章。
-  const pieces = html.split(/<mbp:pagebreak\s*\/?>/i);
-  const chapters: ReaderContent['chapters'] = [];
-  pieces.forEach((piece, idx) => {
-    const body = sanitizeHtml(piece);
-    if (body.trim().length === 0) {
-      return;
-    }
-    const title = idx === 0 ? firstHeadingOrEmpty(piece) : `Section ${idx + 1}`;
-    chapters.push({ title, html: body });
-  });
-
+  const chapters = chaptersFromHtml(html);
   if (chapters.length === 0) {
     throw new ParseError('MOBI 未提取到正文内容');
   }

@@ -9,6 +9,9 @@
  * T8：包内图片不再 parse 期物化——章节 HTML 中的 img 保留包内规范路径作占位
  * src，由章节 resolveResources/releaseResources 钩子按渲染窗口懒解压并配对
  * revokeObjectURL；archive 随 ReaderContent.dispose 关闭。
+ *
+ * spine ≥ 4：保持原生项懒装载，不按标题重切。spine < 4 的一文件转换书抽出
+ * 正文行交给 `splitPlainTextChapters`；包图仍走现有 resolveResources。
  */
 
 import { bytesToBase64 } from '../../asset/asset-service.js';
@@ -20,9 +23,11 @@ import { isRandomAccessSource } from '../sources/types.js';
 import { decodeReaderText } from './text-encoding.js';
 import { isUsableEpubChapterTitle } from '../chapter-title.js';
 import { READER_LIMITS } from '../reader-limits.js';
+import { splitPlainTextChapters } from './chapter-headings.js';
 import {
   ParseError,
   ReaderLimitError,
+  type ReaderChapter,
   type ReaderContent,
 } from './types.js';
 
@@ -34,6 +39,42 @@ interface ManifestItem {
 
 const EPUB_EAGER_CHAPTER_LIMIT = 64;
 const EPUB_INITIAL_CHAPTERS = 2;
+const MIN_NATIVE_SPINE_CHAPTERS = 4;
+
+const BLOCK_LINE_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'dd',
+  'div',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+]);
 
 function isRemoteArchiveInput(source: ArchiveInput): boolean {
   return isRandomAccessSource(source) && source.access === 'remote';
@@ -50,6 +91,73 @@ function eagerChapterCount(source: ArchiveInput, chapterCount: number): number {
 
 function firstBodyHeadingText(body: HTMLElement): string {
   return body.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+/** 块标签折成独立行，只喂标题规则；标记本身不当标题。 */
+function elementToPlainText(root: Element): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '');
+      return;
+    }
+    if (!(node instanceof Element)) {
+      return;
+    }
+    const tag = node.localName;
+    if (tag === 'br') {
+      parts.push('\n');
+      return;
+    }
+    if (tag === 'script' || tag === 'style' || tag === 'svg') {
+      return;
+    }
+    const block = BLOCK_LINE_TAGS.has(tag);
+    if (block) {
+      parts.push('\n');
+    }
+    for (const child of node.childNodes) {
+      walk(child);
+    }
+    if (block) {
+      parts.push('\n');
+    }
+  };
+  walk(root);
+  return parts
+    .join('')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function attachPackagedImages(
+  splitChapters: readonly ReaderChapter[],
+  markup: string,
+  resolveResources: (doc: Document) => Promise<void>,
+  releaseResources: (doc: Document) => void,
+): void {
+  const target = splitChapters[0];
+  if (target === undefined || markup === '') {
+    return;
+  }
+  const inject = (): void => {
+    if (!target.html.includes(markup)) {
+      target.html += markup;
+    }
+  };
+  if (target.html !== '' || target.load === undefined) {
+    inject();
+  } else {
+    const originalLoad = target.load;
+    target.load = async () => {
+      await originalLoad();
+      inject();
+    };
+  }
+  target.resolveResources = resolveResources;
+  target.releaseResources = releaseResources;
 }
 
 function stripLeadingJunkTitle(body: HTMLElement, junk: string): void {
@@ -401,7 +509,7 @@ export async function parseEpub(
 
     // 4. Materialize only the first chapters for large books. Remaining spine
     // entries retain their compressed archive entry until the renderer asks.
-    const chapters: ReaderContent['chapters'] = spineItems
+    let chapters: ReaderContent['chapters'] = spineItems
       .map(({ reference }, idx) => ({ reference, idx }))
       .filter(({ reference }) => archive.file(reference.path) !== null)
       .map(({ reference, idx }) => {
@@ -494,9 +602,75 @@ export async function parseEpub(
       throw new ParseError('EPUB 未找到可读章节内容');
     }
     const remote = isRemoteArchiveInput(source);
-    const eagerCount = eagerChapterCount(source, chapters.length);
-    for (let index = 0; index < eagerCount; index += 1) {
-      await chapters[index]!.load?.();
+    if (chapters.length < MIN_NATIVE_SPINE_CHAPTERS) {
+      const texts: string[] = [];
+      const imageMarkup: string[] = [];
+      for (const { reference } of spineItems) {
+        const file = archive.file(reference.path);
+        if (file === null) {
+          continue;
+        }
+        const xhtml = decodeReaderText(await file.readBytes(signal));
+        throwIfReaderLoadCancelled(signal);
+        const document = new DOMParser().parseFromString(xhtml, 'text/html');
+        const body = document.body;
+        const text = elementToPlainText(body);
+        if (text !== '') {
+          texts.push(text);
+        }
+        for (const image of body.querySelectorAll<HTMLImageElement>('img[src]')) {
+          const path = packagedImagePath(reference.path, image.getAttribute('src') ?? '');
+          if (path === null) {
+            continue;
+          }
+          image.setAttribute('src', path);
+          imageMarkup.push(image.outerHTML);
+        }
+        for (const svg of [...body.querySelectorAll('svg')]) {
+          for (const image of svg.querySelectorAll('image')) {
+            const path = packagedImagePath(reference.path, svgImageHref(image));
+            if (path === null) {
+              continue;
+            }
+            const img = document.createElement('img');
+            img.setAttribute('src', path);
+            const width = image.getAttribute('width');
+            const height = image.getAttribute('height');
+            if (width !== null && width !== '' && !width.includes('%')) {
+              img.setAttribute('width', width);
+            }
+            if (height !== null && height !== '' && !height.includes('%')) {
+              img.setAttribute('height', height);
+            }
+            const alt = image.getAttribute('alt') ?? '';
+            if (alt !== '') {
+              img.alt = alt;
+            }
+            imageMarkup.push(img.outerHTML);
+          }
+        }
+      }
+      const split = splitPlainTextChapters(texts.join('\n\n'));
+      if (split.chapters.length > chapters.length) {
+        if (imageMarkup.length > 0) {
+          attachPackagedImages(
+            split.chapters,
+            imageMarkup.join(''),
+            materializeImages,
+            releaseImages,
+          );
+        }
+        chapters = split.chapters;
+      } else {
+        for (const chapter of chapters) {
+          await chapter.load?.();
+        }
+      }
+    } else {
+      const eagerCount = eagerChapterCount(source, chapters.length);
+      for (let index = 0; index < eagerCount; index += 1) {
+        await chapters[index]!.load?.();
+      }
     }
 
     const stylesheetParts: string[] = [];

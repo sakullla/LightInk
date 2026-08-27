@@ -535,6 +535,110 @@ describe('parseFb2', () => {
     expect(content.chapters[0]!.title).toContain('�');
     expect(content.chapters[0]!.html).toContain('<p>ok</p>');
   });
+
+  it('无 section 的 FB2 按行首第0001章切出多章', async () => {
+    const body = [
+      '<p>第一卷</p>',
+      '<empty-line/>',
+      '<p>卷首语。</p>',
+      '<empty-line/>',
+      '<p>第0001章 宋青书的前世今生</p>',
+      '<empty-line/>',
+      '<p>青书醒来。</p>',
+      '<empty-line/>',
+      '<p>第0002章 下山</p>',
+      '<empty-line/>',
+      '<p>他走了。</p>',
+      '<empty-line/>',
+      '<p>第0003章 江湖</p>',
+      '<empty-line/>',
+      '<p>风起。</p>',
+      '<empty-line/>',
+      '<p>第0004章 故人</p>',
+      '<empty-line/>',
+      '<p>重逢。</p>',
+    ].join('\n');
+    const content = parseFb2(
+      enc(
+        `<?xml version="1.0"?>
+<FictionBook>
+<description><title-info><book-title>无节书</book-title></title-info></description>
+<body>
+${body}
+</body>
+</FictionBook>`,
+      ),
+    );
+    const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        '第一卷',
+        '第0001章 宋青书的前世今生',
+        '第0002章 下山',
+        '第0003章 江湖',
+        '第0004章 故人',
+      ]),
+    );
+    expect(content.chapters.filter((chapter) => chapter.title.length > 0).length).toBeGreaterThan(1);
+
+    const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
+    expect(first).toBeDefined();
+    await first!.load?.();
+    expect(first!.html).toContain('青书醒来');
+  });
+
+  it('有 section 的 FB2 仍按 section 成章，不按正文标题再切', () => {
+    const content = parseFb2(
+      enc(`<?xml version="1.0"?>
+<FictionBook>
+<body>
+<section><title><p>上篇</p></title>
+<p>第0001章 宋青书的前世今生</p><p>青书醒来。</p>
+<p>第0002章 下山</p><p>他走了。</p>
+</section>
+<section><title><p>下篇</p></title>
+<p>第0003章 江湖</p><p>风起。</p>
+<p>第0004章 故人</p><p>重逢。</p>
+</section>
+</body>
+</FictionBook>`),
+    );
+    expect(content.chapters).toHaveLength(2);
+    expect(content.chapters[0]!.title).toBe('上篇');
+    expect(content.chapters[1]!.title).toBe('下篇');
+  });
+
+  it('多个 section 仍按 section 成章，未急切章 html 为空直到 load', async () => {
+    const sections = Array.from({ length: 9 }, (_, index) => {
+      const number = index + 1;
+      return `<section><title><p>第${number}章</p></title><p>正文${number}</p></section>`;
+    }).join('');
+    const content = parseFb2(
+      enc(`<?xml version="1.0"?>
+<FictionBook>
+<body>${sections}</body>
+</FictionBook>`),
+    );
+    expect(content.chapters).toHaveLength(9);
+    expect(content.chapters.map((chapter) => chapter.title)).toEqual(
+      Array.from({ length: 9 }, (_, index) => `第${index + 1}章`),
+    );
+    expect(content.chapters[0]!.html).not.toBe('');
+    expect(content.chapters[1]!.html).not.toBe('');
+    expect(content.chapters[0]!.html).toContain('正文1');
+    expect(content.chapters[1]!.html).toContain('正文2');
+    for (let index = 2; index < content.chapters.length; index += 1) {
+      expect(content.chapters[index]!.html).toBe('');
+    }
+
+    const late = content.chapters[8]!;
+    await late.load?.();
+    expect(late.html).not.toBe('');
+    expect(late.html).toContain('正文9');
+    const once = late.html;
+    await late.load?.();
+    expect(late.html).toBe(once);
+  });
 });
 
 describe('parseEpub', () => {
@@ -1198,6 +1302,60 @@ describe('parseMobi', () => {
     expect(content.chapters).toHaveLength(2);
     expect(content.chapters[0]!.html).toContain('<p>a</p>');
     expect(content.chapters[1]!.html).toContain('<p>b</p>');
+  });
+
+  it('有 pagebreak 时即使正文含第0001章也不再按标题切', () => {
+    const html =
+      '<h1>A</h1><p>第0001章 宋青书的前世今生</p><p>a</p>' +
+      '<mbp:pagebreak/>' +
+      '<h1>B</h1><p>第0002章 下山</p><p>b</p>';
+    const content = parseMobi(buildMobi(html));
+    expect(content.chapters).toHaveLength(2);
+    expect(content.chapters[0]!.html).toContain('<p>a</p>');
+    expect(content.chapters[1]!.html).toContain('<p>b</p>');
+    expect(content.chapters[0]!.html).toContain('第0001章 宋青书的前世今生');
+    expect(content.chapters[1]!.html).toContain('第0002章 下山');
+  });
+
+  it('无 pagebreak 的 MOBI 按行首第0001章切出多章', async () => {
+    const html = [
+      '<p>第一卷</p>',
+      '<p>卷首语。</p>',
+      '<p>第0001章 宋青书的前世今生</p>',
+      '<p>青书醒来。</p>',
+      '<p>第0002章 下山</p>',
+      '<p>他走了。</p>',
+      '<p>第0003章 江湖</p>',
+      '<p>风起。</p>',
+      '<p>第0004章 故人</p>',
+      '<p>重逢。</p>',
+    ].join('\n');
+    const content = parseMobi(buildMobi(html));
+    const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        '第一卷',
+        '第0001章 宋青书的前世今生',
+        '第0002章 下山',
+        '第0003章 江湖',
+        '第0004章 故人',
+      ]),
+    );
+    expect(content.chapters.length).toBeGreaterThan(1);
+
+    const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
+    expect(first).toBeDefined();
+    await first!.load?.();
+    expect(first!.html).toContain('青书醒来');
+  });
+
+  it('无 pagebreak 的长 MOBI 回退按篇幅切章且 load 后正文完整', async () => {
+    const block = '甲'.repeat(4000);
+    const content = parseMobi(buildMobi([block, block, block, block].join('\n\n')));
+    expect(content.chapters.length).toBeGreaterThan(1);
+    expect(content.chapters.filter((chapter) => /第.+[章节回]/.test(chapter.title)).length).toBeLessThan(4);
+    const html = await loadedHtml(content);
+    expect((html.match(/甲/g) ?? []).length).toBe(16000);
   });
 
   it('DRM 文件抛 ParseError', () => {
