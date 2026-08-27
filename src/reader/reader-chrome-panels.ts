@@ -645,14 +645,20 @@ function closePinnedTouchSheet(sheet: HTMLElement): void {
     (typeof sheet.closest === 'function' ? sheet.closest<HTMLElement>('.lightink-reader') : null) ??
     sheet.ownerDocument?.querySelector<HTMLElement>('.lightink-reader') ??
     null;
-  const surface = host?.querySelector<HTMLElement>('.lightink-reader-page') ?? host;
-  if (surface !== null) {
-    surface.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    if (sheet.hidden) {
-      return;
-    }
+  if (host === null) {
+    sheet.hidden = true;
+    return;
   }
-  sheet.hidden = true;
+  // Host click — never `.lightink-reader-page` (comic tap at 0,0 can advancePage).
+  host.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  if (sheet.hidden) {
+    return;
+  }
+  // Comic hosts swallow surface clicks; Escape is the same dismissOverlay owner.
+  host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  if (!sheet.hidden) {
+    sheet.hidden = true;
+  }
 }
 
 function bindTouchSheetDrag(overlay: HTMLElement): void {

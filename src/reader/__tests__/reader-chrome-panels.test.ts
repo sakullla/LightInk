@@ -851,6 +851,8 @@ describe('reader chrome panels', () => {
     host.className = 'lightink-reader';
     const page = document.createElement('div');
     page.className = 'lightink-reader-page';
+    const onPageClick = vi.fn();
+    page.addEventListener('click', onPageClick);
     host.append(page);
     document.body.append(host);
     stubRect(host, { width: 390, height: 700 });
@@ -879,8 +881,6 @@ describe('reader chrome panels', () => {
     );
     host.append(catalog);
     positionReaderChromePanel(catalog, host, document.createElement('button'));
-    dragHandlePastThreshold(querySheetHandle(catalog));
-    expect(catalog.hidden).toBe(true);
 
     const typography = document.createElement('div');
     typography.className = 'lightink-reader-chrome-panel';
@@ -895,9 +895,47 @@ describe('reader chrome panels', () => {
     );
     host.append(typography);
     positionReaderChromePanel(typography, host, document.createElement('button'));
+
+    let chromePanel: 'toc' | 'typography' | null = 'toc';
+    const closeChromePanel = vi.fn((): boolean => {
+      if (chromePanel === null) {
+        return false;
+      }
+      if (chromePanel === 'toc') {
+        catalog.hidden = true;
+      } else {
+        typography.hidden = true;
+      }
+      chromePanel = null;
+      return true;
+    });
+    const chrome = createReaderChrome(host, {
+      touchMode: true,
+      returnToShelf: vi.fn(),
+      openOutline: vi.fn(),
+      openTypography: vi.fn(),
+      openSearch: vi.fn(),
+      toggleSidebar: vi.fn(),
+      isOverlayOpen: () => chromePanel !== null,
+      dismissOverlay: () => closeChromePanel(),
+    });
+    chrome.reveal();
+
+    dragHandlePastThreshold(querySheetHandle(catalog));
+    expect(closeChromePanel).toHaveBeenCalledTimes(1);
+    expect(catalog.hidden).toBe(true);
+    expect(chromePanel).toBeNull();
+    expect(onPageClick).not.toHaveBeenCalled();
+
+    chromePanel = 'typography';
+    host.dataset.comicReader = 'true';
     dragHandlePastThreshold(querySheetHandle(typography));
+    expect(closeChromePanel).toHaveBeenCalledTimes(2);
     expect(typography.hidden).toBe(true);
+    expect(chromePanel).toBeNull();
+    expect(onPageClick).not.toHaveBeenCalled();
 
     annotation.destroy();
+    chrome.destroy();
   });
 });
