@@ -1445,7 +1445,7 @@ export function createLibraryView(
   root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
   let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
-  let shelfFilterOpen = true;
+  let shelfFilterOpen = false;
   let selectedCustomGroupId: string | null = null;
   let groups: LibraryGroup[] = [];
   let memberships: LibraryGroupMembership[] = [];
@@ -2057,7 +2057,6 @@ export function createLibraryView(
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       if (isMobileLibraryChrome()) {
-        shelfFilterOpen = true;
         syncMobileGroupsChrome();
         content.replaceChildren(shelfToolbar, continueHost, status, itemList);
       } else {
@@ -2514,6 +2513,7 @@ export function createLibraryView(
     selectedGroup = group;
     selectedCustomGroupId = null;
     selectedSmartGroupId = null;
+    shelfFilterOpen = false;
     closeGroupsSheet();
     void activateShelf();
   }

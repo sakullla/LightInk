@@ -4733,6 +4733,48 @@ describe('LibraryView mobile shelf', () => {
     expect(labels).not.toContain('文字…');
   }
 
+  function expectShelfFilterCollapsed(host: ParentNode): void {
+    const entry = shelfFilterEntry(host);
+    expect(isMountedChrome(entry)).toBe(true);
+    expect(entry.getAttribute('aria-expanded')).toBe('false');
+    expect(shelfFilterButtons(host)).toHaveLength(0);
+    const panel = libraryRoot(host).querySelector<HTMLElement>(
+      '[data-library-shelf-filters], .lightink-library-shelf-filter-menu',
+    );
+    expect(panel === null || !isMountedChrome(panel)).toBe(true);
+  }
+
+  function chromeMinHeight(el: HTMLElement): number {
+    const inline = Number.parseInt(el.style.minHeight, 10);
+    return Number.isFinite(inline) && inline > 0 ? inline : 0;
+  }
+
+  function firstScreenSearchFilterChromeHeight(host: ParentNode): number {
+    const search = libraryRoot(host).querySelector<HTMLElement>('.lightink-library-search');
+    const entry = shelfFilterEntry(host);
+    let height = 0;
+    if (isMountedChrome(search)) height += chromeMinHeight(search) || 40;
+    if (isMountedChrome(entry)) height += chromeMinHeight(entry) || 48;
+    for (const option of shelfFilterButtons(host)) {
+      height += chromeMinHeight(option) || 48;
+    }
+    return height;
+  }
+
+  function coverWallFirstScreenHeight(host: ParentNode): number {
+    const wall = host.querySelector<HTMLElement>('.lightink-library-cover-wall');
+    if (!(wall instanceof HTMLElement) || !isShown(wall)) return 0;
+    const cards = wall.querySelectorAll('.lightink-library-item');
+    const rows = Math.max(1, Math.ceil(cards.length / 2));
+    return rows * 160;
+  }
+
+  function expectCoverWallTallerThanChrome(host: ParentNode): void {
+    expect(coverWallFirstScreenHeight(host)).toBeGreaterThan(
+      firstScreenSearchFilterChromeHeight(host),
+    );
+  }
+
   function expectNoNowrapChipRow(host: ParentNode): void {
     const chips = libraryRoot(host).querySelector<HTMLElement>(
       '.lightink-library-content .lightink-library-shelf-chips',
@@ -4992,6 +5034,8 @@ describe('LibraryView mobile shelf', () => {
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expectNoNowrapChipRow(host);
     expect(isMountedChrome(shelfFilterEntry(host))).toBe(true);
+    expectShelfFilterCollapsed(host);
+    expectCoverWallTallerThanChrome(host);
     const filterButtons = await openShelfFilters(host);
     expect(filterButtons.map((button) => button.dataset.shelfGroup)).toEqual([
       'all',
@@ -5011,6 +5055,8 @@ describe('LibraryView mobile shelf', () => {
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(currentShelfFilters(host)).toEqual(['in-progress']);
+    expectShelfFilterCollapsed(host);
+    expectCoverWallTallerThanChrome(host);
 
     tabButton(host, 'manage').click();
     await waitForShown(
@@ -5051,6 +5097,8 @@ describe('LibraryView mobile shelf', () => {
     expectNoNowrapChipRow(host);
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(isMountedChrome(shelfFilterEntry(host))).toBe(true);
+    expectShelfFilterCollapsed(host);
+    expectCoverWallTallerThanChrome(host);
 
     const bars = host.querySelectorAll('.lightink-library-continue');
     expect(bars.length).toBeLessThanOrEqual(1);
