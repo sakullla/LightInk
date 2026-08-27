@@ -197,6 +197,40 @@ describe('createReaderView 骨架', () => {
     expect(asFake(host).children).toHaveLength(0);
   });
 
+  it('ReaderInstance 门面成员保持（session 抽层不改对外契约）', async () => {
+    // session-load 管线只重组内部加载编排；main.ts/tab-manager 依赖的
+    // ReaderInstance 表面（成员种类）冻结，缺一即视为接线破坏。
+    const host = asHost();
+    const view = createReaderView(host);
+    const instance = view as unknown as Record<string, unknown>;
+    const members = [
+      'load',
+      'destroy',
+      'addBookmark',
+      'addNote',
+      'toggleSidebar',
+      'setTabActive',
+      'isSidebarVisible',
+      'openSearch',
+      'refreshViewport',
+      'refreshPreferences',
+      'restoreReadingProgress',
+      'advanceReading',
+      'adjustDisplayScale',
+      'getOutline',
+      'jumpToOutlineItem',
+      'isAnnotationEnabled',
+      'getExportHtml',
+      'subscribeState',
+    ];
+    for (const member of members) {
+      expect(typeof instance[member], `facade member ${member}`).toBe('function');
+    }
+    expect(typeof (view.state as { phase: unknown }).phase).toBe('string');
+    expect(typeof view.subscribeState(() => undefined)).toBe('function');
+    await view.destroy();
+  });
+
   it('多实例独立 root，销毁互不干扰', async () => {
     const host = asHost();
     const a = createReaderView(host);

@@ -1100,6 +1100,119 @@ describe('Reader load lifecycle', () => {
     expect(root.getAttribute('aria-busy')).toBe('false');
   });
 
+  it('lets the newest paged load win when renderPdfInto resolves out of order', async () => {
+    // 失败面同口径（paged adapter）：乱序取代丢弃过期离屏渲染结果，不画、不报错。
+    const pendingRenders: Array<Deferred<ReturnType<typeof fakePdfHandle>>> = [];
+    pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
+      const slot = document.createElement('div');
+      slot.className = 'lightink-reader-page-slot';
+      slot.dataset.pageIndex = '0';
+      slot.textContent = `render-${pendingRenders.length}`;
+      stagedHost.appendChild(slot);
+      const pending = deferred<ReturnType<typeof fakePdfHandle>>();
+      pendingRenders.push(pending);
+      return pending.promise;
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([1, 2, 3]),
+    });
+
+    // A 先进入离屏渲染（过了取源取消检查），B 再开——B 起点即取代 A；
+    // 两个门都等到各自渲染真正开始后再手动放行，才能构造乱序完成。
+    const loadA = view.load('a.pdf');
+    await vi.waitFor(() => {
+      expect(pendingRenders).toHaveLength(1);
+    });
+    const loadB = view.load('b.pdf');
+    await vi.waitFor(() => {
+      expect(pendingRenders).toHaveLength(2);
+    });
+    const handleA = fakePdfHandle(1, 5);
+    const handleB = fakePdfHandle(2, 9);
+
+    pendingRenders[1]!.resolve(handleB);
+    await loadB;
+    expect(host.querySelector('.lightink-reader-page-slot')?.textContent).toBe('render-1');
+    expect(view.state).toMatchObject({
+      phase: 'ready',
+      current: 2,
+      total: 9,
+      locationKind: 'page',
+    });
+
+    pendingRenders[0]!.resolve(handleA);
+    await loadA;
+    expect(handleA.destroy).toHaveBeenCalledTimes(1);
+    expect(handleB.destroy).not.toHaveBeenCalled();
+    expect(host.querySelector('.lightink-reader-page-slot')?.textContent).toBe('render-1');
+    await view.destroy();
+  });
+
+  it('aborts pending paged work and prevents commits after destroy', async () => {
+    // 失败面同口径（paged adapter）：destroy 中止离屏渲染，迟到的结果经
+    // discard 释放、不换入视图。
+    const renderStarted = deferred<void>();
+    const pendingRender = deferred<ReturnType<typeof fakePdfHandle>>();
+    const handle = fakePdfHandle();
+    pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
+      const slot = document.createElement('div');
+      slot.className = 'lightink-reader-page-slot';
+      stagedHost.appendChild(slot);
+      renderStarted.resolve();
+      return pendingRender.promise;
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([1, 2, 3]),
+    });
+
+    const load = view.load('book.pdf');
+    await renderStarted.promise;
+    await view.destroy();
+    expect(host.children).toHaveLength(0);
+
+    pendingRender.resolve(handle);
+    await load;
+    expect(handle.destroy).toHaveBeenCalledTimes(1);
+    expect(host.children).toHaveLength(0);
+  });
+
+  it('exposes caller cancellation of a paged open without treating it as a load failure', async () => {
+    // 失败面同口径（paged adapter）：调用方取消不作失败提示；取消发生在
+    // 离屏渲染期间时，staged 句柄经 discard 恰一次释放、不换入视图。
+    const renderStarted = deferred<void>();
+    const pendingRender = deferred<ReturnType<typeof fakePdfHandle>>();
+    const handle = fakePdfHandle();
+    pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
+      const slot = document.createElement('div');
+      slot.className = 'lightink-reader-page-slot';
+      stagedHost.appendChild(slot);
+      renderStarted.resolve();
+      return pendingRender.promise;
+    });
+    const host = document.createElement('div');
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([1, 2, 3]),
+    });
+    const controller = new AbortController();
+
+    const load = view.load('book.pdf', { signal: controller.signal });
+    await renderStarted.promise;
+    controller.abort();
+    pendingRender.resolve(handle);
+    await expect(load).resolves.toBeUndefined();
+
+    const root = host.querySelector<HTMLElement>('.lightink-reader')!;
+    expect(root.dataset.readerState).toBe('cancelled');
+    expect(root.getAttribute('aria-busy')).toBe('false');
+    expect(handle.destroy).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('.lightink-reader-page-slot')).toBeNull();
+    await view.destroy();
+  });
+
   it('renders flow content in a same-origin, script-disabled sandbox', async () => {
     const host = document.createElement('div');
     const view = createReaderView(host, { readBytes: async () => bytes('safe text') });

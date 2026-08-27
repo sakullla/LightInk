@@ -1,11 +1,14 @@
 /**
  * `reader-view` — 只读阅读视图的编排壳（T3 骨架 + T4 流式 + T5 页式 + T6 标注；
- * T5 起章节 iframe 渲染/生命周期拆入 src/reader/flow-renderer.ts）。
+ * T5 起章节 iframe 渲染/生命周期拆入 src/reader/flow-renderer.ts，会话核心
+ * （打开管线/世代取代/对称作废）拆入 src/reader/session/session-load.ts，
+ * flow/paged 两族 adapter 见 src/reader/session/adapters.ts）。
  *
  * 流式格式渲染章节化 HTML（滚动宿主）；PDF/CBZ 渲染页（页宿主）。标注按内容哈希
  * （Rust content_hash）关联：加载时读出 → 流式高亮渲染 <mark> + 侧栏列表跳转；
  * 选中正文可加高亮，工具栏可加书签/笔记，侧栏可移除，变更写回 app_data_dir。
- * 本壳保留：加载生命周期/状态机、阅读进度、标注与搜索接线、翻页导航编排。
+ * 本壳保留：视图 DOM/状态机接线、阅读进度、标注与搜索接线、翻页导航编排；
+ * 打开编排只剩 adapter 选择（PAGE_EXTS → paged，其余 → flow）。
  * 只消费主题令牌 var(--lightink-*) 与 --lightink-font-scale。
  */
 
@@ -21,11 +24,15 @@ import {
   type RemoteReaderTarget,
 } from './sources/types.js';
 import { createLocalFileSource } from './sources/file-source.js';
-import type { ReaderChapter, ReaderContent } from './formats/types.js';
-import { ParseError } from './formats/types.js';
+import { throwIfReaderLoadCancelled } from './load-lifecycle.js';
+import { ParseError, type ReaderChapter, type ReaderContent } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
 import { escapeHtml } from './html-escape.js';
-import { renderCbzInto, type CbzRenderHandle } from './formats/cbz.js';
+import {
+  renderCbzInto,
+  type CbzRenderHandle,
+  type ComicArchiveInput,
+} from './formats/cbz.js';
 import { renderPdfInto, type PdfRenderHandle } from './formats/pdf.js';
 import {
   AnnotationWriteQueue,
@@ -90,10 +97,6 @@ import type {
   ReaderStateListener,
 } from './types.js';
 import {
-  isReaderLoadCancelled,
-  throwIfReaderLoadCancelled,
-} from './load-lifecycle.js';
-import {
   sessionRemoteImagePolicy,
   type RemoteImagePolicy,
 } from '../media/remote-image-policy.js';
@@ -131,7 +134,16 @@ import {
   type ReaderFlowLayout,
 } from './reader-layout.js';
 import { createFlowRenderer, readerPagedScroller } from './flow-renderer.js';
-import { attachRemoteSource } from './sources/remote-source.js';
+import { createReaderSessionLoad } from './session/session-load.js';
+import {
+  PAGED_SESSION_EXTENSIONS,
+  sessionAdapterKindForExtension,
+  type ReaderSessionAdapter,
+  type SessionInvalidation,
+  type SessionOpenRequest,
+  type SessionRunContext,
+  type StagedSession,
+} from './session/adapters.js';
 import {
   NATIVE_ARCHIVE_EXTENSIONS,
   openNativeArchive,
@@ -175,7 +187,8 @@ import {
   type ReaderTypography,
 } from './reader-typography.js';
 
-const PAGE_EXTS = new Set(['pdf', 'cbz', ...NATIVE_ARCHIVE_EXTENSIONS]);
+/** 页式扩展族与 session adapter 选择同源（加载编排见 session/session-load）。 */
+const PAGE_EXTS = PAGED_SESSION_EXTENSIONS;
 
 function isComicReaderExt(ext: string): boolean {
   return ext === 'cbz' || NATIVE_ARCHIVE_EXTENSIONS.has(ext);
@@ -524,10 +537,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         mode?: 'inline' | 'blob',
       ) => Promise<{ html: string; missing: readonly string[] }>)
     | null = null;
-  let loadGeneration = 0;
-  let activeLoadController: AbortController | null = null;
   let destroyed = false;
-  let flowContentDispose: (() => void) | null = null;
   /** Spine item count is metadata, independent from the bounded mounted iframe window. */
   let flowChapterCount = 0;
   /** PDF 搜索状态（查询/命中/活动命中索引）；UI 在标注侧栏。 */
@@ -1032,14 +1042,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     void (async () => {
-      const generation = loadGeneration;
+      const generation = sessionLoad.generation();
       const input = await showNoteDialog(
         document,
         annotation.note ?? '',
         { t, editing: true },
         annotation.quote,
       );
-      if (input === null || destroyed || generation !== loadGeneration) {
+      if (input === null || destroyed || generation !== sessionLoad.generation()) {
         return;
       }
       annotations = annotations.map((item) =>
@@ -1095,12 +1105,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
         if (action === 'note') {
           void (async () => {
-            const generation = loadGeneration;
+            const generation = sessionLoad.generation();
             const input = await showNoteDialog(document, '', { t }, pending.quote);
             if (input === null) {
               return; // 取消：保留选区、不产生标注
             }
-            if (destroyed || generation !== loadGeneration) {
+            if (destroyed || generation !== sessionLoad.generation()) {
               return; // 弹层期间已切换文档/销毁：丢弃迟到保存
             }
             clearSourceSelection();
@@ -1314,6 +1324,28 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   // 分页滚轮提到窗口级（main.ts，与 Markdown R1 同源）：大纲/chrome/空白区
   // 悬停也翻正文。章节 iframe 内事件到不了宿主，仍由 flow-renderer 转发。
 
+  /**
+   * 对称作废合同（R7/T6 review 遗留的结构性保证）：每次内容换装（flow/paged
+   * 两族 commit）与 destroy 经同一组摘除助手，作废页滚动监听、待执行的页滚动
+   * 合并帧、待 settle 的缩放刷新/锚点恢复与流式惰性分栏标记。各换装点不再
+   * 依赖调用处自觉摘除（session-load 管线经 adapter commit/destroy 调用）。
+   */
+  const invalidateSharedReadingSurface = (): void => {
+    // R7：页格式 commit 在共享 pane 上挂的 schedulePageScroll 必须一并摘除——
+    // 否则滚动 pane 仍触发 onPageScroll→syncPageState 把流式状态清零，且监听累积。
+    pageHost.removeEventListener('scroll', schedulePageScroll);
+    closestPane()?.removeEventListener('scroll', schedulePageScroll);
+    pageHost.removeEventListener('mouseup', onPageHostSelection);
+    pageHost.removeEventListener('click', onPageHostNoteClick);
+    textLayerObserver?.disconnect();
+    textLayerObserver = null;
+    pageScrollCoordinator?.cancel();
+    cancelFontScaleRefresh?.();
+    cancelFontScaleRefresh = null;
+    stalePaginatedChapters = null;
+  };
+
+
   /** 追加标注并同步正文高亮/侧栏/持久化。 */
   const appendAnnotation = (
     kind: AnnotationKind,
@@ -1343,12 +1375,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const addAnnotation = (kind: AnnotationKind): void => {
     if (kind === 'note') {
       void (async () => {
-        const generation = loadGeneration;
+        const generation = sessionLoad.generation();
         const input = await showNoteDialog(document, '', { t });
         if (input === null) {
           return;
         }
-        if (destroyed || generation !== loadGeneration) {
+        if (destroyed || generation !== sessionLoad.generation()) {
           return; // 弹层期间已切换文档/销毁：丢弃迟到保存
         }
         appendAnnotation('note', currentPositionLocator(), undefined, input);
@@ -2604,18 +2636,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /**
    * 流式渲染入口（T5 拆分）：页宿主接线拆除后委托 flow-renderer 创建章节
-   * iframe 与帧内生命周期；编排壳只保留宿主切换、活动章与状态同步。
+   * iframe 与帧内生命周期；编排壳只保留宿主切换、活动章与状态同步。页宿主
+   * 监听/pending 帧/缩放 settle 的作废由会话管线的对称作废合同先行完成。
    */
   const renderChapters = (chapters: ReaderChapter[], stylesheet = ''): void => {
-    pageHost.removeEventListener('scroll', schedulePageScroll);
-    // R7：页格式时 commitStagedPages 在共享 pane 上挂了 schedulePageScroll，
-    // 同标签 PDF→流式切换必须一并摘除——否则滚动 pane 仍触发 onPageScroll→
-    // syncPageState，把流式阅读状态（章节/进度）清零，且监听器随切换累积。
-    closestPane()?.removeEventListener('scroll', schedulePageScroll);
-    pageHost.removeEventListener('mouseup', onPageHostSelection);
-    pageHost.removeEventListener('click', onPageHostNoteClick);
-    textLayerObserver?.disconnect();
-    textLayerObserver = null;
     scrollHost.hidden = false;
     pageHost.hidden = true;
     const leavingComic =
@@ -2628,53 +2652,21 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       syncChromeRevealAttr();
       notifyReaderWindowChrome();
     }
-    // 页宿主滚动合并帧作废（T3 review 遗留：交换点与 destroy 对称 cancel）。
-    pageScrollCoordinator?.cancel();
-    // T6 review P3：新文档渲染前作废待 settle 的缩放刷新与推迟中的锚点恢复
-    // （与 destroy 对称，防迟到刷新按新文档几何套旧档位）。
-    cancelFontScaleRefresh?.();
-    cancelFontScaleRefresh = null;
-    stalePaginatedChapters = null; // 新文档：帧 load 时各自应用分栏，无待补章
-    flowChapterCount = chapters.length;
+    flowChapterCount = chapters.length; // 新文档：帧 load 时各自应用分栏，无待补章
     flowRenderer.render(chapters, stylesheet);
     setActiveChapter(0);
     syncFlowState();
   };
 
-  const stagePages = async (
-    filePath: string,
-    source: Uint8Array | RandomAccessSource | null,
+  /** paged 族宿主：漫画归档渲染进离屏宿主（i18n 标签与视图回调闭包）。 */
+  const renderComicStaged = (
+    archiveSource: ComicArchiveInput,
+    stagedHost: HTMLDivElement,
     signal: AbortSignal,
     target: ReaderTarget,
-  ): Promise<{
-    host: HTMLDivElement;
-    pdf: PdfRenderHandle | null;
-    cbz: CbzRenderHandle | null;
-  }> => {
-    const ext = extOfPath(filePath);
-    if (ext !== 'pdf' && ext !== 'cbz' && !NATIVE_ARCHIVE_EXTENSIONS.has(ext)) {
-      throw new ParseError(`暂不支持的页格式：.${ext || '?'}`);
-    }
-    const stagedHost = createPageHost();
-    stagedHost.hidden = false;
-    stagedHost.dataset.readerActive = 'true';
-    if (ext === 'pdf') {
-      if (source === null) throw new ParseError('PDF 字节源不可用');
-      stagedHost.dataset.readerFormat = 'pdf';
-      const pdf = await renderPdfInto(source, stagedHost, signal);
-      return { host: stagedHost, pdf, cbz: null };
-    }
-    stagedHost.dataset.readerFormat = ext;
-    const archiveSource = usesNativeArchive(ext)
-      ? await (deps.openArchiveProvider?.(target, signal) ??
-        openNativeArchive(target, {
-          signal,
-          requestPassword: deps.requestArchivePassword,
-        }))
-      : source;
-    if (archiveSource === null) throw new ParseError('漫画归档字节源不可用');
+  ): Promise<CbzRenderHandle> => {
     const extraComicLabels = comicLocaleLabels(t);
-    const cbz = await renderCbzInto(archiveSource, stagedHost, signal, {
+    return renderCbzInto(archiveSource, stagedHost, signal, {
       preferenceStorage,
       progressId: comicProgressIdForTarget(target),
       requestPassword: deps.requestArchivePassword,
@@ -2732,38 +2724,29 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           loadTrack.hidden = true;
         }
       },
+    }).then((cbz) => {
+      queueMicrotask(() => {
+        void Promise.resolve(deps.onComicMetadata?.(target, cbz.metadata)).catch(() => undefined);
+      });
+      return cbz;
     });
-    queueMicrotask(() => {
-      void Promise.resolve(deps.onComicMetadata?.(target, cbz.metadata)).catch(() => undefined);
-    });
-    return { host: stagedHost, pdf: null, cbz };
   };
 
-  const commitStagedPages = (
-    staged: {
-      host: HTMLDivElement;
-      pdf: PdfRenderHandle | null;
-      cbz: CbzRenderHandle | null;
-    },
-  ): void => {
+  /**
+   * paged 族 commit 主体：staged 页宿主换入 live 视图。旧表面的摘除已由管线
+   * 作废上一会话（同一组对称作废助手）先行完成；旧句柄释放同样在上一会话的
+   * invalidate 里，此处只做换装与监听重挂。
+   */
+  const commitPagedStaged = (staged: {
+    host: HTMLDivElement;
+    pdf: PdfRenderHandle | null;
+    cbz: CbzRenderHandle | null;
+  }): void => {
+    invalidateSharedReadingSurface();
     clearFlowBindings();
-    stalePaginatedChapters = null; // 切到页格式：流式惰性分栏标记随流式宿主一并作废
-    const previousFlowDispose = flowContentDispose;
-    flowContentDispose = null;
     flowChapterCount = 0;
-    const previousPdf = pdfHandle;
-    const previousCbz = cbzHandle;
     pdfHandle = staged.pdf;
     cbzHandle = staged.cbz;
-    pageHost.removeEventListener('scroll', schedulePageScroll);
-    closestPane()?.removeEventListener('scroll', schedulePageScroll);
-    pageHost.removeEventListener('mouseup', onPageHostSelection);
-    pageHost.removeEventListener('click', onPageHostNoteClick);
-    // 交换 pageHost 时作废待执行的页滚动合并帧（与 destroy 对称，防迟到帧写旧状态）。
-    pageScrollCoordinator?.cancel();
-    // T6 review P3：切到页格式同样作废流式缩放的 pending settle（与 destroy 对称）。
-    cancelFontScaleRefresh?.();
-    cancelFontScaleRefresh = null;
     pageHost.replaceWith(staged.host);
     pageHost = staged.host;
     watchPageChrome();
@@ -2775,15 +2758,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     observeTextLayers(pageHost); // 文本层懒出现时重渲染该页高亮
     scrollHost.hidden = true;
     syncPageState();
-    void previousPdf?.destroy().catch(() => undefined);
-    void previousCbz?.destroy().catch(() => undefined);
-    previousFlowDispose?.();
   };
 
-  const loadAnnotations = async (
+  /** 会话管线标注装载钩子：身份解析与读取结果都按世代/取消复查。 */
+  const loadAnnotationsForSession = async (
     target: ReaderTarget,
-    generation: number,
-    signal: AbortSignal,
+    context: { signal: AbortSignal; isCurrent: () => boolean },
   ): Promise<void> => {
     const localExt = target.kind === 'local' ? extOfPath(target.path) : '';
     if (
@@ -2798,19 +2778,19 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         target.kind === 'local'
           ? await deps.getContentHash!(target.path)
           : fnv1a64Hex(`remote:${readerIdentityKey(target.identity)}`);
-      if (destroyed || signal.aborted || generation !== loadGeneration) {
+      if (destroyed || context.signal.aborted || !context.isCurrent()) {
         return;
       }
       const nextAnnotations = parseAnnotations(
         await deps.readAnnotations!(nextContentHash),
       );
-      if (destroyed || signal.aborted || generation !== loadGeneration) {
+      if (destroyed || context.signal.aborted || !context.isCurrent()) {
         return;
       }
       contentHash = nextContentHash;
       annotations = nextAnnotations;
     } catch {
-      if (destroyed || signal.aborted || generation !== loadGeneration) {
+      if (destroyed || context.signal.aborted || !context.isCurrent()) {
         return;
       }
       // 与 Rust R4 一致：读失败（含无 Tauri IPC）视为空标注，不弹窗阻断阅读。
@@ -3419,6 +3399,366 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
   }
 
+  // —— 会话核心接线（R1/R2）：两族 adapter 只做本族 stage/commit/收尾，
+  // 世代取代、取消合成、对称作废与远程源单次接管全在 session-load 管线。 ——
+
+  /** staged 附加面：族内 commit/afterCommit 所需载荷（管线只见 StagedSession）。 */
+  interface FlowStagedLocal extends StagedSession {
+    readonly kind: 'flow';
+    readonly ext: string;
+    readonly content: ReaderContent;
+  }
+
+  /** staged 附加面：离屏页宿主与渲染句柄（afterCommit 拉大纲/早绑定用）。 */
+  interface PagedStagedLocal extends StagedSession {
+    readonly kind: 'paged';
+    readonly ext: string;
+    readonly host: HTMLDivElement;
+    readonly pdf: PdfRenderHandle | null;
+    readonly cbz: CbzRenderHandle | null;
+  }
+
+  /** 恰一次作废句柄（幂等守卫）：释放本会话独占资源。 */
+  const onceSessionInvalidation = (
+    release: () => void | Promise<void>,
+  ): SessionInvalidation => {
+    let done = false;
+    return {
+      invalidate: () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        return release();
+      },
+    };
+  };
+
+  /** flow commit 主体：对称作废先行 → 章节渲染 + 导出面/大纲采纳；失败回滚。 */
+  const commitFlowStaged = (content: ReaderContent): void => {
+    const previousFlowChapterCount = flowChapterCount;
+    pdfHandle = null;
+    cbzHandle = null;
+    try {
+      renderChapters(content.chapters, content.stylesheet);
+      exportChapters = content.chapters;
+      exportStylesheet = content.stylesheet ?? '';
+      exportEmbedImages = content.embedExportImages ?? null;
+      readerOutline = outlineFromEntries(
+        content.chapters.map((chapter, index) => ({
+          title: chapter.title.trim() || t('reader.chapter', { n: String(index + 1) }),
+        })),
+        'chapter',
+      );
+    } catch (error) {
+      content.dispose?.();
+      flowChapterCount = previousFlowChapterCount;
+      throw error;
+    }
+  };
+
+  const flowSessionAdapter: ReaderSessionAdapter = {
+    kind: 'flow',
+    async stage(request, context) {
+      const { target, ext, formatPath } = request;
+      const signal = context.signal;
+      const filePath = target.kind === 'local' ? target.path : target.displayName;
+      // TXT 分块顺序读；EPUB 通过带 read-ahead 的 ZIP 随机源读取，避免先把
+      // 整本书跨 IPC 复制进 WebView。依赖缺失时保留整读回退供测试/浏览器使用。
+      const readChunk =
+        target.kind === 'local' && (ext === 'txt' || ext === 'epub')
+          ? deps.readChunk
+          : undefined;
+      const localEpubSource: RandomAccessSource | null =
+        target.kind === 'local' &&
+        ext === 'epub' &&
+        readChunk !== undefined &&
+        deps.readSize !== undefined
+          ? createLocalFileSource({
+              size: await deps.readSize(filePath, signal),
+              identity: target.identity,
+              readRange: (offset, length, readSignal) =>
+                readChunk(filePath, offset, length, readSignal ?? signal),
+            })
+          : null;
+      const remoteSource = context.remote.source;
+      const source: ReaderInputSource =
+        remoteSource !== null
+          ? remoteSource
+          : localEpubSource !== null
+            ? localEpubSource
+            : readChunk === undefined
+              ? await deps.readBytes!(filePath, signal)
+              : {
+                  read: (offset, length, readSignal) =>
+                    readChunk(filePath, offset, length, readSignal ?? signal),
+                };
+      // yield 点取消检查：取源期间被取代/取消的加载不得进入解析。
+      throwIfReaderLoadCancelled(signal);
+      const content = await (deps.parseContent ?? parseReaderContent)(
+        formatPath,
+        source,
+        signal,
+      );
+      const ownedRemote = context.remote.source;
+      if (ownedRemote !== null) {
+        // 远程源所有权折进 content.dispose：换装/销毁时随会话单次关闭。
+        const disposeContent = content.dispose;
+        content.dispose = () => {
+          disposeContent?.();
+          void ownedRemote.close().catch(() => undefined);
+        };
+        context.remote.release();
+      }
+      const staged: FlowStagedLocal = {
+        kind: 'flow',
+        ext,
+        content,
+        commit: () => {
+          invalidateSharedReadingSurface();
+          commitFlowStaged(content);
+          return onceSessionInvalidation(() => {
+            content.dispose?.();
+          });
+        },
+        discard: () => {
+          content.dispose?.();
+        },
+      };
+      return staged;
+    },
+    afterCommit(staged) {
+      if (staged.kind !== 'flow') {
+        return;
+      }
+      // 解析 warning（如 epub 样式被丢弃）在就绪前一次性提示。
+      for (const warning of (staged as FlowStagedLocal).content.warnings ?? []) {
+        deps.notify?.(t(`reader.warning.${warning}`));
+      }
+    },
+  };
+
+  const pagedSessionAdapter: ReaderSessionAdapter = {
+    kind: 'paged',
+    async stage(request, context) {
+      const { target, ext, nativeArchive } = request;
+      const signal = context.signal;
+      const filePath = target.kind === 'local' ? target.path : target.displayName;
+      if (ext !== 'pdf' && ext !== 'cbz' && !NATIVE_ARCHIVE_EXTENSIONS.has(ext)) {
+        throw new ParseError(`暂不支持的页格式：.${ext || '?'}`);
+      }
+      const stagedHost = createPageHost();
+      stagedHost.hidden = false;
+      stagedHost.dataset.readerActive = 'true';
+      // 本地 pdf/cbz 走有界随机读（不整本跨 IPC 拷贝）；native 归档 stage 内
+      // 开 provider；远程源由管线代开并经 lease 移交渲染器。
+      const localPageSource =
+        target.kind === 'local' &&
+        !nativeArchive &&
+        deps.readChunk !== undefined &&
+        deps.readSize !== undefined
+          ? createLocalFileSource({
+              size: await deps.readSize(filePath, signal),
+              identity: target.identity,
+              readRange: (offset, length, readSignal) =>
+                deps.readChunk!(filePath, offset, length, readSignal ?? signal),
+            })
+          : null;
+      const pageSource = nativeArchive
+        ? null
+        : target.kind === 'remote'
+          ? context.remote.source
+          : localPageSource ?? (await deps.readBytes!(filePath, signal));
+      throwIfReaderLoadCancelled(signal);
+      if (ext === 'pdf') {
+        if (pageSource === null) throw new ParseError('PDF 字节源不可用');
+        stagedHost.dataset.readerFormat = 'pdf';
+        const pdf = await renderPdfInto(pageSource, stagedHost, signal);
+        // 页渲染器接管字节源（随句柄 destroy 关闭）。
+        if (context.remote.source !== null) {
+          context.remote.release();
+        }
+        const staged: PagedStagedLocal = {
+          kind: 'paged',
+          ext,
+          host: stagedHost,
+          pdf,
+          cbz: null,
+          commit: () => {
+            commitPagedStaged({ host: stagedHost, pdf, cbz: null });
+            return onceSessionInvalidation(async () => {
+              await pdf.destroy().catch(() => undefined);
+            });
+          },
+          discard: async () => {
+            await pdf.destroy().catch(() => undefined);
+          },
+        };
+        return staged;
+      }
+      stagedHost.dataset.readerFormat = ext;
+      const archiveSource = nativeArchive
+        ? await (deps.openArchiveProvider?.(target, signal) ??
+          openNativeArchive(target, {
+            signal,
+            requestPassword: deps.requestArchivePassword,
+          }))
+        : pageSource;
+      if (archiveSource === null) throw new ParseError('漫画归档字节源不可用');
+      const cbz = await renderComicStaged(archiveSource, stagedHost, signal, target);
+      if (context.remote.source !== null) {
+        context.remote.release();
+      }
+      const staged: PagedStagedLocal = {
+        kind: 'paged',
+        ext,
+        host: stagedHost,
+        pdf: null,
+        cbz,
+        commit: () => {
+          commitPagedStaged({ host: stagedHost, pdf: null, cbz });
+          return onceSessionInvalidation(async () => {
+            await cbz.destroy().catch(() => undefined);
+          });
+        },
+        discard: async () => {
+          await cbz.destroy().catch(() => undefined);
+        },
+      };
+      return staged;
+    },
+    async afterCommit(staged, request, context) {
+      if (staged.kind !== 'paged') {
+        return;
+      }
+      const { pdf, cbz, ext } = staged as PagedStagedLocal;
+      const outline =
+        pdf !== null
+          ? await pdf.outline()
+          : outlineFromEntries(
+              Array.from({ length: cbz?.totalPages ?? 0 }, (_, index) => ({
+                title: t('annotation.location.page', { page: String(index + 1) }),
+              })),
+              'page',
+            );
+      if (!context.isCurrent()) {
+        return;
+      }
+      readerOutline = outline;
+      if (isComicReaderExt(ext)) {
+        // 漫画进度提前绑定：页格式在标注装载前按页恢复（不哈希归档）。
+        const target = request.target;
+        progressId = comicProgressIdForTarget(target);
+        pendingRestore = loadReadingProgressFromIds(progressStorage, [
+          progressId,
+          target.kind === 'local' ? target.path : '',
+          loadLibraryProgressAlias(
+            progressStorage,
+            target.kind === 'remote' ? target.itemId : target.identity.id,
+          ) ?? '',
+        ]);
+        if (!applySavedProgress()) {
+          scheduleRestoreRetry();
+        }
+      }
+    },
+  };
+
+  /** 管线 settle 尾巴：标注装载 → 进度身份链/恢复 → ready 发布与状态同步。 */
+  const settleSession = async (
+    request: SessionOpenRequest,
+    context: SessionRunContext,
+  ): Promise<void> => {
+    const target = request.target;
+    await loadAnnotationsForSession(target, {
+      signal: context.signal,
+      isCurrent: context.isCurrent,
+    });
+    // 标注装载窗口内调用方取消：按取消口径发布 cancelled（原管线语义），
+    // 不停留在 loading。
+    throwIfReaderLoadCancelled(context.signal);
+    if (!context.isCurrent()) {
+      return;
+    }
+    const filePath = target.kind === 'local' ? target.path : target.displayName;
+    progressId = target.kind === 'remote' ? target.itemId : (contentHash ?? filePath);
+    // Hash is the write key after annotations resolve. Older local records
+    // still live under the path or a shelf alias (item.id / local:path).
+    pendingRestore = loadReadingProgressFromIds(progressStorage, [
+      progressId,
+      target.kind === 'local' ? filePath : '',
+      loadLibraryProgressAlias(
+        progressStorage,
+        target.kind === 'remote' ? target.itemId : target.identity.id,
+      ) ?? '',
+      target.kind === 'remote' ? readerIdentityKey(target.identity) : '',
+      contentHash ?? '',
+    ]);
+    if (
+      pendingRestore !== null &&
+      progressId !== '' &&
+      loadReadingProgress(progressStorage, progressId) === null
+    ) {
+      saveReadingProgress(progressStorage, progressId, pendingRestore);
+    }
+    restoreAttempts = 0;
+    cancelRestoreRetry();
+    setReaderPhase('ready');
+    if (!applySavedProgress()) {
+      scheduleRestoreRetry();
+    }
+    if (PAGE_EXTS.has(loadedExt)) {
+      syncPageState();
+    } else {
+      syncFlowState();
+    }
+    if (progressId !== '') {
+      try {
+        deps.onProgressBound?.(progressId, target);
+      } catch {
+        // Shelf alias must not interrupt reading.
+      }
+    }
+  };
+
+  const sessionLoad = createReaderSessionLoad({
+    flow: flowSessionAdapter,
+    paged: pagedSessionAdapter,
+    host: {
+      beginOpen: () => {
+        annotationWriteQueue.invalidate();
+        hideSelectionToolbar();
+        persistReadingProgress();
+        progressId = '';
+        pendingRestore = null;
+        restoreAttempts = 0;
+        cancelRestoreRetry();
+        readerOutline = [];
+        exportChapters = [];
+        exportStylesheet = '';
+        exportEmbedImages = null;
+        closeOpenNoteDialog(); // 打开中的笔记弹层经 Escape 正规 release（续体守卫丢弃迟到保存）
+        closePdfSearch(); // 切换文档清掉搜索状态与命中 overlay
+        closeSearchSheet();
+      },
+      setPhase: (phase) => {
+        if (phase === 'loading') {
+          setReaderPhase('loading', true);
+        } else {
+          setReaderPhase(phase);
+        }
+      },
+      beforeCommit: (request) => {
+        loadedExt = request.ext;
+        annotations = [];
+        contentHash = null;
+        sidebar?.render(annotations);
+      },
+      settle: settleSession,
+      openRemoteSource: deps.openRemoteSource,
+    },
+  });
+
   return {
     get state() {
       return readerState;
@@ -3435,283 +3775,24 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       };
     },
     async load(targetOrPath: string | ReaderTarget, options: ReaderLoadOptions = {}): Promise<void> {
-      const target = normalizeReaderTarget(targetOrPath);
-      const filePath = target.kind === 'local' ? target.path : target.displayName;
-      const nextExt = (target.extension || extOfPath(filePath)).toLowerCase();
-      const nativeArchive = usesNativeArchive(nextExt);
-      const readBytes = deps.readBytes;
-      if (target.kind === 'local' && readBytes === undefined && !nativeArchive) {
-        throw new Error('reader-view load requires the readBytes dependency');
-      }
       if (destroyed) {
         throw new Error('reader-view has been destroyed');
       }
-
-      activeLoadController?.abort();
-      annotationWriteQueue.invalidate();
-      hideSelectionToolbar();
-      persistReadingProgress();
-      progressId = '';
-      pendingRestore = null;
-      restoreAttempts = 0;
-      cancelRestoreRetry();
-      readerOutline = [];
-      exportChapters = [];
-      exportStylesheet = '';
-      exportEmbedImages = null;
-      closeOpenNoteDialog(); // 打开中的笔记弹层经 Escape 正规 release（续体守卫丢弃迟到保存）
-      closePdfSearch(); // 切换文档清掉搜索状态与命中 overlay
-      closeSearchSheet();
-      const controller = new AbortController();
-      activeLoadController = controller;
-      const generation = ++loadGeneration;
+      const target = normalizeReaderTarget(targetOrPath);
+      const filePath = target.kind === 'local' ? target.path : target.displayName;
+      const nextExt = (target.extension || extOfPath(filePath)).toLowerCase();
+      if (target.kind === 'local' && deps.readBytes === undefined && !usesNativeArchive(nextExt)) {
+        throw new Error('reader-view load requires the readBytes dependency');
+      }
+      // 格式分发只剩 adapter 选择（未知扩展按原口径报不支持）：世代取代、
+      // 取消合成、parse→stage→commit 与对称作废全部由 session-load 管线裁决。
+      const kind = sessionAdapterKindForExtension(nextExt);
+      if (kind === null) {
+        throw new ParseError(`暂不支持的阅读格式：.${nextExt || '?'}`);
+      }
+      const nativeArchive = usesNativeArchive(nextExt);
       const formatPath = extOfPath(filePath) === nextExt ? filePath : `${filePath}.${nextExt}`;
-      const cancelFromCaller = (): void => controller.abort();
-      if (options.signal?.aborted === true) {
-        controller.abort();
-      } else {
-        options.signal?.addEventListener('abort', cancelFromCaller, { once: true });
-      }
-      const isCurrent = (): boolean =>
-        !destroyed && !controller.signal.aborted && generation === loadGeneration;
-      let completed = false;
-      let pendingRemoteSource: RandomAccessSource | null = null;
-
-      setReaderPhase('loading', true);
-      try {
-        if (target.kind === 'remote' && !nativeArchive) {
-          pendingRemoteSource =
-            deps.openRemoteSource !== undefined
-              ? await deps.openRemoteSource(target, controller.signal)
-              : (await attachRemoteSource(target, { signal: controller.signal })).source;
-          throwIfReaderLoadCancelled(controller.signal);
-        }
-        if (PAGE_EXTS.has(nextExt)) {
-          const localPageSource =
-            target.kind === 'local' &&
-            !nativeArchive &&
-            deps.readChunk !== undefined &&
-            deps.readSize !== undefined
-              ? createLocalFileSource({
-                  size: await deps.readSize(filePath, controller.signal),
-                  identity: target.identity,
-                  readRange: (offset, length, readSignal) =>
-                    deps.readChunk!(filePath, offset, length, readSignal ?? controller.signal),
-                })
-              : null;
-          const pageSource =
-            nativeArchive
-              ? null
-              : target.kind === 'remote'
-              ? pendingRemoteSource!
-              : localPageSource ?? (await readBytes!(filePath, controller.signal));
-          throwIfReaderLoadCancelled(controller.signal);
-          if (!isCurrent()) {
-            return;
-          }
-          const staged = await stagePages(formatPath, pageSource, controller.signal, target);
-          if (target.kind === 'remote' && !nativeArchive) {
-            // The page renderer now owns the source and closes it with its handle.
-            pendingRemoteSource = null;
-          }
-          if (controller.signal.aborted) {
-            await staged.pdf?.destroy().catch(() => undefined);
-            await staged.cbz?.destroy().catch(() => undefined);
-            throwIfReaderLoadCancelled(controller.signal);
-          }
-          if (!isCurrent()) {
-            await staged.pdf?.destroy().catch(() => undefined);
-            await staged.cbz?.destroy().catch(() => undefined);
-            return;
-          }
-          loadedExt = nextExt;
-          annotations = [];
-          contentHash = null;
-          sidebar?.render(annotations);
-          commitStagedPages(staged);
-          readerOutline =
-            staged.pdf !== null
-              ? await staged.pdf.outline()
-              : outlineFromEntries(
-                  Array.from({ length: staged.cbz?.totalPages ?? 0 }, (_, index) => ({
-                    title: t('annotation.location.page', { page: String(index + 1) }),
-                  })),
-                  'page',
-                );
-          if (!isCurrent()) {
-            return;
-          }
-          if (isComicReaderExt(nextExt)) {
-            progressId = comicProgressIdForTarget(target);
-            pendingRestore = loadReadingProgressFromIds(progressStorage, [
-              progressId,
-              target.kind === 'local' ? filePath : '',
-              loadLibraryProgressAlias(
-                progressStorage,
-                target.kind === 'remote' ? target.itemId : target.identity.id,
-              ) ?? '',
-            ]);
-            if (!applySavedProgress()) {
-              scheduleRestoreRetry();
-            }
-          }
-        } else {
-          // TXT 分块顺序读；EPUB 通过带 read-ahead 的 ZIP 随机源读取，避免先把
-          // 整本书跨 IPC 复制进 WebView。依赖缺失时保留整读回退供测试/浏览器使用。
-          const readChunk =
-            target.kind === 'local' && (nextExt === 'txt' || nextExt === 'epub')
-              ? deps.readChunk
-              : undefined;
-          const localEpubSource: RandomAccessSource | null =
-            target.kind === 'local' &&
-            nextExt === 'epub' &&
-            readChunk !== undefined &&
-            deps.readSize !== undefined
-              ? createLocalFileSource({
-                  size: await deps.readSize(filePath, controller.signal),
-                  identity: target.identity,
-                  readRange: (offset, length, readSignal) =>
-                    readChunk(filePath, offset, length, readSignal ?? controller.signal),
-                })
-              : null;
-          const source: ReaderInputSource =
-            target.kind === 'remote'
-              ? pendingRemoteSource!
-              : localEpubSource !== null
-                ? localEpubSource
-                : readChunk === undefined
-                ? await readBytes!(filePath, controller.signal)
-                : {
-                    read: (offset, length, readSignal) =>
-                      readChunk(filePath, offset, length, readSignal ?? controller.signal),
-                  };
-          throwIfReaderLoadCancelled(controller.signal);
-          if (!isCurrent()) {
-            return;
-          }
-          const content = await (deps.parseContent ?? parseReaderContent)(
-            formatPath,
-            source,
-            controller.signal,
-          );
-          if (pendingRemoteSource !== null) {
-            const ownedSource = pendingRemoteSource;
-            const disposeContent = content.dispose;
-            content.dispose = () => {
-              disposeContent?.();
-              void ownedSource.close().catch(() => undefined);
-            };
-            pendingRemoteSource = null;
-          }
-          if (controller.signal.aborted) {
-            content.dispose?.();
-            throwIfReaderLoadCancelled(controller.signal);
-          }
-          if (!isCurrent()) {
-            content.dispose?.();
-            return;
-          }
-          loadedExt = nextExt;
-          annotations = [];
-          contentHash = null;
-          sidebar?.render(annotations);
-          const previousPdf = pdfHandle;
-          const previousCbz = cbzHandle;
-          const previousFlowDispose = flowContentDispose;
-          const previousFlowChapterCount = flowChapterCount;
-          pdfHandle = null;
-          cbzHandle = null;
-          flowContentDispose = content.dispose ?? null;
-          try {
-            renderChapters(content.chapters, content.stylesheet);
-            exportChapters = content.chapters;
-            exportStylesheet = content.stylesheet ?? '';
-            exportEmbedImages = content.embedExportImages ?? null;
-            readerOutline = outlineFromEntries(
-              content.chapters.map((chapter, index) => ({
-                title: chapter.title.trim() || t('reader.chapter', { n: String(index + 1) }),
-              })),
-              'chapter',
-            );
-          } catch (error) {
-            flowContentDispose?.();
-            flowContentDispose = previousFlowDispose;
-            flowChapterCount = previousFlowChapterCount;
-            throw error;
-          }
-          void previousPdf?.destroy().catch(() => undefined);
-          void previousCbz?.destroy().catch(() => undefined);
-          previousFlowDispose?.();
-          for (const warning of content.warnings ?? []) {
-            deps.notify?.(t(`reader.warning.${warning}`));
-          }
-        }
-
-        await loadAnnotations(target, generation, controller.signal);
-        throwIfReaderLoadCancelled(controller.signal);
-        if (isCurrent()) {
-          progressId =
-            target.kind === 'remote'
-              ? target.itemId
-              : (contentHash ?? filePath);
-          // Hash is the write key after annotations resolve. Older local records
-          // still live under the path or a shelf alias (item.id / local:path).
-          pendingRestore = loadReadingProgressFromIds(progressStorage, [
-            progressId,
-            target.kind === 'local' ? filePath : '',
-            loadLibraryProgressAlias(
-              progressStorage,
-              target.kind === 'remote' ? target.itemId : target.identity.id,
-            ) ?? '',
-            target.kind === 'remote' ? readerIdentityKey(target.identity) : '',
-            contentHash ?? '',
-          ]);
-          if (
-            pendingRestore !== null &&
-            progressId !== '' &&
-            loadReadingProgress(progressStorage, progressId) === null
-          ) {
-            saveReadingProgress(progressStorage, progressId, pendingRestore);
-          }
-          restoreAttempts = 0;
-          cancelRestoreRetry();
-          setReaderPhase('ready');
-          if (!applySavedProgress()) {
-            scheduleRestoreRetry();
-          }
-          if (PAGE_EXTS.has(loadedExt)) {
-            syncPageState();
-          } else {
-            syncFlowState();
-          }
-          if (progressId !== '') {
-            try {
-              deps.onProgressBound?.(progressId, target);
-            } catch {
-              // Shelf alias must not interrupt reading.
-            }
-          }
-          completed = true;
-        }
-      } catch (error) {
-        if (isReaderLoadCancelled(error, controller.signal)) {
-          if (!destroyed && generation === loadGeneration) {
-            setReaderPhase('cancelled');
-          }
-          return;
-        }
-        if (!isCurrent()) {
-          return;
-        }
-        setReaderPhase('error');
-        throw error;
-      } finally {
-        options.signal?.removeEventListener('abort', cancelFromCaller);
-        await pendingRemoteSource?.close().catch(() => undefined);
-        if (activeLoadController === controller && !completed) {
-          activeLoadController = null;
-        }
-      }
+      return sessionLoad.open({ kind, target, formatPath, ext: nextExt, nativeArchive }, options);
     },
     async destroy(): Promise<void> {
       if (destroyed) {
@@ -3724,18 +3805,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       cancelRestoreRetry();
       destroyed = true;
-      loadGeneration += 1;
-      activeLoadController?.abort();
-      activeLoadController = null;
-      annotationWriteQueue.invalidate();
-      clearFlowBindings();
-      const handle = pdfHandle;
-      const cbz = cbzHandle;
-      const disposeFlowContent = flowContentDispose;
+      // 会话销毁（管线）：世代 +1、abort 在飞加载、恰一次作废活动会话
+      // （PDF/漫画句柄与流式内容 dispose + 对称作废合同）；收尾在 DOM 清理
+      // 尾部统一 await。
+      const sessionDispose = sessionLoad.destroy();
       pdfHandle = null;
       cbzHandle = null;
-      flowContentDispose = null;
       flowChapterCount = 0;
+      annotationWriteQueue.invalidate();
+      clearFlowBindings();
       sidebar?.destroy();
       sidebar = null;
       sidebarBackdrop?.remove();
@@ -3759,15 +3837,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       searchSheet = null;
       scrollHost.removeEventListener('scroll', scheduleFlowScroll);
       paneScroller?.removeEventListener('scroll', scheduleFlowScroll);
-      pageHost.removeEventListener('scroll', schedulePageScroll);
-      closestPane()?.removeEventListener('scroll', schedulePageScroll);
+      // 对称作废合同：与每次 commit 同一组摘除助手（页监听/pending 帧/settle）。
+      invalidateSharedReadingSurface();
       flowScrollCoordinator?.cancel();
-      pageScrollCoordinator?.cancel();
-      cancelFontScaleRefresh?.();
-      cancelFontScaleRefresh = null;
-      stalePaginatedChapters = null;
-      pageHost.removeEventListener('mouseup', onPageHostSelection);
-      pageHost.removeEventListener('click', onPageHostNoteClick);
       chromeRevealObserver?.disconnect();
       chromeRevealObserver = null;
       pageChromeObserver?.disconnect();
@@ -3782,8 +3854,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       syncReaderTitlebarReveal(root, false);
       tocPanel.remove();
       typePanel.remove();
-      textLayerObserver?.disconnect();
-      textLayerObserver = null;
       layoutRootObserver?.disconnect();
       cancelViewportRefresh();
       if (typeof document !== 'undefined') {
@@ -3794,9 +3864,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       setReaderPhase('destroyed', true);
       stateListeners.clear();
       root.remove();
-      disposeFlowContent?.();
-      await handle?.destroy().catch(() => undefined);
-      await cbz?.destroy().catch(() => undefined);
+      await sessionDispose;
     },
     addBookmark: () => {
       if (annotationsEnabled) addAnnotation('bookmark');
