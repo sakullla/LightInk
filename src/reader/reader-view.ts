@@ -5,6 +5,8 @@
  * 进度会话（身份链/快照派发/恢复重试阈值/保存时机）拆入
  * src/reader/session/session-progress.ts，搜索会话（世代失效/命中上限/
  * busy reveal/首命中滚动/活动命中步进）拆入 src/reader/session/session-search.ts，
+ * 导航会话（advanceReading 三支与大纲跳转收敛为按 adapter kind 的策略表）拆入
+ * src/reader/session/session-navigation.ts，
  * flow/paged 两族 adapter 见 src/reader/session/adapters.ts）。
  *
  * 流式格式渲染章节化 HTML（滚动宿主）；PDF/CBZ 渲染页（页宿主）。标注按内容哈希
@@ -127,6 +129,7 @@ import {
 } from './reader-layout.js';
 import { createFlowRenderer, readerPagedScroller } from './flow-renderer.js';
 import { createReaderSessionLoad } from './session/session-load.js';
+import { createReaderSessionNavigation } from './session/session-navigation.js';
 import {
   PAGED_SESSION_EXTENSIONS,
   sessionAdapterKindForExtension,
@@ -2208,43 +2211,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     );
   };
 
-  const jumpToOutlineItem = (item: OutlineItem): void => {
-    if (item.page !== undefined) {
-      if (pdfHandle !== null) {
-        pdfHandle.scrollToPage(item.page);
-        syncPageState();
-        sessionProgress.schedulePersist();
-        return;
-      }
-      if (cbzHandle !== null) {
-        cbzHandle.scrollToPage(item.page);
-        syncPageState();
-        sessionProgress.schedulePersist();
-      }
-      return;
-    }
-    if (item.chapter !== undefined) {
-      // A later iframe load must not apply leftover progress and undo this jump.
-      sessionProgress.discardPending();
-      setActiveChapter(item.chapter);
-      if (flowIsPaginated()) {
-        const frame = scrollHost.querySelector<HTMLIFrameElement>(
-          `.lightink-reader-chapter[data-chapter-index="${item.chapter}"] .lightink-reader-chapter-frame`,
-        );
-        const doc = frame?.contentDocument;
-        if (doc !== undefined && doc !== null) {
-          readerPagedScroller(doc).scrollLeft = 0;
-        }
-      } else {
-        scrollHost
-          .querySelector<HTMLElement>(`.lightink-reader-chapter[data-chapter-index="${item.chapter}"]`)
-          ?.scrollIntoView({ block: 'start' });
-      }
-      syncFlowState();
-      sessionProgress.schedulePersist();
-    }
-  };
-
   /**
    * 流式渲染入口（T5 拆分）：页宿主接线拆除后委托 flow-renderer 创建章节
    * iframe 与帧内生命周期；编排壳只保留宿主切换、活动章与状态同步。页宿主
@@ -2415,48 +2381,69 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const gatePagedWheel = createPagedWheelGate();
 
-  const advanceReading = (direction: 1 | -1, navKey?: string): boolean => {
-    if (pdfHandle !== null) {
-      pdfHandle.scrollToPage(pdfHandle.controller.page + direction);
-      syncPageState();
-      sessionProgress.schedulePersist();
-      playReaderPageTurn(root, direction);
-      return true;
-    }
-    if (cbzHandle !== null) {
-      const pageDelta =
-        (navKey === 'ArrowLeft' || navKey === 'ArrowRight') &&
-        cbzHandle.preferences.direction === 'rtl'
-          ? ((direction === 1 ? -1 : 1) as 1 | -1)
-          : direction;
-      if (pageDelta > 0) cbzHandle.nextPage();
-      else cbzHandle.previousPage();
-      syncPageState();
-      sessionProgress.schedulePersist();
-      return true;
-    }
-    const moved = advanceReadingContent(direction);
-    if (moved) {
-      hideSelectionToolbar();
-      playReaderPageTurn(root, direction);
-    }
-    return moved;
-  };
-
-  const advanceReadingContent = (direction: 1 | -1): boolean => {
-    if (flowIsPaginated()) {
-      const moved = flowRenderer.advancePage(direction);
-      if (moved) {
-        sessionProgress.schedulePersist();
+  /**
+   * 导航会话（session-navigation）：advanceReading 三支与大纲跳转收敛为按
+   * adapter kind 的单一策略表（paged/flow 两行，paged 行内 pdf/漫画成员由
+   * 供数区分），返回值合同、rtl 翻转、动效/保存时机与载荷 no-op 唯一实现
+   * 在 session 模块；本壳只供族内机械（句柄步进/滚页、flow 分栏/视口步进、
+   * 章节对齐与状态同步）。
+   */
+  const sessionNavigation = createReaderSessionNavigation({
+    // 原三支分支序冻结：页句柄存活 → paged（成员按句柄），否则 flow 兜底
+    // （加载窗口无句柄时与原口径一致：flow 空内容步进 false、跳转同机械）。
+    activeKind: () => (pdfHandle !== null || cbzHandle !== null ? 'paged' : 'flow'),
+    pagedMember: () => (pdfHandle !== null ? 'pdf' : cbzHandle !== null ? 'comic' : null),
+    pagedComicReadsRightToLeft: () => cbzHandle?.preferences.direction === 'rtl',
+    pagedCurrentPage: () => pdfHandle?.controller.page ?? 1,
+    pagedScrollToPage: (page) => {
+      const pdf = pdfHandle;
+      if (pdf !== null) {
+        pdf.scrollToPage(page);
+        return;
       }
-      return moved;
-    }
-    if (advanceScrolledScroller(flowScrollContainer(), direction)) {
-      sessionProgress.schedulePersist();
-      return true;
-    }
-    return false;
-  };
+      cbzHandle?.scrollToPage(page);
+    },
+    pagedComicStep: (delta) => {
+      const handle = cbzHandle;
+      if (handle === null) {
+        return;
+      }
+      if (delta > 0) handle.nextPage();
+      else handle.previousPage();
+    },
+    syncPagedState: () => syncPageState(),
+    flowIsPaginated: () => flowIsPaginated(),
+    flowAdvancePaged: (direction) => flowRenderer.advancePage(direction),
+    flowAdvanceScrolled: (direction) =>
+      advanceScrolledScroller(flowScrollContainer(), direction),
+    flowJumpToChapter: (chapter) => {
+      setActiveChapter(chapter);
+      if (flowIsPaginated()) {
+        const frame = scrollHost.querySelector<HTMLIFrameElement>(
+          `.lightink-reader-chapter[data-chapter-index="${chapter}"] .lightink-reader-chapter-frame`,
+        );
+        const doc = frame?.contentDocument;
+        if (doc !== undefined && doc !== null) {
+          readerPagedScroller(doc).scrollLeft = 0;
+        }
+      } else {
+        scrollHost
+          .querySelector<HTMLElement>(
+            `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
+          )
+          ?.scrollIntoView({ block: 'start' });
+      }
+    },
+    syncFlowState: () => syncFlowState(),
+    discardPendingRestore: () => sessionProgress.discardPending(),
+    persistProgress: () => sessionProgress.schedulePersist(),
+    playPageTurn: (direction) => playReaderPageTurn(root, direction),
+    hideSelectionToolbar: () => hideSelectionToolbar(),
+  });
+  const advanceReading = (direction: 1 | -1, navKey?: string): boolean =>
+    sessionNavigation.advance(direction, navKey);
+  const jumpToOutlineItem = (item: OutlineItem): void =>
+    sessionNavigation.jumpToOutlineItem(item);
 
   /**
    * T6 缩放性能：字号档位本身便宜（CSS 变量），贵在下游整章 column 重排。

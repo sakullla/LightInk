@@ -26,6 +26,12 @@ import {
 import { readerFlowSpreadFromTypography } from '../reader-layout.js';
 import { applyReaderTheme } from '../reader-theme.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
+import type { SessionAdapterKind } from '../session/adapters.js';
+import {
+  createReaderSessionNavigation,
+  type SessionNavigationHost,
+  type SessionPagedMember,
+} from '../session/session-navigation.js';
 
 /** 最小 fake 元素：覆盖 createReaderView 用到的 DOM 表面。 */
 class FakeEl {
@@ -2225,6 +2231,368 @@ describe('搜索会话接线（session-search 收口：世代失效/无命中空
     });
     expect(sidebar.querySelector('.lightink-reader-sidebar-more')).toBeNull();
     // 不误跳、不报错：阅读位置保持、阶段仍 ready。
+    expect(view.state.current).toBe(1);
+    expect(view.state.phase).toBe('ready');
+    await view.destroy();
+  });
+});
+
+describe('导航会话策略表（session-navigation：按 adapter kind 分派）', () => {
+  interface NavigationHostState {
+    kind: SessionAdapterKind | null;
+    member: SessionPagedMember | null;
+    rtl: boolean;
+    page: number;
+    paginated: boolean;
+    moved: boolean;
+  }
+
+  /** 记账宿主：钩子按序记录调用名，供策略表规则断言（无 DOM 依赖）。 */
+  const createNavigationHost = (state: NavigationHostState) => {
+    const calls: string[] = [];
+    const host: SessionNavigationHost = {
+      activeKind: () => state.kind,
+      pagedMember: () => state.member,
+      pagedComicReadsRightToLeft: () => state.rtl,
+      pagedCurrentPage: () => state.page,
+      pagedScrollToPage: (page) => {
+        calls.push(`scrollToPage:${page}`);
+      },
+      pagedComicStep: (delta) => {
+        calls.push(delta > 0 ? 'comicNext' : 'comicPrev');
+      },
+      syncPagedState: () => {
+        calls.push('syncPaged');
+      },
+      flowIsPaginated: () => state.paginated,
+      flowAdvancePaged: (direction) => {
+        calls.push(`flowPaged:${direction}`);
+        return state.moved;
+      },
+      flowAdvanceScrolled: (direction) => {
+        calls.push(`flowScrolled:${direction}`);
+        return state.moved;
+      },
+      flowJumpToChapter: (chapter) => {
+        calls.push(`flowChapter:${chapter}`);
+      },
+      syncFlowState: () => {
+        calls.push('syncFlow');
+      },
+      discardPendingRestore: () => {
+        calls.push('discardPending');
+      },
+      persistProgress: () => {
+        calls.push('persist');
+      },
+      playPageTurn: (direction) => {
+        calls.push(`anim:${direction}`);
+      },
+      hideSelectionToolbar: () => {
+        calls.push('hideToolbar');
+      },
+    };
+    return { calls, host };
+  };
+
+  it('pdf 成员步进：目标页 = 当前页 ± 1，同步/写进度/播放动画；边界钳制在句柄内', () => {
+    const { calls, host } = createNavigationHost({
+      kind: 'paged',
+      member: 'pdf',
+      rtl: false,
+      page: 12,
+      paginated: false,
+      moved: false,
+    });
+    const navigation = createReaderSessionNavigation(host);
+    expect(navigation.advance(1)).toBe(true);
+    expect(navigation.advance(-1)).toBe(true);
+    expect(calls).toEqual([
+      'scrollToPage:13',
+      'syncPaged',
+      'persist',
+      'anim:1',
+      'scrollToPage:11',
+      'syncPaged',
+      'persist',
+      'anim:-1',
+    ]);
+  });
+
+  it('漫画成员步进：rtl 只反转左右方向键，空格/上下保持物理方向；不播翻页动画', () => {
+    const { calls, host } = createNavigationHost({
+      kind: 'paged',
+      member: 'comic',
+      rtl: true,
+      page: 3,
+      paginated: false,
+      moved: false,
+    });
+    const navigation = createReaderSessionNavigation(host);
+    expect(navigation.advance(1, 'ArrowRight')).toBe(true); // rtl：右键 = 上一页
+    expect(navigation.advance(1, 'ArrowDown')).toBe(true); // 非左右键不反转
+    expect(navigation.advance(-1, 'ArrowLeft')).toBe(true); // rtl：左键 = 下一页
+    expect(calls).toEqual([
+      'comicPrev',
+      'syncPaged',
+      'persist',
+      'comicNext',
+      'syncPaged',
+      'persist',
+      'comicNext',
+      'syncPaged',
+      'persist',
+    ]);
+  });
+
+  it('flow 成员步进：按版式分派（分栏/视口），移动才写进度/藏工具栏/动画', () => {
+    const paged = createNavigationHost({
+      kind: 'flow',
+      member: null,
+      rtl: false,
+      page: 0,
+      paginated: true,
+      moved: true,
+    });
+    expect(createReaderSessionNavigation(paged.host).advance(1)).toBe(true);
+    expect(paged.calls).toEqual(['flowPaged:1', 'persist', 'hideToolbar', 'anim:1']);
+
+    const scrolled = createNavigationHost({
+      kind: 'flow',
+      member: null,
+      rtl: false,
+      page: 0,
+      paginated: false,
+      moved: true,
+    });
+    expect(createReaderSessionNavigation(scrolled.host).advance(-1)).toBe(true);
+    expect(scrolled.calls[0]).toBe('flowScrolled:-1');
+  });
+
+  it('flow 边界（首屏上翻/末屏下翻）：返回 false，不写进度、不动画、不越界', () => {
+    const { calls, host } = createNavigationHost({
+      kind: 'flow',
+      member: null,
+      rtl: false,
+      page: 0,
+      paginated: true,
+      moved: false,
+    });
+    expect(createReaderSessionNavigation(host).advance(1)).toBe(false);
+    expect(createReaderSessionNavigation(host).advance(-1)).toBe(false);
+    expect(calls).toEqual(['flowPaged:1', 'flowPaged:-1']);
+  });
+
+  it('大纲跳转按族落点：paged 按页、flow 按章（先作废待恢复）；错族/无落点 no-op 不报错', () => {
+    const paged = createNavigationHost({
+      kind: 'paged',
+      member: 'pdf',
+      rtl: false,
+      page: 2,
+      paginated: false,
+      moved: false,
+    });
+    const pagedNavigation = createReaderSessionNavigation(paged.host);
+    pagedNavigation.jumpToOutlineItem({ level: 1, text: 'P3', anchor: 0, page: 3 });
+    expect(paged.calls).toEqual(['scrollToPage:3', 'syncPaged', 'persist']);
+    paged.calls.length = 0;
+    // paged 会话收到章节条目：无页落点，不跳转不报错（页宿主未就绪同理）。
+    pagedNavigation.jumpToOutlineItem({ level: 1, text: 'C1', anchor: 1, chapter: 1 });
+    expect(paged.calls).toEqual([]);
+
+    const flow = createNavigationHost({
+      kind: 'flow',
+      member: null,
+      rtl: false,
+      page: 0,
+      paginated: true,
+      moved: false,
+    });
+    const flowNavigation = createReaderSessionNavigation(flow.host);
+    flowNavigation.jumpToOutlineItem({ level: 1, text: '第2章', anchor: 1, chapter: 1 });
+    expect(flow.calls).toEqual(['discardPending', 'flowChapter:1', 'syncFlow', 'persist']);
+    flow.calls.length = 0;
+    // flow 会话收到页式条目 / 条目无 page 也无 chapter：均不跳转不报错。
+    flowNavigation.jumpToOutlineItem({ level: 1, text: 'P2', anchor: 0, page: 2 });
+    flowNavigation.jumpToOutlineItem({ level: 1, text: '无落点', anchor: 2 });
+    expect(flow.calls).toEqual([]);
+  });
+
+  it('无会话（kind null）：advance false、跳转 no-op，不报错', () => {
+    const { calls, host } = createNavigationHost({
+      kind: null,
+      member: null,
+      rtl: false,
+      page: 0,
+      paginated: false,
+      moved: true,
+    });
+    const navigation = createReaderSessionNavigation(host);
+    expect(navigation.advance(1)).toBe(false);
+    expect(() =>
+      navigation.jumpToOutlineItem({ level: 1, text: 'x', anchor: 0, chapter: 0 }),
+    ).not.toThrow();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('窗口级翻页与大纲跳转接线（session-navigation 经 reader-view 门面）', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'scrollIntoView',
+  );
+
+  const loadNavigationBook = async (
+    chapterCount: number,
+  ): Promise<{
+    host: HTMLDivElement;
+    view: ReturnType<typeof createReaderView>;
+    reader: HTMLElement;
+    scroll: HTMLElement;
+  }> => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: chapterCount }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>chapter ${index + 1} body</p>`,
+        })),
+      }),
+    });
+    await view.load('book.epub');
+    const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    reader.dataset.readingLayout = 'scroll';
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    return { host, view, reader, scroll };
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+    // jsdom 未实现 scrollIntoView：滚动模式章节落位按 reader-load-lifecycle 先例打桩。
+    if (originalScrollIntoView === undefined) {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    } else {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    }
+  });
+
+  it('窗口级翻页（滚动视口步进）：移动返回 true；首屏上翻/末屏下翻不越界', async () => {
+    vi.useFakeTimers();
+    const { view, scroll } = await loadNavigationBook(2);
+    // 视口 400、全书 1200：两步到滚动末尾（max = 1200 - 400 = 800）。
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 1200 });
+    scroll.scrollTop = 0;
+
+    expect(view.advanceReading(1)).toBe(true);
+    expect(scroll.scrollTop).toBe(400);
+    expect(view.advanceReading(1)).toBe(true);
+    expect(scroll.scrollTop).toBe(800);
+    // 末屏下翻：已在滚动末尾，返回 false 放行原生滚动（窗口级调用方不吞事件）。
+    expect(view.advanceReading(1)).toBe(false);
+    expect(scroll.scrollTop).toBe(800);
+    // 首屏上翻：同理不越界。
+    scroll.scrollTop = 0;
+    expect(view.advanceReading(-1)).toBe(false);
+    expect(scroll.scrollTop).toBe(0);
+    await view.destroy();
+  });
+
+  it('大纲跳转按章落位：迟到恢复不回跳；无落点条目不跳转不报错', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const { view } = await loadNavigationBook(3);
+    expect(view.getOutline()).toHaveLength(3);
+    expect(view.getOutline()[0]?.chapter).toBe(0); // flow 大纲为章节条目
+
+    view.jumpToOutlineItem({ level: 1, text: 'Chapter 2', anchor: 1, chapter: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    const activeChapter = () =>
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex;
+    expect(activeChapter()).toBe('1');
+
+    // 无 page/chapter 落点的条目（无大纲条目时的防御调用）：不跳转、不报错。
+    expect(() => view.jumpToOutlineItem({ level: 1, text: '无落点', anchor: 9 })).not.toThrow();
+    expect(activeChapter()).toBe('1');
+    await view.destroy();
+  });
+});
+
+describe('导航会话接线（session-navigation：翻页模式门面路径）', () => {
+  // 策略表规则（成员效果/rtl 翻转/跨族载荷 no-op）已由「导航会话策略表」用例
+  // 经记账宿主直测；滚动模式边界与大纲落位由「窗口级翻页与大纲跳转接线」
+  // 经门面覆盖。此处补翻页模式（偏好存储接线）的门面路径。
+  const loadPaginatedBook = async (
+    chapters: Array<{ title: string; html: string }>,
+  ): Promise<{
+    host: HTMLDivElement;
+    view: ReturnType<typeof createReaderView>;
+    activeChapter: () => string | undefined;
+  }> => {
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new TextEncoder().encode('unused'),
+      parseContent: async () => ({ chapters }),
+      preferenceStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+      },
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    const activeChapter = () =>
+      host
+        .querySelector<HTMLElement>('.lightink-reader-chapter.is-active')
+        ?.dataset.chapterIndex;
+    return { host, view, activeChapter };
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('窗口级翻页经策略表：翻页模式步进移动活动章并返回 true', async () => {
+    vi.useFakeTimers();
+    const { view, activeChapter } = await loadPaginatedBook([
+      { title: 'One', html: '<p>chapter one body</p>' },
+      { title: 'Two', html: '<p>chapter two body</p>' },
+    ]);
+    expect(activeChapter()).toBe('0');
+    expect(view.advanceReading(1)).toBe(true);
+    expect(activeChapter()).toBe('1');
+    expect(view.state.current).toBe(2);
+    await view.destroy();
+  });
+
+  it('边界不越界：翻页模式首页上翻/末页下翻返回 false，阅读位置不动', async () => {
+    vi.useFakeTimers();
+    const { view, activeChapter } = await loadPaginatedBook([
+      { title: 'Only', html: '<p>single short chapter</p>' },
+    ]);
+    expect(view.advanceReading(-1)).toBe(false); // 首页上翻
+    expect(view.advanceReading(1)).toBe(false); // 末页下翻（无下一章）
+    expect(activeChapter()).toBe('0');
     expect(view.state.current).toBe(1);
     expect(view.state.phase).toBe('ready');
     await view.destroy();
