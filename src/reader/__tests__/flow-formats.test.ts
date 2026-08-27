@@ -15,12 +15,20 @@ import { parseFb2 } from '../formats/fb2.js';
 import { parseMobi } from '../formats/mobi.js';
 import { parseTxt, parseTxtFromSource } from '../formats/txt.js';
 import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
-import type { ReaderByteSource } from '../formats/types.js';
+import type { ReaderByteSource, ReaderContent } from '../formats/types.js';
 import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
 import { injectReaderLimit } from '../reader-limits.js';
 import { ParseError, ReaderCapabilityError, ReaderLimitError } from '../formats/types.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+/** 物化全部章节后拼接 HTML，适配多章与懒加载合同。 */
+async function loadedHtml(content: ReaderContent): Promise<string> {
+  for (const chapter of content.chapters) {
+    await chapter.load?.();
+  }
+  return content.chapters.map((chapter) => chapter.html).join('');
+}
 
 describe('sanitizeHtml', () => {
   it('移除 script/style 与注释', () => {
@@ -104,19 +112,19 @@ describe('sanitizeHtml', () => {
 });
 
 describe('parseTxt', () => {
-  it('UTF-8 文本按空行分段为单章', () => {
+  it('UTF-8 文本按空行分段为段落 HTML，不强制单章空标题', async () => {
     const content = parseTxt(enc('First line\nSecond line\n\nSecond para'));
-    expect(content.chapters).toHaveLength(1);
-    expect(content.chapters[0]!.html).toContain('<p>First line<br>Second line</p>');
-    expect(content.chapters[0]!.html).toContain('<p>Second para</p>');
+    const html = await loadedHtml(content);
+    expect(html).toContain('<p>First line<br>Second line</p>');
+    expect(html).toContain('<p>Second para</p>');
   });
 
-  it('转义 HTML 特殊字符', () => {
+  it('转义 HTML 特殊字符', async () => {
     const content = parseTxt(enc('a < b & c > d'));
-    expect(content.chapters[0]!.html).toContain('a &lt; b &amp; c &gt; d');
+    expect(await loadedHtml(content)).toContain('a &lt; b &amp; c &gt; d');
   });
 
-  it('非 UTF-8 文本回退 GBK（运行时支持 GBK 时）', () => {
+  it('非 UTF-8 文本回退 GBK（运行时支持 GBK 时）', async () => {
     // “中文”的 GBK 编码（0xD6 0xD0 0xCE 0xC4），不是合法 UTF-8。
     const gbkBuf = new Uint8Array([0xd6, 0xd0, 0xce, 0xc4]);
     let gbkDecoded = false;
@@ -130,7 +138,177 @@ describe('parseTxt', () => {
       return; // 运行时无 GBK，跳过本例（UTF-8 兜底路径在其它用例覆盖）。
     }
     const content = parseTxt(gbkBuf);
-    expect(content.chapters[0]!.html).toContain('中文');
+    expect(await loadedHtml(content)).toContain('中文');
+  });
+
+  it('识别第一卷与第0001章标题并产出可跳转目录', async () => {
+    const text = [
+      '第一卷',
+      '',
+      '卷首语。',
+      '',
+      '第0001章 宋青书的前世今生',
+      '',
+      '青书醒来。',
+      '',
+      '第0002章 下山',
+      '',
+      '他走了。',
+      '',
+      '第0003章 江湖',
+      '',
+      '风起。',
+      '',
+      '第0004章 故人',
+      '',
+      '重逢。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        '第一卷',
+        '第0001章 宋青书的前世今生',
+        '第0002章 下山',
+        '第0003章 江湖',
+        '第0004章 故人',
+      ]),
+    );
+    const jumpable = content.chapters.filter((chapter) => chapter.title.length > 0);
+    expect(jumpable.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(jumpable.map((chapter) => chapter.title)).size).toBe(jumpable.length);
+
+    const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
+    expect(first).toBeDefined();
+    await first!.load?.();
+    expect(first!.html).toContain('青书醒来');
+  });
+
+  it('超过 30 字的第X章叙述行当作正文不切章', async () => {
+    const narrative = `第8章${'叙述'.repeat(16)}还在继续`;
+    expect([...narrative].length).toBeGreaterThan(30);
+    const content = parseTxt(enc(`开场白。\n\n${narrative}\n\n后面还在讲故事。`));
+    expect(content.chapters.some((chapter) => chapter.title === narrative)).toBe(false);
+    expect(content.chapters.filter((chapter) => /第\d+章/.test(chapter.title))).toHaveLength(0);
+    expect(await loadedHtml(content)).toContain(narrative);
+  });
+
+  it('如图第3章所述、部分人认为与前言不搭后语不增章', () => {
+    const text = [
+      '第一卷',
+      '',
+      '卷首。',
+      '',
+      '第0001章 宋青书的前世今生',
+      '',
+      '如图第3章所述，情节已经铺开。',
+      '',
+      '部分人认为此事另有隐情。',
+      '',
+      '这话简直前言不搭后语。',
+      '',
+      '第0002章 下山',
+      '',
+      '他走了。',
+      '',
+      '第0003章 江湖',
+      '',
+      '风起。',
+      '',
+      '第0004章 故人',
+      '',
+      '重逢。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    expect(content.chapters.filter((chapter) => chapter.title.length > 0).map((chapter) => chapter.title)).toEqual([
+      '第一卷',
+      '第0001章 宋青书的前世今生',
+      '第0002章 下山',
+      '第0003章 江湖',
+      '第0004章 故人',
+    ]);
+  });
+
+  it('书前假目录不生成空章', async () => {
+    const text = [
+      '目录',
+      '第一卷',
+      '第0001章 宋青书的前世今生',
+      '第0002章 下山',
+      '第0003章 江湖',
+      '第0004章 故人',
+      '',
+      '第一卷',
+      '',
+      '卷首。',
+      '',
+      '第0001章 宋青书的前世今生',
+      '',
+      '正文一。',
+      '',
+      '第0002章 下山',
+      '',
+      '正文二。',
+      '',
+      '第0003章 江湖',
+      '',
+      '正文三。',
+      '',
+      '第0004章 故人',
+      '',
+      '正文四。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    const titled = content.chapters.filter((chapter) => chapter.title.length > 0).map((chapter) => chapter.title);
+    expect(titled.filter((title) => title === '第0001章 宋青书的前世今生')).toHaveLength(1);
+    expect(titled).toEqual(
+      expect.arrayContaining([
+        '第一卷',
+        '第0001章 宋青书的前世今生',
+        '第0002章 下山',
+        '第0003章 江湖',
+        '第0004章 故人',
+      ]),
+    );
+    for (const chapter of content.chapters) {
+      await chapter.load?.();
+    }
+    expect(content.chapters.every((chapter) => chapter.html.trim().length > 0)).toBe(true);
+    expect(await loadedHtml(content)).toContain('正文一');
+  });
+
+  it('有效标题不足 4 个的长文按篇幅切开且 load 后正文完整', async () => {
+    const block = '甲'.repeat(4000);
+    const text = [block, block, block, block].join('\n\n');
+    const content = parseTxt(enc(text));
+    expect(content.chapters.length).toBeGreaterThan(1);
+    expect(content.chapters.filter((chapter) => /第.+[章节回]/.test(chapter.title)).length).toBeLessThan(4);
+    const html = await loadedHtml(content);
+    expect((html.match(/甲/g) ?? []).length).toBe(16000);
+  });
+
+  it('不少于 9 个带标题章时仅前两章急切物化，其余经 load 幂等填充', async () => {
+    const lines: string[] = ['第一卷', '', '卷首语。', ''];
+    for (let index = 1; index <= 9; index += 1) {
+      const number = String(index).padStart(4, '0');
+      const title = index === 1 ? `第${number}章 宋青书的前世今生` : `第${number}章 标题${index}`;
+      lines.push(title, '', `正文${index}。`, '');
+    }
+    const content = parseTxt(enc(lines.join('\n')));
+    expect(content.chapters.length).toBeGreaterThanOrEqual(9);
+    expect(content.chapters[0]!.html).not.toBe('');
+    expect(content.chapters[1]!.html).not.toBe('');
+    for (let index = 2; index < content.chapters.length; index += 1) {
+      expect(content.chapters[index]!.html).toBe('');
+    }
+
+    const late = content.chapters[content.chapters.length - 1]!;
+    await late.load?.();
+    expect(late.html).not.toBe('');
+    expect(late.html).toContain('正文9');
+    const once = late.html;
+    await late.load?.();
+    expect(late.html).toBe(once);
   });
 });
 
@@ -149,14 +327,13 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
 
   it('跨块分段与整读结果一致（多种块大小）', async () => {
     const text = '第一段 中文\n第二行\r\n\r\nsecond para\n\n\nthird 段末';
-    const expected = parseTxt(enc(text)).chapters[0]!.html;
+    const expected = await loadedHtml(parseTxt(enc(text)));
     // 块大小 1..7 覆盖多字节字符/段落边界/\r\n 的各种跨块切法。
     for (let chunkBytes = 1; chunkBytes <= 7; chunkBytes += 1) {
       const content = await parseTxtFromSource(sourceFromBytes(enc(text)), undefined, {
         chunkBytes,
       });
-      expect(content.chapters).toHaveLength(1);
-      expect(content.chapters[0]!.html).toBe(expected);
+      expect(await loadedHtml(content)).toBe(expected);
     }
   });
 
@@ -166,7 +343,7 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
     const content = await parseTxtFromSource(sourceFromBytes(bytes), undefined, {
       chunkBytes: 2,
     });
-    expect(content.chapters[0]!.html).toBe('<p>a<br>b</p>');
+    expect(await loadedHtml(content)).toBe('<p>a<br>b</p>');
   });
 
   it('GBK 字节经首块嗅探后流式解码（运行时支持 GBK 时）', async () => {
@@ -185,7 +362,7 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
     const content = await parseTxtFromSource(sourceFromBytes(gbkBuf), undefined, {
       chunkBytes: 4,
     });
-    expect(content.chapters[0]!.html).toContain('中文中文');
+    expect(await loadedHtml(content)).toContain('中文中文');
   });
 
   it('嗅探截断点落在多字节字符内部仍判定 UTF-8（>64 KiB 回归）', async () => {
@@ -195,10 +372,11 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
     const text = `${'a'.repeat(65534)}中\n\n结尾段`;
     const bytes = enc(text);
     expect(bytes.length).toBeGreaterThan(64 * 1024);
-    const expected = parseTxt(bytes).chapters[0]!.html;
+    const expected = await loadedHtml(parseTxt(bytes));
     const content = await parseTxtFromSource(sourceFromBytes(bytes));
-    expect(content.chapters[0]!.html).toBe(expected);
-    expect(content.chapters[0]!.html).toContain('中');
+    expect(await loadedHtml(content)).toBe(expected);
+    expect(expected).toContain('中');
+    expect(expected).toContain('结尾段');
   });
 
   it('读取间响应取消信号', async () => {
@@ -222,12 +400,12 @@ describe('parseTxtFromSource（T8 分块解析）', () => {
     // shared-utils：txt 分段与整读成章引用同一 escapeHtml——含 & < > 的段落
     // 在两条路径下产出一致，无第二份转义实现。
     const text = 'a < b & c > d';
-    const expected = parseTxt(enc(text)).chapters[0]!.html;
+    const expected = await loadedHtml(parseTxt(enc(text)));
     const content = await parseTxtFromSource(sourceFromBytes(enc(text)), undefined, {
       chunkBytes: 3,
     });
-    expect(content.chapters[0]!.html).toBe(expected);
-    expect(content.chapters[0]!.html).toContain('a &lt; b &amp; c &gt; d');
+    expect(await loadedHtml(content)).toBe(expected);
+    expect(expected).toContain('a &lt; b &amp; c &gt; d');
   });
 });
 
@@ -1090,7 +1268,7 @@ describe('共享解码嗅探顺序传播（shared-decode）', () => {
     const mobiBytes = buildMobi('<h1>标题</h1><p>正文内容</p>');
     const epubBytes = await buildProbeEpub();
 
-    const txtBefore = parseTxt(txtBytes).chapters[0]!.html;
+    const txtBefore = await loadedHtml(parseTxt(txtBytes));
     const fb2Before = parseFb2(fb2Bytes);
     const epubBefore = await parseEpub(epubBytes);
     const mobiBefore = parseMobi(mobiBytes);
@@ -1104,7 +1282,7 @@ describe('共享解码嗅探顺序传播（shared-decode）', () => {
     // 不走嗅探，输出保持不变。
     const restore = injectEncodingSniffOrder(['windows-1252', 'utf-8', 'gbk']);
     try {
-      const txtAfter = parseTxt(txtBytes).chapters[0]!.html;
+      const txtAfter = await loadedHtml(parseTxt(txtBytes));
       expect(txtAfter).not.toBe(txtBefore);
       expect(txtAfter).not.toContain('中文');
       const fb2After = parseFb2(fb2Bytes);
@@ -1120,7 +1298,7 @@ describe('共享解码嗅探顺序传播（shared-decode）', () => {
       restore();
     }
     // 恢复默认顺序后输出回到基线。
-    expect(parseTxt(txtBytes).chapters[0]!.html).toBe(txtBefore);
+    expect(await loadedHtml(parseTxt(txtBytes))).toBe(txtBefore);
   });
 });
 
