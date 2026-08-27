@@ -15,7 +15,7 @@
  */
 
 import { bytesToBase64 } from '../../asset/asset-service.js';
-import { sanitizeParsedHtml } from '../sanitize.js';
+import { sanitizeHtml, sanitizeParsedHtml } from '../sanitize.js';
 import { sanitizeReaderCss } from '../sanitize-css.js';
 import { throwIfReaderLoadCancelled } from '../load-lifecycle.js';
 import { openSafeArchive, type ArchiveInput } from './safe-archive.js';
@@ -93,9 +93,51 @@ function firstBodyHeadingText(body: HTMLElement): string {
   return body.querySelector('h1, h2, h3')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
-/** 块标签折成独立行，只喂标题规则；标记本身不当标题。 */
-function elementToPlainText(root: Element): string {
+const PACKAGED_IMAGE_ATTRS = ['alt', 'width', 'height', 'title', 'id'] as const;
+
+function normalizeExtractedText(value: string): string {
+  return value
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function packagedImageMarkup(owner: Document, path: string, source: Element): string {
+  const img = owner.createElement('img');
+  img.setAttribute('src', path);
+  for (const name of PACKAGED_IMAGE_ATTRS) {
+    const value = source.getAttribute(name);
+    if (value === null || value === '') {
+      continue;
+    }
+    if ((name === 'width' || name === 'height') && value.includes('%')) {
+      continue;
+    }
+    img.setAttribute(name, value);
+  }
+  return sanitizeHtml(img.outerHTML);
+}
+
+interface LocatedPackagedImage {
+  markup: string;
+  offset: number;
+}
+
+/** 块标签折成独立行，只喂标题规则；标记本身不当标题。顺带记下包图在抽出文本中的位置。 */
+function extractPlainTextAndImages(
+  root: Element,
+  imageMarkup: (element: Element) => string | null,
+): { text: string; images: LocatedPackagedImage[] } {
   const parts: string[] = [];
+  const rawImages: Array<{ markup: string; rawOffset: number }> = [];
+  const recordImage = (element: Element): void => {
+    const markup = imageMarkup(element);
+    if (markup === null || markup === '') {
+      return;
+    }
+    rawImages.push({ markup, rawOffset: parts.join('').length });
+  };
   const walk = (node: Node): void => {
     if (node.nodeType === Node.TEXT_NODE) {
       parts.push(node.textContent ?? '');
@@ -109,7 +151,17 @@ function elementToPlainText(root: Element): string {
       parts.push('\n');
       return;
     }
-    if (tag === 'script' || tag === 'style' || tag === 'svg') {
+    if (tag === 'script' || tag === 'style') {
+      return;
+    }
+    if (tag === 'img') {
+      recordImage(node);
+      return;
+    }
+    if (tag === 'svg') {
+      for (const image of node.querySelectorAll('image')) {
+        recordImage(image);
+      }
       return;
     }
     const block = BLOCK_LINE_TAGS.has(tag);
@@ -124,40 +176,96 @@ function elementToPlainText(root: Element): string {
     }
   };
   walk(root);
-  return parts
-    .join('')
-    .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const raw = parts.join('');
+  const text = normalizeExtractedText(raw);
+  return {
+    text,
+    images: rawImages.map((image) => ({
+      markup: image.markup,
+      offset: normalizeExtractedText(raw.slice(0, image.rawOffset)).length,
+    })),
+  };
+}
+
+function chapterIndexForTextOffset(
+  chapters: readonly ReaderChapter[],
+  sourceText: string,
+  offset: number,
+): number {
+  const clamped = Math.max(0, Math.min(offset, sourceText.length));
+  let chosen = 0;
+  let searchFrom = 0;
+  let sawTitle = false;
+  for (let index = 0; index < chapters.length; index += 1) {
+    const title = chapters[index]!.title;
+    if (title === '') {
+      continue;
+    }
+    sawTitle = true;
+    const at = sourceText.indexOf(title, searchFrom);
+    if (at === -1) {
+      continue;
+    }
+    if (at <= clamped) {
+      chosen = index;
+    }
+    searchFrom = at + title.length;
+  }
+  if (sawTitle) {
+    return chosen;
+  }
+  if (chapters.length <= 1 || sourceText.length === 0) {
+    return 0;
+  }
+  return Math.min(
+    Math.floor((clamped / sourceText.length) * chapters.length),
+    chapters.length - 1,
+  );
 }
 
 function attachPackagedImages(
   splitChapters: readonly ReaderChapter[],
-  markup: string,
+  sourceText: string,
+  images: readonly LocatedPackagedImage[],
   resolveResources: (doc: Document) => Promise<void>,
   releaseResources: (doc: Document) => void,
 ): void {
-  const target = splitChapters[0];
-  if (target === undefined || markup === '') {
+  if (images.length === 0 || splitChapters.length === 0) {
     return;
   }
-  const inject = (): void => {
-    if (!target.html.includes(markup)) {
-      target.html += markup;
+  const markupByChapter = new Map<number, string[]>();
+  for (const image of images) {
+    const index = chapterIndexForTextOffset(splitChapters, sourceText, image.offset);
+    const bucket = markupByChapter.get(index);
+    if (bucket === undefined) {
+      markupByChapter.set(index, [image.markup]);
+    } else {
+      bucket.push(image.markup);
     }
-  };
-  if (target.html !== '' || target.load === undefined) {
-    inject();
-  } else {
-    const originalLoad = target.load;
-    target.load = async () => {
-      await originalLoad();
-      inject();
-    };
   }
-  target.resolveResources = resolveResources;
-  target.releaseResources = releaseResources;
+  for (const [index, markups] of markupByChapter) {
+    const target = splitChapters[index];
+    if (target === undefined) {
+      continue;
+    }
+    const markup = markups.join('');
+    const inject = (): void => {
+      if (!target.html.includes(markup)) {
+        target.html += markup;
+      }
+    };
+    if (target.html !== '' || target.load === undefined) {
+      inject();
+    } else {
+      const originalLoad = target.load;
+      target.load = async () => {
+        await originalLoad();
+        inject();
+      };
+    }
+    target.resolveResources = resolveResources;
+    target.releaseResources = releaseResources;
+  }
 }
 
 function stripLeadingJunkTitle(body: HTMLElement, junk: string): void {
@@ -603,8 +711,8 @@ export async function parseEpub(
     }
     const remote = isRemoteArchiveInput(source);
     if (chapters.length < MIN_NATIVE_SPINE_CHAPTERS) {
-      const texts: string[] = [];
-      const imageMarkup: string[] = [];
+      const locatedImages: LocatedPackagedImage[] = [];
+      let joined = '';
       for (const { reference } of spineItems) {
         const file = archive.file(reference.path);
         if (file === null) {
@@ -613,49 +721,35 @@ export async function parseEpub(
         const xhtml = decodeReaderText(await file.readBytes(signal));
         throwIfReaderLoadCancelled(signal);
         const document = new DOMParser().parseFromString(xhtml, 'text/html');
-        const body = document.body;
-        const text = elementToPlainText(body);
-        if (text !== '') {
-          texts.push(text);
-        }
-        for (const image of body.querySelectorAll<HTMLImageElement>('img[src]')) {
-          const path = packagedImagePath(reference.path, image.getAttribute('src') ?? '');
+        const extracted = extractPlainTextAndImages(document.body, (element) => {
+          const href =
+            element.localName === 'img'
+              ? (element.getAttribute('src') ?? '')
+              : svgImageHref(element);
+          const path = packagedImagePath(reference.path, href);
           if (path === null) {
-            continue;
+            return null;
           }
-          image.setAttribute('src', path);
-          imageMarkup.push(image.outerHTML);
+          return packagedImageMarkup(document, path, element);
+        });
+        const base =
+          joined.length === 0 || extracted.text === ''
+            ? joined.length
+            : joined.length + 2;
+        for (const image of extracted.images) {
+          locatedImages.push({ markup: image.markup, offset: base + image.offset });
         }
-        for (const svg of [...body.querySelectorAll('svg')]) {
-          for (const image of svg.querySelectorAll('image')) {
-            const path = packagedImagePath(reference.path, svgImageHref(image));
-            if (path === null) {
-              continue;
-            }
-            const img = document.createElement('img');
-            img.setAttribute('src', path);
-            const width = image.getAttribute('width');
-            const height = image.getAttribute('height');
-            if (width !== null && width !== '' && !width.includes('%')) {
-              img.setAttribute('width', width);
-            }
-            if (height !== null && height !== '' && !height.includes('%')) {
-              img.setAttribute('height', height);
-            }
-            const alt = image.getAttribute('alt') ?? '';
-            if (alt !== '') {
-              img.alt = alt;
-            }
-            imageMarkup.push(img.outerHTML);
-          }
+        if (extracted.text !== '') {
+          joined = joined === '' ? extracted.text : `${joined}\n\n${extracted.text}`;
         }
       }
-      const split = splitPlainTextChapters(texts.join('\n\n'));
+      const split = splitPlainTextChapters(joined);
       if (split.chapters.length > chapters.length) {
-        if (imageMarkup.length > 0) {
+        if (locatedImages.length > 0) {
           attachPackagedImages(
             split.chapters,
-            imageMarkup.join(''),
+            joined,
+            locatedImages,
             materializeImages,
             releaseImages,
           );

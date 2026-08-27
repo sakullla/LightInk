@@ -813,6 +813,64 @@ describe('parseEpub', () => {
     return zip.close();
   }
 
+  async function buildSpineEpub(
+    chapters: readonly { title: string; body: string }[],
+    extras: readonly { path: string; bytes: Uint8Array; mediaType?: string }[] = [],
+  ): Promise<Uint8Array> {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    const extraItems = extras
+      .map((entry, index) => {
+        const href = entry.path.replace(/^OEBPS\//, '');
+        const mediaType = entry.mediaType ?? 'image/png';
+        return `<item id="res${index}" href="${href}" media-type="${mediaType}"/>`;
+      })
+      .join('');
+    const manifest = chapters
+      .map(
+        (_, index) =>
+          `<item id="ch${index}" href="ch${index}.xhtml" media-type="application/xhtml+xml"/>`,
+      )
+      .join('');
+    const spine = chapters.map((_, index) => `<itemref idref="ch${index}"/>`).join('');
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package>' +
+            '<metadata><dc:title>结构书</dc:title></metadata>' +
+            `<manifest>${manifest}${extraItems}</manifest>` +
+            `<spine>${spine}</spine></package>`,
+        ),
+      ),
+    );
+    for (let index = 0; index < chapters.length; index += 1) {
+      const chapter = chapters[index]!;
+      await zip.add(
+        `OEBPS/ch${index}.xhtml`,
+        new Uint8ArrayReader(
+          enc(
+            `<html><head><title>${chapter.title}</title></head>` +
+              `<body>${chapter.body}</body></html>`,
+          ),
+        ),
+      );
+    }
+    for (const extra of extras) {
+      await zip.add(extra.path, new Uint8ArrayReader(extra.bytes), { level: 0 });
+    }
+    return zip.close();
+  }
+
   it('按 spine 顺序解析章节并消毒', async () => {
     const content = await parseEpub(await buildEpub());
     expect(content.chapters).toHaveLength(2);
@@ -820,6 +878,76 @@ describe('parseEpub', () => {
     expect(content.chapters[0]!.html).toContain('<h1>一</h1>');
     expect(content.chapters[1]!.title).toBe('第二章');
     expect(content.chapters[1]!.html).toContain('<p>乙</p>');
+  });
+
+  it('spine < 4 的 EPUB 按行首第0001章切出多章，包图消毒后挂到所在切章', async () => {
+    const content = await parseEpub(
+      await buildSpineEpub(
+        [
+          {
+            title: '全书',
+            body: [
+              '<p>第一卷</p>',
+              '<p>卷首语。</p>',
+              '<p>第0001章 宋青书的前世今生</p>',
+              '<p>青书醒来。</p>',
+              '<p>第0002章 下山</p>',
+              '<p>他走了。</p>',
+              '<img src="images/pic.png" alt="插图" onerror="alert(1)" data-evil="x" onclick="evil()">',
+              '<p>第0003章 江湖</p>',
+              '<p>风起。</p>',
+              '<p>第0004章 故人</p>',
+              '<p>重逢。</p>',
+            ].join(''),
+          },
+        ],
+        [{ path: 'OEBPS/images/pic.png', bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) }],
+      ),
+    );
+    const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        '第一卷',
+        '第0001章 宋青书的前世今生',
+        '第0002章 下山',
+        '第0003章 江湖',
+        '第0004章 故人',
+      ]),
+    );
+    expect(content.chapters.length).toBeGreaterThan(1);
+
+    const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
+    const second = content.chapters.find((chapter) => chapter.title === '第0002章 下山');
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    await first!.load?.();
+    await second!.load?.();
+    expect(first!.html).toContain('青书醒来');
+    expect(first!.html).not.toContain('OEBPS/images/pic.png');
+    expect(second!.html).toContain('他走了');
+    expect(second!.html).toContain('OEBPS/images/pic.png');
+    expect(second!.html).toContain('alt="插图"');
+    expect(second!.html).not.toMatch(/onerror|onclick|data-evil/i);
+    content.dispose?.();
+  });
+
+  it('spine ≥ 4 的 EPUB 保持原生项，不按正文第0001章再切', async () => {
+    const content = await parseEpub(
+      await buildSpineEpub([
+        { title: '卷一', body: '<h1>卷一</h1><p>第0001章 宋青书的前世今生</p><p>甲</p>' },
+        { title: '卷二', body: '<h1>卷二</h1><p>第0002章 下山</p><p>乙</p>' },
+        { title: '卷三', body: '<h1>卷三</h1><p>第0003章 江湖</p><p>丙</p>' },
+        { title: '卷四', body: '<h1>卷四</h1><p>第0004章 故人</p><p>丁</p>' },
+      ]),
+    );
+    expect(content.chapters).toHaveLength(4);
+    expect(content.chapters.map((chapter) => chapter.title)).toEqual(['卷一', '卷二', '卷三', '卷四']);
+    expect(content.chapters.some((chapter) => chapter.title === '第0001章 宋青书的前世今生')).toBe(
+      false,
+    );
+    expect(content.chapters[0]!.html).toContain('第0001章 宋青书的前世今生');
+    expect(content.chapters[1]!.html).toContain('第0002章 下山');
+    content.dispose?.();
   });
 
   it('keeps NCX/heading titles and strips junk converter <title> text from the body', async () => {
