@@ -1,6 +1,41 @@
 import type { MessageKey } from '../i18n/messages.js';
 import { labelModal, mountModalFocus } from './modal-focus.js';
 
+function isTouchPrimary(doc: Document): boolean {
+  const root = doc.documentElement;
+  return root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary');
+}
+
+/** Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the layer closable. */
+function applyArchivePasswordKeyboardInset(
+  overlay: HTMLElement,
+  dialog: HTMLElement,
+  input: HTMLInputElement,
+  actions: HTMLElement,
+): void {
+  overlay.style.paddingBottom = 'var(--lightink-keyboard-inset, 0px)';
+  dialog.style.maxHeight = 'calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))';
+  if (!isTouchPrimary(overlay.ownerDocument)) return;
+  dialog.style.boxSizing = 'border-box';
+  dialog.style.width = 'calc(100vw - 24px)';
+  dialog.style.maxWidth = 'calc(100vw - 24px)';
+  dialog.style.overflowY = 'auto';
+  dialog.style.padding = '14px 12px 10px';
+  dialog.style.borderRadius = '16px';
+  dialog.style.fontFamily = 'var(--lightink-font-ui)';
+  dialog.style.fontSize = 'var(--lightink-type-ui)';
+  input.style.minHeight = '44px';
+  input.style.fontSize = 'var(--lightink-type-body)';
+  actions.style.position = 'sticky';
+  actions.style.bottom = '0';
+  actions.style.zIndex = '1';
+  actions.style.paddingTop = '8px';
+  actions.style.background = 'var(--lightink-bg-elevated)';
+  for (const button of actions.querySelectorAll('button')) {
+    button.style.minHeight = '44px';
+  }
+}
+
 export interface ArchivePasswordDialogSpec {
   readonly displayName: string;
   readonly retry: boolean;
@@ -81,6 +116,7 @@ export function showArchivePasswordDialog(
     actions.append(cancel, confirm);
     dialog.append(title, message, form, actions);
     overlay.appendChild(dialog);
+    applyArchivePasswordKeyboardInset(overlay, dialog, input, actions);
     overlay.addEventListener('pointerdown', (event) => {
       if (event.target === overlay) settle(null);
     });

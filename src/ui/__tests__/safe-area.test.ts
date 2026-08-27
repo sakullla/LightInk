@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { translate } from '../../i18n/messages.js';
+import { showArchivePasswordDialog } from '../archive-password-dialog.js';
 import {
   applyKeyboardInset,
   applySafeAreaInsets,
   bindSafeAreaBridge,
   bindVisualViewportInsets,
 } from '../safe-area.js';
+
+const libraryCss = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+
+function overlayConsumesKeyboardInset(css: string, token: string): void {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  expect(css).toMatch(new RegExp(`${escaped}[^{}]*\\{[^{}]*--lightink-keyboard-inset`));
+}
 
 describe('applySafeAreaInsets', () => {
   it('writes CSS pixel variables used by reader chrome', () => {
@@ -99,5 +110,56 @@ describe('bindVisualViewportInsets', () => {
     expect(root.hasAttribute('data-keyboard')).toBe(false);
     release();
     expect(host.__lightinkApplyKeyboardInset).toBeUndefined();
+  });
+});
+
+describe('keyboard-inset overlay consumers', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-keyboard');
+    document.documentElement.style.removeProperty('--lightink-keyboard-inset');
+  });
+
+  it('keeps the safe-area write contract for --lightink-keyboard-inset', () => {
+    const root = document.createElement('html');
+    applyKeyboardInset(280, root);
+    expect(root.style.getPropertyValue('--lightink-keyboard-inset')).toBe('280px');
+    expect(root.hasAttribute('data-keyboard')).toBe(true);
+    applyKeyboardInset(0, root);
+    expect(root.style.getPropertyValue('--lightink-keyboard-inset')).toBe('0px');
+    expect(root.hasAttribute('data-keyboard')).toBe(false);
+  });
+
+  it('source/group/cache/membership overlays consume --lightink-keyboard-inset in CSS', () => {
+    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-source-modal');
+    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-group-modal');
+    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-cache-limit-modal');
+    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-membership-overlay');
+    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-membership-dialog');
+  });
+
+  it('archive-password overlay consumes keyboard-inset and can close after inset returns to 0', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const pending = showArchivePasswordDialog(document, {
+      displayName: 'secret.cbz',
+      retry: false,
+      t: (key, vars) => translate('zh-CN', key, vars),
+    });
+    const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay')!;
+    const input = document.querySelector<HTMLInputElement>('#lightink-archive-password')!;
+    expect(overlay.style.paddingBottom).toContain('--lightink-keyboard-inset');
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    applyKeyboardInset(280);
+    expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe(
+      '280px',
+    );
+    expect(overlay.hidden).toBe(false);
+    applyKeyboardInset(0);
+    expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe('0px');
+    expect(document.documentElement.hasAttribute('data-keyboard')).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await expect(pending).resolves.toBeNull();
+    expect(document.querySelector('.lightink-modal-overlay')).toBeNull();
   });
 });

@@ -91,6 +91,12 @@ export function bytesLabel(bytes: number): string {
   return `${value < 10 && unit > 0 ? value.toFixed(1) : value.toFixed(0)} ${units[unit]}`;
 }
 
+/** Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the layer closable. */
+function applyCacheLimitKeyboardInset(overlay: HTMLElement, dialog: HTMLElement): void {
+  overlay.style.paddingBottom = 'var(--lightink-keyboard-inset, 0px)';
+  dialog.style.maxHeight = 'calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))';
+}
+
 function button(doc: Document, text: string, className = ''): HTMLButtonElement {
   const el = doc.createElement('button');
   el.type = 'button';
@@ -229,6 +235,7 @@ export function createLibraryManage(
   cacheLimitForm.append(cacheLimitLabel, cacheLimitActions);
   cacheLimitDialog.append(cacheLimitTitle, cacheLimitForm);
   cacheLimitOverlay.append(cacheLimitDialog);
+  applyCacheLimitKeyboardInset(cacheLimitOverlay, cacheLimitDialog);
 
   let ignoreCacheBackdrop = true;
 

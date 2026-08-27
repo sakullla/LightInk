@@ -858,6 +858,29 @@ function button(doc: Document, text: string, className = ''): HTMLButtonElement 
   return element;
 }
 
+function revealOverlayFocus(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.matches('input, select, textarea, button')) return;
+  if (typeof target.scrollIntoView !== 'function') return;
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/** Keep focused fields and save/cancel above the IME after visualViewport settles. */
+function bindOverlayKeyboardReveal(overlay: HTMLElement): () => void {
+  let revealTimer = 0;
+  const onFocusIn = (event: FocusEvent): void => {
+    revealOverlayFocus(event.target);
+    if (typeof window === 'undefined') return;
+    window.clearTimeout(revealTimer);
+    revealTimer = window.setTimeout(() => revealOverlayFocus(event.target), 320);
+  };
+  overlay.addEventListener('focusin', onFocusIn);
+  return () => {
+    overlay.removeEventListener('focusin', onFocusIn);
+    if (typeof window !== 'undefined') window.clearTimeout(revealTimer);
+  };
+}
+
 function itemTitle(item: LibraryItem): string {
   return typeof item.title === 'string' ? item.title : '';
 }
@@ -4241,6 +4264,7 @@ export function createLibraryView(
       return wrap;
     };
     const actions = doc.createElement('div');
+    actions.className = 'lightink-library-source-form-actions';
     const save = button(doc, labels().save, 'lightink-library-primary');
     save.type = 'submit';
     const cancel = button(doc, labels().cancel);
@@ -4798,6 +4822,9 @@ export function createLibraryView(
     }
     openGroupsSheet();
   });
+  const unbindGroupOverlayReveal = bindOverlayKeyboardReveal(groupOverlay);
+  const unbindSourceOverlayReveal = bindOverlayKeyboardReveal(sourceOverlay);
+  const unbindMembershipOverlayReveal = bindOverlayKeyboardReveal(membershipOverlay);
   const unbindGroupsSheetDrag = bindSheetDrag(groupsSheetHandle, {
     sheet: groupsSheetDialog,
     onClose: () => {
@@ -4999,6 +5026,9 @@ export function createLibraryView(
       for (const controller of activeOperations) controller.abort();
       activeOperations.clear();
       manage.destroy();
+      unbindGroupOverlayReveal();
+      unbindSourceOverlayReveal();
+      unbindMembershipOverlayReveal();
       unbindGroupsSheetDrag();
       deps.workspaceTravel?.remove();
       membershipOverlay.remove();

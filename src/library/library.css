@@ -3549,7 +3549,18 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 /*
  * Portaled overlays sit on document.body. Phone / ?mobile=1 preview must
  * follow the viewport — not the 22–26rem desktop card — and use shelf UI type.
+ * Keyboard inset is written by src/ui/safe-area.ts; these layers only consume it.
  */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-modal {
+  padding-bottom: var(--lightink-keyboard-inset, 0px);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-membership-overlay {
+  padding-bottom: max(20px, var(--lightink-keyboard-inset, 0px));
+}
+
 :is(html[data-android], html[data-touch-primary])
   .lightink-library-group-modal
   .lightink-modal-dialog,
@@ -3563,13 +3574,27 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   box-sizing: border-box;
   width: calc(100vw - 24px);
   max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px));
+  overflow-y: auto;
   padding: 14px 12px 10px;
+  border-radius: 16px;
   font-family: var(--lightink-font-ui);
   font-size: var(--lightink-type-ui);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
-  max-height: min(80vh, 560px);
+  max-height: min(80vh, 560px, calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px)));
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-form-actions,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-form-actions,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-actions,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-membership-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+  background: var(--lightink-bg-elevated);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form,

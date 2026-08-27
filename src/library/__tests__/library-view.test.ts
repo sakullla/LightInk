@@ -20,6 +20,7 @@ import {
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
 import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
+import { applyKeyboardInset } from '../../ui/safe-area.js';
 import '../library.css';
 
 type GroupLibrary = NonNullable<LibraryViewDependencies['library']>;
@@ -717,6 +718,8 @@ afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-android');
   document.documentElement.removeAttribute('data-touch-primary');
+  document.documentElement.removeAttribute('data-keyboard');
+  document.documentElement.style.removeProperty('--lightink-keyboard-inset');
   delete document.documentElement.dataset.readerProgressBar;
 });
 
@@ -4607,6 +4610,13 @@ describe('LibraryView mobile shelf', () => {
     });
   }
 
+  function expectOverlayKeyboardInset(css: string, token: string): void {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expect(css).toMatch(
+      new RegExp(`${escaped}[^{}]*\\{[^{}]*--lightink-keyboard-inset`, 's'),
+    );
+  }
+
   it('spaces the continue banner and cover wall so the last row clears the tab bar', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
 
@@ -4717,6 +4727,88 @@ describe('LibraryView mobile shelf', () => {
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-membership-options label\s*\{[^}]*min-height:\s*44px/,
     );
+    expectOverlayKeyboardInset(css, '.lightink-library-source-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-group-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-cache-limit-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-membership-overlay');
+    expectOverlayKeyboardInset(css, '.lightink-library-membership-dialog');
+  });
+
+  it('lifts source/group/cache/membership overlays above the IME and still closes them at inset 0', async () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expectOverlayKeyboardInset(css, '.lightink-library-source-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-group-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-cache-limit-modal');
+    expectOverlayKeyboardInset(css, '.lightink-library-membership-overlay');
+
+    const novel = localItem();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    await library.createGroup!('稍后读');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    shownControl(host, '添加书库源').click();
+    const sourceOverlay = document.querySelector<HTMLElement>('.lightink-library-source-modal')!;
+    const sourceForm = sourceFormOf();
+    expect(isShown(sourceOverlay)).toBe(true);
+    const auth = sourceForm.elements.namedItem('auth') as HTMLSelectElement;
+    auth.value = 'basic';
+    auth.dispatchEvent(new Event('change', { bubbles: true }));
+    const password = sourceForm.elements.namedItem('password') as HTMLInputElement;
+    expect(password).toBeInstanceOf(HTMLInputElement);
+    expect(password.hidden).toBe(false);
+    password.focus();
+    applyKeyboardInset(280);
+    expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe(
+      '280px',
+    );
+    expect(document.documentElement.hasAttribute('data-keyboard')).toBe(true);
+    expect(isShown(sourceOverlay)).toBe(true);
+    expect(isShown(password)).toBe(true);
+    expect(isShown(sourceForm.querySelector('.lightink-library-primary'))).toBe(true);
+    applyKeyboardInset(0);
+    expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe('0px');
+    expect(document.documentElement.hasAttribute('data-keyboard')).toBe(false);
+    expect(isShown(sourceOverlay)).toBe(true);
+    shownControl(sourceOverlay, '取消').click();
+    expect(isShown(sourceOverlay)).toBe(false);
+
+    await startCreateGroup(host);
+    const groupOverlay = document.querySelector<HTMLElement>('.lightink-library-group-modal')!;
+    expect(isShown(groupOverlay)).toBe(true);
+    applyKeyboardInset(240);
+    applyKeyboardInset(0);
+    expect(isShown(groupOverlay)).toBe(true);
+    shownControl(groupOverlay, '取消').click();
+    expect(isShown(groupOverlay)).toBe(false);
+
+    const card = itemCard(host, novel.id);
+    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', bubbles: true, cancelable: true }));
+    await settle();
+    const membershipOverlay = document.querySelector<HTMLElement>(
+      '.lightink-library-membership-overlay',
+    )!;
+    expect(isShown(membershipOverlay)).toBe(true);
+    applyKeyboardInset(200);
+    applyKeyboardInset(0);
+    expect(isShown(membershipOverlay)).toBe(true);
+    shownControl(membershipOverlay, '取消').click();
+    expect(isShown(membershipOverlay)).toBe(false);
+
+    await openManage(host);
+    host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const cacheOverlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
+    expect(isShown(cacheOverlay)).toBe(true);
+    expect(cacheOverlay.style.paddingBottom).toContain('--lightink-keyboard-inset');
+    applyKeyboardInset(180);
+    applyKeyboardInset(0);
+    expect(isShown(cacheOverlay)).toBe(true);
+    cacheOverlay.querySelector<HTMLButtonElement>('.lightink-library-cache-limit-cancel')!.click();
+    expect(isShown(cacheOverlay)).toBe(false);
+    view.destroy();
   });
 
   function tabButton(host: ParentNode, tab: string): HTMLButtonElement {
