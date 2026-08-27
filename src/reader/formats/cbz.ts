@@ -269,6 +269,34 @@ function comicPointerDistance(
   return Math.hypot(left.x - right.x, left.y - right.y);
 }
 
+/** Qualified horizontal swipe: distance and axis, before reading-direction mapping. */
+function isComicSwipeTurn(dx: number, dy: number): boolean {
+  return Math.abs(dx) >= COMIC_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy);
+}
+
+function comicSwipePageDirection(
+  dx: number,
+  dy: number,
+  direction: ComicPreferences['direction'],
+): 1 | -1 | null {
+  if (!isComicSwipeTurn(dx, dy)) return null;
+  const forward = direction === 'rtl' ? dx > 0 : dx < 0;
+  return forward ? 1 : -1;
+}
+
+function comicSurfaceTouchAction(
+  mode: ComicReadingMode,
+  fit: ComicFit,
+  zoomed: boolean,
+): string {
+  if (zoomed) return 'none';
+  if (mode === 'strip') return 'pan-y';
+  if (fit === 'width') return 'pan-y';
+  if (fit === 'height') return 'pan-x';
+  if (fit === 'original') return 'pan-x pan-y';
+  return 'none';
+}
+
 function isComicInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(COMIC_INTERACTIVE_SELECTOR) !== null;
 }
@@ -987,7 +1015,7 @@ export async function renderCbzInto(
       pagesRoot.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
       pagesRoot.style.transformOrigin = '0 0';
       pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
-      const touchAction = zoomed ? 'none' : preferences.mode === 'strip' ? 'pan-y' : 'manipulation';
+      const touchAction = comicSurfaceTouchAction(preferences.mode, preferences.fit, zoomed);
       container.style.touchAction = touchAction;
       pagesRoot.style.touchAction = touchAction;
       if (preferences.mode === 'strip') {
@@ -1621,9 +1649,10 @@ export async function renderCbzInto(
       if (swipeOrigin !== null && viewScale <= 1 && preferences.mode === 'paged') {
         const dx = event.clientX - swipeOrigin.x;
         const dy = event.clientY - swipeOrigin.y;
-        if (Math.abs(dx) >= COMIC_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
+        if (isComicSwipeTurn(dx, dy)) {
           gestureMoved = true;
           lastGestureUp = { x: event.clientX, y: event.clientY };
+          event.preventDefault();
         }
       }
     };
@@ -1650,9 +1679,9 @@ export async function renderCbzInto(
           const dy = event.clientY - swipeStart.y;
           lastGestureUp = { x: event.clientX, y: event.clientY };
           lastTap = null;
-          if (Math.abs(dx) >= COMIC_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
-            const forward = preferences.direction === 'rtl' ? dx > 0 : dx < 0;
-            advancePage(forward ? 1 : -1);
+          const swipeDirection = comicSwipePageDirection(dx, dy, preferences.direction);
+          if (swipeDirection !== null) {
+            advancePage(swipeDirection);
           }
         } else if (gestureMoved) {
           lastGestureUp = { x: event.clientX, y: event.clientY };

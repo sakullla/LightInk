@@ -664,11 +664,20 @@ describe('CBZ page materialization', () => {
       preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
     });
 
-    swipeCanvas(container, 800, 200);
+    swipeCanvas(container, 800, 200, 'touch');
     expect(handle.currentPage).toBe(2);
     clickCanvas(container, 200);
     expect(handle.currentPage).toBe(2);
-    swipeCanvas(container, 200, 800);
+    swipeCanvas(container, 200, 800, 'touch');
+    expect(handle.currentPage).toBe(1);
+    clickCanvas(container, 950);
+    expect(handle.currentPage).toBe(2);
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(handle.currentPage).toBe(2);
+    pinchByPointers(container, false);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    clickCanvas(container, 50);
     expect(handle.currentPage).toBe(1);
     await handle.destroy();
 
@@ -677,10 +686,12 @@ describe('CBZ page materialization', () => {
     const rtlHandle = await renderCbzInto(await buildCbz(4), rtl, undefined, {
       preferenceStorage: pagedStorage({ direction: 'rtl', spread: 'single' }),
     });
-    swipeCanvas(rtl, 200, 800);
+    swipeCanvas(rtl, 200, 800, 'touch');
     expect(rtlHandle.currentPage).toBe(2);
     clickCanvas(rtl, 800);
     expect(rtlHandle.currentPage).toBe(2);
+    swipeCanvas(rtl, 800, 200, 'touch');
+    expect(rtlHandle.currentPage).toBe(1);
     await rtlHandle.destroy();
   });
 
@@ -712,7 +723,16 @@ describe('CBZ page materialization', () => {
     const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
       preferenceStorage: pagedStorage({ mode: 'strip' }),
     });
-    swipeCanvas(container, 800, 200);
+    expect(handle.preferences.mode).toBe('strip');
+    swipeCanvas(container, 800, 200, 'touch');
+    expect(handle.currentPage).toBe(1);
+    swipeCanvas(container, 200, 800, 'touch');
+    expect(handle.currentPage).toBe(1);
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(handle.currentPage).toBe(1);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
     expect(handle.currentPage).toBe(1);
     await handle.destroy();
   });
