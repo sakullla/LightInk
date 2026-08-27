@@ -512,7 +512,7 @@ describe('reader chrome panels', () => {
     expect(overlay.classList.contains('is-touch-sheet')).toBe(true);
     expect(overlay.style.left).toBe('20px');
     expect(overlay.style.right).toBe('180px');
-    expect(overlay.style.bottom).toBe('60px');
+    expect(overlay.style.bottom).toBe('calc(60px + var(--lightink-keyboard-inset, 0px))');
     expect(overlay.style.top).toBe('auto');
     unpinFixedOverlay(overlay);
     expect(overlay.classList.contains('is-touch-sheet')).toBe(false);
@@ -536,7 +536,7 @@ describe('reader chrome panels', () => {
     positionReaderChromePanel(panel, host, anchor);
     expect(panel.classList.contains('is-touch-sheet')).toBe(true);
     expect(panel.classList.contains('lightink-reader-chrome-popover')).toBe(false);
-    expect(panel.style.bottom).toBe('72px');
+    expect(panel.style.bottom).toBe('calc(72px + var(--lightink-keyboard-inset, 0px))');
     expect(panel.style.top).toBe('auto');
     footer.remove();
     document.documentElement.removeAttribute('data-touch-primary');
@@ -617,7 +617,7 @@ describe('reader chrome panels', () => {
     panel.className = 'lightink-reader-chrome-panel';
     positionReaderChromePanel(panel, host, actionButton(host, 'toc'));
     expect(panel.classList.contains('is-touch-sheet')).toBe(true);
-    expect(panel.style.bottom).toBe('72px');
+    expect(panel.style.bottom).toBe('calc(72px + var(--lightink-keyboard-inset, 0px))');
     expect(panel.style.top).toBe('auto');
 
     page.dispatchEvent(
@@ -654,8 +654,12 @@ describe('reader chrome panels', () => {
       pinFixedOverlay(overlay, host, { innerWidth: 390, innerHeight: 780 });
       expect(panel.classList.contains('is-touch-sheet'), kind).toBe(true);
       expect(overlay.classList.contains('is-touch-sheet'), kind).toBe(true);
-      expect(panel.style.bottom, kind).toBe('80px');
-      expect(overlay.style.bottom, kind).toBe('80px');
+      expect(panel.style.bottom, kind).toBe(
+        'calc(80px + var(--lightink-keyboard-inset, 0px))',
+      );
+      expect(overlay.style.bottom, kind).toBe(
+        'calc(80px + var(--lightink-keyboard-inset, 0px))',
+      );
       expect(panel.style.top, kind).toBe('auto');
       expect(overlay.style.top, kind).toBe('auto');
     }
@@ -692,7 +696,7 @@ describe('reader chrome panels', () => {
     const panel = document.createElement('div');
     positionReaderChromePanel(panel, host, actionButton(host, 'typography'));
     expect(panel.classList.contains('is-touch-sheet')).toBe(true);
-    expect(panel.style.bottom).toBe('64px');
+    expect(panel.style.bottom).toBe('calc(64px + var(--lightink-keyboard-inset, 0px))');
     chrome.destroy();
   });
 
@@ -751,7 +755,10 @@ describe('reader chrome panels', () => {
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:[^;]*--lightink-safe-bottom/,
     );
     expect(sheet).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(\s*12px \+ var\(--lightink-safe-bottom,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-search-sheet\s*\{[^}]*--lightink-keyboard-inset/,
     );
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,

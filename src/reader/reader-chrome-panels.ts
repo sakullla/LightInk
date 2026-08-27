@@ -704,7 +704,7 @@ export function pinFixedOverlay(
     overlay.style.left = `${Math.max(0, box.left)}px`;
     overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
     overlay.style.top = 'auto';
-    overlay.style.bottom = `${bottomGap + inset}px`;
+    overlay.style.bottom = `calc(${bottomGap + inset}px + var(--lightink-keyboard-inset, 0px))`;
     overlay.style.width = 'auto';
     overlay.style.height = 'auto';
     overlay.style.zIndex = '40';

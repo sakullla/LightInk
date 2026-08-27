@@ -603,11 +603,13 @@
  * 点空白关层走 reader-chrome 点击护栏（层内点按被 chrome-panel 类忽略）。 */
 
 .lightink-reader-search-sheet {
-  min-height: min(42vh, 22rem);
-  overflow: hidden;
-  padding-bottom: calc(
-    12px + var(--lightink-safe-bottom, 0px) + var(--lightink-keyboard-inset, 0px)
+  min-height: min(
+    42vh,
+    22rem,
+    calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem - var(--lightink-keyboard-inset, 0px))
   );
+  overflow: hidden;
+  padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
 }
 
 .lightink-reader-search-sheet-bar {

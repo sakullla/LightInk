@@ -692,7 +692,7 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*calc\(\s*var\(--lightink-reader-sheet-inset,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
     );
     expect(css).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(\s*12px \+ var\(--lightink-safe-bottom,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
+      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
     );
     // Real handle node is the grabber; decorative ::after is not the only hit target.
     const handleBlocks =
