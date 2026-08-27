@@ -2,12 +2,15 @@
  * `reader-view` — 只读阅读视图的编排壳（T3 骨架 + T4 流式 + T5 页式 + T6 标注；
  * T5 起章节 iframe 渲染/生命周期拆入 src/reader/flow-renderer.ts，会话核心
  * （打开管线/世代取代/对称作废）拆入 src/reader/session/session-load.ts，
- * flow/paged 两族 adapter 见 src/reader/session/adapters.ts）。
+ * 进度会话（身份链/快照派发/恢复重试阈值/保存时机）拆入
+ * src/reader/session/session-progress.ts，flow/paged 两族 adapter 见
+ * src/reader/session/adapters.ts）。
  *
  * 流式格式渲染章节化 HTML（滚动宿主）；PDF/CBZ 渲染页（页宿主）。标注按内容哈希
  * （Rust content_hash）关联：加载时读出 → 流式高亮渲染 <mark> + 侧栏列表跳转；
  * 选中正文可加高亮，工具栏可加书签/笔记，侧栏可移除，变更写回 app_data_dir。
- * 本壳保留：视图 DOM/状态机接线、阅读进度、标注与搜索接线、翻页导航编排；
+ * 本壳保留：视图 DOM/状态机接线、进度表面的 DOM 供数（flow/paged 两族
+ * snapshot/落点机械）、标注与搜索接线、翻页导航编排；
  * 打开编排只剩 adapter 选择（PAGE_EXTS → paged，其余 → flow）。
  * 只消费主题令牌 var(--lightink-*) 与 --lightink-font-scale。
  */
@@ -104,12 +107,8 @@ import { extOfPath } from '../file/path-ext.js';
 import {
   chapterScrollRatio,
   chapterScrollTop,
-  loadReadingProgress,
-  loadReadingProgressFromIds,
   resolveProgressStorage,
-  saveReadingProgress,
   type ProgressStorage,
-  type ReadingProgress,
 } from './reading-progress.js';
 import {
   advanceScrolledScroller,
@@ -145,12 +144,17 @@ import {
   type StagedSession,
 } from './session/adapters.js';
 import {
+  comicProgressIdForTarget,
+  createReaderSessionProgress,
+  FLOW_RESTORE_MAX_ATTEMPTS,
+  type SessionProgressFeed,
+} from './session/session-progress.js';
+import {
   NATIVE_ARCHIVE_EXTENSIONS,
   openNativeArchive,
   usesNativeArchive,
   type ArchivePasswordProvider,
 } from './sources/native-archive.js';
-import { loadLibraryProgressAlias } from '../library/library-progress.js';
 import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
@@ -192,11 +196,6 @@ const PAGE_EXTS = PAGED_SESSION_EXTENSIONS;
 
 function isComicReaderExt(ext: string): boolean {
   return ext === 'cbz' || NATIVE_ARCHIVE_EXTENSIONS.has(ext);
-}
-
-/** Same identity page progress already uses: remote itemId, local path. */
-function comicProgressIdForTarget(target: ReaderTarget): string {
-  return target.kind === 'remote' ? target.itemId : target.path;
 }
 
 const COMIC_HOST_DATASET_KEYS = [
@@ -566,14 +565,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const annotationWriteQueue = new AnnotationWriteQueue();
   const remoteImagePolicy = deps.remoteImagePolicy ?? sessionRemoteImagePolicy;
   const progressStorage = resolveProgressStorage(deps.progressStorage);
-  let progressId = '';
-  let pendingRestore: ReadingProgress | null = null;
-  let lastFlowProgress: ReadingProgress | null = null;
-  let restoreAttempts = 0;
-  let restoreRetryFrame: number | null = null;
-  let progressSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 滚动恢复：等章节高度量出来再落点；过早按整本比例会停在开头。 */
-  const FLOW_RESTORE_MAX_ATTEMPTS = 12;
   let layoutSwitching = false;
   /**
    * T6 缩放性能：字号档位变更 settle 后仍待补分栏的离屏章索引（翻页模式
@@ -591,9 +582,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     remoteImagePolicy,
     syncState: () => syncFlowState(),
     applyPendingRestore: () => {
-      if (pendingRestore !== null && !applySavedProgress()) {
-        scheduleRestoreRetry();
-      }
+      // 帧 load 后的恢复再驱动：进度会话（session-progress）内计数与续帧。
+      sessionProgress.applyPendingWithRetry();
     },
     renderHighlights: () => {
       bindFlowFrameLeftoverEscape();
@@ -717,8 +707,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     locationKind: null,
   });
 
-  const currentProgressSnapshot = (): ReadingProgress | null => {
-    if (pdfHandle !== null || cbzHandle !== null || PAGE_EXTS.has(loadedExt)) {
+  // —— 进度会话（session-progress）：身份链/保存时机/恢复重试裁决单点在核心，
+  // 视图只按族供数（快照与落位的 DOM 机械 + 未就绪原因，无第二份会话规则）。 ——
+
+  /** paged 族供数：页句柄快照与按页恢复（PDF/漫画）。 */
+  const pagedProgressFeed: SessionProgressFeed = {
+    snapshot: () => {
       const page = pdfHandle?.controller.page ?? cbzHandle?.currentPage ?? 0;
       if (page < 1) {
         return null;
@@ -732,220 +726,137 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         ...(total > 0 ? { total } : {}),
         updatedAt: Date.now(),
       };
-    }
-    const total = flowChapterCount;
-    if (total === 0) {
-      return null;
-    }
-    const chapterIndex = Math.max(0, readerState.current - 1);
-    if (flowIsPaginated()) {
-      const doc = visibleFlowFrame()?.contentDocument;
-      const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
-      return {
-        version: 1,
-        kind: 'flow',
-        index: chapterIndex,
-        ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
-        total,
-        updatedAt: Date.now(),
-      };
-    }
-    const scroller = flowScrollContainer();
-    const article = scrollHost.querySelector<HTMLElement>(
-      `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"]`,
-    );
-    const chapterHeight = article?.offsetHeight ?? 0;
-    if (article !== null && chapterHeight > 0) {
-      return {
-        version: 1,
-        kind: 'flow',
-        index: chapterIndex,
-        ratio: chapterScrollRatio(
-          scroller.scrollTop,
-          articleOffsetInScroller(article, scroller),
-          chapterHeight,
-        ),
-        total,
-        updatedAt: Date.now(),
-      };
-    }
-    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    return {
-      version: 1,
-      kind: 'flow',
-      index: chapterIndex,
-      ratio: maxScroll === 0 ? 0 : Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)),
-      total,
-      updatedAt: Date.now(),
-    };
-  };
-
-  const rememberFlowProgress = (): void => {
-    const snapshot = currentProgressSnapshot();
-    if (snapshot !== null) {
-      lastFlowProgress = snapshot;
-    }
-  };
-
-  const persistReadingProgress = (force = false): void => {
-    if (progressId === '') {
-      return;
-    }
-    if (!force && pendingRestore !== null) {
-      return;
-    }
-    if (!force && readerState.phase !== 'ready' && readerState.phase !== 'loading') {
-      return;
-    }
-    rememberFlowProgress();
-    const snapshot =
-      lastFlowProgress ??
-      (force && pendingRestore !== null ? { ...pendingRestore, updatedAt: Date.now() } : null);
-    if (snapshot !== null) {
-      saveReadingProgress(progressStorage, progressId, {
-        ...snapshot,
-        updatedAt: Date.now(),
-      });
-    }
-  };
-
-  const schedulePersistReadingProgress = (): void => {
-    if (progressSaveTimer !== null) {
-      clearTimeout(progressSaveTimer);
-    }
-    progressSaveTimer = setTimeout(() => {
-      progressSaveTimer = null;
-      persistReadingProgress();
-    }, 400);
-  };
-
-  const cancelRestoreRetry = (): void => {
-    if (restoreRetryFrame !== null) {
-      cancelAnimationFrame(restoreRetryFrame);
-      restoreRetryFrame = null;
-    }
-  };
-
-  const scheduleRestoreRetry = (): void => {
-    if (destroyed || pendingRestore === null || restoreRetryFrame !== null) {
-      return;
-    }
-    if (typeof requestAnimationFrame !== 'function') {
-      return;
-    }
-    restoreRetryFrame = requestAnimationFrame(() => {
-      restoreRetryFrame = null;
-      if (destroyed || pendingRestore === null) {
-        return;
-      }
-      if (!applySavedProgress()) {
-        scheduleRestoreRetry();
-      }
-    });
-  };
-
-  const applySavedProgress = (): boolean => {
-    const saved = pendingRestore;
-    if (saved === null) {
-      return true;
-    }
-    if (saved.kind === 'page') {
+    },
+    apply: (saved) => {
       if (pdfHandle !== null) {
         pdfHandle.scrollToPage(saved.index);
-        pendingRestore = null;
-        return true;
+        return { applied: true };
       }
       if (cbzHandle !== null) {
         cbzHandle.scrollToPage(saved.index);
-        pendingRestore = null;
-        return true;
+        return { applied: true };
       }
-      return false;
-    }
-    if (flowChapterCount === 0) {
-      return false;
-    }
-    const restoreIndex = clampFlowRestoreIndex(saved.index, flowChapterCount);
-    if (flowIsPaginated()) {
-      setActiveChapter(restoreIndex);
-      const frame = scrollHost.querySelector<HTMLIFrameElement>(
-        `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"] .lightink-reader-chapter-frame`,
-      );
-      const frameReady = frame?.dataset.frameReady === 'true';
-      const doc = frame?.contentDocument;
-      const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
-      if (!frameReady || scroller === null || scroller.clientWidth <= 1) {
-        restoreAttempts += 1;
-        // OPDS chapters often load after the first paint. Clearing pendingRestore
-        // here would leave the book at chapter 0 even though the iframe later
-        // calls applyPendingRestore.
-        if (frameReady && restoreAttempts >= 8) {
-          pendingRestore = null;
-          return true;
-        }
-        if (restoreAttempts >= FLOW_RESTORE_MAX_ATTEMPTS * 8) {
-          pendingRestore = null;
-          return true;
-        }
-        return false;
-      }
-      const step = pagedFrameStep(scroller);
-      applyPagedProgress(scroller, saved.ratio, step);
-      snapPagedScroller(scroller, step);
-      pendingRestore = null;
-      return true;
-    }
-    setActiveChapter(restoreIndex);
-    const scroller = flowScrollContainer();
-    const article = scrollHost.querySelector<HTMLElement>(
-      `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"]`,
-    );
-    const scrollerReady = scroller.clientHeight > 1;
-    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    if (
-      (!scrollerReady || article === null || article.offsetHeight <= 1) &&
-      restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS
-    ) {
-      restoreAttempts += 1;
-      scheduleRestoreRetry();
-      return false;
-    }
-    if (article !== null && article.offsetHeight > 1) {
-      const targetTop = chapterScrollTop(
-        articleOffsetInScroller(article, scroller),
-        article.offsetHeight,
-        saved.ratio,
-      );
-      if (targetTop > 0 && maxScroll <= 0 && restoreAttempts < FLOW_RESTORE_MAX_ATTEMPTS) {
-        restoreAttempts += 1;
-        scheduleRestoreRetry();
-        return false;
-      }
-      scroller.scrollTop = Math.min(maxScroll, targetTop);
-    } else if (maxScroll > 0) {
-      scroller.scrollTop = Math.min(maxScroll, Math.round(saved.ratio * maxScroll));
-    }
-    lastFlowProgress = saved;
-    pendingRestore = null;
-    return true;
+      return { applied: false, pending: 'page-host' };
+    },
   };
 
-  const restoreReadingProgress = (): void => {
-    if (destroyed || readerState.phase !== 'ready') {
-      return;
-    }
-    if (pendingRestore === null) {
-      pendingRestore = lastFlowProgress ?? loadReadingProgress(progressStorage, progressId);
-    }
-    if (pendingRestore === null) {
-      return;
-    }
-    restoreAttempts = 0;
-    cancelRestoreRetry();
-    if (!applySavedProgress()) {
-      scheduleRestoreRetry();
-    }
+  /** flow 族供数：章节窗快照与翻页/滚动两种落位（未就绪只报原因，不裁决）。 */
+  const flowProgressFeed: SessionProgressFeed = {
+    snapshot: () => {
+      const total = flowChapterCount;
+      if (total === 0) {
+        return null;
+      }
+      const chapterIndex = Math.max(0, readerState.current - 1);
+      if (flowIsPaginated()) {
+        const doc = visibleFlowFrame()?.contentDocument;
+        const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
+        return {
+          version: 1,
+          kind: 'flow',
+          index: chapterIndex,
+          ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
+          total,
+          updatedAt: Date.now(),
+        };
+      }
+      const scroller = flowScrollContainer();
+      const article = scrollHost.querySelector<HTMLElement>(
+        `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"]`,
+      );
+      const chapterHeight = article?.offsetHeight ?? 0;
+      if (article !== null && chapterHeight > 0) {
+        return {
+          version: 1,
+          kind: 'flow',
+          index: chapterIndex,
+          ratio: chapterScrollRatio(
+            scroller.scrollTop,
+            articleOffsetInScroller(article, scroller),
+            chapterHeight,
+          ),
+          total,
+          updatedAt: Date.now(),
+        };
+      }
+      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      return {
+        version: 1,
+        kind: 'flow',
+        index: chapterIndex,
+        ratio: maxScroll === 0 ? 0 : Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)),
+        total,
+        updatedAt: Date.now(),
+      };
+    },
+    apply: (saved, { attempts }) => {
+      if (flowChapterCount === 0) {
+        return { applied: false, pending: 'flow-content' };
+      }
+      const restoreIndex = clampFlowRestoreIndex(saved.index, flowChapterCount);
+      if (flowIsPaginated()) {
+        setActiveChapter(restoreIndex);
+        const frame = scrollHost.querySelector<HTMLIFrameElement>(
+          `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"] .lightink-reader-chapter-frame`,
+        );
+        const frameReady = frame?.dataset.frameReady === 'true';
+        const doc = frame?.contentDocument;
+        const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
+        if (!frameReady) {
+          // OPDS chapters often load after the first paint. Clearing pendingRestore
+          // here would leave the book at chapter 0 even though the iframe later
+          // calls applyPendingRestore.
+          return { applied: false, pending: 'flow-frame' };
+        }
+        if (scroller === null || scroller.clientWidth <= 1) {
+          return { applied: false, pending: 'flow-frame-scroller' };
+        }
+        const step = pagedFrameStep(scroller);
+        applyPagedProgress(scroller, saved.ratio, step);
+        snapPagedScroller(scroller, step);
+        return { applied: true };
+      }
+      setActiveChapter(restoreIndex);
+      const scroller = flowScrollContainer();
+      const article = scrollHost.querySelector<HTMLElement>(
+        `.lightink-reader-chapter[data-chapter-index="${restoreIndex}"]`,
+      );
+      const measurable = article !== null && article.offsetHeight > 1;
+      const scrollerReady = scroller.clientHeight > 1;
+      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      if ((!scrollerReady || !measurable) && attempts < FLOW_RESTORE_MAX_ATTEMPTS) {
+        // 滚动恢复：等章节高度量出来再落点；过早按整本比例会停在开头。
+        return { applied: false, pending: 'flow-measure' };
+      }
+      if (measurable && article !== null) {
+        const targetTop = chapterScrollTop(
+          articleOffsetInScroller(article, scroller),
+          article.offsetHeight,
+          saved.ratio,
+        );
+        if (targetTop > 0 && maxScroll <= 0 && attempts < FLOW_RESTORE_MAX_ATTEMPTS) {
+          return { applied: false, pending: 'flow-scroll-range' };
+        }
+        scroller.scrollTop = Math.min(maxScroll, targetTop);
+      } else if (maxScroll > 0) {
+        scroller.scrollTop = Math.min(maxScroll, Math.round(saved.ratio * maxScroll));
+      }
+      // 滚动恢复成功后记录即最新已知位置（重排窗口按它恢复）。
+      return { applied: true, rememberAsSnapshot: true };
+    },
   };
+
+  const sessionProgress = createReaderSessionProgress({
+    storage: progressStorage,
+    flow: flowProgressFeed,
+    paged: pagedProgressFeed,
+    activeKind: () =>
+      pdfHandle !== null || cbzHandle !== null || PAGE_EXTS.has(loadedExt) ? 'paged' : 'flow',
+    canPersistNow: () => readerState.phase === 'ready' || readerState.phase === 'loading',
+    canRestoreNow: () => readerState.phase === 'ready',
+    isDestroyed: () => destroyed,
+    onProgressBound: deps.onProgressBound,
+  });
 
   const applyStateToDom = (state: ReaderState): void => {
     root.dataset.readerState = state.phase;
@@ -1279,8 +1190,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   const onFlowScroll = (): void => {
     syncFlowState();
-    rememberFlowProgress();
-    schedulePersistReadingProgress();
+    sessionProgress.rememberSnapshot();
+    sessionProgress.schedulePersist();
     readerChrome?.syncStayRevealed();
     syncChromeRevealAttr();
     pinSidebarOverlay();
@@ -1292,7 +1203,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
   const onPageScroll = (): void => {
     syncPageState();
-    schedulePersistReadingProgress();
+    sessionProgress.schedulePersist();
     if (selectionToolbar?.isVisible() === true) {
       hideSelectionToolbar();
     }
@@ -1551,7 +1462,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (total > 0) {
         pdfHandle.scrollToPage(Math.max(1, Math.min(total, Math.round(clamped * total) || 1)));
         syncPageState();
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
       }
       return;
     }
@@ -1559,7 +1470,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (cbzHandle.totalPages > 0) {
         cbzHandle.scrollToProgress(clamped);
         syncPageState();
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
       }
       return;
     }
@@ -1569,20 +1480,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const total = flowChapterCount;
     const pos = clamped * total;
     const chapterIndex = Math.min(total - 1, Math.max(0, Math.floor(pos)));
-    pendingRestore = {
+    sessionProgress.stage({
       version: 1,
       kind: 'flow',
       index: chapterIndex,
       ratio: Math.min(1, Math.max(0, pos - chapterIndex)),
       total,
       updatedAt: Date.now(),
-    };
-    restoreAttempts = 0;
-    if (!applySavedProgress()) {
-      scheduleRestoreRetry();
-    }
+    });
+    sessionProgress.applyPendingWithRetry();
     syncFlowState();
-    schedulePersistReadingProgress();
+    sessionProgress.schedulePersist();
   }
 
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
@@ -1731,13 +1639,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       syncChromeRevealAttr();
       return;
     }
-    if (pendingRestore !== null) {
-      restoreAttempts = 0;
-      cancelRestoreRetry();
-      if (!applySavedProgress()) {
-        scheduleRestoreRetry();
-      }
-    }
+    // 切回标签时未完成的恢复重新计数重试（无待恢复时为空操作）。
+    sessionProgress.retryPending();
   }
 
   const flowDocuments = (): Document[] =>
@@ -2601,20 +2504,19 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (pdfHandle !== null) {
         pdfHandle.scrollToPage(item.page);
         syncPageState();
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
         return;
       }
       if (cbzHandle !== null) {
         cbzHandle.scrollToPage(item.page);
         syncPageState();
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
       }
       return;
     }
     if (item.chapter !== undefined) {
       // A later iframe load must not apply leftover progress and undo this jump.
-      pendingRestore = null;
-      cancelRestoreRetry();
+      sessionProgress.discardPending();
       setActiveChapter(item.chapter);
       if (flowIsPaginated()) {
         const frame = scrollHost.querySelector<HTMLIFrameElement>(
@@ -2630,7 +2532,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           ?.scrollIntoView({ block: 'start' });
       }
       syncFlowState();
-      schedulePersistReadingProgress();
+      sessionProgress.schedulePersist();
     }
   };
 
@@ -2698,7 +2600,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       onPageChange: () => {
         if (cbzHandle !== null) {
           syncPageState();
-          schedulePersistReadingProgress();
+          sessionProgress.schedulePersist();
         }
       },
       onPageListChange: (totalPages, metadata) => {
@@ -2808,7 +2710,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (pdfHandle !== null) {
       pdfHandle.scrollToPage(pdfHandle.controller.page + direction);
       syncPageState();
-      schedulePersistReadingProgress();
+      sessionProgress.schedulePersist();
       playReaderPageTurn(root, direction);
       return true;
     }
@@ -2821,7 +2723,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (pageDelta > 0) cbzHandle.nextPage();
       else cbzHandle.previousPage();
       syncPageState();
-      schedulePersistReadingProgress();
+      sessionProgress.schedulePersist();
       return true;
     }
     const moved = advanceReadingContent(direction);
@@ -2836,12 +2738,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (flowIsPaginated()) {
       const moved = flowRenderer.advancePage(direction);
       if (moved) {
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
       }
       return moved;
     }
     if (advanceScrolledScroller(flowScrollContainer(), direction)) {
-      schedulePersistReadingProgress();
+      sessionProgress.schedulePersist();
       return true;
     }
     return false;
@@ -2938,11 +2840,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           anchor,
         ).scrollTop;
         syncFlowState();
-        schedulePersistReadingProgress();
+        sessionProgress.schedulePersist();
       });
     }
     syncFlowState();
-    schedulePersistReadingProgress();
+    sessionProgress.schedulePersist();
   };
   const onFontScaleChange = (): void => {
     if (destroyed) {
@@ -2998,28 +2900,24 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     stalePaginatedChapters = null; // 布局切换重测/重分栏全部帧，作废缩放惰性标记
-    const saved = pendingRestore ?? lastFlowProgress ?? currentProgressSnapshot();
-    if (saved !== null && progressId !== '') {
-      saveReadingProgress(progressStorage, progressId, saved);
-    }
+    const saved = sessionProgress.captureForRelayout();
+    sessionProgress.persistSnapshot(saved);
     if (!flowIsPaginated()) {
       remasureScrollFrames();
       if (saved !== null) {
-        pendingRestore = saved;
-        restoreAttempts = 0;
-        applySavedProgress();
+        sessionProgress.stage(saved);
+        sessionProgress.applyPending();
       }
       requestAnimationFrame(refreshOpenSearch);
       return;
     }
     if (saved !== null) {
-      pendingRestore = saved;
-      restoreAttempts = 0;
+      sessionProgress.stage(saved);
     }
     setActiveChapter(saved?.index ?? chapterFromScroll());
     remasurePaginatedFrames(saved === null ? undefined : { restoreRatio: saved.ratio });
-    if (pendingRestore !== null) {
-      applySavedProgress();
+    if (sessionProgress.hasPendingRestore()) {
+      sessionProgress.applyPending();
     }
     requestAnimationFrame(refreshOpenSearch);
   };
@@ -3041,7 +2939,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     // 排版/版式变化会触发重排（分栏或重测高），先快照当前位置，重排后恢复，
     // 与 syncPaginatedChapter 的缩放路径同一机制，避免跳回书的开头。
-    const saved = pendingRestore ?? lastFlowProgress ?? currentProgressSnapshot();
+    const saved = sessionProgress.captureForRelayout();
     if (flowIsPaginated()) {
       remasurePaginatedFrames();
     } else {
@@ -3050,11 +2948,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     refreshOpenSearch();
     syncFlowState();
     if (saved !== null) {
-      pendingRestore = saved;
-      restoreAttempts = 0;
-      if (!applySavedProgress()) {
-        scheduleRestoreRetry();
-      }
+      sessionProgress.stage(saved);
+      sessionProgress.applyPendingWithRetry();
     }
     pinSidebarOverlay();
     if (chromePanel !== null) {
@@ -3138,7 +3033,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   // 书签 / 笔记改由菜单触发（见 ReaderInstance.addBookmark/addNote），不再挂浮动工具栏。
 
   const returnToShelf = (): void => {
-    persistReadingProgress(true);
+    sessionProgress.persistNow();
     closeChromePanel();
     readerChrome?.dismiss();
     syncChromeRevealAttr();
@@ -3647,19 +3542,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       readerOutline = outline;
       if (isComicReaderExt(ext)) {
         // 漫画进度提前绑定：页格式在标注装载前按页恢复（不哈希归档）。
-        const target = request.target;
-        progressId = comicProgressIdForTarget(target);
-        pendingRestore = loadReadingProgressFromIds(progressStorage, [
-          progressId,
-          target.kind === 'local' ? target.path : '',
-          loadLibraryProgressAlias(
-            progressStorage,
-            target.kind === 'remote' ? target.itemId : target.identity.id,
-          ) ?? '',
-        ]);
-        if (!applySavedProgress()) {
-          scheduleRestoreRetry();
-        }
+        sessionProgress.bindComicIdentity(request.target);
+        sessionProgress.applyPendingWithRetry();
       }
     },
   };
@@ -3680,45 +3564,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (!context.isCurrent()) {
       return;
     }
-    const filePath = target.kind === 'local' ? target.path : target.displayName;
-    progressId = target.kind === 'remote' ? target.itemId : (contentHash ?? filePath);
-    // Hash is the write key after annotations resolve. Older local records
-    // still live under the path or a shelf alias (item.id / local:path).
-    pendingRestore = loadReadingProgressFromIds(progressStorage, [
-      progressId,
-      target.kind === 'local' ? filePath : '',
-      loadLibraryProgressAlias(
-        progressStorage,
-        target.kind === 'remote' ? target.itemId : target.identity.id,
-      ) ?? '',
-      target.kind === 'remote' ? readerIdentityKey(target.identity) : '',
-      contentHash ?? '',
-    ]);
-    if (
-      pendingRestore !== null &&
-      progressId !== '' &&
-      loadReadingProgress(progressStorage, progressId) === null
-    ) {
-      saveReadingProgress(progressStorage, progressId, pendingRestore);
-    }
-    restoreAttempts = 0;
-    cancelRestoreRetry();
+    // 身份链绑定（含旧键迁移回填）→ ready 发布 → 恢复落点 → 状态同步 →
+    // 书库绑定通知；全部经 session-progress 单点裁决。
+    sessionProgress.bindDocumentIdentity(target, contentHash);
     setReaderPhase('ready');
-    if (!applySavedProgress()) {
-      scheduleRestoreRetry();
-    }
+    sessionProgress.applyPendingWithRetry();
     if (PAGE_EXTS.has(loadedExt)) {
       syncPageState();
     } else {
       syncFlowState();
     }
-    if (progressId !== '') {
-      try {
-        deps.onProgressBound?.(progressId, target);
-      } catch {
-        // Shelf alias must not interrupt reading.
-      }
-    }
+    sessionProgress.notifyProgressBound(target);
   };
 
   const sessionLoad = createReaderSessionLoad({
@@ -3728,11 +3584,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       beginOpen: () => {
         annotationWriteQueue.invalidate();
         hideSelectionToolbar();
-        persistReadingProgress();
-        progressId = '';
-        pendingRestore = null;
-        restoreAttempts = 0;
-        cancelRestoreRetry();
+        sessionProgress.beginSession();
         readerOutline = [];
         exportChapters = [];
         exportStylesheet = '';
@@ -3798,12 +3650,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (destroyed) {
         return;
       }
-      persistReadingProgress();
-      if (progressSaveTimer !== null) {
-        clearTimeout(progressSaveTimer);
-        progressSaveTimer = null;
-      }
-      cancelRestoreRetry();
+      sessionProgress.dispose();
       destroyed = true;
       // 会话销毁（管线）：世代 +1、abort 在飞加载、恰一次作废活动会话
       // （PDF/漫画句柄与流式内容 dispose + 对称作废合同）；收尾在 DOM 清理
@@ -3877,7 +3724,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     isSidebarVisible: () => sidebarVisible,
     openSearch,
     refreshViewport,
-    restoreReadingProgress,
+    restoreReadingProgress: () => sessionProgress.restore(),
     refreshPreferences: () => {
       applyTypographyPatch(loadReaderTypography(preferenceStorage));
       applyFlowLayout(loadReaderLayout(preferenceStorage));
@@ -3887,7 +3734,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           loadComicPreferences(
             preferenceStorage,
             cbzHandle.metadata.readingDirection ?? 'ltr',
-            progressId,
+            sessionProgress.progressId(),
           ),
         );
       }

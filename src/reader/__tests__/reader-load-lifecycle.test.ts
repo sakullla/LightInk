@@ -24,6 +24,11 @@ import {
   SessionRemoteImagePolicy,
 } from '../../media/remote-image-policy.js';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
+import { readerPagedScroller } from '../flow-renderer.js';
+import {
+  FLOW_RESTORE_MAX_ATTEMPTS,
+  PAGED_FRAME_RESTORE_GIVE_UP_ATTEMPTS,
+} from '../session/session-progress.js';
 
 /** R7 同标签格式切换回归：PDF 渲染走 mock（真实栅格化留手工验证）。 */
 const pdfMock = vi.hoisted(() => ({ renderPdfInto: vi.fn() }));
@@ -2105,5 +2110,309 @@ describe('Reader R7 memory regressions', () => {
     expect(policy.isAllowed(url(9))).toBe(false);
     expect(policy.isAllowed(url(10))).toBe(true);
     expect(policy.isAllowed(url(REMOTE_IMAGE_CONSENT_LIMIT + 9))).toBe(true);
+  });
+});
+
+describe('Reader session progress restore budgets', () => {
+  it('gives up scroll restore after the retry budget and stays readable without looping', async () => {
+    // 失败面：滚动模式恢复重试超过 flow 阈值（12 次）后放弃——停在当前可读
+    // 位置、不报错、不再循环（预算耗尽后度量就绪也不再有帧落点）。
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+    const progressStorage = memoryProgressStore();
+    saveReadingProgress(progressStorage, 'resume-budget.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      total: 2,
+      updatedAt: 1,
+    });
+    const chapters = [
+      { title: 'One', html: '<p>one</p>' },
+      { title: 'Two', html: '<p>two</p>' },
+    ];
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters }),
+      progressStorage,
+    });
+    useReaderScrollLayout(host);
+    await view.load('resume-budget.epub');
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    // 高度永不出：滚动宿主就绪但章高为 0，且整卷不可滚（maxScroll 0）。
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 400 });
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 400 });
+    for (const chapter of chapterEls) {
+      Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 0 });
+    }
+    view.restoreReadingProgress?.();
+    // 12 次重试 + 第 13 次尽力落点：maxScroll 0 → 停在原地，循环终止。
+    await vi.advanceTimersByTimeAsync((FLOW_RESTORE_MAX_ATTEMPTS + 3) * 16);
+    expect(scroll.scrollTop).toBe(0);
+    expect(view.state.phase).toBe('ready');
+    mockChapterScrollLayout(scroll, chapterEls, {
+      scrollTop: 0,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    await vi.advanceTimersByTimeAsync(5 * 16);
+    expect(scroll.scrollTop).toBe(0);
+    await view.destroy();
+  });
+
+  it('drops a paginated restore whose frame never measures and stops retrying', async () => {
+    // 失败面（OPDS 慢章）：帧声明就绪但分栏不可度量 → 8 次后放弃，停在当前
+    // 可读章，不报错、不再循环（分栏随后可度量也不再有帧落点）。
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+    const progressStorage = memoryProgressStore();
+    saveReadingProgress(progressStorage, 'resume-columns.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      total: 3,
+      updatedAt: 1,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+          { title: 'Three', html: '<p>three</p>' },
+        ],
+      }),
+      progressStorage,
+    });
+    await view.load('resume-columns.epub'); // 默认翻页布局
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load')); // frameReady=true；jsdom 分栏宽度 0 → 不可度量
+    }
+    await vi.advanceTimersByTimeAsync((PAGED_FRAME_RESTORE_GIVE_UP_ATTEMPTS + 3) * 16);
+    const active = host.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
+    expect(Number(active?.dataset.chapterIndex)).toBe(1); // 停在恢复章（可读位置）
+    expect(view.state.phase).toBe('ready'); // 放弃不构成错误
+    const frame = host.querySelector<HTMLIFrameElement>(
+      '.lightink-reader-chapter[data-chapter-index="1"] .lightink-reader-chapter-frame',
+    );
+    const scroller = readerPagedScroller(frame!.contentDocument!);
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 600 });
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 1200 });
+    await vi.advanceTimersByTimeAsync(4 * 16);
+    expect(scroller.scrollLeft).toBe(0);
+    await view.destroy();
+  });
+
+  it('reports the storage progressId to the shelf after successful loads only', async () => {
+    // 成功面：onProgressBound 书库绑定行为不变——成功加载按身份链报告一次；
+    // 失败加载不报告（未打开的书架行保持无 alias）。
+    const onProgressBound = vi.fn();
+    const host = document.createElement('div');
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters: [{ title: 'One', html: '<p>one</p>' }] }),
+      progressStorage: memoryProgressStore(),
+      onProgressBound,
+    });
+    await view.load('bind.epub');
+    expect(onProgressBound).toHaveBeenCalledTimes(1);
+    expect(onProgressBound).toHaveBeenCalledWith(
+      'bind.epub',
+      expect.objectContaining({ kind: 'local', path: 'bind.epub' }),
+    );
+    await view.destroy();
+
+    const onBoundFailed = vi.fn();
+    const hostB = document.createElement('div');
+    const viewB = createReaderView(hostB, {
+      readBytes: async () => {
+        throw new Error('disk read failed');
+      },
+      progressStorage: memoryProgressStore(),
+      onProgressBound: onBoundFailed,
+    });
+    await expect(viewB.load('broken.epub')).rejects.toThrow('disk read failed');
+    expect(onBoundFailed).not.toHaveBeenCalled();
+    await viewB.destroy();
+  });
+
+  it('binds comic progress identity early and reports it once to the shelf', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    const onProgressBound = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        progressStorage,
+        preferenceStorage: progressStorage,
+        onProgressBound,
+      }),
+    );
+
+    await view.load('/comics/bound.cbz');
+    // 漫画提前绑定（afterCommit）不触发书库绑定；settle 统一按身份报告一次。
+    expect(onProgressBound).toHaveBeenCalledTimes(1);
+    expect(onProgressBound).toHaveBeenCalledWith(
+      '/comics/bound.cbz',
+      expect.objectContaining({ kind: 'local', path: '/comics/bound.cbz' }),
+    );
+    await view.destroy();
+  });
+});
+
+// —— 进度会话（session-progress）回归：失败面（恢复重试超过阈值放弃、停在
+// 可读位置不报错、不再循环）与保存时机（打开下一本时 flush 上一本位置）。 ——
+
+describe('Reader progress session', () => {
+  const twoChapters = [
+    { title: 'One', html: '<p>one</p>' },
+    { title: 'Two', html: '<p>two</p>' },
+  ];
+
+  function memoryStore(): { values: Record<string, string>; storage: ProgressStorage } {
+    const values: Record<string, string> = {};
+    return {
+      values,
+      storage: {
+        getItem: (key: string) => values[key] ?? null,
+        setItem: (key: string, value: string) => {
+          values[key] = value;
+        },
+      },
+    };
+  }
+
+  it('gives up flow restore after the retry threshold and stays readable without looping', async () => {
+    // 失败面：章节几何从未就绪（jsdom 无布局，clientHeight/offsetHeight 均为 0）。
+    // 恢复逐帧重试，超过 flow 12 次阈值后按 best-effort 收尾（无可滚空间 → 原位），
+    // 不报错、不再排帧（rAF 请求计数收敛）。
+    vi.useFakeTimers();
+    const { storage } = memoryStore();
+    saveReadingProgress(storage, 'giveup.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 1,
+      ratio: 0.5,
+      total: 2,
+      updatedAt: 1,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters: twoChapters }),
+      progressStorage: storage,
+    });
+    useReaderScrollLayout(host);
+    await view.load('giveup.epub');
+
+    const raf = vi.spyOn(window, 'requestAnimationFrame');
+    await vi.advanceTimersByTimeAsync(16 * 40);
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    expect(view.state.phase).toBe('ready');
+    expect(scroll.scrollTop).toBe(0);
+
+    // 放弃后不再循环：追加时间窗口不产生新的恢复帧，位置保持可读原位。
+    const framesAfterGiveUp = raf.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(16 * 40);
+    expect(raf.mock.calls.length).toBe(framesAfterGiveUp);
+    expect(scroll.scrollTop).toBe(0);
+    raf.mockRestore();
+    await view.destroy();
+  });
+
+  it('abandons paginated restore when the ready frame stays unmeasurable', async () => {
+    // 失败面（OPDS 口径）：帧已标记就绪但分栏 scroller 不可测（clientWidth 0）。
+    // 重试 8 次后放弃：停在目标章可读位置（活动章已切换、章内比例丢弃），
+    // 不报错、不再循环。
+    vi.useFakeTimers();
+    const { storage } = memoryStore();
+    saveReadingProgress(storage, 'opds-stall.epub', {
+      version: 1,
+      kind: 'flow',
+      index: 3,
+      ratio: 0.4,
+      total: 5,
+      updatedAt: 1,
+    });
+    const preference: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 5 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>${index + 1}</p>`,
+        })),
+      }),
+      progressStorage: storage,
+      preferenceStorage: {
+        getItem: (key) => preference[key] ?? null,
+        setItem: (key, value) => {
+          preference[key] = value;
+        },
+      },
+    });
+    await view.load('opds-stall.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+
+    const raf = vi.spyOn(window, 'requestAnimationFrame');
+    await vi.advanceTimersByTimeAsync(16 * 40);
+    const active = host.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
+    expect(Number(active?.dataset.chapterIndex)).toBe(3);
+    expect(view.state.phase).toBe('ready');
+    expect(view.state).toMatchObject({ current: 4, total: 5, locationKind: 'chapter' });
+
+    // 放弃后不再循环。
+    const framesAfterGiveUp = raf.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(16 * 40);
+    expect(raf.mock.calls.length).toBe(framesAfterGiveUp);
+    raf.mockRestore();
+    await view.destroy();
+  });
+
+  it('flushes the previous book position when the same view opens the next book', async () => {
+    // 保存时机：防抖未到期（100ms < 400ms）时切换书籍，open 起点立即把上一本
+    // 位置落盘到上一本的键，不丢也不串写到新书的键。
+    vi.useFakeTimers();
+    const { values, storage } = memoryStore();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({ chapters: twoChapters }),
+      progressStorage: storage,
+    });
+    await view.load('first.epub');
+    useReaderScrollLayout(host);
+
+    const scroll = host.querySelector<HTMLElement>('.lightink-reader-scroll')!;
+    const chapterEls = [...scroll.querySelectorAll<HTMLElement>('.lightink-reader-chapter')];
+    mockChapterScrollLayout(scroll, chapterEls, {
+      scrollTop: 1200,
+      clientHeight: 400,
+      chapterHeight: 800,
+    });
+    scroll.dispatchEvent(new Event('scroll'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(values[`${READING_PROGRESS_KEY_PREFIX}first.epub`]).toBeUndefined();
+
+    await view.load('second.epub');
+    expect(values[`${READING_PROGRESS_KEY_PREFIX}first.epub`]).toContain('"index":1');
+    expect(values[`${READING_PROGRESS_KEY_PREFIX}first.epub`]).toContain('"ratio":0.5');
+    expect(values[`${READING_PROGRESS_KEY_PREFIX}second.epub`]).toBeUndefined();
+    expect(view.state).toMatchObject({ phase: 'ready', current: 1, total: 2 });
+    await view.destroy();
   });
 });
