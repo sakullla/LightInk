@@ -23,7 +23,6 @@ import type { MessageKey } from '../i18n/messages.js';
 import { parseReaderContent, type ReaderInputSource } from './formats/index.js';
 import {
   normalizeReaderTarget,
-  readerIdentityKey,
   type ArchiveProvider,
   type RandomAccessSource,
   type ReaderTarget,
@@ -41,9 +40,6 @@ import {
 } from './formats/cbz.js';
 import { renderPdfInto, type PdfRenderHandle } from './formats/pdf.js';
 import {
-  AnnotationWriteQueue,
-  parseAnnotations,
-  serializeAnnotations,
   type Annotation,
   type AnnotationColor,
   type AnnotationKind,
@@ -130,9 +126,11 @@ import {
 import { createFlowRenderer, readerPagedScroller } from './flow-renderer.js';
 import { createReaderSessionLoad } from './session/session-load.js';
 import { createReaderSessionNavigation } from './session/session-navigation.js';
+import { createReaderSessionAnnotation } from './session/session-annotation.js';
 import {
   PAGED_SESSION_EXTENSIONS,
   sessionAdapterKindForExtension,
+  sessionMemberForExtension,
   type ReaderSessionAdapter,
   type SessionInvalidation,
   type SessionOpenRequest,
@@ -151,7 +149,6 @@ import {
   usesNativeArchive,
   type ArchivePasswordProvider,
 } from './sources/native-archive.js';
-import { fnv1a64Hex } from './document-hash.js';
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
 import { createReaderChrome, type ReaderChrome } from './reader-chrome.js';
@@ -189,10 +186,6 @@ import {
 
 /** 页式扩展族与 session adapter 选择同源（加载编排见 session/session-load）。 */
 const PAGE_EXTS = PAGED_SESSION_EXTENSIONS;
-
-function isComicReaderExt(ext: string): boolean {
-  return ext === 'cbz' || NATIVE_ARCHIVE_EXTENSIONS.has(ext);
-}
 
 const COMIC_HOST_DATASET_KEYS = [
   'comicReader',
@@ -501,18 +494,44 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   /** 触屏搜索层（R5/R6）：懒建；注册进 isOverlayOpen/dismissOverlay 参与返回分层。 */
   let searchSheet: SearchSheet | null = null;
 
-  const annotationsEnabled = deps.readAnnotations !== undefined;
+  // —— 标注宿主会话（session-annotation）：启用判定（标注存储 × adapter
+  // 能力声明 × 身份可用）、写队列与侧栏显隐策略唯一实现在核心；本壳只按
+  // host 供数（侧栏 DOM/portal/焦点机械）并消费其裁决。 ——
+  const sessionAnnotation = createReaderSessionAnnotation({
+    storage: {
+      readAnnotations: deps.readAnnotations,
+      writeAnnotations: deps.writeAnnotations,
+      getContentHash: deps.getContentHash,
+    },
+    notifySaveFailed: () => deps.notify?.(t('annotation.saveFailed')),
+    isDestroyed: () => destroyed,
+    ensureSidebarDom: () => ensureSidebar(),
+    syncSidebarDom: () => syncSidebarOverlayDom(),
+    isNarrowViewport: () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 700px)').matches,
+    focusSidebarClose: () => {
+      sidebar?.element
+        .querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')
+        ?.focus();
+    },
+    sidebarHoldsFocus: () =>
+      sidebar !== null && sidebar.element.contains(document.activeElement),
+    focusReaderRoot: () => root.focus(),
+    closeSearchSheet: () => closeSearchSheet(),
+    closeChromePanel: () => closeChromePanel(),
+    resetSearch: () => resetReaderSearch(),
+    afterSidebarSync: () => syncVisibleFlowFrames(),
+    sidebarSearchQuery: () => sidebar?.getSearchQuery() ?? '',
+    renderSidebarList: () => sidebar?.render(annotations),
+  });
 
   let pdfHandle: PdfRenderHandle | null = null;
   let cbzHandle: CbzRenderHandle | null = null;
   let annotations: Annotation[] = [];
-  let contentHash: string | null = null;
   let sidebar: AnnotationSidebar | null = null;
   let sidebarBackdrop: HTMLButtonElement | null = null;
-  /** 标注侧栏默认隐藏；桌面占据固定列，窄窗切换为覆盖式 drawer。 */
-  let sidebarVisible = false;
-  /** 本阅读标签当前是否可见（切走时需隐藏 portal 到共享 chrome 的覆盖层）。 */
-  let tabActive = true;
   /** 划选工具栏（R3）：划选后确认再产生标注；懒创建（标注启用时）。 */
   let selectionToolbar: SelectionToolbar | null = null;
   /** mouseup 时捕获的待确认划选（locator + quote + 命中的已有高亮 id + 来源 frame）。 */
@@ -704,7 +723,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
     },
   });
-  const annotationWriteQueue = new AnnotationWriteQueue();
   const remoteImagePolicy = deps.remoteImagePolicy ?? sessionRemoteImagePolicy;
   const progressStorage = resolveProgressStorage(deps.progressStorage);
   let layoutSwitching = false;
@@ -1054,22 +1072,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   applyStateToDom(readerState);
 
+  /** 写队列策略唯一实现在 session-annotation（按当前身份串行写入，失败提示带会话守卫）。 */
   const saveAnnotations = async (): Promise<void> => {
-    if (contentHash === null || deps.writeAnnotations === undefined) {
-      return;
-    }
-    const saveHash = contentHash;
-    const json = serializeAnnotations(annotations);
-    await annotationWriteQueue.enqueue(
-      saveHash,
-      json,
-      deps.writeAnnotations,
-      () => {
-        if (!destroyed && contentHash === saveHash) {
-          deps.notify?.(t('annotation.saveFailed'));
-        }
-      },
-    );
+    await sessionAnnotation.save(annotations);
   };
 
   /** 移除标注（侧栏/划选工具栏共用）：更新集合、经共享引擎清正文 mark（flow 正文与 PDF 文本层）、保存。 */
@@ -1153,7 +1158,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           void navigator.clipboard?.writeText(pending.quote).catch(() => undefined);
           return;
         }
-        if (deps.writeAnnotations === undefined) {
+        if (!sessionAnnotation.canPersist()) {
           return;
         }
         if (action === 'note') {
@@ -1452,7 +1457,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sidebarBackdrop.className = 'lightink-reader-sidebar-backdrop';
     sidebarBackdrop.tabIndex = -1;
     sidebarBackdrop.setAttribute('aria-hidden', 'true');
-    sidebarBackdrop.hidden = !sidebarVisible;
+    sidebarBackdrop.hidden = !sessionAnnotation.sidebarVisibility().shown;
     sidebarBackdrop.addEventListener('click', () => setSidebarVisible(false));
     sidebar = createAnnotationSidebar({
       t,
@@ -1540,17 +1545,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         openNote(annotation);
       },
     });
-    sidebar.element.setAttribute('aria-hidden', sidebarVisible ? 'false' : 'true');
-    sidebar.element.hidden = !tabActive || !sidebarVisible;
+    const { visible, shown } = sessionAnnotation.sidebarVisibility();
+    sidebar.element.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    sidebar.element.hidden = !shown;
     root.append(sidebarBackdrop, sidebar.element);
     renderSidebarAnnotations();
   }
 
   function renderSidebarAnnotations(): void {
-    if ((sidebar?.getSearchQuery() ?? '').trim() !== '') {
-      return;
-    }
-    sidebar?.render(annotations);
+    // 搜索查询让位判定在 session-annotation 核心；DOM 渲染留视图。
+    sessionAnnotation.syncSidebarList();
   }
 
   const pinSidebarOverlay = (): void => {
@@ -1637,11 +1641,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
   function syncSidebarOverlayDom(): void {
-    const shown = sidebarVisible && tabActive;
-    root.classList.toggle('lightink-reader--sidebar', sidebarVisible);
+    const { visible, shown } = sessionAnnotation.sidebarVisibility();
+    root.classList.toggle('lightink-reader--sidebar', visible);
     // chromeHost（#lightink-main）是所有标签共享的，只在侧栏真正显示时占类。
     chromeHost().classList.toggle('lightink-reader--sidebar', shown);
-    closestPane()?.classList.toggle('lightink-reader--sidebar', sidebarVisible);
+    closestPane()?.classList.toggle('lightink-reader--sidebar', visible);
     sidebar?.element.setAttribute('aria-hidden', shown ? 'false' : 'true');
     if (sidebar !== null) {
       sidebar.element.hidden = !shown;
@@ -1656,38 +1660,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pinChromeDocks();
   }
 
-  /** 切换侧栏显隐，并让窄窗 drawer 获得或释放键盘焦点。 */
+  /** 切换侧栏显隐（显隐策略唯一实现在 session-annotation 核心）。 */
   function setSidebarVisible(visible: boolean): void {
-    if (visible) {
-      closeSearchSheet();
-      closeChromePanel();
-    }
-    if (!visible && sidebarVisible) {
-      resetReaderSearch();
-    }
-    sidebarVisible = visible;
-    if (visible) {
-      ensureSidebar();
-    }
-    syncSidebarOverlayDom();
-    if (
-      sidebarVisible &&
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(max-width: 700px)').matches
-    ) {
-      sidebar?.element
-        .querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')
-        ?.focus();
-    }
-    if (
-      !sidebarVisible &&
-      sidebar !== null &&
-      sidebar.element.contains(document.activeElement)
-    ) {
-      root.focus();
-    }
-    syncVisibleFlowFrames();
+    sessionAnnotation.setSidebarVisible(visible);
   }
 
   const comicChromeVisible = (): boolean =>
@@ -1753,7 +1728,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       hideSelectionToolbar();
       return true;
     }
-    if (sidebarVisible) {
+    if (sessionAnnotation.sidebarVisibility().visible) {
       setSidebarVisible(false);
       return true;
     }
@@ -1765,14 +1740,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /**
    * 标签可见性变化（切换标签时由宿主调用）。侧栏挂在阅读根上，仍要显式同步
-   * hidden，避免切标签后操作非活动文档。sidebarVisible 只记用户偏好，切回时恢复。
+   * hidden，避免切标签后操作非活动文档。标签可见状态与侧栏合成策略在
+   * session-annotation 核心（只改 shown，不改偏好）；本壳只做覆盖层/搜索/面板收尾。
    */
   function setTabActive(active: boolean): void {
-    if (tabActive === active) {
+    if (!sessionAnnotation.setTabActive(active)) {
       return;
     }
-    tabActive = active;
-    syncSidebarOverlayDom();
     if (!active) {
       hideSelectionToolbar();
       closeSearchSheet();
@@ -2073,7 +2047,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 触屏路径（R5）：独立底栏搜索层，不再强制打开标注侧栏。 */
   const openTouchSearchSheet = (query?: string): void => {
-    if (sidebarVisible) {
+    if (sessionAnnotation.sidebarVisibility().visible) {
       setSidebarVisible(false);
     }
     closeChromePanel();
@@ -2337,44 +2311,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     syncPageState();
   };
 
-  /** 会话管线标注装载钩子：身份解析与读取结果都按世代/取消复查。 */
+  /** 会话管线标注装载钩子：启用判定/身份解析/读取/解析唯一实现在 session-annotation。 */
   const loadAnnotationsForSession = async (
     target: ReaderTarget,
     context: { signal: AbortSignal; isCurrent: () => boolean },
   ): Promise<void> => {
-    const localExt = target.kind === 'local' ? extOfPath(target.path) : '';
-    if (
-      !annotationsEnabled ||
-      (target.kind === 'local' && deps.getContentHash === undefined) ||
-      (target.kind === 'local' && isComicReaderExt(localExt))
-    ) {
-      return;
+    const nextAnnotations = await sessionAnnotation.load(loadedExt, target, context);
+    if (nextAnnotations === null) {
+      return; // 未启用/过期（销毁/取消/世代失配）：不改状态（beforeCommit 已复位视图集合）
     }
-    try {
-      const nextContentHash =
-        target.kind === 'local'
-          ? await deps.getContentHash!(target.path)
-          : fnv1a64Hex(`remote:${readerIdentityKey(target.identity)}`);
-      if (destroyed || context.signal.aborted || !context.isCurrent()) {
-        return;
-      }
-      const nextAnnotations = parseAnnotations(
-        await deps.readAnnotations!(nextContentHash),
-      );
-      if (destroyed || context.signal.aborted || !context.isCurrent()) {
-        return;
-      }
-      contentHash = nextContentHash;
-      annotations = nextAnnotations;
-    } catch {
-      if (destroyed || context.signal.aborted || !context.isCurrent()) {
-        return;
-      }
-      // 与 Rust R4 一致：读失败（含无 Tauri IPC）视为空标注，不弹窗阻断阅读。
-      contentHash = null;
-      annotations = [];
-      return;
-    }
+    annotations = nextAnnotations;
     renderHighlights(); // flow/txt 正文与 PDF 文本层（含旧 anchor 数据重渲染）
     ensureSidebar();
   };
@@ -2572,11 +2518,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   }
 
   const refreshOpenSearch = (): void => {
-    if (!tabActive) {
+    if (!sessionAnnotation.tabActive()) {
       return;
     }
     const sheetOpen = searchSheet !== null && searchSheet.isOpen();
-    if (!sheetOpen && (!sidebarVisible || sidebar === null)) {
+    if (!sheetOpen && (!sessionAnnotation.sidebarVisibility().visible || sidebar === null)) {
       return;
     }
     const uiQuery = sheetOpen ? searchSheet!.getQuery() : sidebar!.getSearchQuery();
@@ -2908,7 +2854,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       closeChromePanel();
       return;
     }
-    if (sidebarVisible) {
+    if (sessionAnnotation.sidebarVisibility().visible) {
       setSidebarVisible(false);
     }
     closeSearchSheet();
@@ -2938,9 +2884,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
       openSearch: () => openSearch(),
-      toggleSidebar: () => setSidebarVisible(!sidebarVisible),
+      toggleSidebar: () => setSidebarVisible(!sessionAnnotation.sidebarVisibility().visible),
       isOverlayOpen: () =>
-        sidebarVisible || chromePanel !== null || searchSheet?.isOpen() === true,
+        sessionAnnotation.sidebarVisibility().visible ||
+        chromePanel !== null ||
+        searchSheet?.isOpen() === true,
       // 一次退一层：搜索 → TOC/排版 → 标注。点空白走同一条链。
       dismissOverlay: () => {
         if (closeSearchSheet()) {
@@ -2949,13 +2897,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         if (closeChromePanel()) {
           return true;
         }
-        if (sidebarVisible) {
+        if (sessionAnnotation.sidebarVisibility().visible) {
           setSidebarVisible(false);
           return true;
         }
         return false;
       },
-      isSidebarVisible: () => sidebarVisible,
+      isSidebarVisible: () => sessionAnnotation.sidebarVisibility().visible,
       isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
       hideSelectionToolbar,
       stayRevealed: () =>
@@ -3232,7 +3180,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         return;
       }
       readerOutline = outline;
-      if (isComicReaderExt(ext)) {
+      if (sessionMemberForExtension(ext) === 'comic') {
         // 漫画进度提前绑定：页格式在标注装载前按页恢复（不哈希归档）。
         sessionProgress.bindComicIdentity(request.target);
         sessionProgress.applyPendingWithRetry();
@@ -3258,7 +3206,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     // 身份链绑定（含旧键迁移回填）→ ready 发布 → 恢复落点 → 状态同步 →
     // 书库绑定通知；全部经 session-progress 单点裁决。
-    sessionProgress.bindDocumentIdentity(target, contentHash);
+    sessionProgress.bindDocumentIdentity(target, sessionAnnotation.contentHash());
     setReaderPhase('ready');
     sessionProgress.applyPendingWithRetry();
     if (PAGE_EXTS.has(loadedExt)) {
@@ -3274,7 +3222,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     paged: pagedSessionAdapter,
     host: {
       beginOpen: () => {
-        annotationWriteQueue.invalidate();
+        sessionAnnotation.invalidateWrites();
         hideSelectionToolbar();
         sessionProgress.beginSession();
         readerOutline = [];
@@ -3295,7 +3243,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       beforeCommit: (request) => {
         loadedExt = request.ext;
         annotations = [];
-        contentHash = null;
+        sessionAnnotation.beginSession(request.ext, request.target);
         sidebar?.render(annotations);
       },
       settle: settleSession,
@@ -3351,7 +3299,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       pdfHandle = null;
       cbzHandle = null;
       flowChapterCount = 0;
-      annotationWriteQueue.invalidate();
+      sessionAnnotation.dispose();
       clearFlowBindings();
       sidebar?.destroy();
       sidebar = null;
@@ -3401,14 +3349,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       await sessionDispose;
     },
     addBookmark: () => {
-      if (annotationsEnabled) addAnnotation('bookmark');
+      if (sessionAnnotation.enabled()) addAnnotation('bookmark');
     },
     addNote: () => {
-      if (annotationsEnabled) addAnnotation('note');
+      if (sessionAnnotation.enabled()) addAnnotation('note');
     },
-    toggleSidebar: () => setSidebarVisible(!sidebarVisible),
+    toggleSidebar: () => setSidebarVisible(!sessionAnnotation.sidebarVisibility().visible),
     setTabActive: (active: boolean): void => setTabActive(active),
-    isSidebarVisible: () => sidebarVisible,
+    isSidebarVisible: () => sessionAnnotation.sidebarVisibility().visible,
     openSearch,
     refreshViewport,
     restoreReadingProgress: () => sessionProgress.restore(),
@@ -3434,7 +3382,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     },
     getOutline: () => readerOutline,
     jumpToOutlineItem,
-    isAnnotationEnabled: () => annotationsEnabled,
+    isAnnotationEnabled: () => sessionAnnotation.enabled(),
     getExportHtml: async (mode = 'blob') => {
       if (exportChapters.length === 0) {
         return null;

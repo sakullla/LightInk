@@ -1,11 +1,18 @@
 /**
- * `session/adapters` — 会话核心的格式 adapter 契约（R1/R2）。
+ * `session/adapters` — 会话核心的格式 adapter 契约与格式×能力声明（R1/R2）。
  *
  * 会话规则（世代取代、取消检查、stage→commit 时序、对称作废）唯一实现于
  * session-load 管线；两族 adapter 只负责本族的字节源获取、离屏 stage 与
  * commit/作废的具体执行（R2：flow 与 paged 是两个内容模型，不合并）：
  * - flow：TXT/FB2/EPUB/MOBI 经 parseReaderContent 得到章节化内容；
  * - paged：PDF 与漫画归档（cbz/cbr/cb7/rar/7z）渲染页宿主控制器。
+ *
+ * 格式×能力矩阵（搜索/标注/大纲/进度）在本文件固化为 adapter 声明数据
+ * （SESSION_FORMAT_CAPABILITIES）：此前散在 reader-view 的隐式格式分支证据
+ * ——搜索 flowSearchable（漫画无文本）、标注装载跳过漫画归档（不哈希归档）、
+ * paged afterCommit 的 PDF outline/漫画页条目与漫画进度提前绑定——全部反推
+ * 收敛为按会话成员的声明行；核心与会话模块只按声明分派，不再按格式名分支
+ * （R5：只固化现网行为，不出现现有能力之外的新声明）。
  *
  * 对称作废合同（管线结构性保证，adapter 不必在各调用点自觉）：
  * - `commit()` 把 staged 内容换入 live 宿主并返回本会话的作废句柄；旧会话
@@ -39,15 +46,103 @@ export const PAGED_SESSION_EXTENSIONS: ReadonlySet<string> = new Set([
   ...NATIVE_ARCHIVE_EXTENSIONS,
 ]);
 
-/** 按（小写）扩展名选择 adapter 族；未知扩展返回 null（加载前置校验报不支持）。 */
-export function sessionAdapterKindForExtension(ext: string): SessionAdapterKind | null {
+/** 漫画归档扩展（paged 族漫画成员：cbz 与原生 cbr/cb7/rar/7z）。 */
+export const COMIC_SESSION_EXTENSIONS: ReadonlySet<string> = new Set([
+  'cbz',
+  ...NATIVE_ARCHIVE_EXTENSIONS,
+]);
+
+/**
+ * 会话成员：格式×能力矩阵的行键（flow 族整族一行；paged 族 PDF 与漫画
+ * 归档分两行）。能力差异只在成员级声明，核心与视图不得再按格式名分支。
+ */
+export type SessionAdapterMember = 'flow' | 'pdf' | 'comic';
+
+/** 按（小写）扩展名解析会话成员（能力矩阵行键）；未知扩展返回 null。 */
+export function sessionMemberForExtension(ext: string): SessionAdapterMember | null {
   if (FLOW_SESSION_EXTENSIONS.has(ext)) {
     return 'flow';
   }
-  if (PAGED_SESSION_EXTENSIONS.has(ext)) {
-    return 'paged';
+  if (ext === 'pdf') {
+    return 'pdf';
+  }
+  if (COMIC_SESSION_EXTENSIONS.has(ext)) {
+    return 'comic';
   }
   return null;
+}
+
+/**
+ * 标注能力声明（R5：从 reader-view 现存分支与测试反推冻结）。
+ */
+export interface SessionAnnotationCapability {
+  /**
+   * 本地文档的标注身份：`'content-hash'`（经 content_hash 关联正文）或
+   * `null`（本地不启用——漫画归档不哈希归档，现行规则固化为声明）。远程
+   * 目标不受此字段约束：一律按阅读身份键哈希关联（现行口径原样）。
+   */
+  readonly localIdentity: 'content-hash' | null;
+  /** 正文高亮表面：flow 章正文 mark / pdf 文本层 mark / 无（漫画页无文本）。 */
+  readonly marks: 'flow-body' | 'pdf-text-layer' | 'none';
+}
+
+/** 格式×能力矩阵单行：搜索/标注/大纲/进度四种能力，无此之外的声明（R5）。 */
+export interface SessionFormatCapabilities {
+  /** 文本搜索匹配器族；null = 无正文文本可搜（漫画归档，面板保持空态）。 */
+  readonly textSearch: 'flow-chapters' | 'pdf-text-layer' | null;
+  /** 标注能力（启用判定唯一实现在 ./session-annotation）。 */
+  readonly annotations: SessionAnnotationCapability;
+  /** 大纲条目落点：章节（flow）/ 页（pdf 与漫画归档）。 */
+  readonly outline: 'chapters' | 'pages';
+  /** 进度：快照族与身份绑定方式（漫画按目标提前绑定，不哈希归档）。 */
+  readonly progress: {
+    readonly snapshot: 'flow-window' | 'page';
+    readonly identity: 'document-chain' | 'target-bound';
+  };
+}
+
+/**
+ * 格式×能力矩阵（adapter 声明数据；行 = 会话成员）。修订能力 = 改本表，
+ * 核心与会话模块只按声明分派（不得回到按格式名分支）；新增成员 = 加一行。
+ */
+export const SESSION_FORMAT_CAPABILITIES: Readonly<
+  Record<SessionAdapterMember, SessionFormatCapabilities>
+> = {
+  /** TXT/FB2/EPUB/MOBI：章文本可搜、content_hash 标注（章正文 mark）。 */
+  flow: {
+    textSearch: 'flow-chapters',
+    annotations: { localIdentity: 'content-hash', marks: 'flow-body' },
+    outline: 'chapters',
+    progress: { snapshot: 'flow-window', identity: 'document-chain' },
+  },
+  /** PDF：文本层可搜、content_hash 标注（文本层 mark）、大纲按页。 */
+  pdf: {
+    textSearch: 'pdf-text-layer',
+    annotations: { localIdentity: 'content-hash', marks: 'pdf-text-layer' },
+    outline: 'pages',
+    progress: { snapshot: 'page', identity: 'document-chain' },
+  },
+  /** 漫画归档（cbz/cbr/cb7/rar/7z）：无文本搜索；本地不哈希（无内容哈希标注身份），远程仍按身份键哈希。 */
+  comic: {
+    textSearch: null,
+    annotations: { localIdentity: null, marks: 'none' },
+    outline: 'pages',
+    progress: { snapshot: 'page', identity: 'target-bound' },
+  },
+};
+
+/** 按扩展名取能力声明行；未知扩展返回 null（能力只按声明放行）。 */
+export function sessionCapabilitiesForExtension(
+  ext: string,
+): SessionFormatCapabilities | null {
+  const member = sessionMemberForExtension(ext);
+  return member === null ? null : SESSION_FORMAT_CAPABILITIES[member];
+}
+
+/** 按（小写）扩展名选择 adapter 族；未知扩展返回 null（加载前置校验报不支持）。 */
+export function sessionAdapterKindForExtension(ext: string): SessionAdapterKind | null {
+  const member = sessionMemberForExtension(ext);
+  return member === 'flow' ? 'flow' : member === null ? null : 'paged';
 }
 
 /** 一次打开请求的静态事实（视图解析 target 后交给管线）。 */
