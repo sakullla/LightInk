@@ -1164,13 +1164,18 @@ html[data-touch-primary] .lightink-library-header {
   container-name: library-content;
 }
 
-/* Desktop keeps shelf filters in the left nav; the cover-wall chip row,
- * 「分组」入口 and groups bottom-sheet are phone-only. */
+/* Desktop keeps shelf filters in the left nav; the cover-wall 筛选
+ * control, 「分组」入口 and groups bottom-sheet are phone-only. */
 .lightink-library-shelf-chips {
   display: none;
 }
 
 .lightink-library-shelf-toolbar {
+  display: none;
+}
+
+.lightink-library-shelf-filter,
+.lightink-library-shelf-filter-menu {
   display: none;
 }
 
@@ -2926,87 +2931,111 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     -webkit-overflow-scrolling: touch;
   }
 
-  /* 书架筛选：封面墙顶上一行 48px 单选 chip，只承接五个内置筛选。
-   * 本规则叠在 @media (max-width: 760px) 内；无 flag 或宽屏仍走
-   * 基线 display:none，桌面侧栏保持主导航。 */
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-chips {
-    display: flex;
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 12px;
-    min-height: 48px;
-    max-height: none;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 4px max(16px, var(--lightink-safe-right, 0px)) 12px
-      max(16px, var(--lightink-safe-left, 0px));
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-chips::-webkit-scrollbar {
-    display: none;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-chip {
-    flex: 0 0 auto;
-    min-width: 48px;
-    min-height: 48px;
-    padding: 0 16px;
-    border: 0;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
-    color: var(--lightink-fg);
-    font: inherit;
-    font-size: var(--lightink-type-ui);
-    white-space: nowrap;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-chip.is-active {
-    background: var(--lightink-accent-soft);
-    color: var(--lightink-accent);
-    font-weight: 600;
-  }
-
   /*
-   * 「分组」入口：筛选行外侧的独立控件，不是第六个 data-shelf-group。
-   * 行容器把横滑 chip 与入口并排；入口不进入 chip 滚动，避免挤进筛选行。
-   * 书源 / 管理 / 目录下钻不展示入口与面板。无 flag 或宽屏仍走基线 display:none。
+   * 书架次级 chrome：文案完整的「筛选」入口 + 「分组」。
+   * 不再铺五枚 48px nowrap overflow-x chip，避免主标签裁成「文字…」。
+   * 本规则叠在 @media (max-width: 760px) 内；无 flag 或宽屏仍走
+   * 基线 display:none，桌面侧栏保持主导航。
    */
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-toolbar {
     display: flex;
     flex: 0 0 auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     min-height: 48px;
     margin-top: 0;
-    padding: 4px max(16px, var(--lightink-safe-right, 0px)) 12px
+    padding: 2px max(16px, var(--lightink-safe-right, 0px)) 10px
       max(16px, var(--lightink-safe-left, 0px));
-    border-top: 1px solid color-mix(in srgb, var(--lightink-fg) 8%, transparent);
   }
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-toolbar
-    .lightink-library-shelf-chips {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding-right: 0;
-    padding-left: 0;
+    .lightink-library-shelf-filter {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 48px;
+    min-height: 48px;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 16px;
+    overflow: visible;
+    border: 0;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+    color: var(--lightink-fg);
+    font: inherit;
+    font-size: var(--lightink-type-ui);
+    font-weight: 600;
+    line-height: 1.3;
+    text-overflow: unset;
+    white-space: nowrap;
   }
 
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter.is-active,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter[aria-expanded='true'] {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter-menu:not([hidden]) {
+    display: flex;
+    flex: 1 1 100%;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter-option {
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 8px 14px;
+    overflow: visible;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--lightink-fg);
+    font: inherit;
+    font-size: var(--lightink-type-ui);
+    line-height: 1.35;
+    text-align: left;
+    text-overflow: unset;
+    white-space: normal;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter-option.is-active {
+    background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
+    font-weight: 600;
+  }
+
+  /*
+   * 「分组」入口：筛选控件外侧的独立入口，不是第六个 data-shelf-group。
+   * 书源 / 管理 / 目录下钻不展示入口与面板。无 flag 或宽屏仍走基线 display:none。
+   */
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-groups {
@@ -3020,6 +3049,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     min-height: 48px;
     margin: 0 max(16px, var(--lightink-safe-right, 0px)) 12px auto;
     padding: 0 14px;
+    overflow: visible;
     border: 0;
     border-radius: 10px;
     background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
@@ -3027,6 +3057,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     font: inherit;
     font-size: var(--lightink-type-ui);
     font-weight: 600;
+    text-overflow: unset;
     white-space: nowrap;
   }
 
@@ -3034,7 +3065,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-toolbar
     .lightink-library-shelf-groups {
-    margin: 0;
+    margin: 0 0 0 auto;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3080,29 +3111,64 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     box-shadow: 0 -12px 40px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
   }
 
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-groups-sheet-handle {
+  /* mountLibraryOverlay 把面板挂到 body，把手选择器不能依赖 .lightink-library 祖先。 */
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-handle {
     display: block;
-    width: 36px;
-    min-width: 36px;
-    height: 4px;
-    min-height: 4px;
-    margin: 4px auto 2px;
+    position: relative;
+    flex: 0 0 auto;
+    align-self: stretch;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 48px;
+    height: auto;
+    min-height: 1.75rem;
+    margin: 0;
     padding: 0;
     border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    pointer-events: auto;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-handle::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 36px;
+    height: 4px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
   }
 
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
+    .lightink-library-groups-sheet-handle:hover:not(:disabled)::before,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-groups-sheet-handle:focus-visible::before {
+    background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
     .lightink-library-groups-sheet-handle:hover:not(:disabled),
   :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
     .lightink-library-groups-sheet-handle:focus-visible {
-    background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+    background: transparent;
     color: inherit;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-groups-sheet-handle:focus-visible {
+    outline: 2px solid var(--lightink-accent);
+    outline-offset: 2px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-handle:active {
+    cursor: grabbing;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3225,6 +3291,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library-shelf-toolbar,
   :is(html[data-android], html[data-touch-primary])
     .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-shelf-filter,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
+    .lightink-library-shelf-filter-menu,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library:not([data-library-nav='shelf'])
     .lightink-library-shelf-groups,
   :is(html[data-android], html[data-touch-primary])
     .lightink-library:not([data-library-nav='shelf'])
@@ -3253,11 +3325,11 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     justify-content: start;
     align-content: start;
     align-items: start;
-    gap: 18px 16px;
+    gap: 20px 16px;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    padding: 12px 16px calc(48px + var(--lightink-safe-bottom, 0px));
+    padding: 8px 16px calc(48px + var(--lightink-safe-bottom, 0px));
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
@@ -3300,8 +3372,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue {
+    flex: 0 0 auto;
     gap: 12px;
-    margin: 12px 16px 16px;
+    margin: 8px 16px 8px;
     padding: 10px;
   }
 
