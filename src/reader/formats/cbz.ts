@@ -933,6 +933,7 @@ export async function renderCbzInto(
       element.style.maxHeight = '100%';
       element.style.minWidth = '0';
       element.style.minHeight = '0';
+      element.style.objectPosition = 'center';
     };
 
     const applySlotFit = (index: number): void => {

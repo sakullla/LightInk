@@ -1137,8 +1137,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   height: 0;
 }
 
-/* Overlay chrome owns safe-area padding. The page canvas stays a stable
- * full-bleed box in both chrome states so fit-width/height/screen do not rescale. */
+/* Hardware insets belong on the page canvas so Fit Screen contains inside the
+ * safe rectangle (Mihon / Android edge-to-edge). Overlay chrome still pads
+ * its own controls; chrome show/hide must not change this box. */
 
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-cbz-slot {
   background: var(--lightink-comic-canvas, #111);
@@ -1185,6 +1186,13 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'])
   .lightink-reader-chrome-footer {
   display: none;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-pages[data-comic-reader='true'][data-reader-active='true'] {
+  box-sizing: border-box;
+  padding: var(--lightink-safe-top, 0px) var(--lightink-safe-right, 0px)
+    var(--lightink-safe-bottom, 0px) var(--lightink-safe-left, 0px);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-comic-topbar {
@@ -1479,8 +1487,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 .lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-comic-pages {
   display: flex;
+  flex: 1;
   width: 100%;
-  height: 100%;
+  height: auto;
+  min-width: 0;
   min-height: 0;
   flex-direction: row;
   align-items: center;
@@ -1511,6 +1521,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   min-width: 0;
   min-height: 0;
   object-fit: contain;
+  object-position: center;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-visible='1']
@@ -1526,8 +1537,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-spread='double'][data-comic-visible='2']
   .lightink-reader-cbz-slot {
+  width: auto;
   height: 100%;
   max-width: 50%;
+  max-height: 100%;
 }
 
 .lightink-reader-pages[data-comic-direction='rtl'] .lightink-reader-cbz-slot {
@@ -1572,6 +1585,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: center;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='width'] .lightink-reader-comic-pages {

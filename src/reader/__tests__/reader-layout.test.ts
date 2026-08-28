@@ -505,6 +505,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
   it('contains a single paged screen-fit page in the viewport instead of clipping the foot', () => {
     const css = readerCss();
     expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-comic-pages\s*\{[^}]*flex:\s*1/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-cbz-slot\s*\{[^}]*min-height:\s*0/,
     );
     expect(css).toMatch(
@@ -515,6 +518,12 @@ describe('comic surface layout (R1/R3/R4)', () => {
     );
     expect(css).toMatch(
       /\[data-comic-fit='screen'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page\s*\{[^}]*object-fit:\s*contain/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-mode='paged'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page\s*\{[^}]*object-position:\s*center/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-spread='double'\]\[data-comic-visible='2'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*max-height:\s*100%/,
     );
     expect(css).toMatch(
       /\[data-comic-fit='original'\] \.lightink-reader-cbz-slot,[\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*auto/,
@@ -679,8 +688,8 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
-    expect(css).not.toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\]\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*padding:\s*var\(--lightink-safe-top/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-comic-bottombar\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
