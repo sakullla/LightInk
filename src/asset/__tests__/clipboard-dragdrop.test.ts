@@ -10,28 +10,31 @@ import { describe, expect, it } from 'vitest';
 import { clipboardHasImage, extractClipboardImage } from '../clipboard.js';
 import { dropHasImage, extractDroppedImages } from '../dragdrop.js';
 
-interface FakeItem {
+interface FileLike {
+  type: string;
+  name?: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+interface ItemLike {
   kind: string;
   type: string;
-  bytes?: number[] | null;
+  getAsFile(): FileLike | null;
 }
 
-function fakeClipboardEvent(items: FakeItem[]): ClipboardEvent {
-  return {
-    clipboardData: {
-      items: items.map((it) => {
-        const bytes = it.bytes;
-        return {
-          kind: it.kind,
-          type: it.type,
-          getAsFile: () =>
-            bytes === null || bytes === undefined
-              ? null
-              : { arrayBuffer: async () => new Uint8Array(bytes).buffer },
-        };
-      }),
-    },
-  } as unknown as ClipboardEvent;
+function fileOf(type: string, bytes: number[], name = ''): FileLike {
+  return { type, name, arrayBuffer: async () => new Uint8Array(bytes).buffer };
+}
+
+function eventOf(opts: { items?: ItemLike[]; files?: FileLike[] }): ClipboardEvent {
+  return { clipboardData: { items: opts.items ?? [], files: opts.files ?? [] } } as unknown as ClipboardEvent;
+}
+
+function fileItem(mime: string, file: FileLike | null): ItemLike {
+  return { kind: 'file', type: mime, getAsFile: () => file };
+}
+
+function stringItem(type: string): ItemLike {
+  return { kind: 'string', type, getAsFile: () => null };
 }
 
 interface FakeFile {
@@ -53,49 +56,6 @@ function fakeDragEvent(files: FakeFile[]): DragEvent {
     clientY: 20,
   } as unknown as DragEvent;
 }
-
-describe('clipboard extraction', () => {
-  it('detects and extracts a pasted screenshot (png)', async () => {
-    const event = fakeClipboardEvent([
-      { kind: 'string', type: 'text/plain' },
-      { kind: 'file', type: 'image/png', bytes: [0x89, 0x50, 0x4e, 0x47] },
-    ]);
-    expect(clipboardHasImage(event)).toBe(true);
-    const image = await extractClipboardImage(event);
-    expect(image).not.toBeNull();
-    expect(image!.ext).toBe('png');
-    expect(image!.alt).toBe('');
-    expect(new Uint8Array(image!.bytes)).toEqual(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-  });
-
-  it('returns null / not-handled for text-only clipboard', async () => {
-    const event = fakeClipboardEvent([{ kind: 'string', type: 'text/plain' }]);
-    expect(clipboardHasImage(event)).toBe(false);
-    expect(await extractClipboardImage(event)).toBeNull();
-  });
-
-  it('returns null when clipboardData is missing', async () => {
-    const event = {} as ClipboardEvent;
-    expect(clipboardHasImage(event)).toBe(false);
-    expect(await extractClipboardImage(event)).toBeNull();
-  });
-
-  it('skips items whose file or bytes are unavailable', async () => {
-    const event = fakeClipboardEvent([
-      { kind: 'file', type: 'image/png', bytes: null },
-      { kind: 'file', type: 'image/png', bytes: [] },
-      { kind: 'file', type: 'image/jpeg', bytes: [1, 2, 3] },
-    ]);
-    const image = await extractClipboardImage(event);
-    expect(image!.ext).toBe('jpg');
-  });
-
-  it('falls back to png ext for unknown image MIME', async () => {
-    const event = fakeClipboardEvent([{ kind: 'file', type: 'image/x-weird', bytes: [1] }]);
-    const image = await extractClipboardImage(event);
-    expect(image!.ext).toBe('png');
-  });
-});
 
 describe('drag-drop extraction', () => {
   it('extracts image files, filters non-images, keeps order', async () => {
@@ -133,5 +93,66 @@ describe('drag-drop extraction', () => {
     const event = {} as DragEvent;
     expect(dropHasImage(event)).toBe(false);
     expect(await extractDroppedImages(event)).toEqual([]);
+  });
+});
+
+describe('clipboardHasImage', () => {
+  it('items 含 image 条目', () => {
+    expect(clipboardHasImage(eventOf({ items: [fileItem('image/png', fileOf('image/png', [1]))] }))).toBe(true);
+  });
+
+  it('items 含空 MIME 文件条目经 getAsFile 兜底判定', () => {
+    expect(clipboardHasImage(eventOf({ items: [fileItem('', fileOf('image/png', [1]))] }))).toBe(true);
+  });
+
+  it('仅 files 填充（items 缺失）', () => {
+    expect(clipboardHasImage(eventOf({ files: [fileOf('image/png', [1])] }))).toBe(true);
+  });
+
+  it('纯文本与空剪贴板无图', () => {
+    expect(clipboardHasImage(eventOf({ items: [stringItem('text/plain')] }))).toBe(false);
+    expect(clipboardHasImage(eventOf({}))).toBe(false);
+  });
+
+  it('文本 + 图片同存视为有图（图片优先）', () => {
+    expect(
+      clipboardHasImage(eventOf({ items: [stringItem('text/plain'), fileItem('image/png', fileOf('image/png', [1]))] })),
+    ).toBe(true);
+  });
+});
+
+describe('extractClipboardImage', () => {
+  it('items image 条目提取字节/MIME/扩展名', async () => {
+    const img = await extractClipboardImage(eventOf({ items: [fileItem('image/png', fileOf('image/png', [1, 2, 3]))] }));
+    expect(img).not.toBeNull();
+    expect(img!.ext).toBe('png');
+    expect(img!.mime).toBe('image/png');
+    expect(img!.bytes.byteLength).toBe(3);
+  });
+
+  it('空 MIME 条目经文件 type 提取', async () => {
+    const img = await extractClipboardImage(eventOf({ items: [fileItem('', fileOf('image/jpeg', [9]))] }));
+    expect(img).not.toBeNull();
+    expect(img!.mime).toBe('image/jpeg');
+    expect(img!.ext).toBe('jpg');
+  });
+
+  it('仅 files 填充时提取', async () => {
+    const img = await extractClipboardImage(eventOf({ files: [fileOf('image/png', [4, 5])] }));
+    expect(img).not.toBeNull();
+    expect(img!.mime).toBe('image/png');
+    expect(img!.bytes.byteLength).toBe(2);
+  });
+
+  it('跳过空字节条目，取下一张', async () => {
+    const items = [fileItem('image/png', fileOf('image/png', [])), fileItem('image/png', fileOf('image/png', [1]))];
+    const img = await extractClipboardImage(eventOf({ items }));
+    expect(img).not.toBeNull();
+    expect(img!.bytes.byteLength).toBe(1);
+  });
+
+  it('无图返回 null', async () => {
+    expect(await extractClipboardImage(eventOf({ items: [stringItem('text/plain')] }))).toBeNull();
+    expect(await extractClipboardImage(eventOf({}))).toBeNull();
   });
 });

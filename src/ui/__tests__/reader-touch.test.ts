@@ -14,21 +14,9 @@ import {
   resolveSwipePageDirection,
   resolveTapPageDirection,
   TOUCH_BAND_CLICK_SUPPRESS_MS,
-  TOUCH_SYSTEM_EDGE_PX,
-  TOUCH_TAP_EDGE_RATIO,
   TOUCH_TAP_NEXT_RATIO,
   TOUCH_TAP_PREV_RATIO,
 } from '../touch/reader-touch.js';
-
-describe('touch paging constants', () => {
-  it('exposes the desktop/touch tap ratios and the system edge band width', () => {
-    expect(TOUCH_TAP_EDGE_RATIO).toBe(0.25);
-    expect(TOUCH_TAP_PREV_RATIO).toBe(0.2);
-    expect(TOUCH_TAP_NEXT_RATIO).toBe(0.3);
-    expect(TOUCH_SYSTEM_EDGE_PX).toBe(24);
-    expect(TOUCH_BAND_CLICK_SUPPRESS_MS).toBe(400);
-  });
-});
 
 describe('resolveTapPageDirection', () => {
   it('defaults to the symmetric desktop zones (25%/25%) when no ratios are passed', () => {

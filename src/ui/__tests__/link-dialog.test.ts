@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { renderCheatsheet, type CheatBinding } from '../help-cheatsheet.js';
 import { showLinkDialog, showOpenLinkConfirm } from '../link-dialog.js';
 
 class FakeEl {
@@ -155,5 +156,65 @@ describe('showOpenLinkConfirm', () => {
     );
     open!.click();
     await expect(pending2).resolves.toBe(true);
+  });
+});
+
+class HelpFakeEl {
+  readonly tagName: string;
+  textContent = '';
+  className = '';
+  children: HelpFakeEl[] = [];
+  readonly classList = {
+    contains: (c: string): boolean => this.className.split(/\s+/).includes(c),
+  };
+  append(...kids: HelpFakeEl[]): void {
+    this.children.push(...kids);
+  }
+  appendChild<T extends HelpFakeEl>(child: T): T {
+    this.children.push(child);
+    return child;
+  }
+  constructor(tag: string) {
+    this.tagName = tag.toUpperCase();
+  }
+}
+
+function helpFakeDoc(): Document {
+  return { createElement: (tag: string) => new HelpFakeEl(tag) } as unknown as Document;
+}
+
+describe('renderCheatsheet', () => {
+  it('渲染绑定列表，每项含标签与快捷键', () => {
+    const bindings: CheatBinding[] = [
+      { label: '新建', shortcut: 'Ctrl+N' },
+      { label: '保存', shortcut: 'Ctrl+S' },
+    ];
+    const list = renderCheatsheet(bindings, helpFakeDoc()) as unknown as HelpFakeEl;
+    expect(list.tagName).toBe('UL');
+    expect(list.classList.contains('lightink-cheatsheet')).toBe(true);
+    expect(list.children).toHaveLength(2);
+    const first = list.children[0];
+    expect(first.children[0].textContent).toBe('新建');
+    expect(first.children[1].textContent).toBe('Ctrl+N');
+  });
+
+  it('空绑定返回空列表', () => {
+    const list = renderCheatsheet([], helpFakeDoc()) as unknown as HelpFakeEl;
+    expect(list.children).toHaveLength(0);
+  });
+
+  it('renders immersive tab chrome / cycle bindings used by main SHORTCUT_LABELS', () => {
+    const bindings: CheatBinding[] = [
+      { label: '标签栏显隐', shortcut: 'Alt+T' },
+      { label: '下一个标签', shortcut: 'Ctrl+Tab' },
+      { label: '上一个标签', shortcut: 'Ctrl+Shift+Tab' },
+    ];
+    const list = renderCheatsheet(bindings, helpFakeDoc()) as unknown as HelpFakeEl;
+    expect(list.children).toHaveLength(3);
+    expect(list.children.map((li) => [li.children[0].textContent, li.children[1].textContent])).toEqual([
+      ['标签栏显隐', 'Alt+T'],
+      ['下一个标签', 'Ctrl+Tab'],
+      ['上一个标签', 'Ctrl+Shift+Tab'],
+    ]);
   });
 });

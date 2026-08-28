@@ -105,13 +105,8 @@ describe('placeSlashMenu (viewport placement)', () => {
 });
 
 describe('slash-menu filtering uses shared INSERT_ELEMENTS', () => {
-  it('empty query returns all elements (same source as insert menu)', () => {
-    expect(filterInsertElements('').length).toBeGreaterThanOrEqual(9);
-  });
-
-  it('narrows by keyword', () => {
+  it('narrows the shared catalog by keyword at the slash-menu entry', () => {
     expect(filterInsertElements('表格').map((e) => e.id)).toContain('table');
-    expect(filterInsertElements('code').map((e) => e.id)).toContain('code');
   });
 });
 

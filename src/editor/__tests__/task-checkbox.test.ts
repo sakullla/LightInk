@@ -5,6 +5,8 @@
  * (DOM/widget wiring is covered by plugin factory shape + insert snippet tests.)
  */
 import { describe, expect, it } from 'vitest';
+import { FOLD_REBUILD_DEBOUNCE_MS } from '../plugins/heading-fold.js';
+import { mountEditor } from '../index.js';
 import { Schema } from '@milkdown/prose/model';
 import { EditorState } from '@milkdown/prose/state';
 
@@ -159,5 +161,24 @@ describe('task-list insert default', () => {
     expect(snippet.split('\n').length).toBeGreaterThanOrEqual(2);
     // Must not be the plain list snippet.
     expect(snippet).not.toBe('- 列表项');
+  });
+});
+
+function waitForMountRefresh(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, FOLD_REBUILD_DEBOUNCE_MS * 2));
+}
+
+describe('折叠三角挂载渲染（回归）', () => {
+  it('新挂载的编辑器为每个标题渲染折叠三角（无需先折叠一次）', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const editor = await mountEditor(host, {
+      initialMarkdown: '# A\n\npara one\n\n## B\n\npara two\n',
+    });
+    await editor.ready;
+    await waitForMountRefresh();
+    expect(host.querySelectorAll('.lightink-fold-marker').length).toBe(2);
+    await editor.destroy();
+    host.remove();
   });
 });

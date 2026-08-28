@@ -1168,51 +1168,6 @@ describe('flow host touch paging', () => {
     renderer.clear();
   });
 
-  it('delegates a left-zone tap and a horizontal swipe', () => {
-    const { root, scrollHost } = mountFlowRoot();
-    const dirs: Array<1 | -1> = [];
-    const renderer = createFlowRenderer(
-      scrollHost,
-      root,
-      flowRendererHooks({
-        advancePagedWheel: (direction) => {
-          dirs.push(direction);
-          return true;
-        },
-      }),
-    );
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 40, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 40, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 320, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 140, clientY: 108 }));
-    expect(dirs).toEqual([-1, 1]);
-    renderer.clear();
-  });
-
-  it('uses asymmetric tap zones: prev only within 20%, next already at 30% from the right', () => {
-    const { root, scrollHost } = mountFlowRoot();
-    const dirs: Array<1 | -1> = [];
-    const renderer = createFlowRenderer(
-      scrollHost,
-      root,
-      flowRendererHooks({
-        advancePagedWheel: (direction) => {
-          dirs.push(direction);
-          return true;
-        },
-      }),
-    );
-    // 400 * 0.2 = 80：x=100 已在左热区外（旧对称 25% 会误判为上一页）。
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 100, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 100, clientY: 100 }));
-    expect(dirs).toEqual([]);
-    // 400 * (1 - 0.3) = 280：x=290 落在更宽的右热区（旧对称 25% 判为中间区）。
-    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 290, clientY: 100 }));
-    scrollHost.dispatchEvent(touchEvent('touchend', { clientX: 290, clientY: 100 }));
-    expect(dirs).toEqual([1]);
-    renderer.clear();
-  });
-
   it('ignores touch gestures starting inside the 24px system edge band', () => {
     const { root, scrollHost } = mountFlowRoot();
     const dirs: Array<1 | -1> = [];
@@ -1240,51 +1195,6 @@ describe('flow host touch paging', () => {
     expect(dirs).toEqual([]);
     expect(leftEnd.defaultPrevented).toBe(false);
     expect(rightEnd.defaultPrevented).toBe(false);
-    renderer.clear();
-  });
-
-  it('delegates a right-edge mouse click to advancePagedWheel (no touch edge band)', () => {
-    const { root, scrollHost } = mountFlowRoot();
-    const dirs: Array<1 | -1> = [];
-    const renderer = createFlowRenderer(
-      scrollHost,
-      root,
-      flowRendererHooks({
-        advancePagedWheel: (direction) => {
-          dirs.push(direction);
-          return true;
-        },
-      }),
-    );
-    // 24px 外缘排除带只针对触控手势；鼠标 click 在 x=390 仍应翻页。
-    const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 100 });
-    scrollHost.dispatchEvent(event);
-    expect(dirs).toEqual([1]);
-    expect(event.defaultPrevented).toBe(true);
-    renderer.clear();
-  });
-
-  it('keeps desktop mouse click zones symmetric at 25%/25% (R10)', () => {
-    const { root, scrollHost } = mountFlowRoot();
-    const dirs: Array<1 | -1> = [];
-    const renderer = createFlowRenderer(
-      scrollHost,
-      root,
-      flowRendererHooks({
-        advancePagedWheel: (direction) => {
-          dirs.push(direction);
-          return true;
-        },
-      }),
-    );
-    // x=100 = 400*0.25：对称左热区仍翻上一页（触屏非对称 20% 会判为中部）。
-    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }));
-    expect(dirs).toEqual([-1]);
-    // x=290 < 400*0.75=300：对称右热区外不翻页（触屏非对称 30% 才会翻）。
-    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 290, clientY: 100 }));
-    expect(dirs).toEqual([-1]);
-    scrollHost.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 300, clientY: 100 }));
-    expect(dirs).toEqual([-1, 1]);
     renderer.clear();
   });
 

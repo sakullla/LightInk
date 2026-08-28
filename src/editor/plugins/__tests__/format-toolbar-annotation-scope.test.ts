@@ -3,8 +3,9 @@
  * 标注动作按 scope 解析（回归：多 Markdown 标签时模块级全局 handler 被最后创建
  * 的标签覆盖，工具条会把标注写进隐藏标签的选区）。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { appendPreviewEditButton } from '../preview-edit-button.js';
 import {
   resolveFormatToolbarAnnotationAction,
   setFormatToolbarAnnotationAction,
@@ -46,5 +47,19 @@ describe('annotation action scoping', () => {
     expect(resolveFormatToolbarAnnotationAction(editorA)).toBeNull();
     resolveFormatToolbarAnnotationAction(editorB)?.('copy');
     expect(calls).toEqual(['a:highlight', 'b:note', 'b:copy']);
+  });
+});
+
+describe('preview edit button', () => {
+  it('provides a labelled keyboard button and dispatches edit once', () => {
+    const preview = document.createElement('div');
+    const onEdit = vi.fn();
+    const button = appendPreviewEditButton(preview, 'Edit source', onEdit);
+
+    expect(button.getAttribute('aria-label')).toBe('Edit source');
+    expect(button.getAttribute('title')).toBe('Edit source');
+    expect(button.tabIndex).toBe(0);
+    button.click();
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 });

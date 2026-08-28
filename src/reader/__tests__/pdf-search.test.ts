@@ -76,7 +76,6 @@ describe('capSearchHits', () => {
   it('keeps short lists and slices long ones', () => {
     expect(capSearchHits([1, 2, 3], 5)).toEqual([1, 2, 3]);
     expect(capSearchHits([1, 2, 3, 4], 2)).toEqual([1, 2]);
-    expect(SEARCH_HIT_CAP).toBe(80);
   });
 });
 

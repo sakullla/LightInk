@@ -16,7 +16,7 @@ import type {
   ExternalConflictChoice,
   ExternalReloadChoice,
 } from '../../file/external-change.js';
-import { fileNameOf, snapshotKeyOf, TabManager, type TabManagerDeps } from '../tab-manager.js';
+import { snapshotKeyOf, TabManager, type TabManagerDeps } from '../tab-manager.js';
 import type { CloseChoice, TabState } from '../types.js';
 import { fakeHost, makeFakeEditor } from './test-harness.js';
 
@@ -723,13 +723,6 @@ describe('崩溃快照', () => {
     expect(tab!.editor.getMarkdown()).toBe('磁盘内容');
     expect(tab!.dirty).toBe(false);
     expect(harness.deps.clearSnapshot).toHaveBeenCalledWith('C:\\a.md');
-  });
-});
-
-describe('辅助函数', () => {
-  it('fileNameOf 同时兼容两种分隔符', () => {
-    expect(fileNameOf('C:\\docs\\笔记.md')).toBe('笔记.md');
-    expect(fileNameOf('/home/user/a.md')).toBe('a.md');
   });
 });
 

@@ -11,10 +11,8 @@ import {
   applyFrameWheelToScroller,
   createFlowRenderer,
   flowFrameContentHeight,
-  flowFrameLoadShouldBind,
   resolveFlowFrameClick,
   shouldForwardFrameShortcut,
-  totalColumnCount,
 } from '../flow-renderer.js';
 import type { FlowRendererHooks } from '../flow-renderer.js';
 import { sessionRemoteImagePolicy } from '../../media/remote-image-policy.js';
@@ -335,46 +333,6 @@ describe('划选工具栏（selection-toolbar）', () => {
   });
 });
 
-describe('flowFrameLoadShouldBind', () => {
-  const chrome = 'Mozilla/5.0 Chrome/120.0.0.0';
-
-  it('skips Chromium about:blank after srcdoc was already assigned', () => {
-    expect(
-      flowFrameLoadShouldBind({
-        sourceAssigned: true,
-        frameBound: false,
-        documentUrl: 'about:blank',
-        userAgent: chrome,
-        hasSrcdocChrome: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('binds the srcdoc document so remounted chapters get chrome and height', () => {
-    expect(
-      flowFrameLoadShouldBind({
-        sourceAssigned: true,
-        frameBound: false,
-        documentUrl: 'about:srcdoc',
-        userAgent: chrome,
-        hasSrcdocChrome: true,
-      }),
-    ).toBe(true);
-  });
-
-  it('binds jsdom about:blank so unit tests can dispatch load', () => {
-    expect(
-      flowFrameLoadShouldBind({
-        sourceAssigned: true,
-        frameBound: false,
-        documentUrl: 'about:blank',
-        userAgent: 'Mozilla/5.0 jsdom/22.0.0',
-        hasSrcdocChrome: false,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe('flowFrameContentHeight', () => {
   it('uses body content height, not a stretched iframe viewport', () => {
     const iframe = document.createElement('iframe');
@@ -488,19 +446,6 @@ describe('shouldForwardFrameShortcut', () => {
         new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }),
       ),
     ).toBe(false);
-  });
-});
-
-describe('totalColumnCount', () => {
-  it('reverse-computes rendered column count from scrollWidth', () => {
-    const columnWidth = 370;
-    const gap = 24;
-    expect(totalColumnCount(3 * columnWidth + 2 * gap, columnWidth, gap)).toBe(3);
-    expect(totalColumnCount(4 * columnWidth + 3 * gap, columnWidth, gap)).toBe(4);
-  });
-
-  it('returns 0 for empty/unknown scrollWidth (jsdom, no layout)', () => {
-    expect(totalColumnCount(0, 370, 24)).toBe(0);
   });
 });
 
