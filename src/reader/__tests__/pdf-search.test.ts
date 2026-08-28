@@ -391,9 +391,11 @@ describe('搜索 overlay 共享幂等引擎（PDF 文本层 / 流式正文同引
     const capped = limitSearchMarkSpecs(specs, `k${SEARCH_HIT_CAP + 10}`);
     expect(capped).toHaveLength(SEARCH_HIT_CAP);
     expect(capped[0]?.key).toBe('k0');
-    expect(capped.at(-1)?.key).toBe(`k${SEARCH_HIT_CAP + 10}`);
+    expect(capped[capped.length - 1]?.key).toBe(`k${SEARCH_HIT_CAP + 10}`);
     expect(limitSearchMarkSpecs(specs, null)).toHaveLength(SEARCH_HIT_CAP);
-    expect(limitSearchMarkSpecs(specs, null).at(-1)?.key).toBe(`k${SEARCH_HIT_CAP - 1}`);
+    expect(limitSearchMarkSpecs(specs, null)[SEARCH_HIT_CAP - 1]?.key).toBe(
+      `k${SEARCH_HIT_CAP - 1}`,
+    );
   });
 });
 

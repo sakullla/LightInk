@@ -1514,7 +1514,6 @@ export function createLibraryView(
   root.dataset.libraryNavCollapsed = navRailCollapsed ? 'true' : 'false';
   let activeSection: LibrarySection = 'shelf';
   let selectedGroup: ShelfGroup = 'all';
-  let shelfFilterOpen = false;
   let selectedCustomGroupId: string | null = null;
   let groups: LibraryGroup[] = [];
   let memberships: LibraryGroupMembership[] = [];
@@ -2653,7 +2652,6 @@ export function createLibraryView(
   }
 
   function closeFilterSheet(): void {
-    shelfFilterOpen = false;
     filterSheet.hidden = true;
     filterSheet.style.removeProperty('display');
     filterSheetBackdrop.style.removeProperty('display');
@@ -2666,7 +2664,6 @@ export function createLibraryView(
     closeGroupsSheet();
     renderMobileShelfFilters();
     mountLibraryOverlay(filterSheet, root);
-    shelfFilterOpen = true;
     filterSheet.hidden = false;
     filterSheet.style.display = 'flex';
     filterSheetBackdrop.style.display = 'block';
