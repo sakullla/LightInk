@@ -10,6 +10,7 @@
 import type { LibraryItem, LibraryItemAlias } from './library-client.js';
 import {
   loadReadingProgress,
+  sanitizeReadingProgressTitle,
   type ProgressStorage,
   type ReadingProgress,
 } from '../reader/reading-progress.js';
@@ -36,6 +37,8 @@ export interface LibraryProgressInProgress {
    * Missing or non-finite source values are stored as 0.
    */
   readonly updatedAt?: number;
+  /** Current heading when the reader saved a usable title. */
+  readonly title?: string;
 }
 
 export type LibraryProgress = LibraryProgressNotStarted | LibraryProgressInProgress;
@@ -186,6 +189,7 @@ function projectRecord(
   pageCount: number | undefined,
 ): LibraryProgressInProgress {
   const percent = progressPercent(progress, pageCount);
+  const title = sanitizeReadingProgressTitle(progress.title);
   return {
     status: 'in-progress',
     unit: progress.kind === 'page' ? 'page' : 'chapter',
@@ -193,6 +197,7 @@ function projectRecord(
     ratio: progress.ratio,
     updatedAt: readingProgressUpdatedAt(progress.updatedAt),
     ...(percent === undefined ? {} : { percent }),
+    ...(title === undefined ? {} : { title }),
   };
 }
 

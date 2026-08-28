@@ -3,6 +3,8 @@
  * Stored in localStorage so reopening a book resumes instead of starting over.
  */
 
+import { isUsableEpubChapterTitle } from './chapter-title.js';
+
 export const READING_PROGRESS_KEY_PREFIX = 'lightink.reader.progress.';
 
 /** R7：进度条数上限——超出时按最近使用（updatedAt 最旧）淘汰，防 localStorage 无限增长。 */
@@ -24,6 +26,8 @@ export interface ReadingProgress {
   readonly ratio: number;
   /** Chapter count for flow, page count for pdf/cbz. Used by the shelf bar. */
   readonly total?: number;
+  /** Current heading when known; shelf cards prefer this over “Chapter N”. */
+  readonly title?: string;
   readonly updatedAt: number;
 }
 
@@ -38,6 +42,15 @@ export interface ProgressStorage {
 
 export function readingProgressKey(id: string): string {
   return `${READING_PROGRESS_KEY_PREFIX}${id}`;
+}
+
+/** Keep a heading only when it is short and not converter junk. */
+export function sanitizeReadingProgressTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return isUsableEpubChapterTitle(trimmed) ? trimmed : undefined;
 }
 
 export function parseReadingProgress(raw: string | null | undefined): ReadingProgress | null {
@@ -60,12 +73,14 @@ export function parseReadingProgress(raw: string | null | undefined): ReadingPro
       parsed.total !== undefined && Number.isSafeInteger(parsed.total) && parsed.total >= 1
         ? parsed.total
         : undefined;
+    const title = sanitizeReadingProgressTitle(parsed.title);
     return {
       version: 1,
       kind: parsed.kind,
       index,
       ratio: Math.min(1, Math.max(0, parsed.ratio)),
       ...(total === undefined ? {} : { total }),
+      ...(title === undefined ? {} : { title }),
       updatedAt: typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
         ? parsed.updatedAt
         : 0,

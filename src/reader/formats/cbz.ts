@@ -41,11 +41,13 @@ import {
   isComicCropEmpty,
   isComicImagePath,
   isIgnoredComicPath,
+  orderComicCacheLoads,
   orderComicPages,
   parseComicInfo,
   selectComicCacheWindow,
   type ComicCropInsets,
   type ComicMetadata,
+  type ComicPageElement,
 } from '../comic-model.js';
 import {
   advanceComicPage,
@@ -54,6 +56,7 @@ import {
   comicSpreadIndex,
   comicSpreadList,
   comicSpreadStart,
+  comicTurnPrefetchCenters,
   comicVisiblePages,
   isComicLandscapeSize,
   loadComicPreferences,
@@ -724,6 +727,39 @@ export async function renderCbzInto(
       randomReads = Math.max(0, randomReads - 1);
       randomWaiters.shift()?.();
     };
+    let prefetchDecodes = 0;
+    const prefetchDecodeWaiters: Array<() => void> = [];
+    const withPrefetchDecode = async (
+      urgent: boolean,
+      decodeSignal: AbortSignal,
+    ): Promise<void> => {
+      if (urgent) return;
+      throwIfReaderLoadCancelled(decodeSignal);
+      if (prefetchDecodes >= 1) {
+        await new Promise<void>((resolve) => {
+          const resume = (): void => {
+            decodeSignal.removeEventListener('abort', resume);
+            resolve();
+          };
+          prefetchDecodeWaiters.push(resume);
+          decodeSignal.addEventListener('abort', resume, { once: true });
+        });
+        throwIfReaderLoadCancelled(decodeSignal);
+      }
+      prefetchDecodes += 1;
+    };
+    const releasePrefetchDecode = (urgent: boolean): void => {
+      if (urgent) return;
+      prefetchDecodes = Math.max(0, prefetchDecodes - 1);
+      prefetchDecodeWaiters.shift()?.();
+    };
+    const pageDisplayWidth = (index: number): number => {
+      const slot = slots[index];
+      if (slot !== undefined && !slot.hidden && slot.clientWidth > 0) {
+        return comicDisplayWidthPx(slot);
+      }
+      return comicDisplayWidthPx(pagesRoot.clientWidth > 0 ? pagesRoot : container);
+    };
     const visible = new Set<number>();
     const estimatedBytes = images.map((page) => Math.max(1, page.entry.uncompressedSize));
     const naturalWidths = new Map<number, number>();
@@ -836,8 +872,7 @@ export async function renderCbzInto(
 
     const scheduleVisibleCropScans = (): void => {
       if (preferences.cropMargins !== true) return;
-      const rest = [...wantedPages].filter((index) => !visible.has(index));
-      for (const index of [...visible, ...rest]) enqueueCropScan(index);
+      for (const index of visible) enqueueCropScan(index);
     };
 
     const displayWidth = (index: number): number | undefined => {
@@ -849,11 +884,15 @@ export async function renderCbzInto(
     };
 
     const applySlotWidth = (index: number): void => {
-      const width = displayWidth(index);
-      if (preferences.fit === 'original' && width !== undefined) {
-        slots[index]!.style.setProperty('--lightink-comic-natural-width', `${width}px`);
+      const width = naturalWidths.get(index);
+      const height = naturalHeights.get(index);
+      if (preferences.fit === 'original' && width !== undefined && height !== undefined) {
+        const cropped = comicCroppedSize(width, height, peekInsets(index));
+        slots[index]!.style.setProperty('--lightink-comic-natural-width', `${cropped.width}px`);
+        slots[index]!.style.setProperty('--lightink-comic-natural-height', `${cropped.height}px`);
       } else {
         slots[index]!.style.removeProperty('--lightink-comic-natural-width');
+        slots[index]!.style.removeProperty('--lightink-comic-natural-height');
       }
     };
 
@@ -879,8 +918,9 @@ export async function renderCbzInto(
         return;
       }
       if (fit === 'original') {
-        element.style.width = 'auto';
-        element.style.height = 'auto';
+        element.style.objectFit = 'none';
+        element.style.width = 'var(--lightink-comic-natural-width, auto)';
+        element.style.height = 'var(--lightink-comic-natural-height, auto)';
         element.style.maxWidth = 'none';
         element.style.maxHeight = 'none';
         element.style.removeProperty('min-width');
@@ -944,6 +984,13 @@ export async function renderCbzInto(
       slot.style.removeProperty('height');
       slot.style.removeProperty('max-height');
       slot.style.background = 'transparent';
+      if (preferences.fit === 'original') {
+        slot.style.flex = '0 0 auto';
+        slot.style.aspectRatio = 'auto';
+      } else {
+        slot.style.removeProperty('flex');
+        slot.style.removeProperty('aspect-ratio');
+      }
       applyPageFit(page, preferences.fit);
       applyComicCropDisplay(
         slot,
@@ -965,19 +1012,18 @@ export async function renderCbzInto(
         pagesRoot.style.flex = '1';
         pagesRoot.style.width = '100%';
         pagesRoot.style.alignItems = preferences.fit === 'width' ? 'stretch' : 'center';
-        slots.forEach((_slot, index) => applySlotFit(index));
         return;
       }
-      container.style.removeProperty('min-height');
-      container.style.removeProperty('height');
-      container.style.removeProperty('overflow');
+      container.style.minHeight = '0';
+      container.style.height = '100%';
+      container.style.overflow = 'hidden';
+      pagesRoot.style.height = '100%';
+      pagesRoot.style.minHeight = '0';
+      pagesRoot.style.width = '100%';
       pagesRoot.style.overflow =
-        viewScale > 1 ? 'hidden' : preferences.fit === 'screen' ? '' : 'auto';
-      pagesRoot.style.removeProperty('height');
+        viewScale > 1 || preferences.fit === 'screen' ? 'hidden' : 'auto';
       pagesRoot.style.removeProperty('flex');
-      pagesRoot.style.removeProperty('width');
-      pagesRoot.style.alignItems = 'center';
-      slots.forEach((_slot, index) => applySlotFit(index));
+      pagesRoot.style.alignItems = preferences.fit === 'width' ? 'flex-start' : 'center';
     };
 
     const clampViewOffset = (): void => {
@@ -1021,7 +1067,7 @@ export async function renderCbzInto(
       if (preferences.mode === 'strip') {
         pagesRoot.style.overflow = zoomed ? 'hidden' : 'auto';
       } else {
-        pagesRoot.style.overflow = zoomed ? 'hidden' : preferences.fit === 'screen' ? '' : 'auto';
+        pagesRoot.style.overflow = zoomed || preferences.fit === 'screen' ? 'hidden' : 'auto';
       }
     };
 
@@ -1238,10 +1284,18 @@ export async function renderCbzInto(
           }
           throwIfReaderLoadCancelled(controller.signal);
           if (destroyed || !wantedPages.has(index)) return;
-          const mounted = await createComicPageElement(data, page.entry.filename, {
-            resizeWidth: comicDisplayWidthPx(slots[index]),
-            signal: controller.signal,
-          });
+          const urgent = visible.has(index);
+          await withPrefetchDecode(urgent, controller.signal);
+          let mounted: ComicPageElement;
+          try {
+            mounted = await createComicPageElement(data, page.entry.filename, {
+              resizeWidth: pageDisplayWidth(index),
+              signal: controller.signal,
+              priority: urgent ? 'high' : 'low',
+            });
+          } finally {
+            releasePrefetchDecode(urgent);
+          }
           if (destroyed || controller.signal.aborted || !wantedPages.has(index)) {
             if (mounted.url !== '') URL.revokeObjectURL(mounted.url);
             mounted.element.remove();
@@ -1302,20 +1356,35 @@ export async function renderCbzInto(
     const scroller = pagesRoot;
 
     const viewportPageIndex = (fallback: number): number => {
+      const candidates =
+        visible.size > 0
+          ? [...visible].filter((index) => index >= 0 && index < slots.length)
+          : [fallback, fallback - 1, fallback + 1].filter(
+              (index) => index >= 0 && index < slots.length,
+            );
+      if (candidates.length === 0) return fallback;
+      if (candidates.length === 1) return candidates[0]!;
       const top = scroller.getBoundingClientRect().top;
-      const slotTops = slots.map((slot) => slot.getBoundingClientRect().top);
+      const slotTops = candidates.map((index) => slots[index]!.getBoundingClientRect().top);
       if (new Set(slotTops).size > 1) {
         const nearest = nearestVisibleSlot(slotTops, top);
-        return nearest >= 0 ? nearest : fallback;
+        return nearest >= 0 ? candidates[nearest]! : fallback;
       }
-      return visible.size > 0 ? Math.min(...visible) : fallback;
+      return Math.min(...candidates);
     };
 
+    function cacheCenters(center: number): number[] {
+      const prefs = layoutSpreadPrefs();
+      if (preferences.mode === 'paged') {
+        return prefetchNeighbors
+          ? comicTurnPrefetchCenters(center, images.length, prefs, landscapePages)
+          : comicVisiblePages(center, images.length, prefs, landscapePages);
+      }
+      return stripCacheCenters(center, images.length);
+    }
+
     function refreshCacheWindow(center: number): void {
-      const centers =
-        preferences.mode === 'paged'
-          ? comicVisiblePages(center, images.length, layoutSpreadPrefs(), landscapePages)
-          : stripCacheCenters(center, images.length);
+      const centers = cacheCenters(center);
       const wanted = prefetchNeighbors
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
         : new Set(centers);
@@ -1334,7 +1403,7 @@ export async function renderCbzInto(
           if (!isAbortError(error, signal) && !destroyed) showPageError(firstUnresolved);
         });
       }
-      for (const index of wanted) {
+      for (const index of orderComicCacheLoads(wanted, centers)) {
         if (firstUnresolved >= 0 && index > firstUnresolved) continue;
         if (images[index]?.kind === 'archive') continue;
         void loadPage(index).catch((error: unknown) => {
@@ -1376,18 +1445,43 @@ export async function renderCbzInto(
         });
         visible.clear();
         shown.forEach((index) => visible.add(index));
+        shown.forEach((index) => applySlotFit(index));
       } else {
         slots.forEach((slot) => {
           slot.hidden = false;
         });
         visible.clear();
+        slots.forEach((_slot, index) => applySlotFit(index));
       }
-      slots.forEach((_slot, index) => applySlotFit(index));
       applyViewTransform();
       updateToolbar();
       refreshCacheWindow(currentIndex);
       scheduleVisibleCropScans();
       if (notify && previousPage !== currentPage) options.onPageChange?.();
+    };
+
+    const showPagedSpread = (requestedIndex: number): void => {
+      const spreadPrefs = layoutSpreadPrefs();
+      const index = comicSpreadStart(requestedIndex, images.length, spreadPrefs, landscapePages);
+      currentPage = index + 1;
+      const shown = comicVisiblePages(index, images.length, spreadPrefs, landscapePages);
+      const shownSet = new Set(shown);
+      container.dataset.comicVisible = String(shown.length);
+      for (const previous of [...visible]) {
+        if (shownSet.has(previous)) continue;
+        const slot = slots[previous];
+        if (slot !== undefined) slot.hidden = true;
+        visible.delete(previous);
+      }
+      for (const next of shown) {
+        const slot = slots[next];
+        if (slot === undefined) continue;
+        slot.hidden = false;
+        visible.add(next);
+        applySlotFit(next);
+      }
+      updateToolbar();
+      refreshCacheWindow(index);
     };
 
     const setPreferences = (patch: ComicPreferencesPatch): void => {
@@ -1410,7 +1504,7 @@ export async function renderCbzInto(
       const changed = currentPage !== index + 1;
       currentPage = index + 1;
       if (preferences.mode === 'paged') {
-        applyLayout(false);
+        showPagedSpread(index);
       } else {
         visible.clear();
         visible.add(index);
@@ -1477,14 +1571,6 @@ export async function renderCbzInto(
         // invoke 失败仍只藏应用 chrome，阅读不中断。
       }
     };
-    const applyEdgeToEdge = (chromeShown: boolean): void => {
-      if (chromeShown) {
-        container.style.removeProperty('padding');
-      } else {
-        // 阅读中画面贴边：chrome 与系统栏隐藏时不再吃 safe-area 底垫。
-        container.style.padding = '0';
-      }
-    };
     const setChromeVisible = (visible: boolean): void => {
       const changed = chromeVisible !== visible;
       chromeVisible = visible;
@@ -1495,7 +1581,6 @@ export async function renderCbzInto(
         container.dataset.comicChrome = state;
       }
       chrome.setAttribute('aria-hidden', String(!visible));
-      applyEdgeToEdge(visible);
       if (changed) syncSystemBars(visible);
     };
     const scheduleChromeHide = (): void => {
@@ -1838,7 +1923,6 @@ export async function renderCbzInto(
       clearTimeout(prefetchTimer);
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
-      applyEdgeToEdge(true);
       if (!chromeVisible) syncSystemBars(true);
       container.removeEventListener('click', onSurfaceClick);
       container.removeEventListener('dblclick', onDoubleClick);

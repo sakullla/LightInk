@@ -864,12 +864,31 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
 html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'] {
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
+}
+
+#app.is-workspace-shelf #lightink-editor-area,
+html[data-reading-layout='scroll'] #app.is-workspace-shelf #lightink-editor-area[data-surface='reader'] {
+  overflow: hidden;
 }
 
 html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'] .lightink-tab-host,
 html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader {
   height: auto;
   min-height: 100%;
+}
+
+/* Comics keep a viewport-sized pane even if the last book left scroll layout on. */
+html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader']:has([data-comic-reader='true']) {
+  overflow: hidden;
+}
+
+html[data-reading-layout='scroll']
+  #lightink-editor-area[data-surface='reader']:has([data-comic-reader='true'])
+  .lightink-tab-host,
+html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab-host.lightink-tab-host--reader {
+  height: 100%;
+  min-height: 0;
 }
 
 .lightink-tab-host .lightink-reader-highlight,
@@ -889,6 +908,13 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader 
   position: absolute;
   inset: 0 0 0 auto;
   z-index: 8;
+}
+
+/* Portaled annotation chrome lives on #lightink-main, outside the library
+ * sibling hide. Shelf must not keep a leftover reader drawer on screen. */
+#app.is-workspace-shelf #lightink-main > .lightink-reader-sidebar,
+#app.is-workspace-shelf .lightink-reader-sidebar-backdrop {
+  display: none !important;
 }
 
 .lightink-tab-host .ProseMirror {

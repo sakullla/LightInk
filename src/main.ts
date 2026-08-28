@@ -117,6 +117,7 @@ import {
   applyMarkdownOpenSurface,
   applyWorkspaceVisibility,
   createWorkspaceMode,
+  sealReadingHostsForSurface,
   workspaceVisibility,
   type WorkspaceMode,
   type WorkspaceSnapshot,
@@ -844,9 +845,32 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
     }
     if (state.surface === 'shelf') {
       void libraryView?.show();
+      if (shell?.editorArea !== undefined) {
+        shell.editorArea.dataset.surface = 'shelf';
+        shell.editorArea.scrollTop = 0;
+      }
     } else {
       libraryView?.hide({ notifyVisibility: false });
+      if (shell?.editorArea !== undefined) {
+        shell.editorArea.dataset.surface = state.surface === 'reader' ? 'reader' : 'markdown';
+      }
     }
+    // Unseal before restore: hidden hosts have no layout, so scroll/column
+    // restore would measure display:none and land on the wrong page.
+    const readingHosts: HTMLElement[] = [];
+    if (manager !== undefined) {
+      for (const tab of manager.tabList) {
+        readingHosts.push(tab.hostElement);
+      }
+    }
+    sealReadingHostsForSurface(readingHosts, state.surface, {
+      activeElement: document.activeElement,
+      blur: () => {
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      },
+    });
     if (state.surface === 'editor') {
       // Only steal focus when entering the editor surface. openBook() from
       // File→Open of a PDF in the editor must not bounce back to Markdown.
@@ -862,13 +886,6 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
     syncReaderStatusBarVisibility();
     statusBar?.refresh(getActiveStatusSnapshot);
     syncNativeWindowChrome(state);
-    if (manager !== undefined) {
-      const shelf = state.surface === 'shelf';
-      for (const tab of manager.tabList) {
-        tab.hostElement.toggleAttribute('inert', shelf);
-        tab.hostElement.setAttribute('aria-hidden', shelf ? 'true' : 'false');
-      }
-    }
     syncMarkdownReaderChrome();
   } catch {
     // Stay on the current workspace; do not dispose tab-manager state.

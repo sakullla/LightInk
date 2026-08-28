@@ -5,6 +5,10 @@
 
 import type { OutlineItem } from '../outline/outline-model.js';
 import { isUsableEpubChapterTitle } from './chapter-title.js';
+import {
+  sanitizeReadingProgressTitle,
+  type ReadingProgress,
+} from './reading-progress.js';
 import type { ReaderState } from './types.js';
 
 export const READER_PAGE_ANIM_MS = 280;
@@ -42,6 +46,33 @@ export function resolveReaderChapterTitle(
     return previous[previous.length - 1]?.text ?? fallback('page', state.current);
   }
   return '';
+}
+
+/** Stamp a usable outline heading onto a persist snapshot; drop junk or empty titles. */
+export function stampReadingProgressTitle(
+  progress: ReadingProgress,
+  outline: readonly OutlineItem[],
+): ReadingProgress {
+  const title = sanitizeReadingProgressTitle(
+    resolveReaderChapterTitle(
+      progress.kind === 'flow'
+        ? { current: progress.index + 1, locationKind: 'chapter' }
+        : { current: Math.max(1, progress.index), locationKind: 'page' },
+      outline,
+      () => '',
+    ),
+  );
+  if (title === undefined) {
+    if (progress.title === undefined) {
+      return progress;
+    }
+    const { title: _dropped, ...rest } = progress;
+    return rest;
+  }
+  if (progress.title === title) {
+    return progress;
+  }
+  return { ...progress, title };
 }
 
 export function formatReaderLocation(current: number, total: number): string {

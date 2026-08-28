@@ -2,6 +2,8 @@
  * Session-level editor/reader workspace: cold-start shelf, two chrome
  * sets, labeled 编辑 / 阅读/书架 round-trip.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -11,6 +13,7 @@ import {
   DEFAULT_WORKSPACE_MODE,
   parseWorkspaceMode,
   resolveWorkspaceSurface,
+  sealReadingHostsForSurface,
   workspaceChrome,
   workspaceVisibility,
 } from '../workspace-mode.js';
@@ -379,6 +382,63 @@ describe('applyWorkspaceVisibility', () => {
     expect(editor.hidden).toBe(false);
     expect(shelf.hidden).toBe(true);
     expect(reader.hidden).toBe(true);
+  });
+});
+
+describe('sealReadingHostsForSurface', () => {
+  it('hides and inerts book hosts on the shelf, then restores them on the reader', () => {
+    const host = { hidden: false, inert: false, contains: () => false };
+    sealReadingHostsForSurface([host], 'shelf');
+    expect(host.hidden).toBe(true);
+    expect(host.inert).toBe(true);
+
+    sealReadingHostsForSurface([host], 'reader');
+    expect(host.hidden).toBe(false);
+    expect(host.inert).toBe(false);
+
+    sealReadingHostsForSurface([host], 'editor');
+    expect(host.hidden).toBe(false);
+    expect(host.inert).toBe(false);
+  });
+
+  it('blurs focus that still sits inside a host before sealing it', () => {
+    const active = { id: 'inside' };
+    const host = {
+      hidden: false,
+      inert: false,
+      contains: (node: Node | null) => node === (active as unknown as Node),
+    };
+    const blur = vi.fn();
+    sealReadingHostsForSurface([host], 'shelf', {
+      activeElement: active as unknown as Element,
+      blur,
+    });
+    expect(blur).toHaveBeenCalledTimes(1);
+    expect(host.hidden).toBe(true);
+    expect(host.inert).toBe(true);
+  });
+
+  it('does not blur focus that is already on the shelf', () => {
+    const host = { hidden: false, inert: false, contains: () => false };
+    const blur = vi.fn();
+    sealReadingHostsForSurface([host], 'shelf', {
+      activeElement: { id: 'library' } as unknown as Element,
+      blur,
+    });
+    expect(blur).not.toHaveBeenCalled();
+  });
+
+  it('unseals book hosts before restoring progress when leaving the shelf', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/main.ts'), 'utf-8');
+    const start = source.indexOf('function applyWorkspaceState');
+    const end = source.indexOf('function onLibraryMenu');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const apply = source.slice(start, end);
+    const sealAt = apply.indexOf('sealReadingHostsForSurface');
+    const restoreAt = apply.indexOf('restoreReadingProgress');
+    expect(sealAt).toBeGreaterThan(-1);
+    expect(restoreAt).toBeGreaterThan(sealAt);
   });
 });
 

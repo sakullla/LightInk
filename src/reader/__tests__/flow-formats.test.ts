@@ -141,7 +141,7 @@ describe('parseTxt', () => {
     expect(await loadedHtml(content)).toContain('中文');
   });
 
-  it('识别第一卷与第0001章标题并产出可跳转目录', async () => {
+  it('识别第0001章标题并产出可跳转目录，卷名不单独成章', async () => {
     const text = [
       '第一卷',
       '',
@@ -165,23 +165,91 @@ describe('parseTxt', () => {
     ].join('\n');
     const content = parseTxt(enc(text));
     const titles = content.chapters.map((chapter) => chapter.title);
-    expect(titles).toEqual(
-      expect.arrayContaining([
-        '第一卷',
-        '第0001章 宋青书的前世今生',
-        '第0002章 下山',
-        '第0003章 江湖',
-        '第0004章 故人',
-      ]),
-    );
+    expect(titles).not.toContain('第一卷');
+    expect(titles.filter((title) => title.length > 0)).toEqual([
+      '第0001章 宋青书的前世今生',
+      '第0002章 下山',
+      '第0003章 江湖',
+      '第0004章 故人',
+    ]);
     const jumpable = content.chapters.filter((chapter) => chapter.title.length > 0);
-    expect(jumpable.length).toBeGreaterThanOrEqual(5);
-    expect(new Set(jumpable.map((chapter) => chapter.title)).size).toBe(jumpable.length);
+    expect(jumpable).toHaveLength(4);
 
     const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
     expect(first).toBeDefined();
     await first!.load?.();
     expect(first!.html).toContain('青书醒来');
+    expect(first!.html).toContain('第一卷');
+    expect(first!.html).toContain('卷首语');
+  });
+
+  it('单换行网文把章名从正文里拆出，避免与滚动外标题叠成一段', async () => {
+    const text = [
+      '第10章 标题甲',
+      '正文甲。',
+      '第11章 标题乙',
+      '正文乙。',
+      '第12章 标题丙',
+      '正文丙。',
+      '第13章 标题丁',
+      '正文丁。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    expect(content.chapters.map((chapter) => chapter.title)).toEqual([
+      '第10章 标题甲',
+      '第11章 标题乙',
+      '第12章 标题丙',
+      '第13章 标题丁',
+    ]);
+    const first = content.chapters[0]!;
+    await first.load?.();
+    expect(first.html).toContain('<p>第10章 标题甲</p>');
+    expect(first.html).not.toMatch(/<p>第10章 标题甲<br>/);
+    expect(first.html).toContain('正文甲');
+    expect(first.html).not.toContain('正文乙');
+  });
+
+  it('把第X卷并进随后的章，不单独占一章也不计入章数', async () => {
+    const text = [
+      '第一卷 浪迹天涯',
+      '',
+      '卷首。',
+      '',
+      '第0001章 宋青书的前世今生',
+      '',
+      '青书醒来。',
+      '',
+      '第二卷 再入江湖',
+      '',
+      '第0002章 下山',
+      '',
+      '他走了。',
+      '',
+      '第0003章 江湖',
+      '',
+      '风起。',
+      '',
+      '第0004章 故人',
+      '',
+      '重逢。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    const titled = content.chapters
+      .filter((chapter) => chapter.title.length > 0)
+      .map((chapter) => chapter.title);
+    expect(titled).toEqual([
+      '第0001章 宋青书的前世今生',
+      '第0002章 下山',
+      '第0003章 江湖',
+      '第0004章 故人',
+    ]);
+    expect(titled.some((title) => title.includes('卷'))).toBe(false);
+    const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生')!;
+    await first.load?.();
+    expect(first.html).toContain('第一卷 浪迹天涯');
+    const second = content.chapters.find((chapter) => chapter.title === '第0002章 下山')!;
+    await second.load?.();
+    expect(second.html).toContain('第二卷 再入江湖');
   });
 
   it('超过 30 字的第X章叙述行当作正文不切章', async () => {
@@ -221,7 +289,6 @@ describe('parseTxt', () => {
     ].join('\n');
     const content = parseTxt(enc(text));
     expect(content.chapters.filter((chapter) => chapter.title.length > 0).map((chapter) => chapter.title)).toEqual([
-      '第一卷',
       '第0001章 宋青书的前世今生',
       '第0002章 下山',
       '第0003章 江湖',
@@ -261,15 +328,12 @@ describe('parseTxt', () => {
     const content = parseTxt(enc(text));
     const titled = content.chapters.filter((chapter) => chapter.title.length > 0).map((chapter) => chapter.title);
     expect(titled.filter((title) => title === '第0001章 宋青书的前世今生')).toHaveLength(1);
-    expect(titled).toEqual(
-      expect.arrayContaining([
-        '第一卷',
-        '第0001章 宋青书的前世今生',
-        '第0002章 下山',
-        '第0003章 江湖',
-        '第0004章 故人',
-      ]),
-    );
+    expect(titled).toEqual([
+      '第0001章 宋青书的前世今生',
+      '第0002章 下山',
+      '第0003章 江湖',
+      '第0004章 故人',
+    ]);
     for (const chapter of content.chapters) {
       await chapter.load?.();
     }
@@ -285,6 +349,29 @@ describe('parseTxt', () => {
     expect(content.chapters.filter((chapter) => /第.+[章节回]/.test(chapter.title)).length).toBeLessThan(4);
     const html = await loadedHtml(content);
     expect((html.match(/甲/g) ?? []).length).toBe(16000);
+  });
+
+  it('大量普通正文行仍按行首标题切章，不把正文行扫成标题', () => {
+    const filler = Array.from({ length: 8_000 }, (_, index) => `这是第${index + 1}段普通正文，不是标题。`);
+    const text = [
+      ...filler.slice(0, 2_000),
+      '第一章 开始',
+      '正文甲。',
+      ...filler.slice(2_000, 4_000),
+      '第二章 中间',
+      '正文乙。',
+      ...filler.slice(4_000, 6_000),
+      '第三章 继续',
+      '正文丙。',
+      ...filler.slice(6_000),
+      '第四章 结束',
+      '正文丁。',
+    ].join('\n');
+    const content = parseTxt(enc(text));
+    expect(
+      content.chapters.filter((chapter) => chapter.title.length > 0).map((chapter) => chapter.title),
+    ).toEqual(['第一章 开始', '第二章 中间', '第三章 继续', '第四章 结束']);
+    expect(content.chapters.some((chapter) => chapter.html.includes('正文丁'))).toBe(true);
   });
 
   it('不少于 9 个带标题章时仅前两章急切物化，其余经 load 幂等填充', async () => {
@@ -570,16 +657,16 @@ ${body}
       ),
     );
     const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).not.toContain('第一卷');
     expect(titles).toEqual(
       expect.arrayContaining([
-        '第一卷',
         '第0001章 宋青书的前世今生',
         '第0002章 下山',
         '第0003章 江湖',
         '第0004章 故人',
       ]),
     );
-    expect(content.chapters.filter((chapter) => chapter.title.length > 0).length).toBeGreaterThan(1);
+    expect(content.chapters.filter((chapter) => chapter.title.length > 0)).toHaveLength(4);
 
     const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
     expect(first).toBeDefined();
@@ -905,16 +992,16 @@ describe('parseEpub', () => {
       ),
     );
     const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).not.toContain('第一卷');
     expect(titles).toEqual(
       expect.arrayContaining([
-        '第一卷',
         '第0001章 宋青书的前世今生',
         '第0002章 下山',
         '第0003章 江湖',
         '第0004章 故人',
       ]),
     );
-    expect(content.chapters.length).toBeGreaterThan(1);
+    expect(content.chapters.filter((chapter) => chapter.title.length > 0)).toHaveLength(4);
 
     const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
     const second = content.chapters.find((chapter) => chapter.title === '第0002章 下山');
@@ -1460,16 +1547,16 @@ describe('parseMobi', () => {
     ].join('\n');
     const content = parseMobi(buildMobi(html));
     const titles = content.chapters.map((chapter) => chapter.title);
+    expect(titles).not.toContain('第一卷');
     expect(titles).toEqual(
       expect.arrayContaining([
-        '第一卷',
         '第0001章 宋青书的前世今生',
         '第0002章 下山',
         '第0003章 江湖',
         '第0004章 故人',
       ]),
     );
-    expect(content.chapters.length).toBeGreaterThan(1);
+    expect(content.chapters.filter((chapter) => chapter.title.length > 0)).toHaveLength(4);
 
     const first = content.chapters.find((chapter) => chapter.title === '第0001章 宋青书的前世今生');
     expect(first).toBeDefined();

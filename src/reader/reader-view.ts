@@ -77,6 +77,7 @@ import {
 import {
   clearSearchMarks,
   flowSearchMarkKey,
+  limitSearchMarkSpecs,
   renderSearchMarks,
   SEARCH_MARK_CURRENT_CLASS,
   type SearchMarkSpec,
@@ -108,6 +109,7 @@ import {
   createPagedWheelGate,
   createResizeSettle,
   nearestVisibleChapterIndex,
+  chapterIndexAtViewportTop,
   pagedFrameStep,
   pagedProgressRatio,
   rafFrameScheduler,
@@ -159,6 +161,7 @@ import {
   readerProgressTickFractions,
   playReaderPageTurn,
   resolveReaderChapterTitle,
+  stampReadingProgressTitle,
 } from './reader-progress-ui.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
@@ -617,7 +620,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         if (layer === null) {
           continue; // 未懒渲染的页跳过；层出现时经 observer 重渲染
         }
-        renderSearchMarks(layer, specs, activeKey);
+        renderSearchMarks(layer, limitSearchMarkSpecs(specs, activeKey), activeKey);
       }
       // 激活滚动：该命中即 pending 目标且当前命中 overlay 已就绪时，滚动一次即消费。
       const active = hits.find((hit) => hit.key === activeKey);
@@ -683,7 +686,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     renderFlowHits: (groups, currentKey) => {
       // 宿主遍历口径与原实现一致：按已挂载帧顺序以序号取该章 spec。
       flowDocuments().forEach((doc, index) => {
-        renderSearchMarks(doc.body, groups.get(index) ?? [], currentKey);
+        renderSearchMarks(
+          doc.body,
+          limitSearchMarkSpecs(groups.get(index) ?? [], currentKey),
+          currentKey,
+        );
       });
     },
     collectFlowMarks: (groups) => {
@@ -745,6 +752,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       // 帧 load 后的恢复再驱动：进度会话（session-progress）内计数与续帧。
       sessionProgress.applyPendingWithRetry();
     },
+    onUserScrollIntent: () => {
+      if (sessionProgress.hasPendingRestore()) {
+        sessionProgress.discardPending();
+      }
+    },
     renderHighlights: () => {
       bindFlowFrameLeftoverEscape();
       renderHighlights();
@@ -796,7 +808,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     return visible;
   };
+  let lastScrollChapter = -1;
   const setActiveChapter = (index: number): void => {
+    lastScrollChapter = index;
     flowRenderer.setActiveChapter(index);
     // T6：离屏章惰性分栏——缩放后仍未按新档分栏的章在激活时补一次
     // applyPaginatedDocument（snap:false 不抢滚动位置，由调用方决定落点）。
@@ -878,14 +892,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         return null;
       }
       const total = pdfHandle?.controller.totalPages ?? cbzHandle?.totalPages ?? 0;
-      return {
-        version: 1,
-        kind: 'page',
-        index: page,
-        ratio: 0,
-        ...(total > 0 ? { total } : {}),
-        updatedAt: Date.now(),
-      };
+      return stampReadingProgressTitle(
+        {
+          version: 1,
+          kind: 'page',
+          index: page,
+          ratio: 0,
+          ...(total > 0 ? { total } : {}),
+          updatedAt: Date.now(),
+        },
+        readerOutline,
+      );
     },
     apply: (saved) => {
       if (pdfHandle !== null) {
@@ -911,22 +928,28 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (flowIsPaginated()) {
         const doc = visibleFlowFrame()?.contentDocument;
         const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
-        return {
-          version: 1,
-          kind: 'flow',
-          index: chapterIndex,
-          ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
-          total,
-          updatedAt: Date.now(),
-        };
+        return stampReadingProgressTitle(
+          {
+            version: 1,
+            kind: 'flow',
+            index: chapterIndex,
+            ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
+            total,
+            updatedAt: Date.now(),
+          },
+          readerOutline,
+        );
       }
       const scroller = flowScrollContainer();
       const article = scrollHost.querySelector<HTMLElement>(
         `.lightink-reader-chapter[data-chapter-index="${chapterIndex}"]`,
       );
       const chapterHeight = article?.offsetHeight ?? 0;
-      if (article !== null && chapterHeight > 0) {
-        return {
+      if (article === null || chapterHeight <= 0) {
+        return null;
+      }
+      return stampReadingProgressTitle(
+        {
           version: 1,
           kind: 'flow',
           index: chapterIndex,
@@ -937,17 +960,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           ),
           total,
           updatedAt: Date.now(),
-        };
-      }
-      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      return {
-        version: 1,
-        kind: 'flow',
-        index: chapterIndex,
-        ratio: maxScroll === 0 ? 0 : Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)),
-        total,
-        updatedAt: Date.now(),
-      };
+        },
+        readerOutline,
+      );
     },
     apply: (saved, { attempts }) => {
       if (flowChapterCount === 0) {
@@ -1239,23 +1254,45 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return articleRect.top - scrollerRect.top + scroller.scrollTop;
   };
 
-  /** 流式：视口顶部最近章节的 spine 索引（稀疏窗口不能用 NodeList 下标）。 */
+  /** 流式：视口顶部盖住的章节（稀疏窗口不能用 NodeList 下标；占位条只在缺口里认）。 */
   const chapterFromScroll = (): number => {
-    const chapters = Array.from(
-      scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
-    );
-    if (chapters.length === 0) {
-      return 0;
-    }
     const scroller = flowScrollContainer();
     const hostTop = scroller.getBoundingClientRect().top;
-    return nearestVisibleChapterIndex(
-      chapters.map((chapter) => ({
-        index: Number(chapter.dataset.chapterIndex),
-        top: chapter.getBoundingClientRect().top,
-      })),
-      hostTop,
+    const boxesOf = (
+      selector: string,
+      indexAttr: 'chapterIndex' | 'chapterSpacer',
+    ): Array<{ index: number; top: number; bottom: number }> =>
+      Array.from(scrollHost.querySelectorAll<HTMLElement>(selector))
+        .map((node) => {
+          const index = Number(node.dataset[indexAttr]);
+          const rect = node.getBoundingClientRect();
+          const height = node.offsetHeight;
+          const bottom =
+            Number.isFinite(rect.bottom) && rect.bottom > rect.top
+              ? rect.bottom
+              : rect.top + Math.max(0, height);
+          return { index, top: rect.top, bottom };
+        })
+        .filter((box) => Number.isSafeInteger(box.index) && box.index >= 0);
+    const real = boxesOf('.lightink-reader-chapter', 'chapterIndex');
+    const coveringReal = real.filter((box) => box.top <= hostTop + 1 && box.bottom > hostTop + 1);
+    if (coveringReal.length > 0) {
+      return chapterIndexAtViewportTop(coveringReal, hostTop);
+    }
+    const spacers = boxesOf('.lightink-reader-chapter-spacer', 'chapterSpacer');
+    const coveringSpacer = spacers.filter(
+      (box) => box.top <= hostTop + 1 && box.bottom > hostTop + 1,
     );
+    if (coveringSpacer.length > 0) {
+      return chapterIndexAtViewportTop(coveringSpacer, hostTop);
+    }
+    if (real.length > 0) {
+      return nearestVisibleChapterIndex(real, hostTop);
+    }
+    if (spacers.length > 0) {
+      return nearestVisibleChapterIndex(spacers, hostTop);
+    }
+    return 0;
   };
 
   const firstVisibleChapter = (): number => {
@@ -1336,6 +1373,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const onFlowScroll = (): void => {
+    if (sessionProgress.hasPendingRestore()) {
+      sessionProgress.discardPending();
+    }
+    if (!flowIsPaginated()) {
+      const index = chapterFromScroll();
+      if (index !== lastScrollChapter) {
+        lastScrollChapter = index;
+        setActiveChapter(index);
+      }
+    }
     syncFlowState();
     sessionProgress.rememberSnapshot();
     sessionProgress.schedulePersist();
@@ -1626,14 +1673,19 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const total = flowChapterCount;
     const pos = clamped * total;
     const chapterIndex = Math.min(total - 1, Math.max(0, Math.floor(pos)));
-    sessionProgress.stage({
-      version: 1,
-      kind: 'flow',
-      index: chapterIndex,
-      ratio: Math.min(1, Math.max(0, pos - chapterIndex)),
-      total,
-      updatedAt: Date.now(),
-    });
+    sessionProgress.stage(
+      stampReadingProgressTitle(
+        {
+          version: 1,
+          kind: 'flow',
+          index: chapterIndex,
+          ratio: Math.min(1, Math.max(0, pos - chapterIndex)),
+          total,
+          updatedAt: Date.now(),
+        },
+        readerOutline,
+      ),
+    );
     sessionProgress.applyPendingWithRetry();
     syncFlowState();
     sessionProgress.schedulePersist();
@@ -2301,6 +2353,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pageHost.replaceWith(staged.host);
     pageHost = staged.host;
     watchPageChrome();
+    if (staged.cbz !== null) {
+      closeChromePanel();
+      readerChrome?.dismiss();
+    }
     syncChromeRevealAttr();
     pageHost.addEventListener('scroll', schedulePageScroll, { passive: true });
     closestPane()?.addEventListener('scroll', schedulePageScroll, { passive: true });
@@ -2360,8 +2416,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     syncPagedState: () => syncPageState(),
     flowIsPaginated: () => flowIsPaginated(),
     flowAdvancePaged: (direction) => flowRenderer.advancePage(direction),
-    flowAdvanceScrolled: (direction) =>
-      advanceScrolledScroller(flowScrollContainer(), direction),
+    flowAdvanceScrolled: (direction) => {
+      if (sessionProgress.hasPendingRestore()) {
+        sessionProgress.discardPending();
+      }
+      return advanceScrolledScroller(flowScrollContainer(), direction);
+    },
     flowJumpToChapter: (chapter) => {
       setActiveChapter(chapter);
       if (flowIsPaginated()) {

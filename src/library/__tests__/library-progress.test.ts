@@ -225,6 +225,26 @@ describe('projectLibraryProgress', () => {
     });
   });
 
+  it('forwards a usable heading onto the shelf projection', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(
+      storage,
+      '/books/a.epub',
+      flowProgress({ title: '第1997章 浓浓的火药味', total: 2530, index: 1996, ratio: 0.5 }),
+    );
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
+    ).toMatchObject({
+      status: 'in-progress',
+      title: '第1997章 浓浓的火药味',
+    });
+
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ title: 'ccdqxkhp' }));
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
+    ).not.toHaveProperty('title');
+  });
+
   it('forwards ReadingProgress.updatedAt onto in-progress projections', () => {
     const storage = memoryStorage();
     saveReadingProgress(

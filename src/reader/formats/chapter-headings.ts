@@ -23,14 +23,9 @@ const NUMBERED_HEADING = new RegExp(
 const SPECIAL_HEADING = /^(序章|序言|楔子|引子|前言|后记|尾声|番外)/;
 const ENGLISH_HEADING = /^Chapter\s+\d+\b/i;
 
-interface TextLine {
-  text: string;
-  start: number;
-}
-
 interface HeadingHit {
-  lineIndex: number;
   start: number;
+  end: number;
   title: string;
 }
 
@@ -42,7 +37,8 @@ interface ChapterRange {
 
 /**
  * 从纯文本切章。只认独立行；trim 后 ≤30 字；匹配 第X章/回/节（含第0001章）、
- * 第X卷 / 第X卷 标题、序章|序言|楔子|引子|前言|后记|尾声|番外、行首 Chapter X。
+ * 序章|序言|楔子|引子|前言|后记|尾声|番外、行首 Chapter X。
+ * 第X卷只作分界（假目录/卷首），合并进随后的章，不单独占一章、不计入章数。
  * 不切句中第X章；排除 部分/节课/部门/部队/集合 与 前言不搭后语。
  * 有效标题 < 4：在段落边界按约 8000 汉字切开。扉页保留。书前假目录不切空章。
  * 章数 > 8：仅前 EAGER_CHAPTER_COUNT 章 html 非空，其余 html==='' 且提供幂等 load()。
@@ -53,51 +49,57 @@ export function splitPlainTextChapters(text: string): ReaderContent {
     return { chapters: [{ title: '', html: '' }] };
   }
 
-  const lines = splitLines(source);
-  const realHits = selectRealHeadings(lines, collectHeadingHits(lines));
+  const realHits = selectRealHeadings(source, collectHeadingHits(source));
   const ranges =
     realHits.length >= MIN_HEADING_CHAPTERS
-      ? rangesFromHeadings(source, realHits)
+      ? mergeVolumeRanges(rangesFromHeadings(source, realHits))
       : rangesFromLength(source);
 
   return { chapters: materializeChapters(source, ranges) };
 }
 
-function splitLines(text: string): TextLine[] {
-  const lines: TextLine[] = [];
-  let start = 0;
-  while (start <= text.length) {
-    const newline = text.indexOf('\n', start);
-    if (newline === -1) {
-      lines.push({ text: text.slice(start), start });
-      break;
-    }
-    lines.push({ text: text.slice(start, newline), start });
-    start = newline + 1;
-    if (start === text.length) {
-      lines.push({ text: '', start });
-      break;
-    }
-  }
-  return lines;
-}
-
-function collectHeadingHits(lines: readonly TextLine[]): HeadingHit[] {
+function collectHeadingHits(source: string): HeadingHit[] {
   const hits: HeadingHit[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const title = headingTitle(lines[index]!.text);
+  let start = 0;
+  while (start <= source.length) {
+    const newline = source.indexOf('\n', start);
+    const end = newline === -1 ? source.length : newline;
+    const title = headingTitleAt(source, start, end);
     if (title !== null) {
-      hits.push({ lineIndex: index, start: lines[index]!.start, title });
+      hits.push({ start, end, title });
     }
+    if (newline === -1) {
+      break;
+    }
+    start = newline + 1;
   }
   return hits;
 }
 
-function headingTitle(rawLine: string): string | null {
-  const trimmed = rawLine.trim();
-  if (trimmed.length === 0 || [...trimmed].length > MAX_HEADING_CHARS) {
+function isTrimWs(code: number): boolean {
+  return (
+    code <= 32 ||
+    code === 0xa0 ||
+    code === 0x3000 ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0xfeff
+  );
+}
+
+function headingTitleAt(source: string, start: number, end: number): string | null {
+  let from = start;
+  let to = end;
+  while (from < to && isTrimWs(source.charCodeAt(from))) {
+    from += 1;
+  }
+  while (to > from && isTrimWs(source.charCodeAt(to - 1))) {
+    to -= 1;
+  }
+  if (from === to || to - from > MAX_HEADING_CHARS) {
     return null;
   }
+  const trimmed = source.slice(from, to);
   if (trimmed.includes('前言不搭后语')) {
     return null;
   }
@@ -130,7 +132,7 @@ function isHeadingText(line: string): boolean {
 }
 
 function selectRealHeadings(
-  lines: readonly TextLine[],
+  source: string,
   hits: readonly HeadingHit[],
 ): HeadingHit[] {
   if (hits.length === 0) {
@@ -144,14 +146,14 @@ function selectRealHeadings(
   }
 
   for (let index = 0; index < hits.length; index += 1) {
-    if (!headingHasBody(lines, hits, index) && (lastIndexByTitle.get(hits[index]!.title) ?? index) > index) {
+    if (!headingHasBody(source, hits, index) && (lastIndexByTitle.get(hits[index]!.title) ?? index) > index) {
       fake.add(index);
     }
   }
 
   let emptyRun = 0;
   for (let index = 0; index < hits.length; index += 1) {
-    if (headingHasBody(lines, hits, index)) {
+    if (headingHasBody(source, hits, index)) {
       break;
     }
     emptyRun += 1;
@@ -166,14 +168,15 @@ function selectRealHeadings(
 }
 
 function headingHasBody(
-  lines: readonly TextLine[],
+  source: string,
   hits: readonly HeadingHit[],
   index: number,
 ): boolean {
-  const start = hits[index]!.lineIndex + 1;
-  const end = index + 1 < hits.length ? hits[index + 1]!.lineIndex : lines.length;
-  for (let lineIndex = start; lineIndex < end; lineIndex += 1) {
-    if (lines[lineIndex]!.text.trim().length > 0) {
+  const from = hits[index]!.end;
+  const until = index + 1 < hits.length ? hits[index + 1]!.start : source.length;
+  for (let offset = from; offset < until; offset += 1) {
+    const code = source.charCodeAt(offset);
+    if (code !== 10 && code !== 13 && code !== 32 && code !== 9) {
       return true;
     }
   }
@@ -191,6 +194,36 @@ function rangesFromHeadings(source: string, hits: readonly HeadingHit[]): Chapte
     ranges.push({ title: hits[index]!.title, start: hits[index]!.start, end });
   }
   return ranges;
+}
+
+/** 第X卷 is a divider, not a numbered chapter. Fold it into the following 章. */
+function isVolumeHeadingTitle(title: string): boolean {
+  const numbered = NUMBERED_HEADING.exec(title.trim());
+  return numbered !== null && numbered[2] === '卷';
+}
+
+function mergeVolumeRanges(ranges: readonly ChapterRange[]): ChapterRange[] {
+  const pending = ranges.map((range) => ({ ...range }));
+  const merged: ChapterRange[] = [];
+  for (let index = 0; index < pending.length; index += 1) {
+    const range = pending[index]!;
+    if (!isVolumeHeadingTitle(range.title)) {
+      merged.push(range);
+      continue;
+    }
+    const next = pending[index + 1];
+    if (next !== undefined) {
+      pending[index + 1] = { ...next, start: range.start };
+      continue;
+    }
+    const previous = merged[merged.length - 1];
+    if (previous !== undefined) {
+      merged[merged.length - 1] = { ...previous, end: range.end };
+    } else {
+      merged.push({ title: '', start: range.start, end: range.end });
+    }
+  }
+  return merged;
 }
 
 interface ParagraphSpan {
@@ -319,17 +352,21 @@ function countChars(text: string): number {
 function materializeChapters(source: string, ranges: readonly ChapterRange[]): ReaderChapter[] {
   const lazy = ranges.length > 8;
   return ranges.map((range, index) => {
-    const raw = source.slice(range.start, range.end);
     const eager = !lazy || index < EAGER_CHAPTER_COUNT;
+    if (eager) {
+      return {
+        title: range.title,
+        html: textToHtml(source.slice(range.start, range.end)),
+      };
+    }
     const chapter: ReaderChapter = {
       title: range.title,
-      html: eager ? textToHtml(raw) : '',
+      html: '',
     };
-    if (eager) {
-      return chapter;
-    }
     let loaded = false;
     let inflight: Promise<void> | null = null;
+    const start = range.start;
+    const end = range.end;
     chapter.load = (): Promise<void> => {
       if (loaded) {
         return Promise.resolve();
@@ -338,7 +375,7 @@ function materializeChapters(source: string, ranges: readonly ChapterRange[]): R
         return inflight;
       }
       inflight = Promise.resolve().then(() => {
-        chapter.html = textToHtml(raw);
+        chapter.html = textToHtml(source.slice(start, end));
         loaded = true;
       });
       return inflight;
@@ -349,6 +386,38 @@ function materializeChapters(source: string, ranges: readonly ChapterRange[]): R
 
 function textToHtml(text: string): string {
   return collectParagraphs(text)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .flatMap((paragraph) => splitParagraphOnHeadings(paragraph))
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
     .join('\n');
+}
+
+/**
+ * Web-novel TXT often uses a single newline after the heading, so
+ * `\n\n` paragraph splitting leaves `第X章 …<br>正文` in one block.
+ * Scroll chrome already paints that title; a fused first line doubles it.
+ */
+function splitParagraphOnHeadings(paragraph: string): string[] {
+  const lines = paragraph.split('\n');
+  if (lines.length <= 1) {
+    return [paragraph];
+  }
+  const blocks: string[] = [];
+  let buffer: string[] = [];
+  const flush = (): void => {
+    const piece = buffer.join('\n').trim();
+    if (piece.length > 0) {
+      blocks.push(piece);
+    }
+    buffer = [];
+  };
+  for (const line of lines) {
+    if (headingTitleAt(line, 0, line.length) !== null) {
+      flush();
+      blocks.push(line.trim());
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return blocks.length > 0 ? blocks : [paragraph];
 }

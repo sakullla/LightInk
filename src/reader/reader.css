@@ -365,6 +365,13 @@
   display: none;
 }
 
+/* Scroll: the pane scrollbar is the progress cue. An idle whisper overlay
+   covers the last line (the usual continuous-scroll complaint). Tap still
+   reveals the full footer for chapter seek. */
+.lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper {
+  display: none;
+}
+
 html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper .lightink-reader-chrome-scrubber,
 html[data-reader-progress-bar='off'] .lightink-reader-chrome-footer .lightink-reader-chrome-scrubber {
   display: none;
@@ -734,6 +741,18 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   min-height: 0;
 }
 
+.lightink-reader-chapter-spacer {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+/* 翻页只露当前章；滚动占位条若还在，会把活动章顶出视口，整页空白。 */
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter-spacer {
+  display: none;
+}
+
 /* 翻页：当前章铺满阅读区，正文在 iframe 内按行长分栏横向翻页。 */
 .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
   overflow: hidden;
@@ -932,23 +951,31 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   position: initial;
   background: var(--lightink-selection);
   color: transparent;
+  overflow-anchor: none;
 }
 
 .lightink-reader-text-layer .lightink-reader-search-mark--current {
   position: initial;
   background: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
   color: transparent;
-  outline: 1px solid var(--lightink-fg);
+  box-shadow: inset 0 0 0 1px var(--lightink-fg);
+  overflow-anchor: none;
 }
 
 .lightink-reader-scroll .lightink-reader-search-mark {
   background: var(--lightink-selection);
   border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-anchor: none;
 }
 
 .lightink-reader-scroll .lightink-reader-search-mark--current {
   background: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
-  outline: 1px solid var(--lightink-fg);
+  box-shadow: inset 0 0 0 1px var(--lightink-fg);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-anchor: none;
 }
 
 /* 划选工具栏（R3）：选区附近浮动，点击外部/Escape 消失。 */
@@ -1030,11 +1057,25 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   --lightink-comic-translate-y: 0px;
   --lightink-comic-origin-x: 50%;
   --lightink-comic-origin-y: 50%;
+  --lightink-comic-natural-width: auto;
+  --lightink-comic-natural-height: auto;
   touch-action: manipulation;
 }
 
 .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true'][data-reader-active='true']) {
   background: var(--lightink-comic-canvas, #111);
+}
+
+/* TXT/EPUB 滚动布局会让阅读壳随正文长高。漫画必须钉在视口里，
+ * 平移只发生在页画布内部，否则会出现窗口滚动条并把底栏挤出屏外。 */
+.lightink-reader[data-comic-reader='true'],
+.lightink-reader:has(> .lightink-reader-pages[data-comic-reader='true']) {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  flex-direction: column;
 }
 
 .lightink-reader-cbz-slot[hidden] {
@@ -1084,17 +1125,20 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 0;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
+  scrollbar-width: none;
   background: var(--lightink-comic-canvas, #111);
   color: var(--lightink-comic-fg, #e6e6e6);
 }
 
-/* Reading canvas stays edge-to-edge except for --lightink-safe-* (system bars).
- * Chrome hide/show pairs with those insets: bars hidden → tokens are 0 → flush;
- * invoke failure still eats the inset so the page is not under a live nav bar. */
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader-pages[data-comic-reader='true'][data-reader-active='true'] {
-  padding-bottom: var(--lightink-safe-bottom, 0px);
+.lightink-reader-pages[data-comic-reader='true'][data-reader-active='true']::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
+
+/* Overlay chrome owns safe-area padding. The page canvas stays a stable
+ * full-bleed box in both chrome states so fit-width/height/screen do not rescale. */
 
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-cbz-slot {
   background: var(--lightink-comic-canvas, #111);
@@ -1114,13 +1158,19 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   pointer-events: none;
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: 13;
+  overflow: visible;
   direction: ltr;
 }
 
-/* Comic overlay owns page/slider chrome. Hide the flow footer and idle
- * whisper on every surface (including touch) so toc/排版/搜索/标注 do not
- * stack a second dock under .lightink-reader-comic-*. */
+/* Comic overlay owns page/slider chrome. Hide the novel/EPUB overlay
+ * (top bar, footer, idle whisper) so a previous TXT session cannot leave
+ * 目录/排版/搜索 sitting on the bitmap. Inline reveal styles lose to !important. */
+.lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome,
+.lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) > .lightink-reader-chrome {
+  display: none !important;
+}
+
 .lightink-reader[data-comic-reader='true'] > .lightink-reader-chrome-footer,
 .lightink-reader:has(.lightink-reader-pages[data-comic-reader='true']) .lightink-reader-chrome-footer {
   display: none;
@@ -1186,6 +1236,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   position: absolute;
   left: 0;
   right: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1380,6 +1431,13 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   flex-direction: column;
   align-items: center;
   padding-top: var(--lightink-reader-pad-y, 2rem);
+  scrollbar-width: none;
+}
+
+.lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .lightink-reader-pages[data-comic-mode='strip'] .lightink-reader-comic-pages {
@@ -1406,6 +1464,9 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   min-height: 0;
   margin: 0;
   aspect-ratio: 2 / 3;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 800px;
+  contain: layout style;
 }
 
 .lightink-reader-pages[data-comic-mode='strip'] .lightink-reader-cbz-slot > .lightink-reader-page {
@@ -1427,6 +1488,7 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   gap: 0;
   padding: 0;
   overflow: hidden;
+  scrollbar-width: none;
 }
 
 .lightink-reader-pages[data-comic-mode='paged'] .lightink-reader-cbz-slot {
@@ -1576,9 +1638,11 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-fit='original'] .lightink-reader-cbz-slot,
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']:not([data-comic-fit])
   .lightink-reader-cbz-slot {
+  flex: 0 0 auto;
+  aspect-ratio: auto;
   width: var(--lightink-comic-natural-width, auto);
   max-width: none;
-  height: auto;
+  height: var(--lightink-comic-natural-height, auto);
   max-height: none;
 }
 
@@ -1588,8 +1652,8 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 .lightink-reader-pages[data-comic-mode='paged'][data-comic-fit-width='false']:not([data-comic-fit])
   .lightink-reader-cbz-slot
   > .lightink-reader-page {
-  width: var(--lightink-comic-natural-width, 100%);
-  height: auto;
+  width: var(--lightink-comic-natural-width, auto);
+  height: var(--lightink-comic-natural-height, auto);
   max-width: none;
   max-height: none;
   object-fit: none;

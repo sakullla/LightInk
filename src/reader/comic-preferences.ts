@@ -189,6 +189,29 @@ export function comicVisiblePages(
   return spreadContaining(pageIndex, totalPages, preferences, landscapePages);
 }
 
+/** Current spread plus one turn each way. Strip keeps a single center so tiny budgets stay honest. */
+export function comicTurnPrefetchCenters(
+  pageIndex: number,
+  totalPages: number,
+  preferences: ComicSpreadPreferences,
+  landscapePages?: ReadonlySet<number>,
+): number[] {
+  if (totalPages <= 0) return [];
+  if (preferences.mode !== 'paged') {
+    return [clampComicPageIndex(pageIndex, totalPages)];
+  }
+  const current = comicVisiblePages(pageIndex, totalPages, preferences, landscapePages);
+  const next = advanceComicPage(pageIndex, totalPages, 1, preferences, landscapePages);
+  const previous = advanceComicPage(pageIndex, totalPages, -1, preferences, landscapePages);
+  return [
+    ...new Set([
+      ...current,
+      ...comicVisiblePages(next, totalPages, preferences, landscapePages),
+      ...comicVisiblePages(previous, totalPages, preferences, landscapePages),
+    ]),
+  ].sort((left, right) => left - right);
+}
+
 export function comicSpreadIndex(
   pageIndex: number,
   totalPages: number,

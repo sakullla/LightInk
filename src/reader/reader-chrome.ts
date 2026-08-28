@@ -11,7 +11,8 @@
  * 控件条。「返回书架」是起始侧唯一合书入口。
  *
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
- * 唤出；只由中部点按 / Escape / 收浮层收起，whisper 进度线照常显示。
+ * 唤出；只由中部点按 / Escape / 收浮层收起。翻页模式 idle 仍显示 whisper
+ * 进度线；滚动模式不显示（原生滚动条即进度，底栏会挡住末行）。
  * 目录 / 排版 / 搜索 / 本书标注挪到 `.lightink-reader-chrome-footer` 拇指区
  *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
  * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
@@ -471,8 +472,10 @@ export function createReaderChrome(
     const hideFooter = !revealed || (hideProgress && !touchMode);
     footer.hidden = hideFooter;
     writeAttr(footer, 'aria-hidden', hideFooter ? 'true' : 'false');
-    whisper.hidden = hideProgress || revealed;
-    writeAttr(whisper, 'aria-hidden', hideProgress || revealed ? 'true' : 'false');
+    const hideWhisper =
+      hideProgress || revealed || attachedHost?.dataset.readingLayout === 'scroll';
+    whisper.hidden = hideWhisper;
+    writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
     for (const button of [backButton, tocButton, typographyButton, searchButton, annotationsButton]) {
       button.hidden = !revealed;
     }
@@ -670,6 +673,7 @@ export function createReaderChrome(
     host.addEventListener('pointermove', onHostPointerMove);
     host.addEventListener('pointerleave', onHostPointerLeave);
     host.addEventListener('keydown', onHostKeyDown, true);
+    syncDom();
   };
 
   backButton.addEventListener('click', (event) => {
@@ -771,6 +775,7 @@ export function createReaderChrome(
     syncDom();
   };
 
+  let lastPinKey = '';
   const pinDocks = (
     pane: { getBoundingClientRect(): DOMRect } | null,
     paginated: boolean,
@@ -787,6 +792,7 @@ export function createReaderChrome(
       style.removeProperty('width');
     };
     if (paginated || pane === null || typeof pane.getBoundingClientRect !== 'function') {
+      lastPinKey = '';
       clearPin(footer);
       clearPin(whisper);
       return;
@@ -798,6 +804,11 @@ export function createReaderChrome(
       typeof window !== 'undefined' && Number.isFinite(window.innerHeight)
         ? window.innerHeight
         : 0;
+    const pinKey = `${box.left},${box.top},${box.width},${box.height},${viewportWidth},${viewportHeight}`;
+    if (pinKey === lastPinKey) {
+      return;
+    }
+    lastPinKey = pinKey;
     for (const dock of [footer, whisper]) {
       const style = dock.style;
       if (style === undefined) {
@@ -831,6 +842,7 @@ export function createReaderChrome(
         reveal();
         return;
       }
+      syncDom();
       scheduleHide();
     },
     dismiss,

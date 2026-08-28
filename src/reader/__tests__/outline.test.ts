@@ -18,6 +18,15 @@ describe('outlineFromEntries', () => {
       { level: 1, text: '第 2 页', anchor: 1, page: 2 },
     ]);
   });
+
+  it('keeps every titled chapter past the old 2000-item catalog cap', () => {
+    const entries = Array.from({ length: 2530 }, (_, index) => ({ title: `第${index + 1}章` }));
+    const items = outlineFromEntries(entries, 'chapter');
+    expect(items).toHaveLength(2530);
+    expect(items[0]).toMatchObject({ text: '第1章', chapter: 0 });
+    expect(items[1999]).toMatchObject({ text: '第2000章', chapter: 1999 });
+    expect(items[2529]).toMatchObject({ text: '第2530章', chapter: 2529 });
+  });
 });
 
 describe('outlineFromPdf', () => {

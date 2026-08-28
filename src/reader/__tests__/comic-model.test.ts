@@ -14,6 +14,7 @@ import {
   compareComicPaths,
   createComicPageElement,
   isComicImagePath,
+  orderComicCacheLoads,
   orderComicPages,
   parseComicInfo,
   selectComicCacheWindow,
@@ -26,6 +27,7 @@ import {
   clampComicViewOffset,
   comicPageFromProgress,
   comicSpreadIndex,
+  comicTurnPrefetchCenters,
   comicVisiblePages,
   defaultComicPreferences,
   loadComicPreferences,
@@ -201,6 +203,13 @@ describe('comic page model', () => {
     Object.defineProperty(slot, 'clientWidth', { configurable: true, value: 640 });
     expect(comicDisplayWidthPx(slot, 800, { devicePixelRatio: 1 })).toBe(640);
     expect(comicDisplayWidthPx(slot, 800, { devicePixelRatio: 2 })).toBe(1280);
+    const hidden = document.createElement('div');
+    hidden.hidden = true;
+    Object.defineProperty(hidden, 'clientWidth', { configurable: true, value: 0 });
+    const parent = document.createElement('div');
+    parent.append(hidden);
+    Object.defineProperty(parent, 'clientWidth', { configurable: true, value: 720 });
+    expect(comicDisplayWidthPx(hidden, 800, { devicePixelRatio: 1 })).toBe(720);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x1, 0x2]);
     expect(comicImageBlob(jpeg, 'page.jpg').type).toBe('image/jpeg');
   });
@@ -212,6 +221,7 @@ describe('comic page model', () => {
     expect([...selectComicCacheWindow([40, 5, 5], [0], 10)]).toEqual([0]);
     expect([...selectComicCacheWindow([5, 5, 5, 5], [0], 15)]).toEqual([0, 1, 2]);
     expect([...selectComicCacheWindow([10, 10, 10, 10], [1, 2], 20)]).toEqual([1, 2]);
+    expect(orderComicCacheLoads([3, 0, 1, 4], [1])).toEqual([1, 0, 3, 4]);
   });
 });
 
@@ -352,7 +362,10 @@ describe('comic page paint', () => {
     try {
       const resizeWidth = comicDisplayWidthPx(slot);
       expect(resizeWidth).toBe(1280);
-      const mounted = await createComicPageElement(jpegBytes, 'page.jpg', { resizeWidth });
+      const mounted = await createComicPageElement(jpegBytes, 'page.jpg', {
+        resizeWidth,
+        priority: 'high',
+      });
       const image = mounted.element as HTMLImageElement;
       expect(image).toBeInstanceOf(HTMLImageElement);
       expect(mounted.width).toBe(2000);
@@ -360,6 +373,7 @@ describe('comic page paint', () => {
       expect(mounted.width).toBeGreaterThanOrEqual(resizeWidth);
       expect(image.sizes).toBe('640px');
       expect(image.style.maxWidth).toBe('640px');
+      expect(image.fetchPriority).toBe('high');
       expect(displayConstraintPx(image)).toBe(640);
       expect(createImageBitmap).not.toHaveBeenCalled();
     } finally {
@@ -439,6 +453,14 @@ describe('comic preferences', () => {
     expect(comicVisiblePages(0, 5, stripDouble)).toEqual([0, 1, 2, 3, 4]);
     expect(advanceComicPage(0, 5, 1, stripDouble)).toBe(1);
     expect(advanceComicPage(2, 5, -1, stripDouble)).toBe(1);
+    expect(comicTurnPrefetchCenters(2, 5, stripDouble)).toEqual([2]);
+  });
+
+  it('keeps the next and previous paged spreads in the prefetch center set', () => {
+    const doublePaged = { mode: 'paged' as const, spread: 'double' as const };
+    expect(comicTurnPrefetchCenters(0, 5, doublePaged)).toEqual([0, 1, 2]);
+    expect(comicTurnPrefetchCenters(1, 5, doublePaged)).toEqual([0, 1, 2, 3, 4]);
+    expect(comicTurnPrefetchCenters(3, 5, doublePaged)).toEqual([1, 2, 3, 4]);
   });
 
   it('persists paged or strip mode, direction, spread, and each fit without throwing', () => {

@@ -62,6 +62,21 @@ export interface WorkspaceSurfaceRoots {
 }
 
 /**
+ * Inactive reading/editor hosts that must leave layout and input.
+ * HTMLElement already matches; tests may pass a stub with `contains`.
+ */
+export interface WorkspaceHostSeal {
+  hidden: boolean;
+  inert: boolean;
+  contains?(node: Node | null): boolean;
+}
+
+export interface WorkspaceHostFocus {
+  readonly activeElement: Element | null;
+  blur(): void;
+}
+
+/**
  * Extra visibility context. `markdownOpen` is the R5 case: reader surface
  * showing a markdown tab, so the editor root stays on screen and the
  * ebook host stays hidden.
@@ -191,6 +206,33 @@ export function applyWorkspaceVisibility(
   }
   if (roots.reader !== undefined) {
     roots.reader.hidden = !vis.readerVisible;
+  }
+}
+
+/**
+ * Take inactive book/editor hosts out of layout and input.
+ *
+ * Exclusive full-screen views (Apple Books / KOReader LIBRARY|READING)
+ * must not share a scroll container. `visibility:hidden` still occupies
+ * geometry; `aria-hidden` leaves focusable controls. HTML `hidden` removes
+ * layout; `inert` seals pointer, keyboard, and AT. Blur first so focus is
+ * not left inside a region that is about to become hidden or inert.
+ */
+export function sealReadingHostsForSurface(
+  hosts: readonly WorkspaceHostSeal[],
+  surface: WorkspaceSurface,
+  focus?: WorkspaceHostFocus,
+): void {
+  const seal = surface === 'shelf';
+  if (seal && focus !== undefined) {
+    const active = focus.activeElement;
+    if (active !== null && hosts.some((host) => host.contains?.(active) === true)) {
+      focus.blur();
+    }
+  }
+  for (const host of hosts) {
+    host.hidden = seal;
+    host.inert = seal;
   }
 }
 

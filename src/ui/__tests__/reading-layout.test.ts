@@ -13,6 +13,7 @@ import {
   loadReadingLayout,
   nearestVisibleSlot,
   nearestVisibleChapterIndex,
+  chapterIndexAtViewportTop,
   applyPagedPageStep,
   pagedColumnStep,
   pagedFrameStep,
@@ -341,6 +342,27 @@ describe('nearestVisibleSlot', () => {
         820,
       ),
     ).toBe(5);
+  });
+
+  it('keeps the covering chapter even when a spacer top is closer to the viewport', () => {
+    expect(
+      chapterIndexAtViewportTop(
+        [
+          { index: 96, top: -2400, bottom: -400 },
+          { index: 97, top: -400, bottom: 400 },
+        ],
+        0,
+      ),
+    ).toBe(97);
+    expect(
+      chapterIndexAtViewportTop(
+        [
+          { index: 94, top: -800, bottom: -20 },
+          { index: 95, top: 40, bottom: 840 },
+        ],
+        0,
+      ),
+    ).toBe(95);
   });
 });
 

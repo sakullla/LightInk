@@ -16,7 +16,8 @@ export interface PdfOutlineResolver {
   getPageIndex(ref: unknown): Promise<number>;
 }
 
-const MAX_OUTLINE_ITEMS = 2_000;
+/** PDF bookmark flatten cap. Chapter/page catalogs are uncapped. */
+const MAX_PDF_OUTLINE_ITEMS = 20_000;
 const MAX_OUTLINE_DEPTH = 8;
 
 function destRef(dest: unknown): unknown {
@@ -52,9 +53,6 @@ function pushItem(
   level: number,
   target: { page?: number; chapter?: number },
 ): void {
-  if (items.length >= MAX_OUTLINE_ITEMS) {
-    return;
-  }
   items.push({
     level,
     text: title,
@@ -73,7 +71,7 @@ async function flattenPdfNodes(
     return;
   }
   for (const node of nodes) {
-    if (out.length >= MAX_OUTLINE_ITEMS) {
+    if (out.length >= MAX_PDF_OUTLINE_ITEMS) {
       return;
     }
     const title = typeof node.title === 'string' ? node.title.trim() : '';
@@ -109,7 +107,7 @@ export function outlineFromEntries(
   kind: 'chapter' | 'page',
 ): OutlineItem[] {
   const items: OutlineItem[] = [];
-  for (let index = 0; index < entries.length && items.length < MAX_OUTLINE_ITEMS; index += 1) {
+  for (let index = 0; index < entries.length; index += 1) {
     const title = entries[index]!.title.trim();
     const text = title === '' ? (kind === 'page' ? String(index + 1) : '') : title;
     if (text === '') {

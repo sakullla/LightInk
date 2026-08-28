@@ -768,6 +768,37 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('shows chapter or page progress on the cover, not the heading title', async () => {
+    const book = localItem();
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === book.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 1996,
+            ratio: 0.5,
+            percent: 79,
+            title: '第1997章 浓浓的火药味',
+          }
+        : { status: 'not-started' as const },
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [book]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const row = itemRow(host, book.id);
+    expect(row.textContent).toContain('第 1997 章');
+    expect(row.textContent).toContain('已读 79%');
+    expect(row.textContent).not.toContain('浓浓的火药味');
+    view.destroy();
+  });
+
   it('puts a quick-import tile at the end of the local cover wall', async () => {
     const book = localItem();
     const imported = localItem({
@@ -901,6 +932,18 @@ describe('LibraryView my-books home', () => {
     expect(shelfTitle?.hidden).toBe(true);
     expect(host.textContent).not.toContain('我的书');
     expect(host.querySelector('.lightink-library-brand')?.textContent).toBe('轻墨');
+    expect(host.querySelector('.lightink-library-header')?.hasAttribute('data-tauri-drag-region')).toBe(
+      true,
+    );
+    expect(host.querySelector('.lightink-library-brand')?.hasAttribute('data-tauri-drag-region')).toBe(
+      true,
+    );
+    expect(
+      host.querySelector('.lightink-library-header-main')?.hasAttribute('data-tauri-drag-region'),
+    ).toBe(true);
+    expect(host.querySelector('.lightink-library-search')?.hasAttribute('data-tauri-drag-region')).toBe(
+      false,
+    );
     view.destroy();
   });
 
@@ -3164,6 +3207,9 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(host.querySelector('.lightink-library-catalog-pane > .lightink-library-catalog-tree')).not.toBeNull();
 
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /#app\.is-workspace-shelf #lightink-editor-area > :not\(\.lightink-library\)\s*\{[^}]*display:\s*none/,
+    );
     // 书架不消费 reader 内部令牌
     expect(css).not.toMatch(/--lightink-reader-/);
     expect(css).not.toMatch(/--lightink-measure/);
@@ -4550,6 +4596,24 @@ describe('LibraryView mobile shelf', () => {
     expect(css).not.toMatch(
       /\.lightink-library-groups-sheet-handle\s*\{[^}]*pointer-events:\s*none/,
     );
+    expect(css).not.toMatch(
+      /\.lightink-library-shelf-filter-menu:not\(\[hidden\]\)[^}]*flex:\s*1\s*1\s*100%/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-toolbar\s*\{[^}]*flex-wrap:\s*nowrap/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-filter::after\s*\{/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-groups::after\s*\{/,
+    );
+    expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-toolbar\s*\{[^}]*justify-content:\s*flex-start/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-library-shelf-toolbar\s+\.lightink-library-shelf-groups\s*\{[^}]*margin:\s*0 0 0 auto/,
+    );
     expect(css).toMatch(
       /\[data-library-tab=['"]?shelf['"]?\]\s+\.lightink-library-header-import\s*\{[^}]*display:\s*inline-flex/,
     );
@@ -4830,10 +4894,10 @@ describe('LibraryView mobile shelf', () => {
     expect(isMountedChrome(entry)).toBe(true);
     expect(entry.getAttribute('aria-expanded')).toBe('false');
     expect(shelfFilterButtons(host)).toHaveLength(0);
-    const panel = libraryRoot(host).querySelector<HTMLElement>(
-      '[data-library-shelf-filters], .lightink-library-shelf-filter-menu',
-    );
-    expect(panel === null || !isMountedChrome(panel)).toBe(true);
+    const sheet = shelfFilterSheetQuery();
+    expect(sheet === null || !isMountedChrome(sheet)).toBe(true);
+    const toolbar = libraryRoot(host).querySelector('.lightink-library-shelf-toolbar');
+    expect(toolbar?.querySelector('[data-shelf-group]')).toBeNull();
   }
 
   function chromeMinHeight(el: HTMLElement): number {
@@ -4848,6 +4912,7 @@ describe('LibraryView mobile shelf', () => {
     if (isMountedChrome(search)) height += chromeMinHeight(search) || 40;
     if (isMountedChrome(entry)) height += chromeMinHeight(entry) || 48;
     for (const option of shelfFilterButtons(host)) {
+      if (option.closest('[data-library-filter-sheet], .lightink-library-filter-sheet')) continue;
       height += chromeMinHeight(option) || 48;
     }
     return height;
@@ -4895,7 +4960,11 @@ describe('LibraryView mobile shelf', () => {
       const text = button.textContent?.replace(/\s+/g, ' ').trim();
       const aria = button.getAttribute('aria-label')?.trim();
       return (
-        (text === '筛选' || aria === '筛选' || aria === '打开筛选') &&
+        (text === '筛选' ||
+          aria === '筛选' ||
+          aria === '打开筛选' ||
+          aria?.startsWith('筛选:') === true ||
+          aria?.startsWith('筛选：') === true) &&
         button.dataset.shelfGroup === undefined &&
         isMountedChrome(button)
       );
@@ -5013,7 +5082,7 @@ describe('LibraryView mobile shelf', () => {
       const text = button.textContent?.replace(/\s+/g, ' ').trim();
       const aria = button.getAttribute('aria-label')?.trim();
       return (
-        (text === '分组' || aria === '分组') &&
+        (text === '分组' || aria === '分组' || aria?.startsWith('分组:') === true) &&
         button.dataset.shelfGroup === undefined &&
         isMountedChrome(button)
       );
@@ -5024,10 +5093,12 @@ describe('LibraryView mobile shelf', () => {
     return labeled;
   }
 
+  function shelfFilterSheetQuery(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-library-filter-sheet]');
+  }
+
   function shelfGroupsSheetQuery(): HTMLElement | null {
-    return document.querySelector<HTMLElement>(
-      '[data-library-groups-sheet], .lightink-library-groups-sheet',
-    );
+    return document.querySelector<HTMLElement>('[data-library-groups-sheet]');
   }
 
   function shelfGroupsSheet(): HTMLElement {
@@ -5126,9 +5197,23 @@ describe('LibraryView mobile shelf', () => {
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expectNoNowrapChipRow(host);
     expect(isMountedChrome(shelfFilterEntry(host))).toBe(true);
+    expect(shelfFilterEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('全部');
+    expect(shelfFilterEntry(host).getAttribute('aria-label')).toBe('筛选: 全部');
     expectShelfFilterCollapsed(host);
     expectCoverWallTallerThanChrome(host);
     const filterButtons = await openShelfFilters(host);
+    const filterSheet = shelfFilterSheetQuery();
+    expect(filterSheet).not.toBeNull();
+    expect(isShown(filterSheet)).toBe(true);
+    expect(filterSheet?.parentElement).toBe(document.body);
+    expect(libraryRoot(host).contains(filterSheet)).toBe(false);
+    expect(filterSheet?.querySelector('[role="dialog"][aria-modal="true"]')).not.toBeNull();
+    expectPointerCapableHandle(groupsSheetHandle(filterSheet!), filterSheet!);
+    expect(
+      libraryRoot(host)
+        .querySelector('.lightink-library-shelf-toolbar')
+        ?.contains(filterButtons[0]),
+    ).toBe(false);
     expect(filterButtons.map((button) => button.dataset.shelfGroup)).toEqual([
       'all',
       'in-progress',
@@ -5147,6 +5232,8 @@ describe('LibraryView mobile shelf', () => {
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(currentShelfFilters(host)).toEqual(['in-progress']);
+    expect(shelfFilterEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('在读');
+    expect(shelfFilterEntry(host).getAttribute('aria-label')).toBe('筛选: 在读');
     expectShelfFilterCollapsed(host);
     expectCoverWallTallerThanChrome(host);
 
@@ -5546,6 +5633,8 @@ describe('LibraryView mobile shelf', () => {
     expect(itemRow(host, grouped.id).textContent).toContain('分组小说');
     expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
     expect(currentShelfFilters(host)).toEqual([]);
+    expect(shelfFilterEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('全部');
+    expect(shelfGroupsEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('夏日书单');
     expect((await openShelfFilters(host)).map((button) => button.textContent ?? '').join('')).not.toContain(
       '夏日书单',
     );
@@ -5631,6 +5720,8 @@ describe('LibraryView mobile shelf', () => {
     sheetGroupButton(sheet, 'EPUB').click();
     await settle();
     expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+    expect(shelfGroupsEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('EPUB');
+    expect(shelfFilterEntry(host).textContent?.replace(/\s+/g, ' ').trim()).toBe('全部');
     expect(itemRow(host, novel.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
     expect(currentShelfFilters(host)).toEqual([]);

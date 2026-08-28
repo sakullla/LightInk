@@ -271,6 +271,18 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.whisper.hidden).toBe(false);
   });
 
+  it('hides the idle whisper in scroll mode so it does not cover the last line', () => {
+    const { host, chrome } = mount();
+    host.dataset.readingLayout = 'scroll';
+    chrome.dismiss();
+    expect(chrome.whisper.hidden).toBe(true);
+    chrome.reveal();
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
+    chrome.dismiss();
+    expect(chrome.whisper.hidden).toBe(true);
+  });
+
   it('keeps the touch footer tools when comic progress docks are suppressed', () => {
     const { host, chrome } = mount({
       touchMode: true,

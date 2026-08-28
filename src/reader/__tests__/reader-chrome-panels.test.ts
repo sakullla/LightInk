@@ -763,6 +763,9 @@ describe('reader chrome panels', () => {
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,
     );
+    expect(sheet).toMatch(
+      /#app\.is-workspace-shelf \.lightink-reader-chrome-panel,[\s\S]*?\.lightink-reader-search-sheet\s*\{[^}]*display:\s*none/,
+    );
     expect(readerCss()).toContain('--lightink-keyboard-inset');
     expect(sheet + readerCss()).toMatch(/--lightink-keyboard-inset/);
   });

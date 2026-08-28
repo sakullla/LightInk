@@ -55,7 +55,7 @@ import {
   type OpdsSource,
   type OpdsSourceInput,
 } from './opds-client.js';
-import type { ProgressStorage } from '../reader/reading-progress.js';
+import { type ProgressStorage } from '../reader/reading-progress.js';
 import type { ReaderPrefsStorage } from '../reader/reader-prefs.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import { beginOpenProgress } from '../ui/open-progress.js';
@@ -1095,6 +1095,8 @@ export function createLibraryView(
   searchForm.append(searchInput, searchClear, searchButton);
   const headerMain = doc.createElement('div');
   headerMain.className = 'lightink-library-header-main';
+  headerMain.setAttribute('data-tauri-drag-region', '');
+  heading.setAttribute('data-tauri-drag-region', '');
   const toolbar = doc.createElement('div');
   toolbar.className = 'lightink-library-toolbar';
   const manageNavButton = button(doc, '', 'lightink-library-nav-item lightink-library-manage-entry');
@@ -1351,19 +1353,11 @@ export function createLibraryView(
   const filterToggle = button(doc, '', 'lightink-library-shelf-filter');
   filterToggle.hidden = true;
   filterToggle.dataset.libraryShelfFilter = '';
-  filterToggle.setAttribute('aria-haspopup', 'true');
+  filterToggle.setAttribute('aria-haspopup', 'dialog');
   filterToggle.setAttribute('aria-expanded', 'false');
   filterToggle.style.minWidth = '48px';
   filterToggle.style.minHeight = '48px';
   filterToggle.style.whiteSpace = 'nowrap';
-  const filterPanel = doc.createElement('nav');
-  filterPanel.className = 'lightink-library-shelf-filter-menu';
-  filterPanel.dataset.libraryShelfFilters = '';
-  filterPanel.setAttribute('role', 'radiogroup');
-  filterPanel.hidden = true;
-  filterPanel.style.flexDirection = 'column';
-  filterPanel.style.flexWrap = 'wrap';
-  filterPanel.style.whiteSpace = 'normal';
   const groupsButton = button(doc, '', 'lightink-library-shelf-groups');
   groupsButton.hidden = true;
   groupsButton.dataset.libraryShelfGroups = '';
@@ -1371,7 +1365,7 @@ export function createLibraryView(
   groupsButton.setAttribute('aria-expanded', 'false');
   groupsButton.style.minWidth = '48px';
   groupsButton.style.minHeight = '48px';
-  shelfToolbar.append(filterToggle, groupsButton, filterPanel);
+  shelfToolbar.append(filterToggle, groupsButton);
   const groupsSheet = doc.createElement('div');
   groupsSheet.className = 'lightink-library-groups-sheet';
   groupsSheet.dataset.libraryGroupsSheet = '';
@@ -1419,6 +1413,57 @@ export function createLibraryView(
   groupsSheetList.className = 'lightink-library-groups-sheet-list';
   groupsSheetDialog.append(groupsSheetHandle, groupsSheetTitle, groupsSheetList);
   groupsSheet.append(groupsSheetBackdrop, groupsSheetDialog);
+  const filterSheet = doc.createElement('div');
+  filterSheet.className = 'lightink-library-groups-sheet lightink-library-filter-sheet';
+  filterSheet.dataset.libraryFilterSheet = '';
+  filterSheet.hidden = true;
+  filterSheet.style.position = 'fixed';
+  filterSheet.style.inset = '0';
+  filterSheet.style.zIndex = '200';
+  filterSheet.style.flexDirection = 'column';
+  filterSheet.style.justifyContent = 'flex-end';
+  const filterSheetBackdrop = doc.createElement('div');
+  filterSheetBackdrop.className = 'lightink-library-groups-sheet-backdrop';
+  filterSheetBackdrop.style.position = 'absolute';
+  filterSheetBackdrop.style.inset = '0';
+  filterSheetBackdrop.style.background = 'var(--lightink-overlay)';
+  const filterSheetDialog = doc.createElement('div');
+  filterSheetDialog.className = 'lightink-library-groups-sheet-dialog';
+  filterSheetDialog.setAttribute('role', 'dialog');
+  filterSheetDialog.setAttribute('aria-modal', 'true');
+  filterSheetDialog.style.position = 'relative';
+  filterSheetDialog.style.width = '100%';
+  filterSheetDialog.style.maxHeight = 'min(70vh, 520px)';
+  filterSheetDialog.style.overflow = 'hidden';
+  filterSheetDialog.style.display = 'flex';
+  filterSheetDialog.style.flexDirection = 'column';
+  filterSheetDialog.style.padding = '16px 16px calc(16px + var(--lightink-safe-bottom, 0px))';
+  filterSheetDialog.style.borderRadius = '16px 16px 0 0';
+  filterSheetDialog.style.background = 'var(--lightink-bg-elevated)';
+  const filterSheetHandle = button(doc, '', 'lightink-library-groups-sheet-handle');
+  filterSheetHandle.dataset.sheetHandle = '';
+  filterSheetHandle.setAttribute('aria-hidden', 'true');
+  filterSheetHandle.tabIndex = -1;
+  filterSheetHandle.style.flex = '0 0 auto';
+  filterSheetHandle.style.alignSelf = 'stretch';
+  filterSheetHandle.style.width = '100%';
+  filterSheetHandle.style.minHeight = '28px';
+  filterSheetHandle.style.margin = '0';
+  filterSheetHandle.style.padding = '0';
+  filterSheetHandle.style.border = '0';
+  filterSheetHandle.style.background = 'transparent';
+  filterSheetHandle.style.touchAction = 'none';
+  filterSheetHandle.style.cursor = 'grab';
+  const filterSheetTitle = doc.createElement('h2');
+  filterSheetTitle.className = 'lightink-library-groups-sheet-title';
+  filterSheetTitle.id = 'lightink-library-filter-sheet-title';
+  filterSheetDialog.setAttribute('aria-labelledby', filterSheetTitle.id);
+  const filterPanel = doc.createElement('nav');
+  filterPanel.className = 'lightink-library-groups-sheet-list';
+  filterPanel.dataset.libraryShelfFilters = '';
+  filterPanel.setAttribute('role', 'radiogroup');
+  filterSheetDialog.append(filterSheetHandle, filterSheetTitle, filterPanel);
+  filterSheet.append(filterSheetBackdrop, filterSheetDialog);
   const workArea = doc.createElement('div');
   workArea.className = 'lightink-library-workarea';
   const itemList = doc.createElement('div');
@@ -1459,6 +1504,7 @@ export function createLibraryView(
     groupOverlay,
     sourceOverlay,
     groupsSheet,
+    filterSheet,
   );
   host.appendChild(root);
 
@@ -2083,7 +2129,7 @@ export function createLibraryView(
         syncMobileGroupsChrome();
         content.replaceChildren(shelfToolbar, continueHost, status, itemList);
       } else {
-        shelfFilterOpen = false;
+        closeFilterSheet();
         closeGroupsSheet();
         syncMobileGroupsChrome();
         content.replaceChildren(continueHost, status, itemList);
@@ -2094,7 +2140,7 @@ export function createLibraryView(
       heading.hidden = false;
       heading.textContent = labels().manage;
       toolbar.replaceChildren();
-      shelfFilterOpen = false;
+      closeFilterSheet();
       closeGroupsSheet();
       syncMobileGroupsChrome();
       itemList.classList.remove('lightink-library-cover-wall');
@@ -2103,7 +2149,7 @@ export function createLibraryView(
       heading.hidden = false;
       heading.textContent = catalogTitle();
       toolbar.replaceChildren();
-      shelfFilterOpen = false;
+      closeFilterSheet();
       closeGroupsSheet();
       syncMobileGroupsChrome();
       itemList.classList.add('lightink-library-cover-wall');
@@ -2113,7 +2159,7 @@ export function createLibraryView(
       heading.hidden = false;
       heading.textContent = labels().sources;
       toolbar.replaceChildren();
-      shelfFilterOpen = false;
+      closeFilterSheet();
       closeGroupsSheet();
       syncMobileGroupsChrome();
       itemList.classList.remove('lightink-library-cover-wall');
@@ -2536,7 +2582,7 @@ export function createLibraryView(
     selectedGroup = group;
     selectedCustomGroupId = null;
     selectedSmartGroupId = null;
-    shelfFilterOpen = false;
+    closeFilterSheet();
     closeGroupsSheet();
     void activateShelf();
   }
@@ -2550,24 +2596,82 @@ export function createLibraryView(
     );
   }
 
+  function currentFilterCaption(): string {
+    if (selectedCustomGroupId !== null || selectedSmartGroupId !== null) {
+      return groupLabel(labels(), 'all');
+    }
+    return groupLabel(labels(), selectedGroup);
+  }
+
+  function currentCollectionsCaption(): string {
+    if (selectedCustomGroupId !== null) {
+      return groups.find((group) => group.id === selectedCustomGroupId)?.name ?? labels().groups;
+    }
+    if (selectedSmartGroupId !== null) {
+      const smart = smartGroups.find((group) => group.id === selectedSmartGroupId);
+      return smart !== undefined ? smartGroupName(smart) : labels().groups;
+    }
+    return labels().groups;
+  }
+
   function syncMobileGroupsChrome(): void {
     const mobileShelf = isMobileLibraryChrome() && activeSection === 'shelf';
-    if (!mobileShelf) shelfFilterOpen = false;
+    if (!mobileShelf) closeFilterSheet();
     shelfToolbar.hidden = !mobileShelf;
     filterToggle.hidden = !mobileShelf;
-    filterToggle.textContent = labels().filter;
-    filterToggle.title = labels().filter;
-    filterToggle.setAttribute('aria-label', labels().filter);
-    filterToggle.setAttribute('aria-expanded', String(mobileShelf && shelfFilterOpen));
-    filterPanel.hidden = !mobileShelf || !shelfFilterOpen;
+    const filterCaption = currentFilterCaption();
+    filterToggle.textContent = filterCaption;
+    const filterName = `${labels().filter}: ${filterCaption}`;
+    filterToggle.title = filterName;
+    filterToggle.setAttribute('aria-label', filterName);
+    filterToggle.setAttribute('aria-expanded', String(mobileShelf && !filterSheet.hidden));
+    filterToggle.classList.toggle(
+      'is-active',
+      selectedCustomGroupId === null &&
+        selectedSmartGroupId === null &&
+        selectedGroup !== 'all',
+    );
     filterPanel.setAttribute('aria-label', labels().filter);
+    filterSheetTitle.textContent = labels().filter;
+    filterSheetDialog.setAttribute('aria-label', labels().filter);
     groupsButton.hidden = !mobileShelf;
-    groupsButton.textContent = labels().groups;
-    groupsButton.title = labels().groups;
-    groupsButton.setAttribute('aria-label', labels().groups);
+    const collectionsCaption = currentCollectionsCaption();
+    groupsButton.textContent = collectionsCaption;
+    const collectionsName =
+      collectionsCaption === labels().groups
+        ? labels().groups
+        : `${labels().groups}: ${collectionsCaption}`;
+    groupsButton.title = collectionsName;
+    groupsButton.setAttribute('aria-label', collectionsName);
     groupsButton.setAttribute('aria-expanded', String(!groupsSheet.hidden));
+    groupsButton.classList.toggle(
+      'is-active',
+      selectedCustomGroupId !== null || selectedSmartGroupId !== null,
+    );
     groupsSheetDialog.setAttribute('aria-label', labels().groups);
     groupsSheetTitle.textContent = labels().groups;
+  }
+
+  function closeFilterSheet(): void {
+    shelfFilterOpen = false;
+    filterSheet.hidden = true;
+    filterSheet.style.removeProperty('display');
+    filterSheetBackdrop.style.removeProperty('display');
+    filterSheetDialog.style.transform = '';
+    filterToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function openFilterSheet(): void {
+    if (!isMobileLibraryChrome() || activeSection !== 'shelf') return;
+    closeGroupsSheet();
+    renderMobileShelfFilters();
+    mountLibraryOverlay(filterSheet, root);
+    shelfFilterOpen = true;
+    filterSheet.hidden = false;
+    filterSheet.style.display = 'flex';
+    filterSheetBackdrop.style.display = 'block';
+    filterSheetDialog.style.transform = '';
+    filterToggle.setAttribute('aria-expanded', 'true');
   }
 
   function closeGroupsSheet(): void {
@@ -2580,6 +2684,7 @@ export function createLibraryView(
 
   function openGroupsSheet(): void {
     if (!isMobileLibraryChrome() || activeSection !== 'shelf') return;
+    closeFilterSheet();
     renderGroupsSheet();
     mountLibraryOverlay(groupsSheet, root);
     groupsSheet.hidden = false;
@@ -2612,6 +2717,7 @@ export function createLibraryView(
     }
     selectedCustomGroupId = groupId;
     selectedSmartGroupId = null;
+    selectedGroup = 'all';
     closeGroupsSheet();
     void activateShelf();
   }
@@ -2627,6 +2733,7 @@ export function createLibraryView(
     }
     selectedSmartGroupId = groupId;
     selectedCustomGroupId = null;
+    selectedGroup = 'all';
     closeGroupsSheet();
     void activateShelf();
   }
@@ -2677,7 +2784,8 @@ export function createLibraryView(
     for (const group of SHELF_GROUPS) {
       const caption = groupLabel(labels(), group);
       const active = shelfGroupIsActive(group);
-      const option = button(doc, caption, 'lightink-library-shelf-filter-option');
+      const option = button(doc, caption, 'lightink-library-groups-sheet-item');
+      option.classList.add('lightink-library-shelf-filter-option');
       option.dataset.shelfGroup = group;
       option.setAttribute('role', 'radio');
       option.setAttribute('aria-checked', active ? 'true' : 'false');
@@ -4812,8 +4920,11 @@ export function createLibraryView(
   groupEditorCancel.addEventListener('click', () => closeGroupEditor());
   filterToggle.addEventListener('click', () => {
     if (!isMobileLibraryChrome() || activeSection !== 'shelf') return;
-    shelfFilterOpen = !shelfFilterOpen;
-    syncMobileGroupsChrome();
+    if (!filterSheet.hidden) {
+      closeFilterSheet();
+      return;
+    }
+    openFilterSheet();
   });
   groupsButton.addEventListener('click', () => {
     if (!groupsSheet.hidden) {
@@ -4830,6 +4941,15 @@ export function createLibraryView(
     onClose: () => {
       closeGroupsSheet();
     },
+  });
+  const unbindFilterSheetDrag = bindSheetDrag(filterSheetHandle, {
+    sheet: filterSheetDialog,
+    onClose: () => {
+      closeFilterSheet();
+    },
+  });
+  filterSheetBackdrop.addEventListener('click', () => {
+    closeFilterSheet();
   });
   groupsSheetBackdrop.addEventListener('click', () => {
     closeGroupsSheet();
@@ -4881,6 +5001,11 @@ export function createLibraryView(
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
   root.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !filterSheet.hidden) {
+      event.preventDefault();
+      closeFilterSheet();
+      return;
+    }
     if (event.key === 'Escape' && !groupsSheet.hidden) {
       event.preventDefault();
       closeGroupsSheet();
@@ -5030,11 +5155,13 @@ export function createLibraryView(
       unbindSourceOverlayReveal();
       unbindMembershipOverlayReveal();
       unbindGroupsSheetDrag();
+      unbindFilterSheetDrag();
       deps.workspaceTravel?.remove();
       membershipOverlay.remove();
       groupOverlay.remove();
       sourceOverlay.remove();
       groupsSheet.remove();
+      filterSheet.remove();
       root.remove();
     },
   };

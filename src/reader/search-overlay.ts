@@ -13,6 +13,7 @@
 import {
   canWrapSearchMark,
   offsetRangeFrom,
+  SEARCH_HIT_CAP,
   unwrapSpans,
   wrapTextRangeWithSpan,
 } from './search-panel.js';
@@ -29,6 +30,31 @@ export interface SearchMarkSpec {
 
 function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Cap in-host search overlays so a common query cannot wrap thousands of
+ * inline spans. CSS columns + outline/box-shadow on that many marks make the
+ * page jitter on hover and freeze overflow-x paging. Always keep the current
+ * hit when it would otherwise fall past the cap.
+ */
+export function limitSearchMarkSpecs(
+  specs: readonly SearchMarkSpec[],
+  currentKey: string | null,
+  cap = SEARCH_HIT_CAP,
+): SearchMarkSpec[] {
+  if (specs.length <= cap) {
+    return [...specs];
+  }
+  const kept = specs.slice(0, cap);
+  if (currentKey === null || kept.some((spec) => spec.key === currentKey)) {
+    return kept;
+  }
+  const current = specs.find((spec) => spec.key === currentKey);
+  if (current === undefined) {
+    return kept;
+  }
+  return [...kept.slice(0, Math.max(0, cap - 1)), current];
 }
 
 /**

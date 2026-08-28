@@ -522,6 +522,29 @@ export function nearestVisibleChapterIndex(
   return Number.isSafeInteger(index) && index! >= 0 ? index! : 0;
 }
 
+/**
+ * Chapter whose box covers the viewport top. Nearest-top alone prefers a
+ * short spacer sitting just above a long chapter the reader is actually in.
+ */
+export function chapterIndexAtViewportTop(
+  chapters: readonly { index: number; top: number; bottom: number }[],
+  viewportTop: number,
+): number {
+  const covering = chapters.filter(
+    (chapter) => chapter.top <= viewportTop + 1 && chapter.bottom > viewportTop + 1,
+  );
+  if (covering.length === 0) {
+    return nearestVisibleChapterIndex(chapters, viewportTop);
+  }
+  let best = covering[0]!;
+  for (const chapter of covering) {
+    if (chapter.top >= best.top) {
+      best = chapter;
+    }
+  }
+  return Number.isSafeInteger(best.index) && best.index >= 0 ? best.index : 0;
+}
+
 /** Axis-aligned rect in viewport coordinates (e.g. getBoundingClientRect). */
 export interface LayoutRect {
   left: number;

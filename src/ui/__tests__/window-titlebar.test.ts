@@ -101,6 +101,17 @@ describe('window titlebar', () => {
     expect(theme).toMatch(/\.lightink-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
   });
 
+  it('lets the empty shelf title row drag the window', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/window-titlebar.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-library-header-main,\s*\.lightink-library-header h1\s*\{[^}]*-webkit-app-region:\s*drag/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-header input,\s*\.lightink-library-header button,\s*\.lightink-library-search,\s*\.lightink-library-toolbar/,
+    );
+    expect(css).toMatch(/\.lightink-library-toolbar[\s\S]*?-webkit-app-region:\s*no-drag/);
+  });
+
   it('clears stamped shelf tokens from the titlebar', () => {
     const root = document.createElement('div');
     root.dataset.libraryTheme = 'gallery';

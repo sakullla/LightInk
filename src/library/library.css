@@ -23,6 +23,7 @@
   --lightink-library-detail-min: 240px;
   position: absolute;
   inset: 0;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -39,13 +40,16 @@
   display: none;
 }
 
-#lightink-editor-area:has(> .lightink-library--workspace:not([hidden])) {
+#lightink-editor-area:has(> .lightink-library--workspace:not([hidden])),
+#app.is-workspace-shelf #lightink-editor-area {
   overflow: hidden;
 }
 
-#lightink-editor-area:has(> .lightink-library--workspace:not([hidden])) > :not(.lightink-library) {
-  visibility: hidden;
-  pointer-events: none;
+/* visibility:hidden still occupies layout, so a leftover book height
+   swallows the cover wall. Take reader hosts out of flow. */
+#lightink-editor-area:has(> .lightink-library--workspace:not([hidden])) > :not(.lightink-library),
+#app.is-workspace-shelf #lightink-editor-area > :not(.lightink-library) {
+  display: none !important;
 }
 
 .lightink-library [hidden] {
@@ -2942,7 +2946,8 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-library-shelf-toolbar {
     display: flex;
     flex: 0 0 auto;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
     align-items: center;
     gap: 8px;
     min-height: 48px;
@@ -2979,6 +2984,41 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter::after {
+    content: '';
+    flex: 0 0 auto;
+    width: 0.4em;
+    height: 0.4em;
+    margin-inline-start: 6px;
+    border-inline-end: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg) translateY(-20%);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups::after {
+    content: '';
+    flex: 0 0 auto;
+    width: 0.4em;
+    height: 0.4em;
+    margin-inline-start: 6px;
+    border-inline-end: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg) translateY(-20%);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter[aria-expanded='true']::after,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups[aria-expanded='true']::after {
+    transform: rotate(225deg) translateY(-10%);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
     .lightink-library-shelf-filter.is-active,
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
@@ -2989,15 +3029,8 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-filter-menu:not([hidden]) {
-    display: flex;
-    flex: 1 1 100%;
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    gap: 4px;
-    min-width: 0;
-    overflow: visible;
+    .lightink-library-shelf-filter-menu {
+    display: none;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3047,8 +3080,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     gap: 4px;
     min-width: 48px;
     min-height: 48px;
-    margin: 0 max(16px, var(--lightink-safe-right, 0px)) 12px auto;
-    padding: 0 14px;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 16px;
     overflow: visible;
     border: 0;
     border-radius: 10px;
@@ -3059,13 +3093,6 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     font-weight: 600;
     text-overflow: unset;
     white-space: nowrap;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-shelf-toolbar
-    .lightink-library-shelf-groups {
-    margin: 0 0 0 auto;
   }
 
   :is(html[data-android], html[data-touch-primary])

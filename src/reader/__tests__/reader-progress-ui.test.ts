@@ -10,6 +10,7 @@ import {
   playReaderPageTurn,
   readerProgressTickFractions,
   resolveReaderChapterTitle,
+  stampReadingProgressTitle,
 } from '../reader-progress-ui.js';
 
 describe('resolveReaderChapterTitle', () => {
@@ -43,6 +44,34 @@ describe('resolveReaderChapterTitle', () => {
         fallback,
       ),
     ).toBe('chapter:1');
+  });
+});
+
+describe('stampReadingProgressTitle', () => {
+  it('persists the outline heading and omits converter junk', () => {
+    const flow = {
+      version: 1 as const,
+      kind: 'flow' as const,
+      index: 1,
+      ratio: 0.2,
+      total: 10,
+      updatedAt: 1,
+    };
+    expect(
+      stampReadingProgressTitle(flow, [
+        { level: 1, text: '序章', anchor: 0, chapter: 0 },
+        { level: 1, text: '第2章 白月光', anchor: 1, chapter: 1 },
+      ]),
+    ).toMatchObject({ title: '第2章 白月光' });
+    expect(
+      stampReadingProgressTitle(flow, [{ level: 1, text: 'ccdqxkhp', anchor: 0, chapter: 1 }]),
+    ).not.toHaveProperty('title');
+    expect(
+      stampReadingProgressTitle(
+        { ...flow, kind: 'page', index: 12 },
+        [{ level: 1, text: 'Chapter 12', anchor: 12, page: 12 }],
+      ),
+    ).not.toHaveProperty('title');
   });
 });
 

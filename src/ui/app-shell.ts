@@ -982,12 +982,12 @@ export function createAppShell(
   const chrome = createChromeController();
   const touchPrimary = options.touchPrimary ?? isTouchPrimary;
   const storage = resolveStorage(options);
-  let fallbackReaderLayout = loadReaderLayout(storage);
   let fallbackReaderTypography = loadReaderTypography(storage);
   let rebuildMenusRef = (): void => undefined;
 
-  const currentReaderLayout = (): ReaderFlowLayout =>
-    actions.getReaderFlowLayout?.() ?? fallbackReaderLayout;
+  // Always read the flow key. A shell-created cache would reopen the last
+  // book with the startup layout after 排版 toggled paginated/scroll.
+  const currentReaderLayout = (): ReaderFlowLayout => loadReaderLayout(storage);
   const currentReaderTypography = (): ReaderTypography =>
     actions.getReaderTypography?.() ?? fallbackReaderTypography;
 
@@ -1020,7 +1020,6 @@ export function createAppShell(
     getReaderFlowLayout: currentReaderLayout,
     onSetReaderFlowLayout: (layout) => {
       if (actions.getReaderFlowLayout === undefined) {
-        fallbackReaderLayout = layout;
         saveReaderLayout(storage, layout);
       }
       actions.onSetReaderFlowLayout?.(layout);
@@ -1212,7 +1211,6 @@ export function createAppShell(
   rebuildMenusRef = rebuildMenus;
 
   function refreshReaderPreferences(): void {
-    fallbackReaderLayout = loadReaderLayout(storage);
     fallbackReaderTypography = loadReaderTypography(storage);
     applyReaderChrome();
     rebuildMenus();

@@ -32,6 +32,7 @@ import {
 import {
   clearSearchMarks,
   flowSearchMarkKey,
+  limitSearchMarkSpecs,
   renderSearchMarks,
   SEARCH_MARK_CLASS,
   SEARCH_MARK_CURRENT_CLASS,
@@ -379,6 +380,20 @@ describe('搜索 overlay 共享幂等引擎（PDF 文本层 / 流式正文同引
     renderSearchMarks(root, [{ key: shortKey, start: 3, end: 5 }], shortKey);
     expect(root.querySelector(`[data-search-key="${longKey}"]`)).toBeNull();
     expect(root.querySelector(`[data-search-key="${shortKey}"]`)?.textContent).toBe('ab');
+  });
+
+  it('keeps the current hit when capping a dense chapter overlay', () => {
+    const specs = Array.from({ length: SEARCH_HIT_CAP + 40 }, (_, index) => ({
+      key: `k${index}`,
+      start: index,
+      end: index + 1,
+    }));
+    const capped = limitSearchMarkSpecs(specs, `k${SEARCH_HIT_CAP + 10}`);
+    expect(capped).toHaveLength(SEARCH_HIT_CAP);
+    expect(capped[0]?.key).toBe('k0');
+    expect(capped.at(-1)?.key).toBe(`k${SEARCH_HIT_CAP + 10}`);
+    expect(limitSearchMarkSpecs(specs, null)).toHaveLength(SEARCH_HIT_CAP);
+    expect(limitSearchMarkSpecs(specs, null).at(-1)?.key).toBe(`k${SEARCH_HIT_CAP - 1}`);
   });
 });
 

@@ -50,6 +50,38 @@ describe('parseReadingProgress', () => {
     expect(parseReadingProgress(JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0 }))).toBeNull();
     expect(parseReadingProgress(JSON.stringify({ version: 1, kind: 'flow', index: -1, ratio: 0 }))).toBeNull();
   });
+
+  it('keeps a usable heading and drops converter junk or empty titles', () => {
+    expect(
+      parseReadingProgress(
+        JSON.stringify({
+          version: 1,
+          kind: 'flow',
+          index: 1996,
+          ratio: 0.2,
+          title: '第1997章 浓浓的火药味',
+          updatedAt: 1,
+        }),
+      ),
+    ).toMatchObject({ title: '第1997章 浓浓的火药味' });
+    expect(
+      parseReadingProgress(
+        JSON.stringify({
+          version: 1,
+          kind: 'flow',
+          index: 1,
+          ratio: 0,
+          title: 'ccdqxkhp',
+          updatedAt: 1,
+        }),
+      ),
+    ).not.toHaveProperty('title');
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 1, kind: 'flow', index: 1, ratio: 0, title: '  ', updatedAt: 1 }),
+      ),
+    ).not.toHaveProperty('title');
+  });
 });
 
 describe('load/saveReadingProgress', () => {
@@ -576,8 +608,25 @@ describe('session-progress restore retry thresholds', () => {
     expect(raf.frames).toHaveLength(1);
     harness.progress.discardPending();
     expect(harness.progress.hasPendingRestore()).toBe(false);
-    raf.drain();
-    expect(harness.flow.calls).toHaveLength(1); // 迟到的重试帧不再触发落点
+  });
+
+  it('lets a later persist write after the user discards a pending restore', async () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(3, 0.4);
+    harness.progress.stage(flowRecord(1));
+    harness.progress.schedulePersist();
+    await vi.advanceTimersByTimeAsync(PROGRESS_SAVE_DEBOUNCE_MS);
+    expect(harness.store.writes).toHaveLength(0);
+    harness.progress.discardPending();
+    harness.progress.schedulePersist();
+    await vi.advanceTimersByTimeAsync(PROGRESS_SAVE_DEBOUNCE_MS);
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      index: 3,
+      ratio: 0.4,
+    });
+    vi.useRealTimers();
   });
 
   it('freezes the retry budgets and debounce window at the ported values', () => {

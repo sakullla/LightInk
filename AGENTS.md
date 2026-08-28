@@ -16,6 +16,8 @@ LightInk is a Tauri desktop application. Frontend TypeScript lives in `src/`, or
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: verify Rust formatting; CI fails the build on any diff, so run `cargo fmt --manifest-path src-tauri/Cargo.toml` before committing Rust changes.
 - `npm run tauri:build`: produce platform-specific installers.
 
+Rust **must** compile from this repository. Run `cargo` / `npm run tauri:dev` with cwd `LightInk` (or `--manifest-path src-tauri/Cargo.toml`) so artifacts land in `src-tauri/target`. Do not set `CARGO_TARGET_DIR` to a Cursor sandbox or other temp path, and do not run Tauri from `AppData\Local\Temp\cursor-sandbox-cache` (or any copy of the tree). A log that starts at `Compiling proc-macro2` with hundreds of crates means the incremental cache was missed; stop and rebuild from the project `target` instead of waiting out a cold compile. Frontend-only changes do not need a Rust rebuild: keep the existing `tauri:dev` process and reload the window, or kill only `lightink.exe` / `LightInk` and leave `cargo` running.
+
 ## Coding Style & Naming Conventions
 
 Use strict TypeScript and ES modules. Follow existing files: two-space indentation, semicolons, single quotes, and explicit types at public boundaries. Name files and modules in kebab-case (`file-service.ts`), functions and variables in camelCase, and types/classes in PascalCase. Rust code should follow `rustfmt` defaults and snake_case naming; `cargo fmt -- --check` is enforced in CI and must pass clean. No standalone formatter or linter is configured; `npm run build` is the required static check. Keep feature logic in its owning directory rather than adding broad utility modules.

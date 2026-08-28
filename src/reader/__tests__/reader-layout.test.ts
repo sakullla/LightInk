@@ -253,6 +253,13 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).toMatch(/\.lightink-reader-chrome\s*\{[^}]*position:\s*sticky/);
   });
 
+  it('hides leftover scroll spacers in paginated flow so they cannot cover the page', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-chapter-spacer\s*\{[^}]*display:\s*none/,
+    );
+  });
+
   it('keeps paginated chrome a full-width row so CJK labels do not stack', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(
@@ -282,7 +289,13 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-whisper,[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
+      /\.lightink-reader\[data-reading-layout='scroll'\] > \.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome,[\s\S]*?\.lightink-reader-chrome\s*\{[^}]*display:\s*none/,
     );
     expect(css).not.toMatch(/lightink-reader-comic-hud/);
     expect(css).not.toMatch(
@@ -339,6 +352,44 @@ describe('readerPageInnerPadPx', () => {
     );
   });
 
+  it('lets long search hit lists scroll without hover-lift jitter', () => {
+    const sidebar = readFileSync(
+      resolve(process.cwd(), 'src/reader/annotation-sidebar.css'),
+      'utf-8',
+    );
+    expect(sidebar).toMatch(
+      /\.lightink-reader-sidebar-list\s*\{[^}]*overflow-y:\s*auto[^}]*flex:\s*1 1 0/,
+    );
+    const hover =
+      sidebar.match(/\.lightink-reader-sidebar-item:hover\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(hover).not.toMatch(/transform:/);
+    const sheet = readFileSync(
+      resolve(process.cwd(), 'src/reader/reader-chrome-panels.css'),
+      'utf-8',
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-search-sheet-list\s*\{[^}]*overflow-y:\s*auto[^}]*flex:\s*1 1 0/,
+    );
+  });
+
+  it('rings the current search mark inside the glyph box instead of outlining it', () => {
+    const host = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    expect(host).toMatch(
+      /\.lightink-reader-search-mark--current\s*\{[^}]*box-shadow:\s*inset 0 0 0 1px/,
+    );
+    expect(host).not.toMatch(
+      /\.lightink-reader-search-mark--current\s*\{[^}]*outline:\s*1px/,
+    );
+    expect(flow).toMatch(
+      /\.lightink-reader-search-mark--current\s*\{[^}]*box-shadow:\s*inset 0 0 0 1px/,
+    );
+    expect(flow).toMatch(/box-decoration-break:\s*clone/);
+    expect(flow).not.toMatch(
+      /\.lightink-reader-search-mark--current\s*\{[^}]*outline:\s*1px/,
+    );
+  });
+
   it('uses a short slide page-turn instead of a 3D curl', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(/@keyframes lightink-reader-page-next/);
@@ -357,6 +408,18 @@ describe('readerPageInnerPadPx', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     expect(css).toMatch(
       /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]\s*\{[^}]*overflow-y:\s*auto/,
+    );
+    expect(css).toMatch(
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]\s*\{[^}]*overflow-anchor:\s*none/,
+    );
+    expect(css).toMatch(
+      /#app\.is-workspace-shelf #lightink-editor-area[\s\S]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]:has\(\[data-comic-reader='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /#app\.is-workspace-shelf #lightink-main > \.lightink-reader-sidebar,[\s\S]*?\.lightink-reader-sidebar-backdrop\s*\{[^}]*display:\s*none/,
     );
   });
 
@@ -453,6 +516,12 @@ describe('comic surface layout (R1/R3/R4)', () => {
     expect(css).toMatch(
       /\[data-comic-fit='screen'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page\s*\{[^}]*object-fit:\s*contain/,
     );
+    expect(css).toMatch(
+      /\[data-comic-fit='original'\] \.lightink-reader-cbz-slot,[\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-fit='original'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page[\s\S]*?object-fit:\s*none/,
+    );
   });
 
   it('lays strip pages out as a fit-width continuous run, not one screen per page', () => {
@@ -468,6 +537,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
     );
     expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot\s*\{[^}]*width:\s*100%/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot\s*\{[^}]*content-visibility:\s*auto/,
     );
     expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-mode='strip'\] \.lightink-reader-cbz-slot(?:\s*>\s*\.lightink-reader-page)?\s*\{[^}]*height:\s*auto/,
@@ -491,6 +563,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
     const css = readerCss();
     expect(css).toMatch(
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome,[\s\S]*?\.lightink-reader-chrome\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\) \.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
@@ -531,6 +606,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
     );
     expect(css).toMatch(
       /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-comic-reader='true'\],[\s\S]*?\.lightink-reader:has\(> \.lightink-reader-pages\[data-comic-reader='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
     );
     expect(css).toMatch(/--lightink-comic-canvas:\s*#111\b/);
   });
@@ -601,8 +679,17 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-whisper\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
     );
-    expect(css).toMatch(
+    expect(css).not.toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\]\s*\{[^}]*padding-bottom:\s*var\(--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-comic-bottombar\s*\{[^}]*padding:[^;]*--lightink-safe-bottom/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-reader-active='true'\]\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\] \.lightink-reader-comic-pages::-webkit-scrollbar\s*\{[^}]*display:\s*none/,
     );
     const coarse = coarsePointerCss(css);
     expect(coarse).toMatch(
@@ -973,6 +1060,28 @@ describe('flow host wheel', () => {
     );
     document.dispatchEvent(new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true }));
     expect(called).toBe(0);
+    renderer.clear();
+  });
+
+  it('does not page a scroll-layout flow host', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    root.dataset.readingLayout = 'scroll';
+    document.documentElement.dataset.readingLayout = 'scroll';
+    let called = 0;
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: () => {
+          called += 1;
+          return true;
+        },
+      }),
+    );
+    const event = new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    expect(called).toBe(0);
+    expect(event.defaultPrevented).toBe(false);
     renderer.clear();
   });
 
@@ -1367,6 +1476,36 @@ describe('reader Ctrl+M vs editor layout key', () => {
     expect(editorLayout).toBe('scroll');
     expect(store[READER_FLOW_LAYOUT_STORAGE_KEY]).toBe('scroll');
     registry.detach(document);
+    shell.destroy();
+  });
+
+  it('reopening a book uses the stored flow layout after 排版 changed it', () => {
+    const { store, storage } = memoryStorage({
+      [READER_FLOW_LAYOUT_STORAGE_KEY]: 'scroll',
+    });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const shell = createAppShell(
+      root,
+      stubShellActions({
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      }),
+      { shortcutBindings: () => [], storage },
+    );
+    const editor = root.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div');
+    reader.className = 'lightink-reader';
+    editor?.appendChild(reader);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(reader.dataset.readingLayout).toBe('scroll');
+
+    store[READER_FLOW_LAYOUT_STORAGE_KEY] = 'paginated';
+    shell.applyWorkspace({ mode: 'reader', surface: 'shelf' });
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+
+    expect(reader.dataset.readingLayout).toBe('paginated');
+    expect(document.documentElement.dataset.readingLayout).toBe('paginated');
     shell.destroy();
   });
 });

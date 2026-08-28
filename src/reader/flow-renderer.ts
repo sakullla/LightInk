@@ -13,7 +13,7 @@
  */
 
 import type { MessageKey } from '../i18n/messages.js';
-import { displayChapterTitle } from './chapter-title.js';
+import { displayChapterTitle, markDuplicateChapterHeading } from './chapter-title.js';
 import type { ReaderChapter } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
 import {
@@ -63,6 +63,9 @@ import {
   resolveReaderFontFamily,
   type ReaderTypography,
 } from './reader-typography.js';
+
+/** Prefetch ±2; evict beyond this so a long book cannot keep every iframe. */
+export const FLOW_CHAPTER_KEEP_RADIUS = 3;
 
 const FLOW_FRAME_CSP = [
   "default-src 'none'",
@@ -131,6 +134,9 @@ html[data-reading-layout='scroll']::-webkit-scrollbar,
 html[data-reading-layout='scroll'] body::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+html[data-reading-layout='scroll'] [data-reader-split-heading] {
+  display: none !important;
 }
 html[data-reading-layout='paginated'] {
   box-sizing: border-box;
@@ -253,10 +259,19 @@ mark.lightink-reader-highlight[data-annotation-kind='note']::after {
   margin-left: 0.15em;
   opacity: 0.8;
 }
-.lightink-reader-search-mark { background: rgba(154, 88, 40, 0.22); border-radius: 2px; }
+.lightink-reader-search-mark {
+  background: rgba(154, 88, 40, 0.22);
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-anchor: none;
+}
 .lightink-reader-search-mark--current {
   background: rgba(154, 88, 40, 0.45);
-  outline: 1px solid currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-anchor: none;
 }
 .lightink-remote-image-placeholder { display: flex; align-items: center; min-height: 2.5rem; }
 `;
@@ -327,9 +342,11 @@ export function applyFrameWheelToScroller(
   if (event.deltaY === 0 && event.deltaX === 0) {
     return false;
   }
+  const beforeTop = scroller.scrollTop;
+  const beforeLeft = scroller.scrollLeft;
   scroller.scrollTop += event.deltaY * line;
   scroller.scrollLeft += event.deltaX * line;
-  return true;
+  return scroller.scrollTop !== beforeTop || scroller.scrollLeft !== beforeLeft;
 }
 
 /** Map a Y inside the iframe document to the parent viewport. */
@@ -641,6 +658,32 @@ function flowFrameSource(html: string, stylesheet = ''): string {
 }
 
 /**
+ * Empty iframes fire `load` for about:blank. Assigning srcdoc in the same turn
+ * (remounting a chapter that already has html) leaves sourceAssigned true, so
+ * that blank load binds an empty document and the later srcdoc load is ignored.
+ * Chromium srcdoc documents are `about:srcdoc`. jsdom never parses srcdoc and
+ * stays on about:blank, so tests still bind on a dispatched load.
+ */
+export function flowFrameLoadShouldBind(input: {
+  sourceAssigned: boolean;
+  frameBound: boolean;
+  documentUrl: string;
+  userAgent: string;
+  hasSrcdocChrome: boolean;
+}): boolean {
+  if (!input.sourceAssigned || input.frameBound) {
+    return false;
+  }
+  if (/jsdom/i.test(input.userAgent)) {
+    return true;
+  }
+  if (input.documentUrl !== 'about:blank') {
+    return true;
+  }
+  return input.hasSrcdocChrome;
+}
+
+/**
  * Scroll-mode iframe height: only the inner body content.
  * Never use html.scrollHeight after stretching the iframe — the root
  * viewport is at least as tall as the frame, so a 100000px probe would
@@ -783,6 +826,8 @@ export interface FlowRendererHooks {
   onFrameSurfaceClick?(event: MouseEvent): void;
   /** 滚轮翻页导航（含 trackpad 门限；移动后由编排壳隐藏划选工具栏）。 */
   advancePagedWheel(direction: 1 | -1): boolean;
+  /** User-initiated scroll in flow scroll mode (cancels a pending restore snap-back). */
+  onUserScrollIntent?(): void;
   /** Escape 关闭可见的划选工具栏：返回是否可见并已隐藏。 */
   dismissSelectionToolbar(): boolean;
   /** 布局切换进行中（remeasure 期间跳过帧高度同步）。 */
@@ -843,13 +888,55 @@ export function createFlowRenderer(
     afterResolve: (() => void) | null;
   }
   let resourceWindows: Array<ChapterResourceWindow | undefined> = [];
+  let lastScrollWheelStamp = -1;
+  let lastAppliedScrollWheel: WheelEvent | null = null;
   let resourceObserver: IntersectionObserver | null = null;
   let ensureChapterMounted: ((index: number) => void) | null = null;
-  let chapterContinuationObserver: IntersectionObserver | null = null;
-  let chapterContinuationSentinel: HTMLElement | null = null;
   let evictDistantChapters: ((active: number) => void) | null = null;
   let resumeScrollMounts: (() => void) | null = null;
   let evictTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const visualScrollAnchor = (): HTMLElement | null => {
+    const scroller = hooks.scrollContainer();
+    const scrollerBox =
+      typeof (scroller as HTMLElement).getBoundingClientRect === 'function'
+        ? (scroller as HTMLElement).getBoundingClientRect()
+        : null;
+    const chapters = Array.from(
+      scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
+    );
+    if (scrollerBox !== null && Number.isFinite(scrollerBox.top)) {
+      for (const chapter of chapters) {
+        const rect = chapter.getBoundingClientRect();
+        if (rect.height > 1 && rect.bottom > scrollerBox.top + 1) {
+          return chapter;
+        }
+      }
+    }
+    return (
+      scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active') ??
+      chapters[0] ??
+      null
+    );
+  };
+  const preserveScrollAnchor = (mutate: () => void): void => {
+    if (isFlowPaginated(root)) {
+      mutate();
+      return;
+    }
+    const scroller = hooks.scrollContainer();
+    const anchor = visualScrollAnchor();
+    const before = anchor?.getBoundingClientRect();
+    const useVisual =
+      before !== undefined && Number.isFinite(before.top) && before.height > 1;
+    mutate();
+    if (useVisual && anchor !== null && anchor.isConnected && before !== undefined) {
+      const delta = anchor.getBoundingClientRect().top - before.top;
+      if (delta !== 0) {
+        scroller.scrollTop += delta;
+      }
+    }
+  };
 
   /** Inflate and attach one lazy EPUB chapter at most once. */
   const ensureChapterFrame = (win: ChapterResourceWindow): void => {
@@ -926,10 +1013,6 @@ export function createFlowRenderer(
     unbindHostTouchPaging();
     resourceObserver?.disconnect();
     resourceObserver = null;
-    chapterContinuationObserver?.disconnect();
-    chapterContinuationObserver = null;
-    chapterContinuationSentinel?.remove();
-    chapterContinuationSentinel = null;
     ensureChapterMounted = null;
     evictDistantChapters = null;
     resumeScrollMounts = null;
@@ -937,6 +1020,8 @@ export function createFlowRenderer(
       clearTimeout(evictTimer);
       evictTimer = null;
     }
+    lastScrollWheelStamp = -1;
+    lastAppliedScrollWheel = null;
     const windows = resourceWindows;
     resourceWindows = [];
     releaseRemoteImages.splice(0).forEach((release) => release());
@@ -950,7 +1035,16 @@ export function createFlowRenderer(
     }
   };
 
+  const discardChapterSpacers = (): void => {
+    for (const spacer of scrollHost.querySelectorAll('.lightink-reader-chapter-spacer')) {
+      spacer.remove();
+    }
+  };
+
   const setActiveChapter = (index: number): void => {
+    if (isFlowPaginated(root)) {
+      discardChapterSpacers();
+    }
     for (const near of [index - 2, index - 1, index, index + 1, index + 2]) {
       if (near >= 0) {
         ensureChapterMounted?.(near);
@@ -972,7 +1066,7 @@ export function createFlowRenderer(
       const current = Number(chapter.dataset.chapterIndex);
       chapter.classList.toggle('is-active', current === index);
       const win = resourceWindows[current];
-      if (win !== undefined) {
+      if (win !== undefined && Math.abs(current - index) <= 2) {
         if (isFlowPaginated(root)) {
           win.visible = current === index;
         }
@@ -1233,6 +1327,9 @@ export function createFlowRenderer(
     frameDocument: Document,
     options?: { restoreRatio?: number; snap?: boolean },
   ): void => {
+    if (isFlowPaginated(root)) {
+      discardChapterSpacers();
+    }
     frame.style.width = '100%';
     frame.style.maxWidth = '100%';
     const viewport = pagedViewport();
@@ -1268,6 +1365,7 @@ export function createFlowRenderer(
     html.style.overflow = 'hidden';
     html.style.overscrollBehavior = 'none';
     html.style.background = readerPaperColor(root);
+    markDuplicateChapterHeading(frameDocument.body, frame.title);
     html.style.border = '0';
     html.style.outline = 'none';
     html.style.boxShadow = 'none';
@@ -1434,7 +1532,7 @@ export function createFlowRenderer(
                 syncChapterResources(win);
               }
             },
-            { root: scrollHost, rootMargin: '100% 0px' },
+            { root: hooks.scrollContainer(), rootMargin: '100% 0px' },
           );
     const renderedChapterIndexes = new Set<number>();
     const appendChapter = (chapter: ReaderChapter, chapterIndex: number): void => {
@@ -1494,6 +1592,22 @@ export function createFlowRenderer(
         if (frameDocument === null || frameWindow === null) {
           return;
         }
+        const documentUrl =
+          typeof frameDocument.URL === 'string' && frameDocument.URL !== ''
+            ? frameDocument.URL
+            : (frameDocument.location?.href ?? '');
+        if (
+          !flowFrameLoadShouldBind({
+            sourceAssigned: true,
+            frameBound: false,
+            documentUrl,
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+            hasSrcdocChrome:
+              frameDocument.querySelector('meta[http-equiv="Content-Security-Policy"]') !== null,
+          })
+        ) {
+          return;
+        }
         frame.dataset.frameBound = 'true';
         const applyPaginatedMetrics = (): void => {
           applyPaginatedDocument(frame, frameDocument);
@@ -1502,15 +1616,17 @@ export function createFlowRenderer(
         const applyFrameChrome = (): void => {
           const paginated = isFlowPaginated(root);
           frameDocument.documentElement.dataset.readingLayout = paginated ? 'paginated' : 'scroll';
-          applyFlowTypography(root, frameDocument);
           if (!paginated) {
             applyScrollDocument(frame, frameDocument);
             return;
           }
+          applyFlowTypography(root, frameDocument);
           applyPaginatedMetrics();
         };
         applyFrameChrome();
-        requestAnimationFrame(applyFrameChrome);
+        if (isFlowPaginated(root)) {
+          requestAnimationFrame(applyFrameChrome);
+        }
         frame.dataset.frameReady = 'true';
 
         const measureScrollHeight = (): number => flowFrameContentHeight(frameDocument);
@@ -1519,16 +1635,25 @@ export function createFlowRenderer(
             return;
           }
           applyingFrame = true;
+          let changed = true;
           try {
-            applyFrameChrome();
-            if (!isFlowPaginated(root)) {
-              const nextHeight = `${measureScrollHeight()}px`;
-              if (frame.style.height !== nextHeight) {
-                frame.style.height = nextHeight;
+            if (isFlowPaginated(root)) {
+              applyFrameChrome();
+            } else {
+              const measured = measureScrollHeight();
+              const nextHeight = `${measured}px`;
+              changed = frame.style.height !== nextHeight;
+              if (changed) {
+                preserveScrollAnchor(() => {
+                  frame.style.height = nextHeight;
+                });
               }
             }
           } finally {
             applyingFrame = false;
+          }
+          if (!changed) {
+            return;
           }
           hooks.applyPendingRestore();
           hooks.syncState();
@@ -1722,8 +1847,23 @@ export function createFlowRenderer(
             return;
           }
           if (!isFlowPaginated(root)) {
-            if (applyFrameWheelToScroller(event, hooks.scrollContainer())) {
+            // One hardware tick can hit every mounted iframe in WebView2.
+            // Applying it per frame jumps a keep-window (about seven chapters).
+            if (lastAppliedScrollWheel === event) {
               event.preventDefault();
+              return;
+            }
+            if (event.timeStamp > 0 && event.timeStamp === lastScrollWheelStamp) {
+              event.preventDefault();
+              return;
+            }
+            if (applyFrameWheelToScroller(event, hooks.scrollContainer())) {
+              lastAppliedScrollWheel = event;
+              if (event.timeStamp > 0) {
+                lastScrollWheelStamp = event.timeStamp;
+              }
+              event.preventDefault();
+              hooks.onUserScrollIntent?.();
             }
             return;
           }
@@ -1847,12 +1987,25 @@ export function createFlowRenderer(
       frame.addEventListener('load', onLoad);
       releaseRemoteImages.push(() => frame.removeEventListener('load', onLoad));
       article.append(heading, frame);
+      scrollHost
+        .querySelector(`[data-chapter-spacer="${String(chapterIndex)}"]`)
+        ?.remove();
       const following = Array.from(
-        scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter'),
-      ).find((candidate) => Number(candidate.dataset.chapterIndex) > chapterIndex);
-      const insertionPoint = following ?? chapterContinuationSentinel;
-      if (insertionPoint === null || insertionPoint === undefined) scrollHost.appendChild(article);
-      else scrollHost.insertBefore(article, insertionPoint);
+        scrollHost.querySelectorAll<HTMLElement>(
+          '.lightink-reader-chapter, .lightink-reader-chapter-spacer',
+        ),
+      ).find((candidate) => {
+        const index = Number(candidate.dataset.chapterIndex ?? candidate.dataset.chapterSpacer);
+        return Number.isSafeInteger(index) && index > chapterIndex;
+      });
+      const insertionPoint = following;
+      preserveScrollAnchor(() => {
+        if (insertionPoint === null || insertionPoint === undefined) {
+          scrollHost.appendChild(article);
+        } else {
+          scrollHost.insertBefore(article, insertionPoint);
+        }
+      });
       if (chapterIndex === 0 || chapter.load === undefined || chapter.html !== '') {
         ensureChapterFrame(win);
       }
@@ -1862,100 +2015,102 @@ export function createFlowRenderer(
       if (chapter !== undefined) appendChapter(chapter, index);
     };
     evictDistantChapters = (active): void => {
-      if (!isFlowPaginated(root) || chapters.length <= 8) {
+      if (chapters.length <= 8) {
         return;
       }
-      // Prefetch ±2 so the next ~2-page chapter is already srcdoc'd; evict
-      // only beyond ±3 so a turn does not create/destroy an iframe.
-      const keepRadius = 3;
+      if (isFlowPaginated(root)) {
+        discardChapterSpacers();
+      }
+      // Prefetch ±2 so the next chapter is already srcdoc'd; evict only
+      // beyond ±3 so a turn does not create/destroy an iframe. Scroll mode
+      // used to keep every visited iframe (or the sentinel would append the
+      // whole spine) and a 2000-chapter TXT would hitch, then stall.
+      const keepRadius = FLOW_CHAPTER_KEEP_RADIUS;
+      const scroller = hooks.scrollContainer();
+      const anchor = scrollHost.querySelector<HTMLElement>(
+        `.lightink-reader-chapter[data-chapter-index="${String(active)}"]`,
+      );
+      const beforeRect = anchor?.getBoundingClientRect();
+      const useVisual =
+        beforeRect !== undefined &&
+        Number.isFinite(beforeRect.top) &&
+        beforeRect.height > 1;
+      let removedAbove = 0;
       for (const index of [...renderedChapterIndexes]) {
         if (Math.abs(index - active) <= keepRadius) {
           continue;
         }
         const win = resourceWindows[index];
         if (win !== undefined) {
+          const article = win.frame.closest('.lightink-reader-chapter');
+          const height =
+            article instanceof HTMLElement && article.offsetHeight > 0 ? article.offsetHeight : 0;
+          if (!isFlowPaginated(root) && index < active && article instanceof HTMLElement) {
+            removedAbove += height;
+          }
           win.generation = -1;
           const doc = win.frame.contentDocument;
           if (doc !== null) {
             win.chapter.releaseResources?.(doc);
           }
           win.frame.removeAttribute('srcdoc');
-          win.frame.closest('.lightink-reader-chapter')?.remove();
+          if (!isFlowPaginated(root) && article instanceof HTMLElement && height > 0) {
+            const spacer = document.createElement('div');
+            spacer.className = 'lightink-reader-chapter-spacer';
+            spacer.dataset.chapterSpacer = String(index);
+            spacer.style.height = `${height}px`;
+            spacer.setAttribute('aria-hidden', 'true');
+            article.replaceWith(spacer);
+            removedAbove -= height;
+          } else {
+            article?.remove();
+          }
           resourceWindows[index] = undefined;
         }
         renderedChapterIndexes.delete(index);
+      }
+      if (isFlowPaginated(root)) {
+        return;
+      }
+      // Prefer the painted delta: Chrome scroll-anchoring already reduces
+      // scrollTop when nodes above the viewport are removed. Subtracting
+      // offsetHeight on top of that jumps the reader backward so a chapter
+      // just finished appears again.
+      if (useVisual && anchor !== null && beforeRect !== undefined) {
+        const delta = anchor.getBoundingClientRect().top - beforeRect.top;
+        if (delta !== 0) {
+          scroller.scrollTop += delta;
+        }
+        return;
+      }
+      if (removedAbove > 0) {
+        scroller.scrollTop = Math.max(0, scroller.scrollTop - removedAbove);
       }
     };
 
     // Keep the initial browsing-context budget bounded. A timer-based background
     // loop still creates every iframe and eventually blocks on large EPUBs.
-    // Scroll mode extends this window via the sentinel; paginated mode mounts
-    // a small first window and evicts chapters that leave the keep radius.
-    const initialCount = Math.min(
-      chapters.length,
-      isFlowPaginated(root) && chapters.length > 8 ? 2 : 8,
-    );
+    // Large books paint two chapter shells first; setActiveChapter slides the
+    // window. Scroll mode must not grow via a sentinel.
+    const initialCount = Math.min(chapters.length, chapters.length > 8 ? 2 : 8);
     for (let index = 0; index < initialCount; index += 1) {
       appendChapter(chapters[index]!, index);
     }
-    let nextChapter = initialCount;
-    const appendBatch = (): void => {
-      if (renderGeneration !== flowRenderGeneration) {
-        return;
-      }
-      const end = Math.min(chapters.length, nextChapter + 4);
-      while (nextChapter < end) {
-        appendChapter(chapters[nextChapter]!, nextChapter);
-        nextChapter += 1;
-      }
-      if (nextChapter >= chapters.length) {
-        chapterContinuationObserver?.disconnect();
-        chapterContinuationObserver = null;
-        chapterContinuationSentinel?.remove();
-        chapterContinuationSentinel = null;
-        return;
-      }
-      if (chapterContinuationObserver !== null && chapterContinuationSentinel !== null) {
-        chapterContinuationObserver.unobserve(chapterContinuationSentinel);
-        chapterContinuationObserver.observe(chapterContinuationSentinel);
-      }
-    };
     resumeScrollMounts = (): void => {
       if (renderGeneration !== flowRenderGeneration || isFlowPaginated(root)) {
         return;
       }
-      // Paginated eviction can punch holes before nextChapter (e.g. 0–1
-      // dropped after a jump). Restart from the first missing spine item.
-      for (let index = 0; index < nextChapter; index += 1) {
-        if (!renderedChapterIndexes.has(index)) {
-          nextChapter = index;
-          break;
+      const activeEl = scrollHost.querySelector<HTMLElement>(
+        '.lightink-reader-chapter.is-active',
+      );
+      const active = Number(activeEl?.dataset.chapterIndex ?? 0);
+      const index = Number.isSafeInteger(active) && active >= 0 ? active : 0;
+      for (const near of [index - 2, index - 1, index, index + 1, index + 2]) {
+        if (near >= 0) {
+          ensureChapterMounted?.(near);
         }
       }
-      if (nextChapter < chapters.length) {
-        appendBatch();
-      }
     };
-    if (nextChapter < chapters.length && typeof IntersectionObserver !== 'undefined') {
-      chapterContinuationSentinel = document.createElement('div');
-      chapterContinuationSentinel.className = 'lightink-reader-chapter-sentinel';
-      chapterContinuationSentinel.setAttribute('aria-hidden', 'true');
-      chapterContinuationSentinel.style.height = '1px';
-      scrollHost.appendChild(chapterContinuationSentinel);
-      chapterContinuationObserver = new IntersectionObserver(
-        (entries) => {
-          if (
-            renderGeneration === flowRenderGeneration &&
-            !isFlowPaginated(root) &&
-            entries.some((entry) => entry.isIntersecting)
-          ) {
-            appendBatch();
-          }
-        },
-        { root: hooks.scrollContainer(), rootMargin: '150% 0px' },
-      );
-      chapterContinuationObserver.observe(chapterContinuationSentinel);
-    }
   };
 
   const applyScrollDocument = (frame: HTMLIFrameElement, frameDocument: Document): void => {
@@ -1989,6 +2144,7 @@ export function createFlowRenderer(
     body.style.overflow = 'hidden';
     clearPaginatedMediaInline(frameDocument);
     applyScrollMediaMetrics(frameDocument);
+    markDuplicateChapterHeading(body, frame.title);
     frame.style.width = '100%';
     frame.style.removeProperty('min-height');
     frame.style.removeProperty('max-height');
@@ -2008,7 +2164,9 @@ export function createFlowRenderer(
       applyScrollDocument(frame, frameDocument);
       const nextHeight = `${flowFrameContentHeight(frameDocument)}px`;
       if (frame.style.height !== nextHeight) {
-        frame.style.height = nextHeight;
+        preserveScrollAnchor(() => {
+          frame.style.height = nextHeight;
+        });
       }
     }
     resumeScrollMounts?.();
@@ -2061,10 +2219,6 @@ export function createFlowRenderer(
       syncVisibleFrames();
     } else {
       remasureScrollFrames();
-      if (chapterContinuationObserver !== null && chapterContinuationSentinel !== null) {
-        chapterContinuationObserver.unobserve(chapterContinuationSentinel);
-        chapterContinuationObserver.observe(chapterContinuationSentinel);
-      }
     }
   };
 

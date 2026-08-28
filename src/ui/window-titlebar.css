@@ -184,13 +184,17 @@ html[data-touch-primary] {
   color: #fff;
 }
 
-.lightink-library-header {
+.lightink-library-header,
+.lightink-library-brand,
+.lightink-library-header-main,
+.lightink-library-header h1 {
   -webkit-app-region: drag;
 }
 
 .lightink-library-header input,
 .lightink-library-header button,
 .lightink-library-search,
+.lightink-library-toolbar,
 .lightink-reader-chrome-action,
 .lightink-window-caption {
   -webkit-app-region: no-drag;

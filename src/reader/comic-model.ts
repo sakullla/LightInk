@@ -136,13 +136,19 @@ export function comicDevicePixelRatio(
   return Math.min(4, Math.max(1, ratio));
 }
 
+function visibleClientWidth(element: HTMLElement | null | undefined): number {
+  if (element == null || element.hidden) return 0;
+  return element.clientWidth;
+}
+
 /** Slot paint budget in device pixels. CSS layout still uses slot width / dpr. */
 export function comicDisplayWidthPx(
   slot: HTMLElement | undefined,
   fallback = 800,
   host: { readonly devicePixelRatio?: number } | null = typeof window !== 'undefined' ? window : null,
 ): number {
-  const css = slot?.clientWidth || slot?.parentElement?.clientWidth || fallback;
+  const css =
+    visibleClientWidth(slot) || visibleClientWidth(slot?.parentElement) || fallback;
   const device = Math.round(Math.max(1, css) * comicDevicePixelRatio(host));
   return Math.min(COMIC_DISPLAY_MAX_DEVICE_PX, Math.max(1, device));
 }
@@ -427,7 +433,11 @@ function decodeComicImage(image: HTMLImageElement, signal: AbortSignal | undefin
 export async function createComicPageElement(
   bytes: Uint8Array,
   filename: string,
-  options: { readonly resizeWidth?: number; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly resizeWidth?: number;
+    readonly signal?: AbortSignal;
+    readonly priority?: 'high' | 'low';
+  } = {},
 ): Promise<ComicPageElement> {
   if (options.signal?.aborted === true) {
     throw comicAbortError();
@@ -440,6 +450,9 @@ export async function createComicPageElement(
   image.draggable = false;
   image.decoding = 'async';
   image.loading = 'eager';
+  if (options.priority === 'high' || options.priority === 'low') {
+    image.fetchPriority = options.priority;
+  }
   image.src = url;
   try {
     await decodeComicImage(image, options.signal);
@@ -576,4 +589,26 @@ export function selectComicCacheWindow(
     used += size;
   }
   return wanted;
+}
+
+/** Load the current spread before farther cache-window neighbors. */
+export function orderComicCacheLoads(
+  wanted: Iterable<number>,
+  centers: readonly number[],
+): number[] {
+  const centerSet = new Set(centers);
+  return [...wanted].sort((left, right) => {
+    const leftCenter = centerSet.has(left) ? 0 : 1;
+    const rightCenter = centerSet.has(right) ? 0 : 1;
+    if (leftCenter !== rightCenter) return leftCenter - rightCenter;
+    const leftDistance = Math.min(
+      ...centers.map((center) => Math.abs(left - center)),
+      Number.POSITIVE_INFINITY,
+    );
+    const rightDistance = Math.min(
+      ...centers.map((center) => Math.abs(right - center)),
+      Number.POSITIVE_INFINITY,
+    );
+    return leftDistance - rightDistance || left - right;
+  });
 }
