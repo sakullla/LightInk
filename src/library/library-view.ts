@@ -41,6 +41,9 @@ import {
 } from './library-manage.js';
 import {
   coverProgressFillPercent,
+  formatLibraryReadingDuration,
+  libraryProgressReadingMs,
+  setLibraryProgressStatus,
   type LibraryProgress,
   type LibraryProgressQuery,
   type ProjectLibraryProgressOptions,
@@ -72,7 +75,7 @@ import {
 
 type Locale = 'en' | 'zh-CN';
 type LibrarySection = 'shelf' | 'sources' | 'manage';
-type ShelfGroup = 'all' | 'in-progress' | 'unread' | 'text' | 'comic';
+type ShelfGroup = 'all' | 'in-progress' | 'finished' | 'unread' | 'text' | 'comic';
 
 interface Labels {
   library: string;
@@ -84,6 +87,7 @@ interface Labels {
   filter: string;
   all: string;
   inReading: string;
+  finished: string;
   unread: string;
   textBooks: string;
   comics: string;
@@ -168,6 +172,12 @@ interface Labels {
   readPercent: string;
   pageProgress: string;
   chapterProgress: string;
+  position: string;
+  progress: string;
+  lastRead: string;
+  readingTime: string;
+  markFinished: string;
+  markInProgress: string;
   newGroup: string;
   addChildGroup: string;
   renameGroup: string;
@@ -237,6 +247,7 @@ const LABELS: Record<Locale, Labels> = {
     filter: 'Filter',
     all: 'All',
     inReading: 'Reading',
+    finished: 'Finished',
     unread: 'Unread',
     textBooks: 'Text',
     comics: 'Comics',
@@ -321,6 +332,12 @@ const LABELS: Record<Locale, Labels> = {
     readPercent: '{percent}% read',
     pageProgress: 'Page {current}',
     chapterProgress: 'Chapter {current}',
+    position: 'Position',
+    progress: 'Progress',
+    lastRead: 'Last read',
+    readingTime: 'Time spent',
+    markFinished: 'Mark as finished',
+    markInProgress: 'Mark as reading',
     newGroup: 'New group',
     addChildGroup: 'Add child group',
     renameGroup: 'Rename group',
@@ -388,6 +405,7 @@ const LABELS: Record<Locale, Labels> = {
     filter: '筛选',
     all: '全部',
     inReading: '在读',
+    finished: '读完',
     unread: '未读',
     textBooks: '文字书',
     comics: '漫画',
@@ -472,6 +490,12 @@ const LABELS: Record<Locale, Labels> = {
     readPercent: '已读 {percent}%',
     pageProgress: '第 {current} 页',
     chapterProgress: '第 {current} 章',
+    position: '当前位置',
+    progress: '阅读进度',
+    lastRead: '最近阅读',
+    readingTime: '累计阅读',
+    markFinished: '标为读完',
+    markInProgress: '标为在读',
     newGroup: '新建分组',
     addChildGroup: '新建子组',
     renameGroup: '重命名分组',
@@ -809,15 +833,17 @@ function isDisplayablePercent(value: number | undefined): value is number {
 }
 
 /** Reading clock from projected progress. Missing or non-finite values count as 0. */
-function progressClock(progress: Extract<LibraryProgress, { status: 'in-progress' }>): number {
-  const raw = (progress as { readonly updatedAt?: unknown }).updatedAt;
+function progressClock(progress: LibraryProgress): number {
+  if (progress.status === 'not-started') return 0;
+  const raw = progress.updatedAt;
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
 }
 
-function displayLocation(progress: Extract<LibraryProgress, { status: 'in-progress' }>): {
+function displayLocation(progress: LibraryProgress): {
   readonly kind: 'page' | 'chapter';
   readonly current: number;
 } | null {
+  if (progress.status === 'not-started') return null;
   if (!Number.isSafeInteger(progress.index) || progress.index < 0) {
     return null;
   }
@@ -831,6 +857,17 @@ function isTransportError(text: string): boolean {
   return /error sending request|failed to fetch|network error|connection refused|timed out|dns|reading 'invoke'|cannot read properties of undefined/i.test(
     text,
   );
+}
+
+/** Detail-pane reading clock; falls back to ISO when the locale cannot format. */
+function formatReadingClock(clock: number, locale: Locale): string {
+  const date = new Date(clock);
+  if (!Number.isFinite(date.getTime())) return '';
+  try {
+    return date.toLocaleString(locale);
+  } catch {
+    return date.toISOString();
+  }
 }
 
 function errorText(error: unknown, fallback: string): string {
@@ -950,7 +987,14 @@ function saveNavWidth(storage: LibraryThemeStorage | null | undefined, width: nu
   }
 }
 
-const SHELF_GROUPS: readonly ShelfGroup[] = ['all', 'in-progress', 'unread', 'text', 'comic'];
+const SHELF_GROUPS: readonly ShelfGroup[] = [
+  'all',
+  'in-progress',
+  'finished',
+  'unread',
+  'text',
+  'comic',
+];
 
 // 内置智能组中与书库快捷过滤（SHELF_GROUPS）语义重复的项，不在智能分组导航中重复渲染。
 const SHELF_FILTER_SMART_IDS: ReadonlySet<string> = new Set([
@@ -981,6 +1025,8 @@ function groupLabel(labels: Labels, group: ShelfGroup): string {
       return labels.all;
     case 'in-progress':
       return labels.inReading;
+    case 'finished':
+      return labels.finished;
     case 'unread':
       return labels.unread;
     case 'text':
@@ -1012,6 +1058,7 @@ const NAV_ICON_PATHS = {
     'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
   ],
   reading: ['M12 8v4l3 3', 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z'],
+  finished: ['M22 11.08V12a10 10 0 1 1-5.93-9.14', 'M22 4L12 14.01l-3-3'],
   unread: [
     'M22 12h-6l-2 3h-4l-2-3H2',
     'M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
@@ -1032,6 +1079,7 @@ const NAV_ICON_PATHS = {
 const SHELF_NAV_ICONS: Record<ShelfGroup, readonly string[]> = {
   all: NAV_ICON_PATHS.library,
   'in-progress': NAV_ICON_PATHS.reading,
+  finished: NAV_ICON_PATHS.finished,
   unread: NAV_ICON_PATHS.unread,
   text: NAV_ICON_PATHS.text,
   comic: NAV_ICON_PATHS.comic,
@@ -1921,7 +1969,7 @@ export function createLibraryView(
       const projected = catalogEntry
         ? deps.getProgress?.(display.item, { catalogEntry: true })
         : deps.getProgress?.(display.item);
-      if (projected == null || projected.status !== 'in-progress') {
+      if (projected == null || projected.status === 'not-started') {
         return catalogEntry ? null : { status: 'not-started' };
       }
       return projected;
@@ -1931,13 +1979,17 @@ export function createLibraryView(
   }
 
   function progressLabel(progress: LibraryProgress): string {
-    if (progress.status !== 'in-progress') return labels().notStarted;
+    if (progress.status === 'not-started') return labels().notStarted;
     const parts: string[] = [];
-    const location = displayLocation(progress);
-    if (location?.kind === 'page') {
-      parts.push(labels().pageProgress.replace('{current}', String(location.current)));
-    } else if (location?.kind === 'chapter') {
-      parts.push(labels().chapterProgress.replace('{current}', String(location.current)));
+    if (progress.status === 'finished') {
+      parts.push(labels().finished);
+    } else {
+      const location = displayLocation(progress);
+      if (location?.kind === 'page') {
+        parts.push(labels().pageProgress.replace('{current}', String(location.current)));
+      } else if (location?.kind === 'chapter') {
+        parts.push(labels().chapterProgress.replace('{current}', String(location.current)));
+      }
     }
     if (isDisplayablePercent(progress.percent)) {
       parts.push(
@@ -1946,6 +1998,10 @@ export function createLibraryView(
           String(Math.min(100, Math.round(progress.percent))),
         ),
       );
+    }
+    const duration = formatLibraryReadingDuration(libraryProgressReadingMs(progress));
+    if (duration !== '') {
+      parts.push(duration);
     }
     return parts.length > 0 ? parts.join(' · ') : labels().continueReading;
   }
@@ -2027,6 +2083,8 @@ export function createLibraryView(
         return true;
       case 'in-progress':
         return progress?.status === 'in-progress';
+      case 'finished':
+        return progress?.status === 'finished';
       case 'unread':
         return progress !== null && progress.status === 'not-started';
       case 'text':
@@ -3228,9 +3286,44 @@ export function createLibraryView(
     }
   }
 
+  /**
+   * 手动「标为读完 / 标为在读」：经 library-progress 的 helper 写回
+   * ReadingProgress（保持 v2 形状、刷新 updatedAt），随后立即重投影书架。
+   */
+  function applyReadingStatus(display: DisplayItem, status: 'finished' | 'in-progress'): void {
+    const storage = continueStorage();
+    if (storage === null) return;
+    if (!setLibraryProgressStatus(storage, display.item, status)) return;
+    refreshSmartGroups();
+    renderGroups();
+    renderContinueBar();
+    renderItems();
+    renderDetail();
+  }
+
   function openItemCollectionMenu(display: DisplayItem, position: { x: number; y: number }): void {
     const custom = flattenedCustomGroups();
     const items: MenuItem[] = [];
+    const shelfProgress = progressFor(display);
+    if (shelfProgress?.status === 'in-progress' || shelfProgress?.status === 'finished') {
+      items.push({
+        id: 'progress-status',
+        label:
+          shelfProgress.status === 'finished' ? labels().markInProgress : labels().markFinished,
+        action: () => {
+          applyReadingStatus(
+            display,
+            shelfProgress.status === 'finished' ? 'in-progress' : 'finished',
+          );
+        },
+      });
+      items.push({
+        id: 'sep-progress',
+        label: '',
+        separator: true,
+        action: () => undefined,
+      });
+    }
     if (custom.length === 0) {
       items.push({
         id: 'add',
@@ -3845,6 +3938,51 @@ export function createLibraryView(
       }
       detail.appendChild(metadata);
     }
+    // 进度详情：当前位置（章节名或第 N 页/章）、百分比、最近阅读时间、累计时长。
+    const detailProgress = progressFor(selected);
+    if (detailProgress !== null && detailProgress.status !== 'not-started') {
+      const progressFacts: Array<[string, string]> = [];
+      const location = displayLocation(detailProgress);
+      const positionText =
+        detailProgress.title ??
+        (location?.kind === 'page'
+          ? labels().pageProgress.replace('{current}', String(location.current))
+          : location?.kind === 'chapter'
+            ? labels().chapterProgress.replace('{current}', String(location.current))
+            : undefined);
+      if (positionText !== undefined && positionText !== '') {
+        progressFacts.push([labels().position, positionText]);
+      }
+      if (isDisplayablePercent(detailProgress.percent)) {
+        progressFacts.push([
+          labels().progress,
+          labels().readPercent.replace(
+            '{percent}',
+            String(Math.min(100, Math.round(detailProgress.percent))),
+          ),
+        ]);
+      }
+      const clock = progressClock(detailProgress);
+      if (clock > 0) {
+        progressFacts.push([labels().lastRead, formatReadingClock(clock, deps.getLocale())]);
+      }
+      const duration = formatLibraryReadingDuration(libraryProgressReadingMs(detailProgress));
+      if (duration !== '') {
+        progressFacts.push([labels().readingTime, duration]);
+      }
+      if (progressFacts.length > 0) {
+        const progressMeta = doc.createElement('dl');
+        progressMeta.className = 'lightink-library-comic-metadata lightink-library-detail-progress';
+        for (const [label, value] of progressFacts) {
+          const term = doc.createElement('dt');
+          term.textContent = label;
+          const description = doc.createElement('dd');
+          description.textContent = value;
+          progressMeta.append(term, description);
+        }
+        detail.appendChild(progressMeta);
+      }
+    }
     if (selected.entry?.summary !== undefined && selected.entry.summary !== '') {
       const summary = doc.createElement('p');
       summary.className = 'lightink-library-summary';
@@ -3881,6 +4019,21 @@ export function createLibraryView(
           (managedBodyMissing && deps.onDownload === undefined);
     open.addEventListener('click', () => void openSelected());
     actions.appendChild(open);
+    if (selectedProgress?.status === 'in-progress' || selectedProgress?.status === 'finished') {
+      const statusToggle = button(
+        doc,
+        selectedProgress.status === 'finished' ? labels().markInProgress : labels().markFinished,
+        'lightink-library-progress-toggle',
+      );
+      statusToggle.addEventListener('click', () => {
+        if (selected === null) return;
+        applyReadingStatus(
+          selected,
+          selectedProgress.status === 'finished' ? 'in-progress' : 'finished',
+        );
+      });
+      actions.appendChild(statusToggle);
+    }
     if (managedBodyMissing && deps.onDownload !== undefined) {
       const download = button(doc, labels().downloadBook);
       const itemId = selected.item.id;

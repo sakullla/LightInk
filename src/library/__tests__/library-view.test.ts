@@ -18,7 +18,7 @@ import {
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
-import { saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
+import { loadReadingProgress, saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
 import { applyKeyboardInset } from '../../ui/safe-area.js';
 import '../library.css';
 
@@ -1111,16 +1111,24 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('filters the cover wall with 全部 / 在读 / 未读 / 文字书 / 漫画', async () => {
+  it('filters the cover wall with 全部 / 在读 / 读完 / 未读 / 文字书 / 漫画', async () => {
     const unread = localItem();
     const novel = localItem({
       id: 'local:/books/c.epub',
       title: '续读小说',
       localPath: '/books/c.epub',
     });
+    const done = localItem({
+      id: 'local:/books/d.epub',
+      title: '读完的书',
+      localPath: '/books/d.epub',
+    });
     const comic = comicItem();
     const getProgress = vi.fn((item: LibraryProgressQuery) => {
       if (item.id === unread.id) return { status: 'not-started' as const };
+      if (item.id === done.id) {
+        return { status: 'finished' as const, unit: 'chapter' as const, index: 9, ratio: 1, percent: 100 };
+      }
       if (item.id === comic.id) {
         return { status: 'in-progress' as const, unit: 'page' as const, index: 4, ratio: 0, percent: 20 };
       }
@@ -1129,7 +1137,7 @@ describe('LibraryView my-books home', () => {
     const base = dependencies();
     const deps = dependencies({
       getProgress,
-      library: { ...base.library, listItems: vi.fn(async () => [unread, novel, comic]) },
+      library: { ...base.library, listItems: vi.fn(async () => [unread, novel, done, comic]) },
     });
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1138,45 +1146,58 @@ describe('LibraryView my-books home', () => {
 
     expect(itemRow(host, unread.id).textContent).toContain('本地小说');
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
+    expect(itemRow(host, done.id).textContent).toContain('读完的书');
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
     expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
-    const desktopFilterLabels = ['全部', '在读', '未读', '文字书', '漫画'].map(
+    const desktopFilterLabels = ['全部', '在读', '读完', '未读', '文字书', '漫画'].map(
       (label) => groupButton(host, label).textContent?.replace(/\s+/g, ' ').trim(),
     );
-    expect(desktopFilterLabels).toEqual(['全部', '在读', '未读', '文字书', '漫画']);
+    expect(desktopFilterLabels).toEqual(['全部', '在读', '读完', '未读', '文字书', '漫画']);
     expect(desktopFilterLabels.join('')).not.toContain('…');
     expect(desktopFilterLabels).not.toContain('文字…');
 
     groupButton(host, '在读').click();
     await settle();
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
+
+    groupButton(host, '读完').click();
+    await settle();
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+    expect(itemRow(host, done.id).textContent).toContain('读完的书');
 
     groupButton(host, '未读').click();
     await settle();
     expect(itemRow(host, unread.id).textContent).toContain('本地小说');
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
 
     groupButton(host, '文字书').click();
     await settle();
     expect(itemRow(host, unread.id).textContent).toContain('本地小说');
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
+    expect(itemRow(host, done.id).textContent).toContain('读完的书');
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
 
     groupButton(host, '漫画').click();
     await settle();
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
 
     groupButton(host, '全部').click();
     await settle();
     expect(itemRow(host, unread.id)).toBeTruthy();
     expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(itemRow(host, done.id)).toBeTruthy();
     expect(itemRow(host, comic.id)).toBeTruthy();
     view.destroy();
   });
@@ -1414,6 +1435,205 @@ describe('LibraryView my-books home', () => {
 
     expect(operationSignal?.aborted).toBe(true);
     expect(deps.notify).not.toHaveBeenCalled();
+    view.destroy();
+  });
+});
+
+describe('LibraryView reading management (R4)', () => {
+  function memoryProgressStorage(): ProgressStorage & { readonly store: Record<string, string> } {
+    const store: Record<string, string> = {};
+    return {
+      store,
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+  }
+
+  it('renders the three-state badge with percent and accumulated reading time', async () => {
+    const finishedBook = localItem({
+      id: 'local:/books/done.epub',
+      title: '读完的书',
+      localPath: '/books/done.epub',
+    });
+    const reading = localItem({
+      id: 'local:/books/reading.epub',
+      title: '在读书',
+      localPath: '/books/reading.epub',
+    });
+    const fresh = localItem();
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === finishedBook.id) {
+        return {
+          status: 'finished' as const,
+          unit: 'chapter' as const,
+          index: 11,
+          ratio: 1,
+          percent: 100,
+          readingMs: 3 * 3_600_000 + 12 * 60_000,
+        };
+      }
+      if (item.id === reading.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 2,
+          ratio: 0.4,
+          percent: 21,
+          readingMs: 45 * 60_000,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [finishedBook, reading, fresh]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const finishedRow = itemRow(host, finishedBook.id);
+    expect(finishedRow.dataset.progressStatus).toBe('finished');
+    expect(finishedRow.dataset.progressFill).toBe('100');
+    expect(finishedRow.style.getPropertyValue('--lightink-library-progress-fill')).toBe('100%');
+    expect(finishedRow.textContent).toContain('读完');
+    expect(finishedRow.textContent).toContain('已读 100%');
+    expect(finishedRow.textContent).toContain('3h12m');
+
+    const readingRow = itemRow(host, reading.id);
+    expect(readingRow.dataset.progressStatus).toBe('in-progress');
+    expect(readingRow.textContent).toContain('第 3 章');
+    expect(readingRow.textContent).toContain('已读 21%');
+    expect(readingRow.textContent).toContain('45m');
+
+    const freshRow = itemRow(host, fresh.id);
+    expect(freshRow.dataset.progressStatus).toBe('not-started');
+    expect(freshRow.textContent).toContain('未开始');
+    expect(freshRow.textContent).not.toContain('已读');
+    view.destroy();
+  });
+
+  it('writes ReadingProgress.status from the cover menu and reflects it immediately', async () => {
+    const storage = memoryProgressStorage();
+    const book = localItem();
+    saveReadingProgress(storage, '/books/a.epub', {
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.4,
+      total: 10,
+      updatedAt: 10,
+      readingMs: 3_600_000,
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: bindLibraryProgress(storage),
+      progressStorage: storage,
+      library: { ...base.library, listItems: vi.fn(async () => [book]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(itemRow(host, book.id).dataset.progressStatus).toBe('in-progress');
+
+    await openItemMenu(host, book.id);
+    contextMenuItem('标为读完').click();
+    await settle();
+    const finishedRecord = loadReadingProgress(storage, '/books/a.epub');
+    expect(finishedRecord).toMatchObject({
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.4,
+      total: 10,
+      readingMs: 3_600_000,
+      status: 'finished',
+    });
+    expect(finishedRecord?.updatedAt).toBeGreaterThan(10);
+    const finishedRow = itemRow(host, book.id);
+    expect(finishedRow.dataset.progressStatus).toBe('finished');
+    expect(finishedRow.textContent).toContain('读完');
+    expect(finishedRow.textContent).toContain('已读 100%');
+
+    await openItemMenu(host, book.id);
+    contextMenuItem('标为在读').click();
+    await settle();
+    const restored = loadReadingProgress(storage, '/books/a.epub');
+    expect(restored).not.toBeNull();
+    expect(restored).not.toHaveProperty('status');
+    expect(restored?.kind).toBe('flow');
+    expect(itemRow(host, book.id).dataset.progressStatus).toBe('in-progress');
+    view.destroy();
+  });
+
+  it('does not offer a manual status change for a book without a record', async () => {
+    const storage = memoryProgressStorage();
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: bindLibraryProgress(storage),
+      progressStorage: storage,
+      library: { ...base.library, listItems: vi.fn(async () => [localItem()]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const menu = await tryOpenItemMenu(host, localItem().id);
+    expect(menu?.textContent ?? '').not.toContain('标为读完');
+    expect(menu?.textContent ?? '').not.toContain('标为在读');
+    view.destroy();
+  });
+
+  it('shows position, percent, last-read time, and duration in the detail and toggles status there', async () => {
+    const storage = memoryProgressStorage();
+    saveReadingProgress(storage, 'remote-identity', {
+      version: 2,
+      kind: 'flow',
+      index: 1996,
+      ratio: 0.5,
+      total: 2530,
+      title: '第1997章 浓浓的火药味',
+      updatedAt: 1_700_000_000_000,
+      readingMs: 2 * 3_600_000 + 5 * 60_000,
+    });
+    saveLibraryProgressAlias(storage, 'item-1', 'remote-identity');
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: bindLibraryProgress(storage),
+      progressStorage: storage,
+      library: { ...base.library },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openCatalog(host);
+    itemRow(host, 'item-1').click();
+    await settle();
+    const pane = host.querySelector('.lightink-library-detail');
+    expect(pane instanceof HTMLElement && isShown(pane)).toBe(true);
+    expect(pane!.textContent).toContain('当前位置');
+    expect(pane!.textContent).toContain('第1997章 浓浓的火药味');
+    expect(pane!.textContent).toContain('已读 79%');
+    expect(pane!.textContent).toContain('最近阅读');
+    expect(pane!.textContent).toContain('累计阅读');
+    expect(pane!.textContent).toContain('2h5m');
+
+    shownButtonWithText(pane!, '标为读完').click();
+    await settle();
+    expect(loadReadingProgress(storage, 'remote-identity')?.status).toBe('finished');
+    expect(pane!.textContent).toContain('已读 100%');
+    shownButtonWithText(pane!, '标为在读').click();
+    await settle();
+    expect(loadReadingProgress(storage, 'remote-identity')).not.toHaveProperty('status');
     view.destroy();
   });
 });
@@ -2871,7 +3091,7 @@ describe('LibraryView shelf collections', () => {
     });
   }
 
-  it('keeps the five shelf filters as non-editable filters when collections exist', async () => {
+  it('keeps the six shelf filters as non-editable filters when collections exist', async () => {
     const novel = seriesNovel();
     const { deps } = collectionDependencies({
       items: [novel],
@@ -2886,6 +3106,7 @@ describe('LibraryView shelf collections', () => {
     for (const [label, shelfGroup] of [
       ['全部', 'all'],
       ['在读', 'in-progress'],
+      ['读完', 'finished'],
       ['未读', 'unread'],
       ['文字书', 'text'],
       ['漫画', 'comic'],
@@ -4056,7 +4277,7 @@ describe('LibraryView mobile shelf', () => {
     return button;
   }
 
-  const SHELF_FILTER_LABELS = ['全部', '在读', '未读', '文字书', '漫画'] as const;
+  const SHELF_FILTER_LABELS = ['全部', '在读', '读完', '未读', '文字书', '漫画'] as const;
 
   function expectFullFilterLabels(labels: Array<string | undefined>): void {
     expect(labels).toEqual([...SHELF_FILTER_LABELS]);

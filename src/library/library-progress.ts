@@ -11,13 +11,14 @@ import type { LibraryItem, LibraryItemAlias } from './library-client.js';
 import {
   loadReadingProgress,
   sanitizeReadingProgressTitle,
+  saveReadingProgress,
   type ProgressStorage,
   type ReadingProgress,
 } from '../reader/reading-progress.js';
 
 export const LIBRARY_PROGRESS_ALIAS_PREFIX = 'lightink.library.progressAlias.';
 
-export type LibraryProgressStatus = 'not-started' | 'in-progress';
+export type LibraryProgressStatus = 'not-started' | 'in-progress' | 'finished';
 export type LibraryProgressUnit = 'chapter' | 'page';
 
 export interface LibraryProgressNotStarted {
@@ -39,9 +40,29 @@ export interface LibraryProgressInProgress {
   readonly updatedAt?: number;
   /** Current heading when the reader saved a usable title. */
   readonly title?: string;
+  /** Accumulated reading time in ms; omitted when 0 or unknown. */
+  readonly readingMs?: number;
 }
 
-export type LibraryProgress = LibraryProgressNotStarted | LibraryProgressInProgress;
+/**
+ * `ReadingProgress.status === 'finished'` projection. Percent is pinned to
+ * 100 so cards and the cover bar never show a stranded 97% on a done book.
+ */
+export interface LibraryProgressFinished {
+  readonly status: 'finished';
+  readonly unit: LibraryProgressUnit;
+  readonly index: number;
+  readonly ratio: number;
+  readonly percent?: number;
+  readonly updatedAt?: number;
+  readonly title?: string;
+  readonly readingMs?: number;
+}
+
+export type LibraryProgress =
+  | LibraryProgressNotStarted
+  | LibraryProgressInProgress
+  | LibraryProgressFinished;
 
 export type LibraryProgressQuery = Pick<LibraryItem, 'id' | 'localPath' | 'pageCount'>;
 
@@ -160,8 +181,11 @@ function progressPercent(
   return Math.min(100, raw);
 }
 
-/** Cover-bar width 1..100 when a real overall percent is known. */
+/** Cover-bar width 1..100 when a real overall percent is known; 100 when finished. */
 export function coverProgressFillPercent(progress: LibraryProgress): number | null {
+  if (progress.status === 'finished') {
+    return 100;
+  }
   if (progress.status !== 'in-progress' || !isFinitePercent(progress.percent)) {
     return null;
   }
@@ -174,31 +198,95 @@ function isFinitePercent(value: number | undefined): value is number {
 
 /** Banner clock: missing or non-finite `updatedAt` is 0 and never throws. */
 export function libraryProgressUpdatedAt(progress: LibraryProgress): number {
-  if (progress.status !== 'in-progress') {
+  if (progress.status === 'not-started') {
     return 0;
   }
   return readingProgressUpdatedAt(progress.updatedAt);
+}
+
+/** Accumulated reading time in ms; 0 for not-started, missing, or non-finite. */
+export function libraryProgressReadingMs(progress: LibraryProgress): number {
+  if (progress.status === 'not-started') {
+    return 0;
+  }
+  const raw = progress.readingMs;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+/**
+ * Compact accumulated-reading-time label such as "3h12m" / "45m" / "3h".
+ * Returns '' when there is nothing worth showing (< 1 minute or invalid).
+ */
+export function formatLibraryReadingDuration(readingMs: number): string {
+  if (!Number.isFinite(readingMs) || readingMs < 60_000) {
+    return '';
+  }
+  const totalMinutes = Math.floor(readingMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+  return minutes === 0 ? `${hours}h` : `${hours}h${minutes}m`;
 }
 
 function readingProgressUpdatedAt(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function sanitizeReadingMs(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : undefined;
+}
+
 function projectRecord(
   progress: ReadingProgress,
   pageCount: number | undefined,
-): LibraryProgressInProgress {
-  const percent = progressPercent(progress, pageCount);
+): LibraryProgressInProgress | LibraryProgressFinished {
+  const finished = progress.status === 'finished';
+  const percent = finished ? 100 : progressPercent(progress, pageCount);
   const title = sanitizeReadingProgressTitle(progress.title);
+  const readingMs = sanitizeReadingMs(progress.readingMs);
   return {
-    status: 'in-progress',
+    status: finished ? 'finished' : 'in-progress',
     unit: progress.kind === 'page' ? 'page' : 'chapter',
     index: progress.index,
     ratio: progress.ratio,
     updatedAt: readingProgressUpdatedAt(progress.updatedAt),
     ...(percent === undefined ? {} : { percent }),
     ...(title === undefined ? {} : { title }),
+    ...(readingMs === undefined ? {} : { readingMs }),
   };
+}
+
+/**
+ * Manual shelf-side status change (R4): write `ReadingProgress.status` back
+ * through the same alias/path identity the projection reads. Keeps the v2
+ * record shape (kind/index/ratio/readingMs preserved), refreshes `updatedAt`,
+ * and never forges a record for a book that has none. Returns false when
+ * there is no readable record to update.
+ */
+export function setLibraryProgressStatus(
+  storage: ProgressStorage | null | undefined,
+  query: LibraryProgressQuery,
+  status: 'finished' | 'in-progress',
+  now: number = Date.now(),
+): boolean {
+  const progressId = resolveProgressId(storage, query);
+  if (progressId === null) {
+    return false;
+  }
+  const existing = loadReadingProgress(storage, progressId);
+  if (existing === null) {
+    return false;
+  }
+  const { status: _previousStatus, ...rest } = existing;
+  const updatedAt = Number.isFinite(now) ? now : Date.now();
+  const next: ReadingProgress =
+    status === 'finished' ? { ...rest, status: 'finished', updatedAt } : { ...rest, updatedAt };
+  saveReadingProgress(storage, progressId, next);
+  return true;
 }
 
 /**

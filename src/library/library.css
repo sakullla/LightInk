@@ -1643,6 +1643,20 @@ html[data-touch-primary] .lightink-library-header {
   display: none;
 }
 
+/* 读完：进度文案改为主题色徽标，封面进度条保持满格（fill=100）。 */
+.lightink-library-item[data-progress-status='finished'] .lightink-library-item-progress {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-library-detail-progress {
+  margin-top: 8px;
+}
+
+.lightink-library-progress-toggle {
+  align-self: start;
+}
+
 .lightink-library-item-continue {
   align-self: start;
   min-height: 26px;

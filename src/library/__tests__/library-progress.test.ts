@@ -3,14 +3,18 @@ import { describe, expect, it } from 'vitest';
 import {
   bindLibraryProgress,
   coverProgressFillPercent,
+  formatLibraryReadingDuration,
   libraryProgressAliasKey,
+  libraryProgressReadingMs,
   libraryProgressUpdatedAt,
   loadLibraryProgressAlias,
   migrateLibraryProgressAliases,
   projectLibraryProgress,
   saveLibraryProgressAlias,
+  setLibraryProgressStatus,
 } from '../library-progress.js';
 import {
+  loadReadingProgress,
   readingProgressKey,
   saveReadingProgress,
   type ProgressStorage,
@@ -433,8 +437,155 @@ describe('libraryProgressUpdatedAt', () => {
   });
 });
 
-describe('bindLibraryProgress', () => {
-  it('binds storage for injected getProgress(item) consumers', () => {
+describe('finished projection and reading time (R4)', () => {
+  it('projects ReadingProgress.status finished with a pinned 100 percent and a full cover bar', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(
+      storage,
+      '/books/a.epub',
+      flowProgress({ index: 9, ratio: 1, total: 10, status: 'finished' }),
+    );
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' }),
+    ).toEqual({
+      status: 'finished',
+      unit: 'chapter',
+      index: 9,
+      ratio: 1,
+      percent: 100,
+      updatedAt: 10,
+    });
+    expect(
+      coverProgressFillPercent({
+        status: 'finished',
+        unit: 'chapter',
+        index: 9,
+        ratio: 1,
+        percent: 100,
+      }),
+    ).toBe(100);
+  });
+
+  it('forwards accumulated readingMs and omits zero or missing values', () => {
+    const storage = memoryStorage();
+    const query = { id: 'local:/books/a.epub', localPath: '/books/a.epub' };
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ readingMs: 3_720_000 }));
+    expect(projectLibraryProgress(storage, query)).toMatchObject({
+      status: 'in-progress',
+      readingMs: 3_720_000,
+    });
+
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ readingMs: 0 }));
+    expect(projectLibraryProgress(storage, query)).not.toHaveProperty('readingMs');
+
+    saveReadingProgress(storage, '/books/a.epub', flowProgress());
+    expect(projectLibraryProgress(storage, query)).not.toHaveProperty('readingMs');
+  });
+
+  it('joins finished progress through the item alias as well', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, 'content-hash-a', pageProgress({ status: 'finished' }));
+    saveLibraryProgressAlias(storage, 'managed:book-a', 'content-hash-a');
+    expect(
+      projectLibraryProgress(storage, { id: 'managed:book-a', localPath: '/books/shared.cbz' }),
+    ).toMatchObject({ status: 'finished', unit: 'page', percent: 100 });
+  });
+});
+
+describe('libraryProgressReadingMs / formatLibraryReadingDuration', () => {
+  it('reads the accumulated clock safely and formats compact durations', () => {
+    expect(libraryProgressReadingMs({ status: 'not-started' })).toBe(0);
+    expect(
+      libraryProgressReadingMs({ status: 'in-progress', unit: 'chapter', index: 1, ratio: 0 }),
+    ).toBe(0);
+    expect(
+      libraryProgressReadingMs({
+        status: 'finished',
+        unit: 'page',
+        index: 12,
+        ratio: 0,
+        readingMs: 11_520_000,
+      }),
+    ).toBe(11_520_000);
+
+    expect(formatLibraryReadingDuration(0)).toBe('');
+    expect(formatLibraryReadingDuration(59_999)).toBe('');
+    expect(formatLibraryReadingDuration(Number.NaN)).toBe('');
+    expect(formatLibraryReadingDuration(60_000)).toBe('1m');
+    expect(formatLibraryReadingDuration(45 * 60_000)).toBe('45m');
+    expect(formatLibraryReadingDuration(3_600_000)).toBe('1h');
+    expect(formatLibraryReadingDuration(3 * 3_600_000 + 12 * 60_000)).toBe('3h12m');
+  });
+});
+
+describe('setLibraryProgressStatus', () => {
+  it('marks an in-progress record finished, keeping the v2 shape and refreshing updatedAt', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ total: 10, readingMs: 3_600_000 }));
+    const changed = setLibraryProgressStatus(
+      storage,
+      { id: 'local:/books/a.epub', localPath: '/books/a.epub' },
+      'finished',
+      1234,
+    );
+    expect(changed).toBe(true);
+    expect(loadReadingProgress(storage, '/books/a.epub')).toEqual({
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.4,
+      total: 10,
+      updatedAt: 1234,
+      readingMs: 3_600_000,
+      status: 'finished',
+    });
+    expect(
+      projectLibraryProgress(storage, { id: 'local:/books/a.epub', localPath: '/books/a.epub' })
+        ?.status,
+    ).toBe('finished');
+  });
+
+  it('returns a finished record to in-progress by dropping the status field', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, '/books/a.epub', flowProgress({ status: 'finished' }));
+    const changed = setLibraryProgressStatus(
+      storage,
+      { id: 'local:/books/a.epub', localPath: '/books/a.epub' },
+      'in-progress',
+      5678,
+    );
+    expect(changed).toBe(true);
+    const record = loadReadingProgress(storage, '/books/a.epub');
+    expect(record).toEqual({ version: 2, kind: 'flow', index: 2, ratio: 0.4, updatedAt: 5678 });
+    expect(record).not.toHaveProperty('status');
+  });
+
+  it('writes through the item alias and refuses books without a record', () => {
+    const storage = memoryStorage();
+    saveReadingProgress(storage, 'content-hash-a', flowProgress());
+    saveLibraryProgressAlias(storage, 'managed:book-a', 'content-hash-a');
+    expect(
+      setLibraryProgressStatus(
+        storage,
+        { id: 'managed:book-a', localPath: '/books/shared.epub' },
+        'finished',
+        42,
+      ),
+    ).toBe(true);
+    expect(loadReadingProgress(storage, 'content-hash-a')?.status).toBe('finished');
+    // book-b shares the path but has no alias/record: never forge a write.
+    expect(
+      setLibraryProgressStatus(
+        storage,
+        { id: 'managed:book-b', localPath: '/books/shared.epub' },
+        'finished',
+      ),
+    ).toBe(false);
+    expect(setLibraryProgressStatus(null, { id: 'local:/books/a.epub' }, 'finished')).toBe(false);
+  });
+});
+
+describe('bindLibraryProgress', () => {  it('binds storage for injected getProgress(item) consumers', () => {
     const storage = memoryStorage();
     saveReadingProgress(storage, '/books/a.epub', flowProgress());
     const getProgress = bindLibraryProgress(storage);
