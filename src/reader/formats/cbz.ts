@@ -20,6 +20,7 @@ import type { ArchivePasswordProvider } from '../sources/native-archive.js';
 import { enforcePageCount, READER_LIMITS } from '../reader-limits.js';
 import {
   isReaderLoadCancelled,
+  ReaderLoadCancelledError,
   throwIfReaderLoadCancelled,
   yieldReaderLoad,
 } from '../load-lifecycle.js';
@@ -506,6 +507,41 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
+/** Bound in-flight work without leaving aborted waiters at the head of the queue. */
+function createAbortableLimiter(limit: number): {
+  acquire: (signal: AbortSignal) => Promise<void>;
+  release: () => void;
+} {
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    async acquire(signal: AbortSignal): Promise<void> {
+      throwIfReaderLoadCancelled(signal);
+      while (active >= limit) {
+        await new Promise<void>((resolve, reject) => {
+          const resume = (): void => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+          };
+          const onAbort = (): void => {
+            const at = waiters.indexOf(resume);
+            if (at >= 0) waiters.splice(at, 1);
+            reject(new ReaderLoadCancelledError());
+          };
+          waiters.push(resume);
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+        throwIfReaderLoadCancelled(signal);
+      }
+      active += 1;
+    },
+    release(): void {
+      active = Math.max(0, active - 1);
+      waiters.shift()?.();
+    },
+  };
+}
+
 function toolbarButton(
   symbol: string,
   label: string,
@@ -708,52 +744,18 @@ export async function renderCbzInto(
     const pending = new Map<number, { promise: Promise<void>; controller: AbortController }>();
     const failed = new Set<number>();
     const sequentialQueues = new Map<ArchiveProvider, Promise<void>>();
-    let randomReads = 0;
-    const randomWaiters: Array<() => void> = [];
-    const withRandomRead = async (readSignal: AbortSignal): Promise<void> => {
-      throwIfReaderLoadCancelled(readSignal);
-      if (randomReads >= 2) {
-        await new Promise<void>((resolve) => {
-          const resume = (): void => {
-            readSignal.removeEventListener('abort', resume);
-            resolve();
-          };
-          randomWaiters.push(resume);
-          readSignal.addEventListener('abort', resume, { once: true });
-        });
-        throwIfReaderLoadCancelled(readSignal);
-      }
-      randomReads += 1;
-    };
-    const releaseRandomRead = (): void => {
-      randomReads = Math.max(0, randomReads - 1);
-      randomWaiters.shift()?.();
-    };
-    let prefetchDecodes = 0;
-    const prefetchDecodeWaiters: Array<() => void> = [];
+    const randomReads = createAbortableLimiter(2);
+    const prefetchDecodes = createAbortableLimiter(1);
     const withPrefetchDecode = async (
       urgent: boolean,
       decodeSignal: AbortSignal,
     ): Promise<void> => {
       if (urgent) return;
-      throwIfReaderLoadCancelled(decodeSignal);
-      if (prefetchDecodes >= 1) {
-        await new Promise<void>((resolve) => {
-          const resume = (): void => {
-            decodeSignal.removeEventListener('abort', resume);
-            resolve();
-          };
-          prefetchDecodeWaiters.push(resume);
-          decodeSignal.addEventListener('abort', resume, { once: true });
-        });
-        throwIfReaderLoadCancelled(decodeSignal);
-      }
-      prefetchDecodes += 1;
+      await prefetchDecodes.acquire(decodeSignal);
     };
     const releasePrefetchDecode = (urgent: boolean): void => {
       if (urgent) return;
-      prefetchDecodes = Math.max(0, prefetchDecodes - 1);
-      prefetchDecodeWaiters.shift()?.();
+      prefetchDecodes.release();
     };
     const pageDisplayWidth = (index: number): number => {
       const slot = slots[index];
@@ -1238,8 +1240,13 @@ export async function renderCbzInto(
         return Promise.resolve();
       }
       const existing = pending.get(index);
-      if (existing !== undefined) return existing.promise;
+      if (existing !== undefined && existing.controller.signal.aborted !== true) {
+        return existing.promise;
+      }
       const controller = new AbortController();
+      const forgetPending = (): void => {
+        if (pending.get(index)?.controller === controller) pending.delete(index);
+      };
       const requestedPage = images[index]!;
       if (requestedPage.kind === 'archive') {
         const placeholder = slots[index]?.querySelector<HTMLElement>(
@@ -1254,7 +1261,7 @@ export async function renderCbzInto(
         const operation = expandNestedArchive(index, requestedPage, controller)
           .finally(() => {
             signal?.removeEventListener('abort', abortFromParent);
-            pending.delete(index);
+            forgetPending();
           })
           .then(() => {
             if (!destroyed) applyLayout(false);
@@ -1291,11 +1298,11 @@ export async function renderCbzInto(
               }
             }
           } else {
-            await withRandomRead(controller.signal);
+            await randomReads.acquire(controller.signal);
             try {
               data = await read();
             } finally {
-              releaseRandomRead();
+              randomReads.release();
             }
             await yieldReaderLoad(controller.signal);
           }
@@ -1362,9 +1369,7 @@ export async function renderCbzInto(
         } finally {
           signal?.removeEventListener('abort', abortFromParent);
         }
-      })().finally(() => {
-        pending.delete(index);
-      });
+      })().finally(forgetPending);
       pending.set(index, { promise: operation, controller });
       return operation;
     };

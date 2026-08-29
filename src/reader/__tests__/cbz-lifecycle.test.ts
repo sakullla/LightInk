@@ -35,6 +35,7 @@ class ControlledIntersectionObserver {
 }
 
 const originalIntersectionObserver = globalThis.IntersectionObserver;
+const originalDecode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode');
 const originalNaturalWidth = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalWidth');
 const originalNaturalHeight = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalHeight');
 const createObjectUrl = vi.fn<(blob: Blob) => string>();
@@ -70,6 +71,11 @@ afterEach(() => {
   document.documentElement.removeAttribute('data-android');
   document.documentElement.removeAttribute('data-touch-primary');
   document.body.replaceChildren();
+  if (originalDecode !== undefined) {
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', originalDecode);
+  } else {
+    Reflect.deleteProperty(HTMLImageElement.prototype, 'decode');
+  }
   if (originalNaturalWidth !== undefined) {
     Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', originalNaturalWidth);
   }
@@ -574,6 +580,59 @@ describe('CBZ page materialization', () => {
       direction: 'rtl',
       spread: 'double',
       fit: 'screen',
+    });
+    await handle.destroy();
+  });
+
+  it('reloads auto double-spread pages after a slider jump aborts in-flight loads', async () => {
+    const queued: Array<() => void> = [];
+    let hangDecode = false;
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        if (!hangDecode) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container, 1200, 700);
+    const handle = await renderCbzInto(await buildCbz(8), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'auto', fit: 'screen' }),
+    });
+    expect(container.dataset.comicSpread).toBe('double');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    hangDecode = true;
+    const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
+    slider.value = slider.max;
+    slider.dispatchEvent(new Event('input'));
+    handle.scrollToPage(1);
+    slider.value = slider.max;
+    slider.dispatchEvent(new Event('input'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    hangDecode = false;
+    queued.splice(0).forEach((resolve) => resolve());
+
+    const filledVisibleSlots = (): HTMLElement[] =>
+      Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')).filter(
+        (slot) => !slot.hidden,
+      );
+    await vi.waitFor(() => {
+      const shown = filledVisibleSlots();
+      expect(shown.length).toBeGreaterThan(0);
+      for (const slot of shown) {
+        expect(slot.querySelector('img')).not.toBeNull();
+      }
+    });
+
+    expect(handle.previousPage()).toBe(true);
+    await vi.waitFor(() => {
+      const shown = filledVisibleSlots();
+      expect(shown.length).toBeGreaterThan(0);
+      for (const slot of shown) {
+        expect(slot.querySelector('img')).not.toBeNull();
+      }
     });
     await handle.destroy();
   });
