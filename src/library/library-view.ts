@@ -3288,12 +3288,14 @@ export function createLibraryView(
 
   /**
    * 手动「标为读完 / 标为在读」：经 library-progress 的 helper 写回
-   * ReadingProgress（保持 v2 形状、刷新 updatedAt），随后立即重投影书架。
+   * ReadingProgress（保持 v2 形状、刷新 updatedAt），随后与其它本地
+   * 元数据变更一样通知调度同步，并立即重投影书架。
    */
   function applyReadingStatus(display: DisplayItem, status: 'finished' | 'in-progress'): void {
     const storage = continueStorage();
     if (storage === null) return;
     if (!setLibraryProgressStatus(storage, display.item, status)) return;
+    deps.onLocalChange?.();
     refreshSmartGroups();
     renderGroups();
     renderContinueBar();

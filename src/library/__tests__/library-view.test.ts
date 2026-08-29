@@ -18,7 +18,13 @@ import {
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
-import { loadReadingProgress, saveReadingProgress, type ProgressStorage } from '../../reader/reading-progress.js';
+import {
+  loadReadingProgress,
+  readingProgressKey,
+  saveReadingProgress,
+  type ProgressStorage,
+} from '../../reader/reading-progress.js';
+import { createSyncableStorage } from '../../storage/syncable-storage.js';
 import { applyKeyboardInset } from '../../ui/safe-area.js';
 import '../library.css';
 
@@ -1569,6 +1575,69 @@ describe('LibraryView reading management (R4)', () => {
     expect(restored).not.toHaveProperty('status');
     expect(restored?.kind).toBe('flow');
     expect(itemRow(host, book.id).dataset.progressStatus).toBe('in-progress');
+    view.destroy();
+  });
+
+  it('writes a manual status change through the syncable progress storage boundary', async () => {
+    // 回归：手动改阅读状态必须经注入的 progressStorage（SyncableStorage）
+    // 写入——触发 onChange、进入同步快照——而不是回退裸 window.localStorage，
+    // 且成功后像其它本地元数据变更一样通知 onLocalChange 调度同步。
+    const progressId = 'a'.repeat(64);
+    const itemId = `managed:${'b'.repeat(64)}`;
+    const values = new Map<string, string>();
+    const backing = {
+      get length() {
+        return values.size;
+      },
+      key: (index: number) => [...values.keys()][index] ?? null,
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    };
+    const onChange = vi.fn();
+    const storage = createSyncableStorage(backing, { onChange });
+    saveReadingProgress(storage, progressId, {
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.4,
+      total: 10,
+      updatedAt: 10,
+    });
+    saveLibraryProgressAlias(storage, itemId, progressId);
+    onChange.mockClear();
+
+    const book = localItem({ id: itemId, localPath: undefined });
+    const base = dependencies();
+    const onLocalChange = vi.fn();
+    const deps = dependencies({
+      getProgress: bindLibraryProgress(storage),
+      progressStorage: storage,
+      onLocalChange,
+      library: { ...base.library, listItems: vi.fn(async () => [book]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openItemMenu(host, book.id);
+    contextMenuItem('标为读完').click();
+    await settle();
+
+    const progressKey = readingProgressKey(progressId);
+    expect(loadReadingProgress(backing, progressId)?.status).toBe('finished');
+    expect(onChange).toHaveBeenCalledWith(
+      progressKey,
+      expect.stringContaining('"status":"finished"'),
+    );
+    expect(storage.snapshot()[progressKey]).toContain('"status":"finished"');
+    expect(window.localStorage.getItem(progressKey)).toBeNull();
+    expect(onLocalChange).toHaveBeenCalled();
     view.destroy();
   });
 

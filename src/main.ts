@@ -2780,6 +2780,9 @@ libraryView = createLibraryView(shell.editorArea, {
   onOpenSyncPanel: openWebDavSyncPanel,
   themeStorage: syncableStorage,
   readerPrefsStorage: syncableStorage,
+  // R4：手动改阅读状态必须经 SyncableStorage 边界写入，才能触发 onChange、
+  // 进入 dirtyKeys 并调度同步；缺省会回退裸 window.localStorage 断开同步。
+  progressStorage: syncableStorage,
   enrichLocalItem: enrichLocalLibraryItem,
   onOpen: openLibraryItem,
   onCache: cacheLibraryItem,
