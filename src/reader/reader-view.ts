@@ -902,7 +902,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       const total = pdfHandle?.controller.totalPages ?? cbzHandle?.totalPages ?? 0;
       return stampReadingProgressTitle(
         {
-          version: 1,
+          version: 2,
           kind: 'page',
           index: page,
           ratio: 0,
@@ -938,7 +938,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         const scroller = doc === undefined || doc === null ? null : readerPagedScroller(doc);
         return stampReadingProgressTitle(
           {
-            version: 1,
+            version: 2,
             kind: 'flow',
             index: chapterIndex,
             ratio: scroller === null ? 0 : pagedProgressRatio(scroller),
@@ -958,7 +958,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
       return stampReadingProgressTitle(
         {
-          version: 1,
+          version: 2,
           kind: 'flow',
           index: chapterIndex,
           ratio: chapterScrollRatio(
@@ -1728,7 +1728,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sessionProgress.stage(
       stampReadingProgressTitle(
         {
-          version: 1,
+          version: 2,
           kind: 'flow',
           index: chapterIndex,
           ratio: Math.min(1, Math.max(0, pos - chapterIndex)),

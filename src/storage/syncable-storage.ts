@@ -62,11 +62,18 @@ function validReadingProgress(value: string): boolean {
     const parsed: unknown = JSON.parse(value);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
     const record = parsed as Record<string, unknown>;
-    return record.version === 1 &&
+    // 进度模型 v2 形状；v1/损坏值视为删除（不同步、snapshot 省略）。
+    return record.version === 2 &&
       (record.kind === 'flow' || record.kind === 'page') &&
       typeof record.index === 'number' && Number.isSafeInteger(record.index) && record.index >= 0 &&
       typeof record.ratio === 'number' && Number.isFinite(record.ratio) &&
-      typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt);
+      typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) &&
+      (record.status === undefined || record.status === 'finished') &&
+      (record.readingMs === undefined || (
+        typeof record.readingMs === 'number' &&
+        Number.isFinite(record.readingMs) &&
+        record.readingMs >= 0
+      ));
   } catch {
     return false;
   }

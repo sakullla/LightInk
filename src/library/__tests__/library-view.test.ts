@@ -2818,7 +2818,7 @@ describe('LibraryView sources, manage, and catalog', () => {
       pageCount: 40,
     });
     saveReadingProgress(storage, comicPath, {
-      version: 1,
+      version: 2,
       kind: 'page',
       index: 12,
       ratio: 0,

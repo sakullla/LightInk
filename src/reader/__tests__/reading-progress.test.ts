@@ -23,39 +23,83 @@ import {
   PAGED_FRAME_RESTORE_GIVE_UP_ATTEMPTS,
   PAGED_FRAME_RESTORE_MAX_ATTEMPTS,
   PROGRESS_SAVE_DEBOUNCE_MS,
+  READING_IDLE_PAUSE_MS,
   type SessionProgressApplyResult,
   type SessionProgressFeed,
 } from '../session/session-progress.js';
 
 describe('parseReadingProgress', () => {
-  it('accepts a v1 flow or page snapshot', () => {
+  it('accepts a v2 flow or page snapshot', () => {
     expect(
       parseReadingProgress(
-        JSON.stringify({ version: 1, kind: 'flow', index: 2, ratio: 0.4, updatedAt: 10 }),
+        JSON.stringify({ version: 2, kind: 'flow', index: 2, ratio: 0.4, updatedAt: 10 }),
       ),
-    ).toEqual({ version: 1, kind: 'flow', index: 2, ratio: 0.4, updatedAt: 10 });
+    ).toEqual({ version: 2, kind: 'flow', index: 2, ratio: 0.4, updatedAt: 10 });
     expect(
-      parseReadingProgress(JSON.stringify({ version: 1, kind: 'page', index: 7, ratio: 0 })),
+      parseReadingProgress(JSON.stringify({ version: 2, kind: 'page', index: 7, ratio: 0 })),
     ).toMatchObject({ kind: 'page', index: 7, ratio: 0 });
     expect(
       parseReadingProgress(
-        JSON.stringify({ version: 1, kind: 'flow', index: 3, ratio: 0.2, total: 12, updatedAt: 1 }),
+        JSON.stringify({ version: 2, kind: 'flow', index: 3, ratio: 0.2, total: 12, updatedAt: 1 }),
       ),
     ).toMatchObject({ index: 3, total: 12 });
   });
 
-  it('rejects corrupt or unknown records', () => {
+  it('round-trips a v2 record with status and readingMs', () => {
+    const record: ReadingProgress = {
+      version: 2,
+      kind: 'page',
+      index: 40,
+      ratio: 0,
+      total: 40,
+      updatedAt: 123,
+      status: 'finished',
+      readingMs: 3_600_000,
+    };
+    expect(parseReadingProgress(JSON.stringify(record))).toEqual(record);
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0.5, updatedAt: 1, readingMs: 0 }),
+      ),
+    ).toMatchObject({ readingMs: 0 });
+  });
+
+  it('returns null for v1, unknown versions and corrupt records', () => {
     expect(parseReadingProgress('')).toBeNull();
     expect(parseReadingProgress('{')).toBeNull();
-    expect(parseReadingProgress(JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0 }))).toBeNull();
-    expect(parseReadingProgress(JSON.stringify({ version: 1, kind: 'flow', index: -1, ratio: 0 }))).toBeNull();
+    // R6：v1 记录安静置空，无迁移。
+    expect(
+      parseReadingProgress(JSON.stringify({ version: 1, kind: 'flow', index: 1, ratio: 0 })),
+    ).toBeNull();
+    expect(
+      parseReadingProgress(JSON.stringify({ version: 3, kind: 'flow', index: 1, ratio: 0 })),
+    ).toBeNull();
+    expect(parseReadingProgress(JSON.stringify({ version: 2, kind: 'flow', index: -1, ratio: 0 }))).toBeNull();
+  });
+
+  it('rejects illegal status and readingMs values', () => {
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0, status: 'reading' }),
+      ),
+    ).toBeNull();
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0, readingMs: -5 }),
+      ),
+    ).toBeNull();
+    expect(
+      parseReadingProgress(
+        JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0, readingMs: '5m' }),
+      ),
+    ).toBeNull();
   });
 
   it('keeps a usable heading and drops converter junk or empty titles', () => {
     expect(
       parseReadingProgress(
         JSON.stringify({
-          version: 1,
+          version: 2,
           kind: 'flow',
           index: 1996,
           ratio: 0.2,
@@ -67,7 +111,7 @@ describe('parseReadingProgress', () => {
     expect(
       parseReadingProgress(
         JSON.stringify({
-          version: 1,
+          version: 2,
           kind: 'flow',
           index: 1,
           ratio: 0,
@@ -78,7 +122,7 @@ describe('parseReadingProgress', () => {
     ).not.toHaveProperty('title');
     expect(
       parseReadingProgress(
-        JSON.stringify({ version: 1, kind: 'flow', index: 1, ratio: 0, title: '  ', updatedAt: 1 }),
+        JSON.stringify({ version: 2, kind: 'flow', index: 1, ratio: 0, title: '  ', updatedAt: 1 }),
       ),
     ).not.toHaveProperty('title');
   });
@@ -94,7 +138,7 @@ describe('load/saveReadingProgress', () => {
       },
     };
     saveReadingProgress(storage, '0123456789abcdef', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 3,
       ratio: 0.25,
@@ -238,7 +282,7 @@ const remoteBook = (): ReaderTarget => ({
 });
 
 const flowRecord = (index: number, ratio = 0.5, total?: number): ReadingProgress => ({
-  version: 1,
+  version: 2,
   kind: 'flow',
   index,
   ratio,
@@ -247,7 +291,7 @@ const flowRecord = (index: number, ratio = 0.5, total?: number): ReadingProgress
 });
 
 const pageRecord = (index: number): ReadingProgress => ({
-  version: 1,
+  version: 2,
   kind: 'page',
   index,
   ratio: 0,
@@ -635,5 +679,136 @@ describe('session-progress restore retry thresholds', () => {
     expect(PAGED_FRAME_RESTORE_GIVE_UP_ATTEMPTS).toBe(8);
     expect(PAGED_FRAME_RESTORE_MAX_ATTEMPTS).toBe(96);
     expect(PROGRESS_SAVE_DEBOUNCE_MS).toBe(400);
+    expect(READING_IDLE_PAUSE_MS).toBe(2 * 60 * 1000);
+  });
+});
+
+describe('session-progress v2 fields (readingMs / status)', () => {
+  it('accumulates readingMs across debounced writes while the session is active', async () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(2, 0.75, 9);
+    harness.progress.schedulePersist();
+    await vi.advanceTimersByTimeAsync(PROGRESS_SAVE_DEBOUNCE_MS); // 首次写入：+400ms
+    await vi.advanceTimersByTimeAsync(30_000); // 持续阅读 30s
+    harness.progress.noteActivity();
+    harness.progress.schedulePersist();
+    await vi.advanceTimersByTimeAsync(PROGRESS_SAVE_DEBOUNCE_MS);
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      readingMs: 30_800,
+    });
+  });
+
+  it('pauses readingMs after the 2-minute idle threshold', async () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    harness.progress.noteActivity(); // 30s 活跃阅读
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000); // 之后 10 分钟无输入
+    harness.progress.persistNow();
+    // 计入 30s 活跃 + 2 分钟空闲阈值；阈值之后暂停。
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      readingMs: 30_000 + READING_IDLE_PAUSE_MS,
+    });
+  });
+
+  it('resumes timing from the activity point after an idle gap', async () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(2);
+    await vi.advanceTimersByTimeAsync(READING_IDLE_PAUSE_MS + 60_000); // 空闲超过阈值
+    harness.progress.noteActivity(); // 恢复活动：从恢复点重新起计
+    await vi.advanceTimersByTimeAsync(5_000);
+    harness.progress.persistNow();
+    // 空闲间隙不计入：绑定起 2 分钟阈值 + 恢复后 5s。
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      readingMs: READING_IDLE_PAUSE_MS + 5_000,
+    });
+  });
+
+  it('accumulates onto the restored record readingMs across sessions', async () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    saveReadingProgress(harness.store.storage, '/books/a.epub', {
+      ...flowRecord(4, 0.5, 8),
+      readingMs: 60_000,
+    });
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.progress.applyPending(); // 落点，解除写入门控
+    harness.flow.snapshotValue = flowRecord(4, 0.5, 8);
+    await vi.advanceTimersByTimeAsync(5_000);
+    harness.progress.noteActivity();
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      readingMs: 65_000,
+    });
+  });
+
+  it('marks flow progress finished at the last chapter end and keeps it sticky', () => {
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(9, 1, 10); // 末章末尾
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      status: 'finished',
+    });
+    // 读完为粘性语义：回读中途章节不清除（改回在读由书架侧手动完成）。
+    harness.flow.snapshotValue = flowRecord(2, 0.5, 10);
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      status: 'finished',
+      index: 2,
+    });
+  });
+
+  it('marks paged progress finished on the last page only', () => {
+    const harness = createProgressHarness();
+    harness.flags.activeKind = 'paged';
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.paged.snapshotValue = { ...pageRecord(11), total: 12 };
+    harness.progress.persistNow();
+    expect(
+      loadReadingProgress(harness.store.storage, '/books/a.epub'),
+    ).not.toHaveProperty('status');
+    harness.paged.snapshotValue = { ...pageRecord(12), total: 12 };
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      status: 'finished',
+    });
+  });
+
+  it('keeps a restored finished status on later writes', () => {
+    const harness = createProgressHarness();
+    saveReadingProgress(harness.store.storage, '/books/a.epub', {
+      ...flowRecord(9, 1, 10),
+      status: 'finished',
+    });
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.progress.applyPending();
+    harness.flow.snapshotValue = flowRecord(1, 0.2, 10);
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      status: 'finished',
+      index: 1,
+    });
+  });
+
+  it('does not carry readingMs or finished state across beginSession', () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(9, 1, 10);
+    harness.progress.persistNow();
+    harness.progress.beginSession();
+    harness.progress.bindDocumentIdentity(localBook('/books/b.epub'), null);
+    harness.flow.snapshotValue = flowRecord(0, 0.1, 10);
+    harness.progress.persistNow();
+    const next = loadReadingProgress(harness.store.storage, '/books/b.epub');
+    expect(next).not.toHaveProperty('status');
+    expect(next?.readingMs).toBe(0);
   });
 });

@@ -8,7 +8,7 @@ import {
 const SHA256 = 'a'.repeat(64);
 const PROGRESS_KEY = 'lightink.reader.progress.0123456789abcdef';
 const PROGRESS = JSON.stringify({
-  version: 1,
+  version: 2,
   kind: 'flow',
   index: 2,
   ratio: 0.5,
@@ -100,6 +100,51 @@ describe('SyncableStorage', () => {
     expect(onChange).toHaveBeenCalledWith(aliasKey, '0123456789abcdef');
     sync.setItem(aliasKey, 'C:\\Users\\user\\private.epub');
     expect(onChange).toHaveBeenLastCalledWith(aliasKey, null);
+  });
+
+  it('syncs v2 progress records and treats v1 or corrupt values as deleted', () => {
+    const withV2Fields = JSON.stringify({
+      version: 2,
+      kind: 'page',
+      index: 12,
+      ratio: 0,
+      updatedAt: 10,
+      status: 'finished',
+      readingMs: 3_600_000,
+    });
+    const v1 = JSON.stringify({ version: 1, kind: 'flow', index: 2, ratio: 0.5, updatedAt: 10 });
+    const badStatus = JSON.stringify({
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.5,
+      updatedAt: 10,
+      status: 'reading',
+    });
+    const badReadingMs = JSON.stringify({
+      version: 2,
+      kind: 'flow',
+      index: 2,
+      ratio: 0.5,
+      updatedAt: 10,
+      readingMs: -1,
+    });
+
+    expect(isSyncableStorageEntry(PROGRESS_KEY, PROGRESS)).toBe(true);
+    expect(isSyncableStorageEntry(PROGRESS_KEY, withV2Fields)).toBe(true);
+    // v1 键值视为删除：不进 snapshot，写入经 onChange 报 null。
+    expect(isSyncableStorageEntry(PROGRESS_KEY, v1)).toBe(false);
+    expect(isSyncableStorageEntry(PROGRESS_KEY, badStatus)).toBe(false);
+    expect(isSyncableStorageEntry(PROGRESS_KEY, badReadingMs)).toBe(false);
+
+    const base = storage({ [PROGRESS_KEY]: PROGRESS });
+    const onChange = vi.fn();
+    const sync = createSyncableStorage(base, { onChange });
+    expect(sync.snapshot()).toEqual({ [PROGRESS_KEY]: PROGRESS });
+    sync.setItem(PROGRESS_KEY, v1);
+    expect(onChange).toHaveBeenLastCalledWith(PROGRESS_KEY, null);
+    sync.setItem(PROGRESS_KEY, withV2Fields);
+    expect(onChange).toHaveBeenLastCalledWith(PROGRESS_KEY, withV2Fields);
   });
 
   it('does not turn a storage failure into an application crash on reads', () => {

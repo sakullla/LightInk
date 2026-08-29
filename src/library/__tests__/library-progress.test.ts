@@ -32,7 +32,7 @@ function memoryStorage(initial: Record<string, string> = {}): ProgressStorage & 
 
 function flowProgress(overrides: Partial<ReadingProgress> = {}): ReadingProgress {
   return {
-    version: 1,
+    version: 2,
     kind: 'flow',
     index: 2,
     ratio: 0.4,
@@ -43,7 +43,7 @@ function flowProgress(overrides: Partial<ReadingProgress> = {}): ReadingProgress
 
 function pageProgress(overrides: Partial<ReadingProgress> = {}): ReadingProgress {
   return {
-    version: 1,
+    version: 2,
     kind: 'page',
     index: 7,
     ratio: 0,
@@ -295,27 +295,27 @@ describe('projectLibraryProgress', () => {
     expect(() => {
       storage.setItem(
         readingProgressKey('/books/a.epub'),
-        JSON.stringify({ version: 1, kind: 'flow', index: 2, ratio: 0.4 }),
+        JSON.stringify({ version: 2, kind: 'flow', index: 2, ratio: 0.4 }),
       );
       expect(projectLibraryProgress(storage, query)).toEqual(expected);
     }).not.toThrow();
 
     storage.setItem(
       readingProgressKey('/books/a.epub'),
-      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":1e1000}',
+      '{"version":2,"kind":"flow","index":2,"ratio":0.4,"updatedAt":1e1000}',
     );
     expect(() => projectLibraryProgress(storage, query)).not.toThrow();
     expect(projectLibraryProgress(storage, query)).toEqual(expected);
 
     storage.setItem(
       readingProgressKey('/books/a.epub'),
-      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":-1e1000}',
+      '{"version":2,"kind":"flow","index":2,"ratio":0.4,"updatedAt":-1e1000}',
     );
     expect(projectLibraryProgress(storage, query)).toEqual(expected);
 
     storage.setItem(
       readingProgressKey('/books/a.epub'),
-      '{"version":1,"kind":"flow","index":2,"ratio":0.4,"updatedAt":null}',
+      '{"version":2,"kind":"flow","index":2,"ratio":0.4,"updatedAt":null}',
     );
     expect(projectLibraryProgress(storage, query)).toEqual(expected);
   });

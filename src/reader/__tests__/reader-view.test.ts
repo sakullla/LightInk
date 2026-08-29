@@ -1619,7 +1619,7 @@ describe('缩放性能（T6：档位合并去抖 + 仅可见章分栏 + 流式�
     globalThis.localStorage?.setItem(
       'lightink.reader.progress.book.epub',
       JSON.stringify({
-        version: 1,
+        version: 2,
         kind: 'flow',
         index: 0,
         ratio: 0,

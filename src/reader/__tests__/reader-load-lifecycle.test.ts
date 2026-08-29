@@ -397,7 +397,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, 'item-1@etag-old', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 5,
       ratio: 0,
@@ -1601,7 +1601,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, 'resume-wait.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -1650,7 +1650,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, 'resume-scroll-lock.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -1707,7 +1707,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, '/books/legacy.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -1756,7 +1756,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, '/old/name.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.25,
@@ -1806,7 +1806,7 @@ describe('Reader load lifecycle', () => {
       },
     };
     saveReadingProgress(progressStorage, 'resume-pane.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -2255,7 +2255,7 @@ describe('Reader R7 memory regressions', () => {
       },
     };
     const progress = (updatedAt: number): ReadingProgress => ({
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 0,
       ratio: 0,
@@ -2296,7 +2296,7 @@ describe('Reader session progress restore budgets', () => {
     vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
     const progressStorage = memoryProgressStore();
     saveReadingProgress(progressStorage, 'resume-budget.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -2345,7 +2345,7 @@ describe('Reader session progress restore budgets', () => {
     vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
     const progressStorage = memoryProgressStore();
     saveReadingProgress(progressStorage, 'resume-columns.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -2473,7 +2473,7 @@ describe('Reader progress session', () => {
     vi.useFakeTimers();
     const { storage } = memoryStore();
     saveReadingProgress(storage, 'giveup.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 1,
       ratio: 0.5,
@@ -2512,7 +2512,7 @@ describe('Reader progress session', () => {
     vi.useFakeTimers();
     const { storage } = memoryStore();
     saveReadingProgress(storage, 'opds-stall.epub', {
-      version: 1,
+      version: 2,
       kind: 'flow',
       index: 3,
       ratio: 0.4,

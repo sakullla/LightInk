@@ -8,6 +8,9 @@
  *   身份判定修改一处即对全部格式（flow/paged 两族）生效；
  * - 保存时机：滚动/翻页事件 400ms 防抖合并写入；换书/返回书架/销毁时立即
  *   尽力保存（force 允许 pendingRestore 兜底快照）；
+ * - 进度 v2 会话字段：readingMs 在阅读会话活跃时累计（心跳合并进 400ms
+ *   防抖写入；2 分钟无输入暂停计时），到达末页/末章末尾置 status='finished'
+ *   （读完为粘性语义，改回在读由书架侧手动完成）；
  * - 恢复重试阈值（数值自 reader-view 原样搬迁，行为冻结）：滚动模式等章节
  *   高度共 12 次重试（第 13 次由供数侧尽力落点）；翻页模式帧已就绪但分栏
  *   未量出（OPDS 慢章）8 次放弃；帧未挂载总预算 12×8=96 帧。超过阈值即
@@ -40,6 +43,27 @@ export const PAGED_FRAME_RESTORE_MAX_ATTEMPTS =
 
 /** 保存防抖窗口（ms）：滚动/翻页事件合并为一次进度写入。 */
 export const PROGRESS_SAVE_DEBOUNCE_MS = 400;
+
+/** 空闲阈值（ms）：无输入超过 2 分钟暂停阅读时长（readingMs）计时。 */
+export const READING_IDLE_PAUSE_MS = 2 * 60 * 1000;
+
+/** 末章"末尾"判定：章内比例 ≥0.99 视为读完（R4 status='finished'）。 */
+const READING_FINISH_RATIO = 0.99;
+
+/**
+ * 到达末尾判定：paged 到达末页（1-based 页码 ≥ 总页数）；flow 到达末章
+ * 且章内比例到末尾。total 未知时不判读完。
+ */
+function isFinishedSnapshot(progress: ReadingProgress): boolean {
+  const total = progress.total;
+  if (total === undefined || !Number.isSafeInteger(total) || total < 1) {
+    return false;
+  }
+  if (progress.kind === 'page') {
+    return progress.index >= total;
+  }
+  return progress.index >= total - 1 && progress.ratio >= READING_FINISH_RATIO;
+}
 
 /** Same identity page progress already uses: remote itemId, local path. */
 export function comicProgressIdForTarget(target: ReaderTarget): string {
@@ -155,8 +179,10 @@ export interface ReaderSessionProgress {
   snapshot(): ReadingProgress | null;
   /** 记住当前快照（滚动事件后、写入前调用）。 */
   rememberSnapshot(): void;
-  /** 防抖写入（滚动/翻页事件后 400ms 合并）。 */
+  /** 防抖写入（滚动/翻页事件后 400ms 合并；事件本身即阅读活动信号）。 */
   schedulePersist(): void;
+  /** 阅读输入活动信号：刷新空闲计时窗口（无输入 2 分钟后 readingMs 暂停）。 */
+  noteActivity(): void;
   /** 立即尽力写入（允许 pendingRestore 兜底快照；返回书架路径）。 */
   persistNow(): void;
   /** 新会话起点：保存上一本 → 清身份/待恢复/计数/最近快照（beginOpen）。 */
@@ -214,6 +240,52 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
   let restoreAttempts = 0;
   let restoreRetryFrame: number | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  // —— 进度 v2 会话字段：base* 为绑定时既有记录值；会话活跃累计随写入合并。 ——
+  let baseReadingMs = 0;
+  let sessionReadingMs = 0;
+  let baseFinished = false;
+  let sessionFinished = false;
+  /** 计时截止点：最近活动 + 空闲阈值；超过即暂停 readingMs 累计。 */
+  let activeUntil = 0;
+  let lastTickAt: number | null = null;
+
+  /**
+   * 心跳：把上次 tick 到本次活动截止点之间的时长计入会话累计。空闲期
+   * （超过 activeUntil）不计入；活动恢复时从恢复点重新起计。
+   */
+  const tickReading = (now: number): void => {
+    if (lastTickAt === null) {
+      return;
+    }
+    const countedUntil = Math.min(now, activeUntil);
+    if (countedUntil > lastTickAt) {
+      sessionReadingMs += countedUntil - lastTickAt;
+      lastTickAt = countedUntil;
+    }
+  };
+
+  const noteActivityAt = (now: number): void => {
+    tickReading(now);
+    if (lastTickAt === null || lastTickAt < now) {
+      // 会话起点，或空闲后恢复：从当前时刻重新起计。
+      lastTickAt = now;
+    }
+    activeUntil = now + READING_IDLE_PAUSE_MS;
+  };
+
+  /** 写入前合并 v2 会话字段：updatedAt/累计时长/读完状态（读完为粘性语义）。 */
+  const withSessionFields = (stored: ReadingProgress, now: number): ReadingProgress => {
+    tickReading(now);
+    if (isFinishedSnapshot(stored)) {
+      sessionFinished = true;
+    }
+    return {
+      ...stored,
+      updatedAt: now,
+      readingMs: baseReadingMs + sessionReadingMs,
+      ...(baseFinished || sessionFinished ? { status: 'finished' as const } : {}),
+    };
+  };
 
   const snapshot = (): ReadingProgress | null =>
     (host.activeKind() === 'paged' ? host.paged : host.flow).snapshot();
@@ -237,11 +309,21 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
     }
     rememberSnapshot();
     const stored =
-      lastProgress ??
-      (force && pendingRestore !== null ? { ...pendingRestore, updatedAt: Date.now() } : null);
+      lastProgress ?? (force && pendingRestore !== null ? pendingRestore : null);
     if (stored !== null) {
-      saveReadingProgress(host.storage, progressId, { ...stored, updatedAt: Date.now() });
+      saveReadingProgress(host.storage, progressId, withSessionFields(stored, Date.now()));
     }
+  };
+
+  /** 新身份绑定：以命中记录为 base，重置会话累计并启动活跃计时。 */
+  const beginBoundSession = (bound: ReadingProgress | null): void => {
+    baseReadingMs = bound?.readingMs ?? 0;
+    baseFinished = bound?.status === 'finished';
+    sessionReadingMs = 0;
+    sessionFinished = false;
+    lastTickAt = null;
+    activeUntil = 0;
+    noteActivityAt(Date.now());
   };
 
   const cancelRestoreRetry = (): void => {
@@ -311,6 +393,7 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
     snapshot,
     rememberSnapshot,
     schedulePersist: () => {
+      noteActivityAt(Date.now());
       if (saveTimer !== null) {
         clearTimeout(saveTimer);
       }
@@ -318,6 +401,9 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
         saveTimer = null;
         persist();
       }, PROGRESS_SAVE_DEBOUNCE_MS);
+    },
+    noteActivity: () => {
+      noteActivityAt(Date.now());
     },
     persistNow: () => {
       persist(true);
@@ -330,6 +416,13 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
       cancelRestoreRetry();
       // 最近快照随会话作废：跨书残留会把上一本的章节/比例恢复进新书。
       lastProgress = null;
+      // 会话字段同步作废：时长/读完状态不得带入下一本。
+      baseReadingMs = 0;
+      sessionReadingMs = 0;
+      baseFinished = false;
+      sessionFinished = false;
+      lastTickAt = null;
+      activeUntil = 0;
     },
     bindDocumentIdentity: (target, contentHash) => {
       progressId = documentProgressId(target, contentHash);
@@ -347,6 +440,7 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
       }
       restoreAttempts = 0;
       cancelRestoreRetry();
+      beginBoundSession(pendingRestore);
     },
     bindComicIdentity: (target) => {
       progressId = comicProgressIdForTarget(target);
@@ -356,6 +450,7 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
       );
       restoreAttempts = 0;
       cancelRestoreRetry();
+      beginBoundSession(pendingRestore);
     },
     notifyProgressBound: (target) => {
       if (progressId === '') {
@@ -404,7 +499,9 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
     captureForRelayout: () => pendingRestore ?? lastProgress ?? snapshot(),
     persistSnapshot: (saved) => {
       if (saved !== null && progressId !== '') {
-        saveReadingProgress(host.storage, progressId, saved);
+        // 直写保留调用方 updatedAt，但会话字段（时长/读完）不能在此丢失。
+        const merged = withSessionFields(saved, Date.now());
+        saveReadingProgress(host.storage, progressId, { ...merged, updatedAt: saved.updatedAt });
       }
     },
     dispose: () => {

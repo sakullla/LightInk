@@ -55,7 +55,7 @@ describe('resolveReaderChapterTitle', () => {
 describe('stampReadingProgressTitle', () => {
   it('persists the outline heading and omits converter junk', () => {
     const flow = {
-      version: 1 as const,
+      version: 2 as const,
       kind: 'flow' as const,
       index: 1,
       ratio: 0.2,
