@@ -2437,27 +2437,31 @@ manager = new TabManager({
       // R5：标注导出——annotation-export 编排，save 对话框 + writeFile 原子写
       // （与 createExportDeps 同通道）；空态/成功走非阻断提示，失败走统一上报。
       exportAnnotations: async ({ title, annotations }) => {
-        const { exportAnnotationsMarkdown } = await import('./reader/annotation-export.js');
-        await exportAnnotationsMarkdown({
-          getTitle: () => title,
-          getAnnotations: () => annotations,
-          t: (key, vars) => i18n.t(key, vars),
-          showSaveDialog: async (defaultPath) => {
-            const selected = await save({
-              defaultPath,
-              filters: [
-                { name: 'Markdown', extensions: ['md'] },
-                { name: 'All Files', extensions: ['*'] },
-              ],
-            });
-            return typeof selected === 'string' ? selected : null;
-          },
-          writeFile,
-          notify: (message) => {
-            void showAppAlert(message);
-          },
-          reportError: reportExportError,
-        });
+        try {
+          const { exportAnnotationsMarkdown } = await import('./reader/annotation-export.js');
+          await exportAnnotationsMarkdown({
+            getTitle: () => title,
+            getAnnotations: () => annotations,
+            t: (key, vars) => i18n.t(key, vars),
+            showSaveDialog: async (defaultPath) => {
+              const selected = await save({
+                defaultPath,
+                filters: [
+                  { name: 'Markdown', extensions: ['md'] },
+                  { name: 'All Files', extensions: ['*'] },
+                ],
+              });
+              return typeof selected === 'string' ? selected : null;
+            },
+            writeFile,
+            notify: (message) => {
+              void showAppAlert(message);
+            },
+            reportError: reportExportError,
+          });
+        } catch (error) {
+          reportExportError(i18n.t('annotation.export.failed'), error);
+        }
       },
     });
     reader.subscribeState(() => {
