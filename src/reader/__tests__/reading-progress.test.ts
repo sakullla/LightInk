@@ -811,4 +811,47 @@ describe('session-progress v2 fields (readingMs / status)', () => {
     expect(next).not.toHaveProperty('status');
     expect(next?.readingMs).toBe(0);
   });
+
+  it('keeps an externally marked finished status on later persists of a live session', () => {
+    const harness = createProgressHarness();
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.flow.snapshotValue = flowRecord(2, 0.5, 10);
+    harness.progress.persistNow();
+    // 会话存活期间书架手动「标为读完」（returnToShelf 只 persistNow 不 dispose）。
+    const stored = loadReadingProgress(harness.store.storage, '/books/a.epub');
+    saveReadingProgress(harness.store.storage, '/books/a.epub', {
+      ...stored!,
+      status: 'finished',
+    });
+    // 会话后续任意 persist 不得覆盖外部写入的 finished。
+    harness.flow.snapshotValue = flowRecord(3, 0.4, 10);
+    harness.progress.persistNow();
+    expect(loadReadingProgress(harness.store.storage, '/books/a.epub')).toMatchObject({
+      status: 'finished',
+      index: 3,
+    });
+  });
+
+  it('does not resurrect finished after the shelf marks the book in-progress mid-session', () => {
+    vi.useFakeTimers();
+    const harness = createProgressHarness();
+    saveReadingProgress(harness.store.storage, '/books/a.epub', {
+      ...flowRecord(9, 1, 10),
+      status: 'finished',
+      readingMs: 60_000,
+    });
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.progress.applyPending(); // 落点，解除写入门控；绑定时 baseFinished=true
+    // 书架手动「标为在读」：删除 status，其余字段（含 readingMs）保留。
+    const stored = loadReadingProgress(harness.store.storage, '/books/a.epub');
+    const { status: _removed, ...rest } = stored!;
+    saveReadingProgress(harness.store.storage, '/books/a.epub', rest);
+    // 会话后续 persist 不得凭绑定时的 baseFinished 重新加回 status；
+    // readingMs 以存储值为准，不回退、不重复累计。
+    harness.flow.snapshotValue = flowRecord(2, 0.5, 10);
+    harness.progress.persistNow();
+    const next = loadReadingProgress(harness.store.storage, '/books/a.epub');
+    expect(next).not.toHaveProperty('status');
+    expect(next?.readingMs).toBe(60_000);
+  });
 });

@@ -273,17 +273,29 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
     activeUntil = now + READING_IDLE_PAUSE_MS;
   };
 
-  /** 写入前合并 v2 会话字段：updatedAt/累计时长/读完状态（读完为粘性语义）。 */
+  /**
+   * 写入前合并 v2 会话字段：updatedAt/累计时长/读完状态（读完为粘性语义）。
+   * 会话可跨书架访问存活（returnToShelf 只 persistNow 不 dispose），写入前
+   * 重读存储当前记录：stored.status='finished' 并入粘性判定，stored 无
+   * status（书架手动标为在读）时不得凭绑定时的 baseFinished 重新加回；
+   * readingMs 以 stored 为 base 合并，外部（书架/同步）写入的时长不回退。
+   */
   const withSessionFields = (stored: ReadingProgress, now: number): ReadingProgress => {
     tickReading(now);
     if (isFinishedSnapshot(stored)) {
       sessionFinished = true;
     }
+    const latest = loadReadingProgress(host.storage, progressId);
+    const storedFinished = latest === null ? baseFinished : latest.status === 'finished';
+    const readingMs = (latest?.readingMs ?? baseReadingMs) + sessionReadingMs;
+    // 本次写入值即新基准、会话累计重新起计：下次重读到本次写入时不会重复累加。
+    baseReadingMs = readingMs;
+    sessionReadingMs = 0;
     return {
       ...stored,
       updatedAt: now,
-      readingMs: baseReadingMs + sessionReadingMs,
-      ...(baseFinished || sessionFinished ? { status: 'finished' as const } : {}),
+      readingMs,
+      ...(storedFinished || sessionFinished ? { status: 'finished' as const } : {}),
     };
   };
 
