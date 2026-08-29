@@ -31,9 +31,17 @@ import {
 import type { ReaderFlowLayout } from './reader-layout.js';
 import { READER_THEMES, type ReaderThemeId } from './reader-theme.js';
 import type { ComicPreferences } from './comic-preferences.js';
+import { observeLoadMore } from './search-panel.js';
 
 export const READER_TYPE_LINE_HEIGHTS = [1.5, 1.65, 1.8, 2] as const;
 export const READER_TYPE_MEASURE_REMS = [16, 18, 22, 26, 32] as const;
+
+/** IME-safe debounce for the contents search box. */
+export const READER_TOC_SEARCH_DEBOUNCE_MS = 200;
+/** Above this many visible rows the contents sheet renders in batches. */
+export const READER_TOC_BATCH_THRESHOLD = 500;
+/** Rows painted per batch (first paint plus each scroll-append). */
+export const READER_TOC_RENDER_BATCH = 200;
 
 /**
  * Format gate for the typography sheet: flow gets every control, pdf keeps
@@ -211,6 +219,9 @@ export function fillReaderTocPanel(
 
   let visibleItems: OutlineItem[] = [];
   let activeIndex = 0;
+  let renderedCount = 0;
+  let loadMoreSentinel: HTMLElement | null = null;
+  let disconnectLoadMore: () => void = () => undefined;
 
   const optionButtons = (): HTMLButtonElement[] =>
     [...list.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item')];
@@ -235,11 +246,62 @@ export function fillReaderTocPanel(
     }
   };
 
+  const buildItemButton = (item: OutlineItem, index: number): HTMLButtonElement => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = `${listId}-opt-${index}`;
+    button.className = 'lightink-reader-toc-item';
+    button.setAttribute('role', 'option');
+    button.dataset.outlineLevel = String(item.level);
+    button.style.setProperty('--lightink-reader-toc-level', String(Math.max(0, item.level - 1)));
+    button.textContent = item.text;
+    if (outlineItemIsCurrent(item, current)) {
+      button.setAttribute('aria-current', 'location');
+      button.classList.add('is-current');
+    }
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelect(item);
+    });
+    return button;
+  };
+
+  const renderNextBatch = (): void => {
+    if (loadMoreSentinel === null || renderedCount >= visibleItems.length) {
+      return;
+    }
+    const nextCount = Math.min(renderedCount + READER_TOC_RENDER_BATCH, visibleItems.length);
+    for (let index = renderedCount; index < nextCount; index += 1) {
+      list.insertBefore(buildItemButton(visibleItems[index]!, index), loadMoreSentinel);
+    }
+    renderedCount = nextCount;
+    if (renderedCount >= visibleItems.length) {
+      disconnectLoadMore();
+      disconnectLoadMore = () => undefined;
+      loadMoreSentinel.remove();
+      loadMoreSentinel = null;
+    }
+  };
+
+  const appendLoadMoreSentinel = (): void => {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'lightink-reader-toc-load-more';
+    sentinel.setAttribute('aria-hidden', 'true');
+    list.appendChild(sentinel);
+    loadMoreSentinel = sentinel;
+    disconnectLoadMore = observeLoadMore(list, sentinel, renderNextBatch);
+  };
+
   const paintItems = (query: string): void => {
+    disconnectLoadMore();
+    disconnectLoadMore = () => undefined;
+    loadMoreSentinel = null;
     list.replaceChildren();
     const visible = filterOutlineItems(items, query);
     visibleItems = visible;
     if (visible.length === 0) {
+      renderedCount = 0;
       const empty = document.createElement('p');
       empty.className = 'lightink-reader-chrome-panel-empty';
       empty.textContent = copy.tocEmptySearch ?? copy.tocEmpty;
@@ -250,25 +312,15 @@ export function fillReaderTocPanel(
       return;
     }
     live.textContent = formatOutlineSearchCount(copy.tocSearchCount ?? '{n}', visible.length);
-    for (const [index, item] of visible.entries()) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.id = `${listId}-opt-${index}`;
-      button.className = 'lightink-reader-toc-item';
-      button.setAttribute('role', 'option');
-      button.dataset.outlineLevel = String(item.level);
-      button.style.setProperty('--lightink-reader-toc-level', String(Math.max(0, item.level - 1)));
-      button.textContent = item.text;
-      if (outlineItemIsCurrent(item, current)) {
-        button.setAttribute('aria-current', 'location');
-        button.classList.add('is-current');
-      }
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onSelect(item);
-      });
-      list.appendChild(button);
+    renderedCount = Math.min(
+      visible.length,
+      visible.length > READER_TOC_BATCH_THRESHOLD ? READER_TOC_RENDER_BATCH : visible.length,
+    );
+    for (let index = 0; index < renderedCount; index += 1) {
+      list.appendChild(buildItemButton(visible[index]!, index));
+    }
+    if (renderedCount < visible.length) {
+      appendLoadMoreSentinel();
     }
     const currentIndex = lastCurrentOutlineIndex(visible, current);
     setActive(
@@ -276,6 +328,56 @@ export function fillReaderTocPanel(
       query.trim() === '' && panel.hidden !== true,
     );
   };
+
+  // IME-safe debounce (bindImeSafeQuery pattern): composition never paints;
+  // compositionend paints immediately, steady typing repaints after the pause.
+  // paintNow also cancels a pending debounce so Escape-clear cannot be undone.
+  let searchComposing = false;
+  let skipTrailingInput = false;
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  const paintNow = (query: string): void => {
+    if (searchDebounce !== null) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
+    paintItems(query);
+  };
+
+  search.addEventListener('compositionstart', () => {
+    searchComposing = true;
+    skipTrailingInput = false;
+  });
+  search.addEventListener('compositionend', () => {
+    searchComposing = false;
+    skipTrailingInput = true;
+    paintNow(search.value);
+    setTimeout(() => {
+      skipTrailingInput = false;
+    }, 0);
+  });
+  search.addEventListener('input', (event) => {
+    if (skipTrailingInput) {
+      skipTrailingInput = false;
+      return;
+    }
+    if (searchComposing || (event instanceof InputEvent && event.isComposing)) {
+      return;
+    }
+    if (searchDebounce !== null) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
+    const query = search.value;
+    if (query.trim() === '') {
+      paintItems(query);
+      return;
+    }
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null;
+      paintItems(query);
+    }, READER_TOC_SEARCH_DEBOUNCE_MS);
+  });
 
   search.addEventListener('keydown', (event) => {
     const action = outlineSearchKeyAction(
@@ -290,7 +392,7 @@ export function fillReaderTocPanel(
     event.stopPropagation();
     if (action.kind === 'clear') {
       search.value = '';
-      paintItems('');
+      paintNow('');
       return;
     }
     if (action.kind === 'dismiss') {
@@ -308,7 +410,6 @@ export function fillReaderTocPanel(
       }
     }
   });
-  search.addEventListener('input', () => paintItems(search.value));
   paintItems(previousQuery);
 }
 

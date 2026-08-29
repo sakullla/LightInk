@@ -152,6 +152,12 @@
   border: 0;
 }
 
+.lightink-reader-toc-load-more {
+  flex: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+}
+
 /* ===== 排版浮层（现代浮层卡片重设计） ===== */
 
 .lightink-reader-chrome-typography {
@@ -654,6 +660,19 @@
 
 .lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-popover::before {
   display: none;
+}
+
+/* 触屏目录：列表保底高度（标注面板同 9.5rem），条目紧凑单行省略。
+   桌面浮层排版保持不变，故全部限定 is-touch-sheet 作用域。 */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-list {
+  min-height: 9.5rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-item {
+  padding: 0.35rem 0.9rem 0.35rem calc(0.9rem + var(--lightink-reader-toc-level, 0) * 0.85rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lightink-reader-sheet-handle {

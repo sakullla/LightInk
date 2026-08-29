@@ -19,9 +19,13 @@ import {
   mountReaderOverlay,
   pinFixedOverlay,
   positionReaderChromePanel,
+  READER_TOC_BATCH_THRESHOLD,
+  READER_TOC_RENDER_BATCH,
+  READER_TOC_SEARCH_DEBOUNCE_MS,
   readerChromeFooterInset,
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
+import type { OutlineItem } from '../../outline/outline-model.js';
 
 const THUMB_ACTIONS = ['toc', 'typography', 'search'] as const;
 const MIN_HIT_PX = 48;
@@ -142,6 +146,28 @@ function declaredHitPx(el: HTMLElement): number {
   return 0;
 }
 
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+
+  private readonly callback: IntersectionObserverCallback;
+
+  constructor(callback: IntersectionObserverCallback, _options?: IntersectionObserverInit) {
+    this.callback = callback;
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+
+  trigger(isIntersecting: boolean): void {
+    this.callback(
+      [{ isIntersecting } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
 describe('reader chrome panels', () => {
   afterEach(() => {
     document.body.replaceChildren();
@@ -203,7 +229,14 @@ describe('reader chrome panels', () => {
     );
     const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
     search.value = '终';
-    search.dispatchEvent(new Event('input'));
+    // 输入经 IME 安全防抖，推进防抖窗口后应用过滤。
+    vi.useFakeTimers();
+    try {
+      search.dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
     const items = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
     expect(items).toHaveLength(1);
     expect(items[0]!.textContent).toBe('终章');
@@ -226,18 +259,24 @@ describe('reader chrome panels', () => {
     );
     const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
     search.value = '终';
-    search.dispatchEvent(new Event('input'));
-    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(1);
+    vi.useFakeTimers();
+    try {
+      search.dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS);
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(1);
 
-    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    expect(search.value).toBe('');
-    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
-    expect(onDismiss).not.toHaveBeenCalled();
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(search.value).toBe('');
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+      expect(onDismiss).not.toHaveBeenCalled();
 
-    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
-    search.dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(true);
-    expect(onDismiss).toHaveBeenCalledTimes(1);
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      search.dispatchEvent(escape);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('moves the active contents row with arrows and selects it with Enter', () => {
@@ -328,6 +367,181 @@ describe('reader chrome panels', () => {
       expect(scrolled[scrolled.length - 1]).toBe('小节');
     } finally {
       HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('keeps the desktop toc item rule multi-line and scopes compact single-line ellipsis to the touch sheet', () => {
+    const sheet = panelsCss();
+    // 桌面浮层排版不变：基础规则不带单行省略。
+    const baseRule = sheet.match(/\.lightink-reader-toc-item\s*\{([^}]*)\}/);
+    expect(baseRule, 'base .lightink-reader-toc-item rule').toBeTruthy();
+    expect(baseRule![1]).not.toMatch(/white-space:\s*nowrap/);
+    expect(baseRule![1]).not.toMatch(/text-overflow:\s*ellipsis/);
+    // 触屏 sheet：紧凑单行省略 + 列表保底高度，层级缩进变量保留。
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-item\s*\{[^}]*white-space:\s*nowrap/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-item\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-item\s*\{[^}]*text-overflow:\s*ellipsis/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-item\s*\{[^}]*--lightink-reader-toc-level/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-list\s*\{[^}]*min-height:\s*9\.5rem/,
+    );
+    // pointer:coarse 下 44px 触控目标规则保留。
+    expect(sheet).toMatch(/@media \(pointer: coarse\)\s*\{[\s\S]*?\.lightink-reader-toc-item[^}]*min-height:\s*44px/);
+  });
+
+  it('debounces contents search input so steady typing repaints once per pause', () => {
+    vi.useFakeTimers();
+    try {
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        [
+          { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+          { level: 1, text: '第二节', anchor: 1, chapter: 1 },
+          { level: 1, text: '终章', anchor: 2, chapter: 2 },
+        ],
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+      );
+      const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+      const nav = panel.querySelector<HTMLElement>('.lightink-reader-toc-list')!;
+      // fillReaderTocPanel 的首批渲染已完成；此后每次重建都会 replaceChildren。
+      const replaceSpy = vi.spyOn(nav, 'replaceChildren');
+      search.value = '第';
+      search.dispatchEvent(new Event('input'));
+      search.value = '第二';
+      search.dispatchEvent(new Event('input'));
+      // 防抖窗口内：不逐键重建。
+      expect(replaceSpy).not.toHaveBeenCalled();
+      expect(nav.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(3);
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS - 1);
+      expect(replaceSpy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      // 停顿后只按最后一个查询词重建一次。
+      expect(replaceSpy).toHaveBeenCalledTimes(1);
+      const items = nav.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
+      expect(items).toHaveLength(1);
+      expect(items[0]!.textContent).toBe('第二节');
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS * 2);
+      expect(replaceSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a pending search debounce when Escape clears the box', () => {
+    vi.useFakeTimers();
+    try {
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        [
+          { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+          { level: 1, text: '终章', anchor: 1, chapter: 1 },
+        ],
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+      );
+      const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+      search.value = '终';
+      search.dispatchEvent(new Event('input'));
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+      // 挂起的防抖回调不得用旧查询词覆盖 Escape 的清空结果。
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS * 2);
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not repaint contents search while IME composition is in progress', () => {
+    vi.useFakeTimers();
+    try {
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        [
+          { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+          { level: 1, text: '终章', anchor: 1, chapter: 1 },
+        ],
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+      );
+      const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+      search.dispatchEvent(new CompositionEvent('compositionstart'));
+      search.value = '终';
+      search.dispatchEvent(new InputEvent('input', { isComposing: true }));
+      vi.advanceTimersByTime(READER_TOC_SEARCH_DEBOUNCE_MS * 2);
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+      search.dispatchEvent(new CompositionEvent('compositionend'));
+      // compositionend 立即应用，不等防抖。
+      const items = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
+      expect(items).toHaveLength(1);
+      expect(items[0]!.textContent).toBe('终章');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders long contents lists in batches and appends more as the sentinel intersects', () => {
+    const observers: FakeIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = FakeIntersectionObserver as unknown as typeof IntersectionObserver;
+    FakeIntersectionObserver.instances = observers;
+    try {
+      const many: OutlineItem[] = Array.from({ length: 600 }, (_, index) => ({
+        level: 1,
+        text: `第${index + 1}章`,
+        anchor: index,
+        chapter: index,
+      }));
+      const panel = document.createElement('div');
+      fillReaderTocPanel(panel, many, defaultReaderChromePanelCopy(), { chapter: 0 }, vi.fn());
+      const list = panel.querySelector('.lightink-reader-toc-list')!;
+      const count = () => list.querySelectorAll('.lightink-reader-toc-item').length;
+      // 超阈值：首批只渲染一部分，底部挂 IntersectionObserver 哨兵。
+      expect(count()).toBe(READER_TOC_RENDER_BATCH);
+      expect(count()).toBeLessThan(many.length);
+      const sentinel = list.querySelector('.lightink-reader-toc-load-more');
+      expect(sentinel).not.toBeNull();
+      expect(sentinel!.getAttribute('aria-hidden')).toBe('true');
+      expect(observers).toHaveLength(1);
+      observers[0]!.trigger(true);
+      expect(count()).toBe(READER_TOC_RENDER_BATCH * 2);
+      observers[0]!.trigger(true);
+      expect(count()).toBe(many.length);
+      expect(list.querySelector('.lightink-reader-toc-load-more')).toBeNull();
+      // 分批渲染保留 aria/is-current 标记。
+      const first = list.querySelector<HTMLButtonElement>('.lightink-reader-toc-item')!;
+      expect(first.classList.contains('is-current')).toBe(true);
+      expect(first.getAttribute('role')).toBe('option');
+
+      // 未超阈值：一次渲染全部，不挂哨兵与观察器。
+      const small: OutlineItem[] = Array.from(
+        { length: READER_TOC_BATCH_THRESHOLD },
+        (_, index) => ({ level: 1, text: `小${index}`, anchor: index, chapter: index }),
+      );
+      const smallPanel = document.createElement('div');
+      fillReaderTocPanel(smallPanel, small, defaultReaderChromePanelCopy(), { chapter: 0 }, vi.fn());
+      expect(
+        smallPanel.querySelectorAll('.lightink-reader-toc-item'),
+      ).toHaveLength(READER_TOC_BATCH_THRESHOLD);
+      expect(smallPanel.querySelector('.lightink-reader-toc-load-more')).toBeNull();
+      expect(observers).toHaveLength(1);
+    } finally {
+      globalThis.IntersectionObserver = originalObserver;
     }
   });
 
