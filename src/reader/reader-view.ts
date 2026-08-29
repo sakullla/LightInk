@@ -1981,6 +1981,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return false;
     }
     chromePanel = null;
+    // 触屏 sheet 经 pinFixedOverlay 进入模块级 touchSheetPins（强引用 Map +
+    // 键盘 MutationObserver）；关闭必须对称 unpin，否则观察者跨会话存活并
+    // 回写已隐藏/已 detach 的面板。桌面端不 pin，保持原口径不动。
+    if (readerChromeTouchMode()) {
+      unpinFixedOverlay(tocPanel);
+      unpinFixedOverlay(typePanel);
+    }
     tocPanel.hidden = true;
     typePanel.hidden = true;
     syncChromeActionState();
@@ -3594,6 +3601,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       flowChapterCount = 0;
       sessionAnnotation.dispose();
       clearFlowBindings();
+      // 触屏钉住的标注侧栏同样持有 touchSheetPins 引用；销毁前对称释放，
+      // 否则键盘观察者在会话结束后仍回写已移除的 DOM。
+      if (sidebar !== null && readerChromeTouchMode()) {
+        unpinFixedOverlay(sidebar.element);
+      }
       sidebar?.destroy();
       sidebar = null;
       sidebarBackdrop?.remove();
@@ -3625,6 +3637,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       readerChrome?.destroy();
       readerChrome = null;
       syncReaderTitlebarReveal(root, false);
+      // closeChromePanel 只在面板打开时 unpin；这里兜底 chromePanel 已为 null
+      // 的销毁路径，确保 touchSheetPins 清空、键盘观察者 disconnect。
+      if (readerChromeTouchMode()) {
+        unpinFixedOverlay(tocPanel);
+        unpinFixedOverlay(typePanel);
+      }
       tocPanel.remove();
       typePanel.remove();
       layoutRootObserver?.disconnect();

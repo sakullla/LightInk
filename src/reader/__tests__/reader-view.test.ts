@@ -2703,3 +2703,114 @@ describe('阅读活动信号接线（进度 v2 noteActivity）', () => {
   });
 });
 
+
+describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称收尾）', () => {
+  const loadTouchBook = async (): Promise<{
+    host: HTMLDivElement;
+    view: ReturnType<typeof createReaderView>;
+  }> => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'Chapter 1', html: '<p>chapter 1 body</p>' },
+          { title: 'Chapter 2', html: '<p>chapter 2 body</p>' },
+        ],
+      }),
+      getContentHash: async () => 'aaaaaaaaaaaaaaaa',
+      readAnnotations: async () => '',
+      writeAnnotations: async () => undefined,
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    return { host, view };
+  };
+
+  const chromeAction = (action: string): HTMLButtonElement => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-reader-chrome-action="${action}"]`,
+    );
+    expect(button).not.toBeNull();
+    return button!;
+  };
+
+  const flushKeyboardMutation = async (): Promise<void> => {
+    document.documentElement.setAttribute('data-keyboard', '');
+    await vi.advanceTimersByTimeAsync(0);
+    document.documentElement.removeAttribute('data-keyboard');
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+    document.documentElement.removeAttribute('data-touch-primary');
+    document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-keyboard');
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('关闭 chrome 面板即 unpin：键盘切换不再回写已关闭的 sheet', async () => {
+    vi.useFakeTimers();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const { view } = await loadTouchBook();
+
+    chromeAction('toc').click();
+    const tocPanel = document.querySelector<HTMLElement>('.lightink-reader-chrome-toc');
+    expect(tocPanel).not.toBeNull();
+    expect(tocPanel!.hidden).toBe(false);
+    expect(tocPanel!.classList.contains('is-touch-sheet')).toBe(true);
+    expect(tocPanel!.style.position).toBe('fixed');
+
+    // 再点同一动作 = closeChromePanel：pin 对称释放（类与内联几何清理）。
+    chromeAction('toc').click();
+    expect(tocPanel!.hidden).toBe(true);
+    expect(tocPanel!.classList.contains('is-touch-sheet')).toBe(false);
+    expect(tocPanel!.style.position).toBe('');
+    expect(tocPanel!.style.bottom).toBe('');
+
+    // 最后一个 pin 已释放 → 键盘 MutationObserver disconnect，不再触碰已关闭面板。
+    await flushKeyboardMutation();
+    expect(tocPanel!.classList.contains('is-touch-sheet')).toBe(false);
+    expect(tocPanel!.style.position).toBe('');
+    expect(tocPanel!.style.top).toBe('');
+    expect(tocPanel!.style.bottom).toBe('');
+    await view.destroy();
+  });
+
+  it('destroy 释放仍 pinned 的 chrome 面板与标注侧栏', async () => {
+    vi.useFakeTimers();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const { view } = await loadTouchBook();
+
+    chromeAction('typography').click();
+    const typePanel = document.querySelector<HTMLElement>('.lightink-reader-chrome-typography');
+    expect(typePanel).not.toBeNull();
+    expect(typePanel!.hidden).toBe(false);
+    expect(typePanel!.classList.contains('is-touch-sheet')).toBe(true);
+    expect(typePanel!.style.position).toBe('fixed');
+
+    view.toggleSidebar();
+    await vi.advanceTimersByTimeAsync(0);
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel');
+    expect(sidebar).not.toBeNull();
+    expect(sidebar!.hidden).toBe(false);
+    expect(sidebar!.classList.contains('is-touch-sheet')).toBe(true);
+
+    // 面板与侧栏均 pinned 时销毁：模块级 Map 清空、键盘观察者 disconnect。
+    await view.destroy();
+    expect(typePanel!.classList.contains('is-touch-sheet')).toBe(false);
+    expect(typePanel!.style.position).toBe('');
+    expect(sidebar!.classList.contains('is-touch-sheet')).toBe(false);
+    expect(sidebar!.style.position).toBe('');
+
+    await flushKeyboardMutation();
+    expect(typePanel!.style.top).toBe('');
+    expect(sidebar!.style.top).toBe('');
+  });
+});
