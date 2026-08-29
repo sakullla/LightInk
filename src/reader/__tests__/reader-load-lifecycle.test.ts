@@ -110,7 +110,7 @@ function frameSource(host: HTMLElement): string {
 }
 
 /** T3：读书页浮层四项均带文字，退出文案必须是「返回书架」。 */
-const READER_CHROME_LABELS = ['返回书架', '目录', '排版', '本书标注'] as const;
+const READER_CHROME_LABELS = ['返回书架', '目录', '排版', '搜索'] as const;
 
 function readerChrome(host: HTMLElement): HTMLElement | null {
   return host.querySelector<HTMLElement>('.lightink-reader-chrome');
@@ -134,7 +134,7 @@ function chromeControlByLabel(host: HTMLElement, label: string): HTMLElement | u
     返回书架: ['shelf', 'backToShelf'],
     目录: ['toc'],
     排版: ['typography'],
-    本书标注: ['annotations'],
+    搜索: ['search'],
   };
   for (const action of actions[label] ?? []) {
     const match = host.querySelector<HTMLElement>(`[data-reader-chrome-action="${action}"]`);
@@ -1966,6 +1966,8 @@ describe('Reader immersive chrome lifecycle', () => {
       expect(labels.some((text) => text.includes(label))).toBe(true);
     }
     expect(chromeControlByLabel(host, '返回书架')?.textContent).toContain('返回书架');
+    expect(labels.some((text) => text.includes('本书标注'))).toBe(false);
+    expect(host.querySelector('[data-reader-chrome-action="annotations"]')).toBeNull();
     await view.destroy();
   });
 
@@ -2025,7 +2027,7 @@ describe('Reader immersive chrome lifecycle', () => {
     const root = host.querySelector<HTMLElement>('.lightink-reader')!;
 
     revealReaderChrome(host);
-    chromeControlByLabel(host, '本书标注')!.click();
+    view.toggleSidebar();
     expect(view.isSidebarVisible()).toBe(true);
 
     root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

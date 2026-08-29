@@ -14,8 +14,10 @@ import {
 } from '../annotation-locator.js';
 import {
   annotationMarkSpec,
+  paintAnnotationOverlays,
   renderAnnotationMarks,
   removeAnnotationMarks,
+  visibleHighlightOverlayBoxes,
   type AnnotationMarkSpec,
 } from '../annotation-render.js';
 import {
@@ -179,6 +181,38 @@ describe('PDF 文字级标注闭环', () => {
     renderAnnotationMarks(layer, [fallback]);
     const plain = layer.querySelector<HTMLElement>('mark[data-annotation-id="plain"]');
     expect(plain?.dataset.annotationColor).toBe(DEFAULT_ANNOTATION_COLOR);
+  });
+
+  it('paints one overlay box per mark client rect for paginated columns', () => {
+    const layer = textLayer('划选整段文字可见高亮');
+    renderAnnotationMarks(layer, [
+      {
+        id: 'ov1',
+        kind: 'highlight',
+        anchor: {
+          start: 0,
+          end: 10,
+          quote: '划选整段文字可见高亮',
+          prefix: '',
+          suffix: '',
+        },
+      },
+    ]);
+    const mark = layer.querySelector<HTMLElement>('mark[data-annotation-id="ov1"]')!;
+    mark.getClientRects = () =>
+      [
+        { left: 20, top: 40, width: 120, height: 18, right: 140, bottom: 58 },
+        { left: 20, top: 60, width: 90, height: 18, right: 110, bottom: 78 },
+        { left: 900, top: 40, width: 80, height: 18, right: 980, bottom: 58 },
+      ] as unknown as DOMRectList;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+    const visible = visibleHighlightOverlayBoxes(document, [mark]);
+    expect(visible).toHaveLength(2);
+    expect(visible[0]?.width).toBe(120);
+    expect(visible.some((box) => box.left >= 800)).toBe(false);
+    paintAnnotationOverlays(document);
+    document.querySelector('.lightink-reader-highlight-layer')?.remove();
   });
 
   it('旧页码级 PdfLocator（无 anchor）与文字级数据可共存解析', () => {

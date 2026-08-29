@@ -32,6 +32,13 @@ export interface OutlineItem {
   readonly chapter?: number;
 }
 
+/** Current reading/editing location used to highlight a TOC/outline row. */
+export interface OutlineLocation {
+  readonly chapter?: number;
+  readonly page?: number;
+  readonly anchor?: number;
+}
+
 /** 递归提取行内节点的纯文本（text/inlineCode 取 value，image 取 alt）。 */
 function phrasingText(nodes: readonly PhrasingContent[]): string {
   let out = '';
@@ -97,4 +104,145 @@ export function leafHeadingAnchors(items: readonly OutlineItem[]): Set<number> {
     }
   }
   return leaves;
+}
+
+export function outlineItemMatchesQuery(text: string, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  return needle === '' || text.toLowerCase().includes(needle);
+}
+
+/** Keep matches and their ancestor headings so a nested hit still has context. */
+export function filterOutlineItems(
+  items: readonly OutlineItem[],
+  query: string,
+): OutlineItem[] {
+  if (query.trim() === '') {
+    return [...items];
+  }
+  const matched = new Set<number>();
+  items.forEach((item, index) => {
+    if (!outlineItemMatchesQuery(item.text, query)) {
+      return;
+    }
+    matched.add(index);
+    let level = item.level;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const ancestor = items[cursor]!;
+      if (ancestor.level < level) {
+        matched.add(cursor);
+        level = ancestor.level;
+      }
+    }
+  });
+  return items.filter((_, index) => matched.has(index));
+}
+
+export function outlineLocationFromReader(state: {
+  readonly locationKind: 'page' | 'chapter' | null;
+  readonly current: number;
+}): OutlineLocation {
+  if (state.current <= 0) {
+    return {};
+  }
+  if (state.locationKind === 'chapter') {
+    return { chapter: state.current - 1 };
+  }
+  if (state.locationKind === 'page') {
+    return { page: state.current };
+  }
+  return {};
+}
+
+export function outlineItemIsCurrent(
+  item: OutlineItem,
+  current: OutlineLocation,
+): boolean {
+  if (current.chapter !== undefined && item.chapter === current.chapter) {
+    return true;
+  }
+  if (current.page !== undefined && item.page === current.page) {
+    return true;
+  }
+  return current.anchor !== undefined && item.anchor === current.anchor;
+}
+
+export function lastCurrentOutlineIndex(
+  items: readonly OutlineItem[],
+  current: OutlineLocation,
+): number {
+  let found = -1;
+  items.forEach((item, index) => {
+    if (outlineItemIsCurrent(item, current)) {
+      found = index;
+    }
+  });
+  return found;
+}
+
+export type OutlineSearchKeyAction =
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'dismiss' }
+  | { readonly kind: 'move'; readonly delta: 1 | -1 }
+  | { readonly kind: 'select' }
+  | { readonly kind: 'stop' };
+
+/** Keys the reader would steal while the contents search field is focused. */
+export function outlineSearchKeyIsComposing(event: {
+  readonly isComposing?: boolean;
+  readonly key?: string;
+  readonly keyCode?: number;
+}): boolean {
+  return event.isComposing === true || event.key === 'Process' || event.keyCode === 229;
+}
+
+export function outlineSearchKeyAction(
+  key: string,
+  query: string,
+  composing = false,
+): OutlineSearchKeyAction | null {
+  if (composing) {
+    return null;
+  }
+  if (key === 'Escape') {
+    return query.trim() === '' ? { kind: 'dismiss' } : { kind: 'clear' };
+  }
+  if (key === 'ArrowDown') {
+    return { kind: 'move', delta: 1 };
+  }
+  if (key === 'ArrowUp') {
+    return { kind: 'move', delta: -1 };
+  }
+  if (key === 'Enter') {
+    return { kind: 'select' };
+  }
+  if (key === 'PageUp' || key === 'PageDown') {
+    return { kind: 'stop' };
+  }
+  return null;
+}
+
+/** Scroll only the list, not ancestor windows (WAI listbox: nearest). */
+export function scrollChildIntoScroller(scroller: HTMLElement, child: HTMLElement): void {
+  if (
+    typeof scroller.getBoundingClientRect === 'function' &&
+    typeof child.getBoundingClientRect === 'function'
+  ) {
+    const scrollerBox = scroller.getBoundingClientRect();
+    const childBox = child.getBoundingClientRect();
+    const scrollerHeight = scrollerBox.bottom - scrollerBox.top;
+    if (Number.isFinite(scrollerHeight) && scrollerHeight > 0) {
+      if (childBox.top < scrollerBox.top) {
+        scroller.scrollTop += childBox.top - scrollerBox.top;
+        return;
+      }
+      if (childBox.bottom > scrollerBox.bottom) {
+        scroller.scrollTop += childBox.bottom - scrollerBox.bottom;
+        return;
+      }
+      return;
+    }
+  }
+  if (typeof child.scrollIntoView === 'function') {
+    child.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }

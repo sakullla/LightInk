@@ -32,6 +32,8 @@ export interface FlowLocator extends TextQuoteAnchor {
 
 export interface TextLocator extends TextQuoteAnchor {
   format: 'text';
+  /** Chapter index when the TXT is split like a spine; omitted in older records. */
+  chapter?: number;
 }
 
 export interface PdfLocator {
@@ -103,7 +105,10 @@ function isLocator(value: unknown): value is Locator {
     case 'flow':
       return isNonNegativeInteger(locator.chapter) && isTextAnchor(locator);
     case 'text':
-      return isTextAnchor(locator);
+      return (
+        isTextAnchor(locator) &&
+        (locator.chapter === undefined || isNonNegativeInteger(locator.chapter))
+      );
     case 'pdf':
       return (
         isNonNegativeInteger(locator.page) &&

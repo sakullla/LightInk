@@ -91,6 +91,33 @@ describe('serialize/parse 往返', () => {
     expect(back[2]!.note).toBe('一段笔记');
   });
 
+  it('keeps an optional chapter on text locators and still loads records without one', () => {
+    const withChapter: Annotation = {
+      id: 't-ch',
+      kind: 'highlight',
+      locator: {
+        format: 'text',
+        chapter: 10,
+        start: 0,
+        end: 4,
+        quote: '过来干什么',
+        prefix: '',
+        suffix: '',
+      },
+      quote: '过来干什么',
+      createdAt: 1,
+    };
+    expect(parseAnnotations(serializeAnnotations([withChapter]))).toEqual([withChapter]);
+    expect(parseAnnotations(serializeAnnotations([sample[2]!]))[0]!.locator).toEqual({
+      format: 'text',
+      start: 100,
+      end: 150,
+      quote: '',
+      prefix: '',
+      suffix: '',
+    });
+  });
+
   it('标注 id/kind/createdAt 保留', () => {
     const back = parseAnnotations(serializeAnnotations(sample));
     expect(back[0]).toMatchObject({ id: 'h1', kind: 'highlight', createdAt: 1700000000000 });

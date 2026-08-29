@@ -422,6 +422,68 @@ export function advanceScrolledScroller(
   return true;
 }
 
+/**
+ * Window-level paginated wheel must not steal these hosts.
+ * Flow scroll (TXT/EPUB) owns the pane, including chapter titles/gaps
+ * outside iframes. PDF and overflow comic fits keep the page host.
+ */
+export function readerPageHostOwnsWindowWheel(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  const flow = target.closest('.lightink-reader');
+  if (flow !== null && flow.getAttribute('data-reading-layout') === 'scroll') {
+    return true;
+  }
+  const pane =
+    target.id === 'lightink-editor-area' ? target : target.closest('#lightink-editor-area');
+  if (
+    pane !== null &&
+    pane.querySelector('.lightink-reader[data-reading-layout="scroll"]') !== null
+  ) {
+    return true;
+  }
+  if (target.closest('.lightink-reader-pages') === null) {
+    return false;
+  }
+  const pagedComic = target.closest('[data-comic-reader="true"][data-comic-mode="paged"]');
+  if (pagedComic === null) {
+    return true;
+  }
+  if (pagedComic.getAttribute('data-comic-zoomed') === 'true') {
+    return true;
+  }
+  const fit = pagedComic.getAttribute('data-comic-fit');
+  return fit === 'width' || fit === 'height' || fit === 'original';
+}
+
+/** True when native overflow can still absorb this wheel delta. */
+export function scrollerHasRoomInDelta(
+  scroller: {
+    scrollTop: number;
+    scrollLeft: number;
+    scrollHeight: number;
+    scrollWidth: number;
+    clientHeight: number;
+    clientWidth: number;
+  },
+  deltaX: number,
+  deltaY: number,
+  slop = 1,
+): boolean {
+  const useX = Math.abs(deltaX) > Math.abs(deltaY);
+  if (useX) {
+    if (deltaX === 0) return false;
+    return deltaX > 0
+      ? scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - slop
+      : scroller.scrollLeft > slop;
+  }
+  if (deltaY === 0) return false;
+  return deltaY > 0
+    ? scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - slop
+    : scroller.scrollTop > slop;
+}
+
 export function isReadingNavKey(key: string): boolean {
   return (
     key === ' ' ||
@@ -468,20 +530,29 @@ export function createResizeSettle(delayMs = 180): (run: () => void) => () => vo
   };
 }
 
-/** Trackpad bursts should turn one page, not skip several. */
-export function createPagedWheelGate(minIntervalMs = 160): (
+/**
+ * One page per wheel/trackpad gesture. A min-interval gate retriggers during
+ * macOS pixel-mode inertia (~300–800ms of decaying events) and skips pages.
+ * Lock until the stream has been idle for `idleMs`, and extend the lock while
+ * events keep arriving so one flick cannot chain into the next chapter.
+ */
+export function createPagedWheelGate(idleMs = 240): (
   direction: 1 | -1,
   advance: (direction: 1 | -1) => boolean,
 ) => boolean {
-  let lastAt = 0;
+  let locked = false;
+  let lastEventAt = 0;
   return (direction, advance) => {
     const now = Date.now();
-    if (now - lastAt < minIntervalMs) {
+    if (locked && now - lastEventAt < idleMs) {
+      lastEventAt = now;
       return false;
     }
+    locked = false;
     const moved = advance(direction);
     if (moved) {
-      lastAt = now;
+      locked = true;
+      lastEventAt = now;
     }
     return moved;
   };

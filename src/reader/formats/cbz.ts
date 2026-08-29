@@ -29,6 +29,7 @@ import {
   createPagedWheelGate,
   nearestVisibleSlot,
   rafFrameScheduler,
+  scrollerHasRoomInDelta,
 } from '../../ui/reading-layout.js';
 import {
   applyComicCropDisplay,
@@ -578,6 +579,7 @@ export async function renderCbzInto(
     const cacheBudget = Math.max(1, options.cacheBudgetBytes ?? DEFAULT_COMIC_CACHE_BUDGET);
 
     container.replaceChildren();
+    container.tabIndex = -1;
     container.dataset.comicReader = 'true';
     container.dataset.comicChrome = 'visible';
     container.dataset.comicCanvas = 'near-black';
@@ -979,7 +981,6 @@ export async function renderCbzInto(
       }
       slot.style.removeProperty('flex');
       slot.style.minWidth = '0';
-      slot.style.minHeight = '0';
       slot.style.removeProperty('width');
       slot.style.removeProperty('max-width');
       slot.style.removeProperty('height');
@@ -988,8 +989,15 @@ export async function renderCbzInto(
       if (preferences.fit === 'original') {
         slot.style.flex = '0 0 auto';
         slot.style.aspectRatio = 'auto';
+        slot.style.minHeight = 'auto';
+      } else if (preferences.fit === 'width') {
+        slot.style.flex = '0 0 auto';
+        slot.style.minHeight = 'auto';
+        slot.style.height = 'auto';
+        slot.style.maxHeight = 'none';
+        slot.style.removeProperty('aspect-ratio');
       } else {
-        slot.style.removeProperty('flex');
+        slot.style.minHeight = '0';
         slot.style.removeProperty('aspect-ratio');
       }
       applyPageFit(page, preferences.fit);
@@ -1001,6 +1009,9 @@ export async function renderCbzInto(
         peekInsets(index),
         { fallbackAspect: cropFallbackAspect() },
       );
+      if (preferences.fit === 'width' || preferences.fit === 'original') {
+        slot.style.maxHeight = 'none';
+      }
     };
 
     const applySurfaceMetrics = (): void => {
@@ -1060,8 +1071,13 @@ export async function renderCbzInto(
       pagesRoot.style.setProperty('--lightink-comic-scale', scaleText);
       pagesRoot.style.setProperty('--lightink-comic-translate-x', `${viewX}px`);
       pagesRoot.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
-      pagesRoot.style.transformOrigin = '0 0';
-      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      if (zoomed) {
+        pagesRoot.style.transformOrigin = '0 0';
+        pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      } else {
+        pagesRoot.style.removeProperty('transform');
+        pagesRoot.style.removeProperty('transform-origin');
+      }
       const touchAction = comicSurfaceTouchAction(preferences.mode, preferences.fit, zoomed);
       container.style.touchAction = touchAction;
       pagesRoot.style.touchAction = touchAction;
@@ -1481,6 +1497,8 @@ export async function renderCbzInto(
         visible.add(next);
         applySlotFit(next);
       }
+      pagesRoot.scrollTop = 0;
+      pagesRoot.scrollLeft = 0;
       updateToolbar();
       refreshCacheWindow(index);
     };
@@ -1582,6 +1600,11 @@ export async function renderCbzInto(
         container.dataset.comicChrome = state;
       }
       chrome.setAttribute('aria-hidden', String(!visible));
+      if (visible) {
+        topbar.setAttribute('data-tauri-drag-region', '');
+      } else {
+        topbar.removeAttribute('data-tauri-drag-region');
+      }
       if (changed) syncSystemBars(visible);
     };
     const scheduleChromeHide = (): void => {
@@ -1617,6 +1640,7 @@ export async function renderCbzInto(
     };
 
     const handleSurfaceTap = (clientX: number): void => {
+      container.focus({ preventScroll: true });
       const rect = container.getBoundingClientRect();
       if (rect.width < 8) {
         setChromeVisible(!chromeVisible);
@@ -1695,7 +1719,9 @@ export async function renderCbzInto(
       if (viewScale > 1) {
         panOrigin = { x: event.clientX, y: event.clientY, viewX, viewY };
         container.setPointerCapture?.(event.pointerId);
-      } else if (preferences.mode === 'paged') {
+      } else if (preferences.mode === 'paged' && event.pointerType !== 'mouse') {
+        // Mouse/trackpad clicks stay on the click-zone path. Capturing a Mac
+        // trackpad as a swipe swallows the click that would page or show chrome.
         swipeOrigin = { x: event.clientX, y: event.clientY };
         container.setPointerCapture?.(event.pointerId);
       }
@@ -1850,6 +1876,12 @@ export async function renderCbzInto(
       const delta =
         Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       if (delta === 0) {
+        return;
+      }
+      if (
+        preferences.fit !== 'screen' &&
+        scrollerHasRoomInDelta(pagesRoot, event.deltaX, event.deltaY)
+      ) {
         return;
       }
       event.preventDefault();

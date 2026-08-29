@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   bindClickPaging,
+  bindPointerTapPaging,
   bindTouchPaging,
   resolveSwipePageDirection,
   resolveTapPageDirection,
@@ -393,5 +394,88 @@ describe('bindClickPaging', () => {
     const { el, page } = mount({ enabled: () => false });
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 390, clientY: 200 }));
     expect(page).not.toHaveBeenCalled();
+  });
+});
+
+describe('bindPointerTapPaging', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function pointer(type: 'pointerdown' | 'pointerup', clientX: number): PointerEvent {
+    return new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: type === 'pointerdown' ? 0 : undefined,
+      clientX,
+      clientY: 200,
+    });
+  }
+
+  it('pages on a short mouse pointer tap in the right zone', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    bindPointerTapPaging(el, { page, viewportWidth: () => 400 });
+    el.dispatchEvent(pointer('pointerdown', 390));
+    el.dispatchEvent(pointer('pointerup', 392));
+    expect(page).toHaveBeenCalledWith(1);
+  });
+
+  it('toggles chrome on a center tap and ignores a selection drag', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    const onCenterTap = vi.fn();
+    bindPointerTapPaging(el, { page, viewportWidth: () => 400, onCenterTap });
+    el.dispatchEvent(pointer('pointerdown', 200));
+    el.dispatchEvent(pointer('pointerup', 201));
+    expect(page).not.toHaveBeenCalled();
+    expect(onCenterTap).toHaveBeenCalledTimes(1);
+    el.dispatchEvent(pointer('pointerdown', 40));
+    el.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: 200,
+        clientY: 200,
+      }),
+    );
+    expect(page).not.toHaveBeenCalled();
+    expect(onCenterTap).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not page or swallow click when ignore matches an EPUB in-book link', () => {
+    const el = document.createElement('div');
+    const link = document.createElement('a');
+    link.setAttribute('href', '#lightink-chapter?chapter=2');
+    link.textContent = 'next chapter';
+    el.appendChild(link);
+    document.body.appendChild(el);
+    const page = vi.fn<(direction: 1 | -1) => boolean>(() => true);
+    const onCenterTap = vi.fn();
+    bindPointerTapPaging(el, {
+      page,
+      viewportWidth: () => 400,
+      onCenterTap,
+      ignore: (event) => {
+        const target = event.target;
+        return (
+          target instanceof Element &&
+          (target.closest('a[href^="#"]') !== null)
+        );
+      },
+    });
+    link.dispatchEvent(pointer('pointerdown', 390));
+    link.dispatchEvent(pointer('pointerup', 390));
+    expect(page).not.toHaveBeenCalled();
+    expect(onCenterTap).not.toHaveBeenCalled();
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
   });
 });

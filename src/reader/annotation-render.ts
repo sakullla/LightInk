@@ -12,7 +12,7 @@
  * 颜色与 `annotations.ts` 共用同一关闭色板与默认黄；缺省/非法视为默认，不改 CSS。
  */
 
-import { DEFAULT_ANNOTATION_COLOR, resolveAnnotationColor } from './annotations.js';
+import { ANNOTATION_COLORS, DEFAULT_ANNOTATION_COLOR, resolveAnnotationColor } from './annotations.js';
 import type { TextQuoteAnchor } from './annotations.js';
 import { markTextRange, removeTextRangeMarks, resolveTextQuoteRange } from './annotation-locator.js';
 
@@ -68,7 +68,6 @@ function applyMarkAppearance(
     mark.style.removeProperty('background');
     return;
   }
-  // PDF 文本层字形在 canvas 上，mark 必须半透明；流式正文可用实色。
   mark.style.background = isTextLayerHost(host)
     ? `color-mix(in srgb, ${color} 32%, transparent)`
     : color;
@@ -116,6 +115,142 @@ export function syncAnnotationMarks(
     }
   }
   renderAnnotationMarks(host, specs);
+}
+
+const HIGHLIGHT_LAYER_CLASS = 'lightink-reader-highlight-layer';
+
+export function highlightCssName(color: string): string {
+  return `lightink-hl-${color.replace('#', '').toLowerCase()}`;
+}
+
+/** ::highlight rules for the closed palette (iframe stylesheet). */
+export const ANNOTATION_HIGHLIGHT_API_CSS = ANNOTATION_COLORS.map(
+  (color) =>
+    `::highlight(${highlightCssName(color)}){background-color:color-mix(in srgb, ${color} 62%, transparent);color:inherit;}`,
+).join('');
+
+interface HighlightRegistry {
+  set(name: string, highlight: unknown): void;
+  delete(name: string): boolean;
+  keys(): IterableIterator<string>;
+}
+
+function overlayHost(doc: Document): HTMLElement {
+  return doc.documentElement;
+}
+
+function markHighlightColor(mark: HTMLElement): string {
+  const fromStyle = mark.style.getPropertyValue('--lightink-annotation-color').trim();
+  if (fromStyle !== '') {
+    return fromStyle;
+  }
+  const fromData = mark.dataset.annotationColor ?? '';
+  return fromData === '' ? DEFAULT_ANNOTATION_COLOR : fromData;
+}
+
+function cssHighlightApi(win: Window | null): {
+  highlights: HighlightRegistry;
+  Highlight: new (...ranges: Range[]) => { add(range: Range): void };
+} | null {
+  if (win === null) {
+    return null;
+  }
+  const css = (win as unknown as { CSS?: { highlights?: HighlightRegistry } }).CSS;
+  const HighlightCtor = (win as unknown as { Highlight?: new (...ranges: Range[]) => { add(range: Range): void } })
+    .Highlight;
+  if (css === undefined || css.highlights === undefined || HighlightCtor === undefined) {
+    return null;
+  }
+  return { highlights: css.highlights, Highlight: HighlightCtor };
+}
+
+function clearCssHighlights(api: { highlights: HighlightRegistry }): void {
+  for (const key of [...api.highlights.keys()]) {
+    if (key.startsWith('lightink-hl-')) {
+      api.highlights.delete(key);
+    }
+  }
+}
+
+function textNodeClientRects(mark: HTMLElement): Array<{ left: number; top: number; width: number; height: number; right: number; bottom: number }> {
+  const doc = mark.ownerDocument;
+  const boxes: Array<{ left: number; top: number; width: number; height: number; right: number; bottom: number }> = [];
+  const walker = doc.createTreeWalker(mark, NodeFilter.SHOW_TEXT);
+  let node: Node | null = walker.nextNode();
+  while (node !== null) {
+    const text = node as Text;
+    if ((text.nodeValue ?? '').length > 0) {
+      const range = doc.createRange();
+      range.selectNodeContents(text);
+      try {
+        for (const rect of Array.from(range.getClientRects())) {
+          boxes.push(rect);
+        }
+      } catch {
+        // jsdom
+      }
+    }
+    node = walker.nextNode();
+  }
+  if (boxes.length === 0) {
+    try {
+      for (const rect of Array.from(mark.getClientRects())) {
+        boxes.push(rect);
+      }
+    } catch {
+      // jsdom
+    }
+  }
+  return boxes;
+}
+
+export function visibleHighlightOverlayBoxes(
+  doc: Document,
+  marks: Iterable<HTMLElement>,
+): Array<{ left: number; top: number; width: number; height: number; color: string }> {
+  const win = doc.defaultView;
+  const viewportW = win !== null && win.innerWidth > 0 ? win.innerWidth : doc.documentElement.clientWidth;
+  const viewportH = win !== null && win.innerHeight > 0 ? win.innerHeight : doc.documentElement.clientHeight;
+  const painted: Array<{ left: number; top: number; width: number; height: number; color: string }> = [];
+  for (const mark of marks) {
+    const color = markHighlightColor(mark);
+    const lineHeight = Number.parseFloat(win?.getComputedStyle(mark).lineHeight || '') || 28;
+    for (const rect of textNodeClientRects(mark)) {
+      if (rect.width < 1 || rect.height < 1) {
+        continue;
+      }
+      // Column-break phantoms: hairline or taller than two lines.
+      if (rect.width < 2 || rect.height > lineHeight * 2.5) {
+        continue;
+      }
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(viewportW, rect.right);
+      const bottom = Math.min(viewportH, rect.bottom);
+      if (right - left < 1 || bottom - top < 1) {
+        continue;
+      }
+      painted.push({ left, top, width: right - left, height: bottom - top, color });
+    }
+  }
+  return painted;
+}
+
+function clearOverlayLayer(doc: Document): void {
+  overlayHost(doc).querySelector(`:scope > .${HIGHLIGHT_LAYER_CLASS}`)?.remove();
+}
+
+/**
+ * Do not paint CSS Custom Highlights or range overlays on flow chapters.
+ * Both 错行 in CSS columns (black bars / off-glyph boxes). The <mark>
+ * background is the first-page highlight that already sat on the glyphs.
+ */
+export function paintAnnotationOverlays(doc: Document): void {
+  const api = cssHighlightApi(doc.defaultView);
+  if (api !== null) {
+    clearCssHighlights(api);
+  }
+  clearOverlayLayer(doc);
 }
 
 /** 移除 host 上指定标注的全部高亮 mark（与 renderAnnotationMarks 成对）。 */

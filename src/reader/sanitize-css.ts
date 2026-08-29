@@ -17,6 +17,7 @@ const CSS_EXPRESSION = /expression\s*\(/gi;
 const CSS_MOZ_BINDING = /-moz-binding\s*:/gi;
 const CSS_BEHAVIOR = /behavior\s*:/gi;
 const CSS_FIXED_POSITION = /position\s*:\s*(?:fixed|sticky)\b/gi;
+const CSS_USER_SELECT = /(?:-webkit-|-moz-|-ms-)?user-select\s*:[^;]+;?/gi;
 const CSS_ROOT_HEIGHT = /(?:html|body)(?:\s*,\s*(?:html|body))*\s*\{[^}]*\}/gi;
 const STYLE_END_BOUNDARY = /<\/style/gi;
 /** 转义解码后可能出现裸 `<script` 文本（如 content 字符串）；一并剥除。 */
@@ -25,7 +26,9 @@ const HTML_SCRIPT_OPEN = /<script/gi;
 function neutralizeRootViewportRules(block: string): string {
   return block
     .replace(/(?:min-|max-)?height\s*:\s*[^;]+;?/gi, '')
-    .replace(/overflow(?:-[xy])?\s*:\s*[^;]+;?/gi, '');
+    .replace(/overflow(?:-[xy])?\s*:\s*[^;]+;?/gi, '')
+    .replace(/pointer-events\s*:\s*[^;]+;?/gi, '')
+    .replace(/touch-action\s*:\s*[^;]+;?/gi, '');
 }
 
 /**
@@ -65,6 +68,7 @@ export function sanitizeReaderCss(input: string): string {
     .replace(CSS_MOZ_BINDING, 'invalid:')
     .replace(CSS_BEHAVIOR, 'invalid:')
     .replace(CSS_FIXED_POSITION, 'position: static')
+    .replace(CSS_USER_SELECT, '')
     .replace(CSS_ROOT_HEIGHT, (block) => neutralizeRootViewportRules(block))
     .replace(STYLE_END_BOUNDARY, '')
     .replace(HTML_SCRIPT_OPEN, '')

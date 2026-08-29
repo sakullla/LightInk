@@ -633,6 +633,7 @@ describe('CBZ page materialization', () => {
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('hidden');
     expect(chrome?.getAttribute('aria-hidden')).toBe('true');
+    expect(topbar?.hasAttribute('data-tauri-drag-region')).toBe(false);
     expect(handle.hideChrome()).toBe(false);
     container.dispatchEvent(new MouseEvent('click', { clientX: 500, clientY: 400, bubbles: true }));
     expect(container.dataset.comicChrome).toBe('visible');
@@ -647,6 +648,45 @@ describe('CBZ page materialization', () => {
     });
     expect(container.dispatchEvent(wheel)).toBe(false);
     expect(handle.currentPage).toBe(3);
+    await handle.destroy();
+  });
+
+  it('scrolls a tall paged width-fit page before turning', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'width' }),
+    });
+    const slot = container.querySelector<HTMLElement>('.lightink-reader-cbz-slot:not([hidden])');
+    expect(slot?.style.height).toBe('auto');
+    expect(slot?.style.maxHeight).toBe('none');
+    expect(slot?.style.minHeight).toBe('auto');
+    const image = slot?.querySelector<HTMLElement>('.lightink-reader-page');
+    expect(image?.style.height).toBe('auto');
+    expect(image?.style.maxHeight).toBe('none');
+
+    const surface = comicSurface(container);
+    Object.defineProperty(surface, 'clientHeight', { configurable: true, value: 800 });
+    Object.defineProperty(surface, 'scrollHeight', { configurable: true, value: 2400 });
+    Object.defineProperty(surface, 'scrollTop', { configurable: true, writable: true, value: 0 });
+    const before = handle.currentPage;
+    const wheel = new WheelEvent('wheel', {
+      deltaY: 80,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(container.dispatchEvent(wheel)).toBe(true);
+    expect(handle.currentPage).toBe(before);
+
+    Object.defineProperty(surface, 'scrollTop', { configurable: true, writable: true, value: 1600 });
+    const edge = new WheelEvent('wheel', {
+      deltaY: 80,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(container.dispatchEvent(edge)).toBe(false);
+    expect(handle.currentPage).toBe(before + 1);
+    expect(surface.scrollTop).toBe(0);
     await handle.destroy();
   });
 
@@ -728,6 +768,8 @@ describe('CBZ page materialization', () => {
     swipeCanvas(container, 800, 200, 'touch');
     expect(handle.currentPage).toBe(2);
     clickCanvas(container, 200);
+    expect(handle.currentPage).toBe(2);
+    swipeCanvas(container, 200, 800, 'mouse');
     expect(handle.currentPage).toBe(2);
     swipeCanvas(container, 200, 800, 'touch');
     expect(handle.currentPage).toBe(1);

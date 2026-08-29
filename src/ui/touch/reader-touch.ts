@@ -147,6 +147,108 @@ export function bindClickPaging(target: EventTarget, options: TouchPagingOptions
   };
 }
 
+export interface PointerTapPagingOptions extends TouchPagingOptions {
+  /** Center tap: chrome / existing click path. Edge taps still call `page`. */
+  onCenterTap?(event: PointerEvent): void;
+  /** Map event clientX into the paging viewport (iframe host vs srcdoc). */
+  mapClientX?(clientX: number): number;
+  /**
+   * Skip paging/chrome and do not swallow the following click.
+   * EPUB in-book `#` links and annotation marks need the existing click path.
+   */
+  ignore?(event: PointerEvent): boolean;
+}
+
+/**
+ * Desktop pointer taps (macOS trackpad reports as mouse). WKWebView often
+ * starts a text selection instead of firing `click`, so paging and chrome
+ * never run. A short, low-movement pointerup is a tap; drags stay selection.
+ */
+export function bindPointerTapPaging(
+  target: EventTarget,
+  options: PointerTapPagingOptions,
+): () => void {
+  const tapMaxMs = options.tapMaxMs ?? TOUCH_TAP_MAX_MS;
+  const now = options.now ?? (() => Date.now());
+  let start: { x: number; y: number; at: number; id: number } | null = null;
+  let suppressClick = false;
+
+  const onPointerDown = (event: Event): void => {
+    const pointer = event as PointerEvent;
+    if (pointer.pointerType === 'touch') {
+      return;
+    }
+    if (typeof pointer.button === 'number' && pointer.button !== 0) {
+      return;
+    }
+    if (typeof pointer.clientX !== 'number') {
+      return;
+    }
+    start = {
+      x: pointer.clientX,
+      y: pointer.clientY,
+      at: now(),
+      id: pointer.pointerId,
+    };
+  };
+
+  const onPointerUp = (event: Event): void => {
+    const pointer = event as PointerEvent;
+    const origin = start;
+    start = null;
+    if (origin === null || pointer.pointerId !== origin.id) {
+      return;
+    }
+    if (options.enabled !== undefined && !options.enabled()) {
+      return;
+    }
+    const elapsed = now() - origin.at;
+    const moved = Math.hypot(pointer.clientX - origin.x, pointer.clientY - origin.y);
+    if (elapsed > tapMaxMs || moved > TOUCH_TAP_MOVE_PX) {
+      return;
+    }
+    if (options.ignore?.(pointer) === true) {
+      return;
+    }
+    const clientX = options.mapClientX?.(pointer.clientX) ?? pointer.clientX;
+    const direction = resolveTapPageDirection(
+      clientX,
+      options.viewportWidth(),
+      options.tapPrevRatio,
+      options.tapNextRatio,
+    );
+    if (direction !== null && options.page(direction)) {
+      if (typeof pointer.preventDefault === 'function') {
+        pointer.preventDefault();
+      }
+      suppressClick = true;
+      return;
+    }
+    options.onCenterTap?.(pointer);
+    suppressClick = true;
+  };
+
+  const onClick = (event: Event): void => {
+    if (!suppressClick) {
+      return;
+    }
+    suppressClick = false;
+    event.preventDefault();
+    if (typeof (event as MouseEvent).stopPropagation === 'function') {
+      (event as MouseEvent).stopPropagation();
+    }
+  };
+
+  target.addEventListener('pointerdown', onPointerDown);
+  target.addEventListener('pointerup', onPointerUp);
+  target.addEventListener('click', onClick, true);
+  return () => {
+    target.removeEventListener('pointerdown', onPointerDown);
+    target.removeEventListener('pointerup', onPointerUp);
+    target.removeEventListener('click', onClick, true);
+  };
+}
+
 /** 绑定触控翻页手势；返回解绑函数。 */
 export function bindTouchPaging(target: EventTarget, options: TouchPagingOptions): () => void {
   const tapMaxMs = options.tapMaxMs ?? TOUCH_TAP_MAX_MS;

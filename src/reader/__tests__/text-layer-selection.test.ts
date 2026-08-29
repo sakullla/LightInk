@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   annotationMarkFromEventTarget,
+  captureSelectionAnchor,
   captureTextQuoteAnchor,
   markTextRange,
   removeTextRangeMarks,
@@ -109,6 +110,46 @@ describe('annotation text quote locators', () => {
       end: anchor.end,
     });
     expect(paragraph.textContent).toBe('Alpha beta gamma');
+  });
+
+  it('captures a cross-block quote from the text-node model so wrap still hits', () => {
+    document.body.innerHTML = '<p>第一段文字</p><p>第二段文字</p>';
+    const first = document.querySelector('p')!.firstChild as Text;
+    const second = document.querySelectorAll('p')[1]!.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(first, 2);
+    range.setEnd(second, 3);
+    const anchor = captureTextQuoteAnchor(document.body, range)!;
+    expect(anchor.quote.includes('\n')).toBe(false);
+    expect(anchor.quote).toBe('段文字第二段');
+    const resolved = resolveTextQuoteRange(document.body, anchor)!;
+    expect(markTextRange(document.body, resolved, 'block-quote', 'highlight')).toBeGreaterThan(0);
+    expect(
+      [...document.body.querySelectorAll('mark.lightink-reader-highlight')]
+        .map((mark) => mark.textContent)
+        .join(''),
+    ).toBe('段文字第二段');
+  });
+
+  it('uses the visible selection string when the Range only covers the first glyph', () => {
+    document.body.innerHTML = '<p>按他们对症推测这个时候应该是少林寺屠狐大会</p>';
+    const node = document.querySelector('p')!.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, 1);
+    const selection = {
+      rangeCount: 1,
+      getRangeAt: () => range,
+      toString: () => '按他们对症推测这个时候应该是少林寺屠狐大会',
+    } as unknown as Selection;
+    const anchor = captureSelectionAnchor(document.body, selection)!;
+    expect(anchor.quote).toBe('按他们对症推测这个时候应该是少林寺屠狐大会');
+    expect(anchor.end - anchor.start).toBe(anchor.quote.length);
+    const resolved = resolveTextQuoteRange(document.body, anchor)!;
+    expect(markTextRange(document.body, resolved, 'full-quote', 'highlight')).toBe(1);
+    expect(document.querySelector('mark')?.textContent).toBe(
+      '按他们对症推测这个时候应该是少林寺屠狐大会',
+    );
   });
 
   it('uses prefix and suffix to choose between repeated quotes', () => {

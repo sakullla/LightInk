@@ -6,11 +6,13 @@ import { createReaderView } from '../reader-view.js';
 import {
   applyFrameWheelToScroller,
   createFlowRenderer,
+  mapFrameClientRect,
   resolveFlowFrameClick,
+  shouldDeferFlowPointerTap,
 } from '../flow-renderer.js';
 import type { FlowRendererHooks } from '../flow-renderer.js';
 import { sessionRemoteImagePolicy } from '../../media/remote-image-policy.js';
-import { createSelectionToolbar, toolbarPosition } from '../selection-toolbar.js';
+import { createSelectionToolbar, selectionClientRect, toolbarPosition } from '../selection-toolbar.js';
 import {
   applyPagedSpreadVars,
   clearPagedSpreadVars,
@@ -89,6 +91,43 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(actions).toEqual([]);
   });
 
+  it('notifies onDismiss when pressing outside the toolbar', () => {
+    const onDismiss = vi.fn();
+    const toolbar = createSelectionToolbar({
+      t: (key) => key,
+      onAction: () => undefined,
+      onDismiss,
+    });
+    document.body.appendChild(toolbar.element);
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
+    outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(toolbar.isVisible()).toBe(false);
+  });
+
+  it('dismisses from the full-page catcher without firing an action', () => {
+    const onDismiss = vi.fn();
+    const actions: string[] = [];
+    const toolbar = createSelectionToolbar({
+      t: (key) => key,
+      onAction: (action) => actions.push(action),
+      onDismiss,
+    });
+    document.body.appendChild(toolbar.element);
+    toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
+    const catcher = document.querySelector<HTMLElement>('.lightink-reader-selection-dismiss');
+    expect(catcher).not.toBeNull();
+    expect(catcher!.hidden).toBe(false);
+    catcher!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+    catcher!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(actions).toEqual([]);
+    expect(toolbar.isVisible()).toBe(false);
+    expect(catcher!.hidden).toBe(true);
+  });
+
   it('工具栏定位：优先选区上方，越顶下移并夹在视口内', () => {
     const rect = { left: 200, top: 300, width: 100, height: 20 };
     const toolbarSize = { width: 160, height: 32 };
@@ -101,6 +140,54 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(toolbarPosition({ left: -50, top: 300, width: 0, height: 20 }, toolbarSize, viewport)).toEqual({
       left: 4,
       top: 264,
+    });
+  });
+
+  it('anchors on the last line box instead of a column-spanning bounding rect', () => {
+    const range = document.createRange();
+    range.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: 80,
+        left: 40,
+        top: 80,
+        width: 720,
+        height: 40,
+        right: 760,
+        bottom: 120,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    range.getClientRects = () =>
+      [
+        { left: 40, top: 80, width: 300, height: 18, right: 340, bottom: 98 },
+        { left: 48, top: 100, width: 260, height: 18, right: 308, bottom: 118 },
+      ] as unknown as DOMRectList;
+    expect(selectionClientRect(range)).toEqual({
+      left: 48,
+      top: 100,
+      width: 260,
+      height: 18,
+    });
+  });
+
+  it('maps an iframe-local rect into the parent viewport', () => {
+    const frame = document.createElement('iframe');
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({
+      left: 200,
+      top: 80,
+      width: 800,
+      height: 600,
+      right: 1000,
+      bottom: 680,
+      x: 200,
+      y: 80,
+      toJSON: () => ({}),
+    } as DOMRect);
+    expect(mapFrameClientRect(frame, { left: 40, top: 100, width: 260, height: 18 })).toEqual({
+      left: 240,
+      top: 180,
+      width: 260,
+      height: 18,
     });
   });
 });
@@ -160,6 +247,23 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
         paginated: true,
       }),
     ).toEqual({ kind: 'page', direction: -1 });
+  });
+
+  it('defers desktop pointer taps on EPUB in-book links and annotation marks', () => {
+    const link = document.createElement('a');
+    link.setAttribute('href', '#lightink-chapter?chapter=2');
+    const wrap = document.createElement('a');
+    wrap.setAttribute('href', 'https://example.invalid/next');
+    const mark = document.createElement('mark');
+    mark.setAttribute('data-annotation-id', 'n1');
+    mark.className = 'lightink-reader-highlight';
+    expect(shouldDeferFlowPointerTap(link)).toBe(true);
+    expect(shouldDeferFlowPointerTap(wrap)).toBe(false);
+    expect(shouldDeferFlowPointerTap(mark)).toBe(true);
+    expect(shouldDeferFlowPointerTap(mark.appendChild(document.createTextNode('highlighted')))).toBe(
+      true,
+    );
+    expect(shouldDeferFlowPointerTap(document.createElement('p'))).toBe(false);
   });
 
   it('flow-renderer applyPaginatedDocument 写入阅读页栏变量且 iframe 铺满纸面', () => {
@@ -938,6 +1042,15 @@ describe('滚动模式章节帧高度（末行裁切）', () => {
     );
     expect(frame.srcdoc).toMatch(
       /html\[data-reading-layout='scroll'\] \[data-reader-split-heading\][\s\S]*?display:\s*none/,
+    );
+    expect(frame.srcdoc).toMatch(
+      /mark\.lightink-reader-highlight\[data-annotation-kind='note'\]\s*\{[^}]*background:\s*var\(--lightink-annotation-color/,
+    );
+    expect(frame.srcdoc).toMatch(/mark\.lightink-reader-highlight\s*\{[^}]*display:\s*inline\s*!important/);
+    expect(frame.srcdoc).toMatch(/\.lightink-reader-highlight-layer\s*\{[^}]*position:\s*fixed/);
+    expect(frame.srcdoc).toMatch(/::highlight\(lightink-hl-f2d675\)/);
+    expect(frame.srcdoc).not.toMatch(
+      /mark\.lightink-reader-highlight\[data-annotation-kind='note'\]\s*\{[^}]*background:\s*color-mix/,
     );
     frame.dispatchEvent(new Event('load'));
     const frameDocument = frame.contentDocument!;
@@ -1778,7 +1891,7 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     delete document.documentElement.dataset.readingLayout;
   });
 
-  it('shows the existing selection toolbar on desktop iframe mouseup and does not consume contextmenu', async () => {
+  it('shows the existing selection toolbar on desktop iframe mouseup and consumes contextmenu when a quote is selected', async () => {
     vi.useFakeTimers();
     const { view, frames } = await loadFlowSelectionBook();
     const frame = frames[0]!;
@@ -1795,7 +1908,7 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
 
     const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     frameDocument.dispatchEvent(menu);
-    expect(menu.defaultPrevented).toBe(false);
+    expect(menu.defaultPrevented).toBe(true);
     await view.destroy();
   });
 
@@ -1806,6 +1919,7 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     const frame = frames[0]!;
     const frameDocument = frame.contentDocument!;
     expect(frame.srcdoc).toMatch(/-webkit-touch-callout:\s*none/);
+    expect(frame.srcdoc).toMatch(/user-select:\s*text/);
 
     selectFrameQuote(frame);
     frameDocument.dispatchEvent(new Event('selectionchange'));
@@ -1878,6 +1992,194 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     expect(
       document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
     ).toBe('1');
+    await view.destroy();
+  });
+
+  it('keeps the quote snapshot after iframe selection collapses, then wraps a highlight', async () => {
+    vi.useFakeTimers();
+    const { view, reader, frames } = await loadFlowSelectionBook();
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+    const toolbar = visibleSelectionToolbar();
+    expect(toolbar).not.toBeNull();
+    expect(reader.dataset.selectionToolbar).toBe('open');
+
+    frame.contentWindow!.getSelection()!.removeAllRanges();
+    frameDocument.dispatchEvent(new Event('selectionchange'));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(visibleSelectionToolbar()).not.toBeNull();
+
+    toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--highlight')!.click();
+    expect(visibleSelectionToolbar()).toBeNull();
+    expect(reader.dataset.selectionToolbar).toBeUndefined();
+    expect(
+      frameDocument.querySelector('mark.lightink-reader-highlight[data-annotation-kind="highlight"]'),
+    ).not.toBeNull();
+    await view.destroy();
+  });
+
+  it('wraps a TXT highlight in the selected chapter instead of chapter 0', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'Chapter 1', html: '<p>chapter 1 other body</p>' },
+          { title: 'Chapter 2', html: '<p>chapter 2 selectable body</p>' },
+          { title: 'Chapter 3', html: '<p>chapter 3 other body</p>' },
+        ],
+      }),
+    });
+    await view.load('book.txt');
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 400 });
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    const chapterTwo = frames.find((frame) => frame.dataset.chapterIndex === '1') ?? frames[1]!;
+    const chapterOne = frames.find((frame) => frame.dataset.chapterIndex === '0') ?? frames[0]!;
+    const doc = chapterTwo.contentDocument!;
+    stubRangeClientRect(doc);
+    let paragraph = doc.querySelector('p');
+    if (paragraph === null) {
+      paragraph = doc.createElement('p');
+      paragraph.textContent = 'chapter 2 selectable body';
+      doc.body.appendChild(paragraph);
+    }
+    const node = paragraph.firstChild as Text;
+    const start = (node.textContent ?? '').indexOf('selectable');
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + 'selectable'.length);
+    const selection = doc.defaultView!.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    doc.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    const toolbar = visibleSelectionToolbar();
+    expect(toolbar).not.toBeNull();
+    toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--highlight')!.click();
+    expect(
+      chapterTwo.contentDocument!.querySelector(
+        'mark.lightink-reader-highlight[data-annotation-kind="highlight"]',
+      ),
+    ).not.toBeNull();
+    expect(chapterOne.contentDocument!.querySelector('mark.lightink-reader-highlight')).toBeNull();
+    await view.destroy();
+  });
+
+  it('clears the live selection so dismissing the toolbar does not bring it back', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadFlowSelectionBook();
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(visibleSelectionToolbar()).not.toBeNull();
+
+    document.querySelector<HTMLElement>('.lightink-reader-selection-dismiss')!.dispatchEvent(
+      new MouseEvent('pointerdown', { bubbles: true, cancelable: true }),
+    );
+    expect(visibleSelectionToolbar()).toBeNull();
+    expect(frame.contentWindow!.getSelection()?.toString() ?? '').toBe('');
+
+    frameDocument.dispatchEvent(new Event('selectionchange'));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(visibleSelectionToolbar()).toBeNull();
+    await view.destroy();
+  });
+
+  it('does not turn the page when the click that finishes a selection lands in an edge zone', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadFlowSelectionBook(3);
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    Object.defineProperty(frame.contentWindow!, 'innerWidth', { configurable: true, value: 400 });
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(visibleSelectionToolbar()).not.toBeNull();
+    frameDocument.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 350, clientY: 100 }),
+    );
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('0');
+    expect(visibleSelectionToolbar()).not.toBeNull();
+    await view.destroy();
+  });
+
+  it('does not turn the page when clicking a highlight in an edge zone', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadFlowSelectionBook(3);
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    Object.defineProperty(frame.contentWindow!, 'innerWidth', { configurable: true, value: 400 });
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    visibleSelectionToolbar()!.querySelector<HTMLButtonElement>(
+      '.lightink-reader-selection-action--highlight',
+    )!.click();
+    const mark = frameDocument.querySelector('mark.lightink-reader-highlight')!;
+    expect(mark).not.toBeNull();
+    mark.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 350, clientY: 100 }),
+    );
+    mark.firstChild?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 350, clientY: 100 }),
+    );
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('0');
+    await view.destroy();
+  });
+
+  it('dismisses the toolbar from a tap in the chapter without paging', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadFlowSelectionBook(3);
+    const frame = frames[0]!;
+    const frameDocument = frame.contentDocument!;
+    Object.defineProperty(frame.contentWindow!, 'innerWidth', { configurable: true, value: 400 });
+    selectFrameQuote(frame);
+    frameDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(visibleSelectionToolbar()).not.toBeNull();
+
+    frameDocument.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        button: 0,
+        clientX: 200,
+        clientY: 100,
+      }),
+    );
+    expect(visibleSelectionToolbar()).toBeNull();
+    expect(frame.contentWindow!.getSelection()?.toString() ?? '').toBe('');
+
+    frameDocument.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: 350,
+        clientY: 100,
+      }),
+    );
+    frameDocument.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 350, clientY: 100 }),
+    );
+    expect(
+      document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
+    ).toBe('0');
     await view.destroy();
   });
 });

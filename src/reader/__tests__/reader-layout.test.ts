@@ -18,12 +18,13 @@ import type { InsertElementId } from '../../editor/insert-commands.js';
 import { createAppShell, type AppShellActions } from '../../ui/app-shell.js';
 import { ShortcutRegistry } from '../../ui/shortcuts.js';
 import type { BuiltinThemeId } from '../../theme/theme-service.js';
-import { createFlowRenderer, type FlowRendererHooks } from '../flow-renderer.js';
+import { createFlowRenderer, eventTargetsFlowScroller, type FlowRendererHooks } from '../flow-renderer.js';
 import { sessionRemoteImagePolicy } from '../../media/remote-image-policy.js';
 
 import {
   applyReadingLayout,
   READING_LAYOUT_STORAGE_KEY,
+  readerPageHostOwnsWindowWheel,
   saveReadingLayout,
 } from '../../ui/reading-layout.js';
 import {
@@ -245,6 +246,13 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
     expect(css).toMatch(/\.lightink-reader-status\[hidden\][\s\S]*?display:\s*none/);
   });
 
+  it('lets the host selection toolbar receive clicks over chapter iframes', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader-selection-dismiss\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/,
+    );
+  });
+
   it('keeps scroll-mode chrome sticky at the start of the reader column', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(
@@ -275,6 +283,9 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-bar\s*\{[^}]*--lightink-safe-top/,
     );
     expect(css).toMatch(/\.lightink-reader-chrome-action\s*\{[^}]*-webkit-app-region:\s*no-drag/);
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-bar\[hidden\][\s\S]*?-webkit-app-region:\s*no-drag/,
+    );
     expect(css).toMatch(/\.lightink-reader-chrome-track--whisper\s*\{[^}]*height:\s*1px/);
     expect(css).toMatch(
       /\.lightink-reader-chrome-footer\s*\{[^}]*flex-direction:\s*row/,
@@ -370,6 +381,15 @@ describe('readerPageInnerPadPx', () => {
     expect(sheet).toMatch(
       /\.lightink-reader-search-sheet-list\s*\{[^}]*overflow-y:\s*auto[^}]*flex:\s*1 1 0/,
     );
+    expect(sheet).toMatch(
+      /\.lightink-reader-toc-list\s*\{[^}]*scrollbar-width:\s*thin[^}]*scrollbar-color:\s*var\(--lightink-border\)/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-type-sheet\s*\{[^}]*scrollbar-width:\s*thin[^}]*scrollbar-color:\s*var\(--lightink-border\)/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-toc-list::-webkit-scrollbar-button[\s\S]*?display:\s*none/,
+    );
   });
 
   it('rings the current search mark inside the glyph box instead of outlining it', () => {
@@ -407,10 +427,10 @@ describe('readerPageInnerPadPx', () => {
   it('scrolls the reader pane like Markdown instead of clipping the book', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     expect(css).toMatch(
-      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]\s*\{[^}]*overflow-y:\s*auto/,
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],\s*#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)\s*\{[^}]*overflow-y:\s*auto/,
     );
     expect(css).toMatch(
-      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]\s*\{[^}]*overflow-anchor:\s*none/,
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],\s*#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)\s*\{[^}]*overflow-anchor:\s*none/,
     );
     expect(css).toMatch(
       /#app\.is-workspace-shelf #lightink-editor-area[\s\S]*overflow:\s*hidden/,
@@ -483,6 +503,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-topbar\s*\{[^}]*opacity:\s*0/,
     );
     expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-topbar\s*\{[^}]*-webkit-app-region:\s*no-drag/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-chrome='hidden'\] \.lightink-reader-comic-bottombar\s*\{[^}]*opacity:\s*0/,
     );
     expect(css).not.toMatch(/lightink-reader-comic-hud/);
@@ -508,6 +531,9 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-comic-pages\s*\{[^}]*flex:\s*1/,
     );
     expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-comic-pages\s*\{[^}]*height:\s*100%/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader-pages\[data-comic-mode='paged'\] \.lightink-reader-cbz-slot\s*\{[^}]*min-height:\s*0/,
     );
     expect(css).toMatch(
@@ -526,10 +552,32 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\[data-comic-spread='double'\]\[data-comic-visible='2'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*max-height:\s*100%/,
     );
     expect(css).toMatch(
+      /\[data-comic-fit='screen'\]\[data-comic-visible='2'\][\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*auto/,
+    );
+    expect(css).toMatch(
       /\[data-comic-fit='original'\] \.lightink-reader-cbz-slot,[\s\S]*?\.lightink-reader-cbz-slot\s*\{[^}]*aspect-ratio:\s*auto/,
     );
     expect(css).toMatch(
       /\[data-comic-fit='original'\][\s\S]*?\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page[\s\S]*?object-fit:\s*none/,
+    );
+  });
+
+  it('lets a single paged width-fit page grow past the viewport instead of clipping the foot', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\[data-comic-fit='width'\]\[data-comic-visible='1'\]\s*\.lightink-reader-cbz-slot\s*\{[^}]*height:\s*auto[^}]*max-height:\s*none/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-fit='width'\]\[data-comic-visible='1'\]\s*\.lightink-reader-comic-pages\s*\{[^}]*flex-direction:\s*column/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-fit='width'\]\s*\.lightink-reader-cbz-slot\s*>\s*\.lightink-reader-page\s*\{[^}]*height:\s*auto[^}]*max-height:\s*none/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-zoomed='true'\][\s\S]*?\.lightink-reader-comic-pages\s*\{[^}]*transform:\s*translate3d/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\] \.lightink-reader-comic-pages\s*\{[^}]*transform:\s*translate3d/,
     );
   });
 
@@ -589,7 +637,7 @@ describe('comic surface layout (R1/R3/R4)', () => {
       /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)[\s\S]{0,220}?\.lightink-reader-chrome-footer-stats/,
     );
     expect(css).not.toMatch(
-      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)[\s\S]{0,280}?\.lightink-reader-chrome-action--(?:toc|typography|search|annotations)/,
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-comic-reader='true'\]\)[\s\S]{0,280}?\.lightink-reader-chrome-action--(?:toc|typography|search)/,
     );
   });
 
@@ -1092,6 +1140,40 @@ describe('flow host wheel', () => {
     expect(called).toBe(0);
     expect(event.defaultPrevented).toBe(false);
     renderer.clear();
+  });
+
+  it('scrolls the host pane from a chapter title between frames', () => {
+    const scroller = { scrollTop: 40, scrollLeft: 0, clientHeight: 600 };
+    const { root, scrollHost } = mountFlowRoot();
+    root.dataset.readingLayout = 'scroll';
+    document.documentElement.dataset.readingLayout = 'scroll';
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        scrollContainer: () => scroller as unknown as HTMLElement,
+      }),
+    );
+    const title = document.createElement('h1');
+    title.className = 'lightink-reader-chapter-title';
+    title.textContent = '第0137章 豪在鼓里的公主';
+    scrollHost.appendChild(title);
+    const event = new WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+    title.dispatchEvent(event);
+    expect(scroller.scrollTop).toBe(120);
+    expect(event.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
+
+  it('keeps flow-scroll chapter chrome on the pane scroller', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    root.dataset.readingLayout = 'scroll';
+    const title = document.createElement('h1');
+    title.className = 'lightink-reader-chapter-title';
+    scrollHost.appendChild(title);
+    expect(eventTargetsFlowScroller(title, root)).toBe(true);
+    expect(readerPageHostOwnsWindowWheel(title)).toBe(true);
+    expect(readerPageHostOwnsWindowWheel(document.createElement('div'))).toBe(false);
   });
 
   it('removes the document wheel listener on clear', () => {

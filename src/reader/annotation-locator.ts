@@ -66,21 +66,130 @@ function rangeFromOffsets(root: Node, start: number, end: number): Range | null 
   return range;
 }
 
+/**
+ * Map a Range boundary onto the concatenated text-node model (no extra
+ * newlines). Chromium Range.toString() inserts breaks between blocks, so
+ * using it as the quote makes resolve miss the passage in EPUB bodies.
+ */
+function pointOffset(spans: readonly TextSpan[], node: Node, offset: number): number {
+  if (node.nodeType === Node.TEXT_NODE) {
+    for (const span of spans) {
+      if (span.node === node) {
+        const length = span.end - span.start;
+        return span.start + Math.max(0, Math.min(offset, length));
+      }
+    }
+    return 0;
+  }
+  const kids = node.childNodes;
+  if (offset <= 0) {
+    for (const span of spans) {
+      if (node.contains(span.node)) {
+        return span.start;
+      }
+    }
+    for (const span of spans) {
+      const pos = node.compareDocumentPosition(span.node);
+      if ((pos & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+        return span.start;
+      }
+    }
+    return 0;
+  }
+  if (offset >= kids.length) {
+    let lastEnd = 0;
+    let saw = false;
+    for (const span of spans) {
+      if (node.contains(span.node)) {
+        lastEnd = span.end;
+        saw = true;
+      }
+    }
+    if (saw) {
+      return lastEnd;
+    }
+    for (let index = spans.length - 1; index >= 0; index -= 1) {
+      const span = spans[index]!;
+      const pos = node.compareDocumentPosition(span.node);
+      if ((pos & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+        return span.end;
+      }
+    }
+    return 0;
+  }
+  const child = kids[offset]!;
+  if (child.nodeType === Node.TEXT_NODE) {
+    return pointOffset(spans, child, 0);
+  }
+  for (const span of spans) {
+    if (child.contains(span.node)) {
+      return span.start;
+    }
+  }
+  for (const span of spans) {
+    const pos = child.compareDocumentPosition(span.node);
+    if ((pos & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+      return span.start;
+    }
+  }
+  return spans[spans.length - 1]?.end ?? 0;
+}
+
+function rangeOffsets(root: Node, range: Range): { start: number; end: number } {
+  const { spans } = textSpans(root);
+  const start = pointOffset(spans, range.startContainer, range.startOffset);
+  const end = pointOffset(spans, range.endContainer, range.endOffset);
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
 export function captureTextQuoteAnchor(root: Node, range: Range): TextQuoteAnchor | null {
   if (!root.contains(range.commonAncestorContainer)) {
     return null;
   }
   const { text } = textSpans(root);
-  const prefixRange = documentOf(root).createRange();
-  prefixRange.selectNodeContents(root);
-  prefixRange.setEnd(range.startContainer, range.startOffset);
-  const start = prefixRange.toString().length;
-  const quote = range.toString();
-  const end = start + quote.length;
+  const { start, end } = rangeOffsets(root, range);
+  const quote = text.slice(start, end);
+  if (quote === '') {
+    return null;
+  }
   return {
     start,
     end,
     quote,
+    prefix: text.slice(Math.max(0, start - CONTEXT_LENGTH), start),
+    suffix: text.slice(end, end + CONTEXT_LENGTH),
+  };
+}
+
+/**
+ * CSS columns / WebView2 can paint a long native selection while
+ * Range.getRangeAt(0) only covers the first glyph. Chromium also inserts
+ * newlines in Selection.toString() between blocks; strip those so the quote
+ * matches the concatenated text-node model.
+ */
+export function captureSelectionAnchor(root: Node, selection: Selection): TextQuoteAnchor | null {
+  if (selection.rangeCount === 0) {
+    return null;
+  }
+  const rangeAnchor = captureTextQuoteAnchor(root, selection.getRangeAt(0));
+  const visual = selection.toString().replace(/\r\n|\r|\n/g, '');
+  if (visual === '' || (rangeAnchor !== null && rangeAnchor.quote.length >= visual.length)) {
+    return rangeAnchor;
+  }
+  const { text } = textSpans(root);
+  const hint = rangeAnchor?.start ?? 0;
+  let start = text.indexOf(visual, Math.max(0, hint - visual.length));
+  if (start < 0) {
+    start = text.indexOf(visual);
+  }
+  if (start < 0) {
+    return rangeAnchor;
+  }
+  const end = start + visual.length;
+  return {
+    start,
+    end,
+    quote: visual,
     prefix: text.slice(Math.max(0, start - CONTEXT_LENGTH), start),
     suffix: text.slice(end, end + CONTEXT_LENGTH),
   };
@@ -180,20 +289,22 @@ export function markTextRange(
   annotationId: string,
   kind?: string,
 ): number {
+  const { start, end } = rangeOffsets(root, range);
+  if (start === end) {
+    return 0;
+  }
   const { spans } = textSpans(root);
-  const selected = spans.flatMap(({ node }) => {
-    if (!range.intersectsNode(node)) {
-      return [];
-    }
-    const length = node.nodeValue?.length ?? 0;
-    const start = node === range.startContainer ? range.startOffset : 0;
-    const end = node === range.endContainer ? range.endOffset : length;
-    return start < end ? [{ node, start, end }] : [];
+  const selected = spans.flatMap((span) => {
+    const from = Math.max(span.start, start);
+    const to = Math.min(span.end, end);
+    return from < to
+      ? [{ node: span.node, start: from - span.start, end: to - span.start }]
+      : [];
   });
 
-  for (const { node, start, end } of selected.reverse()) {
-    const selectedNode = start === 0 ? node : node.splitText(start);
-    const selectedLength = end - start;
+  for (const piece of selected.reverse()) {
+    const selectedNode = piece.start === 0 ? piece.node : piece.node.splitText(piece.start);
+    const selectedLength = piece.end - piece.start;
     if (selectedLength < selectedNode.length) {
       selectedNode.splitText(selectedLength);
     }
@@ -243,7 +354,20 @@ export function flowLocatorFromRange(
   if (anchor === null) {
     return null;
   }
-  return format === 'text' ? { format, ...anchor } : { format, chapter, ...anchor };
+  return { format, chapter, ...anchor };
+}
+
+export function flowLocatorFromSelection(
+  root: Node,
+  selection: Selection,
+  chapter: number,
+  format: 'flow' | 'text',
+): FlowLocator | TextLocator | null {
+  const anchor = captureSelectionAnchor(root, selection);
+  if (anchor === null) {
+    return null;
+  }
+  return { format, chapter, ...anchor };
 }
 
 /** PDF 文本层选区 → 文字级 PdfLocator（page + 可选 anchor，R5 兼容旧页码级数据）。 */

@@ -8,7 +8,16 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildOutline, leafHeadingAnchors } from '../outline-model.js';
+import {
+  buildOutline,
+  filterOutlineItems,
+  lastCurrentOutlineIndex,
+  leafHeadingAnchors,
+  outlineItemIsCurrent,
+  outlineLocationFromReader,
+  outlineSearchKeyAction,
+  outlineSearchKeyIsComposing,
+} from '../outline-model.js';
 
 describe('buildOutline', () => {
   it('无标题时返回空数组', () => {
@@ -124,5 +133,63 @@ describe('leafHeadingAnchors', () => {
 
   it('空大纲返回空集合', () => {
     expect(leafHeadingAnchors([]).size).toBe(0);
+  });
+});
+
+describe('outline location and search', () => {
+  it('maps reader chapter/page snapshots and matches the current row', () => {
+    expect(outlineLocationFromReader({ locationKind: 'chapter', current: 2 })).toEqual({
+      chapter: 1,
+    });
+    expect(outlineLocationFromReader({ locationKind: 'page', current: 4 })).toEqual({
+      page: 4,
+    });
+    expect(outlineLocationFromReader({ locationKind: null, current: 1 })).toEqual({});
+    expect(
+      outlineItemIsCurrent({ level: 1, text: '一', anchor: 0, chapter: 1 }, { chapter: 1 }),
+    ).toBe(true);
+    expect(
+      outlineItemIsCurrent({ level: 1, text: '一', anchor: 0, page: 4 }, { page: 3 }),
+    ).toBe(false);
+  });
+
+  it('keeps ancestor headings when filtering nested outline items', () => {
+    expect(
+      filterOutlineItems(
+        [
+          { level: 1, text: '开篇', anchor: 0, chapter: 0 },
+          { level: 2, text: '白月光', anchor: 1, chapter: 1 },
+          { level: 1, text: '终章', anchor: 2, chapter: 2 },
+        ],
+        '白月',
+      ),
+    ).toEqual([
+      { level: 1, text: '开篇', anchor: 0, chapter: 0 },
+      { level: 2, text: '白月光', anchor: 1, chapter: 1 },
+    ]);
+  });
+
+  it('picks the deepest current row and maps search keys', () => {
+    expect(
+      lastCurrentOutlineIndex(
+        [
+          { level: 1, text: '一', anchor: 0, chapter: 1 },
+          { level: 2, text: '1.1', anchor: 1, chapter: 1 },
+        ],
+        { chapter: 1 },
+      ),
+    ).toBe(1);
+    expect(outlineSearchKeyAction('Escape', '白月')).toEqual({ kind: 'clear' });
+    expect(outlineSearchKeyAction('Escape', '')).toEqual({ kind: 'dismiss' });
+    expect(outlineSearchKeyAction('ArrowDown', '')).toEqual({ kind: 'move', delta: 1 });
+    expect(outlineSearchKeyAction('Enter', '')).toEqual({ kind: 'select' });
+    expect(outlineSearchKeyAction('a', '')).toBeNull();
+    expect(outlineSearchKeyAction('Enter', '', true)).toBeNull();
+    expect(outlineSearchKeyAction('Escape', '', true)).toBeNull();
+    expect(outlineSearchKeyAction('ArrowDown', '白月', true)).toBeNull();
+    expect(outlineSearchKeyIsComposing({ isComposing: true, key: 'Enter' })).toBe(true);
+    expect(outlineSearchKeyIsComposing({ key: 'Process' })).toBe(true);
+    expect(outlineSearchKeyIsComposing({ key: 'Enter', keyCode: 229 })).toBe(true);
+    expect(outlineSearchKeyIsComposing({ key: 'Enter' })).toBe(false);
   });
 });

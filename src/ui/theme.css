@@ -618,6 +618,8 @@ html[data-display='xuhd'] {
 }
 
 .lightink-outline.is-rail .lightink-outline-title,
+.lightink-outline.is-rail .lightink-outline-search,
+.lightink-outline.is-rail .lightink-outline-live,
 .lightink-outline.is-rail .lightink-outline-body,
 .lightink-outline.is-rail .lightink-outline-resize {
   display: none;
@@ -692,6 +694,50 @@ body.lightink-outline-resizing * {
 .lightink-outline-title {
   font-size: 12px;
   color: var(--lightink-muted);
+}
+
+.lightink-outline-search {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  margin: 6px 8px 2px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.lightink-outline-search[hidden] {
+  display: none;
+}
+
+.lightink-outline-search:focus {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-outline-item.is-current {
+  background: var(--lightink-accent-soft);
+  font-weight: 600;
+}
+
+.lightink-outline-item.is-active {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-outline-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .lightink-outline-toggle {
@@ -813,6 +859,8 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
 
 #lightink-editor-area::-webkit-scrollbar-button {
   display: none;
+  width: 0;
+  height: 0;
 }
 
 /*
@@ -860,8 +908,11 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
 }
 
 /* Scroll mode uses the same pane scroller as Markdown. height:auto on the
-   tab host lets the book grow so overflow-y:auto actually has a range. */
-html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'] {
+   tab host lets the book grow so overflow-y:auto actually has a range.
+   Key off the flow root as well as html: editor paginated + reader scroll
+   must still be a scroller, or chapter titles/gaps outside iframes eat the wheel. */
+html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'],
+#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll']) {
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
@@ -873,7 +924,8 @@ html[data-reading-layout='scroll'] #app.is-workspace-shelf #lightink-editor-area
 }
 
 html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'] .lightink-tab-host,
-html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader {
+html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader,
+#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll']) .lightink-tab-host {
   height: auto;
   min-height: 100%;
 }
@@ -900,7 +952,7 @@ html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab
 
 .lightink-tab-host .lightink-reader-highlight--note,
 .lightink-tab-host .ProseMirror .lightink-reader-highlight[data-annotation-kind='note'] {
-  background: color-mix(in srgb, var(--lightink-accent) 22%, var(--lightink-bg));
+  background: var(--lightink-annotation, #f2d675);
   box-shadow: inset 0 -0.12em 0 var(--lightink-accent);
 }
 

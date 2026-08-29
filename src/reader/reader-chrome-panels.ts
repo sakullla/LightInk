@@ -8,7 +8,21 @@
 
 import { FONT_SCALE_STEPS } from '../ui/font-scale.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
-import type { OutlineItem } from '../outline/outline-model.js';
+import {
+  filterOutlineItems,
+  lastCurrentOutlineIndex,
+  outlineItemIsCurrent,
+  outlineSearchKeyAction,
+  outlineSearchKeyIsComposing,
+  scrollChildIntoScroller,
+  type OutlineItem,
+  type OutlineLocation,
+} from '../outline/outline-model.js';
+
+export {
+  filterOutlineItems,
+  outlineItemMatchesQuery,
+} from '../outline/outline-model.js';
 import {
   READER_FONT_FAMILY_PRESETS,
   type ReaderFontFamilyPreset,
@@ -58,6 +72,9 @@ export interface ReaderChromePanelComicCopy {
 export interface ReaderChromePanelCopy {
   tocTitle: string;
   tocEmpty: string;
+  tocSearch?: string;
+  tocEmptySearch?: string;
+  tocSearchCount?: string;
   typeTitle: string;
   theme: string;
   size: string;
@@ -103,6 +120,9 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
   return {
     tocTitle: '目录',
     tocEmpty: '暂无目录',
+    tocSearch: '搜索',
+    tocEmptySearch: '没有匹配的条目',
+    tocSearchCount: '{n} 条匹配',
     typeTitle: '排版',
     theme: '纸张',
     size: '字号',
@@ -132,13 +152,22 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
   };
 }
 
+let tocSearchSeq = 0;
+
+function formatOutlineSearchCount(template: string, count: number): string {
+  return template.replace(/\{n\}/g, String(count));
+}
+
 export function fillReaderTocPanel(
   panel: HTMLElement,
   items: readonly OutlineItem[],
   copy: ReaderChromePanelCopy,
-  current: { chapter?: number; page?: number },
+  current: OutlineLocation,
   onSelect: (item: OutlineItem) => void,
+  onDismiss?: () => void,
 ): void {
+  const previousQuery =
+    panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')?.value ?? '';
   panel.replaceChildren();
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
@@ -154,32 +183,153 @@ export function fillReaderTocPanel(
     panel.appendChild(empty);
     return;
   }
+  const listId = `lightink-reader-toc-list-${(tocSearchSeq += 1)}`;
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'lightink-reader-toc-search';
+  search.autocomplete = 'off';
+  search.placeholder = copy.tocSearch ?? '搜索';
+  search.setAttribute('role', 'combobox');
+  search.setAttribute('aria-autocomplete', 'list');
+  search.setAttribute('aria-expanded', 'true');
+  search.setAttribute('aria-controls', listId);
+  search.setAttribute('aria-label', copy.tocSearch ?? copy.tocTitle);
+  search.value = previousQuery;
+  search.addEventListener('click', (event) => event.stopPropagation());
+  search.addEventListener('pointerdown', (event) => event.stopPropagation());
+  panel.appendChild(search);
+  const live = document.createElement('div');
+  live.className = 'lightink-reader-toc-live';
+  live.setAttribute('aria-live', 'polite');
+  panel.appendChild(live);
   const list = document.createElement('nav');
+  list.id = listId;
   list.className = 'lightink-reader-toc-list';
+  list.setAttribute('role', 'listbox');
   list.setAttribute('aria-label', copy.tocTitle);
-  for (const item of items) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'lightink-reader-toc-item';
-    button.dataset.outlineLevel = String(item.level);
-    button.style.setProperty('--lightink-reader-toc-level', String(Math.max(0, item.level - 1)));
-    button.textContent = item.text;
-    const currentChapter =
-      current.chapter !== undefined && item.chapter !== undefined && item.chapter === current.chapter;
-    const currentPage =
-      current.page !== undefined && item.page !== undefined && item.page === current.page;
-    if (currentChapter || currentPage) {
-      button.setAttribute('aria-current', 'location');
-      button.classList.add('is-current');
-    }
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onSelect(item);
-    });
-    list.appendChild(button);
-  }
   panel.appendChild(list);
+
+  let visibleItems: OutlineItem[] = [];
+  let activeIndex = 0;
+
+  const optionButtons = (): HTMLButtonElement[] =>
+    [...list.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item')];
+
+  const setActive = (index: number, scroll: boolean): void => {
+    const buttons = optionButtons();
+    if (buttons.length === 0) {
+      activeIndex = -1;
+      search.removeAttribute('aria-activedescendant');
+      return;
+    }
+    activeIndex = Math.max(0, Math.min(index, buttons.length - 1));
+    buttons.forEach((button, optionIndex) => {
+      const selected = optionIndex === activeIndex;
+      button.classList.toggle('is-active', selected);
+      button.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    const active = buttons[activeIndex]!;
+    search.setAttribute('aria-activedescendant', active.id);
+    if (scroll) {
+      scrollChildIntoScroller(list, active);
+    }
+  };
+
+  const paintItems = (query: string): void => {
+    list.replaceChildren();
+    const visible = filterOutlineItems(items, query);
+    visibleItems = visible;
+    if (visible.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'lightink-reader-chrome-panel-empty';
+      empty.textContent = copy.tocEmptySearch ?? copy.tocEmpty;
+      list.appendChild(empty);
+      live.textContent = copy.tocEmptySearch ?? copy.tocEmpty;
+      search.removeAttribute('aria-activedescendant');
+      activeIndex = -1;
+      return;
+    }
+    live.textContent = formatOutlineSearchCount(copy.tocSearchCount ?? '{n}', visible.length);
+    for (const [index, item] of visible.entries()) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = `${listId}-opt-${index}`;
+      button.className = 'lightink-reader-toc-item';
+      button.setAttribute('role', 'option');
+      button.dataset.outlineLevel = String(item.level);
+      button.style.setProperty('--lightink-reader-toc-level', String(Math.max(0, item.level - 1)));
+      button.textContent = item.text;
+      if (outlineItemIsCurrent(item, current)) {
+        button.setAttribute('aria-current', 'location');
+        button.classList.add('is-current');
+      }
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect(item);
+      });
+      list.appendChild(button);
+    }
+    const currentIndex = lastCurrentOutlineIndex(visible, current);
+    setActive(
+      currentIndex >= 0 ? currentIndex : 0,
+      query.trim() === '' && panel.hidden !== true,
+    );
+  };
+
+  search.addEventListener('keydown', (event) => {
+    const action = outlineSearchKeyAction(
+      event.key,
+      search.value,
+      outlineSearchKeyIsComposing(event),
+    );
+    if (action === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (action.kind === 'clear') {
+      search.value = '';
+      paintItems('');
+      return;
+    }
+    if (action.kind === 'dismiss') {
+      onDismiss?.();
+      return;
+    }
+    if (action.kind === 'move') {
+      setActive(activeIndex + action.delta, true);
+      return;
+    }
+    if (action.kind === 'select') {
+      const item = visibleItems[activeIndex];
+      if (item !== undefined) {
+        onSelect(item);
+      }
+    }
+  });
+  search.addEventListener('input', () => paintItems(search.value));
+  paintItems(previousQuery);
+}
+
+/** After the contents sheet is visible: scroll the current row and focus search. */
+export function activateReaderTocPanel(panel: HTMLElement): void {
+  const list = panel.querySelector<HTMLElement>('.lightink-reader-toc-list');
+  const target =
+    list?.querySelector<HTMLElement>('.lightink-reader-toc-item.is-active') ??
+    list?.querySelector<HTMLElement>('.lightink-reader-toc-item.is-current');
+  if (list !== null && list !== undefined && target !== null && target !== undefined) {
+    scrollChildIntoScroller(list, target);
+  }
+  const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search');
+  if (search === null || typeof search.focus !== 'function') {
+    return;
+  }
+  try {
+    search.focus({ preventScroll: true });
+  } catch {
+    search.focus();
+  }
 }
 
 export function fillReaderTypographyPanel(
@@ -537,6 +687,8 @@ export function adoptReaderOverlayTheme(overlay: HTMLElement, host: HTMLElement)
   const theme = host.dataset.readerTheme;
   if (theme !== undefined && theme !== '') overlay.dataset.readerTheme = theme;
   if (style.color !== '') overlay.style.color = style.color;
+  const colorScheme = style.colorScheme?.trim() ?? '';
+  if (colorScheme !== '') overlay.style.colorScheme = colorScheme;
   // Reader paper has no accent token; use ink so chips/focus are not editor brown.
   const ink = overlay.style.getPropertyValue('--lightink-fg').trim() || style.color;
   const elevated =

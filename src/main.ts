@@ -84,6 +84,7 @@ import {
   readStoredOutlineWidth,
   type OutlineView,
 } from './outline/outline-view.js';
+import { outlineLocationFromReader } from './outline/outline-model.js';
 import {
   createMarkdownAnnotationHost,
   type MarkdownAnnotationHost,
@@ -154,6 +155,7 @@ import {
   isReadingNavKey,
   loadReadingLayout,
   pagedSpreadMetrics,
+  readerPageHostOwnsWindowWheel,
   readingNavDirection,
   saveReadingLayout,
   type ReadingLayout,
@@ -2630,6 +2632,10 @@ outline = createOutlineView({
   jumpToReaderOutlineItem: (item) => {
     activeReaderTab()?.reader.jumpToOutlineItem(item);
   },
+  getActiveLocation: () => {
+    const tab = activeReaderTab();
+    return tab === null ? {} : outlineLocationFromReader(tab.reader.state);
+  },
   // T4/R2：大纲↔编辑器折叠双向联动（序号口径与 buildOutline anchor 一致）。
   getFoldedOrdinals: () => activeMarkdownTab()?.editor.getFoldedOrdinals() ?? [],
   toggleFoldAtOrdinal: (ordinal) => {
@@ -3546,25 +3552,6 @@ function advanceMarkdownReading(direction: 1 | -1): boolean {
   return readingLayout === 'paginated'
     ? advancePagedScroller(editorScroller, direction)
     : advanceScrolledScroller(editorScroller, direction);
-}
-
-/**
- * PDF and strip comics own page-host scroll. Paged comics have no overflow
- * range, so the window listener turns the spread — unless the surface is
- * zoomed and is panning. EPUB/editor never set data-comic-reader.
- */
-function readerPageHostOwnsWindowWheel(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-  if (target.closest('.lightink-reader-pages') === null) {
-    return false;
-  }
-  const pagedComic = target.closest('[data-comic-reader="true"][data-comic-mode="paged"]');
-  if (pagedComic === null) {
-    return true;
-  }
-  return pagedComic.getAttribute('data-comic-zoomed') === 'true';
 }
 
 // 触屏优先设备（pointer: coarse）不注册阅读翻页键全局劫持——无实体键盘时

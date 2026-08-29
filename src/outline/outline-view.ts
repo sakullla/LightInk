@@ -13,13 +13,25 @@
  *     大纲始终渲染完整标题列表——编辑器侧折叠只隐藏编辑器正文，不在大纲中
  *     级联隐藏子条目（两个视图保持独立，大纲作为完整导航目录不被折叠影响）。
  *   - Expanded 态右侧拖动手柄可调宽度，写入 localStorage `lightink.outlineWidth`。
+ *   - 搜索过滤与当前项高亮/滚入视口与阅读器 TOC 浮层共用 outline-model。
  *
  * 可测试性：DOM 创建经 `doc` 注入、宿主/内容经 `getActiveHost` /
  * `getActiveMarkdown` 注入，node 环境下以 fake 元素驱动全部行为。
  * 样式类见 src/ui/theme.css，配色全部取主题令牌。
  */
 
-import { buildOutline, leafHeadingAnchors, type OutlineItem } from './outline-model.js';
+import {
+  buildOutline,
+  filterOutlineItems,
+  lastCurrentOutlineIndex,
+  leafHeadingAnchors,
+  outlineItemIsCurrent,
+  outlineSearchKeyAction,
+  outlineSearchKeyIsComposing,
+  scrollChildIntoScroller,
+  type OutlineItem,
+  type OutlineLocation,
+} from './outline-model.js';
 import type { MessageKey } from '../i18n/messages.js';
 
 /** 渲染侧标题选择器：与 buildOutline 收集的 heading 一一对应（文档顺序）。 */
@@ -49,6 +61,8 @@ export interface OutlineViewDeps {
   getActiveReaderOutline?: () => readonly OutlineItem[] | null;
   /** 阅读器大纲跳转；有 page/chapter 的条目优先走这里。 */
   jumpToReaderOutlineItem?: (item: OutlineItem) => void;
+  /** 当前阅读/编辑位置；用于高亮并在打开目录时滚到该项。 */
+  getActiveLocation?: () => OutlineLocation;
   /**
    * T4/R2：当前活动 markdown 标签已折叠标题的序号列表（与 anchor 同口径）。无活动
    * markdown 标签或缺省时视为「无折叠」。供大纲渲染折叠标记态。
@@ -157,6 +171,9 @@ const OUTLINE_DEFAULTS: Readonly<Record<string, string>> = {
   'outline.show': '显示大纲',
   'outline.noTab': '无活动标签',
   'outline.empty': '暂无标题',
+  'outline.search': '搜索',
+  'outline.emptySearch': '没有匹配的条目',
+  'outline.searchCount': '{n} 条匹配',
   'outline.resize': '拖动调整大纲宽度',
 };
 
@@ -194,10 +211,32 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
   header.appendChild(title);
   header.appendChild(toggle);
 
-  const body = doc.createElement('div');
-  body.classList.add('lightink-outline-body');
+  const listId = 'lightink-outline-list';
+  const search = doc.createElement('input');
+  search.type = 'search';
+  search.classList.add('lightink-outline-search');
+  search.setAttribute('type', 'search');
+  search.setAttribute('role', 'combobox');
+  search.setAttribute('aria-autocomplete', 'list');
+  search.setAttribute('aria-expanded', 'false');
+  search.setAttribute('aria-controls', listId);
+  search.setAttribute('aria-label', t('outline.search'));
+  search.setAttribute('placeholder', t('outline.search'));
+  search.setAttribute('autocomplete', 'off');
+  search.setAttribute('hidden', '');
 
-  // Right-edge drag handle (expanded only). Kept after body so body stays children[1].
+  const live = doc.createElement('div');
+  live.classList.add('lightink-outline-live');
+  live.setAttribute('aria-live', 'polite');
+
+  const body = doc.createElement('div');
+  body.id = listId;
+  body.classList.add('lightink-outline-body');
+  body.setAttribute('role', 'listbox');
+  body.setAttribute('aria-label', t('outline.title'));
+
+  // Right-edge drag handle (expanded only). After body so tests can find
+  // `.lightink-outline-body` / `.lightink-outline-resize` by class.
   const resizeHandle = doc.createElement('div');
   resizeHandle.classList.add('lightink-outline-resize');
   resizeHandle.setAttribute('role', 'separator');
@@ -206,6 +245,8 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
   resizeHandle.setAttribute('title', t('outline.resize'));
 
   root.appendChild(header);
+  root.appendChild(search);
+  root.appendChild(live);
   root.appendChild(body);
   root.appendChild(resizeHandle);
 
@@ -213,6 +254,10 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let widthPx = readStoredOutlineWidth(storage) ?? OUTLINE_WIDTH_DEFAULT;
   let dragCleanup: (() => void) | null = null;
+  let searchQuery = '';
+  let lastOutlineIdentity = '';
+  let visibleItems: OutlineItem[] = [];
+  let activeIndex = 0;
 
   function applyWidth(px: number, persist: boolean): void {
     widthPx = clampOutlineWidth(px);
@@ -261,25 +306,98 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     }
   }
 
-  function renderEmpty(text: string): void {
+  function setSearchChrome(visible: boolean): void {
+    search.setAttribute('aria-expanded', visible ? 'true' : 'false');
+    if (visible) {
+      search.removeAttribute('hidden');
+      if ('value' in search) {
+        (search as HTMLInputElement).value = searchQuery;
+      }
+    } else {
+      search.setAttribute('hidden', '');
+      live.textContent = '';
+      search.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function renderEmpty(text: string, searchVisible = false): void {
+    setSearchChrome(searchVisible);
     const empty = doc.createElement('div');
     empty.classList.add('lightink-outline-empty');
     empty.textContent = text;
     body.replaceChildren(empty);
   }
 
-  function render(): void {
+  function outlineIdentity(items: readonly OutlineItem[], source: string): string {
+    if (items.length === 0) {
+      return source;
+    }
+    return `${source}:${items.length}:${items[0]?.text ?? ''}:${items[items.length - 1]?.text ?? ''}`;
+  }
+
+  function outlineButtons(): HTMLElement[] {
+    return Array.from(body.children).filter((child) =>
+      child.classList.contains('lightink-outline-item'),
+    ) as HTMLElement[];
+  }
+
+  function setActive(index: number, scroll: boolean): void {
+    const buttons = outlineButtons();
+    if (buttons.length === 0) {
+      activeIndex = -1;
+      search.removeAttribute('aria-activedescendant');
+      return;
+    }
+    activeIndex = Math.max(0, Math.min(index, buttons.length - 1));
+    buttons.forEach((button, optionIndex) => {
+      const selected = optionIndex === activeIndex;
+      button.classList.toggle('is-active', selected);
+      button.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    const active = buttons[activeIndex]!;
+    if (active.id !== '') {
+      search.setAttribute('aria-activedescendant', active.id);
+    }
+    if (scroll) {
+      scrollChildIntoScroller(body, active);
+    }
+  }
+
+  function scrollCurrentOutlineItem(): void {
+    const buttons = outlineButtons();
+    const active = buttons[activeIndex] ?? buttons.find((button) => button.classList.contains('is-current'));
+    if (active !== undefined) {
+      scrollChildIntoScroller(body, active);
+    }
+  }
+
+  function render(options: { scrollCurrent?: boolean } = {}): void {
     const readerItems = deps.getActiveReaderOutline?.() ?? null;
     const markdown = deps.getActiveMarkdown();
     if (readerItems === null && markdown === null) {
+      lastOutlineIdentity = 'empty';
       renderEmpty(t('outline.noTab'));
       return;
     }
     const items = readerItems ?? buildOutline(markdown ?? '');
     if (items.length === 0) {
+      lastOutlineIdentity = readerItems !== null ? 'reader' : 'markdown';
       renderEmpty(t('outline.empty'));
       return;
     }
+    const identity = outlineIdentity(items, readerItems !== null ? 'reader' : 'markdown');
+    const documentChanged = identity !== lastOutlineIdentity;
+    lastOutlineIdentity = identity;
+    const visible = filterOutlineItems(items, searchQuery);
+    visibleItems = visible;
+    if (visible.length === 0) {
+      live.textContent = t('outline.emptySearch');
+      renderEmpty(t('outline.emptySearch'), true);
+      return;
+    }
+    setSearchChrome(true);
+    live.textContent = t('outline.searchCount').replace(/\{n\}/g, String(visible.length));
+    const current = deps.getActiveLocation?.() ?? {};
     const foldingEnabled = readerItems === null;
     const foldedOrdinals = new Set(foldingEnabled ? (deps.getFoldedOrdinals?.() ?? []) : []);
     // 叶子标题（无子标题）不渲染折叠三角。
@@ -287,13 +405,19 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     // 大纲与编辑器折叠保持独立：编辑器侧折叠只隐藏编辑器正文，大纲始终渲染
     // 完整标题列表（不在大纲中级联隐藏子条目），折叠态仅以左侧标记呈现。
     body.replaceChildren(
-      ...items.map((item) => {
+      ...visible.map((item, index) => {
         const el = doc.createElement('button');
         el.type = 'button';
+        el.id = `${listId}-opt-${index}`;
         el.classList.add('lightink-outline-item');
         el.classList.add(`level-${Math.min(Math.max(item.level, 1), 6)}`);
+        el.setAttribute('role', 'option');
         el.textContent = item.text;
         el.setAttribute('title', item.text);
+        if (outlineItemIsCurrent(item, current)) {
+          el.classList.add('is-current');
+          el.setAttribute('aria-current', 'location');
+        }
         el.addEventListener('click', () => scrollToItem(item));
         // T4/R2：折叠标记作为 item 的首个子 span（仅在注入了 toggleFoldAtOrdinal 时
         // 渲染——测试不注入，故 body.children 仍是纯 item 按钮，既有断言不变）。
@@ -332,7 +456,60 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
         return el;
       }),
     );
+    const currentIndex = lastCurrentOutlineIndex(visible, current);
+    setActive(currentIndex >= 0 ? currentIndex : 0, false);
+    if (
+      visibility === 'expanded' &&
+      searchQuery.trim() === '' &&
+      (options.scrollCurrent === true || documentChanged)
+    ) {
+      scrollCurrentOutlineItem();
+    }
   }
+
+  search.addEventListener('keydown', (event) => {
+    const keyEvent = event as KeyboardEvent;
+    const action = outlineSearchKeyAction(
+      keyEvent.key,
+      searchQuery,
+      outlineSearchKeyIsComposing(keyEvent),
+    );
+    if (action === null) {
+      return;
+    }
+    if (typeof keyEvent.preventDefault === 'function') {
+      keyEvent.preventDefault();
+    }
+    if (typeof keyEvent.stopPropagation === 'function') {
+      keyEvent.stopPropagation();
+    }
+    if (action.kind === 'dismiss') {
+      applyVisibility('rail');
+      return;
+    }
+    if (action.kind === 'clear') {
+      searchQuery = '';
+      if ('value' in search) {
+        (search as HTMLInputElement).value = '';
+      }
+      render({ scrollCurrent: true });
+      return;
+    }
+    if (action.kind === 'move') {
+      setActive(activeIndex + action.delta, true);
+      return;
+    }
+    if (action.kind === 'select') {
+      const item = visibleItems[activeIndex];
+      if (item !== undefined) {
+        scrollToItem(item);
+      }
+    }
+  });
+  search.addEventListener('input', () => {
+    searchQuery = 'value' in search && typeof search.value === 'string' ? search.value : '';
+    render({ scrollCurrent: searchQuery.trim() === '' });
+  });
 
   function cancelTimer(): void {
     if (timer !== null) {
@@ -356,6 +533,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
   }
 
   function applyVisibility(next: OutlineVisibility): void {
+    const reveal = visibility !== 'expanded' && next === 'expanded';
     visibility = next;
     root.dataset.visibility = next;
     root.classList.toggle('is-rail', next === 'rail');
@@ -389,6 +567,9 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     resizeHandle.style.display = next === 'expanded' ? '' : 'none';
     resizeHandle.setAttribute('aria-hidden', next === 'expanded' ? 'false' : 'true');
     syncHostClass();
+    if (reveal) {
+      render({ scrollCurrent: true });
+    }
     deps.onVisibilityChange?.();
   }
 
@@ -513,6 +694,9 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     },
     retranslate(): void {
       title.textContent = t('outline.title');
+      search.setAttribute('aria-label', t('outline.search'));
+      search.setAttribute('placeholder', t('outline.search'));
+      body.setAttribute('aria-label', t('outline.title'));
       resizeHandle.setAttribute('aria-label', t('outline.resize'));
       resizeHandle.setAttribute('title', t('outline.resize'));
       applyVisibility(visibility);

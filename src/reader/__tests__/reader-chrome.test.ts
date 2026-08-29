@@ -5,15 +5,14 @@
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
  * First paint is hidden except a 1px progress hairline. A page click
- * or a pointer near the top/bottom edge reveals five text-labeled actions
+ * or a pointer near the top/bottom edge reveals four text-labeled actions
  * together with a progress footer:
- *   返回书架 · 目录 · 排版 · 搜索 · 本书标注
+ *   返回书架 · 目录 · 排版 · 搜索
  * 「返回书架」 is the first control (start of the top bar). It is the only
- * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索 / 本书标注
- * call `openOutline` / `openTypography` / `openSearch` / `toggleSidebar`.
- * 搜索 lives in the tools cluster; the chrome only forwards to the injected
- * `openSearch` — reader-view decides desktop (annotation sidebar search)
- * versus touch (bottom-sheet search layer).
+ * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索
+ * call `openOutline` / `openTypography` / `openSearch`.
+ * 搜索 lives in the tools cluster and opens the annotation sidebar (notes +
+ * in-book search); chrome does not add a second 本书标注 control.
  *
  * The bar is out of document flow (`position: absolute|fixed|sticky`) so
  * reveal/dismiss does not change the reading area's top or height.
@@ -31,7 +30,7 @@
  * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
  * reveal — the chrome only leaves via center tap, Escape, or closing an
  * overlay. Desktop behavior above is unchanged when the flag is absent.
- * toc / typography / search / annotations live in the footer thumb zone
+ * toc / typography / search live in the footer thumb zone
  * (hit target ≥48×48, adjacent gap ≥8px) so they stay reachable after the
  * top bar is dismissed. backToShelf stays on the top bar with the same
  * 48×48 hit. Text books and comics share this reveal/dismiss chrome.
@@ -47,8 +46,8 @@ import {
   READER_CHROME_TOUCH_HIT_PX,
 } from '../reader-chrome.js';
 
-const LABELS = ['返回书架', '目录', '排版', '搜索', '本书标注'] as const;
-const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
+const LABELS = ['返回书架', '目录', '排版', '搜索'] as const;
+const THUMB_ACTIONS = ['toc', 'typography', 'search'] as const;
 const PRIMARY_TOUCH_ACTIONS = ['backToShelf', ...THUMB_ACTIONS] as const;
 const AUTO_HIDE_MS = 2500;
 const MIN_HIT_PX = READER_CHROME_TOUCH_HIT_PX;
@@ -223,16 +222,18 @@ describe('createReaderChrome first paint', () => {
 });
 
 describe('createReaderChrome reveal', () => {
-  it('reveals five text-labeled controls with 返回书架 first after a page click', () => {
+  it('reveals four text-labeled controls with 返回书架 first after a page click', () => {
     const { host, page, chrome } = mount();
 
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
 
     const buttons = labeledButtons(host);
-    expect(buttons).toHaveLength(5);
+    expect(buttons).toHaveLength(4);
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
+    expect(host.textContent).not.toContain('本书标注');
+    expect(host.querySelector('[data-reader-chrome-action="annotations"]')).toBeNull();
     const bar = host.querySelector('.lightink-reader-chrome-bar');
     expect(bar?.querySelector('.lightink-reader-chrome-tools')?.contains(buttons[1]!)).toBe(true);
     expect(bar?.getAttribute('data-tauri-drag-region')).toBe('');
@@ -242,6 +243,12 @@ describe('createReaderChrome reveal', () => {
     for (const button of buttons) {
       expect(button.hasAttribute('data-tauri-drag-region')).toBe(false);
     }
+    chrome.dismiss();
+    expect(bar?.hasAttribute('data-tauri-drag-region')).toBe(false);
+    expect(
+      host.querySelector('.lightink-reader-chrome-drag')?.hasAttribute('data-tauri-drag-region'),
+    ).toBe(false);
+    chrome.reveal();
     for (const button of buttons) {
       expect(button.getAttribute('aria-label')?.trim()).toBe(button.textContent?.trim());
       expect(button.hidden).toBe(false);
@@ -379,11 +386,10 @@ describe('createReaderChrome actions', () => {
     buttonByLabel(host, '目录').click();
     buttonByLabel(host, '搜索').click();
     buttonByLabel(host, '排版').click();
-    buttonByLabel(host, '本书标注').click();
     expect(deps.openOutline).toHaveBeenCalledTimes(1);
     expect(deps.openSearch).toHaveBeenCalledTimes(1);
     expect(deps.openTypography).toHaveBeenCalledTimes(1);
-    expect(deps.toggleSidebar).toHaveBeenCalledTimes(1);
+    expect(deps.toggleSidebar).not.toHaveBeenCalled();
     expect(deps.returnToShelf).not.toHaveBeenCalled();
 
     buttonByLabel(host, '返回书架').click();
@@ -391,7 +397,7 @@ describe('createReaderChrome actions', () => {
     expect(deps.openOutline).toHaveBeenCalledTimes(1);
     expect(deps.openSearch).toHaveBeenCalledTimes(1);
     expect(deps.openTypography).toHaveBeenCalledTimes(1);
-    expect(deps.toggleSidebar).toHaveBeenCalledTimes(1);
+    expect(deps.toggleSidebar).not.toHaveBeenCalled();
   });
 
   it('closes an open sheet when the page is clicked again', () => {
@@ -686,7 +692,7 @@ describe('createReaderChrome touch mode', () => {
     );
   });
 
-  it('places toc / typography / search / annotations in the footer thumb zone', () => {
+  it('places toc / typography / search in the footer thumb zone', () => {
     const { host, chrome } = mount({ touchMode: true });
     chrome.reveal();
 
@@ -702,7 +708,7 @@ describe('createReaderChrome touch mode', () => {
     }
   });
 
-  it('keeps the four thumb actions reachable after the top bar is dismissed', () => {
+  it('keeps the three thumb actions reachable after the top bar is dismissed', () => {
     const { chrome, deps } = mount({ touchMode: true });
     chrome.reveal();
 
@@ -713,7 +719,6 @@ describe('createReaderChrome touch mode', () => {
       ['toc', () => expect(deps.openOutline).toHaveBeenCalledTimes(1)],
       ['typography', () => expect(deps.openTypography).toHaveBeenCalledTimes(1)],
       ['search', () => expect(deps.openSearch).toHaveBeenCalledTimes(1)],
-      ['annotations', () => expect(deps.toggleSidebar).toHaveBeenCalledTimes(1)],
     ];
     for (const [action, assertCall] of clicks) {
       const button = actionButton(chrome.footer, action);
@@ -769,7 +774,7 @@ describe('createReaderChrome touch mode', () => {
 
     const footerActionBlocks = cssRuleBodies(
       css,
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--annotations/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--search/,
     );
     expect(footerActionBlocks.length).toBeGreaterThan(0);
     for (const block of footerActionBlocks) {
@@ -794,8 +799,8 @@ describe('createReaderChrome touch mode', () => {
   });
 });
 
-describe('createReaderChrome desktop keeps five actions on the top bar', () => {
-  it('keeps all five actions on the top bar and out of the footer', () => {
+describe('createReaderChrome desktop keeps four actions on the top bar', () => {
+  it('keeps shelf / contents / typography / search on the top bar and out of the footer', () => {
     const { host, chrome } = mount();
     chrome.reveal();
 
@@ -806,7 +811,19 @@ describe('createReaderChrome desktop keeps five actions on the top bar', () => {
       );
       expect(chrome.footer.contains(button)).toBe(false);
     }
+    expect(host.querySelector('[data-reader-chrome-action="annotations"]')).toBeNull();
     expect(chrome.footer.querySelector('[data-reader-chrome-action]')).toBeNull();
+  });
+
+  it('keeps desktop tool labels from stacking and does not ship a 本书标注 control', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).not.toMatch(/chrome-action--annotations/);
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-tools\s*\{[^}]*flex-wrap:\s*nowrap[^}]*gap:\s*0\.4rem/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-action\s*\{[^}]*flex-shrink:\s*0[^}]*isolation:\s*isolate/,
+    );
   });
 });
 

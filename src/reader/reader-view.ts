@@ -47,12 +47,13 @@ import {
 } from './annotations.js';
 import {
   annotationMarkFromEventTarget,
-  flowLocatorFromRange,
+  flowLocatorFromSelection,
   pdfTextLocatorFromRange,
   resolveTextQuoteRange,
 } from './annotation-locator.js';
 import {
   annotationMarkSpec,
+  paintAnnotationOverlays,
   renderAnnotationMarks,
   removeAnnotationMarks,
   type AnnotationMarkSpec,
@@ -63,11 +64,15 @@ import {
 } from './annotation-sidebar.js';
 import {
   createSelectionToolbar,
+  selectionClientRect,
   type SelectionToolbar,
 } from './selection-toolbar.js';
 import { showNoteDialog } from './note-dialog.js';
 import { outlineFromEntries } from './outline.js';
-import type { OutlineItem } from '../outline/outline-model.js';
+import {
+  outlineLocationFromReader,
+  type OutlineItem,
+} from '../outline/outline-model.js';
 import {
   findTextHits,
   htmlToSearchText,
@@ -125,7 +130,7 @@ import {
   saveReaderLayout,
   type ReaderFlowLayout,
 } from './reader-layout.js';
-import { createFlowRenderer, readerPagedScroller } from './flow-renderer.js';
+import { createFlowRenderer, mapFrameClientRect, readerPagedScroller } from './flow-renderer.js';
 import { createReaderSessionLoad } from './session/session-load.js';
 import { createReaderSessionNavigation } from './session/session-navigation.js';
 import { createReaderSessionAnnotation } from './session/session-annotation.js';
@@ -165,6 +170,8 @@ import {
 } from './reader-progress-ui.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
 import {
+  activateReaderTocPanel,
+  adoptReaderOverlayTheme,
   fillReaderTocPanel,
   fillReaderTypographyPanel,
   mountReaderOverlay,
@@ -786,6 +793,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return false;
     },
     dismissSelectionToolbar: () => dismissReaderOverlayStep(),
+    isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
     isLayoutSwitching: () => layoutSwitching,
     scrollContainer: () => flowScrollContainer(),
     onFramePointerMove: ({ clientY }) => {
@@ -1097,6 +1105,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     annotations = annotations.filter((a) => a.id !== id);
     for (const doc of flowDocuments()) {
       removeAnnotationMarks(doc.body, id);
+      paintAnnotationOverlays(doc);
     }
     for (const layer of pageHost.querySelectorAll('.lightink-reader-text-layer')) {
       removeAnnotationMarks(layer, id);
@@ -1105,10 +1114,28 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     void saveAnnotations();
   };
 
+  const setSelectionToolbarOpen = (open: boolean): void => {
+    if (open) {
+      root.dataset.selectionToolbar = 'open';
+      return;
+    }
+    delete root.dataset.selectionToolbar;
+  };
+
   const hideSelectionToolbar = (): void => {
+    const pending = pendingSelection;
     pendingSelection = null;
     selectionToolbar?.hide();
+    setSelectionToolbarOpen(false);
+    if (pending?.frame !== null && pending?.frame !== undefined) {
+      pending.frame.contentWindow?.getSelection()?.removeAllRanges();
+    } else if (typeof window !== 'undefined') {
+      window.getSelection()?.removeAllRanges();
+    }
   };
+
+  const keepCommittedSelection = (): boolean =>
+    selectionToolbar?.isVisible() === true && pendingSelection !== null;
 
   const openNote = (annotation: Annotation): void => {
     if (annotation.kind !== 'note') {
@@ -1148,9 +1175,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     selectionToolbar = createSelectionToolbar({
       t,
+      onDismiss: () => hideSelectionToolbar(),
       onAction: (action, detail) => {
         const pending = pendingSelection;
-        pendingSelection = null;
+        hideSelectionToolbar();
         if (pending === null) {
           return;
         }
@@ -1173,9 +1201,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           void navigator.clipboard?.writeText(pending.quote).catch(() => undefined);
           return;
         }
-        if (!sessionAnnotation.canPersist()) {
-          return;
-        }
         if (action === 'note') {
           void (async () => {
             const generation = sessionLoad.generation();
@@ -1195,7 +1220,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         appendAnnotation('highlight', pending.locator, pending.quote, undefined, detail?.color);
       },
     });
-    root.appendChild(selectionToolbar.element);
+    mountReaderOverlay(selectionToolbar.element, root);
   };
 
   /** 当前阅读位置的定位器（书签/笔记用）。 */
@@ -1227,7 +1252,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       suffix: text.slice(start, start + 32),
     };
     if (loadedExt === 'txt') {
-      return { format: 'text', ...anchor };
+      return { format: 'text', chapter, ...anchor };
     }
     return { format: 'flow', chapter, ...anchor };
   };
@@ -1441,6 +1466,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pageHost.removeEventListener('scroll', schedulePageScroll);
     closestPane()?.removeEventListener('scroll', schedulePageScroll);
     pageHost.removeEventListener('mouseup', onPageHostSelection);
+    pageHost.removeEventListener('contextmenu', onPageHostContextMenu);
     pageHost.removeEventListener('click', onPageHostNoteClick);
     textLayerObserver?.disconnect();
     textLayerObserver = null;
@@ -1487,6 +1513,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
         if (destroyed || generation !== sessionLoad.generation()) {
           return; // 弹层期间已切换文档/销毁：丢弃迟到保存
+        }
+        const pending = pendingSelection;
+        if (pending !== null && pending.quote.trim() !== '') {
+          pendingSelection = null;
+          if (pending.frame !== null) {
+            pending.frame.contentWindow?.getSelection()?.removeAllRanges();
+          } else {
+            window.getSelection()?.removeAllRanges();
+          }
+          appendAnnotation('note', pending.locator, pending.quote, input);
+          return;
         }
         appendAnnotation('note', currentPositionLocator(), undefined, input);
       })();
@@ -1546,8 +1583,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         }
         // flow / text：优先定位到该条高亮的 <mark>，否则到章节。
         const chapter =
-          loc.format === 'flow' ? loc.chapter : loc.format === 'text' ? 0 : firstVisibleChapter();
-        if (flowIsPaginated()) {
+          loc.format === 'flow'
+            ? loc.chapter
+            : loc.format === 'text'
+              ? loc.chapter
+              : firstVisibleChapter();
+        if (chapter !== undefined && flowIsPaginated()) {
           setActiveChapter(chapter);
         }
         const mark = Array.from(
@@ -1564,26 +1605,37 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           return;
         }
         if (loc.format === 'flow' || loc.format === 'text') {
-          const frame = scrollHost.querySelector<HTMLIFrameElement>(
-            `.lightink-reader-chapter-frame[data-chapter-index="${chapter}"]`,
-          );
-          const range =
-            frame?.contentDocument === null || frame?.contentDocument === undefined
-              ? null
-              : resolveTextQuoteRange(frame.contentDocument.body, loc);
-          const boundary = range?.startContainer;
-          const target =
-            boundary?.nodeType === Node.ELEMENT_NODE
-              ? (boundary as Element)
-              : boundary?.parentElement;
-          if (target !== undefined && target !== null) {
-            target.scrollIntoView({ block: 'center' });
-            return;
+          const frames =
+            chapter === undefined
+              ? Array.from(
+                  scrollHost.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+                )
+              : [
+                  scrollHost.querySelector<HTMLIFrameElement>(
+                    `.lightink-reader-chapter-frame[data-chapter-index="${chapter}"]`,
+                  ),
+                ].filter((frame): frame is HTMLIFrameElement => frame !== null);
+          for (const frame of frames) {
+            const range =
+              frame.contentDocument === null || frame.contentDocument === undefined
+                ? null
+                : resolveTextQuoteRange(frame.contentDocument.body, loc);
+            const boundary = range?.startContainer;
+            const target =
+              boundary?.nodeType === Node.ELEMENT_NODE
+                ? (boundary as Element)
+                : boundary?.parentElement;
+            if (target !== undefined && target !== null) {
+              target.scrollIntoView({ block: 'center' });
+              return;
+            }
           }
         }
-        scrollHost
-          .querySelector<HTMLElement>(`[data-chapter-index="${chapter}"]`)
-          ?.scrollIntoView({ block: 'center' });
+        if (chapter !== undefined) {
+          scrollHost
+            .querySelector<HTMLElement>(`[data-chapter-index="${chapter}"]`)
+            ?.scrollIntoView({ block: 'center' });
+        }
       },
       onRemove: (annotation) => {
         removeAnnotationById(annotation.id);
@@ -1881,7 +1933,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const selection = typeof window !== 'undefined' ? window.getSelection() : null;
     const text = selection?.toString().trim() ?? '';
     if (selection === null || selection.rangeCount === 0 || text.length === 0) {
-      hideSelectionToolbar();
+      if (!keepCommittedSelection()) {
+        hideSelectionToolbar();
+      }
       return;
     }
     const range = selection.getRangeAt(0);
@@ -1919,9 +1973,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       frame: null,
     };
     ensureSelectionToolbar();
-    selectionToolbar?.showAt(range.getBoundingClientRect(), {
+    selectionToolbar?.showAt(selectionClientRect(range), {
       canRemoveHighlight: existingMark !== null,
     });
+    setSelectionToolbarOpen(true);
+  };
+
+  const onPageHostContextMenu = (event: Event): void => {
+    if (pdfHandle === null) {
+      return;
+    }
+    const text = typeof window !== 'undefined' ? (window.getSelection()?.toString().trim() ?? '') : '';
+    if (text.length > 0) {
+      event.preventDefault();
+    }
   };
 
   const onPageHostNoteClick = (event: MouseEvent): void => {
@@ -2150,6 +2215,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     const byChapter = new Map<number, AnnotationMarkSpec[]>();
+    const unchaptered: AnnotationMarkSpec[] = [];
     for (const hl of annotations) {
       if ((hl.kind !== 'highlight' && hl.kind !== 'note') || hl.quote === undefined) {
         continue;
@@ -2158,8 +2224,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (locator.format !== 'flow' && locator.format !== 'text') {
         continue;
       }
-      const chapter = locator.format === 'flow' ? locator.chapter : 0;
       const spec: AnnotationMarkSpec = annotationMarkSpec(hl, locator);
+      const chapter = locator.format === 'flow' ? locator.chapter : locator.chapter;
+      if (chapter === undefined) {
+        unchaptered.push(spec);
+        continue;
+      }
       const list = byChapter.get(chapter);
       if (list === undefined) {
         byChapter.set(chapter, [spec]);
@@ -2167,6 +2237,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         list.push(spec);
       }
     }
+    const paintFrame = (doc: Document, specs: readonly AnnotationMarkSpec[]): void => {
+      renderAnnotationMarks(doc.body, specs);
+      paintAnnotationOverlays(doc);
+    };
     for (const [chapter, specs] of byChapter) {
       const frame = scrollHost.querySelector<HTMLIFrameElement>(
         `.lightink-reader-chapter-frame[data-chapter-index="${chapter}"]`,
@@ -2175,7 +2249,18 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (doc === null || doc === undefined) {
         continue;
       }
-      renderAnnotationMarks(doc.body, specs);
+      paintFrame(doc, specs);
+    }
+    if (unchaptered.length > 0) {
+      for (const frame of scrollHost.querySelectorAll<HTMLIFrameElement>(
+        '.lightink-reader-chapter-frame',
+      )) {
+        const doc = frame.contentDocument;
+        if (doc === null || doc.body === null) {
+          continue;
+        }
+        paintFrame(doc, unchaptered);
+      }
     }
   };
 
@@ -2191,12 +2276,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   ): void => {
     const text = selection?.toString().trim() ?? '';
     if (selection === null || selection.rangeCount === 0 || text.length === 0) {
-      hideSelectionToolbar();
+      // Keep the committed quote while the host toolbar is up. Clicking a
+      // parent overlay blurs the iframe and collapses the live selection
+      // (Kindle / Apple Books / epub.js snapshot the range on toolbar show).
+      if (!keepCommittedSelection()) {
+        hideSelectionToolbar();
+      }
       return;
     }
-    const locator = flowLocatorFromRange(
+    const locator = flowLocatorFromSelection(
       body,
-      selection.getRangeAt(0),
+      selection,
       chapter,
       loadedExt === 'txt' ? 'text' : 'flow',
     );
@@ -2224,17 +2314,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     // iframe 内 rect 是 frame 视口坐标，叠加 frame 偏移换算为外层 client 坐标。
-    const rangeRect = selection.getRangeAt(0).getBoundingClientRect();
-    const frameRect = frame.getBoundingClientRect();
+    // 分栏里 bounding rect 会横跨左右页，改用最后一行盒子锚定工具栏。
     selectionToolbar.showAt(
-      {
-        left: rangeRect.left + frameRect.left,
-        top: rangeRect.top + frameRect.top,
-        width: rangeRect.width,
-        height: rangeRect.height,
-      },
+      mapFrameClientRect(frame, selectionClientRect(selection.getRangeAt(0))),
       { canRemoveHighlight: existingMark !== null },
     );
+    setSelectionToolbarOpen(true);
   };
 
   /**
@@ -2361,6 +2446,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pageHost.addEventListener('scroll', schedulePageScroll, { passive: true });
     closestPane()?.addEventListener('scroll', schedulePageScroll, { passive: true });
     pageHost.addEventListener('mouseup', onPageHostSelection);
+    pageHost.addEventListener('contextmenu', onPageHostContextMenu);
     pageHost.addEventListener('click', onPageHostNoteClick);
     observeTextLayers(pageHost); // 文本层懒出现时重渲染该页高亮
     scrollHost.hidden = true;
@@ -2572,6 +2658,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     flowRenderer.syncTheme();
+    syncOpenOverlayThemes();
   };
   if (typeof document !== 'undefined') {
     document.addEventListener('lightink:theme-change', onThemeChange);
@@ -2771,6 +2858,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
   };
 
+  const syncOpenOverlayThemes = (): void => {
+    adoptReaderOverlayTheme(typePanel, root);
+    adoptReaderOverlayTheme(tocPanel, root);
+    if (sidebar !== null) {
+      adoptReaderOverlayTheme(sidebar.element, root);
+    }
+    if (searchSheet !== null) {
+      adoptReaderOverlayTheme(searchSheet.element, root);
+    }
+    if (selectionToolbar !== null) {
+      adoptReaderOverlayTheme(selectionToolbar.element, root);
+    }
+  };
+
   const applyPaperTheme = (theme: ReaderThemeId): void => {
     const next = saveReaderTheme(preferenceStorage, theme);
     applyReaderTheme(root, next);
@@ -2779,6 +2880,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       applyReaderTheme(pane, next);
     }
     flowRenderer.syncTheme();
+    syncOpenOverlayThemes();
     notifyReaderWindowChrome();
     renderTypographyPanel();
   };
@@ -2788,6 +2890,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return {
     tocTitle: t('reader.toc.title'),
     tocEmpty: t('outline.empty'),
+    tocSearch: t('outline.search'),
+    tocEmptySearch: t('outline.emptySearch'),
+    tocSearchCount: t('outline.searchCount'),
     typeTitle: t('reader.type.title'),
     theme: t('reader.type.theme'),
     size: t('reader.type.size'),
@@ -2847,16 +2952,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   const renderTocPanel = (): void => {
-    const current =
-      readerState.locationKind === 'chapter'
-        ? { chapter: Math.max(0, readerState.current - 1) }
-        : readerState.locationKind === 'page'
-          ? { page: readerState.current }
-          : {};
-    fillReaderTocPanel(tocPanel, readerOutline, readerPanelCopy(), current, (item) => {
-      jumpToOutlineItem(item);
-      closeChromePanel();
-    });
+    const current = outlineLocationFromReader(readerState);
+    fillReaderTocPanel(
+      tocPanel,
+      readerOutline,
+      readerPanelCopy(),
+      current,
+      (item) => {
+        jumpToOutlineItem(item);
+        closeChromePanel();
+      },
+      () => {
+        closeChromePanel();
+      },
+    );
   };
 
   /**
@@ -2919,11 +3028,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     closeSearchSheet();
     chromePanel = next;
-    if (next === 'toc') {
-      renderTocPanel();
-    } else {
-      renderTypographyPanel();
-    }
     tocPanel.hidden = next !== 'toc';
     typePanel.hidden = next !== 'typography';
     const panel = next === 'toc' ? tocPanel : typePanel;
@@ -2934,6 +3038,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       root,
       root.querySelector(`[data-reader-chrome-action="${action}"]`),
     );
+    if (next === 'toc') {
+      renderTocPanel();
+      activateReaderTocPanel(tocPanel);
+    } else {
+      renderTypographyPanel();
+    }
     syncChromeActionState();
   };
 

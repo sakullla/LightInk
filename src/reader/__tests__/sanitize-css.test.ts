@@ -29,6 +29,18 @@ describe('sanitizeReaderCss', () => {
     expect(out).toContain('color: red');
   });
 
+  it('strips publisher user-select and html/body pointer locks so EPUB taps and highlights still work', () => {
+    const out = sanitizeReaderCss(
+      'p { -webkit-user-select: none; user-select: none; color: navy; }' +
+        'html, body { pointer-events: none; touch-action: none; color: red; }',
+    );
+    expect(out).not.toMatch(/user-select/);
+    expect(out).not.toMatch(/pointer-events/);
+    expect(out).not.toMatch(/touch-action/);
+    expect(out).toContain('color: navy');
+    expect(out).toContain('color: red');
+  });
+
   it('decodes CSS escapes before stripping so escaped url()/import cannot dodge the pass', () => {
     // u\72 l( → url(：不先解码就会漏进 iframe 触发远程图片请求。
     const out = sanitizeReaderCss(

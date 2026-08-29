@@ -16,6 +16,7 @@ import type { MessageKey } from '../i18n/messages.js';
 import { displayChapterTitle, markDuplicateChapterHeading } from './chapter-title.js';
 import type { ReaderChapter } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
+import { ANNOTATION_HIGHLIGHT_API_CSS, paintAnnotationOverlays } from './annotation-render.js';
 import {
   bindBlockedRemoteImages,
   type RemoteImagePolicy,
@@ -39,6 +40,7 @@ import {
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import {
   bindClickPaging,
+  bindPointerTapPaging,
   bindTouchPaging,
   resolveTapPageDirection,
   TOUCH_TAP_NEXT_RATIO,
@@ -88,6 +90,8 @@ html, body {
   border: 0 !important;
   outline: none;
   box-shadow: none !important;
+  -webkit-user-select: text;
+  user-select: text;
 }
 html[data-reading-layout='paginated'] body div:not(.lightink-reader-spread),
 html[data-reading-layout='paginated'] body section,
@@ -244,12 +248,26 @@ th, td { padding: 0.35rem 0.5rem; border: 1px solid currentColor; }
 pre { overflow-x: auto; white-space: pre-wrap; }
 a { color: inherit; text-decoration: underline; }
 mark.lightink-reader-highlight {
+  display: inline !important;
   background: var(--lightink-annotation-color, #f2d675);
   color: #111;
   border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.lightink-reader-highlight-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.lightink-reader-highlight-rect {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
 }
 mark.lightink-reader-highlight[data-annotation-kind='note'] {
-  background: color-mix(in srgb, var(--lightink-annotation-color, #9a5828) 28%, transparent);
+  background: var(--lightink-annotation-color, #f2d675);
   box-shadow: inset 0 -0.14em 0 var(--lightink-annotation-color, #9a5828);
   cursor: pointer;
 }
@@ -274,6 +292,7 @@ mark.lightink-reader-highlight[data-annotation-kind='note']::after {
   overflow-anchor: none;
 }
 .lightink-remote-image-placeholder { display: flex; align-items: center; min-height: 2.5rem; }
+${ANNOTATION_HIGHLIGHT_API_CSS}
 `;
 
 function readerPreferenceStorage(): {
@@ -305,6 +324,64 @@ function ensureReaderFlowChrome(root: HTMLElement): void {
 function isFlowPaginated(root: HTMLElement): boolean {
   ensureReaderFlowChrome(root);
   return parseReaderLayout(root.dataset.readingLayout) === 'paginated';
+}
+
+function elementFromEventTarget(target: EventTarget | null): Element | null {
+  if (target === null || typeof target !== 'object') {
+    return null;
+  }
+  if (typeof (target as Element).closest === 'function') {
+    return target as Element;
+  }
+  const parent = (target as Node).parentElement;
+  return parent;
+}
+
+function isFlowAnnotationMarkTarget(target: EventTarget | null): boolean {
+  return elementFromEventTarget(target)?.closest('[data-annotation-id], .lightink-reader-highlight') !== null;
+}
+
+/**
+ * Host-side chapter titles, margins, and pane padding sit outside the iframe.
+ * Scroll-mode wheel must still reach the same scroller as in-frame ticks.
+ */
+export function eventTargetsFlowScroller(
+  target: EventTarget | null,
+  root: HTMLElement,
+): boolean {
+  const element = elementFromEventTarget(target);
+  if (element === null) {
+    return false;
+  }
+  if (
+    element.closest('.lightink-reader-pages') !== null ||
+    element.closest('.lightink-reader-sidebar') !== null ||
+    element.closest('.lightink-reader-chrome-panel') !== null
+  ) {
+    return false;
+  }
+  if (root.contains(element) || element === root) {
+    return true;
+  }
+  const pane =
+    typeof root.closest === 'function' ? root.closest('#lightink-editor-area') : null;
+  return pane instanceof HTMLElement && (pane === element || pane.contains(element));
+}
+
+/**
+ * Desktop pointer taps must not swallow EPUB in-book `#` navigation or
+ * annotation marks — those still use the existing click path.
+ */
+export function shouldDeferFlowPointerTap(target: EventTarget | null): boolean {
+  const element = elementFromEventTarget(target);
+  if (element === null) {
+    return false;
+  }
+  if (isFlowAnnotationMarkTarget(target)) {
+    return true;
+  }
+  const href = element.closest('a[href]')?.getAttribute('href') ?? '';
+  return href.startsWith('#');
 }
 
 /**
@@ -355,6 +432,23 @@ export function mapFrameClientY(frame: HTMLElement, clientY: number): number {
     return clientY;
   }
   return frame.getBoundingClientRect().top + clientY;
+}
+
+/** Map an iframe-local client rect to the parent viewport. */
+export function mapFrameClientRect(
+  frame: HTMLElement,
+  rect: { left: number; top: number; width: number; height: number },
+): { left: number; top: number; width: number; height: number } {
+  if (typeof frame.getBoundingClientRect !== 'function') {
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  }
+  const frameRect = frame.getBoundingClientRect();
+  return {
+    left: rect.left + frameRect.left,
+    top: rect.top + frameRect.top,
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 function clearPaginatedMediaInline(frameDocument: Document): void {
@@ -450,14 +544,16 @@ function pageFormatHostActive(root: HTMLElement): boolean {
 }
 
 /** Visible, connected flow reader — not a hidden tab or PDF/comic host. */
-function flowReaderHostActive(root: HTMLElement): boolean {
+function flowReaderSurfaceActive(root: HTMLElement): boolean {
   if (!root.isConnected || !readerSurfaceActive(root) || ancestorIsHidden(root)) {
     return false;
   }
-  if (pageFormatHostActive(root)) {
-    return false;
-  }
-  return isFlowPaginated(root);
+  return !pageFormatHostActive(root);
+}
+
+/** Paginated flow only: host-side wheel/touch turns pages. */
+function flowReaderHostActive(root: HTMLElement): boolean {
+  return flowReaderSurfaceActive(root) && isFlowPaginated(root);
 }
 
 function syncReaderDocumentLayout(root: HTMLElement): void {
@@ -505,6 +601,12 @@ function ensureReaderSpread(frameDocument: Document): HTMLElement {
   if (existing !== null) {
     for (const node of Array.from(body.childNodes)) {
       if (node === existing) {
+        continue;
+      }
+      if (
+        node instanceof HTMLElement &&
+        node.classList.contains('lightink-reader-highlight-layer')
+      ) {
         continue;
       }
       existing.appendChild(node);
@@ -830,6 +932,8 @@ export interface FlowRendererHooks {
   onUserScrollIntent?(): void;
   /** Escape 关闭可见的划选工具栏：返回是否可见并已隐藏。 */
   dismissSelectionToolbar(): boolean;
+  /** 划选工具栏是否正在显示（帧内点按取消 / 禁止连带翻页）。 */
+  isSelectionToolbarVisible?(): boolean;
   /** 布局切换进行中（remeasure 期间跳过帧高度同步）。 */
   isLayoutSwitching(): boolean;
 }
@@ -890,6 +994,27 @@ export function createFlowRenderer(
   let resourceWindows: Array<ChapterResourceWindow | undefined> = [];
   let lastScrollWheelStamp = -1;
   let lastAppliedScrollWheel: WheelEvent | null = null;
+  const applyScrollModeWheel = (event: WheelEvent): boolean => {
+    // One hardware tick can hit every mounted iframe plus the host gap.
+    if (lastAppliedScrollWheel === event) {
+      event.preventDefault();
+      return true;
+    }
+    if (event.timeStamp > 0 && event.timeStamp === lastScrollWheelStamp) {
+      event.preventDefault();
+      return true;
+    }
+    if (applyFrameWheelToScroller(event, hooks.scrollContainer())) {
+      lastAppliedScrollWheel = event;
+      if (event.timeStamp > 0) {
+        lastScrollWheelStamp = event.timeStamp;
+      }
+      event.preventDefault();
+      hooks.onUserScrollIntent?.();
+      return true;
+    }
+    return false;
+  };
   let resourceObserver: IntersectionObserver | null = null;
   let ensureChapterMounted: ((index: number) => void) | null = null;
   let evictDistantChapters: ((active: number) => void) | null = null;
@@ -1279,6 +1404,13 @@ export function createFlowRenderer(
       snapPagedScroller(scroller, step);
       hooks.syncState();
       hooks.dismissSelectionToolbar();
+      const doc = frame?.contentDocument;
+      if (doc !== null && doc !== undefined) {
+        paintAnnotationOverlays(doc);
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => paintAnnotationOverlays(doc));
+        }
+      }
       return true;
     }
     const active = scrollHost.querySelector<HTMLElement>('.lightink-reader-chapter.is-active');
@@ -1314,6 +1446,10 @@ export function createFlowRenderer(
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => {
         applyChapterPage();
+        const doc = nextFrame?.contentDocument;
+        if (doc !== null && doc !== undefined) {
+          paintAnnotationOverlays(doc);
+        }
         requestAnimationFrame(applyChapterPage);
       });
     }
@@ -1553,6 +1689,7 @@ export function createFlowRenderer(
       frame.dataset.chapterIndex = String(chapterIndex);
       frame.title = headingTitle;
       frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.tabIndex = -1;
       frame.setAttribute('scrolling', 'no');
       frame.setAttribute('frameborder', '0');
       frame.style.border = '0';
@@ -1658,17 +1795,36 @@ export function createFlowRenderer(
           hooks.applyPendingRestore();
           hooks.syncState();
         };
+        const frameQuote = (): string => frameWindow.getSelection()?.toString().trim() ?? '';
+        const selectionToolbarOpen = (): boolean => hooks.isSelectionToolbarVisible?.() === true;
+        let ignorePagingGesture = false;
+        const onContentPointerDown = (): void => {
+          if (!selectionToolbarOpen()) {
+            return;
+          }
+          hooks.dismissSelectionToolbar();
+          ignorePagingGesture = true;
+        };
         const onClick = (event: MouseEvent): void => {
           if (hooks.handleNoteMarkClick(event)) {
             return;
           }
-          const target = event.target;
-          const element =
-            target !== null &&
-            typeof target === 'object' &&
-            typeof (target as Element).closest === 'function'
-              ? (target as Element)
-              : null;
+          // Highlight glyphs are Text nodes; the click still lands in a tap
+          // zone and must not turn the page.
+          if (isFlowAnnotationMarkTarget(event.target)) {
+            return;
+          }
+          // 划选结束会合成 click：左右热区绝不能跟着翻页。
+          if (frameQuote().length > 0) {
+            return;
+          }
+          if (ignorePagingGesture) {
+            ignorePagingGesture = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          const element = elementFromEventTarget(event.target);
           const link = element?.closest<HTMLAnchorElement>('a[href]') ?? null;
           const href = link?.getAttribute('href') ?? null;
           const viewportWidth =
@@ -1751,20 +1907,16 @@ export function createFlowRenderer(
         let stableSelectionTimer: ReturnType<typeof setTimeout> | null = null;
         const flushStableSelection = (): void => {
           stableSelectionTimer = null;
-          if (!hostHasTouchFlags(root)) {
-            return;
-          }
           notifySelection();
         };
         const scheduleStableSelection = (): void => {
-          if (!hostHasTouchFlags(root)) {
-            return;
-          }
           if (stableSelectionTimer !== null) {
             clearTimeout(stableSelectionTimer);
           }
-          // selectionchange 在长按拖选中连发；停一拍再走既有 onSelectionMouseUp。
-          stableSelectionTimer = setTimeout(flushStableSelection, 80);
+          // selectionchange 在拖选中连发；停一拍再走既有 onSelectionMouseUp。
+          // Desktop/macOS trackpad may finish a selection without mouseup.
+          const delay = hostHasTouchFlags(root) ? 80 : 160;
+          stableSelectionTimer = setTimeout(flushStableSelection, delay);
         };
         const onSelectionChange = (): void => {
           scheduleStableSelection();
@@ -1773,12 +1925,18 @@ export function createFlowRenderer(
           scheduleStableSelection();
         };
         const onContextMenu = (event: Event): void => {
-          if (hostHasTouchFlags(root)) {
+          const quote = frameWindow.getSelection()?.toString().trim() ?? '';
+          if (hostHasTouchFlags(root) || quote.length > 0) {
             event.preventDefault();
           }
         };
         // 划选发生在 iframe 内，键盘焦点也在 iframe 文档——Escape 需在 frame 内转发。
+        let appliedKey: KeyboardEvent | null = null;
         const onKeyDown = (event: KeyboardEvent): void => {
+          if (appliedKey === event) {
+            return;
+          }
+          appliedKey = event;
           if (event.key === 'Escape' && hooks.dismissSelectionToolbar()) {
             event.preventDefault();
             return;
@@ -1847,24 +2005,7 @@ export function createFlowRenderer(
             return;
           }
           if (!isFlowPaginated(root)) {
-            // One hardware tick can hit every mounted iframe in WebView2.
-            // Applying it per frame jumps a keep-window (about seven chapters).
-            if (lastAppliedScrollWheel === event) {
-              event.preventDefault();
-              return;
-            }
-            if (event.timeStamp > 0 && event.timeStamp === lastScrollWheelStamp) {
-              event.preventDefault();
-              return;
-            }
-            if (applyFrameWheelToScroller(event, hooks.scrollContainer())) {
-              lastAppliedScrollWheel = event;
-              if (event.timeStamp > 0) {
-                lastScrollWheelStamp = event.timeStamp;
-              }
-              event.preventDefault();
-              hooks.onUserScrollIntent?.();
-            }
+            applyScrollModeWheel(event);
             return;
           }
           const delta =
@@ -1880,12 +2021,22 @@ export function createFlowRenderer(
             clientY: mapFrameClientY(frame, event.clientY),
           });
         };
+        const onContentPointerUp = (): void => {
+          queueMicrotask(() => {
+            ignorePagingGesture = false;
+          });
+        };
         frameDocument.addEventListener('click', onClick);
+        frameDocument.addEventListener('pointerdown', onContentPointerDown);
+        frame.addEventListener('pointerdown', onContentPointerDown);
+        frameDocument.addEventListener('pointerup', onContentPointerUp);
+        frame.addEventListener('pointerup', onContentPointerUp);
         frameDocument.addEventListener('mouseup', onMouseUp);
         frameDocument.addEventListener('selectionchange', onSelectionChange);
         frameDocument.addEventListener('touchend', onTouchEnd);
         frameDocument.addEventListener('contextmenu', onContextMenu);
         frameDocument.addEventListener('keydown', onKeyDown);
+        frameWindow.addEventListener('keydown', onKeyDown);
         frameDocument.addEventListener('pointermove', onPointerMove);
         // Capture on both: some engines skip window when the target is <img>.
         // The same WheelEvent object is ignored the second time.
@@ -1902,10 +2053,86 @@ export function createFlowRenderer(
           viewportWidth: () => frame.clientWidth,
           tapPrevRatio: TOUCH_TAP_PREV_RATIO,
           tapNextRatio: TOUCH_TAP_NEXT_RATIO,
-          page: (direction) => advanceFlowPage(direction),
+          page: (direction) => {
+            if (ignorePagingGesture) {
+              return true;
+            }
+            if (frameQuote().length > 0) {
+              return false;
+            }
+            if (selectionToolbarOpen()) {
+              hooks.dismissSelectionToolbar();
+              return true;
+            }
+            return isFlowPaginated(root) && advanceFlowPage(direction);
+          },
           pagedScroller: () => readerPagedScroller(frameDocument),
-          settleDrag: (startLeft, dx) => settleVisiblePagedRelease(startLeft, dx),
+          settleDrag: (startLeft, dx) => {
+            if (ignorePagingGesture || frameQuote().length > 0 || selectionToolbarOpen()) {
+              return false;
+            }
+            return settleVisiblePagedRelease(startLeft, dx);
+          },
           onScrollIdle: snapVisiblePagedScroller,
+        });
+        if (root.tabIndex < 0) {
+          root.tabIndex = -1;
+        }
+        let pointerTapConsumed = false;
+        const consumePointerTap = (): boolean => {
+          if (pointerTapConsumed) {
+            return false;
+          }
+          pointerTapConsumed = true;
+          queueMicrotask(() => {
+            pointerTapConsumed = false;
+          });
+          return true;
+        };
+        const collapseFrameSelection = (): void => {
+          frameWindow.getSelection()?.removeAllRanges();
+        };
+        const pageFromPointerTap = (direction: 1 | -1): boolean => {
+          if (pointerTapConsumed) {
+            return true;
+          }
+          if (ignorePagingGesture || frameQuote().length > 0) {
+            consumePointerTap();
+            return true;
+          }
+          const moved = isFlowPaginated(root) && advanceFlowPage(direction);
+          if (moved) {
+            consumePointerTap();
+            collapseFrameSelection();
+          }
+          return moved;
+        };
+        const onPointerCenterTap = (event: PointerEvent): void => {
+          if (ignorePagingGesture || frameQuote().length > 0) {
+            consumePointerTap();
+            return;
+          }
+          if (!consumePointerTap()) {
+            return;
+          }
+          collapseFrameSelection();
+          hooks.onFrameSurfaceClick?.(event as unknown as MouseEvent);
+          try {
+            root.focus({ preventScroll: true });
+          } catch {
+            // jsdom / detached root
+          }
+        };
+        const pointerTapOptions = {
+          viewportWidth: () => frame.clientWidth,
+          page: pageFromPointerTap,
+          onCenterTap: onPointerCenterTap,
+          ignore: (event: PointerEvent) => shouldDeferFlowPointerTap(event.target),
+        };
+        const releaseFramePointerTap = bindPointerTapPaging(frameDocument, pointerTapOptions);
+        const releaseHostPointerTap = bindPointerTapPaging(frame, {
+          ...pointerTapOptions,
+          mapClientX: (clientX) => clientX - frame.getBoundingClientRect().left,
         });
         const releaseImages = bindBlockedRemoteImages(
           frameDocument.body,
@@ -1950,6 +2177,11 @@ export function createFlowRenderer(
         watchFrameImages();
         syncHeight();
         requestAnimationFrame(syncHeight);
+        const overlayScroller = readerPagedScroller(frameDocument);
+        const onHighlightOverlayScroll = (): void => {
+          paintAnnotationOverlays(frameDocument);
+        };
+        overlayScroller.addEventListener('scroll', onHighlightOverlayScroll, { passive: true });
         hooks.renderHighlights();
         // T8：帧就绪——章节引用资源（EPUB 图片）按窗口可见性物化；物化完成后
         // 重新挂图片 load 监听并同步帧高（懒物化的图片此时才开始加载）。
@@ -1970,14 +2202,22 @@ export function createFlowRenderer(
             stableSelectionTimer = null;
           }
           resizeObserver?.disconnect();
+          overlayScroller.removeEventListener('scroll', onHighlightOverlayScroll);
           releaseImages();
           releaseFrameTouchPaging();
+          releaseFramePointerTap();
+          releaseHostPointerTap();
           frameDocument.removeEventListener('click', onClick);
+          frameDocument.removeEventListener('pointerdown', onContentPointerDown);
+          frame.removeEventListener('pointerdown', onContentPointerDown);
+          frameDocument.removeEventListener('pointerup', onContentPointerUp);
+          frame.removeEventListener('pointerup', onContentPointerUp);
           frameDocument.removeEventListener('mouseup', onMouseUp);
           frameDocument.removeEventListener('selectionchange', onSelectionChange);
           frameDocument.removeEventListener('touchend', onTouchEnd);
           frameDocument.removeEventListener('contextmenu', onContextMenu);
           frameDocument.removeEventListener('keydown', onKeyDown);
+          frameWindow.removeEventListener('keydown', onKeyDown);
           frameDocument.removeEventListener('pointermove', onPointerMove);
           frameWindow.removeEventListener('wheel', onWheel, true);
           frameDocument.removeEventListener('wheel', onWheel, true);
@@ -2226,7 +2466,7 @@ export function createFlowRenderer(
     if (event.ctrlKey || event.metaKey || event.defaultPrevented) {
       return;
     }
-    if (!flowReaderHostActive(root)) {
+    if (!flowReaderSurfaceActive(root)) {
       return;
     }
     if (wheelPagingShouldIgnoreTarget(event.target)) {
@@ -2238,6 +2478,15 @@ export function createFlowRenderer(
         event.target.closest('.lightink-reader-sidebar') !== null ||
         event.target.closest('.lightink-reader-chrome-panel') !== null)
     ) {
+      return;
+    }
+    if (!isFlowPaginated(root)) {
+      if (!eventTargetsFlowScroller(event.target, root)) {
+        return;
+      }
+      if (applyScrollModeWheel(event)) {
+        event.stopPropagation();
+      }
       return;
     }
     const delta =

@@ -28,6 +28,8 @@ import {
 class FakeElement {
   readonly tagName: string;
   textContent = '';
+  type = '';
+  value = '';
   style: Record<string, string> = {};
   children: FakeElement[] = [];
   /** 宿主 fake 专用：模拟渲染出的 h1-h6（querySelectorAll 返回）。 */
@@ -150,13 +152,22 @@ function headerOf(view: OutlineView): FakeElement {
   return rootOf(view).children[0] as FakeElement;
 }
 
+function childByClass(view: OutlineView, className: string): FakeElement {
+  const match = rootOf(view).children.find((child) => child.classList.contains(className));
+  expect(match, `missing .${className}`).toBeTruthy();
+  return match!;
+}
+
 function bodyOf(view: OutlineView): FakeElement {
-  // children: [header, body, resizeHandle]
-  return rootOf(view).children[1] as FakeElement;
+  return childByClass(view, 'lightink-outline-body');
+}
+
+function searchOf(view: OutlineView): FakeElement {
+  return childByClass(view, 'lightink-outline-search');
 }
 
 function resizeHandleOf(view: OutlineView): FakeElement {
-  return rootOf(view).children[2] as FakeElement;
+  return childByClass(view, 'lightink-outline-resize');
 }
 
 function memoryStorage(seed: Record<string, string> = {}): Storage {
@@ -322,6 +333,67 @@ describe('createOutlineView 跳转', () => {
     expect(bodyOf(view).children[1].classList.contains('level-2')).toBe(true);
     (bodyOf(view).children[0] as FakeElement).click();
     expect(jumps).toEqual([{ text: '第一章', page: 3, chapter: undefined }]);
+    view.destroy();
+  });
+
+  it('高亮当前阅读位置，打开或换书时滚到当前项', () => {
+    let location = { page: 4 };
+    const view = createOutlineView({
+      doc: fakeDocument(),
+      getActiveHost: () => null,
+      getActiveMarkdown: () => null,
+      getActiveReaderOutline: () => [
+        { level: 1, text: '第一章', anchor: 0, page: 3 },
+        { level: 2, text: '1.1', anchor: 1, page: 4 },
+        { level: 1, text: '终章', anchor: 2, page: 20 },
+      ],
+      getActiveLocation: () => location,
+    });
+    const items = bodyOf(view).children;
+    expect(items[1]?.classList.contains('is-current')).toBe(true);
+    expect(items[1]?.scrollIntoView).toHaveBeenCalled();
+
+    location = { page: 20 };
+    view.refreshNow();
+    expect(bodyOf(view).children[2]?.classList.contains('is-current')).toBe(true);
+    expect(bodyOf(view).children[2]?.scrollIntoView).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('按标题搜索并保留祖先条目', () => {
+    const view = createOutlineView({
+      doc: fakeDocument(),
+      getActiveHost: () => null,
+      getActiveMarkdown: () => '# 开篇\n\n## 白月光\n\n# 终章\n',
+    });
+    expect(searchOf(view).getAttribute('hidden')).toBeNull();
+    searchOf(view).value = '白月';
+    searchOf(view).emit('input');
+    expect(itemTexts(view)).toEqual(['开篇', '白月光']);
+    searchOf(view).value = '没有这章';
+    searchOf(view).emit('input');
+    expect(bodyOf(view).children[0]?.classList.contains('lightink-outline-empty')).toBe(true);
+    searchOf(view).emit('keydown', {
+      key: 'Escape',
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+    expect(itemTexts(view)).toEqual(['开篇', '白月光', '终章']);
+    searchOf(view).value = '';
+    searchOf(view).emit('input');
+    searchOf(view).emit('keydown', {
+      key: 'Escape',
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+    expect(view.visibility).toBe('rail');
+    searchOf(view).emit('keydown', {
+      key: 'Escape',
+      isComposing: true,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+    expect(view.visibility).toBe('rail');
     view.destroy();
   });
 });

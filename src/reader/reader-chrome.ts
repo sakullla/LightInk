@@ -2,9 +2,10 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。桌面顶栏是五项带文字入口（返回书架 · 目录 ·
- * 排版 · 搜索 · 本书标注）；底栏与沉浸条都是单行：
- * 章节名 | 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC 刻度。
+ * 边缘时顶栏与底栏同时出现。桌面顶栏是四项带文字入口（返回书架 · 目录 ·
+ * 排版 · 搜索）。搜索打开同一套标注侧栏（列表 + 书内搜索），不再另放
+ * 「本书标注」。底栏与沉浸条都是单行：章节名 | 进度轨道 | 位置/百分比。
+ * 轨道用主题色填充，唤出后标 TOC 刻度。
  *
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
  * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
@@ -13,7 +14,7 @@
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
  * 唤出；只由中部点按 / Escape / 收浮层收起。翻页模式 idle 仍显示 whisper
  * 进度线；滚动模式不显示（原生滚动条即进度，底栏会挡住末行）。
- * 目录 / 排版 / 搜索 / 本书标注挪到 `.lightink-reader-chrome-footer` 拇指区
+ * 目录 / 排版 / 搜索挪到 `.lightink-reader-chrome-footer` 拇指区
  *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
  * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
  * 一套 chrome 状态机。文字书与漫画共用这套点按显隐。
@@ -23,14 +24,13 @@ import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
 
-export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'search' | 'annotations';
+export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'search';
 
 export interface ReaderChromeLabels {
   readonly backToShelf: string;
   readonly toc: string;
   readonly typography: string;
   readonly search: string;
-  readonly annotations: string;
   readonly toolbar: string;
   readonly progress: string;
   readonly footer: string;
@@ -48,7 +48,6 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
   'toc',
   'typography',
   'search',
-  'annotations',
 ];
 
 export const READER_CHROME_HIDE_DELAY_MS = 2500;
@@ -64,7 +63,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     toc: 'Contents',
     typography: 'Typography',
     search: 'Search',
-    annotations: 'Book notes',
     toolbar: 'Reading controls',
     progress: 'Reading progress',
     footer: 'Reading progress',
@@ -74,7 +72,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     toc: '目录',
     typography: '排版',
     search: '搜索',
-    annotations: '本书标注',
     toolbar: '阅读控件',
     progress: '阅读进度',
     footer: '阅读进度',
@@ -345,14 +342,13 @@ export function createReaderChrome(
   const tocButton = makeButton('toc', labels.toc);
   const typographyButton = makeButton('typography', labels.typography);
   const searchButton = makeButton('search', labels.search);
-  const annotationsButton = makeButton('annotations', labels.annotations);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, searchButton, annotationsButton);
+  tools.append(tocButton, typographyButton, searchButton);
   if (touchMode) {
     const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
     const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
@@ -468,6 +464,15 @@ export function createReaderChrome(
     bar.hidden = !revealed;
     writeAttr(bar, 'aria-hidden', revealed ? 'false' : 'true');
     bar.style.display = revealed ? 'flex' : 'none';
+    if (revealed) {
+      bar.setAttribute('data-tauri-drag-region', '');
+      drag.setAttribute('data-tauri-drag-region', '');
+      bar.style.setProperty('-webkit-app-region', 'drag');
+    } else {
+      bar.removeAttribute('data-tauri-drag-region');
+      drag.removeAttribute('data-tauri-drag-region');
+      bar.style.setProperty('-webkit-app-region', 'no-drag');
+    }
     const hideProgress = suppressProgressDock();
     const hideFooter = !revealed || (hideProgress && !touchMode);
     footer.hidden = hideFooter;
@@ -476,7 +481,7 @@ export function createReaderChrome(
       hideProgress || revealed || attachedHost?.dataset.readingLayout === 'scroll';
     whisper.hidden = hideWhisper;
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
-    for (const button of [backButton, tocButton, typographyButton, searchButton, annotationsButton]) {
+    for (const button of [backButton, tocButton, typographyButton, searchButton]) {
       button.hidden = !revealed;
     }
   };
@@ -695,11 +700,6 @@ export function createReaderChrome(
     event.preventDefault();
     event.stopPropagation();
     deps.openSearch?.();
-  });
-  annotationsButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    deps.toggleSidebar?.();
   });
 
   const onDockEnter = (): void => {

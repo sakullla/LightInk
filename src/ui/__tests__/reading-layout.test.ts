@@ -29,6 +29,7 @@ import {
   scrollToKeepViewportAnchor,
   settlePagedRelease,
   snapPagedScroller,
+  scrollerHasRoomInDelta,
   viewportAnchor,
 } from '../reading-layout.js';
 
@@ -61,6 +62,22 @@ describe('load/saveReadingLayout', () => {
 });
 
 describe('paged navigation', () => {
+  it('reports remaining overflow so a width-fit comic can scroll before paging', () => {
+    const scroller = {
+      scrollTop: 0,
+      scrollLeft: 0,
+      scrollHeight: 2400,
+      scrollWidth: 800,
+      clientHeight: 800,
+      clientWidth: 800,
+    };
+    expect(scrollerHasRoomInDelta(scroller, 0, 80)).toBe(true);
+    expect(scrollerHasRoomInDelta(scroller, 0, -80)).toBe(false);
+    scroller.scrollTop = 1600;
+    expect(scrollerHasRoomInDelta(scroller, 0, 80)).toBe(false);
+    expect(scrollerHasRoomInDelta(scroller, 0, -80)).toBe(true);
+  });
+
   it('advances one viewport at a time and stops at the end', () => {
     const scroller = { scrollLeft: 0, scrollWidth: 900, clientWidth: 400 };
     expect(advancePagedScroller(scroller, 1)).toBe(true);
@@ -230,6 +247,22 @@ describe('reading nav keys', () => {
     const advance = (direction: 1 | -1): boolean => direction === 1;
     expect(gate(1, advance)).toBe(true);
     expect(gate(1, advance)).toBe(false);
+  });
+
+  it('keeps a trackpad burst as one page until the wheel stream goes idle', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gate = createPagedWheelGate(200);
+    const advance = vi.fn(() => true);
+    expect(gate(1, advance)).toBe(true);
+    vi.setSystemTime(50);
+    expect(gate(1, advance)).toBe(false);
+    vi.setSystemTime(180);
+    expect(gate(1, advance)).toBe(false);
+    vi.setSystemTime(400);
+    expect(gate(1, advance)).toBe(true);
+    expect(advance).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it('runs once after a resize burst settles', () => {

@@ -12,8 +12,10 @@ import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 import {
   adoptReaderOverlayTheme,
   defaultReaderChromePanelCopy,
+  activateReaderTocPanel,
   fillReaderTocPanel,
   fillReaderTypographyPanel,
+  filterOutlineItems,
   mountReaderOverlay,
   pinFixedOverlay,
   positionReaderChromePanel,
@@ -22,7 +24,7 @@ import {
 } from '../reader-chrome-panels.js';
 import { createSearchSheet } from '../search-sheet.js';
 
-const THUMB_ACTIONS = ['toc', 'typography', 'search', 'annotations'] as const;
+const THUMB_ACTIONS = ['toc', 'typography', 'search'] as const;
 const MIN_HIT_PX = 48;
 const MIN_GAP_PX = 8;
 
@@ -163,12 +165,170 @@ describe('reader chrome panels', () => {
     );
     const items = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
     expect(panel.querySelector('nav')).not.toBeNull();
+    expect(panel.querySelector('.lightink-reader-toc-search')).not.toBeNull();
     expect(items).toHaveLength(2);
     expect(items[1]!.classList.contains('is-current')).toBe(true);
     expect(items[1]!.dataset.outlineLevel).toBe('2');
     expect(panel.getAttribute('aria-modal')).toBe('true');
     items[0]!.click();
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters the contents list and keeps ancestor headings for a nested hit', () => {
+    expect(
+      filterOutlineItems(
+        [
+          { level: 1, text: '开篇', anchor: 0, chapter: 0 },
+          { level: 2, text: '白月光', anchor: 1, chapter: 1 },
+          { level: 1, text: '终章', anchor: 2, chapter: 2 },
+        ],
+        '白月',
+      ),
+    ).toEqual([
+      { level: 1, text: '开篇', anchor: 0, chapter: 0 },
+      { level: 2, text: '白月光', anchor: 1, chapter: 1 },
+    ]);
+
+    const panel = document.createElement('div');
+    fillReaderTocPanel(
+      panel,
+      [
+        { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+        { level: 2, text: '小节', anchor: 1, chapter: 1 },
+        { level: 1, text: '终章', anchor: 2, chapter: 2 },
+      ],
+      defaultReaderChromePanelCopy(),
+      { chapter: 1 },
+      vi.fn(),
+    );
+    const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+    search.value = '终';
+    search.dispatchEvent(new Event('input'));
+    const items = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]!.textContent).toBe('终章');
+  });
+
+  it('clears search on Escape, then dismisses the contents sheet', () => {
+    const panel = document.createElement('div');
+    const onSelect = vi.fn();
+    const onDismiss = vi.fn();
+    fillReaderTocPanel(
+      panel,
+      [
+        { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+        { level: 1, text: '终章', anchor: 1, chapter: 1 },
+      ],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      onSelect,
+      onDismiss,
+    );
+    const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+    search.value = '终';
+    search.dispatchEvent(new Event('input'));
+    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(1);
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(search.value).toBe('');
+    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    search.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves the active contents row with arrows and selects it with Enter', () => {
+    const panel = document.createElement('div');
+    const onSelect = vi.fn();
+    fillReaderTocPanel(
+      panel,
+      [
+        { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+        { level: 1, text: '终章', anchor: 1, chapter: 1 },
+      ],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      onSelect,
+    );
+    const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+    const first = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item')[0]!;
+    expect(first.classList.contains('is-active')).toBe(true);
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    const second = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item')[1]!;
+    expect(second.classList.contains('is-active')).toBe(true);
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(onSelect).toHaveBeenCalledWith({ level: 1, text: '终章', anchor: 1, chapter: 1 });
+  });
+
+  it('does not steal IME composition keys in contents search', () => {
+    const panel = document.createElement('div');
+    const onSelect = vi.fn();
+    const onDismiss = vi.fn();
+    fillReaderTocPanel(
+      panel,
+      [
+        { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+        { level: 1, text: '终章', anchor: 1, chapter: 1 },
+      ],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      onSelect,
+      onDismiss,
+    );
+    const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+    const composing = { isComposing: true, bubbles: true, cancelable: true } as const;
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', ...composing }));
+    expect(panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item')[0]!.classList.contains('is-active')).toBe(
+      true,
+    );
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ...composing }));
+    expect(onSelect).not.toHaveBeenCalled();
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', ...composing }));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('focuses the contents search after the sheet is shown', () => {
+    const panel = document.createElement('div');
+    document.body.append(panel);
+    fillReaderTocPanel(
+      panel,
+      [
+        { level: 1, text: '第一章', anchor: 0, chapter: 0 },
+        { level: 1, text: '终章', anchor: 1, chapter: 1 },
+      ],
+      defaultReaderChromePanelCopy(),
+      { chapter: 1 },
+      vi.fn(),
+    );
+    activateReaderTocPanel(panel);
+    expect(panel.querySelector('.lightink-reader-toc-search')).toBe(document.activeElement);
+  });
+
+  it('scrolls the deepest current contents row into view when the panel opens', () => {
+    const panel = document.createElement('div');
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+      scrolled.push(this.textContent ?? '');
+    };
+    try {
+      fillReaderTocPanel(
+        panel,
+        [
+          { level: 1, text: '第一章', anchor: 0, chapter: 1 },
+          { level: 2, text: '小节', anchor: 1, chapter: 1 },
+        ],
+        defaultReaderChromePanelCopy(),
+        { chapter: 1 },
+        vi.fn(),
+      );
+      expect(scrolled[scrolled.length - 1]).toBe('小节');
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
   });
 
   it('groups typography controls and exposes paper swatches', () => {
@@ -564,6 +724,28 @@ describe('reader chrome panels', () => {
     document.body.style.removeProperty('--lightink-bg-elevated');
   });
 
+  it('re-adopts overlay tokens when the reader paper theme changes without remounting', () => {
+    const host = document.createElement('div');
+    host.dataset.readerTheme = 'sepia';
+    host.style.setProperty('--lightink-bg-elevated', 'rgb(244, 228, 196)');
+    host.style.setProperty('--lightink-fg', 'rgb(92, 74, 50)');
+    document.body.append(host);
+    const overlay = document.createElement('div');
+    adoptReaderOverlayTheme(overlay, host);
+    expect(overlay.dataset.readerTheme).toBe('sepia');
+    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('rgb(244, 228, 196)');
+
+    host.dataset.readerTheme = 'night';
+    host.style.setProperty('--lightink-bg-elevated', 'rgb(28, 28, 28)');
+    host.style.setProperty('--lightink-fg', 'rgb(200, 200, 200)');
+    adoptReaderOverlayTheme(overlay, host);
+    expect(overlay.dataset.readerTheme).toBe('night');
+    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('rgb(28, 28, 28)');
+    expect(overlay.style.getPropertyValue('--lightink-fg')).toBe('rgb(200, 200, 200)');
+    overlay.remove();
+    host.remove();
+  });
+
   it('reveals footer four tools and top-bar 回书架 by tap, then docks the sheet above the footer', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
@@ -700,13 +882,13 @@ describe('reader chrome panels', () => {
     chrome.destroy();
   });
 
-  it('sizes back-to-shelf and the four footer tools at least 48×48 on touch', () => {
+  it('sizes back-to-shelf and the three footer tools at least 48×48 on touch', () => {
     const css = readerCss();
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
     );
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--(?:toc|typography|search|annotations)[\s\S]*?\{[^}]*min-(?:width|height):\s*48px/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-action--(?:toc|typography|search)[\s\S]*?\{[^}]*min-(?:width|height):\s*48px/,
     );
     expect(css).not.toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-action\s*\{[^}]*min-height:\s*44px/,
@@ -731,7 +913,7 @@ describe('reader chrome panels', () => {
     style.remove();
   });
 
-  it('keeps at least 8px between the four footer tools', () => {
+  it('keeps at least 8px between the three footer tools', () => {
     const css = readerCss();
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-chrome-footer \.lightink-reader-chrome-tools\s*\{[^}]*gap:\s*(?:8px|0\.5rem|[1-9]\d?px)/,
