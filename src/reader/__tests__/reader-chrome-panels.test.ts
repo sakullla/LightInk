@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SHEET_DRAG_THRESHOLD_PX } from '../../ui/touch/sheet-drag.js';
-import { createAnnotationSidebar } from '../annotation-sidebar.js';
+import { createAnnotationPanel } from '../annotation-panel.js';
 import { defaultComicPreferences } from '../comic-preferences.js';
 import { createReaderChrome } from '../reader-chrome.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
@@ -22,7 +22,6 @@ import {
   readerChromeFooterInset,
   unpinFixedOverlay,
 } from '../reader-chrome-panels.js';
-import { createSearchSheet } from '../search-sheet.js';
 
 const THUMB_ACTIONS = ['toc', 'typography', 'search'] as const;
 const MIN_HIT_PX = 48;
@@ -930,29 +929,33 @@ describe('reader chrome panels', () => {
 
   it('consumes safe-area and keyboard inset on the touch sheet instead of inventing a new stack', () => {
     const sheet = panelsCss();
+    const panel = readFileSync(
+      resolve(process.cwd(), 'src/reader/annotation-panel.css'),
+      'utf-8',
+    );
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-safe-top/,
     );
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*padding-bottom:[^;]*--lightink-safe-bottom/,
     );
-    expect(sheet).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+    expect(panel).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
     );
-    expect(sheet).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*--lightink-keyboard-inset/,
+    expect(panel).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,
     );
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,
     );
     expect(sheet).toMatch(
-      /#app\.is-workspace-shelf \.lightink-reader-chrome-panel,[\s\S]*?\.lightink-reader-search-sheet\s*\{[^}]*display:\s*none/,
+      /#app\.is-workspace-shelf \.lightink-reader-chrome-panel,[\s\S]*?\.lightink-reader-sidebar\s*\{[^}]*display:\s*none/,
     );
     expect(readerCss()).toContain('--lightink-keyboard-inset');
     expect(sheet + readerCss()).toMatch(/--lightink-keyboard-inset/);
   });
 
-  it('gives annotation, search, catalog, and typography sheets a real pointer handle', () => {
+  it('gives annotation, catalog, and typography sheets a real pointer handle', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     host.className = 'lightink-reader';
@@ -988,7 +991,7 @@ describe('reader chrome panels', () => {
     host.append(typography);
     positionReaderChromePanel(typography, host, document.createElement('button'));
 
-    const annotation = createAnnotationSidebar({
+    const annotation = createAnnotationPanel({
       t: (key) => key,
       onJump: vi.fn(),
       onClose: vi.fn(),
@@ -996,48 +999,42 @@ describe('reader chrome panels', () => {
     host.append(annotation.element);
     pinFixedOverlay(annotation.element, host, { innerWidth: 390, innerHeight: 700 });
 
-    const search = createSearchSheet({
-      t: (key) => key,
-      onQuery: vi.fn(),
-      onClose: vi.fn(),
-    });
-    host.append(search.element);
-    search.open('keyword');
-
-    for (const sheet of [catalog, typography, annotation.element, search.element]) {
+    for (const sheet of [catalog, typography, annotation.element]) {
       expect(sheet.classList.contains('is-touch-sheet'), sheet.className).toBe(true);
       const handle = querySheetHandle(sheet);
       expectPointerCapableHandle(handle, sheet);
     }
 
-    expect(search.element.querySelector('.lightink-reader-search-sheet-close')).not.toBeNull();
     expect(annotation.element.querySelector('.lightink-reader-sidebar-close')).not.toBeNull();
-    search.destroy();
     annotation.destroy();
   });
 
-  it('closes the search sheet from a downward handle drag and still honors the close button', () => {
+  it('closes the unified annotation panel sheet from a downward handle drag and still honors the close button', () => {
     const onClose = vi.fn();
-    const sheet = createSearchSheet({
+    const panel = createAnnotationPanel({
       t: (key) => key,
-      onQuery: vi.fn(),
+      onJump: vi.fn(),
       onClose,
     });
-    document.body.append(sheet.element);
-    sheet.open('keyword');
-    const handle = querySheetHandle(sheet.element);
-    expectPointerCapableHandle(handle, sheet.element);
+    document.body.append(panel.element);
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    stubRect(host, { width: 390, height: 700 });
+    document.body.append(host);
+    host.append(panel.element);
+    pinFixedOverlay(panel.element, host, { innerWidth: 390, innerHeight: 700 });
+    const handle = querySheetHandle(panel.element);
+    expectPointerCapableHandle(handle, panel.element);
 
     dragHandlePastThreshold(handle);
-    expect(sheet.isOpen()).toBe(false);
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    sheet.open('keyword');
-    expect(sheet.isOpen()).toBe(true);
-    sheet.element.querySelector<HTMLButtonElement>('.lightink-reader-search-sheet-close')!.click();
-    expect(sheet.isOpen()).toBe(false);
+    panel
+      .element!.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')!
+      .click();
     expect(onClose).toHaveBeenCalledTimes(2);
-    sheet.destroy();
+    panel.destroy();
   });
 
   it('closes annotation, catalog, and typography sheets from a downward handle drag', () => {
@@ -1053,7 +1050,7 @@ describe('reader chrome panels', () => {
     stubRect(host, { width: 390, height: 700 });
 
     const onAnnotationClose = vi.fn();
-    const annotation = createAnnotationSidebar({
+    const annotation = createAnnotationPanel({
       t: (key) => key,
       onJump: vi.fn(),
       onClose: onAnnotationClose,

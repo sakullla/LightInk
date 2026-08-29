@@ -7,7 +7,7 @@
  */
 
 @import './reader-chrome-panels.css';
-@import './annotation-sidebar.css';
+@import './annotation-panel.css';
 
 .lightink-reader {
   position: relative;

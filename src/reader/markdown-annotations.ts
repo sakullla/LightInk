@@ -13,7 +13,7 @@ import {
   collectPmText,
 } from '../editor/plugins/markdown-annotations.js';
 import type { MessageKey } from '../i18n/messages.js';
-import { createAnnotationSidebar, type AnnotationSidebar } from './annotation-sidebar.js';
+import { createAnnotationPanel, type AnnotationPanel } from './annotation-panel.js';
 import {
   AnnotationWriteQueue,
   parseAnnotations,
@@ -63,7 +63,7 @@ export function createMarkdownAnnotationHost(
   let annotations: Annotation[] = [];
   let contentHash: string | null = null;
   let identityKey = '';
-  let sidebar: AnnotationSidebar | null = null;
+  let sidebar: AnnotationPanel | null = null;
   let sidebarVisible = false;
   let destroyed = false;
   let loadGeneration = 0;
@@ -227,7 +227,7 @@ export function createMarkdownAnnotationHost(
     if (sidebar !== null) {
       return;
     }
-    sidebar = createAnnotationSidebar({
+    sidebar = createAnnotationPanel({
       t: deps.t,
       onClose: () => setSidebarVisible(false),
       onJump: jumpTo,

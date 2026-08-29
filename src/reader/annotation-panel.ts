@@ -1,10 +1,29 @@
 /**
- * `annotation-sidebar` — 本书标注笔记本（R5）。
+ * `annotation-panel` — 统一融合标注搜索面板（R2/R8，替代 annotation-sidebar
+ * 与 search-sheet）。
  *
- * 列出当前文档的高亮/书签/笔记：搜摘录与备注、按类型和颜色筛、显示定位、
- * 点击跳转、改备注、删除。分类行追加「搜索正文」分类后，同一输入框检索全书
- * （可选 `search`，Markdown 宿主不提供）。纯 DOM 装配；查询语义走 annotations.ts
- * 的 filterAnnotations。render 全量重绘，筛选与标注搜索状态在闭包内跨 render 保留。
+ * 单一组件承载两件事：
+ * - 标注笔记本：本书全部书签/高亮/笔记按文档位置排序，类型/颜色筛选，
+ *   点击跳转、编辑备注、删除（删除由宿主走 removeAnnotation 产出 tombstone，
+ *   本组件列表永远经 filterAnnotations 过滤，tombstone 不出列）；
+ * - 同一查询框双语义检索：标注分类下本地筛标注；「全部」分类有查询时正文
+ *   命中合并渲染；「搜索正文」分类只检索全书（可选 `search`）。
+ *
+ * 双端同一实现：桌面经 pinFixedOverlay 侧栏形态钉在阅读区右侧；触屏由宿主
+ * （reader-view pinSidebarOverlay → pinFixedOverlay）portal 到 body 并加
+ * is-touch-sheet 底栏形态——拖拽关闭把手与键盘 inset 由 reader-chrome-panels
+ * 的 sheet 机制提供，触屏由此获得与桌面一致的浏览/筛选/跳转/编辑/删除能力。
+ *
+ * Escape 分层：查询非空先清查询（不关面板），为空退一层经 onClose 关面板；
+ * 事件在面板内消费，不再冒泡到 chrome 返回分层（一次只关一层）。
+ *
+ * 正文搜索不可用的宿主（Markdown 编辑器宿主；漫画等位图格式）省略 search
+ * 并可选 isDocumentSearchUnsupported：面板保留「搜索正文」分类，进入后显示
+ * 不支持空态（reader.search.unsupported），不回退「无结果」。
+ *
+ * 纯 DOM 装配；查询语义走 annotations.ts 的 filterAnnotations 与
+ * search-panel.ts 的 bindImeSafeQuery/observeLoadMore。render 全量重绘，
+ * 筛选与标注搜索状态在闭包内跨 render 保留。
  */
 
 import {
@@ -44,7 +63,7 @@ export interface SearchHitsState {
   hasMore?: boolean;
 }
 
-export interface AnnotationSidebarSearch {
+export interface AnnotationPanelSearch {
   onQuery: (query: string) => void;
   onJump: (key: string) => void;
   onNext: () => void;
@@ -53,21 +72,26 @@ export interface AnnotationSidebarSearch {
   onLoadMore?: () => void;
 }
 
-export interface AnnotationSidebarDeps {
+export interface AnnotationPanelDeps {
   t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string;
-  /** 点击某条标注时跳转到其位置（由 reader-view 实现滚动/翻页）。 */
+  /** 点击某条标注时跳转到其位置（由宿主实现滚动/翻页）。 */
   onJump: (annotation: Annotation) => void;
-  /** 可选：移除标注（由 reader-view 实现删除+保存）。 */
+  /** 可选：移除标注（由宿主走 removeAnnotation 产出 tombstone 并保存）。 */
   onRemove?: (annotation: Annotation) => void;
-  /** 可选：编辑备注（由 reader-view 唤起笔记弹层并保存）。 */
+  /** 可选：编辑备注（由宿主唤起笔记弹层并保存）。 */
   onEditNote?: (annotation: Annotation) => void;
-  /** Close the sidebar from its narrow-window drawer control. */
+  /** Close the panel from its close button / Escape layering. */
   onClose?: () => void;
-  /** Reader-only document search. Markdown hosts omit this. */
-  search?: AnnotationSidebarSearch;
+  /** Reader-only document search. Markdown hosts and bitmap formats omit this. */
+  search?: AnnotationPanelSearch;
+  /**
+   * 正文检索不可用（漫画等位图格式无文本层）：保留「搜索正文」分类并显示
+   * 不支持空态；提供时即使 search 缺省也不显示「无结果」。
+   */
+  isDocumentSearchUnsupported?: () => boolean;
 }
 
-export interface AnnotationSidebar {
+export interface AnnotationPanel {
   readonly element: HTMLElement;
   render(annotations: readonly Annotation[]): void;
   renderHits(hits: readonly SearchHitView[], state?: SearchHitsState): void;
@@ -77,10 +101,10 @@ export interface AnnotationSidebar {
   destroy(): void;
 }
 
-/** 每条标注的定位描述（侧栏显示用；cbz 无章节概念只给页码）。 */
+/** 每条标注的定位描述（面板显示用；cbz 无章节概念只给页码）。 */
 function locationText(
   annotation: Annotation,
-  t: AnnotationSidebarDeps['t'],
+  t: AnnotationPanelDeps['t'],
 ): string | null {
   const locator = annotation.locator;
   switch (locator.format) {
@@ -93,6 +117,33 @@ function locationText(
     default:
       return null;
   }
+}
+
+/** 文档位置排序键：先章节/页，再文内偏移（同位置按创建时间稳定排序）。 */
+function positionRank(annotation: Annotation): [number, number] {
+  const locator = annotation.locator;
+  switch (locator.format) {
+    case 'flow':
+      return [locator.chapter, locator.start];
+    case 'text':
+      return [locator.chapter ?? 0, locator.start];
+    case 'pdf':
+      return [locator.page - 1, locator.anchor?.start ?? 0];
+    default:
+      return [(locator as { page: number }).page - 1, 0];
+  }
+}
+
+function byDocumentPosition(left: Annotation, right: Annotation): number {
+  const [leftChapter, leftStart] = positionRank(left);
+  const [rightChapter, rightStart] = positionRank(right);
+  if (leftChapter !== rightChapter) {
+    return leftChapter - rightChapter;
+  }
+  if (leftStart !== rightStart) {
+    return leftStart - rightStart;
+  }
+  return left.createdAt - right.createdAt;
 }
 
 function styleSwatch(element: HTMLElement, color: string): void {
@@ -157,11 +208,13 @@ function createFilterButton(
 }
 
 /**
- * 创建标注侧栏。element 挂到 reader 视图；render 用当前标注集合重绘列表。
+ * 创建统一融合标注搜索面板。element 由宿主挂载：桌面钉在阅读区右侧
+ * （pinFixedOverlay），触屏 portal 到 body 后经 is-touch-sheet 呈底栏形态；
+ * render 用当前标注集合重绘列表。
  */
-export function createAnnotationSidebar(deps: AnnotationSidebarDeps): AnnotationSidebar {
+export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPanel {
   const root = document.createElement('aside');
-  root.className = 'lightink-reader-sidebar';
+  root.className = 'lightink-reader-sidebar lightink-reader-annotation-panel';
   root.setAttribute('aria-label', deps.t('annotation.sidebar'));
   root.setAttribute('aria-modal', 'true');
 
@@ -194,8 +247,8 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   noteStatus.setAttribute('aria-live', 'polite');
   noteField.append(noteSearchInput, noteStatus);
 
-  // 分类筛选：all + 三种 kind；宿主提供正文搜索时追加「搜索正文」分类。
-  // 同一个输入框：标注分类下筛选标注，正文分类下搜索正文。
+  // 分类筛选：all + 三种 kind；宿主提供正文搜索（或声明不支持）时追加
+  // 「搜索正文」分类。同一个输入框：标注分类下筛选标注，正文分类下搜索全书。
   const filters = document.createElement('div');
   filters.className = 'lightink-reader-sidebar-filters';
   filters.setAttribute('role', 'group');
@@ -228,6 +281,13 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     }
   };
 
+  const search = deps.search;
+  const unsupported = (): boolean => deps.isDocumentSearchUnsupported?.() === true;
+  /** 正文检索可执行（宿主提供 search 且当前格式未声明不支持）。 */
+  const documentSearchAvailable = (): boolean => search !== undefined && !unsupported();
+  /** 「搜索正文」分类可见：可执行或不支持（不支持也要有空态出口）。 */
+  const documentCategoryVisible = (): boolean => search !== undefined || unsupported();
+
   for (const filter of FILTERS) {
     const button = createFilterButton(
       {
@@ -241,8 +301,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     filters.appendChild(button);
   }
 
-  const search = deps.search;
-  if (search !== undefined) {
+  if (documentCategoryVisible()) {
     const documentButton = createFilterButton(
       {
         className: 'lightink-reader-sidebar-filter',
@@ -301,7 +360,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
 
   /** 输入框描述随分类切换：标注分类下筛选标注，「搜索正文」分类下只检索全书。 */
   const syncSearchMode = (): void => {
-    const documentMode = currentFilter === 'document' && search !== undefined;
+    const documentMode = currentFilter === 'document' && documentCategoryVisible();
     const label = deps.t(
       documentMode ? 'reader.search.document' : 'annotation.search.placeholder',
     );
@@ -311,8 +370,22 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   const clearDocumentSearch = (): void => {
-    if (lastHits !== null || currentFilter === 'document') search?.onClear();
+    if (
+      lastHits !== null ||
+      currentFilter === 'document' ||
+      noteSearchInput.value.trim() !== ''
+    ) {
+      search?.onClear();
+    }
     lastHits = null;
+  };
+
+  /** 清空查询框并退掉正文搜索会话（Escape/切分类共用；输入框仍有值时通知宿主）。 */
+  const clearQuery = (): void => {
+    clearDocumentSearch();
+    noteSearchInput.value = '';
+    annotationQuery = '';
+    renderCombined();
   };
 
   const setFilter = (filter: AnnotationFilter): void => {
@@ -320,7 +393,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     currentFilter = filter;
     applyFilter();
     syncSearchMode();
-    if (search !== undefined && noteSearchInput.value.trim() !== '') {
+    if (search !== undefined && !unsupported() && noteSearchInput.value.trim() !== '') {
       // 「全部」分类下输入即同时筛选标注与检索正文；「搜索正文」只检索全书。
       if (filter === 'document' || (filter === 'all' && currentColor === 'all')) {
         search.onQuery(noteSearchInput.value);
@@ -332,7 +405,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
 
   /** 颜色筛选离开「全部」时退出正文检索；回到「全部」且有查询时恢复合并搜索。 */
   const syncColorSearchScope = (): void => {
-    if (search !== undefined && currentFilter !== 'document') {
+    if (search !== undefined && !unsupported() && currentFilter !== 'document') {
       if (currentColor === 'all' && currentFilter === 'all' && annotationQuery.trim() !== '') {
         renderCombined();
         search.onQuery(annotationQuery);
@@ -344,12 +417,12 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   const documentSearchScope = (): boolean =>
-    search !== undefined &&
+    documentSearchAvailable() &&
     (currentFilter === 'document' || (currentFilter === 'all' && currentColor === 'all'));
 
   const applyLocalQuery = (): void => {
     annotationQuery = noteSearchInput.value;
-    if (search !== undefined && lastHits !== null && !documentSearchScope()) {
+    if (search !== undefined && !unsupported() && lastHits !== null && !documentSearchScope()) {
       clearDocumentSearch();
     }
     renderCombined();
@@ -361,7 +434,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       search.onQuery(query);
       return;
     }
-    if (search !== undefined && lastHits !== null) {
+    if (documentSearchAvailable() && lastHits !== null) {
       clearDocumentSearch();
     }
     renderCombined();
@@ -379,15 +452,17 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       }
       return;
     }
-    if (event.key !== 'Escape' || noteSearchInput.value === '') {
+    if (event.key !== 'Escape') {
       return;
     }
+    // Escape 分层：有查询先清查询；无查询退一层关面板（触屏同语义）。
     event.preventDefault();
     event.stopPropagation();
-    noteSearchInput.value = '';
-    annotationQuery = '';
-    clearDocumentSearch();
-    renderCombined();
+    if (noteSearchInput.value === '') {
+      deps.onClose?.();
+      return;
+    }
+    clearQuery();
   });
 
   root.addEventListener('keydown', (event) => {
@@ -407,10 +482,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       event.preventDefault();
       event.stopPropagation();
       if (noteSearchInput.value !== '') {
-        noteSearchInput.value = '';
-        annotationQuery = '';
-        clearDocumentSearch();
-        renderCombined();
+        clearQuery();
         return;
       }
       deps.onClose?.();
@@ -594,6 +666,14 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       noteStatus.dataset.searchEmpty = 'false';
     }
     if (currentFilter === 'document') {
+      // 位图格式（漫画）无文本层：正文搜索固定为不支持空态，不回退「无结果」。
+      if (unsupported()) {
+        const unsupportedItem = document.createElement('li');
+        unsupportedItem.className = 'lightink-reader-sidebar-empty';
+        unsupportedItem.textContent = deps.t('reader.search.unsupported');
+        list.appendChild(unsupportedItem);
+        return;
+      }
       if (lastHits === null) {
         const prompt = document.createElement('li');
         prompt.className = 'lightink-reader-sidebar-empty';
@@ -607,11 +687,13 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     }
     const kindFilter: AnnotationKind | undefined =
       currentFilter === 'all' ? undefined : currentFilter;
+    // 列表必经 filterAnnotations：tombstone（已删除记录）永不出列。
     const visible = filterAnnotations(lastAnnotations, {
       query: annotationQuery,
       kind: kindFilter,
       color: currentColor === 'all' ? undefined : currentColor,
     });
+    visible.sort(byDocumentPosition);
     for (const annotation of visible) {
       list.appendChild(renderItem(annotation));
     }
@@ -623,8 +705,11 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
       const empty = document.createElement('li');
       empty.className = 'lightink-reader-sidebar-empty';
       // 区分无标注、搜索无命中（标注与正文都没有）、类型/颜色筛无匹配。
+      // 空态以「过滤后可见」为判定基线：全部记录都是 tombstone 时与
+      // 无标注同文案，不再失真为筛选空态。
+      const liveCount = filterAnnotations(lastAnnotations).length;
       empty.textContent =
-        lastAnnotations.length === 0
+        liveCount === 0
           ? deps.t('annotation.empty')
           : annotationQuery.trim() !== ''
             ? deps.t('reader.search.empty')
@@ -641,13 +726,19 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
   };
 
   const renderHits = (hits: readonly SearchHitView[], state: SearchHitsState = {}): void => {
-    lastHits = hits;
-    lastHitsState = state;
+    if (unsupported()) {
+      // 不支持的格式永远没有正文命中：保持「未搜索」状态由不支持空态承接。
+      lastHits = null;
+      lastHitsState = {};
+    } else {
+      lastHits = hits;
+      lastHitsState = state;
+    }
     renderCombined();
   };
 
   const activateDocumentFilter = (): void => {
-    if (search !== undefined && currentFilter !== 'document') {
+    if (documentCategoryVisible() && currentFilter !== 'document') {
       currentFilter = 'document';
       applyFilter();
       syncSearchMode();
@@ -661,6 +752,7 @@ export function createAnnotationSidebar(deps: AnnotationSidebarDeps): Annotation
     setSearchQuery(query) {
       activateDocumentFilter();
       noteSearchInput.value = query;
+      annotationQuery = query;
     },
     getSearchQuery() {
       return noteSearchInput.value;

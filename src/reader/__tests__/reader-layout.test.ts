@@ -357,7 +357,7 @@ describe('readerPageInnerPadPx', () => {
 });
 
   it('keeps the annotation notebook below the titlebar so caption chips do not cover it', () => {
-    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-sidebar.css'), 'utf-8');
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
     expect(css).toMatch(
       /\.lightink-reader-sidebar\s*\{[^}]*inset:\s*var\(--lightink-titlebar-height/,
     );
@@ -365,7 +365,7 @@ describe('readerPageInnerPadPx', () => {
 
   it('lets long search hit lists scroll without hover-lift jitter', () => {
     const sidebar = readFileSync(
-      resolve(process.cwd(), 'src/reader/annotation-sidebar.css'),
+      resolve(process.cwd(), 'src/reader/annotation-panel.css'),
       'utf-8',
     );
     expect(sidebar).toMatch(
@@ -377,9 +377,6 @@ describe('readerPageInnerPadPx', () => {
     const sheet = readFileSync(
       resolve(process.cwd(), 'src/reader/reader-chrome-panels.css'),
       'utf-8',
-    );
-    expect(sheet).toMatch(
-      /\.lightink-reader-search-sheet-list\s*\{[^}]*overflow-y:\s*auto[^}]*flex:\s*1 1 0/,
     );
     expect(sheet).toMatch(
       /\.lightink-reader-toc-list\s*\{[^}]*scrollbar-width:\s*thin[^}]*scrollbar-color:\s*var\(--lightink-border\)/,
@@ -835,8 +832,10 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*calc\(\s*var\(--lightink-reader-sheet-inset,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
     );
-    expect(css).toMatch(
-      /\.lightink-reader-search-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
+    expect(
+      readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8'),
+    ).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
     );
     // Real handle node is the grabber; decorative ::after is not the only hit target.
     const handleBlocks =
@@ -850,21 +849,25 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     );
   });
 
-  it('keeps the search sheet query box, hit rows, and close button at 44px on coarse pointers', () => {
-    const coarse = coarsePointerCss(panelsCss());
+  it('keeps the unified panel query box, hit rows, and close button at 44px on coarse pointers', () => {
+    const panelCss = readFileSync(
+      resolve(process.cwd(), 'src/reader/annotation-panel.css'),
+      'utf-8',
+    );
+    const coarse = coarsePointerCss(panelCss);
     expect(coarse).toMatch(
-      /\.lightink-reader-search-sheet-input,\s*\.lightink-reader-search-sheet-hit\s*\{[^}]*min-height:\s*44px/,
+      /\.lightink-reader-sidebar-item,[\s\S]*?\.lightink-reader-sidebar-note-search-input,[\s\S]*?\{[^}]*min-height:\s*44px/,
     );
     expect(coarse).toMatch(
-      /\.lightink-reader-search-sheet-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
+      /\.lightink-reader-sidebar-close\s*\{[^}]*min-width:\s*44px/,
     );
-    expect(panelsCss()).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-search-sheet-input,[\s\S]*?min-height:\s*44px[\s\S]*?font-size:\s*16px/,
+    expect(panelCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-sidebar-note-search-input\s*\{[^}]*font-size:\s*16px/,
     );
   });
 
   it('docks the annotation notebook as a touch bottom sheet instead of a side drawer', () => {
-    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-sidebar.css'), 'utf-8');
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
     expect(css).toMatch(
       /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
     );

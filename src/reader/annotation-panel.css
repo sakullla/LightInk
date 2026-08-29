@@ -1,16 +1,18 @@
 /**
- * 标注侧边面板样式。
+ * 统一融合标注搜索面板样式（annotation-panel，替代 annotation-sidebar.css；
+ * 「搜索正文」分类与触屏底栏形态并入同一组件）。
  *
  * 与排版浮层（reader-chrome-panels.css）统一的现代卡片语言：圆角卡片、
- * 柔和阴影、宽松间距、accent 激活态。选择器族从 reader.css 迁入
- * （原 :678-905 主块、:1045-1050 窄窗抽屉媒体查询、:1101-1166 搜索栈块），
- * 类名与 data 钩子全部保留；`@media (forced-colors: active)` 块整体留在
- * reader.css，未迁移。
- * 颜色圆点背景与搜索框等部分表现仍由 annotation-sidebar.ts 内联 style 驱动，
+ * 柔和阴影、宽松间距、accent 激活态。桌面为右侧栏；触屏由宿主 portal 到
+ * body 并加 is-touch-sheet（pinFixedOverlay），呈底栏 sheet 形态（拖拽把手
+ * 由 reader-chrome-panels 的 .lightink-reader-sheet-handle 提供，键盘 inset
+ * 与安全区见下方触屏段）。类名与 data 钩子沿用侧栏选择器族；
+ * `@media (forced-colors: active)` 块整体留在 reader.css。
+ * 颜色圆点背景与搜索框等部分表现仍由 annotation-panel.ts 内联 style 驱动，
  * 本文件只承接尺寸/边框等结构性样式，不写死颜色。
  */
 
-/* ===== 侧栏容器（覆盖阅读区右侧，不挤占正文宽度） ===== */
+/* ===== 面板容器（桌面覆盖阅读区右侧；触屏 is-touch-sheet 底栏，见下方） ===== */
 
 .lightink-reader-sidebar {
   position: absolute;
@@ -95,7 +97,7 @@
   outline-offset: 2px;
 }
 
-/* ===== 搜索行 ===== */
+/* ===== 搜索行（同一查询框：标注分类下筛标注，正文分类下搜全书） ===== */
 
 .lightink-reader-sidebar-search {
   display: flex;
@@ -106,7 +108,6 @@
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
-/* 统一搜索输入框：标注分类下筛选标注，正文分类下搜索全书。 */
 .lightink-reader-sidebar-note-search-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -140,7 +141,7 @@
   display: none;
 }
 
-/* ===== 标注列表：卡片化列表项 ===== */
+/* ===== 标注列表：卡片化列表项（标注行与正文命中行共用） ===== */
 
 .lightink-reader-sidebar-list {
   list-style: none;
@@ -384,7 +385,7 @@
   outline-offset: 2px;
 }
 
-/* ===== 空态：居中 muted 引导文案 ===== */
+/* ===== 空态：居中 muted 引导文案（无标注/筛选无匹配/搜索无命中/正文搜索不支持） ===== */
 
 .lightink-reader-sidebar-empty {
   padding: 1.6rem 0.75rem;
@@ -435,7 +436,7 @@
 
 /* ===== 360dp 竖屏与触屏（追加档，不改既有断点语义） ===== */
 
-/* 360dp 竖屏：标注侧栏近乎全宽抽屉，不溢出视口。 */
+/* 360dp 竖屏：面板近乎全宽抽屉，不溢出视口。 */
 @media (max-width: 480px) {
   .lightink-reader-sidebar {
     width: calc(100% - 1rem);
@@ -443,7 +444,7 @@
   }
 }
 
-/* 触屏（粗指针）：侧栏行项、按钮、筛选标签页命中目标 ≥44px。 */
+/* 触屏（粗指针）：面板行项、按钮、筛选标签页命中目标 ≥44px。 */
 @media (pointer: coarse) {
   .lightink-reader-sidebar-item,
   .lightink-reader-sidebar-close,
@@ -469,6 +470,8 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar:not(.is-touch-sheet) {
   inset: var(--lightink-safe-top, 0px) 0 var(--lightink-safe-bottom, 0px) auto;
 }
+
+/* ===== 触屏底栏 sheet 形态（同一组件；pinFixedOverlay 加 is-touch-sheet） ===== */
 
 .lightink-reader-sidebar.is-touch-sheet {
   position: fixed;
@@ -523,4 +526,3 @@
     0 1px 3px rgba(0, 0, 0, 0.12),
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
-

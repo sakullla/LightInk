@@ -59,9 +59,9 @@ import {
   type AnnotationMarkSpec,
 } from './annotation-render.js';
 import {
-  createAnnotationSidebar,
-  type AnnotationSidebar,
-} from './annotation-sidebar.js';
+  createAnnotationPanel,
+  type AnnotationPanel,
+} from './annotation-panel.js';
 import {
   createSelectionToolbar,
   selectionClientRect,
@@ -88,7 +88,6 @@ import {
   type SearchMarkSpec,
 } from './search-overlay.js';
 import { createReaderSessionSearch } from './session/session-search.js';
-import { createSearchSheet, type SearchSheet } from './search-sheet.js';
 import type {
   ReaderInstance,
   ReaderLoadOptions,
@@ -137,6 +136,7 @@ import { createReaderSessionAnnotation } from './session/session-annotation.js';
 import {
   PAGED_SESSION_EXTENSIONS,
   sessionAdapterKindForExtension,
+  sessionCapabilitiesForExtension,
   sessionMemberForExtension,
   type ReaderSessionAdapter,
   type SessionInvalidation,
@@ -501,9 +501,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   typePanel.hidden = true;
   typePanel.setAttribute('data-panel', 'typography');
 
-  /** 触屏搜索层（R5/R6）：懒建；注册进 isOverlayOpen/dismissOverlay 参与返回分层。 */
-  let searchSheet: SearchSheet | null = null;
-
   // —— 标注宿主会话（session-annotation）：启用判定（标注存储 × adapter
   // 能力声明 × 身份可用）、写队列与侧栏显隐策略唯一实现在核心；本壳只按
   // host 供数（侧栏 DOM/portal/焦点机械）并消费其裁决。 ——
@@ -529,7 +526,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sidebarHoldsFocus: () =>
       sidebar !== null && sidebar.element.contains(document.activeElement),
     focusReaderRoot: () => root.focus(),
-    closeSearchSheet: () => closeSearchSheet(),
     closeChromePanel: () => closeChromePanel(),
     resetSearch: () => resetReaderSearch(),
     afterSidebarSync: () => syncVisibleFlowFrames(),
@@ -540,7 +536,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   let pdfHandle: PdfRenderHandle | null = null;
   let cbzHandle: CbzRenderHandle | null = null;
   let annotations: Annotation[] = [];
-  let sidebar: AnnotationSidebar | null = null;
+  let sidebar: AnnotationPanel | null = null;
   let sidebarBackdrop: HTMLButtonElement | null = null;
   /** 划选工具栏（R3）：划选后确认再产生标注；懒创建（标注启用时）。 */
   let selectionToolbar: SelectionToolbar | null = null;
@@ -1543,9 +1539,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sidebarBackdrop.setAttribute('aria-hidden', 'true');
     sidebarBackdrop.hidden = !sessionAnnotation.sidebarVisibility().shown;
     sidebarBackdrop.addEventListener('click', () => setSidebarVisible(false));
-    sidebar = createAnnotationSidebar({
+    sidebar = createAnnotationPanel({
       t,
       onClose: () => setSidebarVisible(false),
+      // 漫画等位图格式无文本层：正文搜索固定为「不支持」空态（能力矩阵声明）。
+      isDocumentSearchUnsupported: () => {
+        if (loadedExt === '') {
+          return false;
+        }
+        return sessionCapabilitiesForExtension(loadedExt)?.textSearch == null;
+      },
       search: {
         onQuery: (nextQuery) => {
           if (nextQuery.trim() === '') {
@@ -1836,9 +1839,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       setSidebarVisible(false);
       return true;
     }
-    if (closeSearchSheet()) {
-      return true;
-    }
     return closeChromePanel();
   };
 
@@ -1853,7 +1853,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     if (!active) {
       hideSelectionToolbar();
-      closeSearchSheet();
       closeChromePanel();
       readerChrome?.dismiss();
       syncChromeRevealAttr();
@@ -2097,14 +2096,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     mark.scrollIntoView({ block: 'center', inline: 'nearest' });
   };
 
-  /** 命中表面同步：触屏搜索层与桌面标注侧栏共用会话的 hitViews/hitsState。 */
+  /** 命中表面同步：统一面板（桌面侧栏/触屏 sheet 同一实例）消费会话的 hitViews/hitsState。 */
   const syncSearchHits = (): void => {
-    if (searchSheet !== null && searchSheet.isOpen()) {
-      searchSheet.renderHits(
-        searchSheet.getQuery().trim() === '' ? [] : sessionSearch.hitViews(),
-        sessionSearch.hitsState(),
-      );
-    }
     if (sidebar === null) {
       return;
     }
@@ -2134,59 +2127,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return sanitizeSearchQuery(typeof window !== 'undefined' ? window.getSelection()?.toString() : '');
   };
 
-  const ensureSearchSheet = (): SearchSheet => {
-    if (searchSheet === null) {
-      searchSheet = createSearchSheet({
-        t,
-        onQuery: (query) => sessionSearch.run(query),
-        // 点命中跳转且层保持打开（连续查阅）；宿主重放 renderHits 校正 current。
-        onJump: (key) => sessionSearch.activateKey(key),
-        onLoadMore: () => sessionSearch.loadMore(),
-        // 层关闭（× / Escape / 点空白 / 宿主关闭）：命中 overlay 随层收起
-        // （与侧栏关闭同语义），查询词保留供重开续查。
-        onClose: () => {
-          sessionSearch.clear();
-          if (
-            searchSheet !== null &&
-            typeof document !== 'undefined' &&
-            searchSheet.element.contains(document.activeElement)
-          ) {
-            root.focus();
-          }
-        },
-      });
-    }
-    return searchSheet;
-  };
-
-  /** 关触屏搜索层；层原本打开返回 true（供 dismissOverlay 分层判定）。 */
-  const closeSearchSheet = (): boolean => searchSheet?.close() === true;
-
-  /** 触屏路径（R5）：独立底栏搜索层，不再强制打开标注侧栏。 */
-  const openTouchSearchSheet = (query?: string): void => {
-    if (sessionAnnotation.sidebarVisibility().visible) {
-      setSidebarVisible(false);
-    }
-    closeChromePanel();
-    const sheet = ensureSearchSheet();
-    mountReaderOverlay(sheet.element, root);
-    pinFixedOverlay(sheet.element, root);
-    const seed = sanitizeSearchQuery(query) || currentSearchSelection();
-    sheet.open(seed === '' ? undefined : seed);
-    const effective = sheet.getQuery().trim();
-    if (effective !== '') {
-      sessionSearch.run(effective);
-    } else {
-      syncSearchHits();
-    }
-  };
-
-  /** 打开搜索：触屏走底栏搜索层；桌面打开标注侧栏并聚焦搜索（PDF / 流式；CBZ 无文本则空结果）。 */
+  /**
+   * 打开搜索（双端收敛为同一面板）：打开统一融合面板并聚焦查询框——桌面为
+   * 侧栏形态、触屏经 pinSidebarOverlay 呈 is-touch-sheet 底栏形态；查询词
+   * 非空即检索（PDF / 流式；漫画无文本层则面板显示不支持空态）。
+   */
   const openSearch = (query?: string): void => {
-    if (readerChromeTouchMode()) {
-      openTouchSearchSheet(query);
-      return;
-    }
     const scroller = flowScrollContainer();
     const left = scroller.scrollLeft;
     const top = scroller.scrollTop;
@@ -2668,12 +2614,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (!sessionAnnotation.tabActive()) {
       return;
     }
-    const sheetOpen = searchSheet !== null && searchSheet.isOpen();
-    if (!sheetOpen && (!sessionAnnotation.sidebarVisibility().visible || sidebar === null)) {
+    if (!sessionAnnotation.sidebarVisibility().visible || sidebar === null) {
       return;
     }
-    const uiQuery = sheetOpen ? searchSheet!.getQuery() : sidebar!.getSearchQuery();
-    const query = (uiQuery || sessionSearch.query() || '').trim();
+    const query = (sidebar.getSearchQuery() || sessionSearch.query() || '').trim();
     if (query === '') {
       return;
     }
@@ -2864,9 +2808,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (sidebar !== null) {
       adoptReaderOverlayTheme(sidebar.element, root);
     }
-    if (searchSheet !== null) {
-      adoptReaderOverlayTheme(searchSheet.element, root);
-    }
     if (selectionToolbar !== null) {
       adoptReaderOverlayTheme(selectionToolbar.element, root);
     }
@@ -3026,7 +2967,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (sessionAnnotation.sidebarVisibility().visible) {
       setSidebarVisible(false);
     }
-    closeSearchSheet();
     chromePanel = next;
     tocPanel.hidden = next !== 'toc';
     typePanel.hidden = next !== 'typography';
@@ -3057,13 +2997,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       toggleSidebar: () => setSidebarVisible(!sessionAnnotation.sidebarVisibility().visible),
       isOverlayOpen: () =>
         sessionAnnotation.sidebarVisibility().visible ||
-        chromePanel !== null ||
-        searchSheet?.isOpen() === true,
-      // 一次退一层：搜索 → TOC/排版 → 标注。点空白走同一条链。
+        chromePanel !== null,
+      // 一次退一层：TOC/排版 → 标注面板。点空白走同一条链。
       dismissOverlay: () => {
-        if (closeSearchSheet()) {
-          return true;
-        }
         if (closeChromePanel()) {
           return true;
         }
@@ -3401,7 +3337,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         exportEmbedImages = null;
         closeOpenNoteDialog(); // 打开中的笔记弹层经 Escape 正规 release（续体守卫丢弃迟到保存）
         resetReaderSearch(); // 切换文档清掉搜索状态与命中 overlay
-        closeSearchSheet();
       },
       setPhase: (phase) => {
         if (phase === 'loading') {
@@ -3485,8 +3420,6 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       // 搜索会话销毁作废（原 destroy 口径：不扫命中 overlay，DOM 随 root 移除；
       // 在飞扫描经 destroyed 守卫与 pdf 句柄取代检查丢弃）：只取消待执行重查。
       sessionSearch.cancelScheduled();
-      searchSheet?.destroy();
-      searchSheet = null;
       scrollHost.removeEventListener('scroll', scheduleFlowScroll);
       paneScroller?.removeEventListener('scroll', scheduleFlowScroll);
       // 对称作废合同：与每次 commit 同一组摘除助手（页监听/pending 帧/settle）。

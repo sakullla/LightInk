@@ -14,10 +14,11 @@
  *   复查销毁/取消/世代，过期结果静默丢弃、不留半更新状态；
  * - 写队列：按内容哈希串行写入（annotations.AnnotationWriteQueue），保存
  *   失败且会话身份未变时经宿主提示一次；open 起点与销毁作废未起写的排队项；
- * - 侧栏策略：可见偏好 × 标签可见 → 实际展示；开启先收起触屏搜索层与
- *   chrome 面板（覆盖层互斥），关闭作废搜索会话并复位侧栏搜索框（查询不
- *   跨书残留）；窄窗开启把焦点给予关闭钮、关闭时侧栏持焦点则还给阅读根；
- *   侧栏搜索查询激活时标注列表刷新让位给命中列表。
+ * - 侧栏策略：可见偏好 × 标签可见 → 实际展示；开启先收起 chrome 面板
+ *   （覆盖层互斥；标注与搜索已并为同一面板，无独立搜索层），关闭作废搜索
+ *   会话并复位面板搜索框（查询不跨书残留）；窄窗开启把焦点给予关闭钮、
+ *   关闭时面板持焦点则还给阅读根；面板搜索查询激活时标注列表刷新让位给
+ *   命中列表。
  * DOM（侧栏节点/portal pin/正文高亮/划选工具栏）与 i18n 留在视图层经 host
  * 供数（T5 hooks 先例）。
  *
@@ -85,8 +86,6 @@ export interface SessionAnnotationHost {
   sidebarHoldsFocus(): boolean;
   /** 焦点还给阅读根（侧栏持焦点关闭时）。 */
   focusReaderRoot(): void;
-  /** 开启侧栏先收起触屏搜索层（覆盖层互斥）。 */
-  closeSearchSheet(): void;
   /** 开启侧栏先收起 chrome 面板（覆盖层互斥）。 */
   closeChromePanel(): void;
   /** 关闭侧栏作废搜索会话并复位侧栏搜索框（查询不跨书残留）。 */
@@ -249,7 +248,6 @@ export function createReaderSessionAnnotation(
     },
     setSidebarVisible: (visible) => {
       if (visible) {
-        host.closeSearchSheet();
         host.closeChromePanel();
       }
       if (!visible && sidebarVisible) {

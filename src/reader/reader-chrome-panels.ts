@@ -786,9 +786,7 @@ function releaseTouchSheetDrag(overlay: HTMLElement): void {
 
 function closePinnedTouchSheet(sheet: HTMLElement): void {
   sheet.style.removeProperty('transform');
-  const closer = sheet.querySelector<HTMLElement>(
-    '.lightink-reader-search-sheet-close, .lightink-reader-sidebar-close',
-  );
+  const closer = sheet.querySelector<HTMLElement>('.lightink-reader-sidebar-close');
   if (closer !== null) {
     closer.click();
     return;

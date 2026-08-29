@@ -1332,8 +1332,9 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
-  it('opens the touch search sheet from openSearch without forcing the annotation sidebar', async () => {
-    // 触屏旗标（R5）：openSearch 走独立底栏搜索层，不再强制打开标注侧栏。
+  it('opens the unified annotation panel as a touch sheet from openSearch', async () => {
+    // 触屏旗标（R8）：openSearch 不再分叉——打开同一融合面板（is-touch-sheet
+    // 底栏形态），触屏由此获得完整标注浏览/筛选/跳转/编辑/删除能力。
     document.documentElement.setAttribute('data-touch-primary', '');
     const onReturnToShelf = vi.fn();
     const host = document.createElement('div');
@@ -1355,19 +1356,19 @@ describe('Reader load lifecycle', () => {
 
     view.openSearch?.('keyword');
 
-    expect(view.isSidebarVisible()).toBe(false);
-    const sidebar = host.querySelector<HTMLElement>('.lightink-reader-sidebar');
-    expect(sidebar?.hidden ?? true).toBe(true);
+    expect(view.isSidebarVisible()).toBe(true);
     const visibleSheets = (): HTMLElement[] =>
       [...document.querySelectorAll<HTMLElement>('.is-touch-sheet')].filter(
         (el) => !el.hidden && el.getAttribute('aria-hidden') !== 'true',
       );
-    const sheet = visibleSheets()[0];
-    expect(sheet).not.toBeUndefined();
-    // 选区/入参 seed 预填进搜索层查询框。
-    expect(sheet!.querySelector<HTMLInputElement>('input')?.value).toBe('keyword');
+    const sheet = visibleSheets();
+    expect(sheet).toHaveLength(1);
+    expect(sheet[0]!.classList.contains('lightink-reader-sidebar')).toBe(true);
+    expect(sheet[0]!.classList.contains('lightink-reader-annotation-panel')).toBe(true);
+    // 选区/入参 seed 预填进统一面板查询框。
+    expect(sheet[0]!.querySelector<HTMLInputElement>('input')?.value).toBe('keyword');
 
-    // Escape（Android 系统返回经 back-navigation 合成同键）一次只关搜索层，不合书。
+    // Escape（Android 系统返回经 back-navigation 合成同键）一次只关面板，不合书。
     const root = host.querySelector<HTMLElement>('.lightink-reader')!;
     root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(visibleSheets()).toHaveLength(0);
@@ -1378,7 +1379,7 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
-  it('keeps the touch search sheet and annotation sheet mutually exclusive', async () => {
+  it('serves toggleSidebar and openSearch from the same unified panel on touch', async () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1404,21 +1405,17 @@ describe('Reader load lifecycle', () => {
       visibleSheets().some((el) => el.classList.contains('lightink-reader-sidebar')),
     ).toBe(true);
 
+    // openSearch 复用同一面板（不再出现第二个搜索层），seed 进同一查询框。
     view.openSearch?.('keyword');
-    expect(view.isSidebarVisible()).toBe(false);
+    expect(view.isSidebarVisible()).toBe(true);
     const afterSearch = visibleSheets();
     expect(afterSearch).toHaveLength(1);
-    expect(afterSearch[0]!.classList.contains('lightink-reader-search-sheet')).toBe(true);
+    expect(afterSearch[0]!.classList.contains('lightink-reader-sidebar')).toBe(true);
     expect(afterSearch[0]!.querySelector('input')?.value).toBe('keyword');
 
     view.toggleSidebar();
-    expect(view.isSidebarVisible()).toBe(true);
-    const afterNotes = visibleSheets();
-    expect(afterNotes).toHaveLength(1);
-    expect(afterNotes[0]!.classList.contains('lightink-reader-sidebar')).toBe(true);
-    expect(
-      afterNotes.some((el) => el.classList.contains('lightink-reader-search-sheet')),
-    ).toBe(false);
+    expect(view.isSidebarVisible()).toBe(false);
+    expect(visibleSheets()).toHaveLength(0);
 
     await view.destroy();
   });
