@@ -504,17 +504,15 @@
 
 /* ===== 触屏底栏 sheet 形态（同一组件；pinFixedOverlay 加 is-touch-sheet） ===== */
 
+/* 键盘弹起时几何由 pinFixedOverlay 内联双锚定接管；此处 bottom/max-height 只覆盖
+   键盘收起态（内联 bottom 同样生效，max-height 防溢出到状态栏）。 */
 .lightink-reader-sidebar.is-touch-sheet {
   position: fixed;
-  inset: auto 0 calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px))
-    0;
+  inset: auto 0 var(--lightink-keyboard-inset, 0px) 0;
   z-index: 40;
   width: 100%;
   max-width: 100%;
-  max-height: min(
-    78vh,
-    calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem - var(--lightink-keyboard-inset, 0px))
-  );
+  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
   border-radius: 16px 16px 0 0;
@@ -524,8 +522,31 @@
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
-  inset: auto 0 calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px))
-    0;
+  inset: auto 0 var(--lightink-keyboard-inset, 0px) 0;
+}
+
+/* 触屏 sheet 列表仍是唯一滚动区；最小高度保障 ≥3 行条目不被固定 chrome 挤没。 */
+.lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-list {
+  min-height: 9.5rem;
+}
+
+/* 键盘弹起：隐藏颜色筛选行、收紧固定 chrome，把高度让给列表（chip 触控目标
+   仍由 pointer:coarse 的 44px min-height 保障，不在此处收紧）。 */
+html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-colors {
+  display: none;
+}
+
+html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-header {
+  padding: 0.4rem 0.75rem 0.35rem;
+}
+
+html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-search-stack {
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem 0.35rem;
+}
+
+html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-filters {
+  margin: 0.3rem 0.6rem;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,

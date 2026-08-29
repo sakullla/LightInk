@@ -830,7 +830,7 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*z-index:\s*40/,
     );
     expect(css).toMatch(
-      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*calc\(\s*var\(--lightink-reader-sheet-inset,\s*0px\) \+ var\(--lightink-keyboard-inset,\s*0px\)/,
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*var\(--lightink-keyboard-inset,\s*0px\)/,
     );
     expect(
       readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8'),

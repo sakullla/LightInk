@@ -767,6 +767,57 @@ export function positionReaderChromePanel(
 const READER_SHEET_HANDLE_CLASS = 'lightink-reader-sheet-handle';
 const sheetDragUnbinds = new WeakMap<HTMLElement, () => void>();
 
+/**
+ * Touch sheets re-pin when the keyboard state flips (safe-area.ts toggles
+ * `data-keyboard` on <html> at the >=80px inset threshold): keyboard-open
+ * geometry double-anchors top/bottom, keyboard-closed keeps the footer gap.
+ */
+const touchSheetPins = new Map<
+  HTMLElement,
+  {
+    pane: { getBoundingClientRect(): DOMRect } | null;
+    viewport: { innerWidth: number; innerHeight: number };
+  }
+>();
+let touchSheetKeyboardObserver: MutationObserver | null = null;
+
+function trackTouchSheetPin(
+  overlay: HTMLElement,
+  pane: { getBoundingClientRect(): DOMRect } | null,
+  viewport: { innerWidth: number; innerHeight: number },
+): void {
+  touchSheetPins.set(overlay, { pane, viewport });
+  if (touchSheetKeyboardObserver !== null || typeof MutationObserver !== 'function') {
+    return;
+  }
+  const root = overlay.ownerDocument?.documentElement ?? null;
+  if (root === null) {
+    return;
+  }
+  try {
+    touchSheetKeyboardObserver = new MutationObserver(() => {
+      for (const [sheet, pin] of touchSheetPins) {
+        pinFixedOverlay(sheet, pin.pane, pin.viewport);
+      }
+    });
+    touchSheetKeyboardObserver.observe(root, {
+      attributes: true,
+      attributeFilter: ['data-keyboard'],
+    });
+  } catch {
+    // Fake documents in unit tests are not MutationObserver targets.
+    touchSheetKeyboardObserver = null;
+  }
+}
+
+function releaseTouchSheetPin(overlay: HTMLElement): void {
+  touchSheetPins.delete(overlay);
+  if (touchSheetPins.size === 0 && touchSheetKeyboardObserver !== null) {
+    touchSheetKeyboardObserver.disconnect();
+    touchSheetKeyboardObserver = null;
+  }
+}
+
 /** Pin an overlay to the visible reading pane so scroll mode cannot carry it away. */
 function isTouchReaderChrome(
   root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
@@ -846,21 +897,34 @@ export function pinFixedOverlay(
   }
   if (isTouchReaderChrome()) {
     const box = pane.getBoundingClientRect();
-    const inset = readerChromeFooterInset(overlay.ownerDocument);
-    const bottomGap = Math.max(0, viewport.innerHeight - box.bottom);
+    const keyboardOpen =
+      typeof document !== 'undefined' && document.documentElement.hasAttribute('data-keyboard');
     overlay.classList.add('is-touch-sheet');
     overlay.classList.remove('lightink-reader-chrome-popover');
     overlay.style.position = 'fixed';
     overlay.style.left = `${Math.max(0, box.left)}px`;
     overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
-    overlay.style.top = 'auto';
-    overlay.style.bottom = `calc(${bottomGap + inset}px + var(--lightink-keyboard-inset, 0px))`;
+    if (keyboardOpen) {
+      // Keyboard up: double-anchor between the safe top and the keyboard top;
+      // the keyboard already covers the footer, so no footer inset is added.
+      overlay.style.top = 'calc(var(--lightink-safe-top, 0px) + 4.5rem)';
+      overlay.style.bottom = 'var(--lightink-keyboard-inset, 0px)';
+      overlay.style.maxHeight = 'none';
+    } else {
+      const inset = readerChromeFooterInset(overlay.ownerDocument);
+      const bottomGap = Math.max(0, viewport.innerHeight - box.bottom);
+      overlay.style.top = 'auto';
+      overlay.style.bottom = `calc(${bottomGap + inset}px + var(--lightink-keyboard-inset, 0px))`;
+      overlay.style.removeProperty('max-height');
+    }
     overlay.style.width = 'auto';
     overlay.style.height = 'auto';
     overlay.style.zIndex = '40';
+    trackTouchSheetPin(overlay, pane, viewport);
     bindTouchSheetDrag(overlay);
     return;
   }
+  releaseTouchSheetPin(overlay);
   releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
   const box = pane.getBoundingClientRect();
@@ -889,6 +953,7 @@ function titlebarOffsetPx(): number {
 }
 
 export function unpinFixedOverlay(overlay: HTMLElement): void {
+  releaseTouchSheetPin(overlay);
   releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
   overlay.style.removeProperty('position');
@@ -898,6 +963,7 @@ export function unpinFixedOverlay(overlay: HTMLElement): void {
   overlay.style.removeProperty('left');
   overlay.style.removeProperty('width');
   overlay.style.removeProperty('height');
+  overlay.style.removeProperty('max-height');
   overlay.style.removeProperty('z-index');
 }
 

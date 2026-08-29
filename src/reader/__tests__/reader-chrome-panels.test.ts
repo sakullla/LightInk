@@ -147,6 +147,7 @@ describe('reader chrome panels', () => {
     document.body.replaceChildren();
     document.documentElement.removeAttribute('data-touch-primary');
     document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-keyboard');
   });
 
   it('renders a vertical contents list and marks the current chapter', () => {
@@ -673,8 +674,43 @@ describe('reader chrome panels', () => {
     expect(overlay.style.right).toBe('180px');
     expect(overlay.style.bottom).toBe('calc(60px + var(--lightink-keyboard-inset, 0px))');
     expect(overlay.style.top).toBe('auto');
+    expect(overlay.style.maxHeight).toBe('');
     unpinFixedOverlay(overlay);
     expect(overlay.classList.contains('is-touch-sheet')).toBe(false);
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
+
+  it('double-anchors the touch sheet between the safe top and the keyboard while it is open', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    document.documentElement.setAttribute('data-keyboard', '');
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    const pane = {
+      getBoundingClientRect: () =>
+        ({ left: 0, top: 0, width: 390, height: 700, right: 390, bottom: 700 }) as DOMRect,
+    };
+    pinFixedOverlay(overlay, pane, { innerWidth: 390, innerHeight: 700 });
+    expect(overlay.classList.contains('is-touch-sheet')).toBe(true);
+    // 键盘态：上下双锚定，不叠加 footer inset，清掉 max-height 的键盘扣减。
+    expect(overlay.style.top).toBe('calc(var(--lightink-safe-top, 0px) + 4.5rem)');
+    expect(overlay.style.bottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    expect(overlay.style.height).toBe('auto');
+    expect(overlay.style.maxHeight).toBe('none');
+
+    // 键盘收起：data-keyboard 摘除触发重 pin，回到既有 bottom 锚定字符串。
+    document.documentElement.removeAttribute('data-keyboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(overlay.style.top).toBe('auto');
+    expect(overlay.style.bottom).toBe('calc(0px + var(--lightink-keyboard-inset, 0px))');
+    expect(overlay.style.maxHeight).toBe('');
+
+    // 再弹起：同一监听把几何切回双锚定。
+    document.documentElement.setAttribute('data-keyboard', '');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(overlay.style.top).toBe('calc(var(--lightink-safe-top, 0px) + 4.5rem)');
+    expect(overlay.style.bottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    unpinFixedOverlay(overlay);
+    expect(overlay.style.maxHeight).toBe('');
     document.documentElement.removeAttribute('data-touch-primary');
   });
 
@@ -947,6 +983,16 @@ describe('reader chrome panels', () => {
     );
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*--lightink-keyboard-inset/,
+    );
+    // D5：--lightink-reader-sheet-inset 死 token 无任何残留消费。
+    expect(sheet).not.toContain('--lightink-reader-sheet-inset');
+    expect(panel).not.toContain('--lightink-reader-sheet-inset');
+    // 键盘态几何由 pinFixedOverlay 内联接管，max-height 不再重复扣减 keyboard-inset。
+    expect(sheet).not.toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*max-height:[^;]*--lightink-keyboard-inset/,
+    );
+    expect(panel).not.toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*max-height:[^;]*--lightink-keyboard-inset/,
     );
     expect(sheet).toMatch(
       /#app\.is-workspace-shelf \.lightink-reader-chrome-panel,[\s\S]*?\.lightink-reader-sidebar\s*\{[^}]*display:\s*none/,

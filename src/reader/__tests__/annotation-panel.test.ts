@@ -7,6 +7,8 @@
  * is-touch-sheet 底栏形态（拖拽把手与关闭）/正文搜索不支持空态（漫画）/
  * Escape 与 dismiss 分层。附笔记弹层 Promise 语义与 Markdown 标注宿主装载。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnnotationPanel } from '../annotation-panel.js';
@@ -96,6 +98,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-touch-primary');
+  document.documentElement.removeAttribute('data-keyboard');
 });
 
 describe('annotation-panel 标注列表', () => {
@@ -604,6 +607,63 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
       true,
     );
     expect(panel.element.querySelector('.lightink-reader-sidebar-close')).not.toBeNull();
+  });
+
+  it('键盘弹起时 pinFixedOverlay 双锚定上下沿、摘除 data-keyboard 后回到 footer 之上锚定', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    document.documentElement.setAttribute('data-keyboard', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    document.body.append(host);
+    const { panel } = mount();
+    host.append(panel.element);
+    stubRect(host, { width: 390, height: 700 });
+    pinFixedOverlay(panel.element, host, { innerWidth: 390, innerHeight: 700 });
+
+    expect(panel.element.classList.contains('is-touch-sheet')).toBe(true);
+    expect(panel.element.style.top).toBe('calc(var(--lightink-safe-top, 0px) + 4.5rem)');
+    expect(panel.element.style.bottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    expect(panel.element.style.height).toBe('auto');
+    expect(panel.element.style.maxHeight).toBe('none');
+
+    document.documentElement.removeAttribute('data-keyboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(panel.element.style.top).toBe('auto');
+    expect(panel.element.style.bottom).toBe('calc(0px + var(--lightink-keyboard-inset, 0px))');
+    expect(panel.element.style.maxHeight).toBe('');
+  });
+
+  it('触屏 sheet CSS：列表有最小高度保障且键盘态隐藏颜色行、压缩固定 chrome', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
+    // 列表仍是唯一滚动区，is-touch-sheet 下 min-height 保障 ≥3 行条目。
+    const listRule = css.match(
+      /\.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-list\s*\{[^}]*\}/,
+    )?.[0];
+    expect(listRule, 'touch sheet list min-height rule').toBeTruthy();
+    const minHeight = listRule!.match(/min-height:\s*([\d.]+)(rem|px)/);
+    expect(minHeight, 'touch sheet list declares a min-height').toBeTruthy();
+    const minHeightPx = minHeight![2] === 'rem' ? parseFloat(minHeight![1]) * 16 : parseFloat(minHeight![1]);
+    expect(minHeightPx).toBeGreaterThanOrEqual(9 * 16 * 0.9);
+    // 键盘态：隐藏颜色筛选行、收紧 header/搜索区/筛选行的 padding 与 margin。
+    expect(css).toMatch(
+      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-colors\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-header\s*\{[^}]*padding:/,
+    );
+    expect(css).toMatch(
+      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-filters\s*\{[^}]*margin:/,
+    );
+    // 键盘态压缩不砍 chip 触控目标：data-keyboard 规则内不得出现 <44px 的 min-height。
+    const keyboardRules = css.match(/html\[data-keyboard\][^{]*\{[^}]*\}/g) ?? [];
+    for (const rule of keyboardRules) {
+      const declared = rule.match(/min-height:\s*([\d.]+)px/);
+      if (declared !== null) {
+        expect(parseFloat(declared[1])).toBeGreaterThanOrEqual(44);
+      }
+    }
+    // D5：死 token 无残留消费。
+    expect(css).not.toContain('--lightink-reader-sheet-inset');
   });
 
   it('下拉拖拽把手经关闭按钮关面板（onClose 恰一次）；关闭按钮直点同语义', () => {

@@ -632,19 +632,18 @@
   }
 }
 
-/* Bottom sheet sits above the thumb footer (inset from JS), not under it. */
+/* Bottom sheet sits above the thumb footer (inset from JS), not under it.
+   Keyboard-open geometry is owned by pinFixedOverlay (top/bottom double-anchor);
+   the non-keyboard max-height keeps the sheet out of the status bar. */
 .lightink-reader-chrome-panel.is-touch-sheet {
   left: 0;
   right: 0;
   top: auto;
-  bottom: calc(var(--lightink-reader-sheet-inset, 0px) + var(--lightink-keyboard-inset, 0px));
+  bottom: var(--lightink-keyboard-inset, 0px);
   z-index: 40;
   width: 100%;
   max-width: 100%;
-  max-height: min(
-    78vh,
-    calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem - var(--lightink-keyboard-inset, 0px))
-  );
+  max-height: min(78vh, calc(100dvh - var(--lightink-safe-top, 0px) - 4.5rem));
   border-radius: 16px 16px 0 0;
   border-left: 0;
   border-right: 0;
