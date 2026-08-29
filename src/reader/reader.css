@@ -158,6 +158,23 @@
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
 }
 
+/* 书签开关（R1）：线框图标，已书签态填实并着主题色（与 aria-pressed 同步）。 */
+.lightink-reader-chrome-action--bookmark::before {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
+}
+
+.lightink-reader-chrome-action--bookmark.is-bookmarked {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-reader-chrome-action--bookmark.is-bookmarked::before {
+  opacity: 1;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
+}
+
 .lightink-reader-chrome-action.is-open {
   background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
   font-weight: 600;
@@ -263,6 +280,28 @@
   height: 8px;
   background: color-mix(in srgb, var(--lightink-fg) 32%, transparent);
   transform: translate(-50%, -50%);
+}
+
+/* 书签刻度（R3）：主题色、比章节刻度粗，可点击跳对应书签（容器 pointer-events:none，按钮自行恢复）。 */
+.lightink-reader-chrome-tick--bookmark {
+  z-index: 2;
+  width: 10px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.lightink-reader-chrome-tick--bookmark::after {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 10px;
+  margin: 0 auto;
+  border-radius: 1px;
+  background: var(--lightink-accent);
 }
 
 .lightink-reader-chrome-progress {
@@ -569,12 +608,13 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-action--toc,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-action--typography,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-action--bookmark,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer .lightink-reader-chrome-action--search {
   width: 48px;
   height: 48px;
   min-width: 48px;
   min-height: 48px;
-  flex: 1 1 calc(33.33% - 8px);
+  flex: 1 1 calc(25% - 8px);
   order: -1;
 }
 
@@ -691,12 +731,13 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 
   .lightink-reader-chrome-footer .lightink-reader-chrome-action--toc,
   .lightink-reader-chrome-footer .lightink-reader-chrome-action--typography,
+  .lightink-reader-chrome-footer .lightink-reader-chrome-action--bookmark,
   .lightink-reader-chrome-footer .lightink-reader-chrome-action--search {
     width: 48px;
     height: 48px;
     min-width: 48px;
     min-height: 48px;
-    flex: 1 1 calc(33.33% - 8px);
+    flex: 1 1 calc(25% - 8px);
     order: -1;
   }
 
@@ -1859,7 +1900,23 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 /* 流式章节：章与章之间用留白分开，标题不抢正文。 */
 .lightink-reader-chapter {
+  position: relative; /* 页角书签丝带角标的定位锚 */
   margin: 0 0 4.5rem;
+}
+
+/* 页内持久书签指示（R1）：有活书签的章/页右上角丝带角标；装饰性，不侵交互。
+ * flow 挂在章容器上，pdf/cbz 挂在页 slot 上（页角，避开正文位图主体）。 */
+.lightink-reader-bookmark-ribbon {
+  position: absolute;
+  top: 0;
+  right: 1.1rem;
+  z-index: 3;
+  width: 12px;
+  height: 18px;
+  background: var(--lightink-accent);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+  opacity: 0.92;
+  pointer-events: none;
 }
 .lightink-reader-chapter-title {
   margin: 0 0 1.15rem;

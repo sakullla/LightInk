@@ -8,11 +8,12 @@
  * - paged：PDF 与漫画归档（cbz/cbr/cb7/rar/7z）渲染页宿主控制器。
  *
  * 格式×能力矩阵（搜索/标注/大纲/进度）在本文件固化为 adapter 声明数据
- * （SESSION_FORMAT_CAPABILITIES）：此前散在 reader-view 的隐式格式分支证据
- * ——搜索 flowSearchable（漫画无文本）、标注装载跳过漫画归档（不哈希归档）、
- * paged afterCommit 的 PDF outline/漫画页条目与漫画进度提前绑定——全部反推
- * 收敛为按会话成员的声明行；核心与会话模块只按声明分派，不再按格式名分支
- * （R5：只固化现网行为，不出现现有能力之外的新声明）。
+ * （SESSION_FORMAT_CAPABILITIES）：搜索 flowSearchable（漫画无文本）、标注
+ * 身份（flow/pdf 经 content_hash 关联正文；漫画归档不哈希正文，本地标注
+ * 与进度同源按目标身份关联页级书签/笔记）、paged afterCommit 的 PDF
+ * outline/漫画页条目与漫画进度提前绑定——全部收敛为按会话成员的声明行；
+ * 核心与会话模块只按声明分派，不再按格式名分支（能力修订只改本表声明，
+ * 不出现隐式格式分支）。
  *
  * 对称作废合同（管线结构性保证，adapter 不必在各调用点自觉）：
  * - `commit()` 把 staged 内容换入 live 宿主并返回本会话的作废句柄；旧会话
@@ -77,13 +78,15 @@ export function sessionMemberForExtension(ext: string): SessionAdapterMember | n
  */
 export interface SessionAnnotationCapability {
   /**
-   * 本地文档的标注身份：`'content-hash'`（经 content_hash 关联正文）或
-   * `null`（本地不启用——漫画归档不哈希归档，现行规则固化为声明）。远程
-   * 目标不受此字段约束：一律按阅读身份键哈希关联（现行口径原样）。
+   * 本地文档的标注身份：`'content-hash'`（经 content_hash 关联正文）、
+   * `'progress-id'`（与进度同源的稳定目标身份：comicProgressIdForTarget——
+   * 漫画归档不哈希正文，页级书签/笔记按路径/远程 itemId 关联）或 `null`
+   * （本地不启用）。远程目标不受此字段约束：一律按阅读身份键哈希关联
+   * （现行口径原样）。
    */
-  readonly localIdentity: 'content-hash' | null;
-  /** 正文高亮表面：flow 章正文 mark / pdf 文本层 mark / 无（漫画页无文本）。 */
-  readonly marks: 'flow-body' | 'pdf-text-layer' | 'none';
+  readonly localIdentity: 'content-hash' | 'progress-id' | null;
+  /** 标注表面：flow 章正文 mark / pdf 文本层 mark / 页角标（漫画页级书签，无文本层）/ 无。 */
+  readonly marks: 'flow-body' | 'pdf-text-layer' | 'page-corner' | 'none';
 }
 
 /** 格式×能力矩阵单行：搜索/标注/大纲/进度四种能力，无此之外的声明（R5）。 */
@@ -122,10 +125,11 @@ export const SESSION_FORMAT_CAPABILITIES: Readonly<
     outline: 'pages',
     progress: { snapshot: 'page', identity: 'document-chain' },
   },
-  /** 漫画归档（cbz/cbr/cb7/rar/7z）：无文本搜索；本地不哈希（无内容哈希标注身份），远程仍按身份键哈希。 */
+  /** 漫画归档（cbz/cbr/cb7/rar/7z）：无文本搜索；本地标注身份与进度同源
+   *（不哈希归档），页级书签/笔记以页角标呈现（无文本层 mark）。 */
   comic: {
     textSearch: null,
-    annotations: { localIdentity: null, marks: 'none' },
+    annotations: { localIdentity: 'progress-id', marks: 'page-corner' },
     outline: 'pages',
     progress: { snapshot: 'page', identity: 'target-bound' },
   },

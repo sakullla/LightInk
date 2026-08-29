@@ -61,8 +61,10 @@ export interface ReaderInstance {
    * 标签时调用；失败由调用方上报，不阻断关闭流程。
    */
   destroy(): Promise<void>;
-  /** 在当前阅读位置添加书签（标注未启用时空操作）。 */
+  /** 在当前阅读位置添加/取消书签（开关语义；标注未启用时空操作）。 */
   addBookmark(): void;
+  /** 当前阅读位置是否已有书签（chrome 按钮两态与菜单勾选的事实源）。可选——测试 stub 可省略。 */
+  isBookmarked?(): boolean;
   /** 在当前阅读位置添加笔记（经 prompt 取文本；标注未启用时空操作）。 */
   addNote(): void;
   /** 切换标注侧栏显隐（默认隐藏）。 */

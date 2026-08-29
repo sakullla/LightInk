@@ -2,10 +2,12 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。桌面顶栏是四项带文字入口（返回书架 · 目录 ·
- * 排版 · 搜索）。搜索打开同一套标注侧栏（列表 + 书内搜索），不再另放
- * 「本书标注」。底栏与沉浸条都是单行：章节名 | 进度轨道 | 位置/百分比。
- * 轨道用主题色填充，唤出后标 TOC 刻度。
+ * 边缘时顶栏与底栏同时出现。桌面顶栏是五项带文字入口（返回书架 · 目录 ·
+ * 排版 · 书签 · 搜索）。书签是一等开关：对当前位置添加/取消书签，按钮按
+ * 当前位置是否已书签呈现两态（aria-pressed + is-bookmarked 视觉态）；进度
+ * 轨在 TOC 刻度之外再画书签刻度（可点击跳转）。搜索打开同一套标注侧栏
+ *（列表 + 书内搜索），不再另放「本书标注」。底栏与沉浸条都是单行：章节名 |
+ * 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC/书签刻度。
  *
  * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
  * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
@@ -14,7 +16,7 @@
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
  * 唤出；只由中部点按 / Escape / 收浮层收起。翻页模式 idle 仍显示 whisper
  * 进度线；滚动模式不显示（原生滚动条即进度，底栏会挡住末行）。
- * 目录 / 排版 / 搜索挪到 `.lightink-reader-chrome-footer` 拇指区
+ * 目录 / 排版 / 书签 / 搜索挪到 `.lightink-reader-chrome-footer` 拇指区
  *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
  * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
  * 一套 chrome 状态机。文字书与漫画共用这套点按显隐。
@@ -24,16 +26,19 @@ import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
 
-export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'search';
+export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'bookmark' | 'search';
 
 export interface ReaderChromeLabels {
   readonly backToShelf: string;
   readonly toc: string;
   readonly typography: string;
+  readonly bookmark: string;
   readonly search: string;
   readonly toolbar: string;
   readonly progress: string;
   readonly footer: string;
+  /** 书签刻度按钮的 aria-label（进度轨上的可点击书签刻度）。 */
+  readonly bookmarkTick: string;
 }
 
 export interface ReaderChromeProgress {
@@ -41,12 +46,15 @@ export interface ReaderChromeProgress {
   readonly location: string;
   readonly progress: number;
   readonly ticks?: readonly number[];
+  /** 书签刻度（0..1 全书比例）：区别于章节刻度的样式，点击跳对应书签。 */
+  readonly bookmarkTicks?: readonly number[];
 }
 
 export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
   'backToShelf',
   'toc',
   'typography',
+  'bookmark',
   'search',
 ];
 
@@ -62,19 +70,23 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     backToShelf: 'Back to Shelf',
     toc: 'Contents',
     typography: 'Typography',
+    bookmark: 'Bookmark',
     search: 'Search',
     toolbar: 'Reading controls',
     progress: 'Reading progress',
     footer: 'Reading progress',
+    bookmarkTick: 'Jump to bookmark',
   },
   'zh-CN': {
     backToShelf: '返回书架',
     toc: '目录',
     typography: '排版',
+    bookmark: '书签',
     search: '搜索',
     toolbar: '阅读控件',
     progress: '阅读进度',
     footer: '阅读进度',
+    bookmarkTick: '跳到书签',
   },
 };
 
@@ -96,6 +108,12 @@ export interface ReaderChromeDeps {
   openTypography?: () => void;
   /** 顶栏搜索一等入口：桌面走标注侧栏搜索，触屏走独立底栏搜索层。 */
   openSearch?: () => void;
+  /** 书签一等开关：对当前阅读位置添加/取消书签（宿主裁决两态）。 */
+  toggleBookmark?: () => void;
+  /** 当前位置是否已书签（按钮 aria-pressed 与视觉态同步源）。 */
+  isBookmarked?: () => boolean;
+  /** 点击进度轨书签刻度（fraction 与 setProgress 的 bookmarkTicks 同源）。 */
+  onBookmarkTick?: (fraction: number) => void;
   toggleSidebar?: () => void;
   isOverlayOpen?: () => boolean;
   dismissOverlay?: () => boolean;
@@ -130,6 +148,8 @@ export interface ReaderChrome {
   reveal(): void;
   dismiss(): void;
   toggle(): void;
+  /** 同步书签按钮两态（aria-pressed + is-bookmarked 视觉态）。 */
+  setBookmarked(bookmarked: boolean): void;
   setProgress(snapshot: ReaderChromeProgress): void;
   pinDocks(pane: { getBoundingClientRect(): DOMRect } | null, paginated: boolean): void;
   /** Re-apply stay-revealed (scroll at top) vs idle auto-hide. */
@@ -334,6 +354,10 @@ export function createReaderChrome(
       button.setAttribute('aria-haspopup', 'dialog');
       button.setAttribute('aria-expanded', 'false');
     }
+    if (action === 'bookmark') {
+      // 开关按钮：aria-pressed 承载两态（is-bookmarked 类只是视觉态）。
+      button.setAttribute('aria-pressed', 'false');
+    }
     applyButtonLayout(button, touchMode);
     return button;
   };
@@ -341,6 +365,7 @@ export function createReaderChrome(
   const backButton = makeButton('backToShelf', labels.backToShelf);
   const tocButton = makeButton('toc', labels.toc);
   const typographyButton = makeButton('typography', labels.typography);
+  const bookmarkButton = makeButton('bookmark', labels.bookmark);
   const searchButton = makeButton('search', labels.search);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
@@ -348,7 +373,7 @@ export function createReaderChrome(
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, searchButton);
+  tools.append(tocButton, typographyButton, bookmarkButton, searchButton);
   if (touchMode) {
     const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
     const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
@@ -388,7 +413,6 @@ export function createReaderChrome(
   footerFill.className = 'lightink-reader-chrome-fill';
   const footerTicks = document.createElement('div');
   footerTicks.className = 'lightink-reader-chrome-ticks';
-  footerTicks.setAttribute('aria-hidden', 'true');
   footerTrack.append(footerFill);
   const slider = document.createElement('input');
   slider.type = 'range';
@@ -481,7 +505,7 @@ export function createReaderChrome(
       hideProgress || revealed || attachedHost?.dataset.readingLayout === 'scroll';
     whisper.hidden = hideWhisper;
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
-    for (const button of [backButton, tocButton, typographyButton, searchButton]) {
+    for (const button of [backButton, tocButton, typographyButton, bookmarkButton, searchButton]) {
       button.hidden = !revealed;
     }
   };
@@ -522,11 +546,25 @@ export function createReaderChrome(
     }, hideDelayMs);
   };
 
+  const setBookmarked = (bookmarked: boolean): void => {
+    bookmarkButton.setAttribute('aria-pressed', bookmarked ? 'true' : 'false');
+    bookmarkButton.classList.toggle('is-bookmarked', bookmarked);
+  };
+
+  /** 按钮态向宿主事实对齐（揭示/进度刷新时重读，点击后由宿主回写）。 */
+  const syncBookmarkState = (): void => {
+    const bookmarked = deps.isBookmarked?.();
+    if (bookmarked !== undefined) {
+      setBookmarked(bookmarked);
+    }
+  };
+
   const reveal = (): void => {
     if (destroyed) {
       return;
     }
     revealed = true;
+    syncBookmarkState();
     syncDom();
     if (overlayOpen() || pointerInsideBar) {
       clearHideTimer();
@@ -701,6 +739,12 @@ export function createReaderChrome(
     event.stopPropagation();
     deps.openSearch?.();
   });
+  bookmarkButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deps.toggleBookmark?.();
+    syncBookmarkState();
+  });
 
   const onDockEnter = (): void => {
     pointerInsideBar = true;
@@ -740,7 +784,11 @@ export function createReaderChrome(
     deps.onSeekProgress?.(progress);
   });
 
-  const paintTicks = (host: HTMLElement, ticks: readonly number[]): void => {
+  const paintTicks = (
+    host: HTMLElement,
+    ticks: readonly number[],
+    bookmarkTicks: readonly number[] = [],
+  ): void => {
     if (typeof host.replaceChildren !== 'function') {
       return;
     }
@@ -751,7 +799,26 @@ export function createReaderChrome(
       }
       const tick = document.createElement('i');
       tick.className = 'lightink-reader-chrome-tick';
+      tick.setAttribute('aria-hidden', 'true');
       tick.style.left = `${(fraction * 100).toFixed(2)}%`;
+      host.appendChild(tick);
+    }
+    for (const fraction of bookmarkTicks) {
+      if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
+        continue;
+      }
+      // 书签刻度可点击（跳对应书签）；章节刻度仍是纯装饰。
+      const tick = document.createElement('button');
+      tick.type = 'button';
+      tick.className = 'lightink-reader-chrome-tick lightink-reader-chrome-tick--bookmark';
+      tick.style.left = `${(fraction * 100).toFixed(2)}%`;
+      tick.setAttribute('aria-label', labels.bookmarkTick);
+      tick.title = labels.bookmarkTick;
+      tick.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deps.onBookmarkTick?.(fraction);
+      });
       host.appendChild(tick);
     }
   };
@@ -767,11 +834,12 @@ export function createReaderChrome(
     whisper.setAttribute('aria-label', [title, location, percent].filter((part) => part !== '').join(' · '));
     paintRatio(ratio, percent);
     const ticks = snapshot.ticks ?? [];
-    paintTicks(footerTicks, ticks);
+    paintTicks(footerTicks, ticks, snapshot.bookmarkTicks ?? []);
     paintTicks(whisperTicks, []);
     if (typeof document === 'undefined' || document.activeElement !== slider) {
       slider.value = String(Math.round(ratio * 1000));
     }
+    syncBookmarkState();
     syncDom();
   };
 
@@ -835,6 +903,7 @@ export function createReaderChrome(
     whisper,
     isRevealed: () => revealed,
     setProgress,
+    setBookmarked,
     pinDocks,
     reveal,
     syncStayRevealed: () => {

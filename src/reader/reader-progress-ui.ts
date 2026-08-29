@@ -4,6 +4,7 @@
  */
 
 import type { OutlineItem } from '../outline/outline-model.js';
+import type { Annotation } from './annotations.js';
 import { isUsableEpubChapterTitle } from './chapter-title.js';
 import {
   sanitizeReadingProgressTitle,
@@ -115,6 +116,49 @@ export function flowBookProgress(
 const MAX_PROGRESS_TICKS = 8;
 const MAX_TICK_SOURCE = 16;
 
+/** 进度轨两类刻度：章节刻度（TOC）与书签刻度（活书签位置，点击可跳）。 */
+export interface ReaderProgressTicks {
+  readonly chapters: number[];
+  readonly bookmarks: number[];
+}
+
+function normalizeTickFractions(raw: readonly number[]): number[] {
+  return [...new Set(raw.map((value) => Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000))]
+    .filter((value) => value > 0.015 && value < 0.985)
+    .sort((left, right) => left - right);
+}
+
+/** 活书签（非 tombstone 的 kind='bookmark'）在全书进度轨上的 fraction。 */
+export function readerBookmarkTickFractions(
+  annotations: readonly Annotation[],
+  total: number,
+): number[] {
+  if (!Number.isSafeInteger(total) || total <= 1) {
+    return [];
+  }
+  const raw: number[] = [];
+  for (const annotation of annotations) {
+    if (annotation.kind !== 'bookmark' || annotation.deletedAt !== undefined) {
+      continue;
+    }
+    const locator = annotation.locator;
+    if (
+      (locator.format === 'flow' || locator.format === 'text') &&
+      locator.chapter !== undefined &&
+      locator.chapter >= 0
+    ) {
+      raw.push(locator.chapter / total);
+    } else if (
+      (locator.format === 'pdf' || locator.format === 'cbz') &&
+      Number.isSafeInteger(locator.page) &&
+      locator.page >= 1
+    ) {
+      raw.push((locator.page - 1) / total);
+    }
+  }
+  return normalizeTickFractions(raw);
+}
+
 /**
  * TOC marks on the book-progress track (Readest / KOReader).
  * Level-1 headings first; fall back to level ≤2. Ends are omitted so ticks
@@ -125,14 +169,19 @@ export function readerProgressTickFractions(
   outline: readonly OutlineItem[],
   total: number,
   locationKind: 'chapter' | 'page' | null,
-): number[] {
+  bookmarks: readonly Annotation[] = [],
+): ReaderProgressTicks {
+  const ticks: { chapters: number[]; bookmarks: number[] } = {
+    chapters: [],
+    bookmarks: readerBookmarkTickFractions(bookmarks, total),
+  };
   if (total <= 1 || total > 48 || outline.length === 0) {
-    return [];
+    return ticks;
   }
   const top = outline.filter((item) => item.level === 1);
   const source = top.length >= 2 ? top : outline.filter((item) => item.level <= 2);
   if (source.length > MAX_TICK_SOURCE) {
-    return [];
+    return ticks;
   }
   const raw: number[] = [];
   for (const item of source) {
@@ -142,13 +191,11 @@ export function readerProgressTickFractions(
       raw.push(item.chapter / total);
     }
   }
-  const unique = [...new Set(raw.map((value) => Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000))]
-    .filter((value) => value > 0.015 && value < 0.985)
-    .sort((left, right) => left - right);
+  const unique = normalizeTickFractions(raw);
   if (unique.length > MAX_PROGRESS_TICKS) {
-    return [];
+    return ticks;
   }
-  return unique;
+  return { chapters: unique, bookmarks: ticks.bookmarks };
 }
 
 export function playReaderPageTurn(

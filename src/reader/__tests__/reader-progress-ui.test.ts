@@ -13,10 +13,12 @@ import {
   formatReaderLocation,
   formatReaderPercent,
   playReaderPageTurn,
+  readerBookmarkTickFractions,
   readerProgressTickFractions,
   resolveReaderChapterTitle,
   stampReadingProgressTitle,
 } from '../reader-progress-ui.js';
+import type { Annotation, Locator } from '../annotations.js';
 
 describe('resolveReaderChapterTitle', () => {
   const fallback = (kind: 'chapter' | 'page', n: number) => `${kind}:${n}`;
@@ -111,7 +113,7 @@ describe('readerProgressTickFractions', () => {
         10,
         'chapter',
       ),
-    ).toEqual([0.2, 0.5]);
+    ).toEqual({ chapters: [0.2, 0.5], bookmarks: [] });
     expect(
       readerProgressTickFractions(
         Array.from({ length: 176 }, (_, index) => ({
@@ -123,7 +125,33 @@ describe('readerProgressTickFractions', () => {
         176,
         'chapter',
       ),
-    ).toEqual([]);
+    ).toEqual({ chapters: [], bookmarks: [] });
+  });
+
+  it('adds bookmark ticks for live bookmarks only, across locator formats', () => {
+    let seq = 0;
+    const annotation = (kind: Annotation['kind'], locator: Locator, deletedAt?: number): Annotation => ({
+      id: `a${(seq += 1)}`,
+      kind,
+      locator,
+      createdAt: 1,
+      ...(deletedAt === undefined ? {} : { deletedAt }),
+    });
+    const bookmarks: Annotation[] = [
+      annotation('bookmark', { format: 'flow', chapter: 2, start: 0, end: 0, quote: '', prefix: '', suffix: '' }),
+      annotation('bookmark', { format: 'pdf', page: 6, quote: '' }),
+      annotation('bookmark', { format: 'cbz', page: 9 }),
+      // tombstone 与高亮/笔记不上刻度。
+      annotation('bookmark', { format: 'flow', chapter: 4, start: 0, end: 0, quote: '', prefix: '', suffix: '' }, 2),
+      annotation('highlight', { format: 'flow', chapter: 7, start: 0, end: 1, quote: 'x', prefix: '', suffix: '' }),
+      annotation('note', { format: 'cbz', page: 3 }),
+    ];
+    expect(readerBookmarkTickFractions(bookmarks, 10)).toEqual([0.2, 0.5, 0.8]);
+    const ticks = readerProgressTickFractions([], 10, 'chapter', bookmarks);
+    expect(ticks.chapters).toEqual([]);
+    expect(ticks.bookmarks).toEqual([0.2, 0.5, 0.8]);
+    // 单页/无总数不出刻度。
+    expect(readerBookmarkTickFractions(bookmarks, 1)).toEqual([]);
   });
 });
 

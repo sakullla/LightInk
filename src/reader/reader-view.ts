@@ -40,6 +40,8 @@ import {
 } from './formats/cbz.js';
 import { renderPdfInto, type PdfRenderHandle } from './formats/pdf.js';
 import {
+  removeAnnotation,
+  updateAnnotationNote,
   type Annotation,
   type AnnotationColor,
   type AnnotationKind,
@@ -763,6 +765,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     renderHighlights: () => {
       bindFlowFrameLeftoverEscape();
       renderHighlights();
+      syncBookmarkIndicators(); // 惰性挂载的章节窗口也要补书签角标
     },
     handleNoteMarkClick: (event) => {
       const annotation = annotationFromMark(event.target);
@@ -774,11 +777,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return false;
     },
     onFrameSurfaceClick: (event) => {
+      sessionProgress.noteActivity(); // iframe 内点击不到 root 监听，经 hook 计入活动
       readerChrome?.handleSurfaceClick(event);
       syncChromeRevealAttr();
     },
-    onSelectionMouseUp: (selection, chapter, body, frame) =>
-      onFlowSelectionMouseUp(selection, chapter, body, frame),
+    onSelectionMouseUp: (selection, chapter, body, frame) => {
+      sessionProgress.noteActivity(); // iframe 内划选同为阅读活动信号
+      onFlowSelectionMouseUp(selection, chapter, body, frame);
+    },
     openSearch: (seed) => openSearch(seed),
     advanceReading: (direction) => advanceReading(direction),
     advancePagedWheel: (direction) => {
@@ -1096,9 +1102,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     await sessionAnnotation.save(annotations);
   };
 
-  /** 移除标注（侧栏/划选工具栏共用）：更新集合、经共享引擎清正文 mark（flow 正文与 PDF 文本层）、保存。 */
+  /** 移除标注（侧栏/划选工具栏共用）：v3 删除产 tombstone（同步合并按记录级
+   * LWW 收敛，防复活），更新集合、经共享引擎清正文 mark、刷新书签表面、保存。 */
   const removeAnnotationById = (id: string): void => {
-    annotations = annotations.filter((a) => a.id !== id);
+    annotations = removeAnnotation(annotations, id);
     for (const doc of flowDocuments()) {
       removeAnnotationMarks(doc.body, id);
       paintAnnotationOverlays(doc);
@@ -1107,6 +1114,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       removeAnnotationMarks(layer, id);
     }
     renderSidebarAnnotations();
+    syncBookmarkIndicators();
+    syncChromeBookmarkState();
     void saveAnnotations();
   };
 
@@ -1148,9 +1157,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (input === null || destroyed || generation !== sessionLoad.generation()) {
         return;
       }
-      annotations = annotations.map((item) =>
-        item.id === annotation.id ? { ...item, note: input } : item,
-      );
+      annotations = updateAnnotationNote(annotations, annotation.id, input);
       renderSidebarAnnotations();
       void saveAnnotations();
     })();
@@ -1251,6 +1258,127 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return { format: 'text', chapter, ...anchor };
     }
     return { format: 'flow', chapter, ...anchor };
+  };
+
+  // —— 书签一等开关（R1）：chrome 按钮/菜单/角标/进度轨刻度共用同一组事实判定。 ——
+
+  /**
+   * 状态位的活书签（chrome 按钮两态与菜单勾选的事实源）：按 readerState 判定
+   *（页式按页码、流式按章），不读正文 DOM，滚动帧上调用也足够便宜。
+   */
+  const bookmarkAtStatePosition = (state: ReaderState): Annotation | null => {
+    if (state.locationKind === 'page' && state.current > 0) {
+      return (
+        annotations.find(
+          (annotation) =>
+            annotation.kind === 'bookmark' &&
+            annotation.deletedAt === undefined &&
+            (annotation.locator.format === 'pdf' || annotation.locator.format === 'cbz') &&
+            annotation.locator.page === state.current,
+        ) ?? null
+      );
+    }
+    if (state.locationKind === 'chapter' && state.current > 0) {
+      const chapter = state.current - 1;
+      return (
+        annotations.find(
+          (annotation) =>
+            annotation.kind === 'bookmark' &&
+            annotation.deletedAt === undefined &&
+            (annotation.locator.format === 'flow' || annotation.locator.format === 'text') &&
+            (annotation.locator.chapter ?? 0) === chapter,
+        ) ?? null
+      );
+    }
+    return null;
+  };
+
+  /** chrome 书签按钮两态 + 进度轨书签刻度随位置/集合刷新（setProgress 幂等）。 */
+  const syncChromeBookmarkState = (): void => {
+    readerChrome?.setBookmarked(bookmarkAtStatePosition(readerState) !== null);
+    syncChromeProgress();
+  };
+
+  /** 书签开关：当前位置已有活书签则 tombstone 移除，否则在当前位置添加。 */
+  const toggleBookmarkAtCurrentPosition = (): void => {
+    if (!sessionAnnotation.enabled()) {
+      return;
+    }
+    const existing = bookmarkAtStatePosition(readerState);
+    if (existing !== null) {
+      removeAnnotationById(existing.id);
+      return;
+    }
+    appendAnnotation('bookmark', currentPositionLocator(), undefined, undefined);
+  };
+
+  /** 页内持久书签指示（R1）：有活书签的章/页在页角渲染丝带角标（装饰，不侵交互）。 */
+  const BOOKMARK_BADGE_CLASS = 'lightink-reader-bookmark-ribbon';
+  const syncBookmarkIndicators = (): void => {
+    const chapters = new Set<number>();
+    const pages = new Set<number>();
+    for (const annotation of annotations) {
+      if (annotation.kind !== 'bookmark' || annotation.deletedAt !== undefined) {
+        continue;
+      }
+      const locator = annotation.locator;
+      if (
+        (locator.format === 'flow' || locator.format === 'text') &&
+        locator.chapter !== undefined
+      ) {
+        chapters.add(locator.chapter);
+      } else if (locator.format === 'pdf' || locator.format === 'cbz') {
+        pages.add(locator.page);
+      }
+    }
+    const syncBadge = (host: HTMLElement, on: boolean): void => {
+      const existing = host.querySelector(`:scope > .${BOOKMARK_BADGE_CLASS}`);
+      if (!on) {
+        existing?.remove();
+        return;
+      }
+      if (existing !== null) {
+        return;
+      }
+      const badge = document.createElement('span');
+      badge.className = BOOKMARK_BADGE_CLASS;
+      badge.setAttribute('aria-hidden', 'true');
+      badge.title = t('annotation.bookmarkBadge');
+      host.appendChild(badge);
+    };
+    for (const article of scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')) {
+      syncBadge(article, chapters.has(Number(article.dataset.chapterIndex)));
+    }
+    for (const slot of pageHost.querySelectorAll<HTMLElement>('.lightink-reader-page-slot')) {
+      syncBadge(slot, pages.has(Number(slot.dataset.pageIndex) + 1));
+    }
+  };
+
+  /** 书签刻度点击（chrome 回调）：按刻度 fraction 找回对应活书签并跳转。 */
+  const jumpToBookmarkTick = (fraction: number): void => {
+    const total = readerState.total;
+    if (!Number.isSafeInteger(total) || total <= 1) {
+      return;
+    }
+    const match = annotations.find((annotation) => {
+      if (annotation.kind !== 'bookmark' || annotation.deletedAt !== undefined) {
+        return false;
+      }
+      const locator = annotation.locator;
+      const raw =
+        locator.format === 'flow' || locator.format === 'text'
+          ? (locator.chapter ?? -1) / total
+          : locator.format === 'pdf' || locator.format === 'cbz'
+            ? (locator.page - 1) / total
+            : -1;
+      if (raw < 0) {
+        return false;
+      }
+      return Math.round(Math.min(1, Math.max(0, raw)) * 1000) / 1000 === fraction;
+    });
+    if (match !== undefined) {
+      jumpToAnnotation(match);
+    }
   };
 
   const closestPane = (): HTMLElement | null => {
@@ -1391,6 +1519,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       locationKind: total === 0 ? null : 'page',
       comicMetadata: cbzHandle?.metadata,
     });
+    // 页 slot 懒栅格化/缩放重建后角标需要补画（幂等）。
+    syncBookmarkIndicators();
   };
 
   const onFlowScroll = (): void => {
@@ -1447,6 +1577,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   scrollHost.addEventListener('scroll', scheduleFlowScroll, { passive: true });
   const paneScroller = closestPane();
   paneScroller?.addEventListener('scroll', scheduleFlowScroll, { passive: true });
+  // 阅读输入活动信号（进度 v2 空闲计时）：点击/指针/按键刷新 readingMs 计时窗口；
+  // 滚动/翻页经 schedulePersist 已计入。监听器随 root 摘除，destroy 无需显式移除。
+  const noteReadingActivity = (): void => {
+    sessionProgress.noteActivity();
+  };
+  root.addEventListener('click', noteReadingActivity);
+  root.addEventListener('pointerdown', noteReadingActivity);
+  root.addEventListener('keydown', noteReadingActivity);
   // 分页滚轮提到窗口级（main.ts，与 Markdown R1 同源）：大纲/chrome/空白区
   // 悬停也翻正文。章节 iframe 内事件到不了宿主，仍由 flow-renderer 转发。
 
@@ -1473,7 +1611,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
 
-  /** 追加标注并同步正文高亮/侧栏/持久化。 */
+  /** 追加标注并同步正文高亮/侧栏/书签表面/持久化。 */
   const appendAnnotation = (
     kind: AnnotationKind,
     locator: Locator,
@@ -1495,6 +1633,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     ];
     renderHighlights();
     renderSidebarAnnotations();
+    syncBookmarkIndicators();
+    syncChromeBookmarkState();
     void saveAnnotations();
   };
 
@@ -1526,6 +1666,80 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     appendAnnotation(kind, currentPositionLocator(), undefined, undefined);
+  };
+
+  /** 跳到标注位置（面板行跳转与进度轨书签刻度共用）：pdf/cbz 按页，flow/text 优先定位 mark。 */
+  const jumpToAnnotation = (annotation: Annotation): void => {
+    const loc = annotation.locator;
+    if (loc.format === 'pdf' && pdfHandle !== null) {
+      pdfHandle.scrollToPage(loc.page);
+      syncPageState();
+      pageHost
+        .querySelector<HTMLElement>(`[data-annotation-id="${cssEscape(annotation.id)}"]`)
+        ?.scrollIntoView({ block: 'center' });
+      return;
+    }
+    if (loc.format === 'cbz') {
+      cbzHandle?.scrollToPage(loc.page);
+      syncPageState();
+      return;
+    }
+    // flow / text：优先定位到该条高亮的 <mark>，否则到章节。
+    const chapter =
+      loc.format === 'flow'
+        ? loc.chapter
+        : loc.format === 'text'
+          ? loc.chapter
+          : firstVisibleChapter();
+    if (chapter !== undefined && flowIsPaginated()) {
+      setActiveChapter(chapter);
+    }
+    const mark = Array.from(
+      scrollHost.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    )
+      .map(
+        (frame) =>
+          frame.contentDocument?.querySelector<HTMLElement>(
+            `[data-annotation-id="${cssEscape(annotation.id)}"]`,
+          ) ?? null,
+      )
+      .find((candidate): candidate is HTMLElement => candidate !== null);
+    if (mark !== undefined) {
+      mark.scrollIntoView({ block: 'center' });
+      return;
+    }
+    if (loc.format === 'flow' || loc.format === 'text') {
+      const frames =
+        chapter === undefined
+          ? Array.from(
+              scrollHost.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+            )
+          : [
+              scrollHost.querySelector<HTMLIFrameElement>(
+                `.lightink-reader-chapter-frame[data-chapter-index="${chapter}"]`,
+              ),
+            ].filter((frame): frame is HTMLIFrameElement => frame !== null);
+      for (const frame of frames) {
+        const range =
+          frame.contentDocument === null || frame.contentDocument === undefined
+            ? null
+            : resolveTextQuoteRange(frame.contentDocument.body, loc);
+        const boundary = range?.startContainer;
+        const target =
+          boundary?.nodeType === Node.ELEMENT_NODE
+            ? (boundary as Element)
+            : boundary?.parentElement;
+        if (target !== undefined && target !== null) {
+          target.scrollIntoView({ block: 'center' });
+          return;
+        }
+      }
+    }
+    if (chapter !== undefined) {
+      scrollHost
+        .querySelector<HTMLElement>(`[data-chapter-index="${chapter}"]`)
+        ?.scrollIntoView({ block: 'center' });
+    }
   };
 
   function ensureSidebar(): void {
@@ -1568,77 +1782,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         onLoadMore: () => sessionSearch.loadMore(),
       },
       onJump: (annotation) => {
-        const loc = annotation.locator;
-        if (loc.format === 'pdf' && pdfHandle !== null) {
-          pdfHandle.scrollToPage(loc.page);
-          syncPageState();
-          pageHost
-            .querySelector<HTMLElement>(
-              `[data-annotation-id="${cssEscape(annotation.id)}"]`,
-            )
-            ?.scrollIntoView({ block: 'center' });
-          return;
-        }
-        if (loc.format === 'cbz') {
-          cbzHandle?.scrollToPage(loc.page);
-          syncPageState();
-          return;
-        }
-        // flow / text：优先定位到该条高亮的 <mark>，否则到章节。
-        const chapter =
-          loc.format === 'flow'
-            ? loc.chapter
-            : loc.format === 'text'
-              ? loc.chapter
-              : firstVisibleChapter();
-        if (chapter !== undefined && flowIsPaginated()) {
-          setActiveChapter(chapter);
-        }
-        const mark = Array.from(
-          scrollHost.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
-        )
-          .map((frame) =>
-            frame.contentDocument?.querySelector<HTMLElement>(
-              `[data-annotation-id="${cssEscape(annotation.id)}"]`,
-            ) ?? null,
-          )
-          .find((candidate): candidate is HTMLElement => candidate !== null);
-        if (mark !== undefined) {
-          mark.scrollIntoView({ block: 'center' });
-          return;
-        }
-        if (loc.format === 'flow' || loc.format === 'text') {
-          const frames =
-            chapter === undefined
-              ? Array.from(
-                  scrollHost.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
-                )
-              : [
-                  scrollHost.querySelector<HTMLIFrameElement>(
-                    `.lightink-reader-chapter-frame[data-chapter-index="${chapter}"]`,
-                  ),
-                ].filter((frame): frame is HTMLIFrameElement => frame !== null);
-          for (const frame of frames) {
-            const range =
-              frame.contentDocument === null || frame.contentDocument === undefined
-                ? null
-                : resolveTextQuoteRange(frame.contentDocument.body, loc);
-            const boundary = range?.startContainer;
-            const target =
-              boundary?.nodeType === Node.ELEMENT_NODE
-                ? (boundary as Element)
-                : boundary?.parentElement;
-            if (target !== undefined && target !== null) {
-              target.scrollIntoView({ block: 'center' });
-              return;
-            }
-          }
-        }
-        if (chapter !== undefined) {
-          scrollHost
-            .querySelector<HTMLElement>(`[data-chapter-index="${chapter}"]`)
-            ?.scrollIntoView({ block: 'center' });
-        }
+        jumpToAnnotation(annotation);
       },
       onRemove: (annotation) => {
         removeAnnotationById(annotation.id);
@@ -1695,11 +1839,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         : kind === 'chapter' && total > 0 && current > 0
           ? t('reader.progress.chapterOf', { current: String(current), total: String(total) })
           : formatReaderLocation(current, total);
+    const ticks = readerProgressTickFractions(readerOutline, total, kind, annotations);
     readerChrome?.setProgress({
       chapterTitle: resolveReaderChapterTitle(readerState, readerOutline, locationFallback),
       location,
       progress: readerState.progress,
-      ticks: readerProgressTickFractions(readerOutline, total, kind),
+      ticks: ticks.chapters,
+      bookmarkTicks: ticks.bookmarks,
     });
   }
 
@@ -1873,6 +2019,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const renderPdfHighlights = (): void => {
     const byPage = new Map<number, AnnotationMarkSpec[]>();
     for (const hl of annotations) {
+      if (hl.deletedAt !== undefined) {
+        continue; // tombstone 不渲染（v3：删除是带时钟的记录，不是缺席）
+      }
       if (hl.kind !== 'highlight' && hl.kind !== 'note') {
         continue;
       }
@@ -1929,6 +2078,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (pdfHandle === null) {
       return;
     }
+    sessionProgress.noteActivity(); // 划选同为阅读活动信号（进度 v2 空闲计时）
     const selection = typeof window !== 'undefined' ? window.getSelection() : null;
     const text = selection?.toString().trim() ?? '';
     if (selection === null || selection.rangeCount === 0 || text.length === 0) {
@@ -2163,6 +2313,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const byChapter = new Map<number, AnnotationMarkSpec[]>();
     const unchaptered: AnnotationMarkSpec[] = [];
     for (const hl of annotations) {
+      if (hl.deletedAt !== undefined) {
+        continue; // tombstone 不渲染（v3：删除是带时钟的记录，不是缺席）
+      }
       if ((hl.kind !== 'highlight' && hl.kind !== 'note') || hl.quote === undefined) {
         continue;
       }
@@ -2410,6 +2563,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
     annotations = nextAnnotations;
     renderHighlights(); // flow/txt 正文与 PDF 文本层（含旧 anchor 数据重渲染）
+    syncBookmarkIndicators(); // 页内书签角标随装载落位
+    syncChromeBookmarkState();
     ensureSidebar();
   };
 
@@ -2990,10 +3145,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   if (canMountReaderChrome()) {
     readerChrome = createReaderChrome(root, {
       touchMode: readerChromeTouchMode(),
+      labels: {
+        bookmark: t('reader.chrome.bookmark'),
+        bookmarkTick: t('reader.chrome.bookmarkTick'),
+      },
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
       openSearch: () => openSearch(),
+      toggleBookmark: () => toggleBookmarkAtCurrentPosition(),
+      isBookmarked: () => bookmarkAtStatePosition(readerState) !== null,
+      onBookmarkTick: (fraction) => jumpToBookmarkTick(fraction),
       toggleSidebar: () => setSidebarVisible(!sessionAnnotation.sidebarVisibility().visible),
       isOverlayOpen: () =>
         sessionAnnotation.sidebarVisibility().visible ||
@@ -3350,6 +3512,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         annotations = [];
         sessionAnnotation.beginSession(request.ext, request.target);
         sidebar?.render(annotations);
+        syncBookmarkIndicators(); // 旧书角标不得带入新书
       },
       settle: settleSession,
       openRemoteSource: deps.openRemoteSource,
@@ -3452,8 +3615,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       await sessionDispose;
     },
     addBookmark: () => {
-      if (sessionAnnotation.enabled()) addAnnotation('bookmark');
+      // 开关语义（chrome 书签按钮与标注菜单共用）：当前位置已书签则取消。
+      toggleBookmarkAtCurrentPosition();
     },
+    isBookmarked: () =>
+      sessionAnnotation.enabled() && bookmarkAtStatePosition(readerState) !== null,
     addNote: () => {
       if (sessionAnnotation.enabled()) addAnnotation('note');
     },

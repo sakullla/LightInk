@@ -202,9 +202,11 @@ export interface AppShellActions {
   activeTabKind?(): 'markdown' | 'reader' | null;
   /** reader：当前文档是否启用标注（决定书签/笔记是否可用）。 */
   isReaderAnnotationEnabled?(): boolean;
+  /** reader：当前阅读位置是否已有书签（书签菜单项勾选态）。 */
+  isReaderBookmarked?(): boolean;
   /** reader：标注侧栏当前是否可见（菜单勾选标记）。 */
   isReaderSidebarVisible?(): boolean;
-  /** reader：在当前阅读位置添加书签。 */
+  /** reader：在当前阅读位置添加/取消书签（开关语义，与 chrome 书签按钮同源）。 */
   onReaderAddBookmark?(): void;
   /** reader：在当前阅读位置添加笔记（弹 prompt）。 */
   onReaderAddNote?(): void;
@@ -710,14 +712,18 @@ export function buildMenus(actions: AppShellActions): Menu[] {
     return items;
   };
 
-  /** reader 态「标注」菜单：书签 / 笔记 / 侧栏开关（侧栏默认隐藏，勾选标记当前态）。 */
+  /** reader 态「标注」菜单：书签开关 / 笔记 / 侧栏开关（侧栏与书签勾选标记当前态）。 */
   const annotationMenu: Menu = {
     id: 'annotation',
     label: () => ll('Annotate', '标注'),
     items: [
       menuItem(
         'ann-bookmark',
-        () => ll('Add Bookmark', '添加书签'),
+        () => {
+          // 与 chrome 书签按钮同一开关语义：当前位置已书签时勾选。
+          const base = ll('Bookmark This Page', '书签本页');
+          return actions.isReaderBookmarked?.() === true ? `✓ ${base}` : base;
+        },
         () => actions.onReaderAddBookmark?.(),
         '',
         () => actions.isReaderAnnotationEnabled?.() !== false,

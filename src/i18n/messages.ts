@@ -148,6 +148,9 @@ const en = {
   'reader.chapter': 'Chapter {n}',
   'reader.progress.chapterOf': 'Chapter {current} of {total}',
   'reader.progress.pageOf': 'Page {current} of {total}',
+  // chrome 书签一等入口与页内角标（R1）。
+  'reader.chrome.bookmark': 'Bookmark',
+  'reader.chrome.bookmarkTick': 'Jump to bookmark',
   'reader.loadFailed': 'Could not open this eBook:\n{detail}',
   'reader.fileTooLarge': 'File is too large ({actual} bytes; limit {limit} bytes).',
   'reader.limit.archiveEntries':
@@ -295,6 +298,7 @@ const en = {
   'annotation.location.page': 'Page {page}',
   'annotation.loadFailed': 'Could not load annotations for this document.',
   'annotation.saveFailed': 'Could not save annotations; kept in memory.',
+  'annotation.bookmarkBadge': 'Bookmarked',
   'slash.noMatch': 'No matches',
   'math.editTitle': 'Edit formula source',
   'mermaid.editTitle': 'Edit flowchart source',
@@ -561,6 +565,9 @@ const zhCN = {
   'reader.chapter': '第 {n} 章',
   'reader.progress.chapterOf': '第 {current} / {total} 章',
   'reader.progress.pageOf': '第 {current} / {total} 页',
+  // chrome 书签一等入口与页内角标（R1）。
+  'reader.chrome.bookmark': '书签',
+  'reader.chrome.bookmarkTick': '跳到书签',
   'reader.loadFailed': '无法打开此电子书：\n{detail}',
   'reader.fileTooLarge': '文件过大（{actual} 字节；上限 {limit} 字节）。',
   'reader.limit.archiveEntries': '压缩包条目过多（实际 {actual}；上限 {limit}）。',
@@ -706,6 +713,7 @@ const zhCN = {
   'annotation.location.page': '第 {page} 页',
   'annotation.loadFailed': '无法加载本文档的标注。',
   'annotation.saveFailed': '标注保存失败，已保留在内存中。',
+  'annotation.bookmarkBadge': '已加书签',
   'slash.noMatch': '无匹配项',
   'math.editTitle': '编辑公式源码',
   'mermaid.editTitle': '编辑流程图源码',

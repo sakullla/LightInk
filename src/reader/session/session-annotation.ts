@@ -5,10 +5,11 @@
  * 用户可见面冻结）：
  * - 启用判定：标注存储可用（read/write 注入）× adapter 能力声明 × 身份可用。
  *   remote 目标恒可启用（fnv 身份键哈希关联，含远程漫画——现行口径）；本地
- *   目标需成员声明内容哈希标注身份且 content_hash 注入可用——漫画归档不
- *   哈希归档的现行规则固化为 paged-comic 能力行（见 ./adapters
- *   SESSION_FORMAT_CAPABILITIES），核心与视图均不按格式名分支。未启用成员
- *   的标注操作（书签/笔记/划选确认）为空操作，不产生存储写入；
+ *   目标按成员声明的标注身份放行——'content-hash' 需 content_hash 注入可用，
+ *   'progress-id'（漫画归档不哈希正文，标注与页进度同源按目标身份关联）无需
+ *   额外注入（见 ./adapters SESSION_FORMAT_CAPABILITIES），核心与视图均不按
+ *   格式名分支。未启用成员的标注操作（书签/笔记/划选确认）为空操作，不产生
+ *   存储写入；
  * - 身份解析与装载：本地 content_hash / remote 身份键 → 读标注 JSON → 解析。
  *   读失败（含无 Tauri IPC）视为空标注，不弹窗阻断阅读；每个 await 点后
  *   复查销毁/取消/世代，过期结果静默丢弃、不留半更新状态；
@@ -44,6 +45,7 @@ import {
   sessionCapabilitiesForExtension,
   type SessionRunContext,
 } from './adapters.js';
+import { comicProgressIdForTarget } from './session-progress.js';
 
 /** 标注存储注入面（生产为 Rust IPC；缺省项即对应能力不可用）。 */
 export interface SessionAnnotationStorage {
@@ -155,19 +157,18 @@ export function createReaderSessionAnnotation(
 
   /**
    * 启用判定的会话面：remote 恒可（身份键哈希，现行口径，含远程漫画）；
-   * 本地 = 成员声明内容哈希标注身份（漫画行声明 null）且 content_hash
-   * 注入可用。
+   * 本地 = 成员声明的标注身份可用——'content-hash' 需 content_hash 注入，
+   * 'progress-id'（漫画：与进度同源的目标身份，不哈希归档）无需额外注入。
    */
   const hostable = (ext: string, target: ReaderTarget): boolean => {
     if (target.kind === 'remote') {
       return true;
     }
-    const capabilities = sessionCapabilitiesForExtension(ext);
-    return (
-      capabilities !== null &&
-      capabilities.annotations.localIdentity === 'content-hash' &&
-      storage.getContentHash !== undefined
-    );
+    const identity = sessionCapabilitiesForExtension(ext)?.annotations.localIdentity;
+    if (identity === 'progress-id') {
+      return true;
+    }
+    return identity === 'content-hash' && storage.getContentHash !== undefined;
   };
 
   const visibility = (): SessionSidebarVisibility => ({
@@ -186,11 +187,17 @@ export function createReaderSessionAnnotation(
     try {
       let nextHash: string;
       if (target.kind === 'local') {
-        const getContentHash = storage.getContentHash;
-        if (getContentHash === undefined) {
-          return null; // 启用判定的 content_hash 因子（hostable 已判，防御）
+        const identity = sessionCapabilitiesForExtension(ext)?.annotations.localIdentity;
+        if (identity === 'progress-id') {
+          // 漫画归档不哈希正文：标注身份与页进度同源（comicProgressIdForTarget）。
+          nextHash = comicProgressIdForTarget(target);
+        } else {
+          const getContentHash = storage.getContentHash;
+          if (getContentHash === undefined) {
+            return null; // 启用判定的 content_hash 因子（hostable 已判，防御）
+          }
+          nextHash = await getContentHash(target.path);
         }
-        nextHash = await getContentHash(target.path);
       } else {
         nextHash = fnv1a64Hex(`remote:${readerIdentityKey(target.identity)}`);
       }

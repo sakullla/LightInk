@@ -5,12 +5,13 @@
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
  * First paint is hidden except a 1px progress hairline. A page click
- * or a pointer near the top/bottom edge reveals four text-labeled actions
+ * or a pointer near the top/bottom edge reveals five text-labeled actions
  * together with a progress footer:
- *   返回书架 · 目录 · 排版 · 搜索
+ *   返回书架 · 目录 · 排版 · 书签 · 搜索
  * 「返回书架」 is the first control (start of the top bar). It is the only
  * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索
- * call `openOutline` / `openTypography` / `openSearch`.
+ * call `openOutline` / `openTypography` / `openSearch`. 书签 calls
+ * `toggleBookmark` and reflects `isBookmarked` as a two-state toggle.
  * 搜索 lives in the tools cluster and opens the annotation sidebar (notes +
  * in-book search); chrome does not add a second 本书标注 control.
  *
@@ -30,7 +31,7 @@
  * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
  * reveal — the chrome only leaves via center tap, Escape, or closing an
  * overlay. Desktop behavior above is unchanged when the flag is absent.
- * toc / typography / search live in the footer thumb zone
+ * toc / typography / bookmark / search live in the footer thumb zone
  * (hit target ≥48×48, adjacent gap ≥8px) so they stay reachable after the
  * top bar is dismissed. backToShelf stays on the top bar with the same
  * 48×48 hit. Text books and comics share this reveal/dismiss chrome.
@@ -46,8 +47,8 @@ import {
   READER_CHROME_TOUCH_HIT_PX,
 } from '../reader-chrome.js';
 
-const LABELS = ['返回书架', '目录', '排版', '搜索'] as const;
-const THUMB_ACTIONS = ['toc', 'typography', 'search'] as const;
+const LABELS = ['返回书架', '目录', '排版', '书签', '搜索'] as const;
+const THUMB_ACTIONS = ['toc', 'typography', 'bookmark', 'search'] as const;
 const PRIMARY_TOUCH_ACTIONS = ['backToShelf', ...THUMB_ACTIONS] as const;
 const AUTO_HIDE_MS = 2500;
 const MIN_HIT_PX = READER_CHROME_TOUCH_HIT_PX;
@@ -103,6 +104,9 @@ function mount(overrides: Record<string, unknown> = {}) {
     openOutline: vi.fn(),
     openSearch: vi.fn(),
     openTypography: vi.fn(),
+    toggleBookmark: vi.fn(),
+    isBookmarked: vi.fn(() => false),
+    onBookmarkTick: vi.fn(),
     toggleSidebar: vi.fn(),
     isOverlayOpen: vi.fn(() => false),
     dismissOverlay: vi.fn(() => false),
@@ -222,14 +226,14 @@ describe('createReaderChrome first paint', () => {
 });
 
 describe('createReaderChrome reveal', () => {
-  it('reveals four text-labeled controls with 返回书架 first after a page click', () => {
+  it('reveals five text-labeled controls with 返回书架 first after a page click', () => {
     const { host, page, chrome } = mount();
 
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
 
     const buttons = labeledButtons(host);
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
     expect(host.textContent).not.toContain('本书标注');
@@ -445,7 +449,115 @@ describe('createReaderChrome search entry', () => {
   });
 });
 
+describe('createReaderChrome bookmark toggle (R1)', () => {
+  it('declares bookmark as a first-class chrome action', () => {
+    expect(READER_CHROME_ACTIONS).toContain('bookmark');
+  });
+
+  it('presents a two-state toggle driven by isBookmarked and forwards toggleBookmark', () => {
+    let bookmarked = false;
+    const { host, chrome, deps } = mount({
+      isBookmarked: () => bookmarked,
+      toggleBookmark: vi.fn(() => {
+        bookmarked = !bookmarked;
+      }),
+    });
+    chrome.reveal();
+
+    const button = actionButton(host, 'bookmark');
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.classList.contains('is-bookmarked')).toBe(false);
+
+    button.click();
+    expect(deps.toggleBookmark).toHaveBeenCalledTimes(1);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.classList.contains('is-bookmarked')).toBe(true);
+
+    button.click();
+    expect(deps.toggleBookmark).toHaveBeenCalledTimes(2);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.classList.contains('is-bookmarked')).toBe(false);
+  });
+
+  it('lets the host rewrite the toggle state via setBookmarked and re-reads on reveal', () => {
+    let bookmarked = true;
+    const { host, chrome } = mount({ isBookmarked: () => bookmarked });
+    const button = actionButton(host, 'bookmark');
+
+    chrome.reveal();
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+
+    chrome.setBookmarked(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.classList.contains('is-bookmarked')).toBe(false);
+
+    // 宿主事实源优先：reveal 重新读取 isBookmarked。
+    chrome.setBookmarked(true);
+    bookmarked = false;
+    chrome.dismiss();
+    chrome.reveal();
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps the bookmark toggle in the touch footer thumb zone with a 48px hit', () => {
+    const { host, chrome, deps } = mount({ touchMode: true });
+    chrome.reveal();
+    const button = actionButton(host, 'bookmark');
+    const zone = footerThumbZone(chrome.footer);
+    expect(zone.contains(button)).toBe(true);
+    expect(chrome.bar.contains(button)).toBe(false);
+    expect(Number(button.dataset.readerChromeHit ?? 0)).toBeGreaterThanOrEqual(MIN_HIT_PX);
+    button.click();
+    expect(deps.toggleBookmark).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createReaderChrome bookmark ticks (R3)', () => {
+  it('paints bookmark ticks as clickable buttons distinct from chapter ticks', () => {
+    const onBookmarkTick = vi.fn();
+    const { chrome } = mount({ onBookmarkTick });
+    chrome.setProgress({
+      chapterTitle: '第一章',
+      location: '2 / 10',
+      progress: 0.25,
+      ticks: [0.2],
+      bookmarkTicks: [0.55],
+    });
+
+    const all = chrome.footer.querySelectorAll('.lightink-reader-chrome-tick');
+    expect(all).toHaveLength(2);
+    const chapterTick = chrome.footer.querySelector(
+      '.lightink-reader-chrome-tick:not(.lightink-reader-chrome-tick--bookmark)',
+    );
+    expect(chapterTick?.tagName).toBe('I');
+
+    const bookmarkTick = chrome.footer.querySelector<HTMLButtonElement>(
+      '.lightink-reader-chrome-tick--bookmark',
+    );
+    expect(bookmarkTick).not.toBeNull();
+    expect(bookmarkTick!.tagName).toBe('BUTTON');
+    expect(bookmarkTick!.style.left).toBe('55%');
+    expect(bookmarkTick!.getAttribute('aria-label')?.trim()).not.toBe('');
+
+    bookmarkTick!.click();
+    expect(onBookmarkTick).toHaveBeenCalledTimes(1);
+    expect(onBookmarkTick).toHaveBeenCalledWith(0.55);
+
+    // 书签增删后 setProgress 刷新刻度。
+    chrome.setProgress({
+      chapterTitle: '第一章',
+      location: '2 / 10',
+      progress: 0.25,
+      ticks: [0.2],
+      bookmarkTicks: [],
+    });
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-tick--bookmark')).toBeNull();
+    expect(chrome.footer.querySelectorAll('.lightink-reader-chrome-tick')).toHaveLength(1);
+  });
+});
+
 describe('createReaderChrome escape is one step', () => {
+
   it('closes the selection toolbar before anything else', () => {
     const { chrome, deps } = mount({
       isSelectionToolbarVisible: vi.fn(() => true),
@@ -692,7 +804,7 @@ describe('createReaderChrome touch mode', () => {
     );
   });
 
-  it('places toc / typography / search in the footer thumb zone', () => {
+  it('places toc / typography / bookmark / search in the footer thumb zone', () => {
     const { host, chrome } = mount({ touchMode: true });
     chrome.reveal();
 
@@ -708,7 +820,7 @@ describe('createReaderChrome touch mode', () => {
     }
   });
 
-  it('keeps the three thumb actions reachable after the top bar is dismissed', () => {
+  it('keeps the four thumb actions reachable after the top bar is dismissed', () => {
     const { chrome, deps } = mount({ touchMode: true });
     chrome.reveal();
 
@@ -718,6 +830,7 @@ describe('createReaderChrome touch mode', () => {
     const clicks: Array<[string, () => void]> = [
       ['toc', () => expect(deps.openOutline).toHaveBeenCalledTimes(1)],
       ['typography', () => expect(deps.openTypography).toHaveBeenCalledTimes(1)],
+      ['bookmark', () => expect(deps.toggleBookmark).toHaveBeenCalledTimes(1)],
       ['search', () => expect(deps.openSearch).toHaveBeenCalledTimes(1)],
     ];
     for (const [action, assertCall] of clicks) {
@@ -799,8 +912,8 @@ describe('createReaderChrome touch mode', () => {
   });
 });
 
-describe('createReaderChrome desktop keeps four actions on the top bar', () => {
-  it('keeps shelf / contents / typography / search on the top bar and out of the footer', () => {
+describe('createReaderChrome desktop keeps five actions on the top bar', () => {
+  it('keeps shelf / contents / typography / bookmark / search on the top bar and out of the footer', () => {
     const { host, chrome } = mount();
     chrome.reveal();
 

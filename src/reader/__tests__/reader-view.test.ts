@@ -22,6 +22,9 @@ import { readerFlowSpreadFromTypography } from '../reader-layout.js';
 import { applyReaderTheme } from '../reader-theme.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 
+const cbzMock = vi.hoisted(() => ({ renderCbzInto: vi.fn() }));
+vi.mock('../formats/cbz.js', () => ({ renderCbzInto: cbzMock.renderCbzInto }));
+
 describe('划选工具栏（selection-toolbar）', () => {
   const buttonByAction = (toolbar: ReturnType<typeof createSelectionToolbar>, action: string) =>
     toolbar.element.querySelector<HTMLButtonElement>(
@@ -2401,3 +2404,302 @@ describe('导航会话接线（session-navigation：翻页模式门面路径）'
     await view.destroy();
   });
 });
+
+describe('chrome 书签开关与页内角标（R1）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('书签按钮开关当前章书签：按钮两态、章角丝带角标、存储写入 tombstone', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const writeAnnotations = vi.fn(async (_contentHash: string, _json: string) => undefined);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: Array.from({ length: 4 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          html: `<p>chapter ${index + 1} body</p>`,
+        })),
+      }),
+      getContentHash: async () => 'aaaaaaaaaaaaaaaa',
+      readAnnotations: async () => '',
+      writeAnnotations,
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+
+    // 跳到第 2 章再开关书签（刻度避开轨道端点圆帽）。
+    view.jumpToOutlineItem({ level: 1, text: 'Chapter 2', anchor: 1, chapter: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.state.current).toBe(2);
+
+    const bookmarkButton = host.querySelector<HTMLButtonElement>(
+      '[data-reader-chrome-action="bookmark"]',
+    );
+    expect(bookmarkButton).not.toBeNull();
+    expect(view.isBookmarked?.()).toBe(false);
+
+    bookmarkButton!.click();
+    expect(view.isBookmarked?.()).toBe(true);
+    expect(bookmarkButton!.getAttribute('aria-pressed')).toBe('true');
+    expect(bookmarkButton!.classList.contains('is-bookmarked')).toBe(true);
+    await vi.waitFor(() => expect(writeAnnotations).toHaveBeenCalledTimes(1));
+    const first = JSON.parse(writeAnnotations.mock.calls[0]![1] as string) as {
+      version: number;
+      annotations: Array<Record<string, unknown>>;
+    };
+    expect(first.version).toBe(3);
+    expect(first.annotations[0]).toMatchObject({
+      kind: 'bookmark',
+      locator: { format: 'flow', chapter: 1 },
+    });
+
+    // 页内持久指示：当前章渲染丝带角标。
+    const article = host.querySelector<HTMLElement>(
+      '.lightink-reader-chapter[data-chapter-index="1"]',
+    );
+    expect(article?.querySelector('.lightink-reader-bookmark-ribbon')).not.toBeNull();
+    // 进度轨出现书签刻度（0.25，区别于章节刻度）。
+    const tick = host.querySelector<HTMLButtonElement>('.lightink-reader-chrome-tick--bookmark');
+    expect(tick).not.toBeNull();
+    expect(tick!.style.left).toBe('25%');
+
+    // 再点一次 = 取消：tombstone 写入，角标与刻度消失。
+    bookmarkButton!.click();
+    expect(view.isBookmarked?.()).toBe(false);
+    expect(bookmarkButton!.getAttribute('aria-pressed')).toBe('false');
+    await vi.waitFor(() => expect(writeAnnotations).toHaveBeenCalledTimes(2));
+    const second = JSON.parse(writeAnnotations.mock.calls[1]![1] as string) as {
+      annotations: Array<Record<string, unknown>>;
+    };
+    expect(second.annotations).toHaveLength(1);
+    expect(second.annotations[0]?.deletedAt).toEqual(expect.any(Number));
+    expect(article?.querySelector('.lightink-reader-bookmark-ribbon')).toBeNull();
+    expect(host.querySelector('.lightink-reader-chrome-tick--bookmark')).toBeNull();
+    await view.destroy();
+  });
+
+  it('进度轨书签刻度点击跳转到对应书签位置', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    cbzMock.renderCbzInto.mockImplementation(async (_source: unknown, stagedHost: HTMLElement) => {
+      for (let index = 0; index < 4; index += 1) {
+        const slot = document.createElement('div');
+        slot.className = 'lightink-reader-page-slot lightink-reader-cbz-slot';
+        slot.dataset.pageIndex = String(index);
+        stagedHost.appendChild(slot);
+      }
+      return {
+        totalPages: 4,
+        currentPage: 1,
+        metadata: { pages: [] },
+        preferences: { mode: 'paged', direction: 'ltr', spread: 'single', fit: 'width', cropMargins: false },
+        scrollToPage: vi.fn(),
+        scrollToProgress: vi.fn(),
+        nextPage: vi.fn(() => true),
+        previousPage: vi.fn(() => true),
+        setPreferences: vi.fn(),
+        hideChrome: vi.fn(() => false),
+        adjustZoom: vi.fn(),
+        destroy: vi.fn(async () => undefined),
+      };
+    });
+    const stored = JSON.stringify({
+      version: 3,
+      annotations: [
+        {
+          id: 'bm3',
+          kind: 'bookmark',
+          locator: { format: 'cbz', page: 3 },
+          createdAt: 1,
+        },
+      ],
+    });
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([0x89, 0x50]),
+      readAnnotations: async () => stored,
+    });
+    await view.load('/comics/vol.cbz');
+    await vi.advanceTimersByTimeAsync(50);
+
+    // 书签页角标落在第 3 页 slot（页角，不侵入正文位图）。
+    expect(
+      host.querySelector(
+        '.lightink-reader-page-slot[data-page-index="2"] .lightink-reader-bookmark-ribbon',
+      ),
+    ).not.toBeNull();
+    expect(
+      host.querySelector(
+        '.lightink-reader-page-slot[data-page-index="0"] .lightink-reader-bookmark-ribbon',
+      ),
+    ).toBeNull();
+
+    // 书签刻度点击 → 跳到对应书签页。
+    const tick = host.querySelector<HTMLButtonElement>('.lightink-reader-chrome-tick--bookmark');
+    expect(tick).not.toBeNull();
+    tick!.click();
+    const handle = (await cbzMock.renderCbzInto.mock.results[0]?.value) as {
+      scrollToPage: ReturnType<typeof vi.fn>;
+    };
+    expect(handle.scrollToPage).toHaveBeenCalledWith(3);
+    await view.destroy();
+    cbzMock.renderCbzInto.mockReset();
+  });
+});
+
+describe('标注渲染跳过 tombstone（v3 删除语义）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('flow 渲染循环不渲染 tombstone 高亮，tombstone 书签不出角标', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const stored = JSON.stringify({
+      version: 3,
+      annotations: [
+        {
+          id: 'live1',
+          kind: 'highlight',
+          locator: {
+            format: 'flow',
+            chapter: 0,
+            start: 0,
+            end: 7,
+            quote: 'chapter',
+            prefix: '',
+            suffix: ' 1 body',
+          },
+          quote: 'chapter',
+          createdAt: 1,
+        },
+        // tombstone：定位完全可解析，若不跳过必然出 mark。
+        {
+          id: 'dead1',
+          kind: 'highlight',
+          locator: {
+            format: 'flow',
+            chapter: 0,
+            start: 10,
+            end: 14,
+            quote: 'body',
+            prefix: 'chapter 1 ',
+            suffix: '',
+          },
+          quote: 'body',
+          createdAt: 1,
+          deletedAt: 2,
+        },
+        {
+          id: 'dead-bookmark',
+          kind: 'bookmark',
+          locator: {
+            format: 'flow',
+            chapter: 0,
+            start: 0,
+            end: 0,
+            quote: '',
+            prefix: '',
+            suffix: '',
+          },
+          createdAt: 1,
+          deletedAt: 3,
+        },
+      ],
+    });
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [{ title: 'Chapter 1', html: '<p>chapter 1 body</p>' }],
+      }),
+      getContentHash: async () => 'aaaaaaaaaaaaaaaa',
+      readAnnotations: async () => stored,
+      // 滚动模式：refreshViewport 经 remasureScrollFrames 重跑渲染循环。
+      preferenceStorage: {
+        getItem: (key) => (key === 'lightink.reader.flow.layout' ? 'scroll' : null),
+        setItem: () => undefined,
+      },
+    });
+    await view.load('book.epub');
+    const frame = host.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')!;
+    // jsdom 不把 srcdoc 解析进 iframe 文档，且帧插入即自动绑定 load（正文为空）。
+    // 注入正文后由 refreshViewport 重跑渲染循环落位。
+    const frameDocument = frame.contentDocument!;
+    const paragraph = frameDocument.createElement('p');
+    paragraph.textContent = 'chapter 1 body';
+    frameDocument.body.appendChild(paragraph);
+    view.refreshViewport?.();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(frameDocument.querySelector('mark[data-annotation-id="live1"]')).not.toBeNull();
+    expect(frameDocument.querySelector('mark[data-annotation-id="dead1"]')).toBeNull();
+    expect(host.querySelector('.lightink-reader-bookmark-ribbon')).toBeNull();
+    await view.destroy();
+  });
+});
+
+describe('阅读活动信号接线（进度 v2 noteActivity）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    cbzMock.renderCbzInto.mockReset();
+    document.body.replaceChildren();
+    delete document.documentElement.dataset.readingLayout;
+  });
+
+  it('空闲超时后点击阅读面恢复阅读时长累计', async () => {
+    const store: Record<string, string> = {};
+    cbzMock.renderCbzInto.mockResolvedValue({
+      totalPages: 3,
+      currentPage: 1,
+      metadata: { pages: [] },
+      preferences: { mode: 'paged', direction: 'ltr', spread: 'single', fit: 'width', cropMargins: false },
+      scrollToPage: vi.fn(),
+      scrollToProgress: vi.fn(),
+      nextPage: vi.fn(() => true),
+      previousPage: vi.fn(() => true),
+      setPreferences: vi.fn(),
+      hideChrome: vi.fn(() => false),
+      adjustZoom: vi.fn(),
+      destroy: vi.fn(async () => undefined),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([0x89, 0x50]),
+      readAnnotations: async () => '',
+      progressStorage: {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => {
+          store[key] = value;
+        },
+      },
+    });
+    await view.load('/comics/vol.cbz'); // 真实计时器完成装载
+
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(3 * 60 * 1000); // 超过 2 分钟空闲阈值：计时暂停
+    const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+    reader.dispatchEvent(new MouseEvent('click', { bubbles: true })); // 输入信号恢复计时
+    vi.advanceTimersByTime(1000);
+    await view.destroy();
+
+    const stored = JSON.parse(
+      store['lightink.reader.progress./comics/vol.cbz'] ?? 'null',
+    ) as { readingMs?: number } | null;
+    expect(stored).not.toBeNull();
+    // 初始活跃窗口 2 分钟 + 点击后的 1 秒；无点击接线则只有 120000。
+    expect(stored!.readingMs).toBeGreaterThanOrEqual(120000 + 1000);
+  });
+});
+

@@ -2049,6 +2049,8 @@ shell = createAppShell(
     // ---- 标注：阅读器与 Markdown 共用菜单 ----
     activeTabKind: () => manager?.activeTab?.kind ?? null,
     isReaderAnnotationEnabled: () => activeAnnotationController()?.isAnnotationEnabled() ?? false,
+    // 书签勾选态只认 reader 标签（markdown 宿主无当前位置书签概念）。
+    isReaderBookmarked: () => activeReaderTab()?.reader.isBookmarked?.() ?? false,
     isReaderSidebarVisible: () => activeAnnotationController()?.isSidebarVisible() ?? false,
     onReaderAddBookmark: () => {
       activeAnnotationController()?.addBookmark();
