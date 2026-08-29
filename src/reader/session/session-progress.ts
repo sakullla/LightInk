@@ -291,8 +291,11 @@ export function createReaderSessionProgress(host: SessionProgressHost): ReaderSe
     // 本次写入值即新基准、会话累计重新起计：下次重读到本次写入时不会重复累加。
     baseReadingMs = readingMs;
     sessionReadingMs = 0;
+    // stored（内存快照，可来自绑定时 pendingRestore 的 rememberAsSnapshot）可能
+    // 携带陈旧 status：先剥离，仅按重读存储的 status 或本会话读完决定写回。
+    const { status: _staleStatus, ...rest } = stored;
     return {
-      ...stored,
+      ...rest,
       updatedAt: now,
       readingMs,
       ...(storedFinished || sessionFinished ? { status: 'finished' as const } : {}),

@@ -854,4 +854,31 @@ describe('session-progress v2 fields (readingMs / status)', () => {
     expect(next).not.toHaveProperty('status');
     expect(next?.readingMs).toBe(60_000);
   });
+
+  it('does not write back a stale finished status carried by the remembered snapshot', () => {
+    const harness = createProgressHarness({
+      flowApply: () => ({ applied: true, rememberAsSnapshot: true }),
+    });
+    // 读完为粘性：恢复记录带 finished，但位置并非末尾（书架曾手动标为读完）。
+    saveReadingProgress(harness.store.storage, '/books/a.epub', {
+      ...flowRecord(2, 0.5, 10),
+      status: 'finished',
+    });
+    harness.progress.bindDocumentIdentity(localBook('/books/a.epub'), null);
+    harness.progress.applyPending(); // rememberAsSnapshot：lastProgress 携带 status:'finished'
+    // 书架「标为在读」：外部删除 storage 记录的 status。
+    const stored = loadReadingProgress(harness.store.storage, '/books/a.epub');
+    const { status: _removed, ...rest } = stored!;
+    saveReadingProgress(harness.store.storage, '/books/a.epub', rest);
+    // 布局切换直写内存快照（captureForRelayout 取 lastProgress）：不得把 finished 写回。
+    harness.progress.persistSnapshot(harness.progress.captureForRelayout());
+    expect(
+      loadReadingProgress(harness.store.storage, '/books/a.epub'),
+    ).not.toHaveProperty('status');
+    // 无新快照时 force 写入兜底内存快照：同样不得复活 finished。
+    harness.progress.persistNow();
+    expect(
+      loadReadingProgress(harness.store.storage, '/books/a.epub'),
+    ).not.toHaveProperty('status');
+  });
 });
