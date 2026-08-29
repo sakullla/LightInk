@@ -6,7 +6,8 @@
 //!
 //! JSON 对 Rust 不透明：备注、颜色等字段由前端 schema 拥有；改备注或删除是
 //! 整文件覆写，不在此升跨书索引或「全部标注」目录。同步合并按记录 `id` 比较
-//! `updatedAt`（缺失时回退 `createdAt`），较新覆盖。
+//! `updatedAt`（缺失时回退 `createdAt`），较新覆盖；tombstone（`deletedAt`）
+//! 参与比较且同刻删除优先，删除可跨端收敛而不复活。
 //!
 //! 内容哈希由本模块的 [`content_hash`] 命令在 Rust 侧计算（读字节 +
 //! [`crate::asset::content_hash_hex`]，FNV-1a 64-bit）；`read_annotations` /
@@ -92,19 +93,18 @@ fn annotation_updated_at(value: &Value) -> f64 {
 }
 
 #[cfg(test)]
-fn merge_version(local: u64, remote: u64) -> u64 {
-    if local == 2 || remote == 2 {
-        2
-    } else if local == 1 || remote == 1 {
-        1
-    } else {
-        2
-    }
+fn annotation_is_tombstone(value: &Value) -> bool {
+    value
+        .get("deletedAt")
+        .and_then(Value::as_f64)
+        .is_some_and(f64::is_finite)
 }
 
-/// Merge two annotation documents by record id. The newer `updatedAt` wins;
-/// a missing `updatedAt` falls back to `createdAt`. Corrupt or empty input is
-/// treated as no records so a bad remote file cannot wipe local notes.
+/// Merge two annotation documents by record id (v3 模型): The newer `updatedAt`
+/// wins; a missing `updatedAt` falls back to `createdAt`. Tombstones
+/// (`deletedAt`) participate in the clock comparison and win ties against a
+/// live row so deletions converge instead of resurrecting. Corrupt or empty
+/// input is treated as no records so a bad remote file cannot wipe local notes.
 #[cfg(test)]
 pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
     let local = parse_annotation_file(local_json);
@@ -113,7 +113,7 @@ pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
         (None, None) => String::new(),
         (Some(_), None) => local_json.to_string(),
         (None, Some(_)) => remote_json.to_string(),
-        (Some((local_version, local_items)), Some((remote_version, remote_items))) => {
+        (Some((_, local_items)), Some((_, remote_items))) => {
             let mut remote_by_id = HashMap::new();
             for item in &remote_items {
                 if let Some(id) = annotation_id(item) {
@@ -128,7 +128,13 @@ pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
                 };
                 seen.insert(id);
                 if let Some(remote_item) = remote_by_id.get(id) {
-                    if annotation_updated_at(remote_item) > annotation_updated_at(item) {
+                    let remote_clock = annotation_updated_at(remote_item);
+                    let local_clock = annotation_updated_at(item);
+                    let remote_wins = remote_clock > local_clock
+                        || (remote_clock == local_clock
+                            && annotation_is_tombstone(remote_item)
+                            && !annotation_is_tombstone(item));
+                    if remote_wins {
                         merged.push((*remote_item).clone());
                     } else {
                         merged.push(item.clone());
@@ -145,7 +151,7 @@ pub fn merge_annotations_json(local_json: &str, remote_json: &str) -> String {
                 }
             }
             serde_json::json!({
-                "version": merge_version(local_version, remote_version),
+                "version": 3,
                 "annotations": merged,
             })
             .to_string()
@@ -295,20 +301,20 @@ mod tests {
     fn note_and_color_overwrite_stays_per_hash() {
         // R5：改备注/颜色是整文件覆写；只动本书 key，不写跨书总库。
         let dir = temp_dir();
-        let original = r##"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧备注","color":"#86c28b"}]}"##;
-        let updated = r##"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新备注","color":"#7eb6d9"}]}"##;
+        let original = r##"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"旧备注","color":"#86c28b"}]}"##;
+        let updated = r##"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"新备注","color":"#7eb6d9"}]}"##;
         write_annotations_impl(dir.path(), HASH_A, original).unwrap();
         write_annotations_impl(
             dir.path(),
             HASH_B,
-            r#"{"version":2,"annotations":[{"id":"b1"}]}"#,
+            r#"{"version":3,"annotations":[{"id":"b1"}]}"#,
         )
         .unwrap();
         write_annotations_impl(dir.path(), HASH_A, updated).unwrap();
         assert_eq!(read_annotations_impl(dir.path(), HASH_A).unwrap(), updated);
         assert_eq!(
             read_annotations_impl(dir.path(), HASH_B).unwrap(),
-            r#"{"version":2,"annotations":[{"id":"b1"}]}"#
+            r#"{"version":3,"annotations":[{"id":"b1"}]}"#
         );
     }
 
@@ -318,16 +324,16 @@ mod tests {
         write_annotations_impl(
             dir.path(),
             HASH_A,
-            r##"{"version":2,"annotations":[{"id":"a1","kind":"highlight","color":"#f2d675"}]}"##,
+            r##"{"version":3,"annotations":[{"id":"a1","kind":"highlight","color":"#f2d675"}]}"##,
         )
         .unwrap();
         write_annotations_impl(
             dir.path(),
             HASH_B,
-            r#"{"version":2,"annotations":[{"id":"b1","kind":"note","note":"留着"}]}"#,
+            r#"{"version":3,"annotations":[{"id":"b1","kind":"note","note":"留着"}]}"#,
         )
         .unwrap();
-        write_annotations_impl(dir.path(), HASH_A, r#"{"version":2,"annotations":[]}"#).unwrap();
+        write_annotations_impl(dir.path(), HASH_A, r#"{"version":3,"annotations":[]}"#).unwrap();
 
         let names: Vec<String> = fs::read_dir(dir.path().join(ANNOTATIONS_DIR))
             .unwrap()
@@ -340,11 +346,11 @@ mod tests {
             .any(|name| name == "index.json" || name == "all.json"));
         assert_eq!(
             read_annotations_impl(dir.path(), HASH_A).unwrap(),
-            r#"{"version":2,"annotations":[]}"#
+            r#"{"version":3,"annotations":[]}"#
         );
         assert_eq!(
             read_annotations_impl(dir.path(), HASH_B).unwrap(),
-            r#"{"version":2,"annotations":[{"id":"b1","kind":"note","note":"留着"}]}"#
+            r#"{"version":3,"annotations":[{"id":"b1","kind":"note","note":"留着"}]}"#
         );
     }
 
@@ -357,7 +363,7 @@ mod tests {
         fs::write(&src, content).unwrap();
         let mtime_before = fs::metadata(&src).unwrap().modified().unwrap();
         let hash = crate::asset::content_hash_hex(content);
-        write_annotations_impl(dir.path(), &hash, r#"{"version":1,"annotations":[]}"#).unwrap();
+        write_annotations_impl(dir.path(), &hash, r#"{"version":3,"annotations":[]}"#).unwrap();
         assert_eq!(
             fs::read(&src).unwrap(),
             content,
@@ -402,8 +408,8 @@ mod tests {
 
     #[test]
     fn webdav_annotation_merge_prefers_newer_updated_at() {
-        let local = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10},{"id":"n2","kind":"note","note":"只在本地","createdAt":2,"updatedAt":5}]}"#;
-        let remote = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20},{"id":"n3","kind":"note","note":"只在远端","createdAt":3,"updatedAt":8}]}"#;
+        let local = r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10},{"id":"n2","kind":"note","note":"只在本地","createdAt":2,"updatedAt":5}]}"#;
+        let remote = r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20},{"id":"n3","kind":"note","note":"只在远端","createdAt":3,"updatedAt":8}]}"#;
         let merged = merge_annotations_json(local, remote);
         assert_eq!(annotation_ids(&merged), ["n1", "n2", "n3"]);
         assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));
@@ -414,21 +420,49 @@ mod tests {
     #[test]
     fn webdav_annotation_merge_falls_back_to_created_at() {
         let local =
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":10}]}"#;
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":10}]}"#;
         let remote =
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":20}]}"#;
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":20}]}"#;
         let merged = merge_annotations_json(local, remote);
         assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));
         let tied = merge_annotations_json(
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"本地","createdAt":5}]}"#,
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"远端","createdAt":5}]}"#,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"本地","createdAt":5}]}"#,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"远端","createdAt":5}]}"#,
+        );
+        assert_eq!(annotation_note(&tied, "n1").as_deref(), Some("本地"));
+    }
+
+    #[test]
+    fn webdav_annotation_merge_tombstone_wins_tie_and_newer_clock() {
+        // 同刻删除优先：远端 tombstone 与本地活跃记录同 updatedAt 时删除收敛。
+        let local = r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"本地","createdAt":1,"updatedAt":5}]}"#;
+        let remote = r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"远端","createdAt":1,"updatedAt":5,"deletedAt":5}]}"#;
+        let merged = merge_annotations_json(local, remote);
+        let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        let item = &parsed["annotations"][0];
+        assert_eq!(item["deletedAt"].as_f64(), Some(5.0));
+
+        // tombstone 参与时钟比较：更新的活跃记录可以覆盖较旧的 tombstone。
+        let resurrect = merge_annotations_json(
+            remote,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"更新","createdAt":1,"updatedAt":9}]}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&resurrect).unwrap();
+        let item = &parsed["annotations"][0];
+        assert!(item.get("deletedAt").is_none());
+        assert_eq!(item["note"].as_str(), Some("更新"));
+
+        // 等刻且双方都活跃：保留本地行。
+        let tied = merge_annotations_json(
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"本地","createdAt":5}]}"#,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"远端","createdAt":5}]}"#,
         );
         assert_eq!(annotation_note(&tied, "n1").as_deref(), Some("本地"));
     }
 
     #[test]
     fn webdav_annotation_merge_corrupt_remote_leaves_local() {
-        let local = r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"留下","createdAt":1}]}"#;
+        let local = r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"留下","createdAt":1}]}"#;
         assert_eq!(merge_annotations_json(local, "{not-json"), local);
         assert_eq!(merge_annotations_json(local, ""), local);
         assert!(merge_annotations_json("", "{not-json").is_empty());
@@ -436,8 +470,8 @@ mod tests {
 
     #[test]
     fn webdav_annotation_merge_does_not_keep_top_level_secrets() {
-        let local = r#"{"version":2,"password":"secret","annotations":[{"id":"n1","kind":"note","createdAt":1}]}"#;
-        let remote = r#"{"version":2,"token":"abc","annotations":[{"id":"n2","kind":"note","createdAt":2}]}"#;
+        let local = r#"{"version":3,"password":"secret","annotations":[{"id":"n1","kind":"note","createdAt":1}]}"#;
+        let remote = r#"{"version":3,"token":"abc","annotations":[{"id":"n2","kind":"note","createdAt":2}]}"#;
         let merged = merge_annotations_json(local, remote);
         assert!(!merged.contains("secret"));
         assert!(!merged.contains("abc"));
@@ -452,13 +486,13 @@ mod tests {
         write_annotations_impl(
             dir.path(),
             HASH_A,
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10}]}"#,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"旧","createdAt":1,"updatedAt":10}]}"#,
         )
         .unwrap();
         write_annotations_impl(
             dir.path(),
             HASH_B,
-            r#"{"version":2,"annotations":[{"id":"b1","kind":"note","note":"另一本","createdAt":1}]}"#,
+            r#"{"version":3,"annotations":[{"id":"b1","kind":"note","note":"另一本","createdAt":1}]}"#,
         )
         .unwrap();
         let listed = list_annotations_by_hash(dir.path()).unwrap();
@@ -473,7 +507,7 @@ mod tests {
         let merged = merge_remote_annotations_impl(
             dir.path(),
             HASH_A,
-            r#"{"version":2,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20}]}"#,
+            r#"{"version":3,"annotations":[{"id":"n1","kind":"note","note":"新","createdAt":1,"updatedAt":20}]}"#,
         )
         .unwrap();
         assert_eq!(annotation_note(&merged, "n1").as_deref(), Some("新"));

@@ -215,9 +215,9 @@ describe('PDF 文字级标注闭环', () => {
     document.querySelector('.lightink-reader-highlight-layer')?.remove();
   });
 
-  it('旧页码级 PdfLocator（无 anchor）与文字级数据可共存解析', () => {
+  it('页码级 PdfLocator（无 anchor）与文字级数据可共存解析', () => {
     const json = JSON.stringify({
-      version: 2,
+      version: 3,
       annotations: [
         {
           id: 'old1',

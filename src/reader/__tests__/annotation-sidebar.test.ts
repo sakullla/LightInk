@@ -541,7 +541,7 @@ describe('markdown annotation host load', () => {
     const [contentHash, json] = writeAnnotations.mock.calls[0];
     expect(contentHash).toMatch(/^[0-9a-f]{16}$/);
     const payload = JSON.parse(json) as { version: number; annotations: unknown[] };
-    expect(payload.version).toBe(2);
+    expect(payload.version).toBe(3);
     expect(payload.annotations).toHaveLength(1);
     expect((payload.annotations[0] as { kind: string }).kind).toBe('bookmark');
 

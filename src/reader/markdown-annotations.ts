@@ -17,7 +17,9 @@ import { createAnnotationSidebar, type AnnotationSidebar } from './annotation-si
 import {
   AnnotationWriteQueue,
   parseAnnotations,
+  removeAnnotation,
   serializeAnnotations,
+  updateAnnotationNote,
   type Annotation,
   type AnnotationKind,
   type Locator,
@@ -118,8 +120,9 @@ export function createMarkdownAnnotationHost(
     persist();
   };
 
-  const removeAnnotation = (id: string): void => {
-    annotations = annotations.filter((item) => item.id !== id);
+  const removeAnnotationById = (id: string): void => {
+    // 删除写 tombstone（保留 id 与 deletedAt 时钟），同步合并时删除可跨端收敛。
+    annotations = removeAnnotation(annotations, id);
     applyDecorations();
     renderSidebar();
     persist();
@@ -201,9 +204,7 @@ export function createMarkdownAnnotationHost(
       if (input === null || destroyed || generation !== loadGeneration) {
         return;
       }
-      annotations = annotations.map((item) =>
-        item.id === annotation.id ? { ...item, note: input } : item,
-      );
+      annotations = updateAnnotationNote(annotations, annotation.id, input);
       renderSidebar();
       persist();
     })();
@@ -230,7 +231,7 @@ export function createMarkdownAnnotationHost(
       t: deps.t,
       onClose: () => setSidebarVisible(false),
       onJump: jumpTo,
-      onRemove: (annotation) => removeAnnotation(annotation.id),
+      onRemove: (annotation) => removeAnnotationById(annotation.id),
       onEditNote: openNote,
     });
     const chrome =

@@ -1,4 +1,4 @@
-/** Versioned annotation data and per-document write serialization. */
+/** Versioned annotation data (v3) and per-document write serialization. */
 
 export type AnnotationKind = 'highlight' | 'bookmark' | 'note';
 
@@ -32,7 +32,7 @@ export interface FlowLocator extends TextQuoteAnchor {
 
 export interface TextLocator extends TextQuoteAnchor {
   format: 'text';
-  /** Chapter index when the TXT is split like a spine; omitted in older records. */
+  /** Chapter index when the TXT is split like a spine. */
   chapter?: number;
 }
 
@@ -42,7 +42,7 @@ export interface PdfLocator {
   quote: string;
   /**
    * 文字级锚点（PDF 文本层高亮用，偏移/上下文相对该页拼接文本）。
-   * 可选：历史 v2 数据与页码级书签/笔记无此字段，照旧加载。
+   * 可选：页码级书签/笔记无此字段，照旧加载。
    */
   anchor?: TextQuoteAnchor;
 }
@@ -58,7 +58,7 @@ export interface Annotation {
   readonly id: string;
   readonly kind: AnnotationKind;
   readonly locator: Locator;
-  /** Kept at the annotation level for sidebar display and v1 compatibility. */
+  /** Kept at the annotation level for sidebar display. */
   readonly quote?: string;
   readonly note?: string;
   /** Optional highlight color; omitted records resolve to DEFAULT_ANNOTATION_COLOR. */
@@ -66,6 +66,11 @@ export interface Annotation {
   readonly createdAt: number;
   /** Last edit time for last-write-wins sync. Missing records use createdAt. */
   readonly updatedAt?: number;
+  /**
+   * Tombstone clock for record-level sync: a deleted annotation keeps its id so
+   * the deletion converges across devices instead of resurrecting.
+   */
+  readonly deletedAt?: number;
 }
 
 export interface AnnotationQuery {
@@ -74,8 +79,8 @@ export interface AnnotationQuery {
   readonly color?: string;
 }
 
-interface AnnotationFileV2 {
-  version: 2;
+interface AnnotationFileV3 {
+  version: 3;
   annotations: Annotation[];
 }
 
@@ -114,7 +119,7 @@ function isLocator(value: unknown): value is Locator {
         isNonNegativeInteger(locator.page) &&
         (locator.page as number) >= 1 &&
         typeof locator.quote === 'string' &&
-        // anchor 可选：存在时必须结构合规，缺失（历史页码级定位）照旧通过。
+        // anchor 可选：存在时必须结构合规，缺失（页码级定位）照旧通过。
         (locator.anchor === undefined ||
           (typeof locator.anchor === 'object' &&
             locator.anchor !== null &&
@@ -135,7 +140,7 @@ function readColor(value: unknown): AnnotationColor | undefined {
   return ANNOTATION_COLOR_SET.has(normalized) ? (normalized as AnnotationColor) : undefined;
 }
 
-function readUpdatedAt(value: unknown): number | undefined {
+function readTimestamp(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
@@ -165,7 +170,7 @@ function annotationSearchText(annotation: Annotation): string {
   return parts.join('\n');
 }
 
-/** Client-side notebook query: excerpt/note text plus optional kind and color. */
+/** Client-side notebook query over live records (tombstones never surface). */
 export function filterAnnotations(
   annotations: readonly Annotation[],
   query: AnnotationQuery = {},
@@ -176,6 +181,9 @@ export function filterAnnotations(
       ? undefined
       : resolveAnnotationColor(query.color);
   return annotations.filter((annotation) => {
+    if (annotation.deletedAt !== undefined) {
+      return false;
+    }
     if (query.kind !== undefined && annotation.kind !== query.kind) {
       return false;
     }
@@ -212,17 +220,29 @@ export function updateAnnotationNote(
   );
 }
 
-/** Drop one record by id; unknown id leaves the collection unchanged. */
+/**
+ * Tombstone one record by id (deletion must survive sync merges, so the row is
+ * kept with a deletedAt clock instead of being dropped); unknown id leaves the
+ * collection unchanged.
+ */
 export function removeAnnotation(
   annotations: readonly Annotation[],
   id: string,
 ): Annotation[] {
-  return annotations.filter((annotation) => annotation.id !== id);
+  return annotations.map((annotation) => {
+    if (annotation.id !== id || annotation.deletedAt !== undefined) {
+      return annotation;
+    }
+    const now = Date.now();
+    return { ...annotation, updatedAt: now, deletedAt: now };
+  });
 }
 
 /**
- * Merge two per-document annotation lists. Same id keeps the newer updatedAt
- * (createdAt fallback); unique ids are unioned. Equal clocks keep the local row.
+ * Merge two per-document annotation lists (production sync path). Same id keeps
+ * the newer updatedAt (createdAt fallback); tombstones participate in the clock
+ * comparison and win ties against a live row (deletion never resurrects);
+ * otherwise equal clocks keep the local row. Unique ids are unioned.
  */
 export function mergeAnnotations(
   local: readonly Annotation[],
@@ -234,7 +254,18 @@ export function mergeAnnotations(
   }
   for (const annotation of remote) {
     const current = winners.get(annotation.id);
-    if (current === undefined || annotationUpdatedAt(annotation) > annotationUpdatedAt(current)) {
+    if (current === undefined) {
+      winners.set(annotation.id, annotation);
+      continue;
+    }
+    const remoteClock = annotationUpdatedAt(annotation);
+    const localClock = annotationUpdatedAt(current);
+    const remoteWins =
+      remoteClock > localClock ||
+      (remoteClock === localClock &&
+        annotation.deletedAt !== undefined &&
+        current.deletedAt === undefined);
+    if (remoteWins) {
       winners.set(annotation.id, annotation);
     }
   }
@@ -301,7 +332,8 @@ function isAnnotation(value: unknown): value is Annotation {
 
 function fromParsedAnnotation(annotation: Annotation): Annotation {
   const color = readColor(annotation.color);
-  const updatedAt = readUpdatedAt(annotation.updatedAt);
+  const updatedAt = readTimestamp(annotation.updatedAt);
+  const deletedAt = readTimestamp(annotation.deletedAt);
   return {
     id: annotation.id,
     kind: annotation.kind,
@@ -311,100 +343,19 @@ function fromParsedAnnotation(annotation: Annotation): Annotation {
     createdAt: annotation.createdAt,
     ...(color === undefined ? {} : { color }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
-  };
-}
-
-function migrateV1Locator(
-  value: unknown,
-  annotationQuote: string,
-): Locator | null {
-  if (typeof value !== 'object' || value === null) {
-    return null;
-  }
-  const locator = value as Record<string, unknown>;
-  switch (locator.format) {
-    case 'flow':
-      if (
-        !isNonNegativeInteger(locator.chapter) ||
-        !isNonNegativeInteger(locator.start) ||
-        !isNonNegativeInteger(locator.end)
-      ) {
-        return null;
-      }
-      return {
-        format: 'flow',
-        chapter: locator.chapter,
-        start: locator.start,
-        end: Math.max(locator.start, locator.end),
-        quote: annotationQuote,
-        prefix: '',
-        suffix: '',
-      };
-    case 'text':
-      if (!isNonNegativeInteger(locator.start) || !isNonNegativeInteger(locator.end)) {
-        return null;
-      }
-      return {
-        format: 'text',
-        start: locator.start,
-        end: Math.max(locator.start, locator.end),
-        quote: annotationQuote,
-        prefix: '',
-        suffix: '',
-      };
-    case 'pdf':
-      return isNonNegativeInteger(locator.page) && locator.page >= 1
-        ? {
-            format: 'pdf',
-            page: locator.page,
-            quote: typeof locator.quote === 'string' ? locator.quote : annotationQuote,
-          }
-        : null;
-    case 'cbz':
-      return isNonNegativeInteger(locator.page) && locator.page >= 1
-        ? { format: 'cbz', page: locator.page }
-        : null;
-    default:
-      return null;
-  }
-}
-
-function migrateV1Annotation(value: unknown): Annotation | null {
-  if (typeof value !== 'object' || value === null) {
-    return null;
-  }
-  const annotation = value as Record<string, unknown>;
-  if (
-    typeof annotation.id !== 'string' ||
-    annotation.id.length === 0 ||
-    typeof annotation.kind !== 'string' ||
-    !KINDS.has(annotation.kind as AnnotationKind) ||
-    typeof annotation.createdAt !== 'number' ||
-    !Number.isFinite(annotation.createdAt)
-  ) {
-    return null;
-  }
-  const quote = typeof annotation.quote === 'string' ? annotation.quote : '';
-  const locator = migrateV1Locator(annotation.locator, quote);
-  if (locator === null) {
-    return null;
-  }
-  return {
-    id: annotation.id,
-    kind: annotation.kind as AnnotationKind,
-    locator,
-    quote: typeof annotation.quote === 'string' ? annotation.quote : undefined,
-    note: typeof annotation.note === 'string' ? annotation.note : undefined,
-    createdAt: annotation.createdAt,
+    ...(deletedAt === undefined ? {} : { deletedAt }),
   };
 }
 
 export function serializeAnnotations(annotations: readonly Annotation[]): string {
-  const file: AnnotationFileV2 = { version: 2, annotations: [...annotations] };
+  const file: AnnotationFileV3 = { version: 3, annotations: [...annotations] };
   return JSON.stringify(file);
 }
 
-/** Read v2 strictly and migrate valid v1 records on a best-effort basis. */
+/**
+ * Read the v3 envelope strictly. v1/v2 documents, corrupt JSON, and malformed
+ * records are quietly treated as no annotations (never throws).
+ */
 export function parseAnnotations(json: string): Annotation[] {
   if (json === '') {
     return [];
@@ -419,19 +370,10 @@ export function parseAnnotations(json: string): Annotation[] {
     return [];
   }
   const file = parsed as { version?: unknown; annotations?: unknown };
-  if (!Array.isArray(file.annotations)) {
+  if (file.version !== 3 || !Array.isArray(file.annotations)) {
     return [];
   }
-  if (file.version === 2) {
-    return file.annotations.filter(isAnnotation).map(fromParsedAnnotation);
-  }
-  if (file.version === 1) {
-    return file.annotations
-      .map(migrateV1Annotation)
-      .filter((annotation): annotation is Annotation => annotation !== null)
-      .map(fromParsedAnnotation);
-  }
-  return [];
+  return file.annotations.filter(isAnnotation).map(fromParsedAnnotation);
 }
 
 /** Serialize writes per content hash and invalidate work not yet started after a document switch. */

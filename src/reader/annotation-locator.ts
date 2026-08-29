@@ -370,7 +370,7 @@ export function flowLocatorFromSelection(
   return { format, chapter, ...anchor };
 }
 
-/** PDF 文本层选区 → 文字级 PdfLocator（page + 可选 anchor，R5 兼容旧页码级数据）。 */
+/** PDF 文本层选区 → 文字级 PdfLocator（page + anchor；页码级书签/笔记仍无 anchor）。 */
 export function pdfTextLocatorFromRange(
   root: Node,
   range: Range,

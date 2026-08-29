@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { Schema } from '@milkdown/prose/model';
 import { EditorState } from '@milkdown/prose/state';
 
-import type { Annotation } from '../../../reader/annotations.js';
+import {
+  parseAnnotations,
+  serializeAnnotations,
+  type Annotation,
+} from '../../../reader/annotations.js';
 import {
   collectPmText,
   decorationsForAnnotations,
@@ -58,6 +62,63 @@ describe('markdown annotation locators', () => {
     ];
     const decorations = decorationsForAnnotations(state.doc, annotations);
     expect(decorations.find()).toHaveLength(1);
+  });
+
+  it('skips tombstoned records (deletedAt) when building decorations', () => {
+    const state = docFrom('Alpha beta gamma');
+    const live: Annotation = {
+      id: 'live',
+      kind: 'highlight',
+      locator: {
+        format: 'text',
+        start: 0,
+        end: 5,
+        quote: 'Alpha',
+        prefix: '',
+        suffix: ' beta',
+      },
+      createdAt: 1,
+    };
+    const tombstoned: Annotation = {
+      id: 'gone',
+      kind: 'highlight',
+      locator: {
+        format: 'text',
+        start: 6,
+        end: 10,
+        quote: 'beta',
+        prefix: 'Alpha ',
+        suffix: ' gamm',
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      deletedAt: 2,
+    };
+    const decorations = decorationsForAnnotations(state.doc, [live, tombstoned]);
+    const found = decorations.find();
+    expect(found).toHaveLength(1);
+    const attrs = (found[0]! as unknown as { type: { attrs: Record<string, string> } }).type.attrs;
+    expect(attrs['data-annotation-id']).toBe('live');
+  });
+
+  it('consumes the shared v3 envelope (round-trip through parse/serialize)', () => {
+    const state = docFrom('Alpha beta gamma');
+    const annotation: Annotation = {
+      id: 'h1',
+      kind: 'highlight',
+      locator: {
+        format: 'text',
+        start: 6,
+        end: 10,
+        quote: 'beta',
+        prefix: 'Alpha ',
+        suffix: ' gamm',
+      },
+      createdAt: 1,
+    };
+    const parsed = parseAnnotations(serializeAnnotations([annotation]));
+    expect(parsed).toEqual([annotation]);
+    expect(decorationsForAnnotations(state.doc, parsed).find()).toHaveLength(1);
   });
 });
 

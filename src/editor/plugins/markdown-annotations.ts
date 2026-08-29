@@ -95,6 +95,10 @@ export function decorationsForAnnotations(
   const { text, spans } = collectPmText(doc);
   const decorations: Decoration[] = [];
   for (const annotation of annotations) {
+    // Tombstone（deletedAt）只参与同步合并，不再渲染。
+    if (annotation.deletedAt !== undefined) {
+      continue;
+    }
     if (annotation.kind !== 'highlight' && annotation.kind !== 'note') {
       continue;
     }

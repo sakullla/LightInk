@@ -89,6 +89,11 @@ import {
   createMarkdownAnnotationHost,
   type MarkdownAnnotationHost,
 } from './reader/markdown-annotations.js';
+import {
+  mergeAnnotations,
+  parseAnnotations,
+  serializeAnnotations,
+} from './reader/annotations.js';
 import { type RemoteOpenResult } from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
@@ -2270,7 +2275,16 @@ async function applySyncedAnnotations(records: readonly import('./sync/sync-clie
     if (!/^[0-9a-f]{16,64}$/i.test(hash)) continue;
     const record = currentSyncRecords(records, objectId).find((candidate) => candidate.field === 'json');
     if (record?.tombstone || typeof record?.value !== 'string') continue;
-    await invoke<void>('write_annotations', { contentHash: hash, json: record.value }).catch(() => undefined);
+    // Record-level LWW merge instead of whole-file overwrite so local edits and
+    // tombstones made after the last sync are not clobbered by a stale remote.
+    const localJson = await invoke<string>('read_annotations', { contentHash: hash }).catch(() => '');
+    const localAnnotations = parseAnnotations(localJson);
+    const merged = mergeAnnotations(localAnnotations, parseAnnotations(record.value));
+    const mergedJson = serializeAnnotations(merged);
+    // 与规范化后的本地内容一致（含本地缺失且远端为空）则不落盘。
+    if (mergedJson !== serializeAnnotations(localAnnotations)) {
+      await invoke<void>('write_annotations', { contentHash: hash, json: mergedJson }).catch(() => undefined);
+    }
   }
 }
 
