@@ -3473,8 +3473,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return;
     }
     // 身份链绑定（含旧键迁移回填）→ ready 发布 → 恢复落点 → 状态同步 →
-    // 书库绑定通知；全部经 session-progress 单点裁决。
-    sessionProgress.bindDocumentIdentity(target, sessionAnnotation.contentHash());
+    // 书库绑定通知；全部经 session-progress 单点裁决。漫画页进度身份已在
+    // afterCommit 提前绑定（路径键，不哈希归档）：标注身份现为 16-hex 存储键，
+    // 不得再作为进度身份回灌，故传 null 保持路径键口径。
+    sessionProgress.bindDocumentIdentity(
+      target,
+      sessionMemberForExtension(loadedExt) === 'comic' ? null : sessionAnnotation.contentHash(),
+    );
     setReaderPhase('ready');
     sessionProgress.applyPendingWithRetry();
     if (PAGE_EXTS.has(loadedExt)) {

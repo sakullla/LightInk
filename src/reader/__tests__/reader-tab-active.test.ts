@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
+import { fnv1a64Hex } from '../document-hash.js';
 
 const cbzMock = vi.hoisted(() => ({ renderCbzInto: vi.fn() }));
 vi.mock('../formats/cbz.js', () => ({ renderCbzInto: cbzMock.renderCbzInto }));
@@ -99,10 +100,12 @@ describe('漫画页级标注（progress-id 同源身份）', () => {
 
     await view.load('/comics/vol.cbz');
 
-    // 漫画本地标注启用：不哈希归档，身份与页进度同源（路径键）。
+    // 漫画本地标注启用：不哈希归档，身份与页进度同源，存储键为 16-hex fnv 哈希
+    // （满足 Rust validate_content_hash 契约）。
+    const comicKey = fnv1a64Hex('comic:/comics/vol.cbz');
     expect(view.isAnnotationEnabled()).toBe(true);
     expect(getContentHash).not.toHaveBeenCalled();
-    expect(readAnnotations).toHaveBeenCalledWith('/comics/vol.cbz');
+    expect(readAnnotations).toHaveBeenCalledWith(comicKey);
     expect(view.isBookmarked?.()).toBe(false);
 
     // 书签开关：添加 → 页角丝带角标出现。
@@ -110,7 +113,7 @@ describe('漫画页级标注（progress-id 同源身份）', () => {
     expect(view.isBookmarked?.()).toBe(true);
     await vi.waitFor(() => expect(writeAnnotations).toHaveBeenCalledTimes(1));
     const [firstKey, firstJson] = writeAnnotations.mock.calls[0] as [string, string];
-    expect(firstKey).toBe('/comics/vol.cbz');
+    expect(firstKey).toBe(comicKey);
     const first = JSON.parse(firstJson) as {
       version: number;
       annotations: Array<Record<string, unknown>>;
@@ -136,6 +139,37 @@ describe('漫画页级标注（progress-id 同源身份）', () => {
     expect(second.annotations).toHaveLength(1);
     expect(second.annotations[0]?.deletedAt).toEqual(expect.any(Number));
     expect(firstSlot?.querySelector('.lightink-reader-bookmark-ribbon')).toBeNull();
+
+    await view.destroy();
+  });
+
+  it('漫画本地标注身份键满足 16 位小写 hex 契约（Rust validate_content_hash 回归）', async () => {
+    const readAnnotations = vi.fn(async (_contentHash: string) => '');
+    cbzMock.renderCbzInto.mockImplementation(
+      async (_source: unknown, stagedHost: HTMLElement) => {
+        const slot = document.createElement('div');
+        slot.className = 'lightink-reader-page-slot lightink-reader-cbz-slot';
+        slot.dataset.pageIndex = '0';
+        stagedHost.appendChild(slot);
+        return stubComicHandle();
+      },
+    );
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([0x89, 0x50]),
+      readAnnotations,
+    });
+
+    await view.load('/comics/本地 卷一.cbz');
+
+    // 本地路径含非 ASCII/空格时也必须落在 Rust 键契约内（此前原始路径直传，
+    // 生产读恒空、写必失败——mock 存储接受任意键而未暴露）。
+    expect(readAnnotations).toHaveBeenCalledTimes(1);
+    const [key] = readAnnotations.mock.calls[0] as [string];
+    expect(key).toMatch(/^[0-9a-f]{16}$/);
+    expect(key).toBe(fnv1a64Hex('comic:/comics/本地 卷一.cbz'));
 
     await view.destroy();
   });

@@ -702,6 +702,19 @@ describe('buildMenus 生产结构', () => {
     expect(readerView?.items.some((i) => i.id === 'view-source-mode')).toBe(false);
   });
 
+  it('标注菜单书签项两态：isReaderBookmarked 真/假决定 ✓ 前缀（T4 回归）', () => {
+    const bookmarkLabel = (bookmarked: boolean): string => {
+      const annotation = buildMenus({
+        ...stubActions(),
+        isReaderBookmarked: () => bookmarked,
+      }).find((m) => m.id === 'annotation');
+      const item = annotation?.items.find((i) => i.id === 'ann-bookmark');
+      return typeof item?.label === 'function' ? item.label() : String(item?.label);
+    };
+    expect(bookmarkLabel(true)).toMatch(/^✓ /);
+    expect(bookmarkLabel(false)).not.toMatch(/^✓ /);
+  });
+
   it('视图菜单收纳「字体布局」子菜单：5 项，主菜单原位置移除，快捷键保留（T1）', () => {
     const view = menus.find((m) => m.id === 'view');
     // 主菜单不再平铺缩放与滚动/翻页切换项。

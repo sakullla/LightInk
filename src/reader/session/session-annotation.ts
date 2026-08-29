@@ -10,9 +10,10 @@
  *   额外注入（见 ./adapters SESSION_FORMAT_CAPABILITIES），核心与视图均不按
  *   格式名分支。未启用成员的标注操作（书签/笔记/划选确认）为空操作，不产生
  *   存储写入；
- * - 身份解析与装载：本地 content_hash / remote 身份键 → 读标注 JSON → 解析。
- *   读失败（含无 Tauri IPC）视为空标注，不弹窗阻断阅读；每个 await 点后
- *   复查销毁/取消/世代，过期结果静默丢弃、不留半更新状态；
+ * - 身份解析与装载：本地 content_hash / progress-id（fnv 包装为 16-hex 存储键）/
+ *   remote 身份键 → 读标注 JSON → 解析。读失败（含无 Tauri IPC）视为空标注，
+ *   不弹窗阻断阅读；每个 await 点后复查销毁/取消/世代，过期结果静默丢弃、
+ *   不留半更新状态；
  * - 写队列：按内容哈希串行写入（annotations.AnnotationWriteQueue），保存
  *   失败且会话身份未变时经宿主提示一次；open 起点与销毁作废未起写的排队项；
  * - 侧栏策略：可见偏好 × 标签可见 → 实际展示；开启先收起 chrome 面板
@@ -189,8 +190,10 @@ export function createReaderSessionAnnotation(
       if (target.kind === 'local') {
         const identity = sessionCapabilitiesForExtension(ext)?.annotations.localIdentity;
         if (identity === 'progress-id') {
-          // 漫画归档不哈希正文：标注身份与页进度同源（comicProgressIdForTarget）。
-          nextHash = comicProgressIdForTarget(target);
+          // 漫画归档不哈希正文：标注身份与页进度同源（comicProgressIdForTarget），
+          // 但存储键必须满足 Rust validate_content_hash 的 16 位小写 hex 契约，
+          // 故与 remote 分支同模式经 fnv1a64Hex 包装（同时满足同步合并键约束）。
+          nextHash = fnv1a64Hex(`comic:${comicProgressIdForTarget(target)}`);
         } else {
           const getContentHash = storage.getContentHash;
           if (getContentHash === undefined) {
