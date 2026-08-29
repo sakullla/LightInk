@@ -82,6 +82,11 @@ export interface AnnotationPanelDeps {
   onEditNote?: (annotation: Annotation) => void;
   /** Close the panel from its close button / Escape layering. */
   onClose?: () => void;
+  /**
+   * 可选：导出当前书全部标注为 Markdown（R5，宿主装配 save 对话框 + 原子写）。
+   * 缺省时头部导出按钮隐藏（与 search deps 缺省同模式；Markdown 编辑器宿主不传）。
+   */
+  onExport?: () => void;
   /** Reader-only document search. Markdown hosts and bitmap formats omit this. */
   search?: AnnotationPanelSearch;
   /**
@@ -101,10 +106,10 @@ export interface AnnotationPanel {
   destroy(): void;
 }
 
-/** 每条标注的定位描述（面板显示用；cbz 无章节概念只给页码）。 */
-function locationText(
+/** 每条标注的定位描述（面板显示与标注导出共用；cbz 无章节概念只给页码）。 */
+export function annotationLocationText(
   annotation: Annotation,
-  t: AnnotationPanelDeps['t'],
+  t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string,
 ): string | null {
   const locator = annotation.locator;
   switch (locator.format) {
@@ -134,7 +139,7 @@ function positionRank(annotation: Annotation): [number, number] {
   }
 }
 
-function byDocumentPosition(left: Annotation, right: Annotation): number {
+export function byDocumentPosition(left: Annotation, right: Annotation): number {
   const [leftChapter, leftStart] = positionRank(left);
   const [rightChapter, rightStart] = positionRank(right);
   if (leftChapter !== rightChapter) {
@@ -229,7 +234,18 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   close.setAttribute('aria-label', deps.t('annotation.closeSidebar'));
   close.setAttribute('title', deps.t('annotation.closeSidebar'));
   close.addEventListener('click', () => deps.onClose?.());
-  header.append(title, close);
+  header.append(title);
+  if (deps.onExport !== undefined) {
+    const exportButton = createActionButton(
+      'lightink-reader-sidebar-export',
+      deps.t('annotation.export.button'),
+      () => deps.onExport?.(),
+      deps.t('annotation.export.button'),
+    );
+    exportButton.setAttribute('title', deps.t('annotation.export.button'));
+    header.appendChild(exportButton);
+  }
+  header.appendChild(close);
 
   const noteField = document.createElement('div');
   noteField.className = 'lightink-reader-sidebar-search lightink-reader-sidebar-note-search';
@@ -510,7 +526,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       meta.appendChild(swatch);
     }
     meta.appendChild(kind);
-    const location = locationText(annotation, deps.t);
+    const location = annotationLocationText(annotation, deps.t);
     if (location !== null) {
       const where = document.createElement('span');
       where.className = 'lightink-reader-sidebar-location';

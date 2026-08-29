@@ -97,6 +97,36 @@
   outline-offset: 2px;
 }
 
+/* 头部导出按钮（R5）：标题居左，导出/关闭按钮簇靠右。 */
+.lightink-reader-sidebar-export {
+  cursor: pointer;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.22rem 0.65rem;
+  font-size: 0.8em;
+  line-height: 1.4;
+  color: var(--lightink-muted);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.lightink-reader-sidebar-export:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-export:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
+/* 导出按钮缺省（编辑器宿主）时关闭按钮仍靠右。 */
+.lightink-reader-sidebar-close:first-of-type,
+.lightink-reader-sidebar-header > span:last-of-type + .lightink-reader-sidebar-close {
+  margin-left: auto;
+}
+
 /* ===== 搜索行（同一查询框：标注分类下筛标注，正文分类下搜全书） ===== */
 
 .lightink-reader-sidebar-search {
@@ -448,6 +478,7 @@
 @media (pointer: coarse) {
   .lightink-reader-sidebar-item,
   .lightink-reader-sidebar-close,
+  .lightink-reader-sidebar-export,
   .lightink-reader-sidebar-note-search-input,
   .lightink-reader-sidebar-filter,
   .lightink-reader-sidebar-jump,
@@ -498,6 +529,7 @@
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-export,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-note-search-input,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-item,

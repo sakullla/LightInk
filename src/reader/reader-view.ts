@@ -412,6 +412,15 @@ export interface ReaderViewDeps {
   onProgressBound?: (progressId: string, target: ReaderTarget) => void;
   /** Close the open book and return to the shelf (window stays open). */
   onReturnToShelf?: () => void;
+  /**
+   * 导出当前书全部标注为 Markdown（R5；生产为 main.ts 装配 annotation-export：
+   * save 对话框 + writeFile 原子写 + 空态/成败提示）。缺省时标注面板隐藏导出
+   * 按钮（与 search deps 缺省同模式）。
+   */
+  exportAnnotations?: (payload: {
+    title: string;
+    annotations: readonly Annotation[];
+  }) => void | Promise<void>;
 }
 
 /**
@@ -550,6 +559,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     frame: HTMLIFrameElement | null;
   } | null = null;
   let loadedExt = '';
+  /** 当前书名（displayName；标注导出默认文件名词干，beforeCommit 随会话复位）。 */
+  let loadedTitle = '';
   let readerOutline: OutlineItem[] = [];
   let exportChapters: ReaderChapter[] = [];
   let exportStylesheet = '';
@@ -1790,6 +1801,14 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       onEditNote: (annotation) => {
         openNote(annotation);
       },
+      // 标注导出（R5）：宿主未装配 exportAnnotations 时按钮隐藏（markdown 编辑器
+      // 宿主不传，与 search deps 缺省同模式）。
+      onExport:
+        deps.exportAnnotations === undefined
+          ? undefined
+          : () => {
+              void deps.exportAnnotations?.({ title: loadedTitle, annotations });
+            },
     });
     const { visible, shown } = sessionAnnotation.sidebarVisibility();
     sidebar.element.setAttribute('aria-hidden', visible ? 'false' : 'true');
@@ -3514,6 +3533,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       },
       beforeCommit: (request) => {
         loadedExt = request.ext;
+        loadedTitle = request.target.displayName;
         annotations = [];
         sessionAnnotation.beginSession(request.ext, request.target);
         sidebar?.render(annotations);
