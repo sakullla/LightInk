@@ -1,6 +1,6 @@
 [package]
 name = "lightink"
-version = "0.1.44"
+version = "0.1.45"
 description = "轻墨 LightInk - A lightweight Markdown editor"
 authors = ["LightInk"]
 edition = "2021"
