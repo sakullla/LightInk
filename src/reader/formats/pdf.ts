@@ -707,7 +707,6 @@ export async function renderPdfInto(
     if (total <= 1) {
       return;
     }
-    const start = captureViewportAnchor();
     for (let i = 1; i < total; i += 1) {
       if (destroyed || isAborted()) {
         return;
@@ -718,18 +717,18 @@ export async function renderPdfInto(
       }
       const native = page.getViewport({ scale: 1 });
       nativeSizes[i] = { width: native.width, height: native.height };
+      // 用户可能已滚离首屏：每批改槽高前重采当前锚点，避免把旧首屏点写回。
+      const live = captureViewportAnchor();
       applySlotMetrics(i);
+      if (i % MEASURE_BATCH === 0 || i === total - 1) {
+        keepViewportAnchor(live.view, live.anchor);
+      }
       if (i % MEASURE_BATCH === 0) {
-        keepViewportAnchor(start.view, start.anchor);
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 0);
         });
       }
     }
-    if (destroyed || isAborted()) {
-      return;
-    }
-    keepViewportAnchor(start.view, start.anchor);
   };
   void measureRemainingPages().catch(() => undefined);
 

@@ -190,7 +190,10 @@ function mockMultiPagePdf(numPages: number): {
 }
 
 /** 第 1 页立刻返回；其余页挂起，用来证明 handle 不必等完全部 getPage。 */
-function mockGatedMultiPagePdf(numPages: number): {
+function mockGatedMultiPagePdf(
+  numPages: number,
+  heightForPage: (n: number) => number = () => 200,
+): {
   readonly tasks: ControlledRenderTask[];
   readonly getPage: ReturnType<typeof vi.fn>;
   readonly resolvedPages: Set<number>;
@@ -198,10 +201,10 @@ function mockGatedMultiPagePdf(numPages: number): {
 } {
   const tasks: ControlledRenderTask[] = [];
   const resolvedPages = new Set<number>();
-  const makePage = () => ({
+  const makePage = (n: number) => ({
     getViewport: ({ scale }: { scale: number }) => ({
       width: 100 * scale,
-      height: 200 * scale,
+      height: heightForPage(n) * scale,
     }),
     getTextContent: vi.fn(async () => ({ items: [], styles: {} })),
     render: vi.fn(() => {
@@ -211,6 +214,7 @@ function mockGatedMultiPagePdf(numPages: number): {
     }),
   });
   const gates = new Map<number, { promise: Promise<void>; resolve: () => void }>();
+  let releasedFrom = Number.POSITIVE_INFINITY;
   const gateFor = (n: number): Promise<void> => {
     let gate = gates.get(n);
     if (gate === undefined) {
@@ -224,11 +228,11 @@ function mockGatedMultiPagePdf(numPages: number): {
     return gate.promise;
   };
   const getPage = vi.fn(async (n: number) => {
-    if (n > 1) {
+    if (n > 1 && n < releasedFrom) {
       await gateFor(n);
     }
     resolvedPages.add(n);
-    return makePage();
+    return makePage(n);
   });
   const destroy = vi.fn(async () => undefined);
   pdfRuntime.getDocument.mockReturnValue({
@@ -246,6 +250,7 @@ function mockGatedMultiPagePdf(numPages: number): {
     getPage,
     resolvedPages,
     releaseFrom(fromPage: number) {
+      releasedFrom = Math.min(releasedFrom, fromPage);
       for (const [n, gate] of gates) {
         if (n >= fromPage) {
           gate.resolve();
@@ -395,6 +400,39 @@ describe('PDF render lifecycle', () => {
     expect(runtime.resolvedPages.has(4)).toBe(false);
 
     runtime.releaseFrom(2);
+    await handle.destroy();
+  });
+
+  it('does not jump back to the first screen when remaining page heights refine', async () => {
+    const pageCount = 12;
+    const runtime = mockGatedMultiPagePdf(pageCount, (n) => (n === 1 ? 200 : 400));
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 600 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+    expect(runtime.resolvedPages.has(2)).toBe(false);
+
+    // handle 已返回后，用户滚离第 1 页；视口停在第 5 页。
+    const slotHeight = 500;
+    const currentIndex = 4;
+    const scrolledTop = currentIndex * slotHeight;
+    container.scrollTop = scrolledTop;
+    layoutRects(
+      container,
+      0,
+      Array.from({ length: pageCount }, (_, i) => i * slotHeight - scrolledTop),
+    );
+
+    runtime.releaseFrom(2);
+    await vi.waitFor(() => {
+      expect(runtime.resolvedPages.size).toBe(pageCount);
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(container.scrollTop).toBe(scrolledTop);
+    expect((container.children[8] as HTMLElement).style.height).toBe('400px');
     await handle.destroy();
   });
 
