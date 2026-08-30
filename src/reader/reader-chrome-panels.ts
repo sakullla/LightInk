@@ -45,7 +45,7 @@ export const READER_TOC_RENDER_BATCH = 200;
 
 /**
  * Format gate for the typography sheet: flow gets every control, pdf keeps
- * only theme plus paginated/scroll, comic maps existing comic preferences.
+ * only theme, comic maps existing comic preferences.
  * Anything unrecognized falls back to the full flow sheet.
  */
 export type ReaderTypographyFormatKind = 'flow' | 'pdf' | 'comic';
@@ -510,9 +510,11 @@ export function fillReaderTypographyPanel(
   themeSection.appendChild(swatches);
   panel.appendChild(themeSection);
 
-  if (flowOnly) {
-    appendFontSection(panel, typography, copy, onTypography);
+  if (!flowOnly) {
+    return;
   }
+
+  appendFontSection(panel, typography, copy, onTypography);
 
   const layoutSection = section(copy.layout, 'layout');
   const modes = document.createElement('div');
@@ -525,10 +527,6 @@ export function fillReaderTypographyPanel(
   );
   layoutSection.appendChild(modes);
   panel.appendChild(layoutSection);
-
-  if (!flowOnly) {
-    return;
-  }
   panel.appendChild(
     sliderRow(
       copy.lineHeight,

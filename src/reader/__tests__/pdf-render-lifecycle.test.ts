@@ -335,13 +335,16 @@ describe('PDF render lifecycle', () => {
     globalThis.IntersectionObserver = CapturingObserver as unknown as typeof IntersectionObserver;
 
     const runtime = mockMultiPagePdf(4);
+    const editorArea = document.createElement('div');
+    editorArea.id = 'lightink-editor-area';
     const reader = document.createElement('div');
     reader.className = 'lightink-reader';
     const container = document.createElement('div');
     container.className = 'lightink-reader-pages';
     container.dataset.readerFormat = 'pdf';
     reader.appendChild(container);
-    document.body.appendChild(reader);
+    editorArea.appendChild(reader);
+    document.body.appendChild(editorArea);
 
     const handle = await renderPdfInto(new Uint8Array([1]), container);
     expect(observedRoots[0]).toBe(container);
@@ -392,14 +395,78 @@ describe('PDF render lifecycle', () => {
     await handle.destroy();
   });
 
-  it('keeps paginated PDF overflow on the page host so IntersectionObserver can see later slots', () => {
+  it('keeps PDF overflow on the page host so IntersectionObserver can see later slots', () => {
     const css = readFileSync(path.join(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(
-      /html\[data-reading-layout='paginated'\] \.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
     );
     expect(css).not.toMatch(
       /html\[data-reading-layout='paginated'\] \.lightink-reader:has\([^)]*\)\s*\{[^}]*overflow:\s*auto/,
     );
+  });
+
+  it('uses the page host as observer root even when html is paginated and editor-area exists', async () => {
+    document.documentElement.dataset.readingLayout = 'paginated';
+    const observedRoots: Array<Element | Document | null> = [];
+    class CapturingObserver {
+      constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        observedRoots.push((options?.root as Element | Document | null) ?? null);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+      readonly root = null;
+      readonly rootMargin = '0px';
+      readonly thresholds = [0];
+    }
+    globalThis.IntersectionObserver = CapturingObserver as unknown as typeof IntersectionObserver;
+    mockMultiPagePdf(2);
+    const editorArea = document.createElement('div');
+    editorArea.id = 'lightink-editor-area';
+    const container = document.createElement('div');
+    container.className = 'lightink-reader-pages';
+    container.dataset.readerFormat = 'pdf';
+    editorArea.appendChild(container);
+    document.body.appendChild(editorArea);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+    expect(observedRoots[0]).toBe(container);
+    expect(observedRoots[0]).not.toBe(editorArea);
+    await handle.destroy();
+  });
+
+  it('uses the page host as observer root even when html is scroll and editor-area exists', async () => {
+    document.documentElement.dataset.readingLayout = 'scroll';
+    const observedRoots: Array<Element | Document | null> = [];
+    class CapturingObserver {
+      constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        observedRoots.push((options?.root as Element | Document | null) ?? null);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+      readonly root = null;
+      readonly rootMargin = '0px';
+      readonly thresholds = [0];
+    }
+    globalThis.IntersectionObserver = CapturingObserver as unknown as typeof IntersectionObserver;
+    mockMultiPagePdf(2);
+    const editorArea = document.createElement('div');
+    editorArea.id = 'lightink-editor-area';
+    const container = document.createElement('div');
+    container.className = 'lightink-reader-pages';
+    container.dataset.readerFormat = 'pdf';
+    editorArea.appendChild(container);
+    document.body.appendChild(editorArea);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+    expect(observedRoots[0]).toBe(container);
+    expect(observedRoots[0]).not.toBe(editorArea);
+    await handle.destroy();
   });
 
   it('re-renders pages inside the lazy-render buffer, not only the strict viewport', async () => {

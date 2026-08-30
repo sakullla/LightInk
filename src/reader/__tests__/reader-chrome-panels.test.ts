@@ -699,7 +699,7 @@ describe('reader chrome panels', () => {
     }
   });
 
-  it('shows only theme and layout for pdf — flow-only controls are not rendered', () => {
+  it('shows only theme for pdf — no paginated or scroll tiles', () => {
     const panel = document.createElement('div');
     const onLayout = vi.fn();
     fillReaderTypographyPanel(
@@ -715,23 +715,19 @@ describe('reader chrome panels', () => {
       'pdf',
     );
     expect(panel.querySelector('[data-type-section="theme"]')).not.toBeNull();
-    expect(panel.querySelector('[data-type-section="layout"]')).not.toBeNull();
+    expect(panel.querySelector('[data-type-section="layout"]')).toBeNull();
     expect(panel.querySelectorAll('.lightink-reader-theme-swatch')).toHaveLength(4);
-    expect(panel.querySelectorAll('.lightink-reader-type-mode')).toHaveLength(2);
-    for (const kind of ['size', 'font', 'spacing', 'measure']) {
+    expect(panel.querySelectorAll('.lightink-reader-type-mode')).toHaveLength(0);
+    for (const kind of ['size', 'font', 'spacing', 'measure', 'layout']) {
       expect(panel.querySelector(`[data-type-section="${kind}"]`), kind).toBeNull();
     }
     expect(panel.querySelector('.lightink-reader-type-hero')).toBeNull();
     expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(0);
     expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(0);
-    // Hidden items leave no disabled placeholders behind.
     expect(panel.querySelectorAll('[disabled], [aria-disabled="true"]')).toHaveLength(0);
-    const scroll = [...panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-type-choice')].find(
-      (button) => button.getAttribute('aria-label') === '滚动',
-    );
-    expect(scroll).toBeDefined();
-    scroll!.click();
-    expect(onLayout).toHaveBeenCalledWith('scroll');
+    expect(panel.textContent).not.toContain('翻页');
+    expect(panel.textContent).not.toContain('滚动');
+    expect(onLayout).not.toHaveBeenCalled();
   });
 
   it('maps comic typography onto the injected existing comic preferences only', () => {

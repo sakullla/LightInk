@@ -2612,6 +2612,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pageHost.addEventListener('click', onPageHostNoteClick);
     observeTextLayers(pageHost); // 文本层懒出现时重渲染该页高亮
     scrollHost.hidden = true;
+    if (staged.pdf !== null) {
+      applyReaderLayout(root, 'scroll');
+    }
     syncPageState();
   };
 
@@ -2997,15 +3000,20 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   const applyFlowLayout = (layout: ReaderFlowLayout): void => {
     const next = parseReaderLayout(layout);
     saveReaderLayout(preferenceStorage, next);
+    const pdfLive = pdfHandle !== null || loadedExt === 'pdf';
     try {
       holdLayoutSwitching(() => {
-        // 先写 data-reading-layout：scroll 时 bindTouchPaging/bindClickPaging
-        // 的 enabled()（仅 paginated）立刻为假，点翻失效且不吞纵向滑动。
-        applyReaderLayout(root, next);
+        // 直播 PDF 不消费翻页值：阅读根保持连续竖滚。EPUB 存储键仍可改。
+        applyReaderLayout(root, pdfLive ? 'scroll' : next);
         if (typeof document !== 'undefined') {
           applyReaderDocumentLayout(document.documentElement, 'reader', next);
         }
         dispatchReaderFlowLayoutPref(next);
+        if (pdfLive) {
+          return;
+        }
+        // 先写 data-reading-layout：scroll 时 bindTouchPaging/bindClickPaging
+        // 的 enabled()（仅 paginated）立刻为假，点翻失效且不吞纵向滑动。
         if (next === 'scroll') {
           flowRenderer.remasureScrollFrames();
         } else {
@@ -3322,6 +3330,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const previousFlowChapterCount = flowChapterCount;
     pdfHandle = null;
     cbzHandle = null;
+    applyReaderLayout(root, loadReaderLayout(preferenceStorage));
     try {
       renderChapters(content.chapters, content.stylesheet);
       exportChapters = content.chapters;

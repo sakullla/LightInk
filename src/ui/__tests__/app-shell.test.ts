@@ -185,7 +185,27 @@ class FakeEl {
       const id = selector.slice(1);
       return this.find((el) => el.id === id);
     }
-    return null;
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  querySelectorAll(selector: string): FakeEl[] {
+    const hits: FakeEl[] = [];
+    const className = selector.startsWith('.')
+      ? selector.slice(1).replace(/\[.*$/, '')
+      : '';
+    this.walk((el) => {
+      if (className !== '' && el.classList.contains(className)) {
+        hits.push(el);
+      }
+    });
+    return hits;
+  }
+
+  private walk(visit: (el: FakeEl) => void): void {
+    visit(this);
+    for (const child of this.children) {
+      child.walk(visit);
+    }
   }
 
   private find(pred: (el: FakeEl) => boolean): FakeEl | null {
@@ -904,7 +924,58 @@ describe('buildMenus 生产结构', () => {
     expect(OPEN_FILTERS[1]!.extensions).toEqual(['*']);
   });
 
+  it('does not stamp paginated onto a live PDF host when EPUB flow storage is paginated', () => {
+    installFakeDocument();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      },
+      {
+        shortcutBindings: () => [],
+        storage: {
+          getItem: (key) => store[key] ?? null,
+          setItem: (key, value) => {
+            store[key] = value;
+          },
+        },
+      },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const editor = fakeRoot.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div') as unknown as FakeEl;
+    reader.className = 'lightink-reader';
+    const pages = document.createElement('div') as unknown as FakeEl;
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    reader.appendChild(pages);
+    editor?.appendChild(reader);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(store['lightink.reader.flow.layout']).toBe('paginated');
+
+    const view = buildMenus({
+      ...stubActions(),
+      getWorkspaceMode: () => 'reader',
+      getReaderFlowLayout: () => 'paginated',
+      onSetReaderFlowLayout: (layout) => {
+        store['lightink.reader.flow.layout'] = layout;
+      },
+    }).find((m) => m.id === 'view');
+    const items = (
+      view!.items.find((i) => i.id === 'view-font-layout')!.submenu!() as import('../menus.js').MenuItem[]
+    ).filter((i) => i.separator !== true);
+    expect(items.some((i) => i.id === 'view-layout-paginated')).toBe(true);
+    expect(items.some((i) => i.id === 'view-layout-scroll')).toBe(true);
+    items.find((i) => i.id === 'view-layout-scroll')!.action();
+    expect(store['lightink.reader.flow.layout']).toBe('scroll');
   });
+});
 
 describe('buildRecentsMenuItems（R12 最近打开子菜单）', () => {
   it('路径拆分为文件名 + 目录（兼容 / 与 \\）', () => {

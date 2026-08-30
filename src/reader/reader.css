@@ -971,11 +971,9 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
     calc(var(--lightink-reader-pad-y, 2rem) * 2.2);
 }
 
-/* 翻页布局下阅读壳保持 overflow:hidden；PDF 由页宿主自己滚动，
-   才能和 renderPdfInto 的 IntersectionObserver root 对齐。
-   同时认阅读 flow 根，避免编辑器仍为滚动时这条规则失效。 */
-html[data-reading-layout='paginated'] .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'],
-.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] {
+/* PDF 页宿主自己滚动，不依赖 html[data-reading-layout] 或 editor-area
+   overflow:hidden。IntersectionObserver root 始终是这个容器。 */
+.lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] {
   overflow: auto;
   height: 100%;
   min-height: 0;

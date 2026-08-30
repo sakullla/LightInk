@@ -530,13 +530,8 @@ export async function renderPdfInto(
     slots[index]?.replaceChildren();
   };
 
-  const editorArea =
-    typeof document !== 'undefined' ? document.getElementById('lightink-editor-area') : null;
-  const paginated =
-    typeof document !== 'undefined' &&
-    document.documentElement.getAttribute('data-reading-layout') === 'paginated';
-  // 翻页布局下 editor-area overflow:hidden，PDF 必须在页宿主自己滚动。
-  const scroller = paginated ? container : (editorArea ?? container);
+  // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
+  const scroller = container;
 
   const paintVisibleBuffer = async (generation: number): Promise<void> => {
     const visible = scroller.getBoundingClientRect();

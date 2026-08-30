@@ -77,13 +77,26 @@ function canSetCssVars(target: { style: { setProperty?: unknown } }): boolean {
   return typeof target.style.setProperty === 'function';
 }
 
+function readerHostShowsLivePdf(host: HTMLElement): boolean {
+  if (typeof host.querySelector !== 'function') {
+    return false;
+  }
+  const pages = host.querySelector('.lightink-reader-pages');
+  if (pages === null) {
+    return false;
+  }
+  const dataset = (pages as HTMLElement).dataset;
+  return dataset.readerFormat === 'pdf' && dataset.readerActive === 'true';
+}
+
 function applyReaderShellChrome(
   target: HTMLElement,
   layout: ReaderFlowLayout,
   prefs: ReaderTypography,
   storage?: StorageLike | null,
 ): void {
-  applyReaderLayout(target, layout);
+  // 直播 PDF 不套 EPUB 翻页值；存储键仍可改，回到 PDF 时忽略 paginated。
+  applyReaderLayout(target, readerHostShowsLivePdf(target) ? 'scroll' : layout);
   target.dataset.readerFlowLayout = layout;
   if (canSetCssVars(target)) {
     applyReaderTypography(target, prefs);

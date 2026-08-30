@@ -229,6 +229,16 @@ describe('readerFlowUsesTextColumns', () => {
     expect(readerFlowUsesTextColumns('pdf')).toBe(false);
     expect(readerFlowUsesTextColumns('comic')).toBe(false);
   });
+
+  it('gives the PDF page host overflow:auto without depending on paginated html', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\):not\(:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)\)\s*\{[^}]*overflow:\s*hidden/,
+    );
+  });
 });
 
 describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
@@ -1510,6 +1520,83 @@ describe('reader Ctrl+M vs editor layout key', () => {
 
     expect(reader.dataset.readingLayout).toBe('paginated');
     expect(document.documentElement.dataset.readingLayout).toBe('paginated');
+    shell.destroy();
+  });
+
+  it('Ctrl+M updates EPUB storage but does not paginate a live PDF host', () => {
+    const { store, storage } = memoryStorage({
+      [READING_LAYOUT_STORAGE_KEY]: 'scroll',
+      [READER_FLOW_LAYOUT_STORAGE_KEY]: 'scroll',
+    });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const shell = createAppShell(
+      root,
+      stubShellActions({
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      }),
+      { shortcutBindings: () => [], storage },
+    );
+    const editor = root.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div');
+    reader.className = 'lightink-reader';
+    const pages = document.createElement('div');
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    reader.appendChild(pages);
+    editor?.appendChild(reader);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(reader.dataset.readingLayout).toBe('scroll');
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'm',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(store[READER_FLOW_LAYOUT_STORAGE_KEY]).toBe('paginated');
+    expect(store[READING_LAYOUT_STORAGE_KEY]).toBe('scroll');
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    shell.destroy();
+  });
+
+  it('keeps EPUB paginated / scroll on a flow host after Ctrl+M', () => {
+    const { store, storage } = memoryStorage({
+      [READER_FLOW_LAYOUT_STORAGE_KEY]: 'paginated',
+    });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const shell = createAppShell(
+      root,
+      stubShellActions({
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      }),
+      { shortcutBindings: () => [], storage },
+    );
+    const editor = root.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div');
+    reader.className = 'lightink-reader';
+    editor?.appendChild(reader);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(reader.dataset.readingLayout).toBe('paginated');
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'm',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(store[READER_FLOW_LAYOUT_STORAGE_KEY]).toBe('scroll');
+    expect(reader.dataset.readingLayout).toBe('scroll');
     shell.destroy();
   });
 });
