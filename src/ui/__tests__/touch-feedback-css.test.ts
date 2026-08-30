@@ -39,16 +39,15 @@ function cssDeclarationBlocks(css: string): Array<{ selector: string; body: stri
 }
 
 /**
- * Touch-branch `:active` blocks: selector carries the html gate (or sits inside a
- * coarse-pointer media query) so desktop output stays identical without the flags.
+ * Touch-branch `:active` blocks: selector carries the html gate so desktop
+ * output stays identical without the flags.
  */
 function touchActiveBlocks(css: string): Array<{ selector: string; body: string }> {
   return cssDeclarationBlocks(stripComments(css)).filter(
     (rule) =>
       rule.selector.includes(':active') &&
       !rule.selector.includes(':hover') &&
-      !rule.selector.startsWith('@') &&
-      (rule.selector.includes(TOUCH_GATE) || rule.selector.includes('(pointer: coarse)')),
+      rule.selector.includes(TOUCH_GATE),
   );
 }
 
@@ -171,7 +170,7 @@ describe('touch press feedback baseline (T1)', () => {
   it('neutralizes sticky :hover states on touch so the base background returns after release', () => {
     expect(libraryCss).toMatch(
       new RegExp(
-        `${TOUCH_GATE_RE}\\s*\\.lightink-library button:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library button:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent[^}]*color:\\s*inherit`,
       ),
     );
     expect(libraryCss).toMatch(
@@ -212,6 +211,100 @@ describe('touch press feedback baseline (T1)', () => {
     );
   });
 
+  it('A2/F1: solid-state families keep their base backgrounds through sticky touch hover', () => {
+    // manage-row 恢复 elevated 实底与 fg 字色；激活主题卡 / 打开态图标按钮恢复 accent-soft。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-manage-row:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-bg-elevated\\)[^}]*color:\\s*var\\(--lightink-fg\\)`,
+      ),
+    );
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-theme-swatch\\.is-active:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)`,
+      ),
+    );
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-icon-button\\.is-open:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)`,
+      ),
+    );
+    // 键盘 focus-visible 与 hover 并存时 focus 配色单独恢复（中和不破坏键盘对比）。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library button:focus-visible:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)[^}]*color:\\s*var\\(--lightink-accent\\)`,
+      ),
+    );
+  });
+
+  it('A2/F2: modal primary/danger buttons keep readable solid press states', () => {
+    // 按压洗色排除实底变体；primary/danger 用自身色派生加深实底（文字仍取 --lightink-bg）。
+    expect(themeCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-modal-btn:not\\(:disabled\\):not\\(\\.lightink-modal-btn--primary\\):not\\(\\s*\\.lightink-modal-btn--danger\\s*\\):active\\s*\\{[^}]*${WASH_RE}`,
+      ),
+    );
+    expect(themeCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-modal-btn--primary:not\\(:disabled\\):active\\s*\\{[^}]*background:\\s*color-mix\\(in srgb, var\\(--lightink-accent\\) 82%, var\\(--lightink-bg\\)\\)`,
+      ),
+    );
+    expect(themeCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-modal-btn--danger:not\\(:disabled\\):active\\s*\\{[^}]*background:\\s*color-mix\\(in srgb, var\\(--lightink-danger\\) 82%, var\\(--lightink-bg\\)\\)[^}]*color:\\s*var\\(--lightink-bg\\)`,
+      ),
+    );
+  });
+
+  it('A2/F3-F4: completes hover neutralization for cover wall, rows, headings and panel/toolbar controls', () => {
+    // F3(b)：封面墙 hover 阴影与位移同步复位。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-item:not\\(\\.is-selected\\):hover:not\\(:active\\)\\s*\\.lightink-library-cover\\s*\\{[^}]*transform:\\s*none[^}]*box-shadow:\\s*var\\(--lightink-shadow\\)`,
+      ),
+    );
+    // F3(c)：来源行 / 分区标题 hover 底色复位。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-source-row:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-pane-heading:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
+    // F4：标注面板列表项边框/阴影复位（当前命中项保持 is-current 高亮）。
+    expect(annotationCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-sidebar-item:not\\(\\.is-current\\):hover:not\\(:active\\)\\s*\\{[^}]*border-color:\\s*color-mix\\(in srgb, var\\(--lightink-border\\) 70%, transparent\\)[^}]*box-shadow:\\s*0 1px 3px rgba\\(0, 0, 0, 0\\.06\\)`,
+      ),
+    );
+    // F4：头部按钮透明底 + muted 字色复位。
+    expect(annotationCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-sidebar-close:hover:not\\(:active\\),[\\s\\S]*?\\{[^}]*background:\\s*transparent[^}]*color:\\s*var\\(--lightink-muted\\)`,
+      ),
+    );
+    // F4：颜色圆点 hover 放大复位（激活圆点保持 accent 环）。
+    expect(annotationCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-sidebar-color-filter:not\\(\\[data-color='all'\\]\\):not\\(\\s*\\.lightink-reader-sidebar-filter--active\\s*\\):hover:not\\(:active\\)\\s*\\{[^}]*transform:\\s*none`,
+      ),
+    );
+    // F4：划选工具条 action hover 底色复位。
+    expect(readerCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-selection-action:not\\(:disabled\\):hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
+    // F4：阅读器主题卡 hover 抬升复位（激活卡保持 is-active 描边）。
+    expect(panelsCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-theme-swatch:not\\(\\.is-active\\):hover:not\\(:active\\)\\s*\\.lightink-reader-theme-page\\s*\\{[^}]*transform:\\s*none[^}]*box-shadow:`,
+      ),
+    );
+  });
+
   it('keeps desktop output identical: every :active rule is touch-gated except the desktop thumb', () => {
     // 既有桌面 thumb :active（12→14px）是唯一允许的无门控 :active 规则。
     const ungatedAllowlist = [
@@ -220,12 +313,15 @@ describe('touch press feedback baseline (T1)', () => {
     ];
     for (const { name, css } of allCss) {
       for (const block of cssDeclarationBlocks(stripComments(css))) {
-        if (!block.selector.includes(':active') || block.selector.includes(':hover')) continue;
-        const gated =
-          block.selector.includes(TOUCH_GATE) || block.selector.includes('(pointer: coarse)');
+        if (!block.selector.includes(':active')) continue;
+        // 已门控的按压规则直接放行。
+        if (block.selector.includes(TOUCH_GATE)) continue;
+        // hover 驻留中和块（gate + :hover:not(:active) 复位语义）只做复位，不算按压规则；
+        // 无门控的 `.x:active:hover` 类块不跳过，仍须被门控断言覆盖。
+        if (block.selector.includes(':hover:not(:active)')) continue;
         const allowlisted = ungatedAllowlist.some((re) => re.test(block.selector));
         expect(
-          gated || allowlisted,
+          allowlisted,
           `${name} :active rule must be touch-gated: ${block.selector}`,
         ).toBe(true);
       }

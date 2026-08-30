@@ -3438,9 +3438,28 @@ html:is([data-android], [data-touch-primary]) {
   transition: background-color 100ms ease;
 }
 
-/* 模态按钮按压洗色（不改边框/圆角，与 :hover 态同形）。 */
-:is(html[data-android], html[data-touch-primary]) .lightink-modal-btn:not(:disabled):active {
+/* 模态按钮按压洗色（不改边框/圆角，与 :hover 态同形）；实底变体（primary/danger）例外：
+   半透明洗色会盖过实底，令 --lightink-bg 文字落在近透明底上不可读，按压态单独派生加深实底。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-modal-btn:not(:disabled):not(.lightink-modal-btn--primary):not(
+    .lightink-modal-btn--danger
+  ):active {
   background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 主按钮按压：accent 派生加深实底（文字仍取 --lightink-bg，对比保留）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-modal-btn--primary:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 82%, var(--lightink-bg));
+  transition: background-color 100ms ease;
+}
+
+/* 危险按钮按压：danger 色派生实底反白（与 :hover 实底同语言）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-modal-btn--danger:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-danger) 82%, var(--lightink-bg));
+  color: var(--lightink-bg);
   transition: background-color 100ms ease;
 }
 

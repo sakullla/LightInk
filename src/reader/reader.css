@@ -1146,6 +1146,18 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   transition: transform 100ms ease;
 }
 
+/* 划选工具条 hover 驻留中和（T1-A2）：颜色圆点 hover 描边与 action hover 底色复位
+   （键盘 focus-visible 描边不受中和影响）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-selection-color:hover:not(:active):not(:focus-visible) {
+  outline: none;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-selection-action:not(:disabled):hover:not(:active) {
+  background: transparent;
+}
+
 .lightink-reader-selection-action--removeHighlight {
   color: var(--lightink-danger);
 }

@@ -753,3 +753,13 @@
   .lightink-reader-type-mode:not(.is-active):hover:not(:active) {
   color: var(--lightink-muted);
 }
+
+/* 主题卡 hover 抬升驻留中和（T1-A2）：恢复基础位移与阴影（激活卡的 is-active 描边保持）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-theme-swatch:not(.is-active):hover:not(:active)
+  .lightink-reader-theme-page {
+  transform: none;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 3px 8px rgba(0, 0, 0, 0.06);
+}

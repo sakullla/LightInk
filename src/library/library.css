@@ -3589,15 +3589,17 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     transition: background-color 100ms ease;
   }
 
-  /* hover 驻留中和：抬手后 tab 恢复基础底色（激活 tab 恢复 accent-soft 圆角底）。 */
+  /* hover 驻留中和：抬手后 tab 恢复基础底色/字色（激活 tab 恢复 accent-soft 圆角底与 accent 字色）。 */
   :is(html[data-android], html[data-touch-primary])
     .lightink-library-tabbar-tab:not(.is-active):hover:not(:active) {
     background: transparent;
+    color: var(--lightink-muted);
   }
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library-tabbar-tab.is-active:hover:not(:active) {
     background: var(--lightink-accent-soft);
+    color: var(--lightink-accent);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar-icon {
@@ -3743,10 +3745,17 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   transition: background-color 100ms ease;
 }
 
-/* hover 驻留中和：抬手后 :hover 粘滞不残留高亮，恢复元素基础底色
-   （按压期间由上方 :active 洗色接管）。 */
+/* hover 驻留中和：抬手后 :hover 粘滞不残留高亮，恢复元素基础底色/字色
+   （按压期间由上方 :active 洗色接管；实底/激活态族由后续规则单独恢复）。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-library button:hover:not(:active) {
   background: transparent;
+  color: inherit;
+}
+
+/* 键盘 focus-visible 与 hover 并存时保持既有 focus 配色，中和不破坏键盘对比。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library button:focus-visible:hover:not(:active) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
 }
 
 /* 侧栏导航 hover 带 !important，中和规则需同级 !important 且特异性更高（排除激活态）。 */
@@ -3766,10 +3775,65 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   background: transparent !important;
 }
 
-/* 封面墙 hover 上浮在触屏驻留：中和位移动（选中态洗色保留，缩放按压反馈见上）。 */
+/* 封面墙 hover 上浮在触屏驻留：中和位移与抬升阴影，恢复基础阴影
+   （选中态洗色保留，缩放按压反馈见上）。 */
 :is(html[data-android], html[data-touch-primary])
   .lightink-library-item:not(.is-selected):hover:not(:active)
   .lightink-library-cover {
   transform: none;
+  box-shadow: var(--lightink-shadow);
+}
+
+/* ===== 触屏 hover 驻留中和补全（T1-A2）：实底/激活态恢复 + 未门控 hover 复位 ===== */
+
+/* F1：manage-row 实底行在粘滞 hover 期间保持 elevated 底色与 fg 字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-manage-row:hover:not(:disabled):not(:active) {
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+}
+
+/* F1：激活主题卡 / 打开态图标按钮恢复 accent-soft 实底（中和的透明底不适用实底族）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-theme-swatch.is-active:hover:not(:disabled):not(:active) {
+  background: var(--lightink-accent-soft);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-icon-button.is-open:hover:not(:disabled):not(:active) {
+  background: var(--lightink-accent-soft);
+}
+
+/* F3(a) 连带：激活分组 sheet 项 / 展开态分区操作按钮恢复激活配色（字色不被中和抹平）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-groups-sheet-item.is-active:hover:not(:disabled):not(:active) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-pane-action[aria-expanded='true']:hover:not(:active) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+/* F3(c)：来源行 / 分区标题 hover 底色复位（基础态为透明底；hover 透出的编辑/删除按钮保留）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-source-row:hover:not(:active) {
+  background: transparent;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-pane-heading:hover:not(:active) {
+  background: transparent;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-pane-heading:hover:not(:active)
+  .lightink-library-section-icon,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-pane-heading:hover:not(:active)
+  .lightink-library-collapse-chevron {
+  color: var(--lightink-muted);
 }
 

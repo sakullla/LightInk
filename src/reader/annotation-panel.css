@@ -604,3 +604,49 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
   .lightink-reader-sidebar-color-filter:not([data-color='all']):active {
   transform: scale(0.9);
 }
+
+/* ===== 触屏 hover 驻留中和（T1-A2）：标注面板控件族 ===== */
+
+/* 列表项 hover 高亮（边框 + 阴影）中和：恢复基础边框/阴影（当前命中项保持 is-current 高亮）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-item:not(.is-current):hover:not(:active) {
+  border-color: color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* 头部按钮 hover 中和：恢复透明底与 muted 字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-close:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-export:hover:not(:active) {
+  background: transparent;
+  color: var(--lightink-muted);
+}
+
+/* 筛选 chip hover 字色中和（激活 chip 的 accent 字色保持）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-filter:not(.lightink-reader-sidebar-filter--active):hover:not(:active) {
+  color: var(--lightink-muted);
+}
+
+/* 行操作按钮 hover 中和：恢复透明底与 muted 字色（remove 保持 danger 字色）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-jump:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-edit:hover:not(:active) {
+  background: transparent;
+  color: var(--lightink-muted);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-remove:hover:not(:active) {
+  background: transparent;
+}
+
+/* 颜色圆点 hover 放大中和：恢复未缩放基础态（激活圆点保持 accent 环的 scale(1.1)）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-color-filter:not([data-color='all']):not(
+    .lightink-reader-sidebar-filter--active
+  ):hover:not(:active) {
+  transform: none;
+}
