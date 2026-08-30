@@ -545,6 +545,66 @@ describe('reader chrome panels', () => {
     }
   });
 
+  it('paints the first batches up to the current chapter so long lists highlight and scroll to it', () => {
+    const observers: FakeIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = FakeIntersectionObserver as unknown as typeof IntersectionObserver;
+    FakeIntersectionObserver.instances = observers;
+    const scrolled: string[] = [];
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+      scrolled.push(this.textContent ?? '');
+    };
+    try {
+      // 当前章（索引 550）在首批 200 行之外：首批必须覆盖到它。
+      const many: OutlineItem[] = Array.from({ length: 900 }, (_, index) => ({
+        level: 1,
+        text: `第${index + 1}章`,
+        anchor: index,
+        chapter: index,
+      }));
+      const panel = document.createElement('div');
+      fillReaderTocPanel(panel, many, defaultReaderChromePanelCopy(), { chapter: 550 }, vi.fn());
+      const list = panel.querySelector('.lightink-reader-toc-list')!;
+      const count = () => list.querySelectorAll('.lightink-reader-toc-item').length;
+      // 首批渲染足够批次覆盖当前章（3 批 = 600 行），其余仍靠哨兵滚动追加。
+      expect(count()).toBe(READER_TOC_RENDER_BATCH * 3);
+      expect(count()).toBeLessThan(many.length);
+      expect(list.querySelector('.lightink-reader-toc-load-more')).not.toBeNull();
+
+      const currentRow = list.querySelector<HTMLButtonElement>(
+        '.lightink-reader-toc-item.is-current',
+      );
+      expect(currentRow).not.toBeNull();
+      expect(currentRow!.textContent).toBe('第551章');
+      expect(currentRow!.getAttribute('aria-current')).toBe('location');
+      // setActive 指向当前章而不是被钳制到首批最后一行。
+      expect(currentRow!.classList.contains('is-active')).toBe(true);
+      expect(currentRow!.getAttribute('aria-selected')).toBe('true');
+      const search = panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')!;
+      expect(search.getAttribute('aria-activedescendant')).toBe(currentRow!.id);
+      const rows = list.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-item');
+      expect(rows[READER_TOC_RENDER_BATCH - 1]!.classList.contains('is-active')).toBe(false);
+
+      // 打开面板时滚动定位落在当前章行上。
+      expect(scrolled[scrolled.length - 1]).toBe('第551章');
+      activateReaderTocPanel(panel);
+      expect(scrolled[scrolled.length - 1]).toBe('第551章');
+
+      // 滚动追加语义保持：哨兵相交继续追加剩余批次。
+      expect(observers).toHaveLength(1);
+      observers[0]!.trigger(true);
+      expect(count()).toBe(READER_TOC_RENDER_BATCH * 4);
+      observers[0]!.trigger(true);
+      observers[0]!.trigger(true);
+      expect(count()).toBe(many.length);
+      expect(list.querySelector('.lightink-reader-toc-load-more')).toBeNull();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
   it('groups typography controls and exposes paper swatches', () => {
     const panel = document.createElement('div');
     const onTypography = vi.fn();

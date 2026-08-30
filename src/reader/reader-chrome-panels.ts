@@ -312,17 +312,23 @@ export function fillReaderTocPanel(
       return;
     }
     live.textContent = formatOutlineSearchCount(copy.tocSearchCount ?? '{n}', visible.length);
-    renderedCount = Math.min(
-      visible.length,
-      visible.length > READER_TOC_BATCH_THRESHOLD ? READER_TOC_RENDER_BATCH : visible.length,
-    );
+    const currentIndex = lastCurrentOutlineIndex(visible, current);
+    const baseCount =
+      visible.length > READER_TOC_BATCH_THRESHOLD ? READER_TOC_RENDER_BATCH : visible.length;
+    // The first paint must cover the current row; otherwise is-current is never
+    // rendered and setActive clamps to the rendered prefix, so highlight,
+    // aria-activedescendant and the open-scroll all land on the wrong row.
+    const coverCurrent =
+      currentIndex >= 0
+        ? Math.ceil((currentIndex + 1) / READER_TOC_RENDER_BATCH) * READER_TOC_RENDER_BATCH
+        : 0;
+    renderedCount = Math.min(visible.length, Math.max(baseCount, coverCurrent));
     for (let index = 0; index < renderedCount; index += 1) {
       list.appendChild(buildItemButton(visible[index]!, index));
     }
     if (renderedCount < visible.length) {
       appendLoadMoreSentinel();
     }
-    const currentIndex = lastCurrentOutlineIndex(visible, current);
     setActive(
       currentIndex >= 0 ? currentIndex : 0,
       query.trim() === '' && panel.hidden !== true,
