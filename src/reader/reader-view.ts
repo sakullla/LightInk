@@ -3003,15 +3003,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     const pdfLive = pdfHandle !== null || loadedExt === 'pdf';
     try {
       holdLayoutSwitching(() => {
-        // 直播 PDF 不消费翻页值：阅读根保持连续竖滚。EPUB 存储键仍可改。
-        applyReaderLayout(root, pdfLive ? 'scroll' : next);
+        // 直播 PDF：只改 EPUB 存储键，不写 host / html / 广播呈现。
+        if (pdfLive) {
+          return;
+        }
+        applyReaderLayout(root, next);
         if (typeof document !== 'undefined') {
           applyReaderDocumentLayout(document.documentElement, 'reader', next);
         }
         dispatchReaderFlowLayoutPref(next);
-        if (pdfLive) {
-          return;
-        }
         // 先写 data-reading-layout：scroll 时 bindTouchPaging/bindClickPaging
         // 的 enabled()（仅 paginated）立刻为假，点翻失效且不吞纵向滑动。
         if (next === 'scroll') {

@@ -236,6 +236,12 @@ describe('readerFlowUsesTextColumns', () => {
       /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
     );
     expect(css).toMatch(
+      /\.lightink-reader:has\(>\s*\.lightink-reader-pages\[data-reader-active='true'\]\)\s*\{[^}]*position:\s*absolute/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(>\s*\.lightink-reader-pages\[data-reader-active='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\):not\(:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)\)\s*\{[^}]*overflow:\s*hidden/,
     );
   });
@@ -444,6 +450,12 @@ describe('readerPageInnerPadPx', () => {
     );
     expect(css).toMatch(
       /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]:has\(\[data-comic-reader='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /html\[data-reading-layout='scroll'\][\s\S]*?#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)[\s\S]*?\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /html\[data-reading-layout='scroll'\][\s\S]*?:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)[\s\S]*?\.lightink-tab-host[\s\S]*?\{[^}]*height:\s*100%/,
     );
     expect(css).toMatch(
       /#app\.is-workspace-shelf #lightink-main > \.lightink-reader-sidebar,[\s\S]*?\.lightink-reader-sidebar-backdrop\s*\{[^}]*display:\s*none/,
@@ -1549,6 +1561,17 @@ describe('reader Ctrl+M vs editor layout key', () => {
     editor?.appendChild(reader);
     shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
     expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(document.documentElement.dataset.readingLayout).toBe('scroll');
+
+    const flowEvents: string[] = [];
+    const restamp = (event: Event): void => {
+      const detail = (event as CustomEvent<string>).detail;
+      flowEvents.push(detail);
+      if (detail === 'scroll' || detail === 'paginated') {
+        applyReaderLayout(reader, detail);
+      }
+    };
+    document.addEventListener('lightink:reader-flow-layout', restamp);
 
     document.dispatchEvent(
       new KeyboardEvent('keydown', {
@@ -1562,6 +1585,9 @@ describe('reader Ctrl+M vs editor layout key', () => {
     expect(store[READER_FLOW_LAYOUT_STORAGE_KEY]).toBe('paginated');
     expect(store[READING_LAYOUT_STORAGE_KEY]).toBe('scroll');
     expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(document.documentElement.dataset.readingLayout).toBe('scroll');
+    expect(flowEvents).toEqual([]);
+    document.removeEventListener('lightink:reader-flow-layout', restamp);
     shell.destroy();
   });
 

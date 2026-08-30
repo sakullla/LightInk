@@ -220,6 +220,7 @@ class FakeEl {
 
 class FakeDoc {
   body = new FakeEl('body');
+  documentElement = new FakeEl('html');
   private readonly listeners = new Map<string, Array<(e: unknown) => void>>();
 
   createElement(tag: string): FakeEl {
@@ -239,6 +240,13 @@ class FakeDoc {
       type,
       list.filter((x) => x !== fn),
     );
+  }
+
+  dispatchEvent(event: { type: string }): boolean {
+    for (const fn of this.listeners.get(event.type) ?? []) {
+      fn(event);
+    }
+    return true;
   }
 }
 
@@ -974,6 +982,75 @@ describe('buildMenus 生产结构', () => {
     expect(items.some((i) => i.id === 'view-layout-scroll')).toBe(true);
     items.find((i) => i.id === 'view-layout-scroll')!.action();
     expect(store['lightink.reader.flow.layout']).toBe('scroll');
+  });
+
+  it('persist flow key for a live PDF without restamping host, html, or broadcasting presentation', () => {
+    const doc = installFakeDocument();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'scroll' };
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      },
+      {
+        shortcutBindings: () => [],
+        storage: {
+          getItem: (key) => store[key] ?? null,
+          setItem: (key, value) => {
+            store[key] = value;
+          },
+        },
+      },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const editor = fakeRoot.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div') as unknown as FakeEl;
+    reader.className = 'lightink-reader';
+    const pages = document.createElement('div') as unknown as FakeEl;
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    reader.appendChild(pages);
+    editor?.appendChild(reader);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('scroll');
+
+    const flowEvents: unknown[] = [];
+    const restamp = (event: unknown): void => {
+      const detail = (event as { detail?: unknown }).detail;
+      flowEvents.push(detail);
+      if (detail === 'scroll' || detail === 'paginated') {
+        reader.dataset.readingLayout = String(detail);
+      }
+    };
+    doc.addEventListener('lightink:reader-flow-layout', restamp);
+
+    store['lightink.reader.flow.layout'] = 'paginated';
+    shell.refreshReaderPreferences();
+    expect(store['lightink.reader.flow.layout']).toBe('paginated');
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('scroll');
+    expect(flowEvents).toEqual([]);
+
+    doc.dispatchEvent({
+      type: 'keydown',
+      key: 'm',
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    expect(store['lightink.reader.flow.layout']).toBe('scroll');
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('scroll');
+    expect(flowEvents).toEqual([]);
+    shell.destroy();
   });
 });
 

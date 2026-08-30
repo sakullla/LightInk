@@ -943,6 +943,30 @@ html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab
   min-height: 0;
 }
 
+/* Live PDF: same pane pin as comics, without marking the host as a comic.
+   EPUB scroll CSS otherwise makes #lightink-editor-area the visual scroller
+   while renderPdfInto observes the page host. */
+html[data-reading-layout='scroll']
+  #lightink-editor-area[data-surface='reader']:has(.lightink-reader-pages[data-reader-active='true']),
+#lightink-editor-area[data-surface='reader']:has(
+    .lightink-reader[data-reading-layout='scroll'] .lightink-reader-pages[data-reader-active='true']
+  ) {
+  overflow: hidden;
+}
+
+html[data-reading-layout='scroll']
+  #lightink-editor-area[data-surface='reader']:has(.lightink-reader-pages[data-reader-active='true'])
+  .lightink-tab-host,
+html[data-reading-layout='scroll']:has(.lightink-reader-pages[data-reader-active='true'])
+  .lightink-tab-host.lightink-tab-host--reader,
+#lightink-editor-area[data-surface='reader']:has(
+    .lightink-reader[data-reading-layout='scroll'] .lightink-reader-pages[data-reader-active='true']
+  )
+  .lightink-tab-host {
+  height: 100%;
+  min-height: 0;
+}
+
 .lightink-tab-host .lightink-reader-highlight,
 .lightink-tab-host .ProseMirror .lightink-reader-highlight {
   background: var(--lightink-annotation, #f2d675);

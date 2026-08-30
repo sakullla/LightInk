@@ -1328,6 +1328,17 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   flex-direction: column;
 }
 
+/* Live PDF uses the same viewport pin. Do not mark it as a comic: the page
+ * host keeps overflow:auto so IntersectionObserver and the wheel stay there. */
+.lightink-reader:has(> .lightink-reader-pages[data-reader-active='true']) {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  flex-direction: column;
+}
+
 .lightink-reader-cbz-slot[hidden] {
   display: none !important;
 }

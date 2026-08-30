@@ -1013,8 +1013,16 @@ export function createAppShell(
   const applyReaderChrome = (): void => {
     const layout = currentReaderLayout();
     const prefs = currentReaderTypography();
-    for (const reader of collectReaderHosts(editorArea)) {
+    const hosts = collectReaderHosts(editorArea);
+    const livePdf = hosts.some((host) => readerHostShowsLivePdf(host));
+    for (const reader of hosts) {
       applyReaderShellChrome(reader, layout, prefs, storage);
+    }
+    // Live PDF: persist the EPUB flow key only. Do not restamp html or
+    // broadcast a presentation change that would paginate .lightink-reader.
+    if (livePdf) {
+      dispatchReaderPrefEvent('lightink:reader-typography', prefs);
+      return;
     }
     const workspace =
       actions.getWorkspaceMode?.() ?? actions.getWorkspaceSnapshot?.()?.mode ?? 'editor';
