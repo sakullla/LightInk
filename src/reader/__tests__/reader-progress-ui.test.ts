@@ -12,6 +12,7 @@ import {
   flowBookProgress,
   formatReaderLocation,
   formatReaderPercent,
+  playReaderPageBoundaryBounce,
   playReaderPageTurn,
   readerBookmarkTickFractions,
   readerProgressTickFractions,
@@ -178,6 +179,65 @@ describe('playReaderPageTurn', () => {
       schedule: () => 0,
     });
     expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+});
+
+describe('playReaderPageBoundaryBounce', () => {
+  it('stamps a boundary bounce token on touch and clears it after the spring', () => {
+    const root = document.createElement('div');
+    let delayed: (() => void) | undefined;
+    playReaderPageBoundaryBounce(root, 1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule: (fn) => {
+        delayed = fn;
+        return 1;
+      },
+    });
+    expect(root.getAttribute('data-page-boundary')).toBe('next');
+    delayed!();
+    expect(root.getAttribute('data-page-boundary')).toBeNull();
+  });
+
+  it('maps the backward boundary to the prev token', () => {
+    const root = document.createElement('div');
+    playReaderPageBoundaryBounce(root, -1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-boundary')).toBe('prev');
+  });
+
+  it('stays silent on desktop and under reduced motion', () => {
+    const root = document.createElement('div');
+    playReaderPageBoundaryBounce(root, 1, {
+      touchPrimary: false,
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-boundary')).toBeNull();
+    playReaderPageBoundaryBounce(root, -1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: true }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-boundary')).toBeNull();
+  });
+
+  it('replaces a stale token so rapid boundary hits restart the spring', () => {
+    const root = document.createElement('div');
+    playReaderPageBoundaryBounce(root, 1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    playReaderPageBoundaryBounce(root, -1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-boundary')).toBe('prev');
   });
 });
 

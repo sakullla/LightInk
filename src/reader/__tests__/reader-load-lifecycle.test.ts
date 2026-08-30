@@ -751,6 +751,93 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
+  it('slides comic paged slots in on touch and keeps strip mode instant', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    progressStorage.setItem(
+      COMIC_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'ltr',
+        spread: 'single',
+        fit: 'screen',
+      }),
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        progressStorage,
+        preferenceStorage: progressStorage,
+      }),
+    );
+
+    await view.load('/comics/touch-slide.cbz');
+    expect(host.querySelectorAll('.lightink-comic-slot-slide-next, .lightink-comic-slot-slide-prev')).toHaveLength(0);
+    // T2：触屏（html[data-touch-primary]）翻页时进入 slot 播放滑入；加载后置位，
+    // 避免影响装载期偏好判定（spread 等）。
+    document.documentElement.setAttribute('data-touch-primary', '');
+    try {
+      expect(view.advanceReading(1)).toBe(true);
+      const sliding = host.querySelectorAll('.lightink-comic-slot-slide-next');
+      expect(sliding.length).toBeGreaterThan(0);
+      // 宿主 data-page-anim 语义保留：漫画会话不播宿主翻页动画。
+      expect(host.querySelector('[data-page-anim]')).toBeNull();
+      // 等滑入类清理超时（200ms + 60ms 兜底）落地后再切模式。
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-next, .lightink-comic-slot-slide-prev')).toHaveLength(0);
+      // strip 模式不 slide（原生滚动）。
+      clickComicStripMode(host);
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-next, .lightink-comic-slot-slide-prev')).toHaveLength(0);
+      expect(view.advanceReading(1)).toBe(true);
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-next, .lightink-comic-slot-slide-prev')).toHaveLength(0);
+      await view.destroy();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+  });
+
+  it('bounces the active chapter at a flow boundary on touch paginated flow', async () => {
+    const preference: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      preferenceStorage: {
+        getItem: (key) => preference[key] ?? null,
+        setItem: (key, value) => {
+          preference[key] = value;
+        },
+      },
+    });
+    await view.load('boundary.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await nextFrame();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    try {
+      // 首章第一页向前：advanceFlowPage 边界 false → 触屏章界回弹。
+      expect(view.advanceReading(-1)).toBe(false);
+      expect(
+        host.querySelector('.lightink-reader')?.getAttribute('data-page-boundary'),
+      ).toBe('prev');
+      // flow 会话的宿主翻页动画在 moved=false 时不播（语义保留）。
+      expect(host.querySelector('[data-page-anim]')).toBeNull();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+    await view.destroy();
+  });
+
   it('does not apply the comic near-black overlay to EPUB, PDF, or the editor pane', async () => {
     stubComicObjectUrls();
     const archive = await buildTinyCbz();

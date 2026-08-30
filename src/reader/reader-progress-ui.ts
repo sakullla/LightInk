@@ -5,6 +5,7 @@
 
 import type { OutlineItem } from '../outline/outline-model.js';
 import type { Annotation } from './annotations.js';
+import { isTouchPrimaryDocument } from './comic-preferences.js';
 import { isUsableEpubChapterTitle } from './chapter-title.js';
 import {
   sanitizeReadingProgressTitle,
@@ -13,6 +14,9 @@ import {
 import type { ReaderState } from './types.js';
 
 export const READER_PAGE_ANIM_MS = 280;
+
+/** Chapter-edge bounce duration (T2): ~200ms spring, touch only. */
+export const READER_PAGE_BOUNDARY_BOUNCE_MS = 200;
 
 export function resolveReaderChapterTitle(
   state: Pick<ReaderState, 'current' | 'locationKind'>,
@@ -224,4 +228,46 @@ export function playReaderPageTurn(
       root.removeAttribute('data-page-anim');
     }
   }, READER_PAGE_ANIM_MS + 40);
+}
+
+/**
+ * Chapter-edge bounce for touch paging (T2): `advanceFlowPage` hit the
+ * first/last chapter boundary and returned false, so the active chapter
+ * springs ±10px and settles back instead of giving no feedback. Desktop
+ * keeps today's silent no-op; reduced motion skips the spring (same
+ * matchMedia short-circuit as playReaderPageTurn). Comics never reach this
+ * path (their session advance is clamped inside the page host and always
+ * returns true).
+ */
+export function playReaderPageBoundaryBounce(
+  root: HTMLElement,
+  direction: 1 | -1,
+  options?: {
+    touchPrimary?: boolean;
+    matchMedia?: (query: string) => { matches: boolean };
+    schedule?: (fn: () => void, ms: number) => number;
+  },
+): void {
+  const touchPrimary = options?.touchPrimary ?? isTouchPrimaryDocument(root.ownerDocument);
+  if (!touchPrimary) {
+    return;
+  }
+  const media =
+    options?.matchMedia ??
+    (typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined);
+  if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
+    return;
+  }
+  const token = direction > 0 ? 'next' : 'prev';
+  root.removeAttribute('data-page-boundary');
+  void root.offsetWidth;
+  root.setAttribute('data-page-boundary', token);
+  const schedule =
+    options?.schedule ??
+    ((fn, ms) => (typeof setTimeout === 'function' ? (setTimeout(fn, ms) as unknown as number) : 0));
+  schedule(() => {
+    if (root.getAttribute('data-page-boundary') === token) {
+      root.removeAttribute('data-page-boundary');
+    }
+  }, READER_PAGE_BOUNDARY_BOUNCE_MS + 40);
 }

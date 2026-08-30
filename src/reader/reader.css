@@ -486,6 +486,70 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 }
 
 /*
+ * T2 触屏翻页统一水平 slide：触屏分支的翻页动效由分栏 scroller 的
+ * 200ms rAF 缓动承担（reading-layout.ts 写入层），抑制宿主
+ * data-page-anim 防双动画；桌面 280ms 原样保留（上方选择器不动）。
+ */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-anim='next']
+  .lightink-reader-chapter.is-active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-anim='next']
+  .lightink-reader-pages[data-reader-active='true'],
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-anim='prev']
+  .lightink-reader-chapter.is-active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-anim='prev']
+  .lightink-reader-pages[data-reader-active='true'] {
+  animation: none;
+}
+
+/*
+ * T2 章界回弹：advanceFlowPage 触到首/末章边界返回 false 时，活动章
+ * ±10px 弹回（约 200ms，spring 近似）。触屏专用（JS 门控），
+ * reduce-motion 由 JS matchMedia 短路，这里再兜底一层。
+ */
+@keyframes lightink-reader-page-boundary-next {
+  0% {
+    transform: translateX(0);
+  }
+  35% {
+    transform: translateX(-10px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@keyframes lightink-reader-page-boundary-prev {
+  0% {
+    transform: translateX(0);
+  }
+  35% {
+    transform: translateX(10px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.lightink-reader[data-page-boundary='next'] .lightink-reader-chapter.is-active {
+  animation: lightink-reader-page-boundary-next 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lightink-reader[data-page-boundary='prev'] .lightink-reader-chapter.is-active {
+  animation: lightink-reader-page-boundary-prev 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-reader[data-page-boundary='next'] .lightink-reader-chapter.is-active,
+  .lightink-reader[data-page-boundary='prev'] .lightink-reader-chapter.is-active {
+    animation: none;
+  }
+}
+
+/*
  * Mobile reader (Kindle / Apple Books / 微信读书):
  * narrow ~16pt page gutters, status-bar-aware icon chrome, 48px hits.
  * Back may stay at the top edge. TOC / Aa / search / notes sit in the
@@ -1879,6 +1943,44 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 1rem;
   color: var(--lightink-comic-muted, var(--lightink-muted));
   text-align: center;
+}
+
+/*
+ * T2 漫画 paged slide：触屏翻页时进入 slot 从来向侧滑入（200ms，与
+ * 文字书 slide 同曲线族）；strip 模式仍为原生滚动，不加类。加类与
+ * reduce-motion 门控在 cbz.ts showPagedSpread。
+ */
+@keyframes lightink-comic-slot-slide-next {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes lightink-comic-slot-slide-prev {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.lightink-reader-cbz-slot.lightink-comic-slot-slide-next {
+  animation: lightink-comic-slot-slide-next 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
+  animation: lightink-comic-slot-slide-prev 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-reader-cbz-slot.lightink-comic-slot-slide-next,
+  .lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
+    animation: none;
+  }
 }
 
 .lightink-reader-comic-error button {

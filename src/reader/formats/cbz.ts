@@ -61,6 +61,7 @@ import {
   comicTurnPrefetchCenters,
   comicVisiblePages,
   isComicLandscapeSize,
+  isTouchPrimaryDocument,
   loadComicPreferences,
   resolveComicSpread,
   saveComicPreferences,
@@ -76,6 +77,8 @@ const DEFAULT_COMIC_CACHE_BUDGET = 96 * 1024 * 1024;
 const COMIC_CHROME_IDLE_MS = 2800;
 const COMIC_EDGE_ZONE = 0.28;
 const COMIC_SYSTEM_EDGE_PX = 24;
+/** T2：触屏 paged 翻页进入 slot 的滑入时长（与文字书 slide 同曲线族）。 */
+const COMIC_SLOT_SLIDE_MS = 200;
 const COMIC_ZOOM_MIN = 1;
 const COMIC_ZOOM_MAX = 5;
 const COMIC_ZOOM_TOGGLE = 2;
@@ -1482,7 +1485,28 @@ export async function renderCbzInto(
       if (notify && previousPage !== currentPage) options.onPageChange?.();
     };
 
-    const showPagedSpread = (requestedIndex: number): void => {
+    /** T2：触屏 paged 翻页时进入 slot 的滑入 token（rtl 反转视觉来向）。 */
+    const comicSlotSlideToken = (forward: boolean): 'next' | 'prev' => {
+      const fromRight = preferences.direction === 'rtl' ? !forward : forward;
+      return fromRight ? 'next' : 'prev';
+    };
+
+    const slideEnteringComicSlots = (entering: readonly number[], direction: 1 | -1): void => {
+      const token = comicSlotSlideToken(direction > 0);
+      const className = `lightink-comic-slot-slide-${token}`;
+      for (const index of entering) {
+        const slot = slots[index];
+        if (slot === undefined) continue;
+        slot.classList.remove('lightink-comic-slot-slide-next', 'lightink-comic-slot-slide-prev');
+        void slot.offsetWidth; // 同向连翻时重启动画
+        slot.classList.add(className);
+        setTimeout(() => {
+          slot.classList.remove(className);
+        }, COMIC_SLOT_SLIDE_MS + 60);
+      }
+    };
+
+    const showPagedSpread = (requestedIndex: number, direction: 1 | -1 | 0 = 0): void => {
       const spreadPrefs = layoutSpreadPrefs();
       const index = comicSpreadStart(requestedIndex, images.length, spreadPrefs, landscapePages);
       currentPage = index + 1;
@@ -1495,9 +1519,11 @@ export async function renderCbzInto(
         if (slot !== undefined) slot.hidden = true;
         visible.delete(previous);
       }
+      const entering: number[] = [];
       for (const next of shown) {
         const slot = slots[next];
         if (slot === undefined) continue;
+        if (slot.hidden) entering.push(next);
         slot.hidden = false;
         visible.add(next);
         applySlotFit(next);
@@ -1506,6 +1532,14 @@ export async function renderCbzInto(
       pagesRoot.scrollLeft = 0;
       updateToolbar();
       refreshCacheWindow(index);
+      // T2：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；strip 模式
+      // （scrollToIndex 的另一支）与重排版（direction 0）不 slide。
+      if (entering.length > 0 && direction !== 0 && isTouchPrimaryDocument(container.ownerDocument)) {
+        const media = typeof matchMedia === 'function' ? matchMedia : undefined;
+        if (media?.('(prefers-reduced-motion: reduce)').matches !== true) {
+          slideEnteringComicSlots(entering, direction);
+        }
+      }
     };
 
     const setPreferences = (patch: ComicPreferencesPatch): void => {
@@ -1526,9 +1560,13 @@ export async function renderCbzInto(
     const scrollToIndex = (requestedIndex: number): boolean => {
       const index = comicSpreadStart(requestedIndex, images.length, layoutSpreadPrefs(), landscapePages);
       const changed = currentPage !== index + 1;
+      // T2：翻页方向（进入页 vs 离开页）由调用前位置推断，传给 showPagedSpread
+      // 决定滑入来向；同页重落位（changed false）不 slide。
+      const direction: 1 | -1 | 0 =
+        index + 1 > currentPage ? 1 : index + 1 < currentPage ? -1 : 0;
       currentPage = index + 1;
       if (preferences.mode === 'paged') {
-        showPagedSpread(index);
+        showPagedSpread(index, direction);
       } else {
         visible.clear();
         visible.add(index);

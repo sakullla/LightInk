@@ -26,6 +26,7 @@ import {
   applyPagedPageStep,
   applyPagedProgress,
   applyPagedSpreadVars,
+  cancelPagedTouchSlide,
   scrollPagedScrollerToEdge,
   clearPagedSpreadVars,
   createPagedWheelGate,
@@ -33,10 +34,14 @@ import {
   pagedColumnStep,
   pagedFrameStep,
   pagedProgressRatio,
+  PAGED_TOUCH_SLIDE_MS,
+  type PagedScrollMotion,
   readingNavDirection,
   settlePagedRelease,
   snapPagedScroller,
 } from '../ui/reading-layout.js';
+import { isTouchPrimaryDocument } from './comic-preferences.js';
+import { playReaderPageBoundaryBounce } from './reader-progress-ui.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import {
   bindClickPaging,
@@ -1334,6 +1339,35 @@ export function createFlowRenderer(
 
   const gatePagedWheel = createPagedWheelGate();
 
+  /**
+   * T2 触屏翻页 slide：触屏（html[data-android]/[data-touch-primary]）且
+   * 非 reduce-motion 时，翻页 scrollLeft 写入走 200ms rAF 缓动；桌面与
+   * reduce-motion 保持瞬跳（motion undefined，零回归）。
+   */
+  const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => {
+    if (!isTouchPrimaryDocument(root.ownerDocument)) {
+      return undefined;
+    }
+    const media = typeof matchMedia === 'function' ? matchMedia : undefined;
+    if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
+      return undefined;
+    }
+    return { touchPrimary: true, reducedMotion: false };
+  };
+
+  /**
+   * slide 进行中 syncState 只能读到中间位置；缓动落点后补一次状态同步
+   * （页码/进度读到最终落页）。
+   */
+  const schedulePostSlideSync = (motion: PagedScrollMotion | undefined): void => {
+    if (motion === undefined || typeof setTimeout !== 'function') {
+      return;
+    }
+    setTimeout(() => {
+      hooks.syncState();
+    }, PAGED_TOUCH_SLIDE_MS + 40);
+  };
+
   const resolveVisiblePageStep = (
     frame: HTMLIFrameElement | null,
     scroller: { style: { width: string; getPropertyValue(name: string): string }; clientWidth: number } | null,
@@ -1360,11 +1394,13 @@ export function createFlowRenderer(
       return false;
     }
     const step = resolveVisiblePageStep(frame, scroller);
-    const settled = settlePagedRelease(scroller, startLeft, dx, step);
+    const motion = pagedTouchSlideMotion();
+    const settled = settlePagedRelease(scroller, startLeft, dx, step, motion);
     if (settled) {
       if (frame !== null) delete frame.dataset.pagedRestore;
       hooks.syncState();
       hooks.dismissSelectionToolbar();
+      schedulePostSlideSync(motion);
     }
     return settled;
   };
@@ -1381,8 +1417,10 @@ export function createFlowRenderer(
     if (scroller === null) {
       return;
     }
-    snapPagedScroller(scroller, resolveVisiblePageStep(frame, scroller));
+    const motion = pagedTouchSlideMotion();
+    snapPagedScroller(scroller, resolveVisiblePageStep(frame, scroller), motion);
     hooks.syncState();
+    schedulePostSlideSync(motion);
   };
 
   const advanceFlowPage = (direction: 1 | -1): boolean => {
@@ -1395,15 +1433,17 @@ export function createFlowRenderer(
         ? null
         : readerPagedScroller(frame.contentDocument);
     const step = resolveVisiblePageStep(frame, scroller);
+    const motion = pagedTouchSlideMotion();
     if (
       scroller !== undefined &&
       scroller !== null &&
-      advancePagedScroller(scroller, direction, step)
+      advancePagedScroller(scroller, direction, step, motion)
     ) {
       if (frame !== null) delete frame.dataset.pagedRestore;
-      snapPagedScroller(scroller, step);
+      snapPagedScroller(scroller, step, motion);
       hooks.syncState();
       hooks.dismissSelectionToolbar();
+      schedulePostSlideSync(motion);
       const doc = frame?.contentDocument;
       if (doc !== null && doc !== undefined) {
         paintAnnotationOverlays(doc);
@@ -1417,6 +1457,8 @@ export function createFlowRenderer(
     const current = Number(active?.dataset.chapterIndex ?? 0);
     const nextIndex = current + direction;
     if (!Number.isSafeInteger(nextIndex) || nextIndex < 0) {
+      // 首章向前：触屏播章界回弹（桌面/reduce 静默），返回值语义不变。
+      playReaderPageBoundaryBounce(root, direction);
       return false;
     }
     ensureChapterMounted?.(nextIndex);
@@ -1424,6 +1466,8 @@ export function createFlowRenderer(
       `.lightink-reader-chapter[data-chapter-index="${nextIndex}"]`,
     );
     if (next === null) {
+      // 末章向后（或邻章未挂载）：同上，边界反馈而非无声失败。
+      playReaderPageBoundaryBounce(root, direction);
       return false;
     }
     setActiveChapter(nextIndex);
@@ -2048,6 +2092,14 @@ export function createFlowRenderer(
         // 帧内触控翻页：点按左右热区/横向滑动 → 与滚轮同一 advanceFlowPage 入口；
         // 点按热区非对称（左 20% 上一页、右 30% 下一页），中部 50% 点按不翻页，
         // click 仍走既有 chrome 切换/链接/划选路径。
+        // T2：拖拽开始即作废在飞翻页缓动（rAF 写入不得与原生 overflow 拖动争抢）。
+        frameDocument.addEventListener(
+          'touchstart',
+          () => {
+            cancelPagedTouchSlide(readerPagedScroller(frameDocument));
+          },
+          { passive: true },
+        );
         const releaseFrameTouchPaging = bindTouchPaging(frameDocument, {
           enabled: () => isFlowPaginated(root),
           viewportWidth: () => frame.clientWidth,

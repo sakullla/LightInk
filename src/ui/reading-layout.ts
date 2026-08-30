@@ -156,6 +156,155 @@ export function pagedColumnStep(viewportWidth: number, gapPx = 0): number {
   return Math.max(1, viewportWidth + Math.max(0, gapPx));
 }
 
+/**
+ * Touch page-turn slide duration. Same fast-settling family as the 280ms
+ * desktop `data-page-anim` keyframes, one notch shorter for direct finger
+ * feedback (T2: 触屏翻页统一水平 slide).
+ */
+export const PAGED_TOUCH_SLIDE_MS = 200;
+
+/**
+ * Motion options for paginated scrollLeft writes: `touchPrimary` gates the
+ * slide, `reducedMotion` keeps the instant jump, and `scheduler`/`now` stay
+ * headless-testable (same injection style as createCoalescedScrollHandler).
+ */
+export interface PagedScrollMotion {
+  touchPrimary: boolean;
+  reducedMotion: boolean;
+  scheduler?: FrameScheduler | null;
+  now?: () => number;
+}
+
+interface PagedTouchSlideFlight {
+  readonly scheduler: FrameScheduler;
+  readonly from: number;
+  readonly to: number;
+  readonly startAt: number;
+  lastWritten: number | null;
+  handle: number | null;
+}
+
+const pagedTouchSlideFlights = new WeakMap<object, PagedTouchSlideFlight>();
+
+function pagedSlideNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+/**
+ * easeOutQuart approximates cubic-bezier(0.22, 1, 0.36, 1) — the same
+ * fast-settling curve family as the desktop page-turn keyframes in
+ * reader.css, so touch slide and desktop slide feel like one motion.
+ */
+function pagedSlideEaseOutQuart(t: number): number {
+  return 1 - (1 - t) ** 4;
+}
+
+/** Drop an in-flight touch slide (idempotent; call before native drags). */
+export function cancelPagedTouchSlide(scroller: object): void {
+  const flight = pagedTouchSlideFlights.get(scroller);
+  if (flight === undefined) {
+    return;
+  }
+  pagedTouchSlideFlights.delete(scroller);
+  if (flight.handle !== null) {
+    flight.scheduler.cancel(flight.handle);
+    flight.handle = null;
+  }
+}
+
+/** Pending slide target while a touch animation is still in flight. */
+function pendingPagedSlideTarget(scroller: object): number | null {
+  return pagedTouchSlideFlights.get(scroller)?.to ?? null;
+}
+
+/**
+ * Single write funnel for paginated scrollLeft. Without motion (desktop /
+ * reduced motion / tests) this is the historical instant assignment; with
+ * touch motion it animates ~200ms via rAF. A new write cancels the in-flight
+ * frame and retargets from the current visual offset, so fast consecutive
+ * turns neither stick nor pause on a half page. An external write that moves
+ * the scroller away from our last frame aborts the flight (native drags win).
+ */
+function writePagedScrollLeft(
+  scroller: { scrollLeft: number },
+  target: number,
+  motion?: PagedScrollMotion,
+): void {
+  if (motion === undefined || !motion.touchPrimary || motion.reducedMotion) {
+    cancelPagedTouchSlide(scroller);
+    scroller.scrollLeft = target;
+    return;
+  }
+  const scheduler = motion.scheduler !== undefined ? motion.scheduler : rafFrameScheduler();
+  if (scheduler === null) {
+    cancelPagedTouchSlide(scroller);
+    scroller.scrollLeft = target;
+    return;
+  }
+  const existing = pagedTouchSlideFlights.get(scroller);
+  if (existing !== undefined && existing.handle !== null && existing.to === target) {
+    return; // Already sliding to this page: keep the current curve.
+  }
+  cancelPagedTouchSlide(scroller);
+  const from = scroller.scrollLeft;
+  if (Math.abs(target - from) < 1) {
+    scroller.scrollLeft = target;
+    return;
+  }
+  const now = motion.now ?? pagedSlideNow;
+  const state: PagedTouchSlideFlight = {
+    scheduler,
+    from,
+    to: target,
+    startAt: now(),
+    lastWritten: null,
+    handle: null,
+  };
+  pagedTouchSlideFlights.set(scroller, state);
+  const tick = (): void => {
+    if (pagedTouchSlideFlights.get(scroller) !== state) {
+      return; // cancelled or retargeted by a newer write
+    }
+    if (state.lastWritten !== null && Math.abs(scroller.scrollLeft - state.lastWritten) > 1) {
+      // An external write (native drag / direct assignment) owns the
+      // scroller now — stop fighting it.
+      pagedTouchSlideFlights.delete(scroller);
+      state.handle = null;
+      return;
+    }
+    const elapsed = now() - state.startAt;
+    const ratio = Math.min(1, Math.max(0, elapsed / PAGED_TOUCH_SLIDE_MS));
+    const value = state.from + (state.to - state.from) * pagedSlideEaseOutQuart(ratio);
+    scroller.scrollLeft = value;
+    state.lastWritten = value;
+    if (ratio >= 1) {
+      pagedTouchSlideFlights.delete(scroller);
+      state.handle = null;
+      return;
+    }
+    state.handle = scheduler.request(tick);
+  };
+  state.handle = scheduler.request(tick);
+}
+
+/**
+ * Whole-page snap target for a given offset (pure). Shared by
+ * snapPagedScroller and the settle branches so a touch-animated settle can
+ * compute its final landing point before the (single) animated write.
+ */
+function pagedSnapTarget(current: number, step: number, max: number): number {
+  const page = Math.round(current / step);
+  const snapped = Math.min(max, Math.max(0, page * step));
+  // A short last column is not a multiple of `step`. Rounding it would jump
+  // back a whole page when returning to the previous chapter.
+  if (Math.abs(max - current) <= Math.abs(snapped - current)) {
+    return max;
+  }
+  return snapped;
+}
+
 const PAGE_STEP_VAR = '--lightink-reader-page-step';
 
 export function applyPagedPageStep(
@@ -276,6 +425,7 @@ export function applyPagedProgress(
   ratio: number,
   stepSize?: number,
 ): void {
+  cancelPagedTouchSlide(scroller);
   const safe = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0;
   const max = pagedScrollMax(scroller);
   if (max <= 0 || safe <= 0) {
@@ -294,22 +444,18 @@ export function applyPagedProgress(
 export function snapPagedScroller(
   scroller: { scrollLeft: number; scrollWidth: number; clientWidth: number },
   stepSize?: number,
+  motion?: PagedScrollMotion,
 ): void {
   const step = resolvePagedStep(scroller, stepSize);
   const max = pagedScrollMax(scroller);
   if (max <= 0) {
-    scroller.scrollLeft = 0;
+    writePagedScrollLeft(scroller, 0, motion);
     return;
   }
-  const page = Math.round(scroller.scrollLeft / step);
-  const snapped = Math.min(max, Math.max(0, page * step));
-  // A short last column is not a multiple of `step`. Rounding it would jump
-  // back a whole page when returning to the previous chapter.
-  if (Math.abs(max - scroller.scrollLeft) <= Math.abs(snapped - scroller.scrollLeft)) {
-    scroller.scrollLeft = max;
-    return;
-  }
-  scroller.scrollLeft = snapped;
+  // While a touch slide is in flight, snap from the pending target so the
+  // snap that follows an advance cannot revert the turn mid-slide.
+  const current = pendingPagedSlideTarget(scroller) ?? scroller.scrollLeft;
+  writePagedScrollLeft(scroller, pagedSnapTarget(current, step, max), motion);
 }
 
 /** Matches `TOUCH_SWIPE_MIN_PX`: a short drag should snap back, not free-scroll. */
@@ -333,7 +479,11 @@ export function settlePagedRelease(
   startLeft: number,
   dragDx: number,
   stepSize?: number,
+  motion?: PagedScrollMotion,
 ): boolean {
+  // The finger just owned this scroller: any in-flight slide is stale, and
+  // the native drag position below is the truth to settle from.
+  cancelPagedTouchSlide(scroller);
   const step = resolvePagedStep(scroller, stepSize);
   const maxLeft = pagedScrollMax(scroller);
   if (maxLeft <= 0) {
@@ -347,25 +497,26 @@ export function settlePagedRelease(
   const goingNext = Math.abs(dragDx) >= 1 ? dragDx < 0 : nativeDelta > 0;
   if (commit && goingNext) {
     if (start >= maxLeft - PAGED_RELEASE_EDGE_PX) {
-      snapPagedScroller(scroller, step);
+      snapPagedScroller(scroller, step, motion);
       return false;
     }
     // One step from the page that contains `start`, not from nearest.
-    // round(200/400)+1 would skip ahead to page 2.
-    scroller.scrollLeft = Math.min(maxLeft, Math.max(0, (Math.floor(start / step) + 1) * step));
-    snapPagedScroller(scroller, step);
+    // round(200/400)+1 would skip ahead to page 2. Compute the final landing
+    // point analytically so the touch slide is one continuous write.
+    const landed = Math.min(maxLeft, Math.max(0, (Math.floor(start / step) + 1) * step));
+    writePagedScrollLeft(scroller, pagedSnapTarget(landed, step, maxLeft), motion);
     return true;
   }
   if (commit && !goingNext) {
     if (start <= PAGED_RELEASE_EDGE_PX) {
-      snapPagedScroller(scroller, step);
+      snapPagedScroller(scroller, step, motion);
       return false;
     }
-    scroller.scrollLeft = Math.min(maxLeft, Math.max(0, (Math.ceil(start / step) - 1) * step));
-    snapPagedScroller(scroller, step);
+    const landed = Math.min(maxLeft, Math.max(0, (Math.ceil(start / step) - 1) * step));
+    writePagedScrollLeft(scroller, pagedSnapTarget(landed, step, maxLeft), motion);
     return true;
   }
-  snapPagedScroller(scroller, step);
+  snapPagedScroller(scroller, step, motion);
   return true;
 }
 
@@ -375,6 +526,8 @@ export function scrollPagedScrollerToEdge(
   direction: 1 | -1,
   _stepSize?: number,
 ): void {
+  // Chapter restore is a hard landing: never keep an old slide running.
+  cancelPagedTouchSlide(scroller);
   const max = pagedScrollMax(scroller);
   if (direction < 0) {
     // Do not snap: a short last column is not a multiple of `step`, and
@@ -389,22 +542,26 @@ export function advancePagedScroller(
   scroller: { scrollLeft: number; scrollWidth: number; clientWidth: number },
   direction: 1 | -1,
   stepSize?: number,
+  motion?: PagedScrollMotion,
 ): boolean {
   const step = resolvePagedStep(scroller, stepSize);
   const max = pagedScrollMax(scroller);
   if (max <= 0) {
     return false;
   }
-  const remaining = direction > 0 ? max - scroller.scrollLeft : scroller.scrollLeft;
+  // A quick second turn must advance from the page the first slide is still
+  // flying to, not from the mid-slide visual offset.
+  const current = pendingPagedSlideTarget(scroller) ?? scroller.scrollLeft;
+  const remaining = direction > 0 ? max - current : current;
   // Leftover column slivers should not trap paging inside the chapter.
   if (remaining <= Math.max(8, step * 0.08)) {
     return false;
   }
-  const next = Math.min(max, Math.max(0, scroller.scrollLeft + direction * step));
-  if (next === scroller.scrollLeft) {
+  const next = Math.min(max, Math.max(0, current + direction * step));
+  if (next === current) {
     return false;
   }
-  scroller.scrollLeft = next;
+  writePagedScrollLeft(scroller, next, motion);
   return true;
 }
 

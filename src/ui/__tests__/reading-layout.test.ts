@@ -15,11 +15,14 @@ import {
   nearestVisibleChapterIndex,
   chapterIndexAtViewportTop,
   applyPagedPageStep,
+  cancelPagedTouchSlide,
   pagedColumnStep,
   pagedFrameStep,
+  PAGED_TOUCH_SLIDE_MS,
   pagedProgressRatio,
   pagedSpreadMetrics,
   parseReadingLayout,
+  type PagedScrollMotion,
   READING_LAYOUT_STORAGE_KEY,
   readingColumnLayout,
   readingNavDirection,
@@ -31,6 +34,7 @@ import {
   snapPagedScroller,
   scrollerHasRoomInDelta,
   viewportAnchor,
+  type FrameScheduler,
 } from '../reading-layout.js';
 
 describe('parseReadingLayout', () => {
@@ -228,6 +232,186 @@ describe('paged navigation', () => {
     expect(spread.width).toBe(spread.columnWidth * 2 + spread.gap);
     expect(spread.step).toBe(spread.width + spread.gap);
     expect(spread.width).toBeLessThanOrEqual(803);
+  });
+});
+
+describe('paged touch slide (T2)', () => {
+  const makeClock = (): { now(): number; advance(ms: number): void } => {
+    let t = 0;
+    return {
+      now: () => t,
+      advance: (ms) => {
+        t += ms;
+      },
+    };
+  };
+
+  const makeScheduler = (): {
+    scheduler: FrameScheduler;
+    cancelled: number[];
+    run(): void;
+  } => {
+    const frames: Array<() => void> = [];
+    const cancelled: number[] = [];
+    let handle = 0;
+    return {
+      scheduler: {
+        request: (callback) => {
+          handle += 1;
+          frames.push(callback);
+          return handle;
+        },
+        cancel: (h) => {
+          cancelled.push(h);
+        },
+      },
+      cancelled,
+      run: () => {
+        const frame = frames.shift();
+        if (frame !== undefined) frame();
+      },
+    };
+  };
+
+  const touchMotion = (
+    scheduler: FrameScheduler,
+    now: () => number,
+  ): PagedScrollMotion => ({ touchPrimary: true, reducedMotion: false, scheduler, now });
+
+  it('slides a page turn over ~200ms on touch instead of jumping', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    expect(advancePagedScroller(scroller, 1, 400, touchMotion(harness.scheduler, clock.now))).toBe(
+      true,
+    );
+    expect(scroller.scrollLeft).toBe(0); // 未瞬跳：等 rAF
+    const samples: number[] = [];
+    for (let frame = 0; frame < 12; frame += 1) {
+      clock.advance(25);
+      harness.run();
+      samples.push(scroller.scrollLeft);
+    }
+    expect(samples[0]).toBeGreaterThan(0);
+    expect(samples[0]).toBeLessThan(400);
+    expect(samples).toEqual([...samples].sort((left, right) => left - right)); // 单调推进
+    expect(scroller.scrollLeft).toBe(400); // 落在整页
+  });
+
+  it('keeps the instant jump without touch motion or under reduced motion', () => {
+    const harness = makeScheduler();
+    const desktop = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    expect(
+      advancePagedScroller(desktop, 1, 400, {
+        touchPrimary: false,
+        reducedMotion: false,
+        scheduler: harness.scheduler,
+      }),
+    ).toBe(true);
+    expect(desktop.scrollLeft).toBe(400);
+    const reduced = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    expect(
+      advancePagedScroller(reduced, 1, 400, {
+        touchPrimary: true,
+        reducedMotion: true,
+        scheduler: harness.scheduler,
+      }),
+    ).toBe(true);
+    expect(reduced.scrollLeft).toBe(400);
+    expect(harness.cancelled).toEqual([]); // 无 rAF 调度（均为直接赋值）
+  });
+
+  it('retargets from the current offset when a second turn interrupts the slide', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 2400, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    clock.advance(50);
+    harness.run();
+    const mid = scroller.scrollLeft;
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(400);
+    // 快速连翻：从「在飞目标」再进一页，而非从中间位置四舍五入。
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    expect(harness.cancelled.length).toBeGreaterThan(0); // 在飞帧被取消
+    for (let frame = 0; frame < 10; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(800);
+  });
+
+  it('snap during a flight keeps the pending page instead of reverting mid-slide', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    advancePagedScroller(scroller, 1, 400, motion);
+    clock.advance(25);
+    harness.run();
+    expect(scroller.scrollLeft).toBeGreaterThan(0);
+    // advanceFlowPage 翻页后紧跟 snap：不得把在飞翻页拉回起始页。
+    snapPagedScroller(scroller, 400, motion);
+    for (let frame = 0; frame < 10; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(400);
+  });
+
+  it('animates the settle landing on touch and keeps the chapter-edge verdict', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const motion = touchMotion(harness.scheduler, clock.now);
+    const scroller = { scrollLeft: 160, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(scroller, 0, -160, 400, motion)).toBe(true);
+    expect(scroller.scrollLeft).toBe(160); // 未瞬跳
+    for (let frame = 0; frame < 10; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(400);
+    // 章缘交回调切章的返回值语义不变。
+    const edge = { scrollLeft: 1200, scrollWidth: 1600, clientWidth: 400 };
+    expect(settlePagedRelease(edge, 1200, -80, 400, motion)).toBe(false);
+    expect(edge.scrollLeft).toBe(1200);
+  });
+
+  it('aborts the flight when an external write takes over the scroller', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    advancePagedScroller(scroller, 1, 400, motion);
+    clock.advance(25);
+    harness.run();
+    scroller.scrollLeft = 999; // 原生拖动/直接赋值接管
+    clock.advance(100);
+    harness.run();
+    expect(scroller.scrollLeft).toBe(999); // rAF 不再覆盖
+  });
+
+  it('cancelPagedTouchSlide is idempotent and clears the pending target', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 1600, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    advancePagedScroller(scroller, 1, 400, motion);
+    cancelPagedTouchSlide(scroller);
+    cancelPagedTouchSlide(scroller);
+    expect(harness.cancelled.length).toBe(1);
+    // 取消后新写入从当前实际位置重新起算。
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    for (let frame = 0; frame < 10; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(400);
+  });
+
+  it('uses a 200ms touch slide window', () => {
+    expect(PAGED_TOUCH_SLIDE_MS).toBe(200);
   });
 });
 
