@@ -392,6 +392,53 @@ describe('paged touch slide (T2)', () => {
     expect(scroller.scrollLeft).toBe(999); // rAF 不再覆盖
   });
 
+  it('aborts before the first frame when an external write lands immediately', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 2400, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    // 首帧前的外部写入也要被弃飞检测捕获（初始 lastWritten = from）。
+    scroller.scrollLeft = 999;
+    clock.advance(16);
+    harness.run();
+    expect(scroller.scrollLeft).toBe(999);
+    // 弃飞清除在飞条目：再翻页从实际位置 999 起算，而非旧在飞目标 400。
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    for (let frame = 0; frame < 12; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(1399);
+  });
+
+  it('cancels the in-flight touch slide when a non-touch write retargets', () => {
+    const clock = makeClock();
+    const harness = makeScheduler();
+    const scroller = { scrollLeft: 0, scrollWidth: 2400, clientWidth: 400 };
+    const motion = touchMotion(harness.scheduler, clock.now);
+    expect(advancePagedScroller(scroller, 1, 400, motion)).toBe(true);
+    clock.advance(50);
+    harness.run();
+    expect(scroller.scrollLeft).toBeGreaterThan(0);
+    expect(scroller.scrollLeft).toBeLessThan(400);
+    // 触屏飞行中被非触屏 motion 写入（桌面/reduce 路径）：取消在飞并瞬跳新目标。
+    expect(
+      advancePagedScroller(scroller, 1, 400, {
+        touchPrimary: false,
+        reducedMotion: false,
+      }),
+    ).toBe(true);
+    expect(harness.cancelled.length).toBeGreaterThan(0);
+    expect(scroller.scrollLeft).toBe(800);
+    // 已弃飞的旧帧不再推进。
+    for (let frame = 0; frame < 10; frame += 1) {
+      clock.advance(25);
+      harness.run();
+    }
+    expect(scroller.scrollLeft).toBe(800);
+  });
+
   it('cancelPagedTouchSlide is idempotent and clears the pending target', () => {
     const clock = makeClock();
     const harness = makeScheduler();

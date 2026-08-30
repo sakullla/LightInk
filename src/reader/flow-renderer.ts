@@ -1348,7 +1348,8 @@ export function createFlowRenderer(
     if (!isTouchPrimaryDocument(root.ownerDocument)) {
       return undefined;
     }
-    const media = typeof matchMedia === 'function' ? matchMedia : undefined;
+    const media =
+      typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
     if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
       return undefined;
     }
@@ -1400,8 +1401,10 @@ export function createFlowRenderer(
       if (frame !== null) delete frame.dataset.pagedRestore;
       hooks.syncState();
       hooks.dismissSelectionToolbar();
-      schedulePostSlideSync(motion);
     }
+    // settled 两分支共同出口：false 支路（章缘交回调切章）同样可能带 motion
+    // 写入（末/首页提交回弹 snap），缓动落点后也需要补一次状态同步。
+    schedulePostSlideSync(motion);
     return settled;
   };
 
@@ -2093,13 +2096,10 @@ export function createFlowRenderer(
         // 点按热区非对称（左 20% 上一页、右 30% 下一页），中部 50% 点按不翻页，
         // click 仍走既有 chrome 切换/链接/划选路径。
         // T2：拖拽开始即作废在飞翻页缓动（rAF 写入不得与原生 overflow 拖动争抢）。
-        frameDocument.addEventListener(
-          'touchstart',
-          () => {
-            cancelPagedTouchSlide(readerPagedScroller(frameDocument));
-          },
-          { passive: true },
-        );
+        const onCancelTouchSlide = (): void => {
+          cancelPagedTouchSlide(readerPagedScroller(frameDocument));
+        };
+        frameDocument.addEventListener('touchstart', onCancelTouchSlide, { passive: true });
         const releaseFrameTouchPaging = bindTouchPaging(frameDocument, {
           enabled: () => isFlowPaginated(root),
           viewportWidth: () => frame.clientWidth,
@@ -2257,6 +2257,7 @@ export function createFlowRenderer(
           overlayScroller.removeEventListener('scroll', onHighlightOverlayScroll);
           releaseImages();
           releaseFrameTouchPaging();
+          frameDocument.removeEventListener('touchstart', onCancelTouchSlide);
           releaseFramePointerTap();
           releaseHostPointerTap();
           frameDocument.removeEventListener('click', onClick);

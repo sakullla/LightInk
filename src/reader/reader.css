@@ -534,11 +534,20 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   }
 }
 
-.lightink-reader[data-page-boundary='next'] .lightink-reader-chapter.is-active {
+/*
+ * T2-A2（FB4）：回弹仅触屏语义（JS 已门控），触发选择器与上方 493-506
+ * 抑制块对齐加 :is(html[data-android], html[data-touch-primary]) 前缀；
+ * reduce-motion 由 JS matchMedia 短路，这里再兜底一层。
+ */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-boundary='next']
+  .lightink-reader-chapter.is-active {
   animation: lightink-reader-page-boundary-next 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.lightink-reader[data-page-boundary='prev'] .lightink-reader-chapter.is-active {
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader[data-page-boundary='prev']
+  .lightink-reader-chapter.is-active {
   animation: lightink-reader-page-boundary-prev 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1946,9 +1955,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 }
 
 /*
- * T2 漫画 paged slide：触屏翻页时进入 slot 从来向侧滑入（200ms，与
- * 文字书 slide 同曲线族）；strip 模式仍为原生滚动，不加类。加类与
- * reduce-motion 门控在 cbz.ts showPagedSpread。
+ * T2-A2（FB4）：滑入仅触屏（加类在 cbz.ts 已门控），触发选择器与
+ * 493-506 抑制块对齐加 :is(html[data-android], html[data-touch-primary])
+ * 前缀；strip 模式仍为原生滚动，不加类。加类与 reduce-motion 门控在
+ * cbz.ts showPagedSpread。
  */
 @keyframes lightink-comic-slot-slide-next {
   from {
@@ -1968,11 +1978,13 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   }
 }
 
-.lightink-reader-cbz-slot.lightink-comic-slot-slide-next {
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-cbz-slot.lightink-comic-slot-slide-next {
   animation: lightink-comic-slot-slide-next 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
   animation: lightink-comic-slot-slide-prev 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 

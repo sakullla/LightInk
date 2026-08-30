@@ -1491,18 +1491,29 @@ export async function renderCbzInto(
       return fromRight ? 'next' : 'prev';
     };
 
+    /** T2-A2（FB3）：per-slot 滑入清理 timer；同 slot 快速二次进入先清旧 timer。 */
+    const comicSlotSlideTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+
     const slideEnteringComicSlots = (entering: readonly number[], direction: 1 | -1): void => {
       const token = comicSlotSlideToken(direction > 0);
       const className = `lightink-comic-slot-slide-${token}`;
       for (const index of entering) {
         const slot = slots[index];
         if (slot === undefined) continue;
+        // 旧 timer 只捕获类名字符串、不跟踪 per-slot：同 slot 260ms 内二次进入
+        // 会被旧 timer 中途移除新动画的类。先清旧 timer 再重启。
+        const staleTimer = comicSlotSlideTimers.get(slot);
+        if (staleTimer !== undefined) clearTimeout(staleTimer);
         slot.classList.remove('lightink-comic-slot-slide-next', 'lightink-comic-slot-slide-prev');
         void slot.offsetWidth; // 同向连翻时重启动画
         slot.classList.add(className);
-        setTimeout(() => {
-          slot.classList.remove(className);
-        }, COMIC_SLOT_SLIDE_MS + 60);
+        comicSlotSlideTimers.set(
+          slot,
+          setTimeout(() => {
+            comicSlotSlideTimers.delete(slot);
+            slot.classList.remove(className);
+          }, COMIC_SLOT_SLIDE_MS + 60),
+        );
       }
     };
 
@@ -1532,10 +1543,11 @@ export async function renderCbzInto(
       pagesRoot.scrollLeft = 0;
       updateToolbar();
       refreshCacheWindow(index);
-      // T2：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；strip 模式
-      // （scrollToIndex 的另一支）与重排版（direction 0）不 slide。
+      // T2：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；strip 模式与
+      // 重排版/非连续跳转（direction 0，见 scrollToIndex）不 slide。
       if (entering.length > 0 && direction !== 0 && isTouchPrimaryDocument(container.ownerDocument)) {
-        const media = typeof matchMedia === 'function' ? matchMedia : undefined;
+        const media =
+          typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
         if (media?.('(prefers-reduced-motion: reduce)').matches !== true) {
           slideEnteringComicSlots(entering, direction);
         }
@@ -1557,13 +1569,13 @@ export async function renderCbzInto(
       applyLayout();
     };
 
-    const scrollToIndex = (requestedIndex: number): boolean => {
+    const scrollToIndex = (requestedIndex: number, direction: 1 | -1 | 0 = 0): boolean => {
       const index = comicSpreadStart(requestedIndex, images.length, layoutSpreadPrefs(), landscapePages);
       const changed = currentPage !== index + 1;
-      // T2：翻页方向（进入页 vs 离开页）由调用前位置推断，传给 showPagedSpread
-      // 决定滑入来向；同页重落位（changed false）不 slide。
-      const direction: 1 | -1 | 0 =
-        index + 1 > currentPage ? 1 : index + 1 < currentPage ? -1 : 0;
+      // T2-A2（FB2）：跳转=硬落位。非连续跳转（进度恢复/目录/页码/批注/滑杆
+      // 都经 scrollToPage/scrollToProgress/slider 入口进来）不再按页差符号
+      // 播方向性滑入；仅 advancePage 的相邻 spread 翻页由调用方传入 ±1 保留
+      // 滑入（与 flow 侧「跳转=硬落位」口径一致）。同页重落位同样不 slide。
       currentPage = index + 1;
       if (preferences.mode === 'paged') {
         showPagedSpread(index, direction);
@@ -1587,7 +1599,7 @@ export async function renderCbzInto(
         landscapePages,
       );
       if (next === currentPage - 1) return false;
-      return scrollToIndex(next);
+      return scrollToIndex(next, direction);
     };
 
     previousButton.addEventListener('click', () => advancePage(-1));

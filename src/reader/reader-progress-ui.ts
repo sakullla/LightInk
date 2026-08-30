@@ -230,6 +230,9 @@ export function playReaderPageTurn(
   }, READER_PAGE_ANIM_MS + 40);
 }
 
+/** 连击同方向时旧 timer 的清理回调序号：只有最新一次调用才允许移除属性。 */
+let readerBoundaryBounceSeq = 0;
+
 /**
  * Chapter-edge bounce for touch paging (T2): `advanceFlowPage` hit the
  * first/last chapter boundary and returned false, so the active chapter
@@ -265,7 +268,12 @@ export function playReaderPageBoundaryBounce(
   const schedule =
     options?.schedule ??
     ((fn, ms) => (typeof setTimeout === 'function' ? (setTimeout(fn, ms) as unknown as number) : 0));
+  const seq = (readerBoundaryBounceSeq += 1);
   schedule(() => {
+    // 连击同方向：旧 timer 提前触发时新回弹尚在播，不得移除属性。
+    if (seq !== readerBoundaryBounceSeq) {
+      return;
+    }
     if (root.getAttribute('data-page-boundary') === token) {
       root.removeAttribute('data-page-boundary');
     }

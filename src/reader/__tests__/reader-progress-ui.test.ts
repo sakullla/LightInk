@@ -239,6 +239,31 @@ describe('playReaderPageBoundaryBounce', () => {
     });
     expect(root.getAttribute('data-page-boundary')).toBe('prev');
   });
+
+  it('keeps the attribute when a stale same-direction timer fires during a newer bounce', () => {
+    // FB9：连击同方向时旧 timer 提前触发不得移除新回弹的属性。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageBoundaryBounce(root, 1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule,
+    });
+    playReaderPageBoundaryBounce(root, 1, {
+      touchPrimary: true,
+      matchMedia: () => ({ matches: false }),
+      schedule,
+    });
+    expect(root.getAttribute('data-page-boundary')).toBe('next');
+    timers[0]!(); // 第一次回弹的旧 timer 先到期：新回弹仍在播，不得清理。
+    expect(root.getAttribute('data-page-boundary')).toBe('next');
+    timers[1]!(); // 最新一次的 timer 才允许移除。
+    expect(root.getAttribute('data-page-boundary')).toBeNull();
+  });
 });
 
 describe('displayChapterTitle', () => {

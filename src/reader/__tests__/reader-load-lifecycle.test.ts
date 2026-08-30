@@ -799,6 +799,142 @@ describe('Reader load lifecycle', () => {
     }
   });
 
+  it('slides rtl comic pages in from the left on forward turns', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(3);
+    const progressStorage = memoryProgressStore();
+    progressStorage.setItem(
+      COMIC_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'rtl',
+        spread: 'single',
+        fit: 'screen',
+      }),
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        progressStorage,
+        preferenceStorage: progressStorage,
+      }),
+    );
+
+    await view.load('/comics/rtl-slide.cbz');
+    document.documentElement.setAttribute('data-touch-primary', '');
+    try {
+      // rtl 前进：视觉来向反转，进入 slot 应挂 slide-prev（而非 slide-next）。
+      expect(view.advanceReading(1)).toBe(true);
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-prev').length).toBeGreaterThan(0);
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-next')).toHaveLength(0);
+      await view.destroy();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+  });
+
+  it('hard-lands non-consecutive comic jumps without a slide class', async () => {
+    stubComicObjectUrls();
+    const archive = await buildPagedCbz(5);
+    const progressStorage = memoryProgressStore();
+    progressStorage.setItem(
+      COMIC_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'ltr',
+        spread: 'single',
+        fit: 'screen',
+      }),
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(
+      host,
+      localComicSourceDeps(archive, {
+        progressStorage,
+        preferenceStorage: progressStorage,
+      }),
+    );
+
+    await view.load('/comics/jump.cbz');
+    document.documentElement.setAttribute('data-touch-primary', '');
+    try {
+      // 进度滑杆跳页（scrollToIndex 入口）：非连续跳转=硬落位，不播方向性滑入
+      // （FB2：与 flow 侧「跳转=硬落位」口径一致）。
+      const slider = host.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
+      slider.value = '4';
+      slider.dispatchEvent(new Event('input'));
+      expect(view.state.current).toBe(4);
+      expect(
+        host.querySelectorAll('.lightink-comic-slot-slide-next, .lightink-comic-slot-slide-prev'),
+      ).toHaveLength(0);
+      // 相邻翻页（advancePage 路径）仍保留滑入。
+      expect(view.advanceReading(1)).toBe(true);
+      expect(host.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0);
+      await view.destroy();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+  });
+
+  it('reads prefers-reduced-motion through a bound matchMedia on touch paged flow', async () => {
+    // FB1（P0）：pagedTouchSlideMotion 曾把 matchMedia 裸引用解绑后调用——真浏览器
+    // 抛 TypeError: Illegal invocation，触屏分栏翻页在写入 scrollLeft 前整体失效；
+    // jsdom 无 matchMedia 使旧测试无法暴露。这里把 matchMedia stub 成「解绑调用即
+    // 抛错」的形态（与 reader-progress-ui.ts 的 bind(globalThis) 修复对锁）。
+    let reduceMotion = false;
+    vi.stubGlobal(
+      'matchMedia',
+      function (this: unknown, query: string) {
+        if (this !== globalThis) {
+          throw new TypeError('Illegal invocation');
+        }
+        return { matches: reduceMotion && query === '(prefers-reduced-motion: reduce)' };
+      },
+    );
+    const preference: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      preferenceStorage: {
+        getItem: (key) => preference[key] ?? null,
+        setItem: (key, value) => {
+          preference[key] = value;
+        },
+      },
+    });
+    await view.load('reduce.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await nextFrame();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    try {
+      const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+      // 非 reduce：绑定调用不抛 Illegal invocation，边界回弹照常落位
+      // （pagedTouchSlideMotion slide 生效路径全程经过该 matchMedia）。
+      expect(view.advanceReading(-1)).toBe(false);
+      expect(reader.getAttribute('data-page-boundary')).toBe('prev');
+      reader.removeAttribute('data-page-boundary');
+      // reduce：同一绑定调用返回 matches=true → 短路（无 slide、无回弹）。
+      reduceMotion = true;
+      expect(view.advanceReading(-1)).toBe(false);
+      expect(reader.getAttribute('data-page-boundary')).toBeNull();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+    await view.destroy();
+  });
+
   it('bounces the active chapter at a flow boundary on touch paginated flow', async () => {
     const preference: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
     const host = document.createElement('div');

@@ -180,7 +180,8 @@ interface PagedTouchSlideFlight {
   readonly from: number;
   readonly to: number;
   readonly startAt: number;
-  lastWritten: number | null;
+  /** 最近一帧写入（初始 = from，首帧前的外部写入也能被弃飞检测捕获）。 */
+  lastWritten: number;
   handle: number | null;
 }
 
@@ -259,7 +260,7 @@ function writePagedScrollLeft(
     from,
     to: target,
     startAt: now(),
-    lastWritten: null,
+    lastWritten: from,
     handle: null,
   };
   pagedTouchSlideFlights.set(scroller, state);
@@ -267,7 +268,7 @@ function writePagedScrollLeft(
     if (pagedTouchSlideFlights.get(scroller) !== state) {
       return; // cancelled or retargeted by a newer write
     }
-    if (state.lastWritten !== null && Math.abs(scroller.scrollLeft - state.lastWritten) > 1) {
+    if (Math.abs(scroller.scrollLeft - state.lastWritten) > 1) {
       // An external write (native drag / direct assignment) owns the
       // scroller now — stop fighting it.
       pagedTouchSlideFlights.delete(scroller);
