@@ -579,3 +579,28 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
     0 1px 3px rgba(0, 0, 0, 0.12),
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
+
+/* ===== 触屏按压反馈（T1）：标注面板控件族洗色 ===== */
+
+/* 标注/命中列表项按压洗色（卡片圆角/阴影两态一致）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-item:active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 头部/行操作按钮与筛选 chips 按压洗色。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-export:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-jump:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-edit:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-remove:active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 颜色圆点筛选按压反馈：轻微缩放（圆点几何两态一致；底色仍由内联 style 提供）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-color-filter:not([data-color='all']):active {
+  transform: scale(0.9);
+}

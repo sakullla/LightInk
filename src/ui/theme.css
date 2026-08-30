@@ -3417,3 +3417,38 @@ html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab
     max-width: calc(100vw - 16px);
   }
 }
+
+/* ===== 触屏按压反馈基线（T1）：tap-highlight 压制 + 控件族按压洗色 ===== */
+
+/* 系统级 tap 高亮方块（「按下方块/抬起圆角」根因之一）：html 级声明，属性可继承。 */
+html:is([data-android], [data-touch-primary]) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 沉浸 chrome 触发条按压洗色（触屏下 reveal 由点按切换，hover 语言不适用）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-chrome-trigger:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 菜单 / 右键菜单项按压洗色：与桌面 hover 高亮同语言，圆角/阴影两态一致。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-menu-item:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary]) .lightink-context-menu__item:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 模态按钮按压洗色（不改边框/圆角，与 :hover 态同形）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-modal-btn:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 编辑器「返回书架」悬浮球按压反馈：洗色 + 轻微缩放（圆角/阴影两态一致）。 */
+:is(html[data-android], html[data-touch-primary])
+  #app.is-workspace-editor
+  .lightink-mobile-back-to-shelf:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transform: scale(0.97);
+  transition: background-color 100ms ease, transform 100ms ease;
+}

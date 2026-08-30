@@ -3119,6 +3119,20 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     color: var(--lightink-accent);
   }
 
+  /* 触屏筛选/分组入口/筛选项按压洗色（含 is-active/expanded 态，圆角两态一致）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter:not(:disabled):active,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-groups:not(:disabled):active,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-shelf-filter-option:not(:disabled):active {
+    background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+    transition: background-color 100ms ease;
+  }
+
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-groups-sheet-backdrop:not([hidden]) {
@@ -3210,6 +3224,8 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-handle:active {
     cursor: grabbing;
+    transform: scale(0.99);
+    transition: transform 100ms ease;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3316,6 +3332,13 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     background: var(--lightink-accent-soft);
     color: var(--lightink-accent);
     font-weight: 600;
+  }
+
+  /* 触屏分组 sheet 列表项按压洗色（圆角两态一致）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-groups-sheet-item:not(:disabled):active {
+    background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+    transition: background-color 100ms ease;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-empty,
@@ -3548,11 +3571,33 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     border-radius: 10px;
     color: var(--lightink-muted);
     font-size: var(--lightink-type-caption);
+    transition: background-color 150ms ease, color 150ms ease, font-weight 150ms ease;
   }
 
+  /* 激活 tab：accent-soft 圆角底色 + 150ms 色值/字重/底色过渡。 */
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar-tab.is-active {
+    background: var(--lightink-accent-soft);
     color: var(--lightink-accent);
     font-weight: 600;
+    transition: background-color 150ms ease, color 150ms ease, font-weight 150ms ease;
+  }
+
+  /* 触屏 tab 按压洗色（10px 圆角两态一致）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-tabbar-tab:not(:disabled):active {
+    background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+    transition: background-color 100ms ease;
+  }
+
+  /* hover 驻留中和：抬手后 tab 恢复基础底色（激活 tab 恢复 accent-soft 圆角底）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-tabbar-tab:not(.is-active):hover:not(:active) {
+    background: transparent;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-tabbar-tab.is-active:hover:not(:active) {
+    background: var(--lightink-accent-soft);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar-icon {
@@ -3584,6 +3629,13 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-options label {
     min-height: 44px;
     font-size: var(--lightink-type-ui);
+  }
+
+  /* 触屏复选框标签按压洗色（标签即命中区，44px 高）。 */
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label:active,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-options label:active {
+    background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+    transition: background-color 100ms ease;
   }
 }
 
@@ -3670,5 +3722,54 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form label {
   font-size: var(--lightink-type-ui);
+}
+
+/* ===== 触屏按压反馈基线（T1）：通用按钮/列表项洗色 + hover 驻留中和 ===== */
+
+/* 通用 button 族按压洗色（含来源/组/缓存/会员表单等模态按钮；形状两态一致）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library button:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+/* 封面墙按压反馈：封面轻微缩放（底色带 !important 基线，用缩放反馈代替洗色）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-item:active .lightink-library-cover {
+  transform: scale(0.97);
+}
+
+/* 目录行（OPDS）：按压洗色。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-item--row:active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent) !important;
+  transition: background-color 100ms ease;
+}
+
+/* hover 驻留中和：抬手后 :hover 粘滞不残留高亮，恢复元素基础底色
+   （按压期间由上方 :active 洗色接管）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library button:hover:not(:active) {
+  background: transparent;
+}
+
+/* 侧栏导航 hover 带 !important，中和规则需同级 !important 且特异性更高（排除激活态）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-nav-item:not(.is-active):hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-source:not(.is-active):hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-group:not(.is-active):hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-smart-group:not(.is-active):hover:not(:active) {
+  background: transparent !important;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-item--row:not(.is-selected):hover:not(:active) {
+  background: transparent !important;
+}
+
+/* 封面墙 hover 上浮在触屏驻留：中和位移动（选中态洗色保留，缩放按压反馈见上）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-item:not(.is-selected):hover:not(:active)
+  .lightink-library-cover {
+  transform: none;
 }
 

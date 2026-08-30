@@ -158,6 +158,12 @@
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
 }
 
+/* 触屏 hover 驻留中和：抬手后 :hover 粘滞不残留高亮（按压期间由下方 :active 洗色接管）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-action:not(.is-open):hover:not(:active) {
+  background: transparent;
+}
+
 /* 书签开关（R1）：线框图标，已书签态填实并着主题色（与 aria-pressed 同步）。 */
 .lightink-reader-chrome-action--bookmark::before {
   -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
@@ -342,6 +348,7 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
   appearance: none;
   -webkit-appearance: none;
+  transition: width 100ms ease, height 100ms ease, margin-top 100ms ease;
 }
 
 .lightink-reader-chrome-progress:active::-webkit-slider-thumb {
@@ -363,6 +370,7 @@
   border-radius: 50%;
   background: var(--lightink-accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
+  transition: width 100ms ease, height 100ms ease;
 }
 
 .lightink-reader-chrome-progress:active::-moz-range-thumb {
@@ -552,6 +560,14 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   -webkit-app-region: no-drag;
 }
 
+/* 触屏 chrome action 按压反馈：洗色 + 轻微缩放（圆形 999px 圆角两态一致）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-action:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transform: scale(0.97);
+  transition: background-color 100ms ease, transform 100ms ease;
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-action::before {
   width: 1.4rem;
   height: 1.4rem;
@@ -587,11 +603,27 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   width: 16px;
   height: 16px;
   margin-top: -6.5px;
+  transition: width 100ms ease, height 100ms ease, margin-top 100ms ease;
+}
+
+/* 触屏 thumb 按下放大 16→18px（同曲线过渡，50% 圆角不变）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-progress:active::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -7.5px;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-progress::-moz-range-thumb {
   width: 16px;
   height: 16px;
+  transition: width 100ms ease, height 100ms ease;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-progress:active::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
 }
 
 /* Relocated toc / typography / search: full-width thumb row. */
@@ -1100,6 +1132,18 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
 
 .lightink-reader-selection-action:hover {
   background: var(--lightink-accent-soft);
+}
+
+/* 触屏划选工具条按压反馈：action 洗色 + 颜色圆点轻微缩放（几何两态一致）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-selection-action:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-color:active {
+  transform: scale(0.88);
+  transition: transform 100ms ease;
 }
 
 .lightink-reader-selection-action--removeHighlight {

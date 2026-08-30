@@ -707,3 +707,49 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
   font-size: 0.9375rem;
 }
+
+/* ===== 触屏按压反馈（T1）：控件族洗色 + hover 驻留中和 ===== */
+
+/* 目录条目按压洗色（圆角/阴影两态一致）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-toc-item:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* 排版 sheet 控件族（字号步进/字体/翻页模式/刻度/主题卡）按压洗色。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-type-step:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-type-font:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-type-mode:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-type-tick:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-theme-swatch:active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+/* sheet 把手按压反馈：grabbing + 轻微缩放。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sheet-handle:active {
+  cursor: grabbing;
+  transform: scale(0.99);
+  transition: transform 100ms ease;
+}
+
+/* hover 驻留中和：抬手后 :hover 粘滞恢复基础底色/字色（按压期间由 :active 接管）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-toc-item:not(.is-current):not(.is-active):hover:not(:active) {
+  background: transparent;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-type-step:not(:disabled):hover:not(:active) {
+  background: var(--lightink-bg-elevated);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.1),
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-type-font:not(.is-active):hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-type-mode:not(.is-active):hover:not(:active) {
+  color: var(--lightink-muted);
+}
