@@ -3471,3 +3471,8 @@ html:is([data-android], [data-touch-primary]) {
   transform: scale(0.97);
   transition: background-color 100ms ease, transform 100ms ease;
 }
+
+/* FC3：沉浸 chrome 触发条 hover 底色触屏复位（基础态透明；按压期间由上方 :active 洗色接管）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-chrome-trigger:hover:not(:active) {
+  background: transparent;
+}

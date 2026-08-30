@@ -236,6 +236,38 @@ describe('touch press feedback baseline (T1)', () => {
     );
   });
 
+  it('A3/FC1: solid-base library button families keep base backgrounds through sticky touch hover', () => {
+    // FC1：status 按钮 accent-soft 实底 / travel 编辑按钮 elevated 实底 /
+    // catalog-more fg 7% 混合底，逐族恢复基础底色与字色（中和的透明底不适用实底族）。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-status button:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)[^}]*color:\\s*var\\(--lightink-fg\\)`,
+      ),
+    );
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-edit\\.lightink-workspace-travel:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-bg-elevated\\)[^}]*color:\\s*var\\(--lightink-fg\\)`,
+      ),
+    );
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-catalog-more:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*color-mix\\(in srgb, var\\(--lightink-fg\\) 7%, transparent\\)[^}]*color:\\s*var\\(--lightink-muted\\)`,
+      ),
+    );
+    // FC2 抽样：导入封面 hover 底色/字色复位（基础态 elevated 底 + muted 字色）。
+    expect(libraryCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-item--import:hover:not\\(:active\\)\\s*\\.lightink-library-cover--import\\s*\\{[^}]*background:\\s*var\\(--lightink-bg-elevated\\)[^}]*color:\\s*var\\(--lightink-muted\\)`,
+      ),
+    );
+    // FC3 抽样：沉浸 chrome 触发条 hover 底色复位（基础态透明）。
+    expect(themeCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-chrome-trigger:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
+  });
+
   it('A2/F2: modal primary/danger buttons keep readable solid press states', () => {
     // 按压洗色排除实底变体；primary/danger 用自身色派生加深实底（文字仍取 --lightink-bg）。
     expect(themeCss).toMatch(

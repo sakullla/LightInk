@@ -3837,3 +3837,34 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   color: var(--lightink-muted);
 }
 
+/* ===== 触屏 hover 驻留中和补全（T1-A3）：实底按钮族基础态恢复 ===== */
+
+/* FC1：状态条按钮（accent-soft 实底）在粘滞 hover 期间恢复基础底色/字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-status button:hover:not(:disabled):not(:active) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+}
+
+/* FC1：悬浮编辑按钮（elevated 实底，travel 挂载态）恢复基础底色/字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-edit.lightink-workspace-travel:hover:not(:disabled):not(:active) {
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+}
+
+/* FC1：目录「更多」按钮（fg 7% 混合底 + muted 字色）恢复基础底色/字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-catalog-more:hover:not(:disabled):not(:active) {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-muted);
+}
+
+/* FC2：导入封面 hover 底色/字色触屏复位（基础态 elevated 底 + muted 字色；
+   键盘 focus-visible 不带 :hover 时高亮不受影响）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-item--import:hover:not(:active) .lightink-library-cover--import {
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-muted);
+}
+
