@@ -102,6 +102,30 @@ export function restoreWheelZoomAnchor(anchor: WheelZoomAnchor): void {
   }
 }
 
+function datasetOf(el: { dataset?: DOMStringMap } | null): DOMStringMap | undefined {
+  return el?.dataset;
+}
+
+/** 指针或事件目标落在直播 PDF 页宿主上。 */
+export function wheelEventHitsLivePdf(
+  event: { readonly target?: EventTarget | null; readonly clientX?: number; readonly clientY?: number },
+  source: WheelZoomAnchorSource | null,
+): boolean {
+  const fromPoint =
+    source !== null && typeof event.clientX === 'number' && typeof event.clientY === 'number'
+      ? source.elementFromPoint(event.clientX, event.clientY)
+      : null;
+  const node = (event.target as WheelZoomAnchorElement | null) ?? fromPoint;
+  if (node === null || typeof node.closest !== 'function') {
+    return false;
+  }
+  const pages = node.closest('.lightink-reader-pages') as
+    | (WheelZoomAnchorElement & { dataset?: DOMStringMap })
+    | null;
+  const dataset = datasetOf(pages);
+  return dataset?.readerFormat === 'pdf' && dataset.readerActive === 'true';
+}
+
 /**
  * Install Ctrl/Cmd + wheel font zoom on `target`（usually `document`）。
  * Captures at the target so the event reaches this handler before any
@@ -134,6 +158,17 @@ export function installWheelZoom(
       return;
     }
     lastStepAt = now;
+    // 直播 PDF：改 userZoom，不写字号，也不做流式块锚补偿（PDF 自己按视口中心锚定）。
+    if (wheelEventHitsLivePdf(event, anchorSource)) {
+      if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+        document.dispatchEvent(
+          new CustomEvent('lightink:pdf-user-zoom', {
+            detail: { direction: event.deltaY < 0 ? 1 : -1 },
+          }),
+        );
+      }
+      return;
+    }
     // 缩放前捕获指针锚点；无坐标事件（headless 测试 / 合成事件）跳过补偿。
     const anchor =
       anchorSource !== null &&

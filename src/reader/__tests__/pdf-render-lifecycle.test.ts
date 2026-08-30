@@ -159,6 +159,7 @@ function mockPdf(): {
 function mockMultiPagePdf(numPages: number): {
   readonly tasks: ControlledRenderTask[];
   readonly destroy: ReturnType<typeof vi.fn>;
+  readonly getPage: ReturnType<typeof vi.fn>;
 } {
   const tasks: ControlledRenderTask[] = [];
   const page = {
@@ -174,17 +175,84 @@ function mockMultiPagePdf(numPages: number): {
     }),
   };
   const destroy = vi.fn(async () => undefined);
+  const getPage = vi.fn(async () => page);
   pdfRuntime.getDocument.mockReturnValue({
     promise: Promise.resolve({
       numPages,
-      getPage: vi.fn(async () => page),
+      getPage,
       getOutline: vi.fn(async () => []),
       getDestination: vi.fn(async () => null),
       getPageIndex: vi.fn(async () => 0),
     }),
     destroy,
   });
-  return { tasks, destroy };
+  return { tasks, destroy, getPage };
+}
+
+/** 第 1 页立刻返回；其余页挂起，用来证明 handle 不必等完全部 getPage。 */
+function mockGatedMultiPagePdf(numPages: number): {
+  readonly tasks: ControlledRenderTask[];
+  readonly getPage: ReturnType<typeof vi.fn>;
+  readonly resolvedPages: Set<number>;
+  readonly releaseFrom: (fromPage: number) => void;
+} {
+  const tasks: ControlledRenderTask[] = [];
+  const resolvedPages = new Set<number>();
+  const makePage = () => ({
+    getViewport: ({ scale }: { scale: number }) => ({
+      width: 100 * scale,
+      height: 200 * scale,
+    }),
+    getTextContent: vi.fn(async () => ({ items: [], styles: {} })),
+    render: vi.fn(() => {
+      const task = renderTask();
+      tasks.push(task);
+      return task;
+    }),
+  });
+  const gates = new Map<number, { promise: Promise<void>; resolve: () => void }>();
+  const gateFor = (n: number): Promise<void> => {
+    let gate = gates.get(n);
+    if (gate === undefined) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      gate = { promise, resolve };
+      gates.set(n, gate);
+    }
+    return gate.promise;
+  };
+  const getPage = vi.fn(async (n: number) => {
+    if (n > 1) {
+      await gateFor(n);
+    }
+    resolvedPages.add(n);
+    return makePage();
+  });
+  const destroy = vi.fn(async () => undefined);
+  pdfRuntime.getDocument.mockReturnValue({
+    promise: Promise.resolve({
+      numPages,
+      getPage,
+      getOutline: vi.fn(async () => []),
+      getDestination: vi.fn(async () => null),
+      getPageIndex: vi.fn(async () => 0),
+    }),
+    destroy,
+  });
+  return {
+    tasks,
+    getPage,
+    resolvedPages,
+    releaseFrom(fromPage: number) {
+      for (const [n, gate] of gates) {
+        if (n >= fromPage) {
+          gate.resolve();
+        }
+      }
+    },
+  };
 }
 
 /**
@@ -294,6 +362,66 @@ describe('PDF render lifecycle', () => {
     // jsdom clientHeight=0：newScroll = relTop(200-100) + 500*0.4 = 300。
     // 未归一化时视口绝对坐标会再加 100px chrome 偏移（= 400）。
     expect(container.scrollTop).toBe(300);
+    await handle.destroy();
+  });
+
+  it('returns a handle before remaining getPage calls resolve and can paint page 1', async () => {
+    const runtime = mockGatedMultiPagePdf(4);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    expect(handle.controller.totalPages).toBe(4);
+    expect(container.querySelectorAll('.lightink-reader-page-slot')).toHaveLength(4);
+    expect(runtime.getPage).toHaveBeenCalledWith(1);
+    expect(runtime.resolvedPages.has(1)).toBe(true);
+    expect(runtime.resolvedPages.has(4)).toBe(false);
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await waitForTask(runtime.tasks, 1);
+    runtime.tasks[0]!.resolve();
+    await vi.waitFor(() => {
+      expect((container.children[0] as HTMLElement).querySelector('canvas')).not.toBeNull();
+    });
+    expect(runtime.resolvedPages.has(4)).toBe(false);
+
+    handle.controller.zoomIn();
+    const zoomed = handle.rerender();
+    await waitForTask(runtime.tasks, 2);
+    runtime.tasks[1]!.resolve();
+    await zoomed;
+    expect(runtime.resolvedPages.has(4)).toBe(false);
+
+    runtime.releaseFrom(2);
+    await handle.destroy();
+  });
+
+  it('reset restores fit-width, not a 100% font-scale token', async () => {
+    const runtime = mockPdf();
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { configurable: true, value: 400 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+    const slot = container.querySelector('.lightink-reader-page-slot') as HTMLElement;
+    expect(slot.style.width).toBe('400px');
+    expect(handle.controller.scale).toBe(1);
+
+    handle.controller.zoomIn();
+    const zoomed = handle.rerender();
+    await waitForTask(runtime.tasks, 1);
+    runtime.tasks[0]!.resolve();
+    await zoomed;
+    expect(slot.style.width).toBe('500px');
+
+    handle.controller.resetScale();
+    const restored = handle.rerender();
+    await waitForTask(runtime.tasks, 2);
+    runtime.tasks[1]!.resolve();
+    await restored;
+    expect(handle.controller.scale).toBe(1);
+    expect(slot.style.width).toBe('400px');
     await handle.destroy();
   });
 
@@ -497,6 +625,7 @@ describe('PDF render lifecycle', () => {
     // 第 4 页 top=2100 缓冲区外（滚动进入时应由 observer 懒补，rerender 不管）。
     layoutRects(container, 0, [0, 700, 1400, 2100, 2800]);
 
+    handle.controller.zoomIn();
     const rerendering = handle.rerender();
     // 严格可见的第 1 页串行先画；解开它的任务让循环继续走完缓冲区补画。
     await waitForTask(runtime.tasks, 1);
@@ -533,7 +662,7 @@ describe('PDF text layer', () => {
     const layer = pdfRuntime.textLayerInstances[0]!;
     expect(layer.container.classList.contains('lightink-reader-text-layer')).toBe(true);
     expect(layer.container.parentElement?.className).toBe('lightink-reader-page-slot');
-    // 文本层用 CSS 尺寸 viewport（controller.scale × 字号，不含 dpr）。
+    // 文本层用 CSS 尺寸 viewport（fit-width × userZoom，不含 dpr）。
     expect(layer.options.viewport.width).toBe(100 * 1.25);
     expect(layer.container.style.getPropertyValue('--total-scale-factor')).toBe('1.25');
     layer.resolveRender();
@@ -583,7 +712,7 @@ describe('PDF text layer', () => {
     await handle.destroy();
   });
 
-  it('multiplies the text-layer viewport by the reading font scale', async () => {
+  it('does not multiply the text-layer viewport by the reading font-scale token', async () => {
     document.documentElement.style.setProperty('--lightink-font-scale', '1.25');
     const runtime = mockPdf();
     const container = document.createElement('div');
@@ -597,8 +726,8 @@ describe('PDF text layer', () => {
 
     await vi.waitFor(() => expect(pdfRuntime.textLayerInstances).toHaveLength(1));
     const layer = pdfRuntime.textLayerInstances[0]!;
-    expect(layer.options.viewport.width).toBe(100 * 1.25);
-    expect(layer.container.style.getPropertyValue('--total-scale-factor')).toBe('1.25');
+    expect(layer.options.viewport.width).toBe(100);
+    expect(layer.container.style.getPropertyValue('--total-scale-factor')).toBe('1');
     layer.resolveRender();
     await handle.destroy();
   });

@@ -5,6 +5,7 @@
  * `renderPdfInto` 懒加载 pdfjs-dist（worker 经 `?url` 独立 chunk），把当前页渲染到 canvas，
  * 并在其上叠加 pdfjs `TextLayer` 文本层（DOM span 承载文字选择，版式仍由 canvas 保真）。
  * 文本层与 canvas 同生命周期：懒渲染、缩放按视口中心锚定并只重绘可见页、离屏回收；渲染失败降级纯 canvas。
+ * 打开先量第 1 页并出首屏，其余页先占位再后台补真实宽高。比例是 fitWidthScale * userZoom。
  * 返回 handle 供导航/缩放重绘。canvas/文本层真实渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
 
@@ -26,9 +27,24 @@ import {
 } from '../../ui/reading-layout.js';
 import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
 
-/** 缩放档位（与字号缩放独立，PDF 像素级）。 */
+/** userZoom 档位。还原 = 1，即适合页宽（fitWidthScale * 1），不是 100% 设备像素。 */
 export const PDF_SCALE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
-const DEFAULT_SCALE_IDX = 2; // 1.0
+const DEFAULT_SCALE_IDX = 2; // userZoom 1.0 = 适合页宽
+const RENDER_QUEUE_LIMIT = 2;
+const MEASURE_BATCH = 8;
+
+/** 页宿主内容宽 / 页 CSS 宽；量不到时退回 1，避免 jsdom 零宽把首屏画成空。 */
+export function pdfFitWidthScale(hostContentWidth: number, pageCssWidth: number): number {
+  if (!(hostContentWidth > 0) || !(pageCssWidth > 0)) {
+    return 1;
+  }
+  return hostContentWidth / pageCssWidth;
+}
+
+/** PDF 唯一比例：适合页宽 × 用户档。 */
+export function pdfCssScale(fitWidthScale: number, userZoom: number): number {
+  return fitWidthScale * userZoom;
+}
 
 export interface PdfPageController {
   readonly totalPages: number;
@@ -202,23 +218,20 @@ function devicePixelRatio(): number {
   return typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
 }
 
-/** 阅读字号缩放（页宿主不走 CSS zoom，栅格化时乘入 viewport）。 */
-export function readingFontScale(): number {
-  if (typeof document === 'undefined') {
-    return 1;
-  }
-  const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue('--lightink-font-scale')
-    .trim();
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : 1;
+function pageHostContentWidth(host: HTMLElement): number {
+  const style = typeof getComputedStyle === 'function' ? getComputedStyle(host) : null;
+  const pad =
+    style !== null
+      ? (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)
+      : 0;
+  return Math.max(0, host.clientWidth - pad);
 }
 
 /**
  * 用 pdfjs-dist 把 PDF 以**连续垂直滚动**渲染进容器。worker 经 `?url` 独立 chunk
- * 懒加载。每页一个 `.lightink-reader-page-slot` 占位（预取 viewport 定高，避免滚动
- * 跳变），IntersectionObserver 懒栅格化：仅渲染视口附近（rootMargin 缓冲）的页到
- * canvas，离屏过远的清画布省内存。缩放重算所有 slot 高度并重渲染可见页。
+ * 懒加载。先量第 1 页算出适合页宽并插完全部槽位，其余页后台补真实宽高。
+ * IntersectionObserver 懒栅格化：仅渲染视口附近（rootMargin 缓冲）的页到 canvas，
+ * 离屏过远的清画布省内存。缩放按视口中心锚定，只重画可见与缓冲页。
  *
  * 真实 canvas/滚动渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
@@ -349,27 +362,55 @@ export async function renderPdfInto(
   signal?.addEventListener('abort', onAbort, { once: true });
   throwIfReaderLoadCancelled(signal);
 
-  // 每页一个占位 slot；预取 viewport 定高（getPage 不栅格化，开销远小于 render）。
+  // 先量第 1 页：定适合页宽，立刻插完全部槽。其余页先用页 1 估算高度。
   const slots: HTMLDivElement[] = [];
-  const sizes: { width: number; height: number }[] = [];
+  const nativeSizes: Array<{ width: number; height: number } | undefined> = [];
   const sizeSlot = (slot: HTMLDivElement, w: number, h: number): void => {
     slot.style.width = `${Math.floor(w)}px`;
     slot.style.height = `${Math.floor(h)}px`;
   };
 
-  const pageCssScale = (): number => controller.scale * readingFontScale();
-  let appliedCssScale = pageCssScale();
+  let fitWidthScale = 1;
+  const pageCssScale = (): number => pdfCssScale(fitWidthScale, controller.scale);
+
+  const refreshFitWidth = (pageCssWidth: number): void => {
+    fitWidthScale = pdfFitWidthScale(pageHostContentWidth(container), pageCssWidth);
+  };
+
+  const displaySize = (index: number): { width: number; height: number } => {
+    const native = nativeSizes[index] ?? nativeSizes[0];
+    const scale = pageCssScale();
+    if (native === undefined) {
+      return { width: 0, height: 0 };
+    }
+    return { width: native.width * scale, height: native.height * scale };
+  };
+
+  const applySlotMetrics = (index: number): void => {
+    const slot = slots[index];
+    const size = displaySize(index);
+    if (slot === undefined) {
+      return;
+    }
+    sizeSlot(slot, size.width, size.height);
+  };
+
+  const firstPage = await doc.getPage(1);
+  throwIfReaderLoadCancelled(signal);
+  const firstNative = firstPage.getViewport({ scale: 1 });
+  nativeSizes[0] = { width: firstNative.width, height: firstNative.height };
+  refreshFitWidth(firstNative.width);
 
   container.replaceChildren();
-  for (let i = 1; i <= total; i += 1) {
-    const page = await doc.getPage(i);
-    throwIfReaderLoadCancelled(signal);
-    const vp = page.getViewport({ scale: appliedCssScale });
-    sizes.push({ width: vp.width, height: vp.height });
+  for (let i = 0; i < total; i += 1) {
+    if (i > 0) {
+      nativeSizes[i] = nativeSizes[0];
+    }
+    const size = displaySize(i);
     const slot = document.createElement('div');
     slot.className = 'lightink-reader-page-slot';
-    slot.dataset.pageIndex = String(i - 1);
-    sizeSlot(slot, vp.width, vp.height);
+    slot.dataset.pageIndex = String(i);
+    sizeSlot(slot, size.width, size.height);
     container.appendChild(slot);
     slots.push(slot);
   }
@@ -516,11 +557,39 @@ export async function renderPdfInto(
     void appendTextLayer(index, page, generation).catch(() => undefined);
   };
 
+  const queued = new Set<number>();
+  let inflightRenders = 0;
+  const pendingRender: number[] = [];
+
+  const reportRenderError = (error: unknown): void => {
+    // eslint-disable-next-line no-console
+    console.error('[lightink/reader] PDF page render failed', error);
+  };
+
+  const pumpRenderQueue = (): void => {
+    while (inflightRenders < RENDER_QUEUE_LIMIT && pendingRender.length > 0) {
+      const index = pendingRender.shift();
+      if (index === undefined) {
+        break;
+      }
+      inflightRenders += 1;
+      void renderSlot(index)
+        .catch(reportRenderError)
+        .finally(() => {
+          queued.delete(index);
+          inflightRenders -= 1;
+          pumpRenderQueue();
+        });
+    }
+  };
+
   const queueRender = (index: number): void => {
-    void renderSlot(index).catch((error: unknown) => {
-      // eslint-disable-next-line no-console
-      console.error('[lightink/reader] PDF page render failed', error);
-    });
+    if (queued.has(index) || Number.isNaN(index) || index < 0 || index >= total) {
+      return;
+    }
+    queued.add(index);
+    pendingRender.push(index);
+    pumpRenderQueue();
   };
 
   /** 清掉离屏过远的 slot 画布与文本层，释放内存（再次进入视口会重渲染）。 */
@@ -532,6 +601,43 @@ export async function renderPdfInto(
 
   // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
   const scroller = container;
+
+  const keepViewportAnchor = (
+    view: DOMRect,
+    anchor: { index: number; xRatio: number; yRatio: number },
+  ): void => {
+    const nextSlot = slots[anchor.index]?.getBoundingClientRect();
+    if (nextSlot === undefined) {
+      return;
+    }
+    // getBoundingClientRect 是视口绝对坐标，pdfScrollToKeepAnchor 期望相对
+    // scroller 的坐标；不归一化会把应用 chrome（标签栏/侧栏）的偏移累加进
+    // 新滚动位置，锚点随每次缩放漂移。
+    const next = pdfScrollToKeepAnchor(
+      scroller,
+      {
+        left: nextSlot.left - view.left,
+        top: nextSlot.top - view.top,
+        width: nextSlot.width,
+        height: nextSlot.height,
+      },
+      anchor,
+    );
+    scroller.scrollLeft = next.scrollLeft;
+    scroller.scrollTop = next.scrollTop;
+  };
+
+  const captureViewportAnchor = (): {
+    view: DOMRect;
+    anchor: { index: number; xRatio: number; yRatio: number };
+  } => {
+    const view = scroller.getBoundingClientRect();
+    const slotRects = slots.map((slot) => slot.getBoundingClientRect());
+    return {
+      view,
+      anchor: pdfViewportAnchor(view, slotRects, Math.max(0, controller.page - 1)),
+    };
+  };
 
   const paintVisibleBuffer = async (generation: number): Promise<void> => {
     const visible = scroller.getBoundingClientRect();
@@ -583,8 +689,8 @@ export async function renderPdfInto(
     }
   }
 
-  // 首屏不把出页只交给 IntersectionObserver（root 不对或首帧未相交时会空白）。
-  // 放到 rAF：调用方若立刻 rerender/destroy，世代变化后这次会自动作废。
+  // 槽位已齐即可返回 handle。首屏画页放到 rAF：不必等其余 getPage，
+  // 调用方若立刻 rerender/destroy，世代变化后这次会自动作废。
   const born = renderGeneration;
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {
@@ -596,6 +702,36 @@ export async function renderPdfInto(
   } else {
     void paintVisibleBuffer(born);
   }
+
+  const measureRemainingPages = async (): Promise<void> => {
+    if (total <= 1) {
+      return;
+    }
+    const start = captureViewportAnchor();
+    for (let i = 1; i < total; i += 1) {
+      if (destroyed || isAborted()) {
+        return;
+      }
+      const page = await doc.getPage(i + 1);
+      if (destroyed || isAborted()) {
+        return;
+      }
+      const native = page.getViewport({ scale: 1 });
+      nativeSizes[i] = { width: native.width, height: native.height };
+      applySlotMetrics(i);
+      if (i % MEASURE_BATCH === 0) {
+        keepViewportAnchor(start.view, start.anchor);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      }
+    }
+    if (destroyed || isAborted()) {
+      return;
+    }
+    keepViewportAnchor(start.view, start.anchor);
+  };
+  void measureRemainingPages().catch(() => undefined);
 
   // 滚动时把视口顶部最近的页回写 controller.page（供书签/笔记定位与侧栏跳转）。
   // 槽位判定走共享 nearestVisibleSlot；scroll 事件经 rAF 合并，帧内连发只同步一次。
@@ -624,49 +760,42 @@ export async function renderPdfInto(
     const generation = renderGeneration;
     cancelRenderTasks();
     cancelTextLayers();
-    const view = scroller.getBoundingClientRect();
-    const slotRects = slots.map((slot) => slot.getBoundingClientRect());
-    const anchor = pdfViewportAnchor(view, slotRects, Math.max(0, controller.page - 1));
-    const nextScale = pageCssScale();
-    const factor = appliedCssScale > 0 ? nextScale / appliedCssScale : 1;
-    appliedCssScale = nextScale;
+    queued.clear();
+    pendingRender.length = 0;
+    const captured = captureViewportAnchor();
+    const firstNative = nativeSizes[0];
+    if (firstNative !== undefined) {
+      refreshFitWidth(firstNative.width);
+    }
     for (let i = 0; i < total; i += 1) {
-      const current = sizes[i];
-      if (current === undefined) {
-        continue;
-      }
-      const next = {
-        width: current.width * factor,
-        height: current.height * factor,
-      };
-      sizes[i] = next;
-      sizeSlot(slots[i]!, next.width, next.height);
+      applySlotMetrics(i);
       clearSlot(i);
     }
-    const nextSlot = slots[anchor.index]?.getBoundingClientRect();
-    if (nextSlot !== undefined) {
-      // getBoundingClientRect 是视口绝对坐标，pdfScrollToKeepAnchor 期望相对
-      // scroller 的坐标；不归一化会把应用 chrome（标签栏/侧栏）的偏移累加进
-      // 新滚动位置，锚点随每次缩放漂移。
-      const next = pdfScrollToKeepAnchor(
-        scroller,
-        {
-          left: nextSlot.left - view.left,
-          top: nextSlot.top - view.top,
-          width: nextSlot.width,
-          height: nextSlot.height,
-        },
-        anchor,
-      );
-      scroller.scrollLeft = next.scrollLeft;
-      scroller.scrollTop = next.scrollTop;
-    }
+    keepViewportAnchor(captured.view, captured.anchor);
     // 重渲染范围与 IntersectionObserver 的懒加载缓冲（rootMargin 200% ≈ 上下各 2 屏）
     // 对齐：observer 只在相交状态变化时派发事件，仍在缓冲区内的页被 clearSlot 清掉后
     // 不会再收到通知，必须由 rerender 主动补画，否则缩放后滚动会出现空白页。
     await paintVisibleBuffer(generation);
     onScroll();
   };
+
+  const onHostResize = (): void => {
+    if (destroyed || isAborted()) {
+      return;
+    }
+    const firstNative = nativeSizes[0];
+    if (firstNative === undefined) {
+      return;
+    }
+    const nextFit = pdfFitWidthScale(pageHostContentWidth(container), firstNative.width);
+    if (Math.abs(nextFit - fitWidthScale) < 1e-6) {
+      return;
+    }
+    void rerender();
+  };
+  const hostResizeObserver =
+    typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onHostResize) : null;
+  hostResizeObserver?.observe(container);
 
   const scrollToPage = (page: number): void => {
     const target = Math.min(total, Math.max(1, Math.floor(page)));
@@ -740,6 +869,7 @@ export async function renderPdfInto(
       scroller.removeEventListener('scroll', onScrollEvent);
       scrollCoordinator?.cancel();
       observer?.disconnect();
+      hostResizeObserver?.disconnect();
       try {
         await loadingTask.destroy();
       } finally {

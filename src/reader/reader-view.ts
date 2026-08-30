@@ -2801,12 +2801,32 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     syncFlowState();
     sessionProgress.schedulePersist();
   };
+  const applyDisplayScale = (action: 'in' | 'out' | 'reset'): boolean => {
+    const pdf = pdfHandle;
+    if (pdf !== null) {
+      const changed =
+        action === 'in'
+          ? pdf.controller.zoomIn()
+          : action === 'out'
+            ? pdf.controller.zoomOut()
+            : pdf.controller.resetScale();
+      if (changed) {
+        syncPageState();
+        void pdf.rerender();
+      }
+      return true;
+    }
+    if (cbzHandle === null) return false;
+    cbzHandle.adjustZoom(action);
+    return true;
+  };
+
   const onFontScaleChange = (): void => {
     if (destroyed) {
       return;
     }
     if (pdfHandle !== null) {
-      void pdfHandle.rerender();
+      // PDF 比例是 fit-width × userZoom，不吃阅读字号。
       return;
     }
     // 作废上一轮遗留（settle 定时器或推迟中的锚点恢复 rAF），防止迟到回调用
@@ -2814,8 +2834,22 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     cancelFontScaleRefresh?.();
     cancelFontScaleRefresh = settleFontScaleRefresh(applyFontScaleRefresh);
   };
+  const onPdfUserZoom = (event: Event): void => {
+    if (destroyed) {
+      return;
+    }
+    const direction = (event as CustomEvent<{ direction?: number }>).detail?.direction;
+    if (direction === 1) {
+      applyDisplayScale('in');
+      return;
+    }
+    if (direction === -1) {
+      applyDisplayScale('out');
+    }
+  };
   if (typeof document !== 'undefined') {
     document.addEventListener('lightink:font-scale', onFontScaleChange);
+    document.addEventListener('lightink:pdf-user-zoom', onPdfUserZoom);
   }
 
   // R4：主题切换（浅↔深）时重应用 flow 帧文字色，消除深底深字/浅底浅字不可读。
@@ -3712,6 +3746,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       cancelViewportRefresh();
       if (typeof document !== 'undefined') {
         document.removeEventListener('lightink:font-scale', onFontScaleChange);
+        document.removeEventListener('lightink:pdf-user-zoom', onPdfUserZoom);
         document.removeEventListener('lightink:theme-change', onThemeChange);
       }
       closeOpenNoteDialog();
@@ -3750,11 +3785,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
     },
     advanceReading,
-    adjustDisplayScale: (action: 'in' | 'out' | 'reset'): boolean => {
-      if (cbzHandle === null) return false;
-      cbzHandle.adjustZoom(action);
-      return true;
-    },
+    adjustDisplayScale: applyDisplayScale,
     getOutline: () => readerOutline,
     jumpToOutlineItem,
     isAnnotationEnabled: () => sessionAnnotation.enabled(),

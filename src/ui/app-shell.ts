@@ -135,6 +135,15 @@ function readerHostShowsLivePdf(host: HTMLElement): boolean {
   return dataset.readerFormat === 'pdf' && dataset.readerActive === 'true';
 }
 
+function anyVisibleLivePdf(): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  return collectReaderHosts(document).some(
+    (host) => readerHostIsVisible(host) && readerHostShowsLivePdf(host),
+  );
+}
+
 function applyReaderShellChrome(
   target: HTMLElement,
   layout: ReaderFlowLayout,
@@ -667,6 +676,13 @@ export function buildMenus(actions: AppShellActions): Menu[] {
         ? formatFontScaleLabel(typography.fontScaleStep)
         : actions.getFontScaleLabel();
     const zoomBy = (direction: 1 | -1 | 0): void => {
+      // 直播 PDF：视图放大/缩小/还原改 userZoom，不写阅读字号。
+      if (anyVisibleLivePdf()) {
+        if (direction > 0) actions.onZoomIn();
+        else if (direction < 0) actions.onZoomOut();
+        else actions.onZoomReset();
+        return;
+      }
       if (reader && actions.onSetReaderTypography !== undefined) {
         const fontScaleStep =
           direction === 0

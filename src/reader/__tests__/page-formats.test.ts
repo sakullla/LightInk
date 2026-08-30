@@ -21,6 +21,8 @@ import {
 import {
   createPdfPageController,
   PDF_SCALE_STEPS,
+  pdfCssScale,
+  pdfFitWidthScale,
   pdfScrollToKeepAnchor,
   pdfViewportAnchor,
 } from '../formats/pdf.js';
@@ -102,6 +104,18 @@ describe('createPdfPageController', () => {
     expect(c.scale).toBe(1);
     c.zoomOut();
     expect(c.scale).toBeLessThan(1);
+  });
+
+  it('reset userZoom is 1 so restore is fit-width, not 100% device pixels', () => {
+    expect(pdfFitWidthScale(800, 400)).toBe(2);
+    expect(pdfFitWidthScale(0, 400)).toBe(1);
+    expect(pdfFitWidthScale(800, 0)).toBe(1);
+    const c = createPdfPageController(2);
+    c.zoomIn();
+    expect(pdfCssScale(2.5, c.scale)).toBeGreaterThan(2.5);
+    c.resetScale();
+    expect(c.scale).toBe(1);
+    expect(pdfCssScale(2.5, c.scale)).toBe(2.5);
   });
 
   it('totalPages 至少为 1', () => {

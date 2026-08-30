@@ -248,6 +248,14 @@ class FakeDoc {
     }
     return true;
   }
+
+  querySelector(selector: string): FakeEl | null {
+    return this.body.querySelector(selector);
+  }
+
+  querySelectorAll(selector: string): FakeEl[] {
+    return this.body.querySelectorAll(selector);
+  }
 }
 
 const originalDocument = (globalThis as { document?: unknown }).document;
@@ -812,6 +820,49 @@ describe('buildMenus 生产结构', () => {
     items.find((i) => i.id === 'view-zoom-in')!.action();
     expect(zoomIns).toBe(0);
     expect(patch?.fontScaleStep).toBe(1.125);
+  });
+
+  it('直播 PDF 时视图缩放改 PDF 比例，不写 font-scale token', () => {
+    installFakeDocument();
+    const reader = document.createElement('div') as unknown as FakeEl;
+    reader.className = 'lightink-reader';
+    const pages = document.createElement('div') as unknown as FakeEl;
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    reader.appendChild(pages);
+    (document.body as unknown as FakeEl).appendChild(reader);
+
+    let zoomIns = 0;
+    let zoomResets = 0;
+    let patch: Partial<ReaderTypography> | undefined;
+    const store: Record<string, string> = {};
+    const view = buildMenus({
+      ...stubActions(),
+      getWorkspaceMode: () => 'reader',
+      getReaderTypography: () => defaultReaderTypography(),
+      onSetReaderTypography: (next) => {
+        patch = next;
+        store[READER_TYPOGRAPHY_STORAGE_KEY] = JSON.stringify(next);
+      },
+      onZoomIn: () => {
+        zoomIns += 1;
+      },
+      onZoomReset: () => {
+        zoomResets += 1;
+      },
+    }).find((m) => m.id === 'view');
+    const items = (
+      view!.items.find((i) => i.id === 'view-font-layout')!.submenu!() as import('../menus.js').MenuItem[]
+    ).filter((i) => i.separator !== true);
+    items.find((i) => i.id === 'view-zoom-in')!.action();
+    items.find((i) => i.id === 'view-zoom-reset')!.action();
+    expect(zoomIns).toBe(1);
+    expect(zoomResets).toBe(1);
+    expect(patch).toBeUndefined();
+    expect(store[FONT_SCALE_STORAGE_KEY]).toBeUndefined();
+    expect(store[READER_TYPOGRAPHY_STORAGE_KEY]).toBeUndefined();
+    restoreDocument();
   });
 
   it('「字体布局」子菜单在 zh/en 双语下标签齐备（语言切换重建，T1）', () => {
