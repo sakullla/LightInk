@@ -408,7 +408,10 @@ describe('PDF render lifecycle', () => {
       /\.lightink-reader:has\(>\s*\.lightink-reader-pages\[data-reader-active='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
     );
     expect(theme).toMatch(
-      /html\[data-reading-layout='scroll'\][\s\S]*?#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)[\s\S]*?\{[^}]*overflow:\s*hidden/,
+      /html\[data-reading-layout='scroll'\][\s\S]*?#lightink-editor-area\[data-surface='reader'\]:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader-pages\[data-reader-active='true'\]\s*\)[\s\S]*?\{[^}]*overflow:\s*hidden/,
+    );
+    expect(theme).not.toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)/,
     );
     expect(css).not.toMatch(
       /html\[data-reading-layout='paginated'\] \.lightink-reader:has\([^)]*\)\s*\{[^}]*overflow:\s*auto/,

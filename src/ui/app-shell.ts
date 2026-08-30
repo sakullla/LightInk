@@ -77,6 +77,52 @@ function canSetCssVars(target: { style: { setProperty?: unknown } }): boolean {
   return typeof target.style.setProperty === 'function';
 }
 
+function elementParent(node: HTMLElement): HTMLElement | null {
+  const parentElement = (node as { parentElement?: HTMLElement | null }).parentElement;
+  if (parentElement != null) {
+    return parentElement;
+  }
+  const fakeParent = (node as unknown as { parent?: HTMLElement | null }).parent;
+  return fakeParent ?? null;
+}
+
+function owningTabHost(host: HTMLElement): HTMLElement | null {
+  const closest = (host as { closest?: (selector: string) => HTMLElement | null }).closest;
+  if (typeof closest === 'function') {
+    try {
+      return closest.call(host, '.lightink-tab-host');
+    } catch {
+      /* FakeEl used by app-shell tests has no closest. */
+    }
+  }
+  let node: HTMLElement | null = host;
+  while (node !== null) {
+    if (node.classList.contains('lightink-tab-host')) {
+      return node;
+    }
+    if (node.id === 'lightink-editor-area') {
+      return null;
+    }
+    node = elementParent(node);
+  }
+  return null;
+}
+
+function nodeIsDisplayed(node: HTMLElement): boolean {
+  if (node.hidden) {
+    return false;
+  }
+  return node.style.display !== 'none';
+}
+
+function readerHostIsVisible(host: HTMLElement): boolean {
+  if (!nodeIsDisplayed(host)) {
+    return false;
+  }
+  const tabHost = owningTabHost(host);
+  return tabHost === null || nodeIsDisplayed(tabHost);
+}
+
 function readerHostShowsLivePdf(host: HTMLElement): boolean {
   if (typeof host.querySelector !== 'function') {
     return false;
@@ -1014,7 +1060,9 @@ export function createAppShell(
     const layout = currentReaderLayout();
     const prefs = currentReaderTypography();
     const hosts = collectReaderHosts(editorArea);
-    const livePdf = hosts.some((host) => readerHostShowsLivePdf(host));
+    const livePdf = hosts.some(
+      (host) => readerHostIsVisible(host) && readerHostShowsLivePdf(host),
+    );
     for (const reader of hosts) {
       applyReaderShellChrome(reader, layout, prefs, storage);
     }

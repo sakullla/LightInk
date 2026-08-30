@@ -1052,6 +1052,83 @@ describe('buildMenus 生产结构', () => {
     expect(flowEvents).toEqual([]);
     shell.destroy();
   });
+
+  it('does not treat a display:none PDF tab as live when an EPUB host is visible', () => {
+    const doc = installFakeDocument();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'scroll' };
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      },
+      {
+        shortcutBindings: () => [],
+        storage: {
+          getItem: (key) => store[key] ?? null,
+          setItem: (key, value) => {
+            store[key] = value;
+          },
+        },
+      },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const editor = fakeRoot.querySelector('#lightink-editor-area');
+
+    const pdfHost = document.createElement('div') as unknown as FakeEl;
+    pdfHost.className = 'lightink-tab-host lightink-tab-host--reader';
+    pdfHost.style.display = 'none';
+    const pdfReader = document.createElement('div') as unknown as FakeEl;
+    pdfReader.className = 'lightink-reader';
+    const pages = document.createElement('div') as unknown as FakeEl;
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    pdfReader.appendChild(pages);
+    pdfHost.appendChild(pdfReader);
+
+    const epubHost = document.createElement('div') as unknown as FakeEl;
+    epubHost.className = 'lightink-tab-host lightink-tab-host--reader';
+    const epubReader = document.createElement('div') as unknown as FakeEl;
+    epubReader.className = 'lightink-reader';
+    epubHost.appendChild(epubReader);
+
+    editor?.appendChild(pdfHost);
+    editor?.appendChild(epubHost);
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+    expect(epubReader.dataset.readingLayout).toBe('scroll');
+    expect(pdfReader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('scroll');
+
+    const flowEvents: unknown[] = [];
+    const restamp = (event: unknown): void => {
+      const detail = (event as { detail?: unknown }).detail;
+      flowEvents.push(detail);
+      if (detail === 'scroll' || detail === 'paginated') {
+        epubReader.dataset.readingLayout = String(detail);
+      }
+    };
+    doc.addEventListener('lightink:reader-flow-layout', restamp);
+
+    store['lightink.reader.flow.layout'] = 'paginated';
+    shell.refreshReaderPreferences();
+    expect(epubReader.dataset.readingLayout).toBe('paginated');
+    expect(pdfReader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('paginated');
+    expect(flowEvents).toEqual(['paginated']);
+
+    pdfHost.style.display = '';
+    epubHost.style.display = 'none';
+    flowEvents.length = 0;
+    store['lightink.reader.flow.layout'] = 'scroll';
+    shell.refreshReaderPreferences();
+    expect(pdfReader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('paginated');
+    expect(flowEvents).toEqual([]);
+    shell.destroy();
+  });
 });
 
 describe('buildRecentsMenuItems（R12 最近打开子菜单）', () => {
