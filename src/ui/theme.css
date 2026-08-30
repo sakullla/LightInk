@@ -3401,6 +3401,13 @@ html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab
   border-radius: 16px;
 }
 
+/* 键盘态重锚（pinFixedOverlay 范式）：bottom 通道仍是唯一位移扣减；键盘打开时
+   max-height 再钳到键盘上方可视区（双锚），横屏 IME（inset 大、菜单接近 46dvh）
+   时顶端不溢出视口。 */
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-context-menu {
+  max-height: calc(100dvh - var(--lightink-keyboard-inset, 0px) - 24px);
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-context-menu__shortcut {
   display: none;
 }

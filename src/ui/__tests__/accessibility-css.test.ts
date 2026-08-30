@@ -92,8 +92,10 @@ describe('accessibility media preferences', () => {
       { name: 'group', tokens: ['.lightink-library-group-modal'] },
       { name: 'cache', tokens: ['.lightink-library-cache-limit-modal'] },
       {
+        // 单一扣减（T4-A2）：membership 只有 overlay 消费 keyboard-inset；
+        // dialog 的 max-height 无 inset 项（见下方 points 校验）。
         name: 'membership',
-        tokens: ['.lightink-library-membership-overlay', '.lightink-library-membership-dialog'],
+        tokens: ['.lightink-library-membership-overlay'],
       },
       {
         name: 'archive-password',
@@ -181,6 +183,9 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
       { name: 'group overlay', css: libraryCss, token: '.lightink-library-group-modal' },
       { name: 'cache-limit overlay', css: libraryCss, token: '.lightink-library-cache-limit-modal' },
       { name: 'archive-password overlay', css: libraryCss, token: '#lightink-archive-password' },
+      // 前缀 token 同时覆盖 membership-overlay（bottom 通道）与
+      // membership-dialog（max-height 不得含 inset 项）两个双扣点。
+      { name: 'membership overlay/dialog', css: libraryCss, token: '.lightink-library-membership' },
     ];
     for (const point of points) {
       const rules = cssDeclarationBlocks(point.css).filter(
@@ -188,6 +193,9 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
       );
       expect(rules, `${point.name} must consume keyboard-inset`).not.toHaveLength(0);
       for (const rule of rules) {
+        // 键盘态（html[data-keyboard]）规则是第二锚（pinFixedOverlay 范式）：
+        // bottom 通道已完成唯一位移扣减，max-height 只钳视口上缘，不是双扣。
+        if (rule.selector.includes('html[data-keyboard]')) continue;
         expect(
           rule.body,
           `${point.name} max-height must not consume keyboard-inset: ${rule.selector}`,
@@ -205,18 +213,20 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
   });
 
   it('keeps the TS keyboard-inset appliers single-channel (padding only, no max-height term)', () => {
-    for (const [name, source] of [
-      ['library-manage', libraryManageSource],
-      ['archive-password-dialog', archiveDialogSource],
-    ] as const) {
-      expect(source, `${name} lifts via the overlay bottom offset`).toContain(
-        "paddingBottom = 'var(--lightink-keyboard-inset, 0px)'",
-      );
-      expect(
-        source,
-        `${name} max-height must not consume keyboard-inset`,
-      ).not.toMatch(/maxHeight\s*=\s*'[^']*--lightink-keyboard-inset/);
-    }
+    expect(archiveDialogSource, 'archive-password lifts via the overlay bottom offset').toContain(
+      "paddingBottom = 'var(--lightink-keyboard-inset, 0px)'",
+    );
+    expect(
+      archiveDialogSource,
+      'archive-password max-height must not consume keyboard-inset',
+    ).not.toMatch(/maxHeight\s*=\s*'[^']*--lightink-keyboard-inset/);
+    // T4-A2：cache-limit overlay 的 bottom 通道完全交给 library.css 的
+    // max(safe-bottom, keyboard-inset)——内联 paddingBottom 特异性更高，会把
+    // sheet 的 safe-bottom 通道覆盖归零（键盘收起时贴屏幕底缘）。
+    expect(
+      libraryManageSource,
+      'library-manage must not inline any keyboard-inset style',
+    ).not.toContain('--lightink-keyboard-inset');
   });
 
   it('presents the source/group/cache-limit modals as bottom sheets on touch phones', () => {
@@ -274,6 +284,22 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
           /align-items:\s*flex-end/.test(rule.body),
       ),
     ).toBe(true);
+  });
+
+  it('re-anchors the touch context menu above the keyboard (height clamp, no double shift)', () => {
+    // FB4：键盘态 max-height 钳到键盘上方可视区（双锚，pinFixedOverlay 范式）；
+    // bottom 通道仍是唯一位移扣减，横屏 IME 时菜单顶端不溢出视口。
+    expect(themeCss).toMatch(
+      /html\[data-keyboard\]:is\(\[data-android\], \[data-touch-primary\]\) \.lightink-context-menu\s*\{[^}]*max-height:\s*calc\(100dvh - var\(--lightink-keyboard-inset, 0px\) - 24px\)/,
+    );
+  });
+
+  it('washes membership overlay buttons on touch (portaled above .lightink-library)', () => {
+    // FB2：membership overlay 挂 document.body，`.lightink-library button` 通用
+    // 洗色不命中；overlay 自身的门控组选择器须覆盖其表单按钮。
+    expect(libraryCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-membership-overlay\s*button:not\(:disabled\):active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--lightink-accent\) 14%, transparent\)/,
+    );
   });
 
   it('unifies confirm/password dialog radii on touch and keeps desktop cards untouched', () => {

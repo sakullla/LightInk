@@ -4260,7 +4260,11 @@ describe('LibraryView mobile shelf', () => {
     expectOverlayKeyboardInset(css, '.lightink-library-group-modal');
     expectOverlayKeyboardInset(css, '.lightink-library-cache-limit-modal');
     expectOverlayKeyboardInset(css, '.lightink-library-membership-overlay');
-    expectOverlayKeyboardInset(css, '.lightink-library-membership-dialog');
+    // 单一扣减（T4-A2）：membership dialog 的 max-height 不含 keyboard-inset 项，
+    // inset 只由 overlay 的 padding-bottom 通道消费。
+    expect(css).not.toMatch(
+      /\.lightink-library-membership-dialog[^{}]*\{[^{}]*max-height\s*:[^;}]*--lightink-keyboard-inset/,
+    );
   });
 
   it('lifts source/group/cache/membership overlays above the IME and still closes them at inset 0', async () => {
@@ -4331,7 +4335,9 @@ describe('LibraryView mobile shelf', () => {
     host.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
     const cacheOverlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
     expect(isShown(cacheOverlay)).toBe(true);
-    expect(cacheOverlay.style.paddingBottom).toContain('--lightink-keyboard-inset');
+    // 单一扣减（T4-A2）：bottom 通道完全交给 library.css 门控规则（内联
+    // paddingBottom 会覆盖 sheet 的 max(safe-bottom, keyboard-inset) 通道）。
+    expect(cacheOverlay.style.paddingBottom).toBe('');
     applyKeyboardInset(180);
     applyKeyboardInset(0);
     expect(isShown(cacheOverlay)).toBe(true);

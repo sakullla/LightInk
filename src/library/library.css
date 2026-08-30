@@ -3682,7 +3682,10 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
-  max-height: min(80vh, 560px, calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px)));
+  /* 单一扣减：max-height 不含 keyboard-inset（membership-overlay 的
+     padding-bottom 是唯一位移通道；键盘态由 html[data-keyboard] 锚定的
+     max-height: 100% 接管高度收敛）。 */
+  max-height: min(80vh, 560px, calc(100dvh - 24px));
 }
 
 :is(html[data-android], html[data-touch-primary])
@@ -3806,9 +3809,10 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 }
 
 /*
- * T1 闭包遗留：三模态 overlay 挂在 document.body，`.lightink-library button` 通用
- * 洗色不命中；为 overlay 内表单按钮补门控按压洗色（accent 14%，与 T1 同款；
- * .lightink-library-primary 的 !important 实底不受影响，保持可读对比）。
+ * T1 闭包遗留：三模态与 membership overlay 挂在 document.body，
+ * `.lightink-library button` 通用洗色不命中；为 overlay 内表单按钮补门控按压
+ * 洗色（accent 14%，与 T1 同款；.lightink-library-primary 的 !important
+ * 实底不受影响，保持可读对比）。
  */
 :is(html[data-android], html[data-touch-primary])
   .lightink-library-source-modal
@@ -3818,6 +3822,9 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   button:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
   .lightink-library-cache-limit-modal
+  button:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-membership-overlay
   button:not(:disabled):active {
   background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
   transition: background-color 100ms ease;

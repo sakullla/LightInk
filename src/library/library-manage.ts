@@ -92,18 +92,19 @@ export function bytesLabel(bytes: number): string {
 }
 
 /**
- * Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the
- * layer closable. Single deduction (reader-chrome-panels.ts pinFixedOverlay
- * paradigm): the overlay bottom offset is the only keyboard-inset consumer; on
- * touch the dialog height budget — keyboard-open anchor included — is owned by
- * the touch rules in library.css, so the inset is never subtracted from both
- * the bottom offset and max-height.
+ * Cache-limit dialog height budget. The overlay bottom offset (keyboard /
+ * safe-area inset) is owned by the touch rules in library.css — no inline
+ * paddingBottom here: inline style specificity would override the sheet rule
+ * `padding-bottom: max(safe-bottom, keyboard-inset)` and zero out the
+ * safe-bottom channel when the keyboard is closed (inconsistent with the
+ * group/source sheets). Single deduction (reader-chrome-panels.ts
+ * pinFixedOverlay paradigm): on touch the height budget — keyboard-open anchor
+ * included — is owned by library.css; desktop keeps the legacy cap.
  */
-function applyCacheLimitKeyboardInset(overlay: HTMLElement, dialog: HTMLElement): void {
-  overlay.style.paddingBottom = 'var(--lightink-keyboard-inset, 0px)';
+function applyCacheLimitDialogHeightCap(overlay: HTMLElement, dialog: HTMLElement): void {
   const root = overlay.ownerDocument.documentElement;
   const touch = root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary');
-  // 桌面保留既有高度上限（keyboard-inset 恒为 0，与改版前等价）。
+  // 桌面保留既有高度上限（键盘不占位，与改版前等价）。
   if (!touch) {
     dialog.style.maxHeight = 'calc(100dvh - 24px)';
   }
@@ -247,7 +248,7 @@ export function createLibraryManage(
   cacheLimitForm.append(cacheLimitLabel, cacheLimitActions);
   cacheLimitDialog.append(cacheLimitTitle, cacheLimitForm);
   cacheLimitOverlay.append(cacheLimitDialog);
-  applyCacheLimitKeyboardInset(cacheLimitOverlay, cacheLimitDialog);
+  applyCacheLimitDialogHeightCap(cacheLimitOverlay, cacheLimitDialog);
 
   let ignoreCacheBackdrop = true;
 

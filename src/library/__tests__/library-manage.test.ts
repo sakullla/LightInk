@@ -346,7 +346,7 @@ describe('cache-limit dialog keyboard-inset single deduction (T4)', () => {
     document.documentElement.removeAttribute('data-touch-primary');
   });
 
-  it('lifts via the overlay bottom offset only and keeps the height cap inset-free', () => {
+  it('defers both keyboard channels to CSS so the sheet bottom rule applies', () => {
     const { options } = manageOptions();
     const manage = createLibraryManage(document, options);
     document.body.appendChild(manage.element);
@@ -355,8 +355,11 @@ describe('cache-limit dialog keyboard-inset single deduction (T4)', () => {
     const overlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
     const dialog = overlay.querySelector<HTMLElement>('.lightink-modal-dialog')!;
 
-    // 单一扣减：keyboard-inset 只由 overlay 的 bottom 偏移通道消费。
-    expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    // 单一扣减（T4-A2）：bottom 通道完全交给 library.css 的门控规则
+    // （触屏 padding-bottom: max(safe-bottom, keyboard-inset)）。不再写内联
+    // paddingBottom——内联特异性更高，会把 sheet 的 safe-bottom 通道覆盖归零
+    // （键盘收起时贴屏幕底缘，与 group/source sheet 不一致）。
+    expect(overlay.style.paddingBottom).toBe('');
     // max-height 不含 keyboard-inset；inset=0（键盘收起）时与改版前的
     // calc(100dvh - 24px - 0px) 布局等价。
     expect(dialog.style.maxHeight).toBe('calc(100dvh - 24px)');
@@ -374,10 +377,10 @@ describe('cache-limit dialog keyboard-inset single deduction (T4)', () => {
     const overlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
     const dialog = overlay.querySelector<HTMLElement>('.lightink-modal-dialog')!;
 
-    // 触屏：bottom 偏移仍是唯一 keyboard-inset 通道；高度预算（含
-    // html[data-keyboard] 键盘态锚定 max-height: 100%）由 library.css 持有，
-    // 内联不再双扣。
-    expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    // 触屏：bottom 偏移与高度预算都由 library.css 持有（含 html[data-keyboard]
+    // 键盘态锚定 max-height: 100%），内联不再双扣、不再覆盖 sheet 的
+    // max(safe-bottom, keyboard-inset) 通道。
+    expect(overlay.style.paddingBottom).toBe('');
     expect(dialog.style.maxHeight).toBe('');
     manage.destroy();
   });

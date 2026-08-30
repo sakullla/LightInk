@@ -136,7 +136,12 @@ describe('keyboard-inset overlay consumers', () => {
     overlayConsumesKeyboardInset(libraryCss, '.lightink-library-group-modal');
     overlayConsumesKeyboardInset(libraryCss, '.lightink-library-cache-limit-modal');
     overlayConsumesKeyboardInset(libraryCss, '.lightink-library-membership-overlay');
-    overlayConsumesKeyboardInset(libraryCss, '.lightink-library-membership-dialog');
+    // 单一扣减（T4-A2）：membership dialog 的 max-height 不含 keyboard-inset 项；
+    // inset 只由 membership-overlay 的 padding-bottom 通道消费（键盘态由
+    // html[data-keyboard] 锚定的 max-height: 100% 接管高度收敛）。
+    expect(libraryCss).not.toMatch(
+      /\.lightink-library-membership-dialog[^{}]*\{[^{}]*max-height\s*:[^;}]*--lightink-keyboard-inset/,
+    );
   });
 
   it('archive-password overlay consumes keyboard-inset and can close after inset returns to 0', async () => {
