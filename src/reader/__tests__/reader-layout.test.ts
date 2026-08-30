@@ -440,10 +440,13 @@ describe('readerPageInnerPadPx', () => {
   it('scrolls the reader pane like Markdown instead of clipping the book', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     expect(css).toMatch(
-      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],\s*#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)\s*\{[^}]*overflow-y:\s*auto/,
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],[\s\S]*?:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)[\s\S]*?:has\(\s*>\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)\s*\{[^}]*overflow-y:\s*auto/,
     );
     expect(css).toMatch(
-      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],\s*#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)\s*\{[^}]*overflow-anchor:\s*none/,
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\],[\s\S]*?:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)[\s\S]*?:has\(\s*>\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)\s*\{[^}]*overflow-anchor:\s*none/,
+    );
+    expect(css).toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)[\s\S]*?\.lightink-tab-host[\s\S]*?\{[^}]*height:\s*auto/,
     );
     expect(css).toMatch(
       /#app\.is-workspace-shelf #lightink-editor-area[\s\S]*overflow:\s*hidden/,
@@ -459,6 +462,9 @@ describe('readerPageInnerPadPx', () => {
     );
     expect(css).not.toMatch(
       /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)/,
+    );
+    expect(css).not.toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)/,
     );
     expect(css).toMatch(
       /#app\.is-workspace-shelf #lightink-main > \.lightink-reader-sidebar,[\s\S]*?\.lightink-reader-sidebar-backdrop\s*\{[^}]*display:\s*none/,
@@ -1667,6 +1673,16 @@ describe('reader Ctrl+M vs editor layout key', () => {
     expect(document.documentElement.dataset.readingLayout).toBe('paginated');
     expect(flowEvents).toEqual(['paginated']);
 
+    const ungatedScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll'])";
+    const visibleScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(.lightink-tab-host:not([style*='display: none']) .lightink-reader[data-reading-layout='scroll'])";
+    const unwrappedScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(> .lightink-reader[data-reading-layout='scroll'])";
+    expect(editor.matches(ungatedScrollHas)).toBe(true);
+    expect(editor.matches(visibleScrollHas)).toBe(false);
+    expect(editor.matches(unwrappedScrollHas)).toBe(false);
+
     pdfHost.style.display = '';
     epubHost.style.display = 'none';
     expect(editor.matches(visiblePdfPin)).toBe(true);
@@ -1679,6 +1695,73 @@ describe('reader Ctrl+M vs editor layout key', () => {
     expect(flowEvents).toEqual([]);
 
     document.removeEventListener('lightink:reader-flow-layout', restamp);
+    shell.destroy();
+  });
+
+  it('does not restyle a paginated EPUB as a pane scroller from a hidden PDF tab', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
+    expect(css).not.toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)/,
+    );
+    expect(css).toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)[\s\S]*?\{[^}]*overflow-y:\s*auto/,
+    );
+    expect(css).toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\s*>\s*\.lightink-reader\[data-reading-layout='scroll'\]\s*\)[\s\S]*?\{[^}]*overflow-y:\s*auto/,
+    );
+
+    const { storage } = memoryStorage({
+      [READER_FLOW_LAYOUT_STORAGE_KEY]: 'paginated',
+    });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const shell = createAppShell(
+      root,
+      stubShellActions({
+        getWorkspaceMode: () => 'reader',
+        getWorkspaceSnapshot: () => ({ mode: 'reader', surface: 'reader' }),
+      }),
+      { shortcutBindings: () => [], storage },
+    );
+    const editor = root.querySelector('#lightink-editor-area') as HTMLElement;
+    editor.dataset.surface = 'reader';
+
+    const pdfHost = document.createElement('div');
+    pdfHost.className = 'lightink-tab-host lightink-tab-host--reader';
+    pdfHost.style.display = 'none';
+    const pdfReader = document.createElement('div');
+    pdfReader.className = 'lightink-reader';
+    const pages = document.createElement('div');
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    pdfReader.appendChild(pages);
+    pdfHost.appendChild(pdfReader);
+
+    const epubHost = document.createElement('div');
+    epubHost.className = 'lightink-tab-host lightink-tab-host--reader';
+    const epubReader = document.createElement('div');
+    epubReader.className = 'lightink-reader';
+    epubHost.appendChild(epubReader);
+
+    editor.append(pdfHost, epubHost);
+    document.documentElement.dataset.readingLayout = 'paginated';
+    shell.applyWorkspace({ mode: 'reader', surface: 'reader' });
+
+    const ungatedScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll'])";
+    const visibleScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(.lightink-tab-host:not([style*='display: none']) .lightink-reader[data-reading-layout='scroll'])";
+    const unwrappedScrollHas =
+      "#lightink-editor-area[data-surface='reader']:has(> .lightink-reader[data-reading-layout='scroll'])";
+
+    expect(pdfReader.dataset.readingLayout).toBe('scroll');
+    expect(epubReader.dataset.readingLayout).toBe('paginated');
+    expect(document.documentElement.dataset.readingLayout).toBe('paginated');
+    expect(editor.matches(ungatedScrollHas)).toBe(true);
+    expect(editor.matches(visibleScrollHas)).toBe(false);
+    expect(editor.matches(unwrappedScrollHas)).toBe(false);
+
     shell.destroy();
   });
 

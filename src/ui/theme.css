@@ -910,9 +910,17 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
 /* Scroll mode uses the same pane scroller as Markdown. height:auto on the
    tab host lets the book grow so overflow-y:auto actually has a range.
    Key off the flow root as well as html: editor paginated + reader scroll
-   must still be a scroller, or chapter titles/gaps outside iframes eat the wheel. */
+   must still be a scroller, or chapter titles/gaps outside iframes eat the wheel.
+   Gate :has on a visible tab host: a hidden PDF (applyReaderShellChrome keeps
+   it on scroll) must not restyle a visible paginated EPUB as a pane scroller.
+   Direct .lightink-reader children cover tests / hosts that are not wrapped. */
 html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'],
-#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll']) {
+#lightink-editor-area[data-surface='reader']:has(
+    .lightink-tab-host:not([style*='display: none']) .lightink-reader[data-reading-layout='scroll']
+  ),
+#lightink-editor-area[data-surface='reader']:has(
+    > .lightink-reader[data-reading-layout='scroll']
+  ) {
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
@@ -925,7 +933,14 @@ html[data-reading-layout='scroll'] #app.is-workspace-shelf #lightink-editor-area
 
 html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader'] .lightink-tab-host,
 html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader,
-#lightink-editor-area[data-surface='reader']:has(.lightink-reader[data-reading-layout='scroll']) .lightink-tab-host {
+#lightink-editor-area[data-surface='reader']:has(
+    .lightink-tab-host:not([style*='display: none']) .lightink-reader[data-reading-layout='scroll']
+  )
+  .lightink-tab-host,
+#lightink-editor-area[data-surface='reader']:has(
+    > .lightink-reader[data-reading-layout='scroll']
+  )
+  .lightink-tab-host {
   height: auto;
   min-height: 100%;
 }

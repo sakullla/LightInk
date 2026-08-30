@@ -413,6 +413,9 @@ describe('PDF render lifecycle', () => {
     expect(theme).not.toMatch(
       /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader-pages\[data-reader-active='true'\]\)/,
     );
+    expect(theme).not.toMatch(
+      /#lightink-editor-area\[data-surface='reader'\]:has\(\.lightink-reader\[data-reading-layout='scroll'\]\)/,
+    );
     expect(css).not.toMatch(
       /html\[data-reading-layout='paginated'\] \.lightink-reader:has\([^)]*\)\s*\{[^}]*overflow:\s*auto/,
     );
