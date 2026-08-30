@@ -340,6 +340,49 @@ describe('bytesLabel', () => {
   });
 });
 
+describe('cache-limit dialog keyboard-inset single deduction (T4)', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-android');
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
+
+  it('lifts via the overlay bottom offset only and keeps the height cap inset-free', () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    manage.element.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const overlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
+    const dialog = overlay.querySelector<HTMLElement>('.lightink-modal-dialog')!;
+
+    // 单一扣减：keyboard-inset 只由 overlay 的 bottom 偏移通道消费。
+    expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    // max-height 不含 keyboard-inset；inset=0（键盘收起）时与改版前的
+    // calc(100dvh - 24px - 0px) 布局等价。
+    expect(dialog.style.maxHeight).toBe('calc(100dvh - 24px)');
+    expect(dialog.style.maxHeight).not.toContain('--lightink-keyboard-inset');
+    manage.destroy();
+  });
+
+  it('defers the touch height budget to CSS so the keyboard-open anchor applies', () => {
+    document.documentElement.setAttribute('data-android', '');
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    manage.element.querySelector<HTMLButtonElement>('[aria-label="调整缓存上限"]')!.click();
+    const overlay = document.querySelector<HTMLElement>('.lightink-library-cache-limit-modal')!;
+    const dialog = overlay.querySelector<HTMLElement>('.lightink-modal-dialog')!;
+
+    // 触屏：bottom 偏移仍是唯一 keyboard-inset 通道；高度预算（含
+    // html[data-keyboard] 键盘态锚定 max-height: 100%）由 library.css 持有，
+    // 内联不再双扣。
+    expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
+    expect(dialog.style.maxHeight).toBe('');
+    manage.destroy();
+  });
+});
+
 const zhTabLabels: LibraryTabbarLabels = {
   navigation: '书库导航',
   shelf: '书架',

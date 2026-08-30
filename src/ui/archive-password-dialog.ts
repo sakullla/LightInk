@@ -6,16 +6,27 @@ function isTouchPrimary(doc: Document): boolean {
   return root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary');
 }
 
-/** Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the layer closable. */
+/**
+ * Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the
+ * layer closable. Single deduction (reader-chrome-panels.ts pinFixedOverlay
+ * paradigm): the overlay bottom offset is the only keyboard-inset consumer; on
+ * touch the dialog height budget — keyboard-open anchor included — is owned by
+ * the touch rules in library.css, so the inset is never subtracted from both
+ * the bottom offset and max-height.
+ */
 function applyArchivePasswordKeyboardInset(
   overlay: HTMLElement,
   dialog: HTMLElement,
   input: HTMLInputElement,
   actions: HTMLElement,
 ): void {
+  const touch = isTouchPrimary(overlay.ownerDocument);
   overlay.style.paddingBottom = 'var(--lightink-keyboard-inset, 0px)';
-  dialog.style.maxHeight = 'calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))';
-  if (!isTouchPrimary(overlay.ownerDocument)) return;
+  if (!touch) {
+    // 桌面保留既有高度上限（keyboard-inset 恒为 0，与改版前等价）。
+    dialog.style.maxHeight = 'calc(100dvh - 24px)';
+    return;
+  }
   dialog.style.boxSizing = 'border-box';
   dialog.style.width = 'calc(100vw - 24px)';
   dialog.style.maxWidth = 'calc(100vw - 24px)';

@@ -91,10 +91,22 @@ export function bytesLabel(bytes: number): string {
   return `${value < 10 && unit > 0 ? value.toFixed(1) : value.toFixed(0)} ${units[unit]}`;
 }
 
-/** Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the layer closable. */
+/**
+ * Consume --lightink-keyboard-inset (written by safe-area.ts). Inset 0 keeps the
+ * layer closable. Single deduction (reader-chrome-panels.ts pinFixedOverlay
+ * paradigm): the overlay bottom offset is the only keyboard-inset consumer; on
+ * touch the dialog height budget — keyboard-open anchor included — is owned by
+ * the touch rules in library.css, so the inset is never subtracted from both
+ * the bottom offset and max-height.
+ */
 function applyCacheLimitKeyboardInset(overlay: HTMLElement, dialog: HTMLElement): void {
   overlay.style.paddingBottom = 'var(--lightink-keyboard-inset, 0px)';
-  dialog.style.maxHeight = 'calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))';
+  const root = overlay.ownerDocument.documentElement;
+  const touch = root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary');
+  // 桌面保留既有高度上限（keyboard-inset 恒为 0，与改版前等价）。
+  if (!touch) {
+    dialog.style.maxHeight = 'calc(100dvh - 24px)';
+  }
 }
 
 function button(doc: Document, text: string, className = ''): HTMLButtonElement {

@@ -3644,7 +3644,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 /*
  * Portaled overlays sit on document.body. Phone / ?mobile=1 preview must
  * follow the viewport — not the 22–26rem desktop card — and use shelf UI type.
- * Keyboard inset is written by src/ui/safe-area.ts; these layers only consume it.
+ * Keyboard inset is written by src/ui/safe-area.ts; these layers only consume it,
+ * 单一扣减（reader-chrome-panels.ts pinFixedOverlay 范式）：keyboard-inset 只走
+ * overlay 的 bottom 偏移通道，dialog 的 max-height 不再重复扣 inset。
  */
 :is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal,
@@ -3669,7 +3671,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   box-sizing: border-box;
   width: calc(100vw - 24px);
   max-width: calc(100vw - 24px);
-  max-height: calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px));
+  /* 单一扣减：高度预算不含 keyboard-inset（inset=0 时与改版前的
+     calc(100dvh - 24px - 0px) 等价），键盘弹起不再双倍上移/双倍收缩。 */
+  max-height: calc(100dvh - 24px);
   overflow-y: auto;
   padding: 14px 12px 10px;
   border-radius: 16px;
@@ -3688,7 +3692,8 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
 :is(html[data-android], html[data-touch-primary])
   .lightink-link-dialog:has(#lightink-archive-password) {
-  max-height: calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px));
+  /* 单一扣减：keyboard-inset 只由 overlay 的 padding-bottom 通道消费。 */
+  max-height: calc(100dvh - 24px);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form-actions,
@@ -3724,6 +3729,98 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 :is(html[data-android], html[data-touch-primary]) .lightink-library-source-form label,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-group-form label {
   font-size: var(--lightink-type-ui);
+}
+
+/*
+ * T4 触屏 ≤760px：来源/组/缓存上限三模态底部 sheet 化（沿 theme.css sync panel
+ * 触屏基线）：底部锚定、圆角只在上缘、safe-bottom/keyboard-inset 经 bottom 通道
+ * 单一消费；44px 控件与 16px 输入字号（html 级 --lightink-type-body: 1rem）由
+ * 上方通用触屏规则提供。桌面居中卡片（无触屏旗标或 >760px）完全不变。
+ */
+@media (max-width: 760px) {
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal,
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-modal {
+    grid-template-rows: minmax(0, 1fr);
+    align-items: end;
+    padding-bottom: max(var(--lightink-safe-bottom, 0px), var(--lightink-keyboard-inset, 0px));
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-group-modal
+    .lightink-modal-dialog,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-source-modal
+    .lightink-modal-dialog,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cache-limit-modal
+    .lightink-modal-dialog {
+    width: 100%;
+    max-width: 100vw;
+    /* 高度收敛到内容盒（已扣 safe-bottom/keyboard-inset 的可视区），不含 inset 项。 */
+    max-height: 100%;
+    padding: 16px 16px 14px;
+    border: 1px solid var(--lightink-border);
+    border-bottom: none;
+    border-radius: 20px 20px 0 0;
+    box-shadow: var(--lightink-shadow-strong);
+  }
+}
+
+/*
+ * T4 键盘态锚定（reader-chrome-panels.ts pinFixedOverlay 范式）：safe-area.ts 在
+ * inset ≥ 80px 时写 html[data-keyboard]。键盘打开时对话框锚到键盘上缘——底部
+ * 上移恰等于 inset，高度收敛到可视区（100% = 已扣 inset 的内容盒），杜绝 bottom
+ * 偏移与 max-height 的双倍扣减；键盘收起（inset=0、无 data-keyboard）回到居中卡片。
+ */
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-group-modal,
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-source-modal,
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-cache-limit-modal,
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-overlay {
+  grid-template-rows: minmax(0, 1fr);
+  align-items: end;
+}
+
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-library-group-modal
+  .lightink-modal-dialog,
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-library-source-modal
+  .lightink-modal-dialog,
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-library-cache-limit-modal
+  .lightink-modal-dialog,
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-dialog {
+  max-height: 100%;
+}
+
+/* 密码对话框 overlay 是 flex 布局：同样锚到键盘上缘、高度收敛可视区。 */
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-modal-overlay:has(#lightink-archive-password) {
+  align-items: flex-end;
+}
+
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-link-dialog:has(#lightink-archive-password) {
+  max-height: 100%;
+}
+
+/*
+ * T1 闭包遗留：三模态 overlay 挂在 document.body，`.lightink-library button` 通用
+ * 洗色不命中；为 overlay 内表单按钮补门控按压洗色（accent 14%，与 T1 同款；
+ * .lightink-library-primary 的 !important 实底不受影响，保持可读对比）。
+ */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-source-modal
+  button:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-group-modal
+  button:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cache-limit-modal
+  button:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
 }
 
 /* ===== 触屏按压反馈基线（T1）：通用按钮/列表项洗色 + hover 驻留中和 ===== */

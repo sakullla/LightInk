@@ -150,7 +150,9 @@ describe('keyboard-inset overlay consumers', () => {
     const dialog = document.querySelector<HTMLElement>('.lightink-link-dialog')!;
     const input = document.querySelector<HTMLInputElement>('#lightink-archive-password')!;
     expect(overlay.style.paddingBottom).toBe('var(--lightink-keyboard-inset, 0px)');
-    expect(dialog.style.maxHeight).toBe('calc(100dvh - 24px - var(--lightink-keyboard-inset, 0px))');
+    // 单一扣减（T4）：触屏高度预算交给 library.css 触屏规则（html[data-keyboard] 锚定），
+    // 内联 max-height 不再消费 keyboard-inset，避免 bottom 与 max-height 双扣。
+    expect(dialog.style.maxHeight).toBe('');
     expect(input).toBeInstanceOf(HTMLInputElement);
     applyKeyboardInset(280);
     expect(document.documentElement.style.getPropertyValue('--lightink-keyboard-inset')).toBe(
