@@ -975,25 +975,9 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
    overflow:hidden。IntersectionObserver root 始终是这个容器。 */
 .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] {
   overflow: auto;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
-}
-
-html[data-display='qhd'] .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'],
-html[data-display='uhd'] .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'],
-html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  justify-content: center;
-  gap: 1rem 1.25rem;
-  padding: 1rem;
-}
-
-html[data-display='qhd'] .lightink-reader-pages[data-reader-format='pdf'] .lightink-reader-page-slot,
-html[data-display='uhd'] .lightink-reader-pages[data-reader-format='pdf'] .lightink-reader-page-slot,
-html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .lightink-reader-page-slot {
-  margin: 0;
 }
 
 /* 漫画是位图：字号 zoom 会再采样一层，线条发糊。放大只走 pinch 的 --lightink-comic-scale。

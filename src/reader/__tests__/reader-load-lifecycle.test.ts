@@ -2096,6 +2096,7 @@ describe('Reader load lifecycle', () => {
     expect(host.querySelector<HTMLElement>('.lightink-reader')?.dataset.readingLayout).toBe(
       'paginated',
     );
+    expect(document.documentElement.dataset.readingLayout).toBe('paginated');
     await view.destroy();
   });
 

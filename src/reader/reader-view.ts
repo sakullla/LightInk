@@ -3369,7 +3369,12 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     // PDF 会话会把宿主钉成 scroll。回到 EPUB 时才恢复存储版式。
     // 每次 flow commit 都写存储值会盖掉测试/会话里已经设好的滚动。
     if (leavingPaged) {
-      applyReaderLayout(root, loadReaderLayout(preferenceStorage));
+      const stored = loadReaderLayout(preferenceStorage);
+      applyReaderLayout(root, stored);
+      if (typeof document !== 'undefined') {
+        applyReaderDocumentLayout(document.documentElement, 'reader', stored);
+      }
+      dispatchReaderFlowLayoutPref(stored);
     }
     try {
       renderChapters(content.chapters, content.stylesheet);

@@ -236,6 +236,12 @@ describe('readerFlowUsesTextColumns', () => {
       /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
     );
     expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*flex-direction:\s*column/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-display='(?:qhd|uhd|xuhd)'\][^{]*\.lightink-reader-pages\[data-reader-format='pdf'\][^{]*\{[^}]*flex-wrap:\s*wrap/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader:has\(>\s*\.lightink-reader-pages\[data-reader-active='true'\]\)\s*\{[^}]*position:\s*absolute/,
     );
     expect(css).toMatch(
