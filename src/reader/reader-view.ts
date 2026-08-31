@@ -2835,7 +2835,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     cancelFontScaleRefresh = settleFontScaleRefresh(applyFontScaleRefresh);
   };
   const onPdfUserZoom = (event: Event): void => {
-    if (destroyed) {
+    if (destroyed || !sessionAnnotation.tabActive()) {
       return;
     }
     const direction = (event as CustomEvent<{ direction?: number }>).detail?.direction;

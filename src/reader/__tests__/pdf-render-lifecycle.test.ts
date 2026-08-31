@@ -68,6 +68,7 @@ vi.mock('pdfjs-dist', () => ({
 
 vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'mock-worker.js' }));
 
+import { createReaderView } from '../reader-view.js';
 import { renderPdfInto } from '../formats/pdf.js';
 
 interface ControlledRenderTask {
@@ -768,5 +769,34 @@ describe('PDF text layer', () => {
     expect(layer.container.style.getPropertyValue('--total-scale-factor')).toBe('1');
     layer.resolveRender();
     await handle.destroy();
+  });
+});
+
+describe('PDF user-zoom tab targeting', () => {
+  it('dispatches lightink:pdf-user-zoom only to the active reader tab', async () => {
+    mockPdf();
+    const hostActive = document.createElement('div');
+    const hostHidden = document.createElement('div');
+    document.body.append(hostActive, hostHidden);
+    const deps = { readBytes: async () => new Uint8Array([1]) };
+    const active = createReaderView(hostActive, deps);
+    const hidden = createReaderView(hostHidden, deps);
+
+    await active.load('active.pdf');
+    await hidden.load('hidden.pdf');
+    hidden.setTabActive(false);
+
+    expect(active.state.scale).toBe(1);
+    expect(hidden.state.scale).toBe(1);
+
+    document.dispatchEvent(
+      new CustomEvent('lightink:pdf-user-zoom', { detail: { direction: 1 } }),
+    );
+
+    expect(active.state.scale).toBe(1.25);
+    expect(hidden.state.scale).toBe(1);
+
+    await active.destroy();
+    await hidden.destroy();
   });
 });
