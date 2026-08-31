@@ -3362,9 +3362,15 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   /** flow commit 主体：对称作废先行 → 章节渲染 + 导出面/大纲采纳；失败回滚。 */
   const commitFlowStaged = (content: ReaderContent): void => {
     const previousFlowChapterCount = flowChapterCount;
+    const leavingPaged =
+      pdfHandle !== null || cbzHandle !== null || PAGE_EXTS.has(loadedExt);
     pdfHandle = null;
     cbzHandle = null;
-    applyReaderLayout(root, loadReaderLayout(preferenceStorage));
+    // PDF 会话会把宿主钉成 scroll。回到 EPUB 时才恢复存储版式。
+    // 每次 flow commit 都写存储值会盖掉测试/会话里已经设好的滚动。
+    if (leavingPaged) {
+      applyReaderLayout(root, loadReaderLayout(preferenceStorage));
+    }
     try {
       renderChapters(content.chapters, content.stylesheet);
       exportChapters = content.chapters;

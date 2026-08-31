@@ -26,6 +26,7 @@ import {
 } from '../../media/remote-image-policy.js';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { readerPagedScroller } from '../flow-renderer.js';
+import { READER_FLOW_LAYOUT_STORAGE_KEY } from '../reader-layout.js';
 import {
   FLOW_RESTORE_MAX_ATTEMPTS,
   PAGED_FRAME_RESTORE_GIVE_UP_ATTEMPTS,
@@ -2062,6 +2063,39 @@ describe('Reader load lifecycle', () => {
     view.restoreReadingProgress?.();
     expect(pane.scrollTop).toBe(chapterScrollTop(800, 800, 0.5));
     expect(inner.scrollTop).toBe(0);
+    await view.destroy();
+  });
+
+  it('restores stored paginated layout when opening EPUB after a live PDF', async () => {
+    pdfMock.renderPdfInto.mockImplementation(async () => fakePdfHandle());
+    const store: Record<string, string> = {
+      [READER_FLOW_LAYOUT_STORAGE_KEY]: 'paginated',
+    };
+    const preferenceStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+    };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [{ title: 'One', html: '<p>one</p>' }],
+      }),
+      preferenceStorage,
+    });
+
+    await view.load('doc.pdf');
+    expect(host.querySelector<HTMLElement>('.lightink-reader')?.dataset.readingLayout).toBe(
+      'scroll',
+    );
+
+    await view.load('after-pdf.epub');
+    expect(host.querySelector<HTMLElement>('.lightink-reader')?.dataset.readingLayout).toBe(
+      'paginated',
+    );
     await view.destroy();
   });
 
