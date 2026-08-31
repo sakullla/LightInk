@@ -29,6 +29,19 @@ describe('openDocumentPath', () => {
     expect(deps.manager.openReader).not.toHaveBeenCalled();
   });
 
+  it('routes browser-file Markdown to openFile, not the reader', async () => {
+    const opened = { kind: 'markdown', id: 'md-browser' } as unknown as MarkdownTabState;
+    const deps = {
+      manager: manager({ openFile: vi.fn(async () => opened) }),
+      onReaderOpenError: vi.fn(),
+      onReaderLoadError: vi.fn(),
+    };
+
+    await expect(openDocumentPath('browser-file:note.md', deps)).resolves.toBe(opened);
+    expect(deps.manager.openFile).toHaveBeenCalledWith('browser-file:note.md');
+    expect(deps.manager.openReader).not.toHaveBeenCalled();
+  });
+
   it('reloads when a leftover Reader tab is reused for a different book', async () => {
     const load = vi.fn();
     const leftover = {

@@ -3691,9 +3691,6 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 :is(html[data-android], html[data-touch-primary])
   .lightink-library-source-modal
   .lightink-modal-dialog,
-:is(html[data-android], html[data-touch-primary])
-  .lightink-library-cache-limit-modal
-  .lightink-modal-dialog,
 :is(html[data-android], html[data-touch-primary]) .lightink-library-membership-dialog {
   box-sizing: border-box;
   width: calc(100vw - 24px);
@@ -3704,6 +3701,17 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   overflow-y: auto;
   padding: 14px 12px 10px;
   border-radius: 16px;
+  font-family: var(--lightink-font-ui);
+  font-size: var(--lightink-type-ui);
+}
+
+/* 缓存上限是短表单：触屏也保持视口居中卡片，不走来源/组的底栏 sheet。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cache-limit-modal
+  .lightink-modal-dialog {
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
   font-family: var(--lightink-font-ui);
   font-size: var(--lightink-type-ui);
 }
@@ -3761,15 +3769,14 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 }
 
 /*
- * T4 触屏 ≤760px：来源/组/缓存上限三模态底部 sheet 化（沿 theme.css sync panel
- * 触屏基线）：底部锚定、圆角只在上缘、safe-bottom/keyboard-inset 经 bottom 通道
- * 单一消费；44px 控件与 16px 输入字号（html 级 --lightink-type-body: 1rem）由
- * 上方通用触屏规则提供。桌面居中卡片（无触屏旗标或 >760px）完全不变。
+ * T4 触屏 ≤760px：来源/组底部 sheet 化（沿 theme.css sync panel 触屏基线）：
+ * 底部锚定、圆角只在上缘、safe-bottom/keyboard-inset 经 bottom 通道单一消费。
+ * 缓存上限短表单保持视口居中卡片（place-items:center），不加入本块。
+ * 44px 控件与 16px 输入字号由上方通用触屏规则提供。
  */
 @media (max-width: 760px) {
   :is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal,
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-modal {
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal {
     grid-template-rows: minmax(0, 1fr);
     align-items: end;
     padding-bottom: max(var(--lightink-safe-bottom, 0px), var(--lightink-keyboard-inset, 0px));
@@ -3780,9 +3787,6 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     .lightink-modal-dialog,
   :is(html[data-android], html[data-touch-primary])
     .lightink-library-source-modal
-    .lightink-modal-dialog,
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-cache-limit-modal
     .lightink-modal-dialog {
     width: 100%;
     max-width: 100vw;
@@ -3798,13 +3802,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
 /*
  * T4 键盘态锚定（reader-chrome-panels.ts pinFixedOverlay 范式）：safe-area.ts 在
- * inset ≥ 80px 时写 html[data-keyboard]。键盘打开时对话框锚到键盘上缘——底部
- * 上移恰等于 inset，高度收敛到可视区（100% = 已扣 inset 的内容盒），杜绝 bottom
- * 偏移与 max-height 的双倍扣减；键盘收起（inset=0、无 data-keyboard）回到居中卡片。
+ * inset ≥ 80px 时写 html[data-keyboard]。来源/组/成员 sheet 键盘打开时锚到键盘
+ * 上缘；缓存上限保持 place-items:center，由 overlay padding-bottom 把居中区域
+ * 收到键盘上方。高度收敛不含 keyboard-inset，杜绝双倍扣减。
  */
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-group-modal,
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-source-modal,
-html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-cache-limit-modal,
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-overlay {
   grid-template-rows: minmax(0, 1fr);
   align-items: end;
@@ -3816,11 +3819,13 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 html[data-keyboard]:is([data-android], [data-touch-primary])
   .lightink-library-source-modal
   .lightink-modal-dialog,
-html[data-keyboard]:is([data-android], [data-touch-primary])
-  .lightink-library-cache-limit-modal
-  .lightink-modal-dialog,
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-dialog {
   max-height: 100%;
+}
+
+/* 缓存上限：触屏锁居中。键盘 inset 只走 overlay padding-bottom，卡片在剩余可视区居中。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-cache-limit-modal {
+  place-items: center;
 }
 
 /* 密码对话框 overlay 是 flex 布局：同样锚到键盘上缘、高度收敛可视区。 */

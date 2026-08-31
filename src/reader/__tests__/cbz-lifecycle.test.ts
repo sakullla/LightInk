@@ -554,7 +554,8 @@ describe('CBZ page materialization', () => {
     expect(visiblePageIndices(container)).toEqual(['0']);
     expect(handle.nextPage()).toBe(true);
     expect(handle.currentPage).toBe(2);
-    expect(visiblePageIndices(container)).toEqual(['1', '2']);
+    // decode-gated swap：新页未就绪时旧页保持在屏，换屏等 loadPage 完成。
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['1', '2']));
     const slider = container.querySelector<HTMLInputElement>('.lightink-reader-comic-slider')!;
     expect(slider.max).toBe('3');
     expect(slider.value).toBe('2');
@@ -572,7 +573,7 @@ describe('CBZ page materialization', () => {
     expect(visiblePageIndices(container)).toEqual(['1', '2']);
     expect(handle.nextPage()).toBe(true);
     expect(handle.currentPage).toBe(4);
-    expect(visiblePageIndices(container)).toEqual(['3', '4']);
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['3', '4']));
     expect(handle.nextPage()).toBe(false);
     expect(container.dataset.comicDirection).toBe('rtl');
     expect(JSON.parse([...values.values()][0] ?? '{}')).toMatchObject({
@@ -635,6 +636,81 @@ describe('CBZ page materialization', () => {
       }
     });
     await handle.destroy();
+  });
+
+  it('holds the previous page on screen until the next page decodes (anti-flash swap)', async () => {
+    // 首页 decode 直通让 renderCbzInto 完成；后续页悬挂，模拟慢解码。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'single' }),
+    });
+    expect(visiblePageIndices(container)).toEqual(['0']);
+
+    expect(handle.nextPage()).toBe(true);
+    // 页码/进度立即前进，但换屏被 decode 门控：旧页保持在屏，不闪底色。
+    expect(handle.currentPage).toBe(2);
+    expect(visiblePageIndices(container)).toEqual(['0']);
+    const oldSlot = container.querySelector<HTMLElement>('[data-page-index="0"]')!;
+    expect(oldSlot.querySelector('img')).not.toBeNull();
+
+    // 解码完成后一次性交换到新页。
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    expect(visiblePageIndices(container)).toEqual(['0']);
+    queued.splice(0).forEach((resolve) => resolve());
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['1']));
+    await handle.destroy();
+  });
+
+  it('drives page turns through a View Transition push when supported', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+        preferenceStorage: pagedStorage({ spread: 'single' }),
+      });
+      // 等页 1 预取解码就绪：换屏走同步 commit，直接进 VT。
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.nextPage()).toBe(true);
+      expect(updates).toHaveLength(1);
+      expect(document.documentElement.dataset.comicTurn).toBe('next');
+      expect(visiblePageIndices(container)).toEqual(['1']); // 换屏在 update 回调内提交
+      finishedResolvers.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() => expect(document.documentElement.dataset.comicTurn).toBeUndefined());
+
+      expect(handle.previousPage()).toBe(true);
+      expect(updates).toHaveLength(2);
+      expect(document.documentElement.dataset.comicTurn).toBe('prev');
+      expect(visiblePageIndices(container)).toEqual(['0']);
+      await handle.destroy();
+      expect(document.documentElement.dataset.comicTurn).toBeUndefined();
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
   });
 
   it('shows a retryable structured state when the browser rejects an image', async () => {
@@ -745,7 +821,8 @@ describe('CBZ page materialization', () => {
     });
     expect(container.dispatchEvent(edge)).toBe(false);
     expect(handle.currentPage).toBe(before + 1);
-    expect(surface.scrollTop).toBe(0);
+    // decode-gated swap：滚动复位在换屏提交时执行，等新页就绪后断言。
+    await vi.waitFor(() => expect(surface.scrollTop).toBe(0));
     await handle.destroy();
   });
 
@@ -1138,8 +1215,10 @@ describe('CBZ page materialization', () => {
     });
 
     expect(handle.nextPage()).toBe(true);
-    expect(container.dataset.comicVisible).toBe('2');
-    expect(visiblePageIndices(container)).toEqual(['1', '2']);
+    await vi.waitFor(() => {
+      expect(container.dataset.comicVisible).toBe('2');
+      expect(visiblePageIndices(container)).toEqual(['1', '2']);
+    });
     const paired = (): HTMLElement[] =>
       Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')).filter(
         (slot) => !slot.hidden,

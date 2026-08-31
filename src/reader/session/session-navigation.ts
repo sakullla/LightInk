@@ -15,8 +15,9 @@
  *   - 漫画 rtl 阅读方向只反转左右方向键（navKey ∈ {ArrowLeft, ArrowRight}），
  *     上下/空格/滚轮保持物理方向；
  *   - flow 族返回实际移动位：分栏模式按列步进、滚动模式按视口步进，仅在
- *     移动时写进度、藏划选工具栏并播放翻页动画——首屏上翻/末屏下翻不
- *     越界、不动画、不写进度；
+ *     移动时写进度、藏划选工具栏；分栏才播翻页动画，滚动模式瞬跳、不动画
+ *     （插值滚动会和原生惯性抢主线程，换章后第一下滚动会卡）。首屏上翻/
+ *     末屏下翻不越界、不动画、不写进度；
  * - 大纲跳转按本族落点派发（paged 按页、flow 按章节）：条目缺本族落点
  *   （如 paged 会话收到章节条目、条目无 page/chapter）或页宿主未就绪时
  *   no-op，不跳转不报错；flow 章节跳转前作废待恢复进度——迟到的帧 load
@@ -142,7 +143,9 @@ function flowNavigationStrategy(host: SessionNavigationHost): SessionNavigationS
       }
       host.persistProgress();
       host.hideSelectionToolbar();
-      host.playPageTurn(direction);
+      if (host.flowIsPaginated()) {
+        host.playPageTurn(direction);
+      }
       return true;
     },
     jump(item) {

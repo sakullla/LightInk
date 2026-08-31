@@ -79,6 +79,27 @@ const COMIC_EDGE_ZONE = 0.28;
 const COMIC_SYSTEM_EDGE_PX = 24;
 /** T2：触屏 paged 翻页进入 slot 的滑入时长（与文字书 slide 同曲线族）。 */
 const COMIC_SLOT_SLIDE_MS = 200;
+/**
+ * 翻页防闪屏（decode-gated swap）：相邻翻页时新页图片未解码就绪就先不换屏，
+ * 旧页保持显示，待 loadPage（读档 + img.decode 预热位图）完成后一次性交换；
+ * 超过此上限则不再等待（照旧显示底色占位），保证快速连翻不粘手。
+ */
+const COMIC_TURN_HOLD_MS = 300;
+
+/**
+ * View Transition push 翻页：浏览器先截住旧帧快照、提交 DOM、在合成器层对
+ * 旧/新快照做滑动转场——旧页滑出与新页滑入同帧进行，全程不露底色。
+ * 快照对象是 pagesRoot（CSS view-transition-name: lightink-comic-pages），
+ * 方向由 html[data-comic-turn] 驱动。不支持的环境回退 slot 滑入。
+ */
+interface ComicViewTransition {
+  readonly finished: Promise<void>;
+  skipTransition(): void;
+}
+
+type ComicViewTransitionDocument = Document & {
+  startViewTransition?: (update: () => void) => ComicViewTransition;
+};
 const COMIC_ZOOM_MIN = 1;
 const COMIC_ZOOM_MAX = 5;
 const COMIC_ZOOM_TOGGLE = 2;
@@ -783,6 +804,10 @@ export async function renderCbzInto(
     const cropInsets = new Map<number, ComicCropInsets>();
     let wantedPages = new Set<number>();
     let currentPage = 1;
+    /** decode-gated swap 的世代号：新翻页/重排版让挂起的旧换屏作废。 */
+    let spreadSwapGeneration = 0;
+    /** 进行中的翻页 View Transition；新翻页先跳过旧转场避免叠帧。 */
+    let activeTurnTransition: ComicViewTransition | null = null;
     let viewScale = 1;
     let viewX = 0;
     let viewY = 0;
@@ -1414,7 +1439,11 @@ export async function renderCbzInto(
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
         : new Set(centers);
       for (const index of materialized.keys()) {
-        if (!wanted.has(index)) releasePage(index);
+        // paged 换屏挂起期（decode-gated swap）旧页仍在屏：跳过释放，等下次
+        // 刷新（slot 已隐藏）再回收，避免持有期旧 slot 被掏空闪底色。
+        if (wanted.has(index)) continue;
+        if (preferences.mode === 'paged' && slots[index]?.hidden === false) continue;
+        releasePage(index);
       }
       for (const [index, operation] of pending) {
         if (!wanted.has(index)) operation.controller.abort();
@@ -1438,6 +1467,7 @@ export async function renderCbzInto(
     }
 
     const applyLayout = (notify = true): void => {
+      spreadSwapGeneration += 1; // 重排版同步重写 hidden：作废挂起的换屏
       const previousPage = currentPage;
       const spreadPrefs = layoutSpreadPrefs();
       const currentIndex = comicSpreadStart(
@@ -1523,35 +1553,93 @@ export async function renderCbzInto(
       currentPage = index + 1;
       const shown = comicVisiblePages(index, images.length, spreadPrefs, landscapePages);
       const shownSet = new Set(shown);
-      container.dataset.comicVisible = String(shown.length);
-      for (const previous of [...visible]) {
-        if (shownSet.has(previous)) continue;
-        const slot = slots[previous];
-        if (slot !== undefined) slot.hidden = true;
-        visible.delete(previous);
-      }
-      const entering: number[] = [];
-      for (const next of shown) {
-        const slot = slots[next];
-        if (slot === undefined) continue;
-        if (slot.hidden) entering.push(next);
-        slot.hidden = false;
-        visible.add(next);
-        applySlotFit(next);
-      }
-      pagesRoot.scrollTop = 0;
-      pagesRoot.scrollLeft = 0;
+      const generation = ++spreadSwapGeneration;
+      // 新页先进 visible 提升 loadPage 的解码优先级（urgent）；换屏在 commit。
+      for (const next of shown) visible.add(next);
       updateToolbar();
       refreshCacheWindow(index);
-      // T2：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；strip 模式与
-      // 重排版/非连续跳转（direction 0，见 scrollToIndex）不 slide。
-      if (entering.length > 0 && direction !== 0 && isTouchPrimaryDocument(container.ownerDocument)) {
+      const applySwap = (): number[] => {
+        if (destroyed || generation !== spreadSwapGeneration) return [];
+        container.dataset.comicVisible = String(shown.length);
+        for (const previous of [...visible]) {
+          if (shownSet.has(previous)) continue;
+          const slot = slots[previous];
+          if (slot !== undefined) slot.hidden = true;
+          visible.delete(previous);
+        }
+        const entering: number[] = [];
+        for (const next of shown) {
+          const slot = slots[next];
+          if (slot === undefined) continue;
+          if (slot.hidden) entering.push(next);
+          slot.hidden = false;
+          applySlotFit(next);
+        }
+        pagesRoot.scrollTop = 0;
+        pagesRoot.scrollLeft = 0;
+        return entering;
+      };
+      const commit = (): void => {
+        if (destroyed || generation !== spreadSwapGeneration) return;
         const media =
           typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
-        if (media?.('(prefers-reduced-motion: reduce)').matches !== true) {
+        const reduceMotion = media?.('(prefers-reduced-motion: reduce)').matches === true;
+        const doc = container.ownerDocument as ComicViewTransitionDocument;
+        // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
+        // 中途不露底色。跳转（direction 0）与 reduce-motion 直切。
+        if (direction !== 0 && !reduceMotion && typeof doc.startViewTransition === 'function') {
+          try {
+            activeTurnTransition?.skipTransition();
+            doc.documentElement.dataset.comicTurn = comicSlotSlideToken(direction > 0);
+            const transition = doc.startViewTransition(() => {
+              applySwap();
+            });
+            activeTurnTransition = transition;
+            void transition.finished
+              .catch(() => undefined)
+              .then(() => {
+                if (activeTurnTransition !== transition) return;
+                activeTurnTransition = null;
+                delete doc.documentElement.dataset.comicTurn;
+              });
+            return;
+          } catch {
+            // 快照失败（文档隐藏等罕见态）：退回直切 + slot 滑入。
+          }
+        }
+        const entering = applySwap();
+        // T2 回退路径：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；
+        // strip 模式与重排版/非连续跳转（direction 0，见 scrollToIndex）不 slide。
+        if (
+          entering.length > 0 &&
+          direction !== 0 &&
+          !reduceMotion &&
+          isTouchPrimaryDocument(container.ownerDocument)
+        ) {
           slideEnteringComicSlots(entering, direction);
         }
+      };
+      // decode-gated swap：相邻翻页（±1）且新页图片未就绪时旧页保持在屏，
+      // 待解码完成或超时后一次性换屏。跳转（direction 0）仍硬落位——远跳的
+      // 旧页多已被缓存窗口释放，等待无意义。
+      const awaited =
+        direction === 0
+          ? []
+          : shown.filter(
+              (next) =>
+                images[next]?.kind === 'image' && !materialized.has(next) && !failed.has(next),
+            );
+      if (awaited.length === 0) {
+        commit();
+        return;
       }
+      const holdDeadline = new Promise<void>((resolve) => {
+        setTimeout(resolve, COMIC_TURN_HOLD_MS);
+      });
+      void Promise.race([
+        Promise.all(awaited.map((next) => loadPage(next).catch(() => undefined))),
+        holdDeadline,
+      ]).then(commit);
     };
 
     const setPreferences = (patch: ComicPreferencesPatch): void => {
@@ -2011,6 +2099,13 @@ export async function renderCbzInto(
       clearTimeout(prefetchTimer);
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
+      try {
+        activeTurnTransition?.skipTransition();
+      } catch {
+        // 转场已结束时 skip 可能抛错，忽略。
+      }
+      activeTurnTransition = null;
+      delete container.ownerDocument.documentElement.dataset.comicTurn;
       if (!chromeVisible) syncSystemBars(true);
       container.removeEventListener('click', onSurfaceClick);
       container.removeEventListener('dblclick', onDoubleClick);

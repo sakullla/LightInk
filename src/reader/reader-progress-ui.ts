@@ -216,6 +216,24 @@ export function playReaderPageTurn(
   if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
     return;
   }
+  // 触屏：CSS 已关掉 data-page-anim，再读 offsetWidth 只是整页强制重排。
+  if (isTouchPrimaryDocument(root.ownerDocument)) {
+    return;
+  }
+  // 连续滚动：视口步进已经是瞬跳。再给整章做 translate/opacity 会强制
+  // 重排并抢走合成层，换章后第一下手指滚动会明显卡一下。
+  if (root.dataset.readingLayout === 'scroll') {
+    return;
+  }
+  // 刚换章的帧还在重分栏（data-paged-restore），slide 会叠在未完成的
+  // layout 上；章界本身也没有可插值的 scrollLeft。
+  if (
+    root.querySelector(
+      '.lightink-reader-chapter.is-active .lightink-reader-chapter-frame[data-paged-restore]',
+    ) !== null
+  ) {
+    return;
+  }
   const token = direction > 0 ? 'next' : 'prev';
   root.removeAttribute('data-page-anim');
   void root.offsetWidth;

@@ -27,8 +27,23 @@ export const PRINT_CSS = `/* LightInk 打印微调 */
 @media print {
   body { max-width: none; padding: 0; }
   pre { white-space: pre-wrap; word-break: break-word; }
+  /* 自动目录独占首页，正文从下一页起。后随兄弟再强制 break-before，
+     避免部分打印引擎忽略 nav 上的 break-after。 */
+  .lightink-export-toc {
+    display: block;
+    break-after: page;
+    page-break-after: always;
+  }
+  .lightink-export-toc + * {
+    break-before: page;
+    page-break-before: always;
+  }
   .lightink-export-chapter { break-before: page; page-break-before: always; }
   .lightink-export-chapter:first-of-type { break-before: auto; page-break-before: auto; }
+  .lightink-export-toc + .lightink-export-chapter:first-of-type {
+    break-before: page;
+    page-break-before: always;
+  }
   img, svg, figure {
     break-inside: avoid;
     page-break-inside: avoid;

@@ -34,13 +34,11 @@ import {
   pagedColumnStep,
   pagedFrameStep,
   pagedProgressRatio,
-  PAGED_TOUCH_SLIDE_MS,
   type PagedScrollMotion,
   readingNavDirection,
   settlePagedRelease,
   snapPagedScroller,
 } from '../ui/reading-layout.js';
-import { isTouchPrimaryDocument } from './comic-preferences.js';
 import { playReaderPageBoundaryBounce } from './reader-progress-ui.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import {
@@ -73,6 +71,8 @@ import {
 
 /** Prefetch ±2; evict beyond this so a long book cannot keep every iframe. */
 export const FLOW_CHAPTER_KEEP_RADIUS = 3;
+/** 滚动停稳后再回收远章，避免换章当帧改 scrollTop 打断原生惯性。 */
+export const FLOW_CHAPTER_EVICT_IDLE_MS = 160;
 
 const FLOW_FRAME_CSP = [
   "default-src 'none'",
@@ -1184,10 +1184,13 @@ export function createFlowRenderer(
       if (evictTimer !== null) {
         clearTimeout(evictTimer);
       }
+      // 翻页模式没有纵向惯性，0ms 即可收窗口；滚动模式等停稳再回收，
+      // 否则 evict 会改 scrollTop，换章后第一下滚动被拽回去。
+      const evictDelay = isFlowPaginated(root) ? 0 : FLOW_CHAPTER_EVICT_IDLE_MS;
       evictTimer = setTimeout(() => {
         evictTimer = null;
         evictDistantChapters?.(index);
-      }, 0);
+      }, evictDelay);
     } else {
       evictDistantChapters?.(index);
     }
@@ -1340,34 +1343,10 @@ export function createFlowRenderer(
   const gatePagedWheel = createPagedWheelGate();
 
   /**
-   * T2 触屏翻页 slide：触屏（html[data-android]/[data-touch-primary]）且
-   * 非 reduce-motion 时，翻页 scrollLeft 写入走 200ms rAF 缓动；桌面与
-   * reduce-motion 保持瞬跳（motion undefined，零回归）。
+   * 翻页 scrollLeft 一律瞬跳。触屏 rAF 插值会和原生 overflow 拖动、换章重分栏
+   * 抢主线程，换章后第一下滑动会卡死；做不到流畅就不要滚动动画。
    */
-  const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => {
-    if (!isTouchPrimaryDocument(root.ownerDocument)) {
-      return undefined;
-    }
-    const media =
-      typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
-    if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
-      return undefined;
-    }
-    return { touchPrimary: true, reducedMotion: false };
-  };
-
-  /**
-   * slide 进行中 syncState 只能读到中间位置；缓动落点后补一次状态同步
-   * （页码/进度读到最终落页）。
-   */
-  const schedulePostSlideSync = (motion: PagedScrollMotion | undefined): void => {
-    if (motion === undefined || typeof setTimeout !== 'function') {
-      return;
-    }
-    setTimeout(() => {
-      hooks.syncState();
-    }, PAGED_TOUCH_SLIDE_MS + 40);
-  };
+  const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => undefined;
 
   const resolveVisiblePageStep = (
     frame: HTMLIFrameElement | null,
@@ -1402,9 +1381,6 @@ export function createFlowRenderer(
       hooks.syncState();
       hooks.dismissSelectionToolbar();
     }
-    // settled 两分支共同出口：false 支路（章缘交回调切章）同样可能带 motion
-    // 写入（末/首页提交回弹 snap），缓动落点后也需要补一次状态同步。
-    schedulePostSlideSync(motion);
     return settled;
   };
 
@@ -1423,7 +1399,6 @@ export function createFlowRenderer(
     const motion = pagedTouchSlideMotion();
     snapPagedScroller(scroller, resolveVisiblePageStep(frame, scroller), motion);
     hooks.syncState();
-    schedulePostSlideSync(motion);
   };
 
   const advanceFlowPage = (direction: 1 | -1): boolean => {
@@ -1446,7 +1421,6 @@ export function createFlowRenderer(
       snapPagedScroller(scroller, step, motion);
       hooks.syncState();
       hooks.dismissSelectionToolbar();
-      schedulePostSlideSync(motion);
       const doc = frame?.contentDocument;
       if (doc !== null && doc !== undefined) {
         paintAnnotationOverlays(doc);
@@ -1473,31 +1447,31 @@ export function createFlowRenderer(
       playReaderPageBoundaryBounce(root, direction);
       return false;
     }
+    const outgoing = visibleFrame();
+    const outgoingDoc = outgoing?.contentDocument;
+    if (outgoingDoc !== null && outgoingDoc !== undefined) {
+      cancelPagedTouchSlide(readerPagedScroller(outgoingDoc));
+    }
     setActiveChapter(nextIndex);
     const nextFrame = next.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame');
     if (nextFrame !== null) {
       nextFrame.dataset.pagedRestore = direction < 0 ? 'end' : 'start';
     }
-    void next.offsetWidth;
-    void nextFrame?.offsetWidth;
-    const applyChapterPage = (): void => {
+    const applyChapterPage = (): boolean => {
       const nextDoc = nextFrame?.contentDocument;
       if (nextFrame === null || nextDoc === undefined || nextDoc === null) {
-        return;
+        return false;
       }
       applyPaginatedDocument(nextFrame, nextDoc, {
         restoreRatio: direction < 0 ? 1 : 0,
       });
+      delete nextFrame.dataset.pagedRestore;
+      paintAnnotationOverlays(nextDoc);
+      return true;
     };
-    applyChapterPage();
-    if (typeof requestAnimationFrame === 'function') {
+    if (!applyChapterPage() && typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => {
         applyChapterPage();
-        const doc = nextFrame?.contentDocument;
-        if (doc !== null && doc !== undefined) {
-          paintAnnotationOverlays(doc);
-        }
-        requestAnimationFrame(applyChapterPage);
       });
     }
     hooks.syncState();

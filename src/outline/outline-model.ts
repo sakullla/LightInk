@@ -106,6 +106,34 @@ export function leafHeadingAnchors(items: readonly OutlineItem[]): Set<number> {
   return leaves;
 }
 
+/**
+ * 折叠祖先后隐藏其更深后代：文档序扫描，遇到 folded 标题则跳过 level 更深的项，
+ * 直到回到同级或更高级。搜索态不调用，以免命中被折叠父级吞掉。
+ */
+export function hideFoldedOutlineItems(
+  items: readonly OutlineItem[],
+  foldedAnchors: ReadonlySet<number>,
+): OutlineItem[] {
+  if (foldedAnchors.size === 0) {
+    return [...items];
+  }
+  const visible: OutlineItem[] = [];
+  let skipDeeperThan: number | null = null;
+  for (const item of items) {
+    if (skipDeeperThan !== null) {
+      if (item.level > skipDeeperThan) {
+        continue;
+      }
+      skipDeeperThan = null;
+    }
+    visible.push(item);
+    if (foldedAnchors.has(item.anchor)) {
+      skipDeeperThan = item.level;
+    }
+  }
+  return visible;
+}
+
 export function outlineItemMatchesQuery(text: string, query: string): boolean {
   const needle = query.trim().toLowerCase();
   return needle === '' || text.toLowerCase().includes(needle);

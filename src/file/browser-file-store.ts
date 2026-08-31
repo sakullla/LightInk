@@ -1,12 +1,16 @@
 /**
  * Browser-only file store for `npm run dev` without Tauri.
- * Virtual paths (`browser-file:name.ext`) feed the existing reader load path.
+ * Virtual paths (`browser-file:name.ext`) feed both the reader load path
+ * and Markdown `read_file` / `write_file` when the Tauri IPC is absent.
  */
 
 import { extOfPath } from './path-ext.js';
 import { READER_EXTS } from './file-drop.js';
 
 export const BROWSER_FILE_PREFIX = 'browser-file:';
+
+/** Match Rust `MAX_TEXT_FILE_BYTES` so preview opens the same files as desktop. */
+export const MAX_BROWSER_TEXT_BYTES = 32 * 1024 * 1024;
 
 const files = new Map<string, File>();
 
@@ -59,6 +63,32 @@ export async function readBrowserFileBytes(path: string): Promise<Uint8Array> {
     throw new Error(`browser file not found: ${path}`);
   }
   return new Uint8Array(await file.arrayBuffer());
+}
+
+/** UTF-8 text for Markdown tabs. Same size cap as desktop `read_file`. */
+export async function readBrowserFileText(path: string): Promise<string> {
+  const file = files.get(path);
+  if (file === undefined) {
+    throw new Error(`无法读取文件 ${path}: 文件不存在`);
+  }
+  if (file.size > MAX_BROWSER_TEXT_BYTES) {
+    throw new Error(`FILE_TOO_LARGE:${file.size}:${MAX_BROWSER_TEXT_BYTES}`);
+  }
+  return file.text();
+}
+
+/** Replace or create a virtual Markdown file (browser Save / Save As). */
+export function writeBrowserFileText(path: string, content: string): void {
+  if (!isBrowserFilePath(path)) {
+    throw new Error(`not a browser file path: ${path}`);
+  }
+  const name = path.slice(BROWSER_FILE_PREFIX.length);
+  files.set(
+    path,
+    new File([content], name === '' ? 'untitled.md' : name, {
+      type: 'text/markdown;charset=utf-8',
+    }),
+  );
 }
 
 export async function readBrowserFileChunk(

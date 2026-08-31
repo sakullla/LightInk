@@ -316,7 +316,10 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader-chrome-whisper\s*\{[^}]*flex-direction:\s*row/,
     );
     expect(css).toMatch(
-      /html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-whisper \.lightink-reader-chrome-scrubber,\s*html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-scrubber\s*\{[^}]*display:\s*none/,
+      /html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-whisper \.lightink-reader-chrome-scrubber,\s*html\[data-reader-progress-bar='off'\][\s\S]*?\.lightink-reader-chrome-scrubber[\s\S]*?\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-reader-format='pdf'\]\)[\s\S]*?\.lightink-reader-chrome-footer[\s\S]*?\.lightink-reader-chrome-scrubber[\s\S]*?\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-whisper,[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
@@ -481,6 +484,7 @@ describe('readerPageInnerPadPx', () => {
     const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
     const view = readFileSync(resolve(process.cwd(), 'src/reader/reader-view.ts'), 'utf-8');
     expect(flow).toMatch(/dataset\.pagedRestore = direction < 0 \? 'end' : 'start'/);
+    expect(flow).toMatch(/delete nextFrame\.dataset\.pagedRestore/);
     expect(flow).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
     expect(view).not.toMatch(/scrollLeft = Math\.round\(scroller\.scrollLeft/);
     expect(view).toMatch(/flowRenderer\.advancePage\(direction\)/);

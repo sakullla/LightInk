@@ -26,8 +26,12 @@
             </intent-filter>
             <!-- 电子书文件关联：与 tauri.conf.json bundle.fileAssociations 的 eBook
                  扩展名清单保持一致（pdf/epub/mobi/fb2/cbz/cbr/cb7/rar/7z/txt）。
-                 打开的 URL 经 RunEvent::Opened 送达 Rust/前端（lib.rs）。
-                 注：Android pathPattern 大小写敏感，此处仅声明小写扩展名。 -->
+                 content:// 打开由 MainActivity 拦截复制后经 JS 桥送前端；
+                 file:// 仍走 RunEvent::Opened（lib.rs / cli.rs）。
+                 注：Android PatternMatcher 的 `.*` 不回溯，`.*\\.cbz` 匹配不了
+                 「One.Piece.v01.cbz」这类多点文件名（Telegram 下载常见），必须
+                 叠多点变体；Android 12+ 另加不受该坑影响的 pathSuffix。
+                 pathPattern/pathSuffix 大小写敏感，大写扩展名由 pathSuffix 兜底。 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -36,15 +40,87 @@
                 <data android:host="*" />
                 <data android:mimeType="*/*" />
                 <data android:pathPattern=".*\\.pdf" />
+                <data android:pathPattern=".*\\..*\\.pdf" />
+                <data android:pathPattern=".*\\..*\\..*\\.pdf" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.pdf" />
+                <data android:pathSuffix=".pdf" />
+                <data android:pathSuffix=".PDF" />
                 <data android:pathPattern=".*\\.epub" />
+                <data android:pathPattern=".*\\..*\\.epub" />
+                <data android:pathPattern=".*\\..*\\..*\\.epub" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.epub" />
+                <data android:pathSuffix=".epub" />
+                <data android:pathSuffix=".EPUB" />
                 <data android:pathPattern=".*\\.mobi" />
+                <data android:pathPattern=".*\\..*\\.mobi" />
+                <data android:pathPattern=".*\\..*\\..*\\.mobi" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mobi" />
+                <data android:pathSuffix=".mobi" />
+                <data android:pathSuffix=".MOBI" />
                 <data android:pathPattern=".*\\.fb2" />
+                <data android:pathPattern=".*\\..*\\.fb2" />
+                <data android:pathPattern=".*\\..*\\..*\\.fb2" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fb2" />
+                <data android:pathSuffix=".fb2" />
+                <data android:pathSuffix=".FB2" />
                 <data android:pathPattern=".*\\.cbz" />
+                <data android:pathPattern=".*\\..*\\.cbz" />
+                <data android:pathPattern=".*\\..*\\..*\\.cbz" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.cbz" />
+                <data android:pathSuffix=".cbz" />
+                <data android:pathSuffix=".CBZ" />
                 <data android:pathPattern=".*\\.cbr" />
+                <data android:pathPattern=".*\\..*\\.cbr" />
+                <data android:pathPattern=".*\\..*\\..*\\.cbr" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.cbr" />
+                <data android:pathSuffix=".cbr" />
+                <data android:pathSuffix=".CBR" />
                 <data android:pathPattern=".*\\.cb7" />
+                <data android:pathPattern=".*\\..*\\.cb7" />
+                <data android:pathPattern=".*\\..*\\..*\\.cb7" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.cb7" />
+                <data android:pathSuffix=".cb7" />
+                <data android:pathSuffix=".CB7" />
                 <data android:pathPattern=".*\\.rar" />
+                <data android:pathPattern=".*\\..*\\.rar" />
+                <data android:pathPattern=".*\\..*\\..*\\.rar" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.rar" />
+                <data android:pathSuffix=".rar" />
+                <data android:pathSuffix=".RAR" />
                 <data android:pathPattern=".*\\.7z" />
+                <data android:pathPattern=".*\\..*\\.7z" />
+                <data android:pathPattern=".*\\..*\\..*\\.7z" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.7z" />
+                <data android:pathSuffix=".7z" />
+                <data android:pathSuffix=".7Z" />
                 <data android:pathPattern=".*\\.txt" />
+                <data android:pathPattern=".*\\..*\\.txt" />
+                <data android:pathPattern=".*\\..*\\..*\\.txt" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.txt" />
+                <data android:pathSuffix=".txt" />
+                <data android:pathSuffix=".TXT" />
+            </intent-filter>
+            <!-- 按标准 MIME 关联（发送方带正确 MIME 但 URI 路径里没有文件名时，
+                 上面的扩展名过滤器匹配不了；zip 也纳入——浏览器/网盘常把 cbz
+                 标成 application/zip）。pdf 与 text/plain 已由下方自动生成块声明。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="text/fb2+xml" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/x-cbr" />
+                <data android:mimeType="application/x-cb7" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-7z-compressed" />
+                <data android:mimeType="application/zip" />
             </intent-filter>
             <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
             <intent-filter>

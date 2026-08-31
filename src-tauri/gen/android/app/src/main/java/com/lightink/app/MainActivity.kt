@@ -1,5 +1,6 @@
 package com.lightink.app
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
@@ -68,6 +69,19 @@ import org.json.JSONObject
  * - 失败吞掉、不向 JS 抛：invoke 失败仍只藏应用 chrome，阅读不中断。
  * - 桌面不调用该桥。`ReaderTypography.hideStatusBar` 不复用为本桥。
  * - 前端另有 `invoke('set_system_bars_visible')` 回落；本 Activity 只落地 JS 桥。
+ *
+ * 外部打开桥（文件关联 VIEW intent，前端契约见 src/file/android-view-open.ts）：
+ * - 背景：第三方应用（Telegram 等）「用其他应用打开」送达的是 content:// URI。
+ *   Tauri 的 RunEvent::Opened 虽会在 Android 触发，但 Rust 侧 std::fs 读不了
+ *   content://（cli.rs first_supported_from_urls 刻意只收 file://），因此与
+ *   SAF 导入同一做法：Kotlin 把流复制成真实缓存文件后交前端。
+ * - onCreate（冷启动）与 onNewIntent（singleTask 已运行）都收 ACTION_VIEW；
+ *   content:// 在 safCopyExecutor 上复制到 cacheDir/view-cache/<序号>/<显示名>，
+ *   file:// 留给既有 RunEvent::Opened 路径（避免双开）。
+ * - Kotlin → JS：完成后写入单槽 pendingExternalOpenPath 并 evaluateJavascript
+ *   通知 `window.__lightinkExternalOpenNotify()`；前端经
+ *   `window.LightInkExternalOpen.takePendingPath()`（取出即清空）拉取。
+ *   前端未就绪时通知丢失无妨——bootstrap 时会主动 drain 一次。
  */
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
@@ -75,6 +89,15 @@ class MainActivity : TauriActivity() {
   /** 进行中的 SAF 请求 id（单飞）；null 表示空闲。 */
   private var pendingSafRequestId: String? = null
   private val safCopyExecutor = Executors.newSingleThreadExecutor()
+
+  /**
+   * 待打开的外部文件路径（单槽，后到覆盖先到；取出即清空）。
+   * takePendingPath 运行在 WebView 私有 Binder 线程，复制完成回写在
+   * executor 线程，用 AtomicReference 保证两侧线程安全。
+   */
+  private val pendingExternalOpenPath =
+    java.util.concurrent.atomic.AtomicReference<String?>(null)
+  private var externalOpenCounter = 0L
 
   /**
    * 阅读 chrome 期望的系统栏可见性。false 时 pushSafeArea 只保留 displayCutout，
@@ -132,6 +155,46 @@ class MainActivity : TauriActivity() {
         isEnabled = true
       }
     })
+    handleViewIntent(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleViewIntent(intent)
+  }
+
+  /**
+   * 文件关联打开（ACTION_VIEW）：content:// 复制成真实缓存文件后经外部打开桥
+   * 交前端；file:// 留给 Tauri RunEvent::Opened 既有路径，避免双开。
+   */
+  private fun handleViewIntent(intent: Intent?) {
+    if (intent?.action != Intent.ACTION_VIEW) {
+      return
+    }
+    val uri = intent.data ?: return
+    if (!uri.scheme.equals("content", ignoreCase = true)) {
+      return
+    }
+    val mimeType = intent.type
+    safCopyExecutor.execute {
+      try {
+        val path = copyToViewCache(uri, mimeType)
+        pendingExternalOpenPath.set(path)
+        runOnUiThread { notifyExternalOpen() }
+      } catch (_: Exception) {
+        // 流打开/复制失败（源应用撤权、磁盘满等）：无法读取即无书可开；
+        // 冷启动此刻多半没有前端上下文可提示，静默放弃。
+      }
+    }
+  }
+
+  /** 前端桥就绪时提醒拉取；未就绪（冷启动）由 bootstrap 主动 drain。 */
+  private fun notifyExternalOpen() {
+    webView?.evaluateJavascript(
+      "window.__lightinkExternalOpenNotify && window.__lightinkExternalOpenNotify()",
+      null,
+    )
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -141,6 +204,8 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(SafBridgeJsInterface(), "LightInkSafBridge")
     // 前端契约见 src/reader/formats/cbz.ts `LightInkSystemBars.setVisible`。
     webView.addJavascriptInterface(SystemBarsJsInterface(), "LightInkSystemBars")
+    // 前端契约见 src/file/android-view-open.ts（外部打开桥通道）。
+    webView.addJavascriptInterface(ExternalOpenJsInterface(), "LightInkExternalOpen")
     // Older WebViews report env(safe-area-inset-*) as 0. Push system-bar
     // and IME insets as CSS pixels so chrome sits below the status bar and
     // note dialogs stay above the keyboard (edge-to-edge does not resize).
@@ -217,6 +282,15 @@ class MainActivity : TauriActivity() {
     } catch (_: Exception) {
       // invoke 失败不阻断阅读：前端仍只藏应用 chrome。
     }
+  }
+
+  /**
+   * JS 可见的外部打开桥入口。取出即清空，保证一次打开只消费一次；
+   * 无待打开文件返回 null（JS 侧收到 null）。
+   */
+  private inner class ExternalOpenJsInterface {
+    @JavascriptInterface
+    fun takePendingPath(): String? = pendingExternalOpenPath.getAndSet(null)
   }
 
   /** JS 可见的 SAF 桥入口（运行在 WebView 私有线程，必须切回 UI 线程）。 */
@@ -347,6 +421,49 @@ class MainActivity : TauriActivity() {
     contentResolver.openInputStream(uri)?.use { input ->
       target.outputStream().use { output -> input.copyTo(output) }
     } ?: throw java.io.IOException("Failed to open selected document stream")
+    return target.absolutePath
+  }
+
+  /**
+   * 外部打开（VIEW intent）：把 content:// 流复制到 cacheDir/view-cache/<序号>/
+   * 下，返回真实文件路径。与 copyToImportCache 同理由分子目录、保留干净显示名
+   * （reader 标签标题/书架标题取自文件名）；序号仅在单线程 executor 上自增。
+   */
+  private fun copyToViewCache(uri: Uri, mimeType: String?): String {
+    val rawName = sanitizeFileName(queryDisplayName(uri))
+      ?: sanitizeFileName(uri.lastPathSegment?.substringAfterLast('/'))
+      ?: "external-open"
+    // 前端按扩展名路由（reader/编辑器）；显示名没有扩展名时按 intent MIME 兜底，
+    // 否则打开会以「不支持的文件」失败。application/zip 视作 cbz（本应用只在
+    // 漫画语境下声明 zip 关联）。
+    val displayName = if (rawName.contains('.')) {
+      rawName
+    } else {
+      val ext = when (mimeType?.lowercase()) {
+        "application/pdf" -> "pdf"
+        "application/epub+zip" -> "epub"
+        "application/x-mobipocket-ebook" -> "mobi"
+        "application/x-fictionbook+xml", "text/fb2+xml" -> "fb2"
+        "application/vnd.comicbook+zip", "application/x-cbz", "application/zip" -> "cbz"
+        "application/vnd.comicbook-rar", "application/x-cbr" -> "cbr"
+        "application/x-cb7" -> "cb7"
+        "application/vnd.rar", "application/x-rar-compressed" -> "rar"
+        "application/x-7z-compressed" -> "7z"
+        "text/plain" -> "txt"
+        "text/markdown" -> "md"
+        else -> null
+      }
+      if (ext != null) "$rawName.$ext" else rawName
+    }
+    externalOpenCounter += 1
+    val dir = File(File(cacheDir, "view-cache"), externalOpenCounter.toString())
+    if (!dir.exists() && !dir.mkdirs()) {
+      throw java.io.IOException("Failed to create view cache directory")
+    }
+    val target = File(dir, displayName)
+    contentResolver.openInputStream(uri)?.use { input ->
+      target.outputStream().use { output -> input.copyTo(output) }
+    } ?: throw java.io.IOException("Failed to open external document stream")
     return target.absolutePath
   }
 

@@ -183,6 +183,12 @@ export interface ReaderSessionSearch {
   loadMore(): void;
   /** 按当前会话重渲染命中 overlay（文本层重建/缩放重排后的 observer 重放）。 */
   rerender(): void;
+  /**
+   * 释放正文命中 overlay 但保留会话（整页搜索关闭后的滞后清除：跳转命中
+   * 短暂高亮后正文不留残迹，面板查询与命中列表不丢）。释放后 rerender 与
+   * 在飞扫描的发布都不再重涂，直到下一次 run / 激活命中。
+   */
+  dropMarks(): void;
   /** 清空会话：世代 +1（作废在飞扫描）、busy/防抖/pending 滚动复位、清命中 overlay。 */
   clear(): void;
 }
@@ -211,6 +217,8 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /** 激活跳转待滚动的命中 key：命中首次就绪（含远页文本层异步出现）时滚动一次后清除。 */
   let pendingScrollKey: string | null = null;
+  /** 正文 mark 已释放（dropMarks）：rerender 与在飞发布不再重涂，run/激活复位。 */
+  let marksReleased = false;
   const searchBusy = createSearchBusyReveal(() => {
     host.syncHits();
   });
@@ -254,7 +262,9 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     if (done) {
       searchBusy.clear();
     }
-    host.renderPdfHits(hits, activeKeyOf(state));
+    if (!marksReleased) {
+      host.renderPdfHits(hits, activeKeyOf(state));
+    }
     host.syncHits();
   };
 
@@ -262,6 +272,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
   const runPdfSearch = (query: string): void => {
     const generation = ++searchGeneration;
     displayLimit = SEARCH_HIT_CAP;
+    marksReleased = false;
     searchBusy.start();
     cancelScheduled();
     host.searchPdf(query, {
@@ -281,7 +292,9 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     done: boolean,
     preserveActive?: number,
   ): void => {
-    host.renderFlowHits(groups, null);
+    if (!marksReleased) {
+      host.renderFlowHits(groups, null);
+    }
     const { keys, firstAtOrAfter } = host.collectFlowMarks(groups);
     const fallback = nearestMatchIndex(keys.length, firstAtOrAfter);
     const active = preserveMatchIndex(keys.length, preserveActive ?? state?.active ?? -1, fallback);
@@ -295,7 +308,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
       done,
     };
     const currentKey = activeKeyOf(state);
-    if (currentKey !== null) {
+    if (currentKey !== null && !marksReleased) {
       host.renderFlowHits(groups, currentKey);
     }
     if (done) {
@@ -315,6 +328,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     }
     const generation = ++searchGeneration;
     displayLimit = SEARCH_HIT_CAP;
+    marksReleased = false;
     searchBusy.start();
     cancelScheduled();
     publishFlowSearch(trimmed, new Map(), false, options?.preserveActive);
@@ -354,6 +368,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     if (session === null || index < 0 || index >= session.sequence.length) {
       return;
     }
+    marksReleased = false; // 激活命中重涂 overlay（释放态下点结果也要能看到高亮）
     session.active = index;
     const key = session.sequence[index] ?? null;
     if (key === null) {
@@ -375,6 +390,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
 
   /** 未挂载章命中激活（原 revealFlowSearchKey）：ensure 章后至多 12 次让步重收集对齐。 */
   const ensureFlowHit = async (key: string, chapter: number): Promise<void> => {
+    marksReleased = false;
     host.ensureFlowChapter(chapter);
     for (let attempt = 0; attempt < FLOW_HIT_REVEAL_MAX_ATTEMPTS; attempt += 1) {
       await yieldToUi();
@@ -486,7 +502,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     },
     rerender: () => {
       const session = state;
-      if (session === null) {
+      if (session === null || marksReleased) {
         return;
       }
       const key = activeKeyOf(session);
@@ -496,12 +512,20 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
       }
       host.renderFlowHits(flowGroupsOf(session), key);
     },
+    dropMarks: () => {
+      if (marksReleased) {
+        return;
+      }
+      marksReleased = true;
+      host.clearMarks();
+    },
     clear: () => {
       searchGeneration += 1;
       displayLimit = SEARCH_HIT_CAP;
       searchBusy.clear();
       cancelScheduled();
       pendingScrollKey = null;
+      marksReleased = false;
       state = null;
       host.clearMarks();
     },

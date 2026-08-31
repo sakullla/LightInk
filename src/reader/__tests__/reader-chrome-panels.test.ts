@@ -196,6 +196,9 @@ describe('reader chrome panels', () => {
     expect(items[1]!.classList.contains('is-current')).toBe(true);
     expect(items[1]!.dataset.outlineLevel).toBe('2');
     expect(panel.getAttribute('aria-modal')).toBe('true');
+    // 标题行右侧显示章节总数（{n} 占位替换）。
+    expect(panel.querySelector('.lightink-reader-toc-head')).not.toBeNull();
+    expect(panel.querySelector('.lightink-reader-toc-count')?.textContent).toBe('2 章');
     items[0]!.click();
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
@@ -377,6 +380,8 @@ describe('reader chrome panels', () => {
     expect(baseRule, 'base .lightink-reader-toc-item rule').toBeTruthy();
     expect(baseRule![1]).not.toMatch(/white-space:\s*nowrap/);
     expect(baseRule![1]).not.toMatch(/text-overflow:\s*ellipsis/);
+    // 列表是纵向 flex：行必须禁止收缩，否则整卷章节被压叠成一条线。
+    expect(baseRule![1]).toMatch(/flex:\s*0 0 auto/);
     // 触屏 sheet：紧凑单行省略 + 列表保底高度，层级缩进变量保留。
     expect(sheet).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet \.lightink-reader-toc-item\s*\{[^}]*white-space:\s*nowrap/,
@@ -670,6 +675,116 @@ describe('reader chrome panels', () => {
     expect(panel.querySelectorAll('.lightink-reader-type-glyph--measure')).toHaveLength(5);
     expect(panel.textContent).not.toContain('✓');
     expect(panel.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('lets the spacing and measure tracks commit by dragging, not only tapping ticks', () => {
+    const panel = document.createElement('div');
+    const onTypography = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      onTypography,
+      vi.fn(),
+      vi.fn(),
+    );
+    const track = panel.querySelector<HTMLElement>('[data-type-section="spacing"] .lightink-reader-type-track')!;
+    expect(track.getAttribute('role')).toBe('group');
+    stubRect(track, { width: 200, height: 28, top: 0, left: 0 });
+    track.dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 14 }));
+    track.dispatchEvent(pointerEvent('pointermove', { clientX: 10, clientY: 14 }));
+    track.dispatchEvent(pointerEvent('pointerup', { clientX: 10, clientY: 14 }));
+    expect(onTypography).toHaveBeenCalledWith({ lineHeight: 1.5 });
+  });
+
+  it('lets a mouse drag starting on a tick finish on window after leaving the track', () => {
+    const panel = document.createElement('div');
+    document.body.append(panel);
+    const onTypography = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      onTypography,
+      vi.fn(),
+      vi.fn(),
+    );
+    const track = panel.querySelector<HTMLElement>(
+      '[data-type-section="spacing"] .lightink-reader-type-track',
+    )!;
+    const tick = track.querySelector<HTMLButtonElement>('.lightink-reader-type-tick.is-active');
+    expect(tick).not.toBeNull();
+    stubRect(track, { width: 200, height: 28, top: 80, left: 40 });
+    const mouse = (type: string, clientX: number, clientY: number): PointerEvent =>
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: type === 'pointerdown' ? 0 : undefined,
+        buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX,
+        clientY,
+      });
+    tick!.dispatchEvent(mouse('pointerdown', 140, 94));
+    expect(track.classList.contains('is-dragging')).toBe(true);
+    window.dispatchEvent(mouse('pointermove', 230, 40));
+    window.dispatchEvent(mouse('pointerup', 230, 40));
+    expect(onTypography).toHaveBeenCalledWith({ lineHeight: 2 });
+    expect(track.classList.contains('is-dragging')).toBe(false);
+  });
+
+  it('keeps the touch sheet handle when typography is refilled', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-chrome-panel';
+    document.body.append(panel);
+    const pane = {
+      getBoundingClientRect: () =>
+        ({ left: 0, top: 0, width: 390, height: 700, right: 390, bottom: 700 }) as DOMRect,
+    };
+    pinFixedOverlay(panel, pane, { innerWidth: 390, innerHeight: 700 });
+    const handle = querySheetHandle(panel);
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(querySheetHandle(panel)).toBe(handle);
+    expect(panel.firstElementChild).toBe(handle);
+  });
+
+  it('adopts overlay chrome tokens without inheriting reader type scale', () => {
+    const host = document.createElement('div');
+    host.style.setProperty('--lightink-reader-font-scale', '2');
+    host.style.setProperty('--lightink-reader-line-height', '2');
+    host.style.fontFamily = 'serif';
+    host.style.lineHeight = '2';
+    const overlay = document.createElement('div');
+    adoptReaderOverlayTheme(overlay, host);
+    expect(overlay.style.getPropertyValue('--lightink-reader-font-scale')).toBe('1');
+    expect(overlay.style.getPropertyValue('--lightink-reader-line-height')).toBe('1.35');
+    expect(overlay.style.fontFamily).toBe('var(--lightink-font-ui)');
+    expect(overlay.style.lineHeight).toBe('1.35');
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-chrome-panel\s*\{[^}]*--lightink-reader-font-scale:\s*1/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-track\s*\{[^}]*touch-action:\s*none/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-tick\s*\{[^}]*pointer-events:\s*none/,
+    );
+    // 标签列必须按内容自适应：西文 “LINE SPACING” 固定 2.2rem 会画进轨道首点。
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-slider\s*\{[^}]*grid-template-columns:\s*fit-content\(/,
+    );
   });
 
   it('keeps the full typography control set for flow books and unknown formats', () => {

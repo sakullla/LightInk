@@ -12,6 +12,7 @@
 
 import {
   canWrapSearchMark,
+  findTextHits,
   offsetRangeFrom,
   SEARCH_HIT_CAP,
   unwrapSpans,
@@ -55,6 +56,45 @@ export function limitSearchMarkSpecs(
     return kept;
   }
   return [...kept.slice(0, Math.max(0, cap - 1)), current];
+}
+
+/**
+ * 命中偏移对齐宿主挂载文本（flow 族）。扫描时未挂载章按 fallback 文本
+ * （htmlToSearchText，空白折叠成单空格）计算偏移；章挂载后 iframe 正文
+ * textContent 保留原始空白与缩进，两种形态的偏移不同——照旧偏移包裹会
+ * 逐段漂移高亮错字。逐条校验 [start, end) 切片仍是查询词：吻合的原样保留
+ * （挂载章扫描本就同源，零成本通过）；失配的按 key 中的命中序号在挂载
+ * 文本上重扫描定位；定位不到的丢弃（挂载文本尚未就绪时等后续重涂）。
+ */
+export function alignSearchSpecsToText(
+  text: string,
+  specs: readonly SearchMarkSpec[],
+  query: string,
+): SearchMarkSpec[] {
+  const needle = query.trim();
+  if (needle === '' || specs.length === 0) {
+    return [...specs];
+  }
+  const loweredNeedle = needle.toLowerCase();
+  const matchesAt = (spec: SearchMarkSpec): boolean => {
+    const slice = text.slice(spec.start, spec.end);
+    return slice === needle || slice.toLowerCase() === loweredNeedle;
+  };
+  let relocated: readonly { start: number; end: number }[] | null = null;
+  const aligned: SearchMarkSpec[] = [];
+  for (const spec of specs) {
+    if (matchesAt(spec)) {
+      aligned.push(spec);
+      continue;
+    }
+    relocated ??= findTextHits(text, needle);
+    const ordinal = Number(spec.key.split(':')[1]);
+    const hit = Number.isInteger(ordinal) ? relocated[ordinal] : undefined;
+    if (hit !== undefined) {
+      aligned.push({ key: spec.key, start: hit.start, end: hit.end });
+    }
+  }
+  return aligned;
 }
 
 /**

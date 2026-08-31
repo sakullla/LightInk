@@ -782,8 +782,10 @@ describe('Reader load lifecycle', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     try {
       expect(view.advanceReading(1)).toBe(true);
-      const sliding = host.querySelectorAll('.lightink-comic-slot-slide-next');
-      expect(sliding.length).toBeGreaterThan(0);
+      // decode-gated swap：换屏（含滑入类）等新页就绪后提交。
+      await vi.waitFor(() =>
+        expect(host.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0),
+      );
       // 宿主 data-page-anim 语义保留：漫画会话不播宿主翻页动画。
       expect(host.querySelector('[data-page-anim]')).toBeNull();
       // 等滑入类清理超时（200ms + 60ms 兜底）落地后再切模式。
@@ -828,7 +830,9 @@ describe('Reader load lifecycle', () => {
     try {
       // rtl 前进：视觉来向反转，进入 slot 应挂 slide-prev（而非 slide-next）。
       expect(view.advanceReading(1)).toBe(true);
-      expect(host.querySelectorAll('.lightink-comic-slot-slide-prev').length).toBeGreaterThan(0);
+      await vi.waitFor(() =>
+        expect(host.querySelectorAll('.lightink-comic-slot-slide-prev').length).toBeGreaterThan(0),
+      );
       expect(host.querySelectorAll('.lightink-comic-slot-slide-next')).toHaveLength(0);
       await view.destroy();
     } finally {
@@ -873,7 +877,9 @@ describe('Reader load lifecycle', () => {
       ).toHaveLength(0);
       // 相邻翻页（advancePage 路径）仍保留滑入。
       expect(view.advanceReading(1)).toBe(true);
-      expect(host.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0);
+      await vi.waitFor(() =>
+        expect(host.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0),
+      );
       await view.destroy();
     } finally {
       document.documentElement.removeAttribute('data-touch-primary');
@@ -1556,9 +1562,8 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
-  it('opens the unified annotation panel as a touch sheet from openSearch', async () => {
-    // 触屏旗标（R8）：openSearch 不再分叉——打开同一融合面板（is-touch-sheet
-    // 底栏形态），触屏由此获得完整标注浏览/筛选/跳转/编辑/删除能力。
+  it('opens the unified annotation panel as a full search page from openSearch on touch', async () => {
+    // 触屏 openSearch：同一融合面板，但「搜索正文」是整页而不是半高 sheet。
     document.documentElement.setAttribute('data-touch-primary', '');
     const onReturnToShelf = vi.fn();
     const host = document.createElement('div');
@@ -1589,6 +1594,12 @@ describe('Reader load lifecycle', () => {
     expect(sheet).toHaveLength(1);
     expect(sheet[0]!.classList.contains('lightink-reader-sidebar')).toBe(true);
     expect(sheet[0]!.classList.contains('lightink-reader-annotation-panel')).toBe(true);
+    expect(sheet[0]!.dataset.searchPage).toBe('document');
+    expect(sheet[0]!.classList.contains('is-touch-search-page')).toBe(true);
+    expect(sheet[0]!.style.top).toBe('0px');
+    expect(sheet[0]!.style.bottom).toBe('0px');
+    expect(sheet[0]!.querySelector('.lightink-reader-sheet-handle')).toBeNull();
+    expect(sheet[0]!.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
     // 选区/入参 seed 预填进统一面板查询框。
     expect(sheet[0]!.querySelector<HTMLInputElement>('input')?.value).toBe('keyword');
 
@@ -1600,6 +1611,168 @@ describe('Reader load lifecycle', () => {
     expect(onReturnToShelf).not.toHaveBeenCalled();
     expect(view.state.phase).toBe('ready');
     expect(host.querySelector('.lightink-reader')).not.toBeNull();
+    await view.destroy();
+  });
+
+  it('touch: tapping a search hit jumps back to the text and closes the sheet', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>alpha keyword</p>' },
+          { title: 'Two', html: '<p>keyword again</p>' },
+        ],
+      }),
+    });
+    await view.load('book.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    view.openSearch?.('keyword');
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel')!;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector('[data-search-key]')).not.toBeNull();
+    });
+    (sidebar.querySelector('[data-search-key]') as HTMLElement).click();
+    expect(view.isSidebarVisible()).toBe(false);
+    // 点结果关页但不丢掉查询：再开搜索应续上同一关键词。
+    expect(
+      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
+    ).toBe('keyword');
+    view.openSearch?.();
+    expect(view.isSidebarVisible()).toBe(true);
+    expect(
+      sidebar.querySelector<HTMLInputElement>('.lightink-reader-sidebar-note-search-input')?.value,
+    ).toBe('keyword');
+    await view.destroy();
+  });
+
+  it('paints flow search marks by the chapter index on the frame, not by frame order', async () => {
+    // 回归：挂载窗口随阅读位置滑动淘汰后，帧数组序号 ≠ 章节号；按序号投放
+    // 会把 A 章偏移画进 B 章正文（错字高亮），且正确章 mark 缺失导致点击
+    // 命中无法跳转。最小重现：第 0 章帧被淘汰，只剩第 1 章帧在 DOM。
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>alpha keyword</p>' },
+          { title: 'Two', html: '<p>keyword again</p>' },
+        ],
+      }),
+    });
+    await view.load('book.epub');
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    const chapterTwo = frames.find((frame) => frame.dataset.chapterIndex === '1')!;
+    chapterTwo.contentDocument!.body.innerHTML = '<p>keyword again</p>';
+    frames
+      .find((frame) => frame.dataset.chapterIndex === '0')!
+      .closest('.lightink-reader-chapter')!
+      .remove();
+
+    view.openSearch?.('keyword');
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel')!;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelectorAll('[data-search-key]').length).toBeGreaterThanOrEqual(2);
+    });
+    const marks = Array.from(
+      chapterTwo.contentDocument!.querySelectorAll<HTMLElement>('[data-search-key]'),
+    );
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks) {
+      expect(mark.dataset.searchKey!.startsWith('1:')).toBe(true);
+      expect(mark.textContent).toBe('keyword');
+    }
+    await view.destroy();
+  });
+
+  it('touch: search marks flash after a hit jump, then clear without losing the session', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>alpha keyword</p>' },
+          { title: 'Two', html: '<p>keyword again</p>' },
+        ],
+      }),
+    });
+    await view.load('book.epub');
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    frames[0]!.contentDocument!.body.innerHTML = '<p>alpha keyword</p>';
+    frames[1]!.contentDocument!.body.innerHTML = '<p>keyword again</p>';
+    const docs = frames.map((frame) => frame.contentDocument!);
+
+    view.openSearch?.('keyword');
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel')!;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelectorAll('[data-search-key]').length).toBe(2);
+    });
+
+    vi.useFakeTimers();
+    (sidebar.querySelector('[data-search-key]') as HTMLElement).click();
+    expect(view.isSidebarVisible()).toBe(false);
+    // 关页瞬间命中 mark 仍在正文：跳转命中短暂高亮。
+    expect(
+      docs.some((doc) => doc.querySelector('.lightink-reader-search-mark--current') !== null),
+    ).toBe(true);
+    // 滞后窗口过后正文 mark 全部清除，不永久残留。
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(docs.every((doc) => doc.querySelector('[data-search-key]') === null)).toBe(true);
+    vi.useRealTimers();
+
+    // 会话未丢：再开搜索列表还在，点另一个命中能重涂并跳转。
+    view.openSearch?.();
+    const hits = sidebar.querySelectorAll<HTMLElement>('[data-search-key]');
+    expect(hits.length).toBe(2);
+    hits[hits.length - 1]!.click();
+    expect(view.isSidebarVisible()).toBe(false);
+    await vi.waitFor(() => {
+      expect(
+        docs.some((doc) => doc.querySelector('.lightink-reader-search-mark--current') !== null),
+      ).toBe(true);
+    });
+    await view.destroy();
+  });
+
+  it('closes a body-mounted typography sheet from document Escape without returning to the shelf', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const onReturnToShelf = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, readerViewDeps({ onReturnToShelf }));
+    await view.load('book.epub');
+    revealReaderChrome(host);
+    chromeControlByLabel(host, '排版')!.click();
+
+    const sheet = document.querySelector<HTMLElement>('.lightink-reader-chrome-typography');
+    expect(sheet).not.toBeNull();
+    expect(sheet!.hidden).toBe(false);
+    expect(document.body.contains(sheet)).toBe(true);
+    expect(host.contains(sheet)).toBe(false);
+
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    expect(sheet!.hidden).toBe(true);
+    expect(onReturnToShelf).not.toHaveBeenCalled();
+    expect(view.state.phase).toBe('ready');
     await view.destroy();
   });
 

@@ -433,13 +433,25 @@
   display: none;
 }
 
+/* PDF is always continuous scroll: the page scroller is the progress cue.
+   Hide the seek track (keep page + percent) so it does not overlay the last line. */
 html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper .lightink-reader-chrome-scrubber,
-html[data-reader-progress-bar='off'] .lightink-reader-chrome-footer .lightink-reader-chrome-scrubber {
+html[data-reader-progress-bar='off'] .lightink-reader-chrome-footer .lightink-reader-chrome-scrubber,
+.lightink-reader:has(.lightink-reader-pages[data-reader-format='pdf'])
+  .lightink-reader-chrome-whisper
+  .lightink-reader-chrome-scrubber,
+.lightink-reader:has(.lightink-reader-pages[data-reader-format='pdf'])
+  .lightink-reader-chrome-footer
+  .lightink-reader-chrome-scrubber {
   display: none;
 }
 
 html[data-reader-progress-bar='off'] .lightink-reader-chrome-chapter,
-html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
+html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
+.lightink-reader:has(.lightink-reader-pages[data-reader-format='pdf'])
+  .lightink-reader-chrome-chapter,
+.lightink-reader:has(.lightink-reader-pages[data-reader-format='pdf'])
+  .lightink-reader-chrome-whisper-chapter {
   max-width: none;
   flex: 1 1 auto;
 }
@@ -972,12 +984,24 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 }
 
 /* PDF 页宿主自己滚动，不依赖 html[data-reading-layout] 或 editor-area
-   overflow:hidden。IntersectionObserver root 始终是这个容器。 */
+   overflow:hidden。IntersectionObserver root 始终是这个容器。
+   scrollbar-gutter 固定：滚动条出现/消失不得改变 clientWidth，否则
+   适合页宽跟着变，宿主 ResizeObserver 触发 rerender 形成闪屏死循环。 */
 .lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] {
   overflow: auto;
+  scrollbar-gutter: stable;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+/* 放大出横向溢出后由指针拖拽平移（pdf-drag-pan）；grab 光标提示可拖。 */
+.lightink-reader-pages[data-reader-format='pdf'][data-pdf-pan] {
+  cursor: grab;
+}
+
+.lightink-reader-pages[data-reader-format='pdf'][data-pdf-panning] {
+  cursor: grabbing;
 }
 
 /* 漫画是位图：字号 zoom 会再采样一层，线条发糊。放大只走 pinch 的 --lightink-comic-scale。
@@ -986,10 +1010,15 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
   zoom: 1;
 }
 
-/* PDF 连续滚动：每页一个 slot 占位，懒栅格化 canvas + 文本层。 */
+/* PDF 连续滚动：每页一个 slot 占位，懒栅格化 canvas + 文本层。
+   宿主是纵向 flex：slot 禁止收缩，否则清画布后空槽塌陷、滚动条消失，
+   宽度回弹再次触发 rerender（缩放后无限闪屏）。 */
 .lightink-reader-page-slot {
   position: relative;
+  flex: 0 0 auto;
   margin: 0 auto 1rem;
+  content-visibility: auto;
+  contain: layout style;
 }
 
 /*
@@ -2042,6 +2071,69 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter {
 @media (prefers-reduced-motion: reduce) {
   .lightink-reader-cbz-slot.lightink-comic-slot-slide-next,
   .lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
+    animation: none;
+  }
+}
+
+/*
+ * 漫画翻页 View Transition push 转场（cbz.ts commit）：浏览器截住旧帧快照，
+ * DOM 提交后旧快照滑出、新快照滑入，同帧合成——转场全程不露画布底色，
+ * 消除翻页闪屏。方向 token（next=视觉从右进，rtl 已在 JS 侧换算）写在
+ * html[data-comic-turn]，转场结束即清除。不支持 VT 的环境走上面的
+ * slot 滑入回退。
+ */
+.lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages {
+  view-transition-name: lightink-comic-pages;
+}
+
+::view-transition-group(lightink-comic-pages),
+::view-transition-image-pair(lightink-comic-pages) {
+  overflow: hidden;
+}
+
+@keyframes lightink-comic-turn-in-next {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes lightink-comic-turn-out-next {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes lightink-comic-turn-in-prev {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes lightink-comic-turn-out-prev {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+html[data-comic-turn='next']::view-transition-new(lightink-comic-pages) {
+  animation: lightink-comic-turn-in-next 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html[data-comic-turn='next']::view-transition-old(lightink-comic-pages) {
+  animation: lightink-comic-turn-out-next 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html[data-comic-turn='prev']::view-transition-new(lightink-comic-pages) {
+  animation: lightink-comic-turn-in-prev 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
+  animation: lightink-comic-turn-out-prev 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(lightink-comic-pages),
+  ::view-transition-new(lightink-comic-pages) {
     animation: none;
   }
 }

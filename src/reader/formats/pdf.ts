@@ -2,19 +2,23 @@
  * `pdf` — PDF 页格式渲染（ebook-reader T5 + 文本层）。
  *
  * `createPdfPageController` 是纯页码/缩放状态机（next/prev/setPage/zoom），headless 可测；
- * `renderPdfInto` 懒加载 pdfjs-dist（worker 经 `?url` 独立 chunk），把当前页渲染到 canvas，
+ * `renderPdfInto` 懒加载 pdfjs-dist（workerSrc 经 pdf-worker-entry：同源 boot
+ * 先装 upsert polyfill，再加载未经 Vite 注入的官方 worker），把当前页渲染到 canvas，
  * 并在其上叠加 pdfjs `TextLayer` 文本层（DOM span 承载文字选择，版式仍由 canvas 保真）。
  * 文本层与 canvas 同生命周期：懒渲染、缩放按视口中心锚定并只重绘可见页、离屏回收；渲染失败降级纯 canvas。
  * 打开先量第 1 页并出首屏，其余页先占位再后台补真实宽高。比例是 fitWidthScale * userZoom。
  * 返回 handle 供导航/缩放重绘。canvas/文本层真实渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
 
+import { isTauriRuntime } from '../../file/browser-file-store.js';
 import type { OutlineItem } from '../../outline/outline-model.js';
+import { installMapUpsertPolyfill } from './map-upsert-polyfill.js';
 import { outlineFromPdf } from '../outline.js';
 import { ParseError } from './types.js';
 import { enforcePageCount } from '../reader-limits.js';
 import { findPdfMatches, type PdfSearchMatch } from '../search-panel.js';
 import { bindTextLayerSelection } from '../text-layer-selection.js';
+import { bindPdfDragPan } from './pdf-drag-pan.js';
 import {
   isReaderLoadCancelled,
   ReaderLoadCancelledError,
@@ -22,7 +26,6 @@ import {
 } from '../load-lifecycle.js';
 import {
   createCoalescedScrollHandler,
-  nearestVisibleSlot,
   rafFrameScheduler,
 } from '../../ui/reading-layout.js';
 import { isRandomAccessSource, type RandomAccessSource } from '../sources/types.js';
@@ -32,6 +35,11 @@ export const PDF_SCALE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
 const DEFAULT_SCALE_IDX = 2; // userZoom 1.0 = 适合页宽
 const RENDER_QUEUE_LIMIT = 2;
 const MEASURE_BATCH = 8;
+/** 懒栅格化缓冲：上下各约 0.8 屏。更大的 200% 会同时养活太多 canvas/文本层。 */
+export const PDF_RENDER_ROOT_MARGIN = '80% 0px';
+const PDF_RENDER_BUFFER_SCREENS = 0.8;
+/** 高 DPR 屏上 canvas 按 2 封顶，避免一页几千万像素拖垮合成。 */
+const PDF_MAX_DEVICE_PIXEL_RATIO = 2;
 
 /** 页宿主内容宽 / 页 CSS 宽；量不到时退回 1，避免 jsdom 零宽把首屏画成空。 */
 export function pdfFitWidthScale(hostContentWidth: number, pageCssWidth: number): number {
@@ -213,9 +221,11 @@ export interface PdfRenderHandle {
 
 export type { PdfSearchMatch };
 
-/** 当前设备像素比（WebView2 下读 window.devicePixelRatio）。 */
+/** 当前设备像素比（WebView2 下读 window.devicePixelRatio），封顶以免超大 canvas。 */
 function devicePixelRatio(): number {
-  return typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  const raw =
+    typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  return Math.min(raw, PDF_MAX_DEVICE_PIXEL_RATIO);
 }
 
 function pageHostContentWidth(host: HTMLElement): number {
@@ -228,10 +238,11 @@ function pageHostContentWidth(host: HTMLElement): number {
 }
 
 /**
- * 用 pdfjs-dist 把 PDF 以**连续垂直滚动**渲染进容器。worker 经 `?url` 独立 chunk
- * 懒加载。先量第 1 页算出适合页宽并插完全部槽位，其余页后台补真实宽高。
- * IntersectionObserver 懒栅格化：仅渲染视口附近（rootMargin 缓冲）的页到 canvas，
- * 离屏过远的清画布省内存。缩放按视口中心锚定，只重画可见与缓冲页。
+ * 用 pdfjs-dist 把 PDF 以**连续垂直滚动**渲染进容器。workerSrc 指向同源 boot
+ *（polyfill + 官方 worker）。先量第 1 页算出适合
+ * 页宽并插完全部槽位，其余页后台补真实宽高。IntersectionObserver 懒栅格化：仅渲染
+ * 视口附近（rootMargin 缓冲）的页到 canvas，离屏过远的清画布省内存。缩放按视口中心
+ * 锚定，只重画可见与缓冲页。
  *
  * 真实 canvas/滚动渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
@@ -241,28 +252,61 @@ export async function renderPdfInto(
   signal?: AbortSignal,
 ): Promise<PdfRenderHandle> {
   throwIfReaderLoadCancelled(signal);
+  // pdfjs ≥ 6 直接调用 Map/WeakMap upsert 提案方法：主线程在此补，worker 侧由
+  // 同源 boot 补（两个独立 JS 上下文，缺一不可）。
+  installMapUpsertPolyfill();
   const pdfjs = await import('pdfjs-dist');
-  const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+  const workerEntry = await import('./pdf-worker-entry.js');
   throwIfReaderLoadCancelled(signal);
-  pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default;
+  // 同源 boot：pdf.js 自己 new Worker 并做 ready/test 握手。不要传
+  // PDFWorker({ port })——那会立刻标 ready，首开消息会在 worker 求值前丢掉。
+  // Worker 线程不可用时 preparePdfjsWorker 会改走主线程 fake worker。
+  pdfjs.GlobalWorkerOptions.workerSrc = workerEntry.pdfWorkerSrc();
+  await workerEntry.preparePdfjsWorker();
 
   const randomSource = isRandomAccessSource(input) ? input : null;
   let rangeFailure: unknown = null;
   let rangeController: AbortController | null = null;
   let loadingTask: ReturnType<typeof pdfjs.getDocument>;
-  if (randomSource === null) {
-    // 字节来自 raw IPC 专属拷贝，无复用方，直接移交 pdfjs，避免整本 PDF 防御拷贝。
-    loadingTask = pdfjs.getDocument({ data: input as Uint8Array });
+  // pdfjs 6 默认从 workerSrc 目录拉 wasm/cmap。boot 没有官方资源目录，
+  // 请求会挂起。关掉 wasm 与 worker fetch，解码走 JS 回退。
+  const pdfOpenOptions = { useWasm: false as const, useWorkerFetch: false as const };
+  const browserLocal =
+    randomSource !== null && randomSource.access === 'local' && !isTauriRuntime();
+  if (randomSource === null || browserLocal) {
+    // 浏览器预览的 File 已在内存里。pdfjs 6 的 range 传输要等 transportReady
+    // 挂上 listener 之后才能 onDataRange；首块若提前到达会丢掉，getDocument
+    // 一直不 resolve。桌面 Tauri 仍走下面的有界随机读，避免整本跨 IPC。
+    const data =
+      randomSource === null
+        ? (input as Uint8Array)
+        : await randomSource.readRange(0, randomSource.size, signal);
+    throwIfReaderLoadCancelled(signal);
+    loadingTask = pdfjs.getDocument({ data, ...pdfOpenOptions });
   } else {
     rangeController = new AbortController();
     const controller = rangeController;
     class SourceRangeTransport extends pdfjs.PDFDataRangeTransport {
+      readonly queued: Array<{ begin: number; chunk: Uint8Array }> = [];
+      override transportReady(listener?: unknown): void {
+        const parent = super.transportReady as ((next?: unknown) => void) | undefined;
+        parent?.call(this, listener);
+        for (const item of this.queued) {
+          this.onDataRange(item.begin, item.chunk);
+        }
+        this.queued.length = 0;
+      }
       override requestDataRange(begin: number, end: number): void {
         void randomSource!
           .readRange(begin, end - begin, controller.signal)
           .then((chunk) => {
-            if (!controller.signal.aborted) {
+            if (controller.signal.aborted) {
+              return;
+            }
+            try {
               this.onDataRange(begin, chunk);
+            } catch {
+              this.queued.push({ begin, chunk });
             }
           })
           .catch((error: unknown) => {
@@ -283,6 +327,7 @@ export async function renderPdfInto(
       rangeChunkSize: 256 * 1024,
       disableStream: true,
       disableAutoFetch: true,
+      ...pdfOpenOptions,
     });
   }
   let doc: Awaited<typeof loadingTask.promise>;
@@ -302,6 +347,8 @@ export async function renderPdfInto(
     if (rangeFailure !== null) {
       throw rangeFailure;
     }
+    // 兜底信息面向用户；原始原因必须落日志，否则打开失败无法定位。
+    console.error('[lightink/reader] PDF open failed', error);
     throw new ParseError('PDF 文件损坏或无法解析');
   } finally {
     signal?.removeEventListener('abort', cancelInitialLoad);
@@ -601,6 +648,8 @@ export async function renderPdfInto(
 
   // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
   const scroller = container;
+  // 触屏环境：放大出横向溢出后由指针拖拽平移（见 pdf-drag-pan 模块注释）。
+  const dragPan = bindPdfDragPan(scroller);
 
   const keepViewportAnchor = (
     view: DOMRect,
@@ -647,7 +696,7 @@ export async function renderPdfInto(
       }
       return;
     }
-    const buffer = visible.height * 2;
+    const buffer = visible.height * PDF_RENDER_BUFFER_SCREENS;
     for (let i = 0; i < total; i += 1) {
       const rect = slots[i]!.getBoundingClientRect();
       const strictlyVisible = rect.bottom >= visible.top && rect.top <= visible.bottom;
@@ -661,7 +710,7 @@ export async function renderPdfInto(
     }
   };
 
-  // 懒渲染：视口附近（上下各 ~2 屏缓冲）的页栅格化，离屏过远的清画布。
+  // 懒渲染：视口附近（上下各 ~0.8 屏缓冲）的页栅格化，离屏过远的清画布。
   observer =
     typeof IntersectionObserver !== 'undefined'
       ? new IntersectionObserver(
@@ -675,7 +724,7 @@ export async function renderPdfInto(
               }
             }
           },
-          { root: scroller, rootMargin: '200% 0px 200% 0px' },
+          { root: scroller, rootMargin: PDF_RENDER_ROOT_MARGIN },
         )
       : null;
   if (observer !== null) {
@@ -730,17 +779,40 @@ export async function renderPdfInto(
       }
     }
   };
-  void measureRemainingPages().catch(() => undefined);
+  void measureRemainingPages()
+    .then(() => {
+      // 真实页宽回填后（可能比页 1 宽）重估横向溢出。
+      dragPan.sync();
+    })
+    .catch(() => undefined);
 
   // 滚动时把视口顶部最近的页回写 controller.page（供书签/笔记定位与侧栏跳转）。
-  // 槽位判定走共享 nearestVisibleSlot；scroll 事件经 rAF 合并，帧内连发只同步一次。
+  // 从上一帧页码附近走，避免每帧对全部槽位 getBoundingClientRect。
+  // scroll 事件经 rAF 合并，帧内连发只同步一次。
+  let pageHint = 0;
   const onScroll = (): void => {
-    const top = scroller.getBoundingClientRect().top;
-    const slotTops = slots.map((slot) => slot.getBoundingClientRect().top);
-    const nearest = nearestVisibleSlot(slotTops, top);
-    if (nearest >= 0) {
-      controller.setPage(nearest + 1);
+    // 触底钳制：缩小后多页同屏时，末页顶边永远到不了视口顶，nearest-top
+    // 会把页码钉在前面的页（看着最后一页却显示 n-1/n）；滚到底直接采纳末页。
+    const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+    if (maxScrollTop > 0 && scroller.scrollTop >= maxScrollTop - 2) {
+      pageHint = total - 1;
+      controller.setPage(total);
+      return;
     }
+    const viewTop = scroller.getBoundingClientRect().top;
+    const topOf = (index: number): number => slots[index]!.getBoundingClientRect().top;
+    let i = Math.max(0, Math.min(total - 1, pageHint));
+    while (i > 0 && topOf(i) > viewTop) {
+      i -= 1;
+    }
+    while (i < total - 1 && topOf(i + 1) <= viewTop) {
+      i += 1;
+    }
+    if (i < total - 1 && Math.abs(topOf(i + 1) - viewTop) < Math.abs(topOf(i) - viewTop)) {
+      i += 1;
+    }
+    pageHint = i;
+    controller.setPage(i + 1);
   };
   const scrollFrames = rafFrameScheduler();
   const scrollCoordinator =
@@ -771,7 +843,8 @@ export async function renderPdfInto(
       clearSlot(i);
     }
     keepViewportAnchor(captured.view, captured.anchor);
-    // 重渲染范围与 IntersectionObserver 的懒加载缓冲（rootMargin 200% ≈ 上下各 2 屏）
+    dragPan.sync(); // 缩放后横向溢出可能出现/消失，重估拖拽平移开关
+    // 重渲染范围与 IntersectionObserver 的懒加载缓冲（rootMargin 80% ≈ 上下各 0.8 屏）
     // 对齐：observer 只在相交状态变化时派发事件，仍在缓冲区内的页被 clearSlot 清掉后
     // 不会再收到通知，必须由 rerender 主动补画，否则缩放后滚动会出现空白页。
     await paintVisibleBuffer(generation);
@@ -866,6 +939,7 @@ export async function renderPdfInto(
       cancelRenderTasks();
       cancelTextLayers();
       scroller.removeEventListener('scroll', onScrollEvent);
+      dragPan.release();
       scrollCoordinator?.cancel();
       observer?.disconnect();
       hostResizeObserver?.disconnect();

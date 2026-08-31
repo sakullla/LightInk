@@ -43,6 +43,19 @@ export const READER_TOC_BATCH_THRESHOLD = 500;
 /** Rows painted per batch (first paint plus each scroll-append). */
 export const READER_TOC_RENDER_BATCH = 200;
 
+const READER_SHEET_HANDLE_CLASS = 'lightink-reader-sheet-handle';
+
+function takeSheetHandle(panel: HTMLElement): HTMLElement | null {
+  return panel.querySelector<HTMLElement>(`.${READER_SHEET_HANDLE_CLASS}`);
+}
+
+function restoreSheetHandle(panel: HTMLElement, handle: HTMLElement | null): void {
+  if (handle === null || handle.parentElement === panel) {
+    return;
+  }
+  panel.insertBefore(handle, panel.firstChild);
+}
+
 /**
  * Format gate for the typography sheet: flow gets every control, pdf keeps
  * only theme, comic maps existing comic preferences.
@@ -83,6 +96,8 @@ export interface ReaderChromePanelCopy {
   tocSearch?: string;
   tocEmptySearch?: string;
   tocSearchCount?: string;
+  /** 标题行右侧的章节总数（{n} 占位），缺省不显示。 */
+  tocCount?: string;
   typeTitle: string;
   theme: string;
   size: string;
@@ -131,6 +146,7 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
     tocSearch: '搜索',
     tocEmptySearch: '没有匹配的条目',
     tocSearchCount: '{n} 条匹配',
+    tocCount: '{n} 章',
     typeTitle: '排版',
     theme: '纸张',
     size: '字号',
@@ -176,14 +192,25 @@ export function fillReaderTocPanel(
 ): void {
   const previousQuery =
     panel.querySelector<HTMLInputElement>('.lightink-reader-toc-search')?.value ?? '';
+  const sheetHandle = takeSheetHandle(panel);
   panel.replaceChildren();
+  restoreSheetHandle(panel, sheetHandle);
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
   panel.setAttribute('aria-label', copy.tocTitle);
+  const head = document.createElement('div');
+  head.className = 'lightink-reader-toc-head';
   const heading = document.createElement('h2');
   heading.className = 'lightink-reader-chrome-panel-title';
   heading.textContent = copy.tocTitle;
-  panel.appendChild(heading);
+  head.appendChild(heading);
+  if (items.length > 0 && copy.tocCount !== undefined) {
+    const count = document.createElement('span');
+    count.className = 'lightink-reader-toc-count';
+    count.textContent = formatOutlineSearchCount(copy.tocCount, items.length);
+    head.appendChild(count);
+  }
+  panel.appendChild(head);
   if (items.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'lightink-reader-chrome-panel-empty';
@@ -452,7 +479,9 @@ export function fillReaderTypographyPanel(
   formatKind: ReaderTypographyFormatKind = 'flow',
   comic: ReaderTypographyComicControls | null = null,
 ): void {
+  const sheetHandle = takeSheetHandle(panel);
   panel.replaceChildren();
+  restoreSheetHandle(panel, sheetHandle);
   panel.classList.add('lightink-reader-type-sheet');
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
@@ -794,6 +823,10 @@ export function adoptReaderOverlayTheme(overlay: HTMLElement, host: HTMLElement)
   if (style.color !== '') overlay.style.color = style.color;
   const colorScheme = style.colorScheme?.trim() ?? '';
   if (colorScheme !== '') overlay.style.colorScheme = colorScheme;
+  overlay.style.fontFamily = 'var(--lightink-font-ui)';
+  overlay.style.lineHeight = '1.35';
+  overlay.style.setProperty('--lightink-reader-font-scale', '1');
+  overlay.style.setProperty('--lightink-reader-line-height', '1.35');
   // Reader paper has no accent token; use ink so chips/focus are not editor brown.
   const ink = overlay.style.getPropertyValue('--lightink-fg').trim() || style.color;
   const elevated =
@@ -869,7 +902,6 @@ export function positionReaderChromePanel(
   panel.style.setProperty('--lightink-reader-popover-arrow', `${Math.round(arrow)}px`);
 }
 
-const READER_SHEET_HANDLE_CLASS = 'lightink-reader-sheet-handle';
 const sheetDragUnbinds = new WeakMap<HTMLElement, () => void>();
 
 /**
@@ -1032,6 +1064,20 @@ export function pinFixedOverlay(
     overlay.style.position = 'fixed';
     overlay.style.left = `${Math.max(0, box.left)}px`;
     overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
+    const searchPage = overlay.dataset.searchPage === 'document';
+    overlay.classList.toggle('is-touch-search-page', searchPage);
+    if (searchPage) {
+      // In-book search is a full page (Kindle / Books / 微信读书): not a sheet.
+      overlay.style.top = '0px';
+      overlay.style.bottom = keyboardOpen ? 'var(--lightink-keyboard-inset, 0px)' : '0px';
+      overlay.style.maxHeight = 'none';
+      overlay.style.height = keyboardOpen ? 'auto' : '100dvh';
+      overlay.style.width = 'auto';
+      overlay.style.zIndex = '50';
+      trackTouchSheetPin(overlay, pane, viewport);
+      releaseTouchSheetDrag(overlay);
+      return;
+    }
     if (keyboardOpen) {
       // Keyboard up: double-anchor between the safe top and the keyboard top;
       // the keyboard already covers the footer, so no footer inset is added.
@@ -1055,6 +1101,7 @@ export function pinFixedOverlay(
   releaseTouchSheetPin(overlay);
   releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
+  overlay.classList.remove('is-touch-search-page');
   const box = pane.getBoundingClientRect();
   const titlebar = titlebarOffsetPx();
   overlay.style.position = 'fixed';
@@ -1084,6 +1131,7 @@ export function unpinFixedOverlay(overlay: HTMLElement): void {
   releaseTouchSheetPin(overlay);
   releaseTouchSheetDrag(overlay);
   overlay.classList.remove('is-touch-sheet');
+  overlay.classList.remove('is-touch-search-page');
   overlay.style.removeProperty('position');
   overlay.style.removeProperty('top');
   overlay.style.removeProperty('right');
@@ -1176,8 +1224,140 @@ function sliderRow(
     });
     track.appendChild(button);
   }
+  bindDiscreteTrackDrag(track, choices);
   block.appendChild(track);
   return block;
+}
+
+function discreteTrackIndex(track: HTMLElement, clientX: number, count: number): number {
+  if (count <= 1) {
+    return 0;
+  }
+  const rect = track.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || rect.width <= 0) {
+    return 0;
+  }
+  const t = (clientX - rect.left) / rect.width;
+  return Math.max(0, Math.min(count - 1, Math.round(t * (count - 1))));
+}
+
+function previewDiscreteTrack(
+  track: HTMLElement,
+  choices: readonly { label: string }[],
+  index: number,
+): void {
+  const ticks = track.querySelectorAll('.lightink-reader-type-tick');
+  ticks.forEach((tick, tickIndex) => {
+    const selected = tickIndex === index;
+    tick.classList.toggle('is-active', selected);
+    tick.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  track.style.setProperty(
+    '--lightink-reader-track-fill',
+    `${(index / Math.max(1, choices.length - 1)) * 100}%`,
+  );
+}
+
+function bindDiscreteTrackDrag(
+  track: HTMLElement,
+  choices: readonly { label: string; apply: () => void }[],
+): void {
+  if (choices.length === 0) {
+    return;
+  }
+  let dragging = false;
+  let lastIndex = -1;
+  let activePointerId: number | null = null;
+  const doc = track.ownerDocument;
+  const view = doc.defaultView;
+
+  const pick = (clientX: number): number => discreteTrackIndex(track, clientX, choices.length);
+
+  const samePointer = (event: PointerEvent): boolean =>
+    dragging &&
+    (activePointerId === null ||
+      typeof event.pointerId !== 'number' ||
+      event.pointerId === activePointerId);
+
+  const previewAt = (clientX: number): void => {
+    lastIndex = pick(clientX);
+    previewDiscreteTrack(track, choices, lastIndex);
+  };
+
+  const releaseCapture = (pointerId: number | null): void => {
+    if (
+      pointerId === null ||
+      typeof track.releasePointerCapture !== 'function'
+    ) {
+      return;
+    }
+    try {
+      if (track.hasPointerCapture?.(pointerId) === true) {
+        track.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // jsdom / already-released pointers
+    }
+  };
+
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!samePointer(event)) {
+      return;
+    }
+    previewAt(event.clientX);
+  };
+
+  const detachWindow = (): void => {
+    view?.removeEventListener('pointermove', onPointerMove);
+    view?.removeEventListener('pointerup', onPointerUp);
+    view?.removeEventListener('pointercancel', onPointerUp);
+  };
+
+  const onPointerUp = (event: PointerEvent): void => {
+    if (!samePointer(event)) {
+      return;
+    }
+    const pointerId = activePointerId;
+    dragging = false;
+    activePointerId = null;
+    track.classList.remove('is-dragging');
+    detachWindow();
+    previewAt(event.clientX);
+    releaseCapture(pointerId);
+    // apply() rebuilds the sheet; window listeners must already be gone.
+    choices[lastIndex]?.apply();
+  };
+
+  const onPointerDown = (event: PointerEvent): void => {
+    if (typeof event.button === 'number' && event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+    dragging = true;
+    activePointerId = typeof event.pointerId === 'number' ? event.pointerId : null;
+    track.classList.add('is-dragging');
+    previewAt(event.clientX);
+    if (typeof track.setPointerCapture === 'function' && activePointerId !== null) {
+      try {
+        track.setPointerCapture(activePointerId);
+      } catch {
+        // jsdom / already-released pointers — window listeners still finish the drag
+      }
+    }
+    view?.addEventListener('pointermove', onPointerMove);
+    view?.addEventListener('pointerup', onPointerUp);
+    view?.addEventListener('pointercancel', onPointerUp);
+    // Touch: keep the sheet from scrolling. Mouse: do not cancel, or
+    // <button> ticks swallow the drag (implicit capture + suppressed move).
+    if (event.pointerType !== 'mouse') {
+      event.preventDefault();
+    }
+  };
+
+  track.addEventListener('pointerdown', onPointerDown);
+  track.addEventListener('pointermove', onPointerMove);
+  track.addEventListener('pointerup', onPointerUp);
+  track.addEventListener('pointercancel', onPointerUp);
 }
 
 function spacingGlyph(level: number): HTMLElement {

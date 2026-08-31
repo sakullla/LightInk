@@ -195,7 +195,10 @@ function memoryStorage(seed: Record<string, string> = {}): Storage {
 }
 
 function itemTexts(view: OutlineView): string[] {
-  return bodyOf(view).children.map((c) => c.textContent);
+  return bodyOf(view).children.map((c) => {
+    const label = c.children.find((child) => child.classList.contains('lightink-outline-item-label'));
+    return label?.textContent ?? c.textContent;
+  });
 }
 
 describe('createOutlineView 渲染', () => {
@@ -247,17 +250,17 @@ describe('createOutlineView 折叠标记（T4/R2）', () => {
     // 「一」（anchor 0，非叶子，已折叠）→ 有标记且 is-folded。
     expect(items[0]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
     expect(items[0]?.firstChild?.classList.contains('is-folded')).toBe(true);
-    // 「一.1」（anchor 1，叶子）→ 无标记。
-    expect(items[1]?.firstChild).toBeUndefined();
+    // 「一.1」（anchor 1，叶子）→ 无折叠三角。
+    expect(items[1]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
     // 「二」（anchor 2，非叶子，未折叠）→ 有标记但非 is-folded。
     expect(items[2]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
     expect(items[2]?.firstChild?.classList.contains('is-folded')).toBe(false);
-    // 「二.1」（anchor 3，叶子）→ 无标记。
-    expect(items[3]?.firstChild).toBeUndefined();
+    // 「二.1」（anchor 3，叶子）→ 无折叠三角。
+    expect(items[3]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
     view.destroy();
   });
 
-  it('折叠与大纲独立：折叠条目的更深后代仍在大纲中完整可见', () => {
+  it('折叠祖先后大纲隐藏其后代，再次点击展开', () => {
     const state = { folded: [0] };
     const view = createOutlineView({
       doc: fakeDocument(),
@@ -270,11 +273,13 @@ describe('createOutlineView 折叠标记（T4/R2）', () => {
       },
       getFoldedOrdinals: () => state.folded,
     });
-    // # A 折叠 → 大纲不级联隐藏，A1 / A1a 仍可见（编辑器折叠不影响大纲）。
-    expect(itemTexts(view)).toEqual(['A', 'A1', 'A1a', 'B', 'B1']);
-    // 展开 # A → 列表保持完整不变。
+    expect(itemTexts(view)).toEqual(['A', 'B', 'B1']);
     const marker0 = bodyOf(view).children[0]?.firstChild as FakeElement;
-    marker0.emit('click', { preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    marker0.emit('click', {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+    });
     expect(itemTexts(view)).toEqual(['A', 'A1', 'A1a', 'B', 'B1']);
     view.destroy();
   });

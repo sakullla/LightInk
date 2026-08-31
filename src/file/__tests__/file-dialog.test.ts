@@ -22,6 +22,7 @@ import {
   isTauriRuntime,
   readBrowserFileBytes,
   readBrowserFileChunk,
+  readBrowserFileText,
   registerBrowserFile,
 } from '../browser-file-store.js';
 
@@ -257,6 +258,15 @@ describe('browser file store', () => {
     expect(browserFileSize(path)).toBe(5);
     await expect(readBrowserFileBytes(path)).resolves.toEqual(new Uint8Array([1, 2, 3, 4, 5]));
     await expect(readBrowserFileChunk(path, 1, 2)).resolves.toEqual(new Uint8Array([2, 3]));
+  });
+
+  it('reads registered Markdown as UTF-8 text', async () => {
+    const path = registerBrowserFile(
+      new File(['# 内部证书\n'], '2026-07-31-内部证书自动轮转与隧道双向mtls.md', {
+        type: 'text/markdown',
+      }),
+    );
+    await expect(readBrowserFileText(path)).resolves.toBe('# 内部证书\n');
   });
 
   it('disambiguates colliding file names', () => {

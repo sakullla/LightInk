@@ -9,9 +9,9 @@
  *   - 点击条目 → Markdown 按序号锚点滚到 h1-h6；阅读器走 jumpToOutlineItem；
  *   - 显示三态循环（菜单 / Ctrl+Shift+L / 侧栏按钮）：
  *       expanded → rail（窄条 »）→ hidden（完全隐藏）→ expanded
- *   - T4/R2 折叠联动：条目左侧三角显示编辑器对应标题的折叠态、点击切换；
- *     大纲始终渲染完整标题列表——编辑器侧折叠只隐藏编辑器正文，不在大纲中
- *     级联隐藏子条目（两个视图保持独立，大纲作为完整导航目录不被折叠影响）。
+ *   - T4/R2 折叠联动：条目左侧三角切换编辑器对应标题的折叠态，并在大纲中
+ *     级联隐藏该标题下的子条目（树形控件惯例：▸ 折叠 / ▾ 展开）。搜索时
+ *     不隐藏后代，以免命中被折叠父级吞掉。
  *   - Expanded 态右侧拖动手柄可调宽度，写入 localStorage `lightink.outlineWidth`。
  *   - 搜索过滤与当前项高亮/滚入视口与阅读器 TOC 浮层共用 outline-model。
  *
@@ -23,6 +23,7 @@
 import {
   buildOutline,
   filterOutlineItems,
+  hideFoldedOutlineItems,
   lastCurrentOutlineIndex,
   leafHeadingAnchors,
   outlineItemIsCurrent,
@@ -388,7 +389,13 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     const identity = outlineIdentity(items, readerItems !== null ? 'reader' : 'markdown');
     const documentChanged = identity !== lastOutlineIdentity;
     lastOutlineIdentity = identity;
-    const visible = filterOutlineItems(items, searchQuery);
+    const current = deps.getActiveLocation?.() ?? {};
+    const foldingEnabled = readerItems === null;
+    const foldedOrdinals = new Set(foldingEnabled ? (deps.getFoldedOrdinals?.() ?? []) : []);
+    let visible = filterOutlineItems(items, searchQuery);
+    if (foldingEnabled && searchQuery.trim() === '') {
+      visible = hideFoldedOutlineItems(visible, foldedOrdinals);
+    }
     visibleItems = visible;
     if (visible.length === 0) {
       live.textContent = t('outline.emptySearch');
@@ -397,13 +404,8 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     }
     setSearchChrome(true);
     live.textContent = t('outline.searchCount').replace(/\{n\}/g, String(visible.length));
-    const current = deps.getActiveLocation?.() ?? {};
-    const foldingEnabled = readerItems === null;
-    const foldedOrdinals = new Set(foldingEnabled ? (deps.getFoldedOrdinals?.() ?? []) : []);
-    // 叶子标题（无子标题）不渲染折叠三角。
+    // 叶子标题（无子标题）不渲染折叠三角。折叠祖先后隐藏大纲后代。
     const leafAnchors = leafHeadingAnchors(items);
-    // 大纲与编辑器折叠保持独立：编辑器侧折叠只隐藏编辑器正文，大纲始终渲染
-    // 完整标题列表（不在大纲中级联隐藏子条目），折叠态仅以左侧标记呈现。
     body.replaceChildren(
       ...visible.map((item, index) => {
         const el = doc.createElement('button');
@@ -412,34 +414,30 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
         el.classList.add('lightink-outline-item');
         el.classList.add(`level-${Math.min(Math.max(item.level, 1), 6)}`);
         el.setAttribute('role', 'option');
-        el.textContent = item.text;
+        const label = doc.createElement('span');
+        label.classList.add('lightink-outline-item-label');
+        label.textContent = item.text;
+        el.appendChild(label);
         el.setAttribute('title', item.text);
         if (outlineItemIsCurrent(item, current)) {
           el.classList.add('is-current');
           el.setAttribute('aria-current', 'location');
         }
         el.addEventListener('click', () => scrollToItem(item));
-        // T4/R2：折叠标记作为 item 的首个子 span（仅在注入了 toggleFoldAtOrdinal 时
-        // 渲染——测试不注入，故 body.children 仍是纯 item 按钮，既有断言不变）。
-        // 叶子标题（无子标题）无折叠三角；标记点击 stopPropagation 不触发条目
-        // 跳转，单独联动编辑器折叠。
+        // 叶子无三角。标记点击 stopPropagation，不跳转，只切换折叠。
         if (
           foldingEnabled &&
           deps.toggleFoldAtOrdinal !== undefined &&
           !leafAnchors.has(item.anchor)
         ) {
           const isFolded = foldedOrdinals.has(item.anchor);
-          const marker = doc.createElement('span');
+          const marker = doc.createElement('button');
+          marker.type = 'button';
           marker.classList.add('lightink-outline-fold');
           if (isFolded) {
             marker.classList.add('is-folded');
           }
-          // 三角方向按树形控件惯例：折叠 ▸（可展开）/ 展开 ▾（可折叠）。
           marker.textContent = isFolded ? '▸' : '▾';
-          marker.style.cssText =
-            'cursor:pointer;display:inline-block;width:1.2em;margin-right:2px;' +
-            'opacity:.6;font-size:.9em;';
-          marker.setAttribute('role', 'button');
           marker.setAttribute('aria-label', isFolded ? '展开' : '折叠');
           marker.addEventListener('mousedown', (event) => {
             event.preventDefault();
@@ -448,8 +446,11 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
           marker.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
             deps.toggleFoldAtOrdinal!(item.anchor);
-            render(); // 立即反映新折叠态（编辑器 onFoldChanged 亦会触发 refreshNow）
+            render();
           });
           el.insertBefore(marker, el.firstChild);
         }

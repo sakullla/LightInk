@@ -109,6 +109,7 @@ function lastPathSegment(path: string): string {
  * Human file name for chrome (open-progress, tabs, toasts).
  * Decodes a single percent-encoding pass and UTF-8 bytes that were
  * misread as Latin-1 so Chinese names do not show as `%E6…` or `æ˜Ÿ`.
+ * Browser preview virtual paths (`browser-file:name.ext`) show the basename only.
  */
 export function displayNameOfPath(path: string): string {
   const raw = path.trim();
@@ -116,6 +117,9 @@ export function displayNameOfPath(path: string): string {
     return path;
   }
   let candidate = raw;
+  if (/^browser-file:/i.test(candidate)) {
+    candidate = candidate.slice('browser-file:'.length);
+  }
   if (/^file:/i.test(candidate)) {
     try {
       candidate = new URL(candidate).pathname;

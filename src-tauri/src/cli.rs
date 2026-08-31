@@ -119,6 +119,11 @@ fn file_url_to_path(raw: &str) -> Option<String> {
 ///
 /// 生产调用点仅在 macOS/iOS/Android 的 `RunEvent::Opened` 分支；其它目标
 /// 仍保留实现与单测（file URL 解析与扩展名判断与 argv 路径共用）。
+///
+/// Android 第三方应用（Telegram 等）送达的是 `content://` URI，
+/// `to_file_path` 失败在此**刻意**被跳过：content:// 由 MainActivity 的
+/// 外部打开桥复制成真实缓存文件后经前端打开（见 gen/android
+/// MainActivity.kt「外部打开桥」），此处再收会双开。
 #[cfg_attr(
     not(any(target_os = "macos", target_os = "ios", target_os = "android")),
     allow(dead_code)

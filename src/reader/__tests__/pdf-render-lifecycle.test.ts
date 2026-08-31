@@ -64,12 +64,21 @@ vi.mock('pdfjs-dist', () => ({
   getDocument: pdfRuntime.getDocument,
   TextLayer: MockTextLayer,
   PDFDataRangeTransport: MockPDFDataRangeTransport,
+  PDFWorker: class MockPDFWorker {
+    constructor(public readonly options: { port?: unknown } = {}) {}
+    destroy(): void {}
+  },
 }));
 
-vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'mock-worker.js' }));
+vi.mock('../formats/pdf-worker-entry.ts', () => ({
+  pdfWorkerSrc: vi.fn(() => 'mock-boot-worker.js'),
+  preparePdfjsWorker: vi.fn(async () => undefined),
+  PDF_WORKER_BOOT_DEV_PATH: '/__lightink/pdf.worker.boot.mjs',
+  PDF_WORKER_DEV_PATH: '/__lightink/pdf.worker.min.mjs',
+}));
 
 import { createReaderView } from '../reader-view.js';
-import { renderPdfInto } from '../formats/pdf.js';
+import { PDF_RENDER_ROOT_MARGIN, renderPdfInto } from '../formats/pdf.js';
 
 interface ControlledRenderTask {
   readonly promise: Promise<void>;
@@ -303,10 +312,14 @@ describe('PDF render lifecycle', () => {
       range: MockPDFDataRangeTransport;
       disableStream: boolean;
       disableAutoFetch: boolean;
+      useWasm: boolean;
+      useWorkerFetch: boolean;
     };
     expect(options.data).toBeUndefined();
     expect(options.disableStream).toBe(true);
     expect(options.disableAutoFetch).toBe(true);
+    expect(options.useWasm).toBe(false);
+    expect(options.useWorkerFetch).toBe(false);
     options.range.requestDataRange(128, 384);
     await vi.waitFor(() => expect(source.readRange).toHaveBeenCalledWith(128, 256, expect.any(AbortSignal)));
     await vi.waitFor(() => expect(options.range.received).toEqual([
@@ -315,6 +328,63 @@ describe('PDF render lifecycle', () => {
 
     await handle.destroy();
     expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets workerSrc to the same-origin boot so pdf.js can handshake', async () => {
+    mockPdf();
+    const handle = await renderPdfInto(new Uint8Array([1]), document.createElement('div'));
+    expect(pdfRuntime.workerOptions.workerSrc).toBe('mock-boot-worker.js');
+    const options = pdfRuntime.getDocument.mock.calls[0]?.[0] as { worker?: unknown };
+    expect(options.worker).toBeUndefined();
+    await handle.destroy();
+  });
+
+  it('builds a same-origin boot that polyfills upsert then imports the official worker', () => {
+    const source = readFileSync(
+      path.join(process.cwd(), 'src/reader/formats/pdf-worker-entry.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/MAP_UPSERT_POLYFILL_SOURCE/);
+    expect(source).toMatch(/pdfWorkerBootModule/);
+    expect(source).toMatch(/\/__lightink\/pdf\.worker\.boot\.mjs/);
+    expect(source).toMatch(/WorkerMessageHandler\.initializeFromPort\(self\)/);
+    expect(source).toMatch(/preparePdfjsWorker/);
+    expect(source).toMatch(/pdfWorkerThreadsAvailable/);
+    expect(source).not.toMatch(/createPdfModuleWorker/);
+    expect(source).not.toMatch(/\?worker&url/);
+    expect(source).not.toMatch(/void import\(/);
+  });
+
+  it('loads a browser-local random-access PDF as a single data buffer', async () => {
+    mockPdf();
+    const bytes = new Uint8Array([7, 8, 9, 10]);
+    const source = {
+      size: bytes.length,
+      identity: { id: 'local-pdf' },
+      access: 'local' as const,
+      readRange: vi.fn(async (offset: number, length: number) =>
+        bytes.slice(offset, offset + length),
+      ),
+      close: vi.fn(async () => undefined),
+    };
+    const handle = await renderPdfInto(source, document.createElement('div'));
+    const options = pdfRuntime.getDocument.mock.calls[0]?.[0] as {
+      data?: Uint8Array;
+      range?: MockPDFDataRangeTransport;
+    };
+    expect(options.range).toBeUndefined();
+    expect(Array.from(options.data ?? [])).toEqual([7, 8, 9, 10]);
+    expect(source.readRange).toHaveBeenCalledWith(0, 4, undefined);
+    await handle.destroy();
+  });
+
+  it('disables wasm fetch so the wrapped worker URL cannot hang getDocument', async () => {
+    mockPdf();
+    const handle = await renderPdfInto(new Uint8Array([1]), document.createElement('div'));
+    const options = pdfRuntime.getDocument.mock.calls[0]?.[0] as { useWasm?: boolean; useWorkerFetch?: boolean };
+    expect(options.useWasm).toBe(false);
+    expect(options.useWorkerFetch).toBe(false);
+    await handle.destroy();
   });
 
   it('cancels the previous render when zoom requests overlap', async () => {
@@ -437,6 +507,39 @@ describe('PDF render lifecycle', () => {
     await handle.destroy();
   });
 
+  it('reports the last page when scrolled to the document end (zoomed-out multi-page view)', async () => {
+    // 回归：缩小后多页同屏时末页顶边永远到不了视口顶，nearest-top 把页码
+    // 钉在中间页（看着最后一页却显示 3/7、86%）；触底必须直接采纳末页。
+    // 门控 mock：其余页的 getPage 挂起，量页锚点回写不会中途改 scrollTop。
+    mockGatedMultiPagePdf(7);
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 1540 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+    expect(handle.controller.totalPages).toBe(7);
+
+    // 每页 220px，7 页共 1540；视口 1000 → maxScrollTop = 540。触底时各页顶边：
+    // 距视口顶最近的是第 3 页（-100），但用户看到的是文档末尾。
+    container.scrollTop = 540;
+    layoutRects(container, 0, [-540, -320, -100, 120, 340, 560, 780]);
+    container.dispatchEvent(new Event('scroll'));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(handle.controller.page).toBe(7);
+
+    // 未触底：保持视口顶边最近页的既有口径（第 3 页）。
+    container.scrollTop = 300;
+    layoutRects(container, 0, [-300, -80, 140, 360, 580, 800, 1020]);
+    container.dispatchEvent(new Event('scroll'));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(handle.controller.page).toBe(2);
+    await handle.destroy();
+  });
+
   it('reset restores fit-width, not a 100% font-scale token', async () => {
     const runtime = mockPdf();
     const container = document.createElement('div');
@@ -485,9 +588,11 @@ describe('PDF render lifecycle', () => {
   it('in paginated layout paints later pages from the page-host scroller, not an ancestor', async () => {
     document.documentElement.dataset.readingLayout = 'paginated';
     const observedRoots: Array<Element | Document | null> = [];
+    const observedMargins: string[] = [];
     class CapturingObserver {
       constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
         observedRoots.push((options?.root as Element | Document | null) ?? null);
+        observedMargins.push(options?.rootMargin ?? '');
       }
       observe(): void {}
       unobserve(): void {}
@@ -515,15 +620,16 @@ describe('PDF render lifecycle', () => {
 
     const handle = await renderPdfInto(new Uint8Array([1]), container);
     expect(observedRoots[0]).toBe(container);
+    expect(observedMargins[0]).toBe(PDF_RENDER_ROOT_MARGIN);
 
-    // 页宿主视口 [0,600]；第 4 页 top=2800 在 ±2 屏缓冲外。
+    // 页宿主视口 [0,600]；第 4 页 top=2800 在 ±0.8 屏缓冲外。
     layoutRects(container, 0, [0, 700, 1400, 2800]);
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
     await waitForTask(runtime.tasks, 1);
     runtime.tasks[0]!.resolve();
-    await vi.waitFor(() => expect(runtime.tasks).toHaveLength(3));
+    await vi.waitFor(() => expect(runtime.tasks).toHaveLength(2));
     for (const task of runtime.tasks) task.resolve();
     await vi.waitFor(() => {
       expect((container.children[0] as HTMLElement).querySelector('canvas')).not.toBeNull();
@@ -544,10 +650,10 @@ describe('PDF render lifecycle', () => {
         toJSON: () => ({}),
       }) as DOMRect;
     const afterAncestor = handle.rerender();
-    await waitForTask(runtime.tasks, 4);
-    runtime.tasks[3]!.resolve();
-    await vi.waitFor(() => expect(runtime.tasks).toHaveLength(6));
-    for (const task of runtime.tasks.slice(3)) task.resolve();
+    await waitForTask(runtime.tasks, 3);
+    runtime.tasks[2]!.resolve();
+    await vi.waitFor(() => expect(runtime.tasks).toHaveLength(4));
+    for (const task of runtime.tasks.slice(2)) task.resolve();
     await afterAncestor;
     expect((container.children[3] as HTMLElement).querySelector('canvas')).toBeNull();
 
@@ -557,7 +663,7 @@ describe('PDF render lifecycle', () => {
     await vi.waitFor(() => {
       expect((container.children[3] as HTMLElement).querySelector('canvas')).not.toBeNull();
     });
-    for (const task of runtime.tasks.slice(6)) task.resolve();
+    for (const task of runtime.tasks.slice(4)) task.resolve();
     await afterHost;
     await handle.destroy();
   });
@@ -567,6 +673,9 @@ describe('PDF render lifecycle', () => {
     const theme = readFileSync(path.join(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     expect(css).toMatch(
       /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*overflow:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:has\(\.lightink-reader-pages\[data-reader-format='pdf'\]\)[\s\S]*?\.lightink-reader-chrome-footer[\s\S]*?\.lightink-reader-chrome-scrubber[\s\S]*?\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /\.lightink-reader:has\(>\s*\.lightink-reader-pages\[data-reader-active='true'\]\)\s*\{[^}]*position:\s*absolute/,
@@ -585,6 +694,13 @@ describe('PDF render lifecycle', () => {
     );
     expect(css).not.toMatch(
       /html\[data-reading-layout='paginated'\] \.lightink-reader:has\([^)]*\)\s*\{[^}]*overflow:\s*auto/,
+    );
+    // 缩放闪屏回归：宿主是纵向 flex，slot 必须禁止收缩；滚动条出现/消失不得
+    // 改变 clientWidth（否则适合页宽振荡 → ResizeObserver rerender 死循环）。
+    expect(css).toMatch(/\.lightink-reader-page-slot\s*\{[^}]*flex:\s*0 0 auto/);
+    expect(css).toMatch(/\.lightink-reader-page-slot\s*\{[^}]*content-visibility:\s*auto/);
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*scrollbar-gutter:\s*stable/,
     );
   });
 
@@ -654,15 +770,15 @@ describe('PDF render lifecycle', () => {
 
   it('re-renders pages inside the lazy-render buffer, not only the strict viewport', async () => {
     // 回归：缩放后 rerender 清掉所有画布；IntersectionObserver 只在相交状态变化时
-    // 派发事件，仍在 ±2 屏缓冲区内的页不会收到通知。rerender 必须把这些页一并重画，
+    // 派发事件，仍在 ±0.8 屏缓冲区内的页不会收到通知。rerender 必须把这些页一并重画，
     // 否则缩放后滚动会出现空白页（用户可见为“缺页/页间距异常大”）。
     const runtime = mockMultiPagePdf(5);
     const container = document.createElement('div');
     document.body.appendChild(container);
     const handle = await renderPdfInto(new Uint8Array([1]), container);
-    // viewport [0,600]；缓冲区 = ±2 屏（±1200）。第 3 页 top=1400 严格视口外、缓冲区内；
+    // viewport [0,600]；缓冲区 = ±0.8 屏（±480）。第 3 页 top=900 严格视口外、缓冲区内；
     // 第 4 页 top=2100 缓冲区外（滚动进入时应由 observer 懒补，rerender 不管）。
-    layoutRects(container, 0, [0, 700, 1400, 2100, 2800]);
+    layoutRects(container, 0, [0, 700, 900, 2100, 2800]);
 
     handle.controller.zoomIn();
     const rerendering = handle.rerender();

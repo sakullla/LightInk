@@ -442,6 +442,130 @@ describe('annotation-panel 融合搜索', () => {
     expect(closed).toBe(1);
   });
 
+  it('正文模式：扫描分批发布做增量渲染，已有命中行不重建（点击不因重建落空）', () => {
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+        onLoadMore: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    (panel.element.querySelector('[data-kind-filter="document"]') as HTMLButtonElement).click();
+    panel.setSearchQuery('keyword');
+
+    panel.renderHits(
+      [{ key: '0:0:0:7', snippet: 'keyword one', location: 'Chapter 1', current: true }],
+      { searching: true, hasMore: true },
+    );
+    const first = panel.element.querySelector('[data-search-key="0:0:0:7"]');
+    expect(first).not.toBeNull();
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-more button')?.textContent,
+    ).toBe('reader.search.searching');
+
+    // 追加批：前缀行复用同一节点（按下中的点击不被 replaceChildren 打断）。
+    panel.renderHits(
+      [
+        { key: '0:0:0:7', snippet: 'keyword one', location: 'Chapter 1', current: true },
+        { key: '1:0:0:7', snippet: 'keyword two', location: 'Chapter 2', current: false },
+      ],
+      { searching: true, hasMore: true },
+    );
+    expect(panel.element.querySelector('[data-search-key="0:0:0:7"]')).toBe(first);
+    expect(panel.element.querySelectorAll('.lightink-reader-sidebar-hit')).toHaveLength(2);
+
+    // 完成批 + current 迁移：仍复用节点，只校正 is-current 类名。
+    panel.renderHits([
+      { key: '0:0:0:7', snippet: 'keyword one', location: 'Chapter 1', current: false },
+      { key: '1:0:0:7', snippet: 'keyword two', location: 'Chapter 2', current: true },
+    ]);
+    expect(panel.element.querySelector('[data-search-key="0:0:0:7"]')).toBe(first);
+    expect(first!.classList.contains('is-current')).toBe(false);
+    expect(
+      panel.element
+        .querySelector('[data-search-key="1:0:0:7"]')
+        ?.classList.contains('is-current'),
+    ).toBe(true);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-more')).toBeNull();
+
+    // 查询变化 key 全换：从失配处整段重建。
+    panel.renderHits([
+      { key: '0:0:2:5', snippet: 'other', location: 'Chapter 1', current: true },
+    ]);
+    expect(panel.element.querySelector('[data-search-key="0:0:0:7"]')).toBeNull();
+    expect(panel.element.querySelectorAll('.lightink-reader-sidebar-hit')).toHaveLength(1);
+  });
+
+  it('正文模式：头部改名并藏导出，清除按钮清词不关面板，命中片段高亮查询词', () => {
+    let closed = 0;
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      onClose: () => {
+        closed += 1;
+      },
+      onExport: vi.fn(),
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render(annotations);
+
+    const title = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-sidebar-header span',
+    )!;
+    const exportButton = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-sidebar-export',
+    )!;
+    expect(title.textContent).toBe('annotation.sidebar');
+    expect(exportButton.hidden).toBe(false);
+
+    panel.setSearchQuery('命中');
+    expect(title.textContent).toBe('reader.search.document');
+    expect(title.hidden).toBe(true);
+    expect(exportButton.hidden).toBe(true);
+    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-sidebar-filters:not(.lightink-reader-sidebar-colors)')
+        ?.hidden,
+    ).toBe(true);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
+
+    panel.renderHits([
+      { key: '1:0:2', snippet: '前文 命中 后文', location: 'page 1', current: true },
+    ]);
+    const mark = panel.element.querySelector('.lightink-reader-sidebar-hit-mark');
+    expect(mark?.textContent).toBe('命中');
+
+    const clear = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-sidebar-search-clear',
+    )!;
+    expect(clear.hidden).toBe(false);
+    clear.click();
+    expect(panel.getSearchQuery()).toBe('');
+    expect(closed).toBe(0);
+    expect(clear.hidden).toBe(true);
+
+    (panel.element.querySelector('[data-kind-filter="all"]') as HTMLButtonElement).click();
+    expect(title.textContent).toBe('annotation.sidebar');
+    expect(title.hidden).toBe(false);
+    expect(exportButton.hidden).toBe(false);
+    expect(panel.element.dataset.searchPage).toBeUndefined();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
+  });
+
   it('omits the document category when search is not enabled and not declared unsupported', () => {
     const { panel } = mount();
     expect(panel.element.querySelector('[data-kind-filter="document"]')).toBeNull();
@@ -633,6 +757,44 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(panel.element.style.maxHeight).toBe('');
   });
 
+  it('触屏书内搜索 pin 为整页：顶到底，无 sheet 把手', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    document.body.append(host);
+    const { panel } = mount({
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    host.append(panel.element);
+    stubRect(host, { width: 390, height: 700 });
+    panel.setSearchQuery('宋');
+    pinFixedOverlay(panel.element, host, { innerWidth: 390, innerHeight: 700 });
+
+    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(panel.element.classList.contains('is-touch-search-page')).toBe(true);
+    expect(panel.element.style.top).toBe('0px');
+    expect(panel.element.style.bottom).toBe('0px');
+    expect(panel.element.style.height).toBe('100dvh');
+    expect(panel.element.style.maxHeight).toBe('none');
+    expect(panel.element.querySelector('.lightink-reader-sheet-handle')).toBeNull();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
+  });
+
+  it('触屏 sheet CSS：正文命中片段两行截断，一屏可扫多条结果', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-hit \.lightink-reader-sidebar-text\s*\{[^}]*-webkit-line-clamp:\s*2/,
+    );
+    // 正文搜索模式藏颜色行：author display:flex 必须被 [hidden] 显式归零。
+    expect(css).toMatch(/\.lightink-reader-sidebar-filters\[hidden\]\s*\{[^}]*display:\s*none/);
+  });
+
   it('触屏 sheet CSS：列表有最小高度保障且键盘态隐藏颜色行、压缩固定 chrome', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
     // 列表仍是唯一滚动区，is-touch-sheet 下 min-height 保障 ≥3 行条目。
@@ -664,6 +826,20 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     }
     // D5：死 token 无残留消费。
     expect(css).not.toContain('--lightink-reader-sheet-inset');
+    expect(css).toMatch(/\[data-search-page='document'\][\s\S]*?height:\s*100dvh/);
+    expect(css).toMatch(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sheet-handle\s*\{[^}]*display:\s*none/,
+    );
+    // 整页搜索顶栏单行：返回箭头与搜索胶囊同排。
+    expect(css).toMatch(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-header\s*\{[^}]*flex-direction:\s*row/,
+    );
+    expect(css).toMatch(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-note-search-input\s*\{[^}]*min-height:\s*48px/,
+    );
+    expect(css).toMatch(
+      /\[data-search-page='document'\]:not\(\[data-open\]\)\s*\{[^}]*transform:\s*none/,
+    );
   });
 
   it('下拉拖拽把手经关闭按钮关面板（onClose 恰一次）；关闭按钮直点同语义', () => {

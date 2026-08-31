@@ -55,6 +55,7 @@ import {
 import { fileNameStem, importImageAsset } from './asset/asset-service.js';
 import { isReaderPath, planDroppedFiles } from './file/file-drop.js';
 import { showOpenDialog } from './file/file-dialog.js';
+import { installExternalOpenBridge } from './file/android-view-open.js';
 import {
   browserFileSize,
   isBrowserFilePath,
@@ -664,8 +665,18 @@ async function openPathByKind(
       tab.reader.restoreReadingProgress?.();
     } else if (tab !== null && isMarkdownTab(tab)) {
       applyMarkdownOpenSurface(workspace, isImmersiveMarkdownPlatform());
+    } else if (tab === null && !isReaderPath(path)) {
+      void showAppAlert(i18n.t('error.openFileMissing', { path: displayNameOfPath(path) }));
     }
     return tab;
+  } catch (error) {
+    if (!isReaderPath(path)) {
+      // eslint-disable-next-line no-console
+      console.error(`[lightink] 打开 Markdown 失败: ${path}`, error);
+      void showAppAlert(i18n.t('error.openFileMissing', { path: displayNameOfPath(path) }));
+      return null;
+    }
+    throw error;
   } finally {
     options.signal?.removeEventListener('abort', abortFromParent);
     progress?.close();
@@ -3947,6 +3958,15 @@ async function bootstrap(): Promise<void> {
     });
   } catch {
     // 非 Tauri 环境（纯前端 dev）：无单实例/拖拽事件，忽略。
+  }
+  // Android 文件关联：content:// 由 MainActivity 复制成缓存文件后经外部打开桥
+  // 送达（契约见 src/file/android-view-open.ts；桌面/纯前端桥缺失即 no-op）。
+  // 先装运行期通知处理器，再取冷启动期间已落槽的路径按冷启动语义打开。
+  const androidViewPending = installExternalOpenBridge((path) => {
+    void openExternalAssociationPath(path, externalOpenOrigin);
+  });
+  if (androidViewPending !== null) {
+    await openExternalAssociationPath(androidViewPending, 'cold-start');
   }
   // R1：取出启动/关联文件（首实例 argv 经后端 take_pending_file；命令未就绪时静默）。
   const pendingFile = await invoke<string | null>('take_pending_file').catch(() => null);

@@ -180,6 +180,48 @@ describe('playReaderPageTurn', () => {
     });
     expect(root.getAttribute('data-page-anim')).toBeNull();
   });
+
+  it('skips motion on a touch-primary document', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    try {
+      playReaderPageTurn(root, 1, {
+        matchMedia: () => ({ matches: false }),
+        schedule: () => 0,
+      });
+      expect(root.getAttribute('data-page-anim')).toBeNull();
+    } finally {
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+  });
+
+  it('skips motion in continuous-scroll layout', () => {
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'scroll';
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('skips motion while a chapter frame is still restoring its page', () => {
+    const root = document.createElement('div');
+    root.dataset.readingLayout = 'paginated';
+    const chapter = document.createElement('div');
+    chapter.className = 'lightink-reader-chapter is-active';
+    const frame = document.createElement('iframe');
+    frame.className = 'lightink-reader-chapter-frame';
+    frame.dataset.pagedRestore = 'start';
+    chapter.appendChild(frame);
+    root.appendChild(chapter);
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: false }),
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
 });
 
 describe('playReaderPageBoundaryBounce', () => {

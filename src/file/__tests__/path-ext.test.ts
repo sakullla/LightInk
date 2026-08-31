@@ -15,6 +15,12 @@ describe('displayNameOfPath', () => {
     expect(displayNameOfPath('/library/Chapter 1.epub')).toBe('Chapter 1.epub');
   });
 
+  it('strips the browser-file virtual prefix', () => {
+    expect(
+      displayNameOfPath('browser-file:google play 下载问题排查及解决 by Eurekasium .pdf'),
+    ).toBe('google play 下载问题排查及解决 by Eurekasium .pdf');
+  });
+
   it('decodes a single percent-encoded basename', () => {
     expect(displayNameOfPath('/cache/import/%E6%98%9F%E7%A9%BA%E8%81%8C%E4%B8%9A%E8%80%85.epub')).toBe(
       '星空职业者.epub',

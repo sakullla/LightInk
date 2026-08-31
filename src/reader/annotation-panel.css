@@ -4,9 +4,7 @@
  *
  * 与排版浮层（reader-chrome-panels.css）统一的现代卡片语言：圆角卡片、
  * 柔和阴影、宽松间距、accent 激活态。桌面为右侧栏；触屏由宿主 portal 到
- * body 并加 is-touch-sheet（pinFixedOverlay），呈底栏 sheet 形态（拖拽把手
- * 由 reader-chrome-panels 的 .lightink-reader-sheet-handle 提供，键盘 inset
- * 与安全区见下方触屏段）。类名与 data 钩子沿用侧栏选择器族；
+ * body：标注笔记本是 is-touch-sheet 底栏；书内搜索是 data-search-page 整页。
  * `@media (forced-colors: active)` 块整体留在 reader.css。
  * 颜色圆点背景与搜索框等部分表现仍由 annotation-panel.ts 内联 style 驱动，
  * 本文件只承接尺寸/边框等结构性样式，不写死颜色。
@@ -68,6 +66,10 @@
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
   font-weight: 600;
   color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-header > span[hidden] {
+  display: none;
 }
 
 .lightink-reader-sidebar-close {
@@ -138,33 +140,101 @@
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
+/* 填充胶囊：图标 + 输入框 + 命中计数 + 清空同住一囊，聚焦环挂囊上。 */
+.lightink-reader-sidebar-search-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.3rem 0 0.7rem;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.lightink-reader-sidebar-search-pill:focus-within {
+  border-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  background: var(--lightink-bg-elevated);
+}
+
+/* 放大镜（装饰性）：mask 取色 currentColor 系，不随主题写死颜色。 */
+.lightink-reader-sidebar-search-icon {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  background: var(--lightink-muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-4.3-4.3'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-4.3-4.3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
 .lightink-reader-sidebar-note-search-input {
   flex: 1 1 auto;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: 10px;
-  padding: 0.4rem 0.6rem;
-  background: color-mix(in srgb, var(--lightink-fg) 4%, var(--lightink-bg));
+  border: 0;
+  padding: 0.45rem 0;
+  background: transparent;
   color: var(--lightink-fg);
   font: inherit;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .lightink-reader-sidebar-note-search-input:focus {
   outline: 0;
-  border-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
 }
 
+.lightink-reader-sidebar-note-search-input::placeholder {
+  color: var(--lightink-muted);
+}
+
+/* 命中计数（1/160）：胶囊内右侧，等宽数字防抖动。 */
 .lightink-reader-sidebar-search-status {
   flex: 0 0 auto;
   color: var(--lightink-muted);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lightink-reader-sidebar-search-status:empty {
+  display: none;
+}
+
+/* 查询清空按钮：输入非空时出现在胶囊右端，清词不关面板。 */
+.lightink-reader-sidebar-search-clear {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 9%, transparent);
+  color: var(--lightink-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-reader-sidebar-search-clear:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+  color: var(--lightink-fg);
 }
 
 .lightink-reader-sidebar-hit.is-current {
   border-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
+}
+
+/* 命中片段内的查询词高亮：accent 洗色，不改字色。 */
+.lightink-reader-sidebar-hit-mark {
+  background: color-mix(in srgb, var(--lightink-accent) 30%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 600;
 }
 
 .lightink-reader-sidebar-backdrop {
@@ -312,6 +382,11 @@
   margin: 0.55rem 0.65rem;
   padding: 0.25rem;
   border: 0;
+}
+
+/* author display:flex 压过 UA [hidden]：正文搜索模式藏颜色行必须显式归零。 */
+.lightink-reader-sidebar-filters[hidden] {
+  display: none;
   border-radius: 12px;
   background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
 }
@@ -543,6 +618,16 @@
   min-height: 9.5rem;
 }
 
+/* 触屏正文命中卡片收紧：片段最多两行省略，一屏能扫到多条结果。 */
+.lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-hit .lightink-reader-sidebar-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
 /* 键盘弹起：隐藏颜色筛选行、收紧固定 chrome，把高度让给列表（chip 触控目标
    仍由 pointer:coarse 的 44px min-height 保障，不在此处收紧）。 */
 html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-colors {
@@ -560,6 +645,163 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
 
 html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-filters {
   margin: 0.3rem 0.6rem;
+}
+
+/* 触屏书内搜索：整页。顶栏分两行——返回独占一行，搜索框拉满宽；列表占满剩余。
+   进出场只淡入淡出，不走底栏 sheet 的 translateY（否则整页白底会盖住正文）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document'] {
+  inset: 0;
+  top: 0;
+  bottom: 0;
+  max-height: none;
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding-top: var(--lightink-safe-top, 0px);
+  padding-bottom: var(--lightink-safe-bottom, 0px);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']:not([data-open]) {
+  transform: none;
+  opacity: 0;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sheet-handle {
+  display: none;
+}
+
+/* 顶栏单行：返回箭头 + 搜索胶囊（iOS Books / 微信读书搜索页同构）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-header {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.4rem 0.75rem 0.55rem 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 45%, transparent);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-close {
+  margin-left: 0;
+  align-self: center;
+  border-radius: 999px;
+  font-size: 1.55rem;
+  line-height: 1;
+  font-weight: 400;
+  /* 视觉上箭头略微上飘：往下压 1px 对齐胶囊光心。 */
+  padding-bottom: 2px;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-search-stack {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-search-pill {
+  min-height: 48px;
+  padding: 0 0.45rem 0 0.85rem;
+  gap: 0.5rem;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-search-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-note-search-input {
+  min-height: 48px;
+  padding: 0;
+  font-size: 1.0625rem;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-search-status {
+  font-size: 0.85rem;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-search-clear {
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.05rem;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 0 0 1.2rem;
+}
+
+/* 整页结果列表扁平化：命中行去卡片壳，改内容内嵌 hairline 分隔（现代
+   搜索结果页语言：Spotlight / Play Books），信息层级靠字重与留白。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-hit {
+  margin: 0;
+  padding: 0.8rem 1.05rem 0.85rem;
+  gap: 0.28rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 45%, transparent);
+}
+
+/* 章节定位标签：小号大写 accent 调，替代原 muted 行内小字。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-hit
+  .lightink-reader-sidebar-location {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--lightink-accent) 72%, var(--lightink-muted));
+}
+
+/* 当前命中：accent 左沿条 + 轻染背景（对齐目录当前章语言），不再用描边环。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-hit.is-current {
+  background: color-mix(in srgb, var(--lightink-accent) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--lightink-accent);
+}
+
+/* 触屏 hover 中和会重涂 border-color / box-shadow：扁平行里重申归零。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
+  .lightink-reader-sidebar-hit:not(.is-current):hover:not(:active) {
+  border-color: color-mix(in srgb, var(--lightink-border) 45%, transparent);
+  box-shadow: none;
+}
+
+html[data-keyboard]
+  :is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet[data-search-page='document'] {
+  height: auto;
+  bottom: var(--lightink-keyboard-inset, 0px);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,

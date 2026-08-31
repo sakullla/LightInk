@@ -229,19 +229,17 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
     ).not.toContain('--lightink-keyboard-inset');
   });
 
-  it('presents the source/group/cache-limit modals as bottom sheets on touch phones', () => {
+  it('presents the source/group modals as bottom sheets on touch phones', () => {
     const sheetBlocks = mediaQueryBlocks(libraryCss, '(max-width: 760px)').filter((block) =>
       block.includes('.lightink-library-source-modal'),
     );
     expect(sheetBlocks).toHaveLength(1);
     const sheet = sheetBlocks[0]!;
-    for (const token of [
-      '.lightink-library-source-modal',
-      '.lightink-library-group-modal',
-      '.lightink-library-cache-limit-modal',
-    ]) {
+    for (const token of ['.lightink-library-source-modal', '.lightink-library-group-modal']) {
       expect(sheet, `${token} joins the bottom-sheet form`).toContain(token);
     }
+    // 缓存上限是短表单：触屏保持视口居中，不加入底栏 sheet。
+    expect(sheet).not.toContain('.lightink-library-cache-limit-modal');
     // 底部锚定；safe-bottom/keyboard-inset 经 bottom 通道单一消费。
     expect(sheet).toMatch(/align-items:\s*end/);
     expect(sheet).toMatch(
@@ -253,12 +251,21 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
     expect(sheet).toMatch(/max-height:\s*100%/);
   });
 
+  it('keeps the cache-limit dialog centered on touch instead of a bottom sheet', () => {
+    expect(libraryCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cache-limit-modal\s*\{[^}]*place-items:\s*center/,
+    );
+    const keyboardEnd = cssDeclarationBlocks(libraryCss).find(
+      (rule) =>
+        rule.selector.includes('html[data-keyboard]') &&
+        rule.selector.includes('.lightink-library-cache-limit-modal') &&
+        /align-items:\s*end/.test(rule.body),
+    );
+    expect(keyboardEnd, 'cache-limit must not pin to the keyboard top').toBeUndefined();
+  });
+
   it('anchors dialogs above the keyboard via html[data-keyboard] without double deduction', () => {
-    for (const token of [
-      '.lightink-library-source-modal',
-      '.lightink-library-group-modal',
-      '.lightink-library-cache-limit-modal',
-    ]) {
+    for (const token of ['.lightink-library-source-modal', '.lightink-library-group-modal']) {
       const anchored = cssDeclarationBlocks(libraryCss).find(
         (rule) =>
           rule.selector.includes('html[data-keyboard]') &&

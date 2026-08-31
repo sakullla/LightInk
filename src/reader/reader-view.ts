@@ -82,6 +82,7 @@ import {
   snippetAround,
 } from './search-panel.js';
 import {
+  alignSearchSpecsToText,
   clearSearchMarks,
   flowSearchMarkKey,
   limitSearchMarkSpecs,
@@ -513,6 +514,16 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   typePanel.hidden = true;
   typePanel.setAttribute('data-panel', 'typography');
 
+  /** 整页搜索关闭后正文命中 mark 的滞后清除窗口：跳转命中短暂高亮后消失。 */
+  const SEARCH_MARK_LINGER_MS = 1800;
+  let searchMarkLingerTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelSearchMarkLinger = (): void => {
+    if (searchMarkLingerTimer !== null) {
+      clearTimeout(searchMarkLingerTimer);
+      searchMarkLingerTimer = null;
+    }
+  };
+
   // —— 标注宿主会话（session-annotation）：启用判定（标注存储 × adapter
   // 能力声明 × 身份可用）、写队列与侧栏显隐策略唯一实现在核心；本壳只按
   // host 供数（侧栏 DOM/portal/焦点机械）并消费其裁决。 ——
@@ -540,6 +551,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     focusReaderRoot: () => root.focus(),
     closeChromePanel: () => closeChromePanel(),
     resetSearch: () => resetReaderSearch(),
+    preserveSearchOnHide: () =>
+      readerChromeTouchMode() && sidebar?.element.dataset.searchPage === 'document',
+    releaseSearchMarks: () => {
+      cancelSearchMarkLinger();
+      searchMarkLingerTimer = setTimeout(() => {
+        searchMarkLingerTimer = null;
+        if (!destroyed) {
+          sessionSearch.dropMarks();
+        }
+      }, SEARCH_MARK_LINGER_MS);
+    },
     afterSidebarSync: () => syncVisibleFlowFrames(),
     sidebarSearchQuery: () => sidebar?.getSearchQuery() ?? '',
     renderSidebarList: () => sidebar?.render(annotations),
@@ -703,14 +725,29 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       return described;
     },
     renderFlowHits: (groups, currentKey) => {
-      // 宿主遍历口径与原实现一致：按已挂载帧顺序以序号取该章 spec。
-      flowDocuments().forEach((doc, index) => {
-        renderSearchMarks(
-          doc.body,
-          limitSearchMarkSpecs(groups.get(index) ?? [], currentKey),
-          currentKey,
+      // 命中按帧宿主的真实章节索引投放：挂载窗口随阅读位置滑动（±3 淘汰），
+      // 帧在数组里的序号 ≠ 章节号——按序号取 spec 会把 A 章偏移画进 B 章正文
+      // （错字高亮），且正确章的 mark 不存在导致 collectFlowMarks 收不到、
+      // 点击命中无法跳转。
+      // 偏移对齐：未挂载章扫描用的 fallback 文本空白折叠过，与挂载正文的
+      // textContent 形态不同，直接照偏移包裹会逐段漂移高亮错字。
+      const query = sessionSearch.query() ?? '';
+      for (const doc of flowDocuments()) {
+        const raw = doc.defaultView?.frameElement?.getAttribute('data-chapter-index');
+        if (raw == null) {
+          continue;
+        }
+        const chapter = Number(raw);
+        if (!Number.isInteger(chapter)) {
+          continue;
+        }
+        const specs = alignSearchSpecsToText(
+          doc.body.textContent ?? '',
+          groups.get(chapter) ?? [],
+          query,
         );
-      });
+        renderSearchMarks(doc.body, limitSearchMarkSpecs(specs, currentKey), currentKey);
+      }
     },
     collectFlowMarks: (groups) => {
       const keys: string[] = [];
@@ -1770,6 +1807,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     sidebar = createAnnotationPanel({
       t,
       onClose: () => setSidebarVisible(false),
+      onLayoutChange: () => pinSidebarOverlay(),
       // 漫画等位图格式无文本层：正文搜索固定为「不支持」空态（能力矩阵声明）。
       isDocumentSearchUnsupported: () => {
         if (loadedExt === '') {
@@ -1786,7 +1824,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           }
           sessionSearch.run(nextQuery);
         },
-        onJump: (key) => sessionSearch.activateKey(key),
+        onJump: (key) => {
+          sessionSearch.activateKey(key);
+          // 触屏：点结果即回正文看命中（Books/Kindle 同行为）；桌面留面板步进。
+          if (readerChromeTouchMode()) {
+            setSidebarVisible(false);
+          }
+        },
         onNext: () => sessionSearch.step(1),
         onPrev: () => sessionSearch.step(-1),
         onClear: () => {
@@ -1797,6 +1841,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       },
       onJump: (annotation) => {
         jumpToAnnotation(annotation);
+        if (readerChromeTouchMode()) {
+          setSidebarVisible(false);
+        }
       },
       onRemove: (annotation) => {
         removeAnnotationById(annotation.id);
@@ -2051,6 +2098,27 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     return closeChromePanel();
   };
 
+  const onDocumentEscapeCapture = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || event.defaultPrevented || destroyed) {
+      return;
+    }
+    if (!sessionAnnotation.tabActive()) {
+      return;
+    }
+    const target = event.target;
+    // 根内按键仍走 root keydown；body 上的排版/目录 sheet 才在捕获期消费，
+    // 避免 Android 侧滑返回落到 leftover 直接合书。
+    if (target instanceof Node && root.contains(target)) {
+      return;
+    }
+    if (dismissReaderOverlayStep()) {
+      event.preventDefault();
+    }
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('keydown', onDocumentEscapeCapture, true);
+  }
+
   /**
    * 标签可见性变化（切换标签时由宿主调用）。侧栏挂在阅读根上，仍要显式同步
    * hidden，避免切标签后操作非活动文档。标签可见状态与侧栏合成策略在
@@ -2272,6 +2340,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 切换文档：清搜索会话与命中 overlay，并复位侧栏搜索框（查询不跨书残留）。 */
   const resetReaderSearch = (): void => {
+    cancelSearchMarkLinger(); // 上一本书残留的滞后清除不落到新会话头上
     sessionSearch.clear();
     sidebar?.setSearchQuery('');
     sidebar?.render(annotations);
@@ -2341,9 +2410,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   };
 
   /**
-   * 打开搜索（双端收敛为同一面板）：打开统一融合面板并聚焦查询框——桌面为
-   * 侧栏形态、触屏经 pinSidebarOverlay 呈 is-touch-sheet 底栏形态；查询词
-   * 非空即检索（PDF / 流式；漫画无文本层则面板显示不支持空态）。
+   * 打开搜索：打开统一融合面板并聚焦查询框。桌面为侧栏；触屏「搜索正文」
+   * 切到整页（data-search-page），不是半高 sheet。
    */
   const openSearch = (query?: string): void => {
     const scroller = flowScrollContainer();
@@ -2360,6 +2428,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       syncSearchHits();
     }
     sidebar?.focusSearch();
+    pinSidebarOverlay();
     scroller.scrollLeft = left;
     scroller.scrollTop = top;
   };
@@ -2686,11 +2755,13 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
           readerPagedScroller(doc).scrollLeft = 0;
         }
       } else {
-        scrollHost
-          .querySelector<HTMLElement>(
-            `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
-          )
-          ?.scrollIntoView({ block: 'start' });
+        const article = scrollHost.querySelector<HTMLElement>(
+          `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
+        );
+        const scroller = flowScrollContainer();
+        if (article !== null) {
+          scroller.scrollTop = Math.max(0, articleOffsetInScroller(article, scroller));
+        }
       }
     },
     syncFlowState: () => syncFlowState(),
@@ -3094,6 +3165,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     tocSearch: t('outline.search'),
     tocEmptySearch: t('outline.emptySearch'),
     tocSearchCount: t('outline.searchCount'),
+    tocCount: t('reader.toc.count'),
     typeTitle: t('reader.type.title'),
     theme: t('reader.type.theme'),
     size: t('reader.type.size'),
@@ -3297,7 +3369,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       isSelectionToolbarVisible: () => selectionToolbar?.isVisible() === true,
       hideSelectionToolbar,
       stayRevealed: () =>
-        cbzHandle === null && !flowIsPaginated() && flowScrollContainer().scrollTop <= 16,
+        cbzHandle === null &&
+        pdfHandle === null &&
+        !flowIsPaginated() &&
+        flowScrollContainer().scrollTop <= 16,
       suppressProgressDock: () =>
         pageHost.dataset.comicReader === 'true' || root.dataset.comicReader === 'true',
       onSeekProgress: goToProgress,
@@ -3728,6 +3803,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       // 搜索会话销毁作废（原 destroy 口径：不扫命中 overlay，DOM 随 root 移除；
       // 在飞扫描经 destroyed 守卫与 pdf 句柄取代检查丢弃）：只取消待执行重查。
       sessionSearch.cancelScheduled();
+      cancelSearchMarkLinger();
       scrollHost.removeEventListener('scroll', scheduleFlowScroll);
       paneScroller?.removeEventListener('scroll', scheduleFlowScroll);
       // 对称作废合同：与每次 commit 同一组摘除助手（页监听/pending 帧/settle）。
@@ -3756,6 +3832,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       layoutRootObserver?.disconnect();
       cancelViewportRefresh();
       if (typeof document !== 'undefined') {
+        document.removeEventListener('keydown', onDocumentEscapeCapture, true);
         document.removeEventListener('lightink:font-scale', onFontScaleChange);
         document.removeEventListener('lightink:pdf-user-zoom', onPdfUserZoom);
         document.removeEventListener('lightink:theme-change', onThemeChange);

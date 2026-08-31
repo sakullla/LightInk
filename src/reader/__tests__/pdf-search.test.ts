@@ -30,6 +30,7 @@ import {
   type PdfSearchMatch,
 } from '../search-panel.js';
 import {
+  alignSearchSpecsToText,
   clearSearchMarks,
   flowSearchMarkKey,
   limitSearchMarkSpecs,
@@ -894,5 +895,64 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
     h.renderedKeys.length = 0;
     session.rerender();
     expect(h.renderedKeys).toEqual([session.activeKey()]);
+  });
+
+  it('dropMarks：释放正文 mark 但保留会话，rerender 静默直到重新激活', async () => {
+    const h = createMountedFlowHost(['hit one hit two'], [0]);
+    let cleared = 0;
+    h.host.clearMarks = () => {
+      cleared += 1;
+    };
+    const session = createReaderSessionSearch(h.host);
+    session.run('hit');
+    await vi.waitFor(() => expect(scanSettled(session)).toBe(true));
+
+    h.renderedKeys.length = 0;
+    session.dropMarks();
+    expect(cleared).toBe(1);
+    session.dropMarks(); // 幂等：重复释放不再清
+    expect(cleared).toBe(1);
+    session.rerender();
+    expect(h.renderedKeys).toEqual([]); // 释放期 observer 重放不重涂
+    expect(session.query()).toBe('hit'); // 会话与命中列表保留
+    expect(session.hitViews()).toHaveLength(2);
+
+    // 重新激活命中：恢复重涂并 reveal（整页搜索里再点结果仍能看到高亮）。
+    const key = session.hitViews()[0]!.key;
+    session.activateKey(key);
+    expect(h.renderedKeys).toEqual([key]);
+    expect(h.revealed).toEqual([key]);
+    h.renderedKeys.length = 0;
+    session.rerender();
+    expect(h.renderedKeys).toEqual([key]); // 释放态解除后重放恢复
+  });
+});
+
+describe('alignSearchSpecsToText 命中偏移对齐挂载文本', () => {
+  it('fallback 折叠文本算出的漂移偏移按 key 序号重定位到挂载文本', () => {
+    const mountedText = '　　前言。\n　　正文出现 词 一次，\n　　再出现 词 一次。';
+    const collapsed = mountedText.replace(/\s+/g, ' ').trim();
+    const specs = findTextHits(collapsed, '词').map((hit, ordinal) => ({
+      key: flowSearchMarkKey(4, ordinal, hit.start, hit.end),
+      start: hit.start,
+      end: hit.end,
+    }));
+    expect(specs).toHaveLength(2);
+    // 折叠文本偏移在挂载文本上已不指向查询词（空白形态漂移）。
+    expect(mountedText.slice(specs[1]!.start, specs[1]!.end)).not.toBe('词');
+    const aligned = alignSearchSpecsToText(mountedText, specs, '词');
+    expect(aligned).toHaveLength(2);
+    aligned.forEach((spec, index) => {
+      expect(spec.key).toBe(specs[index]!.key);
+      expect(mountedText.slice(spec.start, spec.end)).toBe('词');
+    });
+  });
+
+  it('已对齐偏移零成本原样保留；挂载文本尚无查询词时丢弃等待重涂', () => {
+    const text = 'alpha keyword beta';
+    const ok = [{ key: '0:0:6:13', start: 6, end: 13 }];
+    expect(alignSearchSpecsToText(text, ok, 'keyword')).toEqual(ok);
+    expect(alignSearchSpecsToText('', ok, 'keyword')).toEqual([]);
+    expect(alignSearchSpecsToText(text, ok, '')).toEqual(ok); // 空查询不动
   });
 });

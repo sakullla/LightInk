@@ -9,6 +9,7 @@ import { createReaderView } from '../reader-view.js';
 import {
   applyFrameWheelToScroller,
   createFlowRenderer,
+  FLOW_CHAPTER_EVICT_IDLE_MS,
   mapFrameClientRect,
   resolveFlowFrameClick,
   shouldDeferFlowPointerTap,
@@ -787,7 +788,7 @@ describe('大型流式书首次渲染预算', () => {
     expect(scrollHost.querySelectorAll('.lightink-reader-chapter')).toHaveLength(2);
     expect(scrollHost.querySelectorAll('iframe')).toHaveLength(2);
     renderer.setActiveChapter(30);
-    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(FLOW_CHAPTER_EVICT_IDLE_MS);
     expect(
       scrollHost.querySelector<HTMLElement>('[data-chapter-index="30"]'),
     ).not.toBeNull();
@@ -970,7 +971,7 @@ describe('大型流式书首次渲染预算', () => {
     renderer.setActiveChapter(7);
     await Promise.resolve();
     await Promise.resolve();
-    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(FLOW_CHAPTER_EVICT_IDLE_MS);
     expect(
       scrollHost.querySelector<HTMLIFrameElement>(
         '[data-chapter-index="8"] .lightink-reader-chapter-frame',
@@ -999,7 +1000,7 @@ describe('大型流式书首次渲染预算', () => {
     for (const chapter of scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')) {
       Object.defineProperty(chapter, 'offsetHeight', { configurable: true, value: 80 });
     }
-    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(FLOW_CHAPTER_EVICT_IDLE_MS);
     expect(scrollHost.querySelector('[data-chapter-spacer="0"]')).not.toBeNull();
 
     root.dataset.readingLayout = 'paginated';
@@ -2377,7 +2378,7 @@ describe('窗口级翻页与大纲跳转接线（session-navigation 经 reader-v
 
   it('窗口级翻页（滚动视口步进）：移动返回 true；首屏上翻/末屏下翻不越界', async () => {
     vi.useFakeTimers();
-    const { view, scroll } = await loadNavigationBook(2);
+    const { view, reader, scroll } = await loadNavigationBook(2);
     // 视口 400、全书 1200：两步到滚动末尾（max = 1200 - 400 = 800）。
     Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 400 });
     Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 1200 });
@@ -2385,6 +2386,7 @@ describe('窗口级翻页与大纲跳转接线（session-navigation 经 reader-v
 
     expect(view.advanceReading(1)).toBe(true);
     expect(scroll.scrollTop).toBe(400);
+    expect(reader.getAttribute('data-page-anim')).toBeNull();
     expect(view.advanceReading(1)).toBe(true);
     expect(scroll.scrollTop).toBe(800);
     // 末屏下翻：已在滚动末尾，返回 false 放行原生滚动（窗口级调用方不吞事件）。
@@ -2472,6 +2474,11 @@ describe('导航会话接线（session-navigation：翻页模式门面路径）'
     expect(view.advanceReading(1)).toBe(true);
     expect(activeChapter()).toBe('1');
     expect(view.state.current).toBe(2);
+    expect(
+      document.querySelector<HTMLIFrameElement>(
+        '.lightink-reader-chapter.is-active .lightink-reader-chapter-frame',
+      )?.dataset.pagedRestore,
+    ).toBeUndefined();
     await view.destroy();
   });
 

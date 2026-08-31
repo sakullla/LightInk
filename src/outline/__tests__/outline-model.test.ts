@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildOutline,
   filterOutlineItems,
+  hideFoldedOutlineItems,
   lastCurrentOutlineIndex,
   leafHeadingAnchors,
   outlineItemIsCurrent,
@@ -166,6 +167,34 @@ describe('outline location and search', () => {
     ).toEqual([
       { level: 1, text: '开篇', anchor: 0, chapter: 0 },
       { level: 2, text: '白月光', anchor: 1, chapter: 1 },
+    ]);
+  });
+
+  it('hides descendants of folded headings until the next peer or ancestor', () => {
+    const items = [
+      { level: 1, text: 'A', anchor: 0 },
+      { level: 2, text: 'A1', anchor: 1 },
+      { level: 3, text: 'A1a', anchor: 2 },
+      { level: 1, text: 'B', anchor: 3 },
+      { level: 2, text: 'B1', anchor: 4 },
+    ];
+    expect(hideFoldedOutlineItems(items, new Set([0])).map((item) => item.text)).toEqual([
+      'A',
+      'B',
+      'B1',
+    ]);
+    expect(hideFoldedOutlineItems(items, new Set([1])).map((item) => item.text)).toEqual([
+      'A',
+      'A1',
+      'B',
+      'B1',
+    ]);
+    expect(hideFoldedOutlineItems(items, new Set()).map((item) => item.text)).toEqual([
+      'A',
+      'A1',
+      'A1a',
+      'B',
+      'B1',
     ]);
   });
 

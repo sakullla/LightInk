@@ -37,6 +37,9 @@ describe('buildPrintHtml', () => {
     expect(html).toContain('@page');
     expect(html).toContain('@media print');
     expect(html).toContain('page-break-inside: avoid');
+    expect(html).toContain('.lightink-export-toc');
+    expect(html).toMatch(/\.lightink-export-toc[^{]*\{[^}]*page-break-after:\s*always/);
+    expect(html).toMatch(/\.lightink-export-toc \+ \*[^{]*\{[^}]*page-break-before:\s*always/);
     expect(html).toContain('max-height: calc(100vh - 32mm)');
     // 基础 CSS 在前、打印微调在后（后者可覆盖前者）。
     expect(html.indexOf(':root{--x:1}')).toBeLessThan(html.indexOf(PRINT_CSS));

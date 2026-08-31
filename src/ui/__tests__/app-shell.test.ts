@@ -242,7 +242,7 @@ class FakeDoc {
     );
   }
 
-  dispatchEvent(event: { type: string }): boolean {
+  dispatchEvent(event: { type: string; [extra: string]: unknown }): boolean {
     for (const fn of this.listeners.get(event.type) ?? []) {
       fn(event);
     }

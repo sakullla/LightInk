@@ -28,7 +28,11 @@
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
     0 4px 12px rgba(0, 0, 0, 0.08),
     0 20px 48px rgba(0, 0, 0, 0.18);
+  font-family: var(--lightink-font-ui);
   font-size: 0.78rem;
+  line-height: 1.35;
+  --lightink-reader-font-scale: 1;
+  --lightink-reader-line-height: 1.35;
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
 }
@@ -74,6 +78,25 @@
   color: var(--lightink-fg);
 }
 
+/* 目录标题行：标题居左、章节总数靠右（muted）。 */
+.lightink-reader-toc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem 0.35rem;
+}
+
+.lightink-reader-toc-head .lightink-reader-chrome-panel-title {
+  padding: 0;
+}
+
+.lightink-reader-toc-count {
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+  font-size: 0.75rem;
+}
+
 .lightink-reader-toc-search {
   display: block;
   box-sizing: border-box;
@@ -113,6 +136,8 @@
 
 .lightink-reader-toc-item {
   display: block;
+  /* 列表是纵向 flex 容器：行禁止收缩，否则整卷章节被压进容器高度，字行叠死。 */
+  flex: 0 0 auto;
   width: 100%;
   box-sizing: border-box;
   margin: 0;
@@ -475,9 +500,14 @@
 /* 行距/行长滑块组：保留 track 轨道与 --lightink-reader-track-fill 填充机制。 */
 .lightink-reader-type-slider {
   display: grid;
-  grid-template-columns: 2.2rem 1fr;
+  /* 标签列按内容自适应（上限内换行）：西文 “LINE SPACING” 不再画进轨道首点。 */
+  grid-template-columns: fit-content(4.6rem) 1fr;
   align-items: center;
   gap: 0.65rem;
+}
+
+.lightink-reader-type-slider .lightink-reader-type-label {
+  overflow-wrap: break-word;
 }
 
 .lightink-reader-type-slider + .lightink-reader-type-slider {
@@ -497,6 +527,14 @@
   align-items: center;
   justify-content: space-between;
   height: 1.8rem;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+.lightink-reader-type-track.is-dragging {
+  cursor: grabbing;
 }
 
 .lightink-reader-type-track::before {
@@ -537,6 +575,8 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
+  /* Hits go to the track so mouse can drag off a tick; keyboard click still works. */
+  pointer-events: none;
 }
 
 .lightink-reader-type-tick .lightink-reader-type-glyph {
@@ -676,17 +716,57 @@
   opacity: 0;
 }
 
-/* 触屏目录：列表保底高度（标注面板同 9.5rem），条目紧凑单行省略。
+/* 触屏目录 sheet（微信读书/ReadAny 同款排布）：标题行 = 大标题 + 章节总数，
+   搜索框弱化为无边框填充胶囊，行 48px 单行省略，当前章节 accent 竖条 + 着色。
    桌面浮层排版保持不变，故全部限定 is-touch-sheet 作用域。 */
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-list {
   min-height: 9.5rem;
 }
 
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-head {
+  padding: 0 1.1rem 0.55rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet
+  .lightink-reader-toc-head
+  .lightink-reader-chrome-panel-title {
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-count {
+  font-size: 0.8125rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-search {
+  width: calc(100% - 2.2rem);
+  margin: 0 1.1rem 0.45rem;
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0.55rem 0.9rem;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-search::placeholder {
+  color: var(--lightink-muted);
+}
+
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-item {
-  padding: 0.35rem 0.9rem 0.35rem calc(0.9rem + var(--lightink-reader-toc-level, 0) * 0.85rem);
+  min-height: 48px;
+  padding: 0.55rem 1.1rem 0.55rem calc(1.1rem + var(--lightink-reader-toc-level, 0) * 0.85rem);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.9375rem;
+}
+
+/* 当前章节：accent 左竖条 + 着色加粗 + 轻染背景（不再是整块灰底）。 */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-item.is-current {
+  background: color-mix(in srgb, var(--lightink-accent) 9%, transparent);
+  color: var(--lightink-accent);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--lightink-accent);
 }
 
 .lightink-reader-sheet-handle {
@@ -717,9 +797,10 @@
   transform: translate(-50%, -50%);
 }
 
+/* 触屏 sheet 基准字号 16px：可读性 + 避免 iOS 聚焦输入框自动放大页面。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-panel.is-touch-sheet,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
-  font-size: 0.9375rem;
+  font-size: 1rem;
 }
 
 /* ===== 触屏按压反馈（T1）：控件族洗色 + hover 驻留中和 ===== */

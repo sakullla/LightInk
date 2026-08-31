@@ -17,10 +17,11 @@
  * - 写队列：按内容哈希串行写入（annotations.AnnotationWriteQueue），保存
  *   失败且会话身份未变时经宿主提示一次；open 起点与销毁作废未起写的排队项；
  * - 侧栏策略：可见偏好 × 标签可见 → 实际展示；开启先收起 chrome 面板
- *   （覆盖层互斥；标注与搜索已并为同一面板，无独立搜索层），关闭作废搜索
- *   会话并复位面板搜索框（查询不跨书残留）；窄窗开启把焦点给予关闭钮、
- *   关闭时面板持焦点则还给阅读根；面板搜索查询激活时标注列表刷新让位给
- *   命中列表。
+ *   （覆盖层互斥；标注与搜索已并为同一面板，无独立搜索层）。标注笔记本
+ *   关闭作废搜索会话并复位查询框；书内搜索整页关闭保留查询与命中（返回
+ *   再开续搜），正文命中 mark 经 releaseSearchMarks 滞后清除（跳转命中
+ *   短暂高亮后不残留）。换书仍经 resetSearch 清掉，查询不跨书残留。窄窗开启把焦点给予关闭钮、关闭时面板持焦点则还给阅读根；
+ *   面板搜索查询激活时标注列表刷新让位给命中列表。
  * DOM（侧栏节点/portal pin/正文高亮/划选工具栏）与 i18n 留在视图层经 host
  * 供数（T5 hooks 先例）。
  *
@@ -93,6 +94,16 @@ export interface SessionAnnotationHost {
   closeChromePanel(): void;
   /** 关闭侧栏作废搜索会话并复位侧栏搜索框（查询不跨书残留）。 */
   resetSearch(): void;
+  /**
+   * 书内搜索整页：关闭不复位查询（导航栈弹出，不是丢掉会话）。
+   * 标注笔记本 / 桌面侧栏仍走 resetSearch。
+   */
+  preserveSearchOnHide(): boolean;
+  /**
+   * 保留会话关闭后释放正文命中 mark（宿主滞后执行：跳转命中短暂高亮后
+   * 正文不留残迹；面板查询与命中列表不受影响）。
+   */
+  releaseSearchMarks(): void;
   /** 显隐同步后的视图收尾（可见章节帧刷新）。 */
   afterSidebarSync(): void;
   /** 侧栏搜索查询（非空时标注列表刷新让位给命中列表）。 */
@@ -125,7 +136,7 @@ export interface ReaderSessionAnnotation {
   ): Promise<Annotation[] | null>;
   /** 写队列策略：按当前身份串行写入（无身份/无写入注入为 no-op）。 */
   save(annotations: readonly Annotation[]): Promise<void>;
-  /** 侧栏可见偏好切换（开启收起搜索层/chrome 面板；关闭作废搜索会话）。 */
+  /** 侧栏可见偏好切换（开启收起 chrome 面板；笔记本关闭作废搜索，整页搜索保留）。 */
   setSidebarVisible(visible: boolean): void;
   /** 标签可见性变化（只影响 shown，不改偏好）；返回状态是否变化。 */
   setTabActive(active: boolean): boolean;
@@ -261,7 +272,13 @@ export function createReaderSessionAnnotation(
         host.closeChromePanel();
       }
       if (!visible && sidebarVisible) {
-        host.resetSearch();
+        if (!host.preserveSearchOnHide()) {
+          host.resetSearch();
+        } else {
+          // 整页搜索关闭：会话与查询保留，但正文 mark 滞后清除（跳转命中
+          // 短暂高亮后消失，不在正文里永久残留）。
+          host.releaseSearchMarks();
+        }
       }
       sidebarVisible = visible;
       if (visible) {

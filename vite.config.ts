@@ -1,7 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
+import fs from "node:fs";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
+import {
+  PDF_WORKER_BOOT_DEV_PATH,
+  PDF_WORKER_BOOT_FILE,
+  PDF_WORKER_DEV_PATH,
+  PDF_WORKER_OFFICIAL_FILE,
+  PDF_WORKER_OFFICIAL_SPECIFIER,
+  pdfWorkerBootModule,
+} from "./src/reader/formats/pdf-worker-entry.ts";
 
+const require = createRequire(import.meta.url);
 const host = process.env.TAURI_DEV_HOST;
 const OPDS_DEV_PROXY_PATH = "/__lightink/opds-proxy";
 const MAX_OPDS_PROXY_BYTES = 80 * 1024 * 1024;
@@ -93,6 +104,54 @@ async function handleOpdsDevProxy(
   }
 }
 
+function lightinkPdfWorkerStatic(): Plugin {
+  const file = require.resolve("pdfjs-dist/build/pdf.worker.min.mjs");
+  const boot = pdfWorkerBootModule(PDF_WORKER_OFFICIAL_SPECIFIER);
+  const middleware = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    next: () => void,
+  ): void => {
+    const pathName = (req.url ?? "").split("?")[0];
+    if (pathName === PDF_WORKER_BOOT_DEV_PATH) {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.end(boot);
+      return;
+    }
+    if (pathName !== PDF_WORKER_DEV_PATH) {
+      next();
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    fs.createReadStream(file).pipe(res);
+  };
+  return {
+    name: "lightink-pdf-worker-static",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: PDF_WORKER_OFFICIAL_FILE,
+        source: fs.readFileSync(file),
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: PDF_WORKER_BOOT_FILE,
+        source: boot,
+      });
+    },
+  };
+}
+
 function lightinkOpdsDevProxy(): Plugin {
   const middleware = (
     req: IncomingMessage,
@@ -119,7 +178,8 @@ function lightinkOpdsDevProxy(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  plugins: [lightinkOpdsDevProxy()],
+  plugins: [lightinkOpdsDevProxy(), lightinkPdfWorkerStatic()],
+  // pdf.js worker 走静态中间件 / 生产 ?url，不再经 Vite worker 打包。
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent vite from obscuring rust errors

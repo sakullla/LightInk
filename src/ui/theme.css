@@ -763,7 +763,9 @@ body.lightink-outline-resizing * {
 }
 
 .lightink-outline-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 2px;
   width: 100%;
   text-align: left;
   border: none;
@@ -771,10 +773,34 @@ body.lightink-outline-resizing * {
   color: var(--lightink-fg);
   padding: 3px 10px;
   font-size: 12.5px;
-  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-outline-item-label {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-outline-fold {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 1.4em;
+  min-width: 1.4em;
+  min-height: 1.4em;
+  margin: 0 2px 0 -4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  font-size: 0.85em;
+  line-height: 1;
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .lightink-outline-item:hover {
