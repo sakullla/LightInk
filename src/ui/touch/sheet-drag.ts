@@ -11,17 +11,26 @@
  *   - 未过阈值 → 200ms transform 回弹（reduce-motion 瞬回），不关闭。
  *
  * 与 sheet 过渡（sheet-transition.ts / 各样式表的 data-open 规则）互斥：
- * 拖拽开始写内联 `transition: none` 让跟随即时，释放/关闭时清掉，
- * 让 class 驱动的开关过渡或 snapBack 自己的回弹接管。
+ * 拖拽开始写内联 `transition: none` 让跟随即时（transitionend 随之不派发，
+ * 在途退场只剩兜底 timer），并调用 cancelSheetTransition 作废在途关闭——
+ * 退场窗口内抓住把手是接管而非继续关闭；释放/关闭时清掉内联，让 class
+ * 驱动的开关过渡或 snapBack 自己的回弹接管。
  *
  * 只依赖 EventTarget 与指针/触摸坐标，jsdom 可用伪造 pointer/touch 事件测试。
  */
+
+import { cancelSheetTransition } from './sheet-transition.js';
 
 export interface SheetDragOptions {
   sheet: HTMLElement;
   onClose: () => void;
   /** 下拖关闭阈值（px），默认 80。 */
   thresholdPx?: number;
+  /**
+   * sheet 开关过渡的容器（data-open 宿主）：书架 sheet 为外层容器，面板/
+   * 工具条即本体；缺省用 sheet。拖拽开始时取消其在途关闭收尾。
+   */
+  container?: HTMLElement;
 }
 
 /** 默认下拖关闭阈值（px）。 */
@@ -97,9 +106,10 @@ function cancelPendingSnapBack(sheet: HTMLElement): void {
   }
 }
 
-/** 拖拽开始：压掉 class 过渡与在途回弹，手指跟随必须即时。 */
-function beginDrag(sheet: HTMLElement): void {
+/** 拖拽开始：压掉 class 过渡与在途回弹，作废在途关闭，手指跟随必须即时。 */
+function beginDrag(sheet: HTMLElement, transitionContainer: HTMLElement): void {
   cancelPendingSnapBack(sheet);
+  cancelSheetTransition(transitionContainer);
   sheet.style.transition = 'none';
 }
 
@@ -182,6 +192,7 @@ function tryReleasePointerCapture(handle: HTMLElement, pointerId: number): void 
 export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): () => void {
   const thresholdPx = options.thresholdPx ?? SHEET_DRAG_THRESHOLD_PX;
   const sheet = options.sheet;
+  const transitionContainer = options.container ?? sheet;
   let drag: DragState | null = null;
 
   const finish = (clientY: number, at: number): void => {
@@ -224,7 +235,7 @@ export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): (
     if (typeof pointer.pointerId === 'number') {
       trySetPointerCapture(handle, pointer.pointerId);
     }
-    beginDrag(sheet);
+    beginDrag(sheet, transitionContainer);
     applySheetOffset(sheet, 0);
   };
 
@@ -269,7 +280,7 @@ export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): (
       startAt: Date.now(),
       lastY: touch.clientY,
     };
-    beginDrag(sheet);
+    beginDrag(sheet, transitionContainer);
     applySheetOffset(sheet, 0);
   };
 

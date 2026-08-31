@@ -1251,6 +1251,20 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   padding: 0 0.7rem;
 }
 
+/* 触屏划选颜色圆点热区（T3-A2 FB8）：命中盒扩到 48px（与 action 同基线），
+   圆点视觉尺寸保持 1.15rem——背景裁剪到 content-box，padding 只贡献热区
+   （全局 box-sizing: border-box，min-width 即命中盒）。基态 1px 描边无法跟随
+   content-box，触屏态摘除（hover 描边已被上方中和规则压掉；focus-visible
+   键盘描边画在 48px 盒上，不影响触屏）。注意：内联色必须用 background-color
+   长属性设置，background 简写会重置 clip 压过本规则（见 selection-toolbar.ts）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-color {
+  min-width: 48px;
+  min-height: 48px;
+  padding: calc((48px - 1.15rem) / 2);
+  border: 0;
+  background-clip: content-box;
+}
+
 .lightink-reader-selection-action--removeHighlight {
   color: var(--lightink-danger);
 }

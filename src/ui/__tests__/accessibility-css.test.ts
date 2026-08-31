@@ -86,7 +86,7 @@ describe('accessibility media preferences', () => {
     );
   });
 
-  it('source/group/cache/membership/archive-password overlays consume keyboard-inset', () => {
+  it('source/group/cache/membership/sheet/note overlays consume keyboard-inset', () => {
     const overlays: Array<{ name: string; tokens: readonly string[] }> = [
       { name: 'source', tokens: ['.lightink-library-source-modal'] },
       { name: 'group', tokens: ['.lightink-library-group-modal'] },

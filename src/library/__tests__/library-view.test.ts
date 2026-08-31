@@ -5226,6 +5226,90 @@ describe('LibraryView mobile shelf', () => {
     view.destroy();
   });
 
+  /** stub computed transition-duration 走异步退场分支（真机 220ms 过渡窗口）。 */
+  function stubSheetTransitionDuration(): void {
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(
+      () =>
+        ({
+          transitionDuration: '0.22s',
+          getPropertyValue: () => '',
+        }) as unknown as CSSStyleDeclaration,
+    );
+  }
+
+  it('aria-expanded keeps the data-open truth through the conceal window (FB1)', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    stubSheetTransitionDuration();
+    try {
+      const grouped = localItem({
+        id: 'local:/books/grouped.epub',
+        title: '分组小说',
+        localPath: '/books/grouped.epub',
+      });
+      const other = localItem({
+        id: 'local:/books/other.epub',
+        title: '未分组小说',
+        localPath: '/books/other.epub',
+      });
+      const { deps, library } = collectionDependencies({ items: [grouped, other] });
+      const created = await library.createGroup!('夏日书单');
+      await library.setGroupMember!(created.id, grouped.id, true);
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const view = createLibraryView(host, deps);
+      await view.show();
+
+      const entry = shelfGroupsEntry(host);
+      const sheet = await openShelfGroupsSheet(host);
+      expect(entry.getAttribute('aria-expanded')).toBe('true');
+
+      // sheet 选项关闭链：selectShelfGroup → close → activateShelf（同步
+      // syncPageChrome → syncMobileGroupsChrome）在退场窗口内重跑。
+      sheetGroupButton(sheet, '夏日书单').click();
+      // 退场窗口内：hidden 延迟落地、data-open 已摘；aria-expanded 不得被同步
+      // 重跑重置回「展开」（旧实现用 !hidden 推导，触屏状态过期）。
+      expect(sheet.dataset.open).toBeUndefined();
+      expect(sheet.hidden).toBe(false);
+      expect(entry.getAttribute('aria-expanded')).toBe('false');
+      view.destroy();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('conceal 窗口内二次点击入口是重开而不是吞成二次 close（FB3）', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    stubSheetTransitionDuration();
+    try {
+      const novel = localItem();
+      const { deps } = collectionDependencies({ items: [novel] });
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const view = createLibraryView(host, deps);
+      await view.show();
+
+      const sheet = await openShelfGroupsSheet(host);
+      expect(sheet.dataset.open).toBe('');
+      expect(shelfGroupsEntry(host).getAttribute('aria-expanded')).toBe('true');
+
+      // 关闭：退场窗口打开（hidden 延迟落地，data-open 已摘）。
+      sheet.querySelector<HTMLElement>('.lightink-library-groups-sheet-backdrop')!.click();
+      expect(sheet.dataset.open).toBeUndefined();
+      expect(sheet.hidden).toBe(false);
+      expect(shelfGroupsEntry(host).getAttribute('aria-expanded')).toBe('false');
+
+      // 窗口内二次点击入口：开合口径与 aria-expanded/过渡状态机一致
+      // （data-open 已摘 = 已收起），应重开而不是再一次 close。
+      shelfGroupsEntry(host).click();
+      expect(sheet.dataset.open).toBe('');
+      expect(sheet.hidden).toBe(false);
+      expect(shelfGroupsEntry(host).getAttribute('aria-expanded')).toBe('true');
+      view.destroy();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('long-press rows gain .is-pressing while held and lose it on cancel (T3)', async () => {
     document.documentElement.setAttribute('data-android', '');
     const novel = localItem();

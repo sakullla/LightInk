@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createReaderView } from '../reader-view.js';
@@ -13,6 +16,7 @@ import {
 import type { FlowRendererHooks } from '../flow-renderer.js';
 import { sessionRemoteImagePolicy } from '../../media/remote-image-policy.js';
 import { createSelectionToolbar, selectionClientRect, toolbarPosition } from '../selection-toolbar.js';
+import { SHEET_TRANSITION_FALLBACK_MS } from '../../ui/touch/sheet-transition.js';
 import {
   applyPagedSpreadVars,
   clearPagedSpreadVars,
@@ -129,6 +133,62 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(actions).toEqual([]);
     expect(toolbar.isVisible()).toBe(false);
     expect(catcher!.hidden).toBe(true);
+  });
+
+  it('hide 后退场过渡收尾才置 hidden（settle 前可见、settle 后摘外部监听）', () => {
+    vi.useFakeTimers();
+    // stub computed transition-duration 走异步退场分支（真机 180ms 过渡窗口）。
+    const computeSpy = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation(() => ({ transitionDuration: '0.18s' }) as CSSStyleDeclaration);
+    try {
+      const onDismiss = vi.fn();
+      const toolbar = createSelectionToolbar({ t: (key) => key, onAction: () => undefined, onDismiss });
+      document.body.appendChild(toolbar.element);
+      toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
+      expect(toolbar.element.dataset.open).toBe('');
+
+      toolbar.hide();
+      // hide 后 settle 前：hidden 不置（退场过渡进行中），data-open 已摘。
+      expect(toolbar.element.hidden).toBe(false);
+      expect(toolbar.isVisible()).toBe(true);
+      expect(toolbar.element.dataset.open).toBeUndefined();
+      // 兜底 timer 未到：外部点击监听仍挂着（退场中的工具条仍可交互收尾）。
+      vi.advanceTimersByTime(SHEET_TRANSITION_FALLBACK_MS - 1);
+      expect(toolbar.element.hidden).toBe(false);
+
+      // settle 落地：置 hidden 并移除 document 上的外部点击监听。
+      vi.advanceTimersByTime(1);
+      expect(toolbar.element.hidden).toBe(true);
+      expect(toolbar.isVisible()).toBe(false);
+      const outside = document.createElement('button');
+      document.body.appendChild(outside);
+      outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      expect(onDismiss).toHaveBeenCalledTimes(0);
+    } finally {
+      computeSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('触屏颜色圆点 48px 热区：命中盒达标、圆点视觉尺寸保持（FB8）', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    const hitRule = css.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-selection-color\s*\{[^}]*\}/,
+    )?.[0];
+    expect(hitRule, 'touch selection-color hit rule').toBeTruthy();
+    expect(hitRule).toMatch(/min-width:\s*48px/);
+    expect(hitRule).toMatch(/min-height:\s*48px/);
+    // 圆点视觉尺寸保持：背景裁剪到 content-box，padding 只贡献热区。
+    expect(hitRule).toMatch(/background-clip:\s*content-box/);
+    expect(hitRule).toMatch(/padding:\s*calc\(\(48px - 1\.15rem\) \/ 2\)/);
+    // 内联色必须用 background-color 长属性，否则简写重置 clip 压过触屏规则。
+    const toolbarSource = readFileSync(
+      resolve(process.cwd(), 'src/reader/selection-toolbar.ts'),
+      'utf-8',
+    );
+    expect(toolbarSource).toMatch(/style\.backgroundColor = color/);
+    expect(toolbarSource).not.toMatch(/style\.background = color/);
   });
 
   it('工具栏定位：优先选区上方，越顶下移并夹在视口内', () => {

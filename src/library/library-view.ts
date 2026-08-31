@@ -2689,7 +2689,12 @@ export function createLibraryView(
     const filterName = `${labels().filter}: ${filterCaption}`;
     filterToggle.title = filterName;
     filterToggle.setAttribute('aria-label', filterName);
-    filterToggle.setAttribute('aria-expanded', String(mobileShelf && !filterSheet.hidden));
+    // aria-expanded 与 data-open 同口径（T3-A2 FB1）：conceal 窗口（hidden 延迟
+    // 落地）内 sheet 选项关闭链同步重跑时，不得把触屏状态重置回「展开」。
+    filterToggle.setAttribute(
+      'aria-expanded',
+      String(mobileShelf && filterSheet.dataset.open !== undefined),
+    );
     filterToggle.classList.toggle(
       'is-active',
       selectedCustomGroupId === null &&
@@ -2708,7 +2713,8 @@ export function createLibraryView(
         : `${labels().groups}: ${collectionsCaption}`;
     groupsButton.title = collectionsName;
     groupsButton.setAttribute('aria-label', collectionsName);
-    groupsButton.setAttribute('aria-expanded', String(!groupsSheet.hidden));
+    // 同 FB1：data-open 口径，避免 conceal 窗口内同步重跑重置为展开。
+    groupsButton.setAttribute('aria-expanded', String(groupsSheet.dataset.open !== undefined));
     groupsButton.classList.toggle(
       'is-active',
       selectedCustomGroupId !== null || selectedSmartGroupId !== null,
@@ -2720,6 +2726,9 @@ export function createLibraryView(
   function closeFilterSheet(): void {
     filterToggle.setAttribute('aria-expanded', 'false');
     filterSheetDialog.style.transform = '';
+    // 在途回弹的内联 transition（sheet-drag snapBack）会覆盖 class 的
+    // transform+opacity 退场（opacity 无过渡直跳 0）：关闭前一并清掉（FB4）。
+    filterSheetDialog.style.removeProperty('transition');
     // 触屏退场：摘 data-open 走 220ms 过渡，收尾（transitionend/兜底 timeout）
     // 后再置 hidden/清 display；桌面与 jsdom 无过渡样式时同步落地，行为不变。
     concealSheet(
@@ -2750,6 +2759,8 @@ export function createLibraryView(
   function closeGroupsSheet(): void {
     groupsButton.setAttribute('aria-expanded', 'false');
     groupsSheetDialog.style.transform = '';
+    // 同 FB4：清掉 snapBack 遗留的内联 transition，让 class 退场接管。
+    groupsSheetDialog.style.removeProperty('transition');
     concealSheet(
       groupsSheet,
       () => {
@@ -5104,14 +5115,16 @@ export function createLibraryView(
   groupEditorCancel.addEventListener('click', () => closeGroupEditor());
   filterToggle.addEventListener('click', () => {
     if (!isMobileLibraryChrome() || activeSection !== 'shelf') return;
-    if (!filterSheet.hidden) {
+    // 开合口径与 aria-expanded / 过渡状态机一致（data-open，T3-A2 FB3）：
+    // conceal 窗口（hidden 延迟落地）内二次点击是「重开」，不再被吞成二次 close。
+    if (filterSheet.dataset.open !== undefined) {
       closeFilterSheet();
       return;
     }
     openFilterSheet();
   });
   groupsButton.addEventListener('click', () => {
-    if (!groupsSheet.hidden) {
+    if (groupsSheet.dataset.open !== undefined) {
       closeGroupsSheet();
       return;
     }
@@ -5122,12 +5135,15 @@ export function createLibraryView(
   const unbindMembershipOverlayReveal = bindOverlayKeyboardReveal(membershipOverlay);
   const unbindGroupsSheetDrag = bindSheetDrag(groupsSheetHandle, {
     sheet: groupsSheetDialog,
+    // 容器（data-open 宿主）是外层 sheet：拖拽开始时作废在途关闭（FB5）。
+    container: groupsSheet,
     onClose: () => {
       closeGroupsSheet();
     },
   });
   const unbindFilterSheetDrag = bindSheetDrag(filterSheetHandle, {
     sheet: filterSheetDialog,
+    container: filterSheet,
     onClose: () => {
       closeFilterSheet();
     },

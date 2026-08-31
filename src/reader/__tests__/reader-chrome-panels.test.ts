@@ -1450,4 +1450,53 @@ describe('reader chrome panels', () => {
     annotation.destroy();
     chrome.destroy();
   });
+
+  it('drag-closing a pinned sheet with no host force-settles it: hidden lands, data-open cleared, unpinned (FB13)', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const overlay = document.createElement('div');
+    // 手动挂 data-open 模拟打开态（真机由 revealSheet 装配）。
+    overlay.dataset.open = '';
+    document.body.append(overlay);
+    const pane = {
+      getBoundingClientRect: () =>
+        ({ left: 0, top: 0, width: 390, height: 700, right: 390, bottom: 700 }) as DOMRect,
+    };
+    pinFixedOverlay(overlay, pane, { innerWidth: 390, innerHeight: 700 });
+    expect(overlay.classList.contains('is-touch-sheet')).toBe(true);
+
+    // 宿主不存在（面板已从 .lightink-reader 移除）：closer/host 路径都不通，
+    // 走 forceSettle 兜底直落。
+    dragHandlePastThreshold(querySheetHandle(overlay));
+    expect(overlay.hidden).toBe(true);
+    expect(overlay.dataset.open).toBeUndefined();
+    // 对称 unpin（FB11）：触屏 sheet pin 与拖拽把手一并收掉。
+    expect(overlay.classList.contains('is-touch-sheet')).toBe(false);
+    expect(overlay.querySelector('.lightink-reader-sheet-handle')).toBeNull();
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
+
+  it('keeps an in-flight conceal intact when the host swallows the close (no force-settle truncation, FB2)', () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    host.className = 'lightink-reader';
+    document.body.append(host);
+    const overlay = document.createElement('div');
+    host.append(overlay);
+    const pane = {
+      getBoundingClientRect: () =>
+        ({ left: 0, top: 0, width: 390, height: 700, right: 390, bottom: 700 }) as DOMRect,
+    };
+    pinFixedOverlay(overlay, pane, { innerWidth: 390, innerHeight: 700 });
+    // 模拟 concealSheet 已接管退场：data-open 已摘、hidden 延迟落地中。
+    overlay.dataset.open = '';
+    delete overlay.dataset.open;
+    overlay.hidden = false;
+
+    // host click / Escape 均无消费者（sheet 无人关闭）：data-open 已摘说明
+    // 过渡接管，兜底不得直落截断退场。
+    dragHandlePastThreshold(querySheetHandle(overlay));
+    expect(overlay.hidden).toBe(false);
+    expect(overlay.dataset.open).toBeUndefined();
+    document.documentElement.removeAttribute('data-touch-primary');
+  });
 });

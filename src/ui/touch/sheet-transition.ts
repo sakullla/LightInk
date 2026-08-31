@@ -15,7 +15,10 @@
  * T2 的 P0 教训），CSS 侧依赖 theme.css 全局 kill-switch。
  *
  * 与 sheet-drag 的互斥：拖拽期间 sheet-drag 在 sheet 上写内联
- * `transition: none`（压掉本过渡），释放后由 snapBack 用自己的 200ms 回弹。
+ * `transition: none`（压掉本过渡，且 transitionend 不再派发——退场只剩
+ * 兜底 timer），释放后由 snapBack 用自己的 200ms 回弹；因此拖拽开始时
+ * sheet-drag 会调用 cancelSheetTransition 作废在途 settle（拖拽意图优先，
+ * 退场窗口内抓住把手不让 240ms 兜底把 sheet 在手指下置 hidden）。
  */
 
 /** 关闭过渡兜底时长（ms）：transitionend 未到（含 jsdom/被中断）时的保底。 */
@@ -125,4 +128,15 @@ export function concealSheet(
   };
   panel.addEventListener('transitionend', onEnd);
   timer = setTimeout(finish, SHEET_TRANSITION_FALLBACK_MS);
+}
+
+/**
+ * 作废 container 上在途的关闭收尾（settle 不再落地）。退场过渡窗口内用户
+ * 抓住把手开始拖拽时由 sheet-drag 调用：拖拽意图优先，兜底 timer / 残留的
+ * transitionend 不得把正被手指接管的 sheet 置 hidden。幂等——无在途过渡时
+ * 仅推进 generation，无副作用；重开（revealSheet）会再次推进 generation，
+ * 同样丢弃过期 settle。
+ */
+export function cancelSheetTransition(container: HTMLElement): void {
+  bumpGeneration(container);
 }

@@ -124,7 +124,10 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     swatch.dataset.annotationColor = color;
     swatch.setAttribute('aria-label', deps.t('annotation.highlight'));
     swatch.title = deps.t('annotation.highlight');
-    swatch.style.background = color;
+    // background-color 长属性而非 background 简写：简写会把内联
+    // background-clip 重置为 border-box（内联优先级压过触屏 48px 热区规则的
+    // content-box 裁剪），见 reader.css 触屏热区规则。
+    swatch.style.backgroundColor = color;
     swatch.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();

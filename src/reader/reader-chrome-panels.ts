@@ -940,22 +940,33 @@ function releaseTouchSheetDrag(overlay: HTMLElement): void {
   }
   overlay.querySelector<HTMLElement>(`.${READER_SHEET_HANDLE_CLASS}[data-reader-pin-handle]`)?.remove();
   overlay.style.removeProperty('transform');
+  overlay.style.removeProperty('transition');
 }
 
 /**
- * 拖拽关闭的兜底直落：closePinnedTouchSheet 的 closer.click / host click+Escape
- * 都没能把 sheet 藏掉时才走到这里。同步摘 data-open 再置 hidden，避免
- * 「已隐藏但 data-open 残留」的僵尸态（下次 reveal 不播进场过渡）。
+ * 拖拽关闭的兜底直落：仅当 closer.click / host click+Escape 都没能把 sheet
+ * 关掉、且没有过渡接管（data-open 仍在）时才走到这里。同步摘 data-open 再
+ * 置 hidden 并对称 unpin（unpinFixedOverlay 幕等），避免「已隐藏但
+ * data-open 残留」的僵尸态（下次 reveal 不播进场过渡）与 pin/观察者/把手
+ * 残留。data-open 已摘除则 concealSheet 已接管退场（hidden 延迟到
+ * transitionend/兜底 timer 落地），直接返回——不得把退场过渡截断成瞬跳
+ * （T3-A2 FB2）。
  */
 function forceSettleTouchSheet(sheet: HTMLElement): void {
-  if (sheet.dataset.open !== undefined) {
-    delete sheet.dataset.open;
+  if (sheet.dataset.open === undefined) {
+    // concealSheet 接管中：退场过渡进行中，收尾由它自己的 settle 负责。
+    return;
   }
+  delete sheet.dataset.open;
   sheet.hidden = true;
+  unpinFixedOverlay(sheet);
 }
 
 function closePinnedTouchSheet(sheet: HTMLElement): void {
+  // 拖拽留下的内联 transform 与 snapBack 的内联 transition 一并清掉：后者会
+  // 覆盖 class 的 transform+opacity 退场（opacity 无过渡直跳 0）（FB4）。
   sheet.style.removeProperty('transform');
+  sheet.style.removeProperty('transition');
   const closer = sheet.querySelector<HTMLElement>('.lightink-reader-sidebar-close');
   if (closer !== null) {
     closer.click();

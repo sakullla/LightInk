@@ -10,8 +10,10 @@ import { bindLongPress } from '../touch/long-press.js';
 import {
   bindSheetDrag,
   SHEET_DRAG_FLICK_PX_PER_MS,
+  SHEET_DRAG_SNAP_BACK_MS,
   SHEET_DRAG_THRESHOLD_PX,
 } from '../touch/sheet-drag.js';
+import { concealSheet, revealSheet, SHEET_TRANSITION_FALLBACK_MS } from '../touch/sheet-transition.js';
 
 function touchEvent(type: string, point: { clientX: number; clientY: number } | null): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
@@ -83,15 +85,22 @@ describe('bindLongPress', () => {
   it('ignores multi-touch gestures', () => {
     const el = mount();
     const onLongPress = vi.fn();
-    bindLongPress(el, { onLongPress });
-    const event = new Event('touchstart', { bubbles: true, cancelable: true });
-    Object.defineProperty(event, 'touches', {
+    const onPressStart = vi.fn();
+    const onPressCancel = vi.fn();
+    bindLongPress(el, { onLongPress, onPressStart, onPressCancel });
+    const start = touchEvent('touchstart', { clientX: 10, clientY: 10 });
+    el.dispatchEvent(start);
+    expect(onPressStart).toHaveBeenCalledTimes(1);
+    // 多指合拢：计时取消的同时按住反馈也收掉（T3-A2 FB9），不悬挂 .is-pressing。
+    const multi = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(multi, 'touches', {
       value: [
         { clientX: 1, clientY: 1 },
         { clientX: 2, clientY: 2 },
       ],
     });
-    el.dispatchEvent(event);
+    el.dispatchEvent(multi);
+    expect(onPressCancel).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(600);
     expect(onLongPress).not.toHaveBeenCalled();
   });
@@ -197,6 +206,7 @@ describe('bindSheetDrag', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     document.body.replaceChildren();
   });
 
@@ -241,6 +251,66 @@ describe('bindSheetDrag', () => {
     handle.dispatchEvent(sheetPointerEvent('pointerup', { clientX: 20, clientY: 50 }));
     expect(onClose).not.toHaveBeenCalled();
     expect(sheet.style.transform).toBe('');
+  });
+
+  it('snapBack 生命周期：释放后内联回弹存在，伪 timer 推进后清理收尾（FB6）', () => {
+    const { handle, sheet } = mountSheet();
+    const onClose = vi.fn();
+    bindSheetDrag(handle, { sheet, onClose, thresholdPx: 80 });
+    handle.dispatchEvent(sheetPointerEvent('pointerdown', { clientX: 20, clientY: 10 }));
+    handle.dispatchEvent(sheetPointerEvent('pointermove', { clientX: 20, clientY: 50 }));
+    // 释放后：回弹靠自己的内联 transition（200ms transform），transform 已回基线。
+    vi.setSystemTime(1_400);
+    handle.dispatchEvent(sheetPointerEvent('pointerup', { clientX: 20, clientY: 50 }));
+    expect(sheet.style.transition).toBe(`transform ${SHEET_DRAG_SNAP_BACK_MS}ms ease`);
+    expect(sheet.style.transform).toBe('');
+    expect(onClose).not.toHaveBeenCalled();
+    // 推进到兜底收尾（200ms + 40ms）：内联 transition 清理、监听/取消句柄移除。
+    vi.advanceTimersByTime(SHEET_DRAG_SNAP_BACK_MS + 40);
+    expect(sheet.style.transition).toBe('');
+    expect(sheet.style.transform).toBe('');
+  });
+
+  it('回弹进行中重拖：取消在途回弹，旧收尾不清掉新拖拽状态（FB6）', () => {
+    const { handle, sheet } = mountSheet();
+    const onClose = vi.fn();
+    bindSheetDrag(handle, { sheet, onClose, thresholdPx: 80 });
+    handle.dispatchEvent(sheetPointerEvent('pointerdown', { clientX: 20, clientY: 10 }));
+    handle.dispatchEvent(sheetPointerEvent('pointermove', { clientX: 20, clientY: 40 }));
+    vi.setSystemTime(1_400);
+    handle.dispatchEvent(sheetPointerEvent('pointerup', { clientX: 20, clientY: 40 }));
+    expect(sheet.style.transition).toBe(`transform ${SHEET_DRAG_SNAP_BACK_MS}ms ease`);
+    // 回弹未收尾时再按下：beginDrag 取消回弹并压回 transition:none。
+    handle.dispatchEvent(sheetPointerEvent('pointerdown', { clientX: 20, clientY: 12 }));
+    expect(sheet.style.transition).toBe('none');
+    handle.dispatchEvent(sheetPointerEvent('pointermove', { clientX: 20, clientY: 44 }));
+    expect(sheet.style.transform).toBe('translateY(32px)');
+    // 推进旧回弹的兜底窗口：不得把新拖拽的位移/transition 清掉。
+    vi.advanceTimersByTime(SHEET_DRAG_SNAP_BACK_MS * 3);
+    expect(sheet.style.transition).toBe('none');
+    expect(sheet.style.transform).toBe('translateY(32px)');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('拖拽开始作废在途 sheet 过渡：退场窗口内抓住把手不被兜底 timer 置 hidden（FB5）', () => {
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(
+      () => ({ transitionDuration: '0.22s' }) as CSSStyleDeclaration,
+    );
+    const { handle, sheet } = mountSheet();
+    const unbind = bindSheetDrag(handle, { sheet, onClose: vi.fn() });
+    sheet.hidden = false;
+    revealSheet(sheet);
+    const settle = vi.fn(() => {
+      sheet.hidden = true;
+    });
+    concealSheet(sheet, settle, sheet);
+    expect(sheet.dataset.open).toBeUndefined();
+    // 退场窗口内抓住把手：拖拽接管，在途 settle（含兜底 timer）作废。
+    handle.dispatchEvent(sheetPointerEvent('pointerdown', { clientX: 20, clientY: 10 }));
+    vi.advanceTimersByTime(SHEET_TRANSITION_FALLBACK_MS * 2);
+    expect(settle).not.toHaveBeenCalled();
+    expect(sheet.hidden).toBe(false);
+    unbind();
   });
 
   it('closes on a downward flick below the distance threshold', () => {

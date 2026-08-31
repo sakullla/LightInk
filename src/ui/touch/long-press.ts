@@ -104,6 +104,9 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
     const touch = firstTouch(event);
     if (touch === undefined) {
       clearTimer();
+      // 多指/无触点（T3-A2 FB9）：按住反馈一并收掉，不让 .is-pressing 悬挂
+      // 到下一次单指落点（onPressStart 只在 !pressing 时重挂）。
+      clearPressing();
       return;
     }
     startX = touch.clientX;
