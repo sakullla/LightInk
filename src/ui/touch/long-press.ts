@@ -21,6 +21,16 @@ export interface LongPressPosition {
 export interface LongPressOptions {
   /** 长按触发回调，坐标为 touchstart 落点（clientX/clientY）。 */
   onLongPress(position: LongPressPosition): void;
+  /**
+   * 按住开始（touchstart 落点并已武装计时）——调用方可加按住反馈
+   * （如 .is-pressing 门控类）。仅在单指落点后才回调。
+   */
+  onPressStart?: (position: LongPressPosition) => void;
+  /**
+   * 按住反馈收尾：500ms 计时内任何取消（提前抬手/移动越界）或长按触发
+   * 时回调（每次按住至多一次），调用方据此移除 .is-pressing 等反馈。
+   */
+  onPressCancel?: () => void;
   /** 长按计时，默认 500ms。 */
   delayMs?: number;
   /** 移动取消阈值（px），默认 10。 */
@@ -52,6 +62,7 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
   let startY = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let fired = false;
+  let pressing = false;
   let resetTimer: ReturnType<typeof setTimeout> | null = null;
 
   const clearTimer = (): void => {
@@ -59,6 +70,15 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
       clearTimeout(timer);
       timer = null;
     }
+  };
+
+  /** 收掉按住反馈（幂等）：提前抬手/移动越界/长按触发/解绑时调用。 */
+  const clearPressing = (): void => {
+    if (!pressing) {
+      return;
+    }
+    pressing = false;
+    options.onPressCancel?.();
   };
 
   const clearResetTimer = (): void => {
@@ -89,9 +109,14 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
     startX = touch.clientX;
     startY = touch.clientY;
     clearTimer();
+    if (!pressing) {
+      pressing = true;
+      options.onPressStart?.({ x: startX, y: startY });
+    }
     timer = setTimeout(() => {
       timer = null;
       fired = true;
+      clearPressing();
       options.onLongPress({ x: startX, y: startY });
     }, delayMs);
   };
@@ -106,11 +131,13 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
     }
     if (Math.abs(touch.clientX - startX) > threshold || Math.abs(touch.clientY - startY) > threshold) {
       clearTimer();
+      clearPressing();
     }
   };
 
   const onTouchEnd = (event: Event): void => {
     clearTimer();
+    clearPressing();
     if (fired) {
       // 抑制合成 click（真实浏览器中 preventDefault touchend 即拦截 click；
       // 捕获阶段的 swallow 监听是双保险，也覆盖测试环境手动派发 click）。
@@ -135,6 +162,7 @@ export function bindLongPress(target: EventTarget, options: LongPressOptions): (
   return () => {
     clearTimer();
     clearResetTimer();
+    clearPressing();
     target.removeEventListener('touchstart', onTouchStart);
     target.removeEventListener('touchmove', onTouchMove);
     target.removeEventListener('touchend', onTouchEnd);

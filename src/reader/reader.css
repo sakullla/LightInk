@@ -1231,6 +1231,26 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   background: transparent;
 }
 
+/* 触屏划选工具条进出场过渡（T3）：data-open class 驱动 translateY+opacity
+   （selection-toolbar showAt/hide 装配）；桌面（无触屏标记）选择器不命中，
+   瞬跳行为不变。reduce-motion 由 theme.css 全局 kill-switch 压 0.01ms。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-toolbar {
+  transition: transform 180ms ease-out, opacity 180ms ease-out;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-selection-toolbar:not([data-open]) {
+  transform: translateY(6px);
+  opacity: 0;
+}
+
+/* 触屏划选工具条 action 热区：≥48px（颜色圆点与 action 同行的点击基线）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-action {
+  min-height: 48px;
+  min-width: 48px;
+  padding: 0 0.7rem;
+}
+
 .lightink-reader-selection-action--removeHighlight {
   color: var(--lightink-danger);
 }
@@ -2294,6 +2314,10 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   flex: 0 0 auto;
 }
 
+/* 定顶镜像公式（与 T4 bottom-单通道范式等价）：overlay 的 padding-bottom
+   （max(keyboard-inset, safe-bottom)）是唯一位移通道；max-height 取同一
+   max() 值不是叠加扣减，而是镜像钳高——限制 dialog 高度不越过键盘上缘的
+   可视区域，与 pinFixedOverlay 的 top+bottom 双锚同一几何结果。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-note-dialog {
   width: 100%;
   max-width: 100vw;

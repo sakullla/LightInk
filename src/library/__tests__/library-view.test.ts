@@ -3989,6 +3989,31 @@ describe('LibraryView touch long-press', () => {
     expect(document.querySelector('.lightink-context-menu')).toBeNull();
     view.destroy();
   });
+
+  it('holds .is-pressing while pressed and drops it when the long press fires (T3)', async () => {
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = itemRow(host, novel.id);
+    // 按住即挂反馈；500ms 计时到期触发长按（菜单渲染走既有入口），反馈随
+    // onPressCancel 摘除——触发后行为与现状一致（菜单弹出、合成 click 被吞）。
+    vi.useFakeTimers();
+    card.dispatchEvent(touchEvent('touchstart', { clientX: 20, clientY: 20 }));
+    expect(card.classList.contains('is-pressing')).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(document.querySelector('.lightink-context-menu')).not.toBeNull();
+    expect(card.classList.contains('is-pressing')).toBe(false);
+    vi.useRealTimers();
+    card.dispatchEvent(touchEvent('touchend', null));
+    expect(card.classList.contains('is-pressing')).toBe(false);
+    expect(deps.onOpen).not.toHaveBeenCalled();
+    document.querySelector('.lightink-context-menu')?.remove();
+    view.destroy();
+  });
 });
 
 describe('LibraryView mobile shelf', () => {
@@ -5140,5 +5165,96 @@ describe('LibraryView mobile shelf', () => {
     expect(bodyRule).not.toBeNull();
     expect(bodyRule![1]).toMatch(/display:\s*grid/);
     expect(bodyRule![1]).toMatch(/grid-template-columns/);
+  });
+
+  it('styles touch-only sheet transitions, handle pseudo-bar, and long-press feedback (T3)', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    // sheet 开关过渡：data-open 驱动 dialog 滑入/滑出，全部触屏门控。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-groups-sheet-dialog\s*\{[^}]*transition:\s*transform 220ms ease-out,\s*opacity 220ms ease-out/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-groups-sheet:not\(\[data-open\]\)\s*\.lightink-library-groups-sheet-dialog\s*\{[^}]*transform:\s*translateY\(100%\)[^}]*opacity:\s*0/,
+    );
+    // 把手伪条 ::before :active 加深（本体 scale 之外的伪条反馈）。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-groups-sheet-handle:active::before\s*\{[^}]*color-mix\(in srgb, var\(--lightink-fg\) 36%, transparent\)/,
+    );
+    // 长按按住反馈：书架行/自定义分组行两处绑定点。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item--cover\.is-pressing,\s*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-custom-group-row\.is-pressing\s*\{[^}]*transform:\s*scale\(0\.98\)[^}]*transition:\s*transform 100ms ease/,
+    );
+    // 筛选/分组入口休息态 hover 恢复（非展开/非激活态）。
+    expect(css).toMatch(
+      /\.lightink-library-shelf-filter:not\(\[aria-expanded='true'\]\):not\(\.is-active\):hover:not\(:active\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-shelf-groups:not\(\[aria-expanded='true'\]\):not\(\.is-active\):hover:not\(:active\)/,
+    );
+    // detail-handle hover 驻留中和：恢复基础态 22%。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-detail-handle:hover:not\(:disabled\):not\(:active\)\s*\{[^}]*color-mix\(in srgb, var\(--lightink-fg\) 22%, transparent\)/,
+    );
+    // archive-password overlay 死规则已删：keyboard-inset 消费只在 TS 内联。
+    expect(css).not.toMatch(
+      /\.lightink-modal-overlay:has\(#lightink-archive-password\)\s*\{[^}]*--lightink-keyboard-inset/,
+    );
+  });
+
+  it('drives the touch groups sheet through the data-open state machine (T3)', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const sheet = await openShelfGroupsSheet(host);
+    // 打开：容器挂 data-open（jsdom 无过渡样式，dialog 即时到位，与瞬跳等价）。
+    expect(sheet.dataset.open).toBe('');
+
+    // 关闭：摘 data-open；jsdom computed transition-duration 为 0 → hidden 同步落地。
+    sheet.querySelector<HTMLElement>('.lightink-library-groups-sheet-backdrop')!.click();
+    await settle();
+    expect(sheet.dataset.open).toBeUndefined();
+    expect(sheet.hidden).toBe(true);
+
+    // 重开：data-open 回挂，无僵尸关闭态。
+    const reopened = await openShelfGroupsSheet(host);
+    expect(reopened.dataset.open).toBe('');
+    view.destroy();
+  });
+
+  it('long-press rows gain .is-pressing while held and lose it on cancel (T3)', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const novel = localItem();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const touch = (type: string, point: { clientX: number; clientY: number } | null): Event => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      const points = point === null ? [] : [point];
+      Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : points });
+      Object.defineProperty(event, 'changedTouches', { value: points });
+      return event;
+    };
+
+    const card = itemRow(host, novel.id);
+    // 按住：反馈挂上（500ms 触发前）。
+    card.dispatchEvent(touch('touchstart', { clientX: 20, clientY: 20 }));
+    expect(card.classList.contains('is-pressing')).toBe(true);
+    // 移动越界取消长按：反馈随 onPressCancel 摘除。
+    card.dispatchEvent(touch('touchmove', { clientX: 45, clientY: 20 }));
+    expect(card.classList.contains('is-pressing')).toBe(false);
+    // 再次按住后提前抬手：普通点按路径同样收尾反馈。
+    card.dispatchEvent(touch('touchstart', { clientX: 20, clientY: 20 }));
+    expect(card.classList.contains('is-pressing')).toBe(true);
+    card.dispatchEvent(touch('touchend', null));
+    expect(card.classList.contains('is-pressing')).toBe(false);
+    view.destroy();
   });
 });

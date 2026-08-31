@@ -3166,6 +3166,20 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     box-shadow: 0 -12px 40px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
   }
 
+  /* 触屏 sheet 开关过渡（T3）：容器 data-open 驱动 dialog 滑入/滑出；
+   * 拖拽跟随与回弹由 sheet-drag 的内联 transition 接管（互斥）。
+   * 选择器带触屏标记：桌面分支不命中，sheet 本身也是 phone-only。 */
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-dialog {
+    transition: transform 220ms ease-out, opacity 220ms ease-out;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-groups-sheet:not([data-open])
+    .lightink-library-groups-sheet-dialog {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+
   /* mountLibraryOverlay 把面板挂到 body，把手选择器不能依赖 .lightink-library 祖先。 */
   :is(html[data-android], html[data-touch-primary]) .lightink-library-groups-sheet-handle {
     display: block;
@@ -3226,6 +3240,12 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     cursor: grabbing;
     transform: scale(0.99);
     transition: transform 100ms ease;
+  }
+
+  /* 把手伪条按压反馈（T3）：本体缩放之外，偍 22% → 36% 加深。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-groups-sheet-handle:active::before {
+    background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3497,9 +3517,16 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
   }
 
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-handle:hover:not(:disabled),
   :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-handle:focus-visible {
     background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+    color: inherit;
+  }
+
+  /* hover 驻留中和（T3 清理）：抬手后 :hover 粘滞不残留 36% 深条；
+   * 恢复与基础态一致的 22%（focus-visible 键盘对比保留 36%）。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-detail-handle:hover:not(:disabled):not(:active) {
+    background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
     color: inherit;
   }
 
@@ -3688,10 +3715,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   max-height: min(80vh, 560px, calc(100dvh - 24px));
 }
 
-:is(html[data-android], html[data-touch-primary])
-  .lightink-modal-overlay:has(#lightink-archive-password) {
-  padding-bottom: var(--lightink-keyboard-inset, 0px);
-}
+/* 原 archive-password overlay 的 padding-bottom keyboard-inset 规则已删
+   （T3 清理）：被 archive-password-dialog.ts 的同值内联样式遮蔽，
+   实际生效通道在 TS 侧（见 accessibility-css.test.ts 的 TS 断言）。 */
 
 :is(html[data-android], html[data-touch-primary])
   .lightink-link-dialog:has(#lightink-archive-password) {
@@ -3849,6 +3875,14 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   transition: background-color 100ms ease;
 }
 
+/* 长按按住反馈（T3）：500ms 触发前书架行/自定义分组行轻微缩放；
+   触发/取消/抬手后由 long-press 的 onPressCancel 即时摘除。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-item--cover.is-pressing,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-custom-group-row.is-pressing {
+  transform: scale(0.98);
+  transition: transform 100ms ease;
+}
+
 /* hover 驻留中和：抬手后 :hover 粘滞不残留高亮，恢复元素基础底色/字色
    （按压期间由上方 :active 洗色接管；实底/激活态族由后续规则单独恢复）。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-library button:hover:not(:active) {
@@ -3860,6 +3894,18 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 :is(html[data-android], html[data-touch-primary]) .lightink-library button:focus-visible:hover:not(:active) {
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent);
+}
+
+/* 书架筛选/分组入口休息态 hover 恢复（T3 清理）：通用 button 中和把
+   7% fg 混底抹成透明；非展开/非激活态粘滞 hover 恢复休息态底色与字色。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-shelf-filter:not([aria-expanded='true']):not(.is-active):hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-shelf-groups:not([aria-expanded='true']):not(.is-active):hover:not(:active) {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg);
 }
 
 /* 侧栏导航 hover 带 !important，中和规则需同级 !important 且特异性更高（排除激活态）。 */

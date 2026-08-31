@@ -8,7 +8,11 @@
  * 判定：
  *   - 仅跟随向下位移（translateY）；
  *   - 松手时位移 ≥ 阈值或向下快甩 → onClose；
- *   - 未过阈值 → 弹回，不关闭。
+ *   - 未过阈值 → 200ms transform 回弹（reduce-motion 瞬回），不关闭。
+ *
+ * 与 sheet 过渡（sheet-transition.ts / 各样式表的 data-open 规则）互斥：
+ * 拖拽开始写内联 `transition: none` 让跟随即时，释放/关闭时清掉，
+ * 让 class 驱动的开关过渡或 snapBack 自己的回弹接管。
  *
  * 只依赖 EventTarget 与指针/触摸坐标，jsdom 可用伪造 pointer/touch 事件测试。
  */
@@ -26,6 +30,8 @@ export const SHEET_DRAG_THRESHOLD_PX = 80;
 export const SHEET_DRAG_FLICK_PX_PER_MS = 0.5;
 /** 快甩至少要有一段向下位移，避免原地抖动误关。 */
 export const SHEET_DRAG_FLICK_MIN_DY_PX = 16;
+/** 松手未过阈值时的回弹时长（ms）。 */
+export const SHEET_DRAG_SNAP_BACK_MS = 200;
 
 interface TouchPointLike {
   clientX: number;
@@ -69,8 +75,73 @@ function applySheetOffset(sheet: HTMLElement, dy: number): void {
   sheet.style.transform = `translateY(${offset}px)`;
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/** 在途回弹的清理句柄：新拖拽开始时取消，避免旧 timer 中途清掉新状态。 */
+const snapBackCancellers = new WeakMap<HTMLElement, () => void>();
+
+function cancelPendingSnapBack(sheet: HTMLElement): void {
+  const cancel = snapBackCancellers.get(sheet);
+  if (cancel !== undefined) {
+    cancel();
+    snapBackCancellers.delete(sheet);
+  }
+}
+
+/** 拖拽开始：压掉 class 过渡与在途回弹，手指跟随必须即时。 */
+function beginDrag(sheet: HTMLElement): void {
+  cancelPendingSnapBack(sheet);
+  sheet.style.transition = 'none';
+}
+
+/** 拖拽结束：恢复 class 过渡（关闭方向由调用方摘 data-open 驱动）。 */
+function releaseDragTransition(sheet: HTMLElement): void {
+  sheet.style.removeProperty('transition');
+}
+
+/** 松手未过阈值：200ms transform 回弹到 class 基线（reduce-motion 瞬回）。 */
 function snapBack(sheet: HTMLElement): void {
+  cancelPendingSnapBack(sheet);
+  if (prefersReducedMotion() || typeof setTimeout !== 'function') {
+    sheet.style.removeProperty('transition');
+    sheet.style.transform = '';
+    return;
+  }
+  sheet.style.transition = `transform ${SHEET_DRAG_SNAP_BACK_MS}ms ease`;
   sheet.style.transform = '';
+  let done = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const finish = (): void => {
+    if (done) {
+      return;
+    }
+    done = true;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    sheet.removeEventListener('transitionend', onEnd);
+    sheet.style.removeProperty('transition');
+    snapBackCancellers.delete(sheet);
+  };
+  const onEnd = (event: TransitionEvent): void => {
+    if (event.target !== sheet || event.propertyName !== 'transform') {
+      return;
+    }
+    finish();
+  };
+  timer = setTimeout(finish, SHEET_DRAG_SNAP_BACK_MS + 40);
+  sheet.addEventListener('transitionend', onEnd);
+  snapBackCancellers.set(sheet, finish);
 }
 
 function shouldClose(dy: number, durationMs: number, thresholdPx: number): boolean {
@@ -124,6 +195,7 @@ export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): (
     if (pointerId !== null) {
       tryReleasePointerCapture(handle, pointerId);
     }
+    releaseDragTransition(sheet);
     if (shouldClose(dy, durationMs, thresholdPx)) {
       options.onClose();
       return;
@@ -152,6 +224,7 @@ export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): (
     if (typeof pointer.pointerId === 'number') {
       trySetPointerCapture(handle, pointer.pointerId);
     }
+    beginDrag(sheet);
     applySheetOffset(sheet, 0);
   };
 
@@ -196,6 +269,7 @@ export function bindSheetDrag(handle: HTMLElement, options: SheetDragOptions): (
       startAt: Date.now(),
       lastY: touch.clientY,
     };
+    beginDrag(sheet);
     applySheetOffset(sheet, 0);
   };
 

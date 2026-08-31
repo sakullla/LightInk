@@ -183,6 +183,7 @@ import {
   type ReaderChromePanelCopy,
   type ReaderTypographyComicControls,
 } from './reader-chrome-panels.js';
+import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 import {
   applyReaderTheme,
   loadReaderTheme,
@@ -549,6 +550,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   let annotations: Annotation[] = [];
   let sidebar: AnnotationPanel | null = null;
   let sidebarBackdrop: HTMLButtonElement | null = null;
+  /** 侧栏逻辑显隐（session-annotation 裁决）：驱动触屏 sheet 的进场 reveal 时机。 */
+  let sidebarShown = false;
   /** 划选工具栏（R3）：划选后确认再产生标注；懒创建（标注启用时）。 */
   let selectionToolbar: SelectionToolbar | null = null;
   /** mouseup 时捕获的待确认划选（locator + quote + 命中的已有高亮 id + 来源 frame）。 */
@@ -1811,6 +1814,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
             },
     });
     const { visible, shown } = sessionAnnotation.sidebarVisibility();
+    sidebarShown = shown;
     sidebar.element.setAttribute('aria-hidden', visible ? 'false' : 'true');
     sidebar.element.hidden = !shown;
     root.append(sidebarBackdrop, sidebar.element);
@@ -1829,6 +1833,11 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (readerChromeTouchMode()) {
       mountReaderOverlay(sidebar.element, root);
       pinFixedOverlay(sidebar.element, closestPane() ?? root);
+      if (sidebarShown && sidebar.element.dataset.open === undefined) {
+        // 进场过渡：pin（is-touch-sheet 几何）落地后再挂 data-open，关闭位
+        // 先经强制回流成为当前 computed style（退场窗口内不回补，防僵尸重开）。
+        revealSheet(sidebar.element);
+      }
       return;
     }
     if (flowIsPaginated()) {
@@ -1914,15 +1923,32 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   /** 侧栏覆盖层（含 portal 到共享 chrome 的部分）与当前显隐状态同步。 */
   function syncSidebarOverlayDom(): void {
     const { visible, shown } = sessionAnnotation.sidebarVisibility();
+    sidebarShown = shown;
     root.classList.toggle('lightink-reader--sidebar', visible);
     // chromeHost（#lightink-main）是所有标签共享的，只在侧栏真正显示时占类。
     chromeHost().classList.toggle('lightink-reader--sidebar', shown);
     closestPane()?.classList.toggle('lightink-reader--sidebar', visible);
     sidebar?.element.setAttribute('aria-hidden', shown ? 'false' : 'true');
     if (sidebar !== null) {
-      sidebar.element.hidden = !shown;
-      if (!shown) {
-        unpinFixedOverlay(sidebar.element);
+      if (shown) {
+        sidebar.element.hidden = false;
+      } else if (!sidebar.element.hidden) {
+        // 触屏退场：摘 data-open 滑出（220ms），收尾后置 hidden 并对称 unpin；
+        // 桌面/jsdom 无过渡样式时同步落地，与既有行为一致。
+        if (readerChromeTouchMode()) {
+          const panel = sidebar.element;
+          concealSheet(panel, () => {
+            panel.hidden = true;
+            if (readerChromeTouchMode()) {
+              unpinFixedOverlay(panel);
+            }
+          });
+        } else {
+          sidebar.element.hidden = true;
+          unpinFixedOverlay(sidebar.element);
+        }
+      } else {
+        sidebar.element.hidden = true;
       }
     }
     if (sidebarBackdrop !== null) {
@@ -1980,16 +2006,27 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     if (chromePanel === null) {
       return false;
     }
+    const closing = chromePanel === 'toc' ? tocPanel : typePanel;
+    const other = chromePanel === 'toc' ? typePanel : tocPanel;
     chromePanel = null;
     // 触屏 sheet 经 pinFixedOverlay 进入模块级 touchSheetPins（强引用 Map +
     // 键盘 MutationObserver）；关闭必须对称 unpin，否则观察者跨会话存活并
     // 回写已隐藏/已 detach 的面板。桌面端不 pin，保持原口径不动。
     if (readerChromeTouchMode()) {
-      unpinFixedOverlay(tocPanel);
-      unpinFixedOverlay(typePanel);
+      // 触屏退场：摘 data-open 走 220ms 出场过渡，收尾后置 hidden 并对称
+      // unpin；桌面/jsdom 无过渡样式时同步落地（既有行为合同不变）。
+      concealSheet(closing, () => {
+        closing.hidden = true;
+        if (readerChromeTouchMode()) {
+          unpinFixedOverlay(closing);
+        }
+      });
+      other.hidden = true;
+      unpinFixedOverlay(other);
+    } else {
+      tocPanel.hidden = true;
+      typePanel.hidden = true;
     }
-    tocPanel.hidden = true;
-    typePanel.hidden = true;
     syncChromeActionState();
     return true;
   };
@@ -3149,8 +3186,21 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       setSidebarVisible(false);
     }
     chromePanel = next;
-    tocPanel.hidden = next !== 'toc';
-    typePanel.hidden = next !== 'typography';
+    // 面板切换：被换下的面板直接隐藏（无退场过渡），同步摘 data-open，
+    // 否则残留的 data-open 让下次 reveal 停在打开位（不播进场过渡）。
+    // 激活面板先摘 hidden（reveal 契约：调用方负责显隐，助手只管 data-open）。
+    if (next !== 'toc') {
+      tocPanel.hidden = true;
+      delete tocPanel.dataset.open;
+    } else {
+      tocPanel.hidden = false;
+    }
+    if (next !== 'typography') {
+      typePanel.hidden = true;
+      delete typePanel.dataset.open;
+    } else {
+      typePanel.hidden = false;
+    }
     const panel = next === 'toc' ? tocPanel : typePanel;
     const action = next === 'toc' ? 'toc' : 'typography';
     mountReaderOverlay(panel, root);
@@ -3164,6 +3214,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       activateReaderTocPanel(tocPanel);
     } else {
       renderTypographyPanel();
+    }
+    if (readerChromeTouchMode()) {
+      // 进场过渡：pin（is-touch-sheet 几何）与内容渲染落地后再挂 data-open。
+      revealSheet(panel);
     }
     syncChromeActionState();
   };

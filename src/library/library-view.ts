@@ -64,6 +64,7 @@ import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import { beginOpenProgress } from '../ui/open-progress.js';
 import { bindLongPress } from '../ui/touch/long-press.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
+import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 import type { WebDavSourceClient } from './webdav-source-client.js';
 import {
   applyLibraryTheme,
@@ -2502,9 +2503,16 @@ export function createLibraryView(
     wrapper.draggable = true;
     // 长按分组行 → 既有 createContextMenu 渲染入口（管理动作纯触控可达）；
     // 先于子按钮 click 绑定，触发后吞掉紧随的合成 click（避免误选中分组）。
+    // 按住期间 .is-pressing 缩放反馈（onPressStart/Cancel，T3）。
     bindLongPress(wrapper, {
       onLongPress: (position) => {
         createContextMenu(buildGroupMenuItems(node), position, doc);
+      },
+      onPressStart: () => {
+        wrapper.classList.add('is-pressing');
+      },
+      onPressCancel: () => {
+        wrapper.classList.remove('is-pressing');
       },
     });
     const row = doc.createElement('div');
@@ -2710,11 +2718,19 @@ export function createLibraryView(
   }
 
   function closeFilterSheet(): void {
-    filterSheet.hidden = true;
-    filterSheet.style.removeProperty('display');
-    filterSheetBackdrop.style.removeProperty('display');
-    filterSheetDialog.style.transform = '';
     filterToggle.setAttribute('aria-expanded', 'false');
+    filterSheetDialog.style.transform = '';
+    // 触屏退场：摘 data-open 走 220ms 过渡，收尾（transitionend/兜底 timeout）
+    // 后再置 hidden/清 display；桌面与 jsdom 无过渡样式时同步落地，行为不变。
+    concealSheet(
+      filterSheet,
+      () => {
+        filterSheet.hidden = true;
+        filterSheet.style.removeProperty('display');
+        filterSheetBackdrop.style.removeProperty('display');
+      },
+      filterSheetDialog,
+    );
   }
 
   function openFilterSheet(): void {
@@ -2726,15 +2742,23 @@ export function createLibraryView(
     filterSheet.style.display = 'flex';
     filterSheetBackdrop.style.display = 'block';
     filterSheetDialog.style.transform = '';
+    // 进场：关闭位先经强制回流落地，再挂 data-open 触发 dialog 滑入过渡。
+    revealSheet(filterSheet, filterSheetDialog);
     filterToggle.setAttribute('aria-expanded', 'true');
   }
 
   function closeGroupsSheet(): void {
-    groupsSheet.hidden = true;
-    groupsSheet.style.removeProperty('display');
-    groupsSheetBackdrop.style.removeProperty('display');
-    groupsSheetDialog.style.transform = '';
     groupsButton.setAttribute('aria-expanded', 'false');
+    groupsSheetDialog.style.transform = '';
+    concealSheet(
+      groupsSheet,
+      () => {
+        groupsSheet.hidden = true;
+        groupsSheet.style.removeProperty('display');
+        groupsSheetBackdrop.style.removeProperty('display');
+      },
+      groupsSheetDialog,
+    );
   }
 
   function openGroupsSheet(): void {
@@ -2746,6 +2770,7 @@ export function createLibraryView(
     groupsSheet.style.display = 'flex';
     groupsSheetBackdrop.style.display = 'block';
     groupsSheetDialog.style.transform = '';
+    revealSheet(groupsSheet, groupsSheetDialog);
     groupsButton.setAttribute('aria-expanded', 'true');
   }
 
@@ -3475,8 +3500,15 @@ export function createLibraryView(
     row.append(cover, text);
     // 长按先于 click/contextmenu 绑定：触发后吞掉紧随的合成 click/原生
     // contextmenu（at-target 阶段按注册顺序派发），避免误打开书或菜单双开。
+    // 按住期间 .is-pressing 洗色反馈（onPressStart/Cancel，T3）。
     bindLongPress(row, {
       onLongPress: (position) => openItemCollectionMenu(display, position),
+      onPressStart: () => {
+        row.classList.add('is-pressing');
+      },
+      onPressCancel: () => {
+        row.classList.remove('is-pressing');
+      },
     });
     if (options.selectOnClick === true) {
       row.addEventListener('click', () => void selectItem(display));

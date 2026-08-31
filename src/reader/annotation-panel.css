@@ -525,6 +525,19 @@
   inset: auto 0 var(--lightink-keyboard-inset, 0px) 0;
 }
 
+/* 触屏标注侧栏开关过渡（T3）：data-open 驱动底栏滑入/滑出（reader-view
+ * revealSheet/concealSheet 装配）；键盘重 pin 只改写几何，不动 data-open，
+ * 已打开的侧栏不闪。拖拽跟随/回弹由 sheet-drag 内联 transition 接管（互斥）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar.is-touch-sheet {
+  transition: transform 220ms ease-out, opacity 220ms ease-out;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar.is-touch-sheet:not([data-open]) {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
 /* 触屏 sheet 列表仍是唯一滚动区；最小高度保障 ≥3 行条目不被固定 chrome 挤没。 */
 .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-list {
   min-height: 9.5rem;

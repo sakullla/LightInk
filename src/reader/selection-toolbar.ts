@@ -9,6 +9,7 @@
 
 import type { MessageKey } from '../i18n/messages.js';
 import { ANNOTATION_COLORS, type AnnotationColor } from './annotations.js';
+import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 
 export type SelectionToolbarAction = 'highlight' | 'note' | 'copy' | 'removeHighlight';
 
@@ -173,13 +174,18 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   let listening = false;
 
   const hide = (): void => {
-    root.hidden = true;
+    // 触屏退场（T3）：摘 data-open 走 180ms translateY+opacity 滑出，收尾
+    // （transitionend/兜底 timeout）后才置 hidden、移除外部点击监听；
+    // 桌面/jsdom 无过渡样式时同步落地，与既有瞬跳行为一致。
     dismiss.hidden = true;
-    if (listening) {
-      listening = false;
-      document.removeEventListener('pointerdown', onPointerDownOutside, true);
-      document.removeEventListener('mousedown', onPointerDownOutside, true);
-    }
+    concealSheet(root, () => {
+      root.hidden = true;
+      if (listening) {
+        listening = false;
+        document.removeEventListener('pointerdown', onPointerDownOutside, true);
+        document.removeEventListener('mousedown', onPointerDownOutside, true);
+      }
+    });
   };
 
   const mountDismiss = (): void => {
@@ -213,6 +219,9 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       );
       root.style.left = `${position.left}px`;
       root.style.top = `${position.top}px`;
+      // 进场过渡（T3）：定位落地后强制回流，再挂 data-open（触屏 CSS 滑入；
+      // 桌面选择器不命中，class 无视觉效果）。
+      revealSheet(root);
     },
     hide,
     isVisible() {

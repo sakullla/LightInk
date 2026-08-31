@@ -942,6 +942,18 @@ function releaseTouchSheetDrag(overlay: HTMLElement): void {
   overlay.style.removeProperty('transform');
 }
 
+/**
+ * 拖拽关闭的兜底直落：closePinnedTouchSheet 的 closer.click / host click+Escape
+ * 都没能把 sheet 藏掉时才走到这里。同步摘 data-open 再置 hidden，避免
+ * 「已隐藏但 data-open 残留」的僵尸态（下次 reveal 不播进场过渡）。
+ */
+function forceSettleTouchSheet(sheet: HTMLElement): void {
+  if (sheet.dataset.open !== undefined) {
+    delete sheet.dataset.open;
+  }
+  sheet.hidden = true;
+}
+
 function closePinnedTouchSheet(sheet: HTMLElement): void {
   sheet.style.removeProperty('transform');
   const closer = sheet.querySelector<HTMLElement>('.lightink-reader-sidebar-close');
@@ -954,7 +966,7 @@ function closePinnedTouchSheet(sheet: HTMLElement): void {
     sheet.ownerDocument?.querySelector<HTMLElement>('.lightink-reader') ??
     null;
   if (host === null) {
-    sheet.hidden = true;
+    forceSettleTouchSheet(sheet);
     return;
   }
   // Host click — never `.lightink-reader-page` (comic tap at 0,0 can advancePage).
@@ -965,7 +977,7 @@ function closePinnedTouchSheet(sheet: HTMLElement): void {
   // Comic hosts swallow surface clicks; Escape is the same dismissOverlay owner.
   host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   if (!sheet.hidden) {
-    sheet.hidden = true;
+    forceSettleTouchSheet(sheet);
   }
 }
 

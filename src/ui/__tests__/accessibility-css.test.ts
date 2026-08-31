@@ -97,10 +97,9 @@ describe('accessibility media preferences', () => {
         name: 'membership',
         tokens: ['.lightink-library-membership-overlay'],
       },
-      {
-        name: 'archive-password',
-        tokens: ['#lightink-archive-password', '.lightink-link-dialog'],
-      },
+      // archive-password overlay 的 keyboard-inset 消费在 TS 内联样式
+      // （archive-password-dialog.ts 的 overlay.style.paddingBottom，
+      // 见下方 TS 断言）；CSS 侧死规则已删（T3 清理）。
       { name: 'groups-sheet', tokens: ['.lightink-library-groups-sheet'] },
       { name: 'note-dialog', tokens: ['.lightink-note-dialog'] },
     ];
@@ -182,7 +181,8 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
       { name: 'source overlay', css: libraryCss, token: '.lightink-library-source-modal' },
       { name: 'group overlay', css: libraryCss, token: '.lightink-library-group-modal' },
       { name: 'cache-limit overlay', css: libraryCss, token: '.lightink-library-cache-limit-modal' },
-      { name: 'archive-password overlay', css: libraryCss, token: '#lightink-archive-password' },
+      // archive-password 的 bottom 通道由 TS 内联 paddingBottom 提供
+      // （下方 TS 断言）；CSS 侧死规则已删（T3 清理），不在此校验。
       // 前缀 token 同时覆盖 membership-overlay（bottom 通道）与
       // membership-dialog（max-height 不得含 inset 项）两个双扣点。
       { name: 'membership overlay/dialog', css: libraryCss, token: '.lightink-library-membership' },

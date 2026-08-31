@@ -662,6 +662,20 @@
   display: none;
 }
 
+/* 触屏 sheet 开关过渡（T3）：reveal/conceal 驱动 data-open（reader-view 装配）；
+ * 键盘重 pin（pinFixedOverlay）只改写几何，不动 data-open，已打开的 sheet 不闪。
+ * 拖拽跟随/回弹由 sheet-drag 内联 transition 接管（互斥）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-panel.is-touch-sheet {
+  transition: transform 220ms ease-out, opacity 220ms ease-out;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-panel.is-touch-sheet:not([data-open]) {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
 /* 触屏目录：列表保底高度（标注面板同 9.5rem），条目紧凑单行省略。
    桌面浮层排版保持不变，故全部限定 is-touch-sheet 作用域。 */
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-toc-list {
@@ -731,6 +745,12 @@
   cursor: grabbing;
   transform: scale(0.99);
   transition: transform 100ms ease;
+}
+
+/* 把手伪条按压反馈（T3）：本体缩放之外，偍 22% → 36% 加深。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sheet-handle:active::before {
+  background: color-mix(in srgb, var(--lightink-fg) 36%, transparent);
 }
 
 /* hover 驻留中和：抬手后 :hover 粘滞恢复基础底色/字色（按压期间由 :active 接管）。 */
