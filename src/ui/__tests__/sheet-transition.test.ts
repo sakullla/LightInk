@@ -8,7 +8,9 @@
  *   - 兜底 timer 路径（transitionend 未派发，240ms）；
  *   - settle 后监听清理与 finish 幂等（再派发无副作用）；
  *   - cancelSheetTransition 作废在途 settle（拖拽接管优先）；
- *   - 同步落地路径（computed transition-duration 为 0，桌面/jsdom 等价瞬跳）。
+ *   - 同步落地路径（computed transition-duration 为 0，桌面/jsdom 等价瞬跳）；
+ *   - reduce-motion 短路：有过渡样式也同步 settle（不挂监听不等 timer）；
+ *   - 子元素冒泡的 transitionend 被 target 过滤（不得提前 settle）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -187,5 +189,52 @@ describe('sheet-transition', () => {
     expect(settle).toHaveBeenCalledTimes(1);
     expect(container.hidden).toBe(true);
     expect(container.dataset.open).toBeUndefined();
+  });
+
+  it('reduce-motion：matchMedia 命中时即使有过渡样式也同步落地 settle（不挂监听不等 timer）', () => {
+    // FC3：reduce-motion 短路优先于 transition-duration——有 0.22s 过渡样式
+    // 也不得走异步分支（theme.css kill-switch 之外的行为兜底）。个别 jsdom
+    // 配置无 matchMedia：补一个返回 matches 的桩（后续用例的 beforeEach 会
+    // 重新 spy 回 matches:false 口径）。
+    if (typeof window.matchMedia !== 'function') {
+      Object.defineProperty(window, 'matchMedia', {
+        value: () => ({ matches: true }) as MediaQueryList,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList);
+    }
+    stubTransitionDuration('0.22s');
+    const { container, panel } = mount();
+    container.hidden = false;
+    revealSheet(container, panel);
+    const settle = vi.fn(() => {
+      container.hidden = true;
+    });
+    concealSheet(container, settle, panel);
+    // 同步落地：不挂 transitionend 监听、不排兜底 timer。
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(container.hidden).toBe(true);
+    expect(container.dataset.open).toBeUndefined();
+    fireTransitionEnd(panel);
+    vi.advanceTimersByTime(SHEET_TRANSITION_FALLBACK_MS * 2);
+    expect(settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('子元素冒泡的 transitionend 不触发收尾（target 过滤生效）', () => {
+    // FC3：panel 内部子元素（如把手/标题行）的 transform 过渡结束会冒泡到
+    // panel 的监听器，但 target 不是 panel 本体——不得提前 settle。
+    stubTransitionDuration('0.22s');
+    const { container, panel } = mount();
+    const child = document.createElement('span');
+    panel.appendChild(child);
+    const settle = vi.fn();
+    concealSheet(container, settle, panel);
+    fireTransitionEnd(child, 'transform');
+    expect(settle).not.toHaveBeenCalled();
+    // 子元素事件不消费收尾窗口：兜底 timer 仍正常落地。
+    vi.advanceTimersByTime(SHEET_TRANSITION_FALLBACK_MS);
+    expect(settle).toHaveBeenCalledTimes(1);
   });
 });

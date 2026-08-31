@@ -145,8 +145,18 @@ describe('划选工具栏（selection-toolbar）', () => {
       const onDismiss = vi.fn();
       const toolbar = createSelectionToolbar({ t: (key) => key, onAction: () => undefined, onDismiss });
       document.body.appendChild(toolbar.element);
+      // FC2：直接监听 document 的 add/removeEventListener 调用——原「settle 后
+      // 派发外部 mousedown 断言 onDismiss 零调用」恒真（onPointerDownOutside
+      // 以 root.hidden 为首行守卫，即使监听器未摘也不会派发）。
+      const addSpy = vi.spyOn(document, 'addEventListener');
+      const removeSpy = vi.spyOn(document, 'removeEventListener');
       toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
       expect(toolbar.element.dataset.open).toBe('');
+      // 显示期间挂上 pointerdown/mousedown 两个 capture 外部监听。
+      const added = addSpy.mock.calls.filter(
+        ([type]) => type === 'pointerdown' || type === 'mousedown',
+      );
+      expect(added.length).toBe(2);
 
       toolbar.hide();
       // hide 后 settle 前：hidden 不置（退场过渡进行中），data-open 已摘。
@@ -157,31 +167,45 @@ describe('划选工具栏（selection-toolbar）', () => {
       vi.advanceTimersByTime(SHEET_TRANSITION_FALLBACK_MS - 1);
       expect(toolbar.element.hidden).toBe(false);
 
-      // settle 落地：置 hidden 并移除 document 上的外部点击监听。
+      // settle 落地：置 hidden，且挂上的同一个监听器（含 capture 标志）被摘除。
       vi.advanceTimersByTime(1);
       expect(toolbar.element.hidden).toBe(true);
       expect(toolbar.isVisible()).toBe(false);
-      const outside = document.createElement('button');
-      document.body.appendChild(outside);
-      outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      expect(onDismiss).toHaveBeenCalledTimes(0);
+      for (const [type, listener, options] of added) {
+        expect(removeSpy).toHaveBeenCalledWith(type, listener, options);
+      }
     } finally {
       computeSpy.mockRestore();
       vi.useRealTimers();
     }
   });
 
-  it('触屏颜色圆点 48px 热区：命中盒达标、圆点视觉尺寸保持（FB8）', () => {
+  it('触屏颜色圆点 44px 热区：命中盒达标、圆点视觉尺寸保持（FB8/FC1）；工具条防溢出（FC1）', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     const hitRule = css.match(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-selection-color\s*\{[^}]*\}/,
     )?.[0];
     expect(hitRule, 'touch selection-color hit rule').toBeTruthy();
-    expect(hitRule).toMatch(/min-width:\s*48px/);
-    expect(hitRule).toMatch(/min-height:\s*48px/);
+    // FC1：48px→44px（EN 单行溢出收窄；仍高于 WCAG 2.5.8 的 24px，与 T4 44px 基线一致）。
+    expect(hitRule).toMatch(/min-width:\s*44px/);
+    expect(hitRule).toMatch(/min-height:\s*44px/);
     // 圆点视觉尺寸保持：背景裁剪到 content-box，padding 只贡献热区。
     expect(hitRule).toMatch(/background-clip:\s*content-box/);
-    expect(hitRule).toMatch(/padding:\s*calc\(\(48px - 1\.15rem\) \/ 2\)/);
+    expect(hitRule).toMatch(/padding:\s*calc\(\(44px - 1\.15rem\) \/ 2\)/);
+    // FC1：触屏工具条防溢出——max-width 与 MARGIN 对齐 + 允许折行。
+    const toolbarRule = css.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-selection-toolbar\s*\{[^}]*\}/g,
+    );
+    expect(toolbarRule, 'touch selection-toolbar rules').toBeTruthy();
+    const overflowRule = toolbarRule!
+      .find((rule) => /max-width:/.test(rule));
+    expect(overflowRule, 'touch toolbar overflow rule').toBeTruthy();
+    expect(overflowRule).toMatch(/flex-wrap:\s*wrap/);
+    expect(overflowRule).toMatch(/max-width:\s*calc\(100vw - 8px\)/);
+    // action 48px 热区保持（T3-A2 基线不动）。
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-selection-action\s*\{[^}]*min-height:\s*48px[^}]*min-width:\s*48px/,
+    );
     // 内联色必须用 background-color 长属性，否则简写重置 clip 压过触屏规则。
     const toolbarSource = readFileSync(
       resolve(process.cwd(), 'src/reader/selection-toolbar.ts'),

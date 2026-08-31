@@ -1244,23 +1244,47 @@ html[data-display='xuhd'] .lightink-reader-pages[data-reader-format='pdf'] .ligh
   opacity: 0;
 }
 
-/* 触屏划选工具条 action 热区：≥48px（颜色圆点与 action 同行的点击基线）。 */
+/* 触屏划选工具条 action 热区：≥48px（保持 T3-A2 基线；颜色圆点为 44px，
+   见下方 FC1 收窄规则——两者同行时行高取 48px）。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-action {
   min-height: 48px;
   min-width: 48px;
   padding: 0 0.7rem;
 }
 
-/* 触屏划选颜色圆点热区（T3-A2 FB8）：命中盒扩到 48px（与 action 同基线），
-   圆点视觉尺寸保持 1.15rem——背景裁剪到 content-box，padding 只贡献热区
+/* 触屏划选工具条防溢出（T3-A3 FC1）：EN 最长组合（colors + Highlight/Note/Copy/
+   Unhighlight）单行约 480px+，旧单行 nowrap 布局在 390px 视口下尾部按钮被裁出
+   视口不可达。max-width 与 toolbarPosition 的 MARGIN=4px 对齐（100vw - 8px），
+   flex-wrap 允许折行：任一 flex 行（最大单行组合）都远小于该上限，容器宽度
+   被钳在视口内、按钮全可达；折行后的高度变化由 showAt 实测 box.height 交给
+   toolbarPosition 的顶/底钳制吸收。桌面（无触屏标记）保持单行 nowrap 不变。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-toolbar {
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0.2rem 0.25rem;
+  max-width: calc(100vw - 8px);
+}
+
+/* 触屏 colors 行同步收窄（FC1）：圆点命中盒降为 44px 后，行内 gap 与分隔
+   边距一并压缩，保证 360px 视口下 colors + 两个短 action 仍能同排。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-colors {
+  gap: 2px;
+  padding-right: 0.25rem;
+  margin-right: 0.1rem;
+}
+
+/* 触屏划选颜色圆点热区（T3-A2 FB8 / T3-A3 FC1 收窄）：命中盒 44px
+   （仍高于 WCAG 2.5.8 的 24px，与 T4 控件 44px 基线一致；原 48px 会把
+   EN 单行工具条推到约 500px，390px 视口溢出），圆点视觉尺寸保持
+   1.15rem——背景裁剪到 content-box，padding 只贡献热区
    （全局 box-sizing: border-box，min-width 即命中盒）。基态 1px 描边无法跟随
    content-box，触屏态摘除（hover 描边已被上方中和规则压掉；focus-visible
-   键盘描边画在 48px 盒上，不影响触屏）。注意：内联色必须用 background-color
+   键盘描边画在 44px 盒上，不影响触屏）。注意：内联色必须用 background-color
    长属性设置，background 简写会重置 clip 压过本规则（见 selection-toolbar.ts）。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-selection-color {
-  min-width: 48px;
-  min-height: 48px;
-  padding: calc((48px - 1.15rem) / 2);
+  min-width: 44px;
+  min-height: 44px;
+  padding: calc((44px - 1.15rem) / 2);
   border: 0;
   background-clip: content-box;
 }
