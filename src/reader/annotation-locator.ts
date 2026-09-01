@@ -1,4 +1,5 @@
 import type { FlowLocator, PdfLocator, TextLocator, TextQuoteAnchor } from './annotations.js';
+import { buildPdfNormalizedView } from './search-panel.js';
 
 const CONTEXT_LENGTH = 32;
 
@@ -276,9 +277,63 @@ export function resolveTextQuoteOffsets(
   return { start, end: start + anchor.quote.length };
 }
 
+/**
+ * 官方 PDF 文本层宿主判定（与 annotation-render 的 isTextLayerHost 同口径）：
+ * `.pdfViewer` 内的 `.textLayer`。仅该宿主的 quote resolve 启用规范化回退，
+ * 流式 iframe 正文 / Markdown 等其他 root 的 resolve 行为不变。
+ */
+function isPdfTextLayerRoot(root: Node): boolean {
+  if (root.nodeType !== Node.ELEMENT_NODE || typeof (root as Element).closest !== 'function') {
+    return false;
+  }
+  const element = root as Element;
+  return element.classList.contains('textLayer') && element.closest('.pdfViewer') !== null;
+}
+
+/**
+ * PDF 文本层 anchor resolve（fast path 优先 + 旧内核存量 anchor 的规范化回退）。
+ *
+ * 旧内核（默认 getTextContent，worker normalizeUnicode 生效）创建的存量 anchor
+ * 的 quote/prefix/suffix/offset 处于规范化文本坐标系；A2 后层 DOM 与拼接文本为
+ * 原始字形坐标系，quote 含 NFKC 类码点（连字/呈现形式/兼容空格）时严格匹配
+ * storedOffsetsMatch 与 candidateOffsets 双失败。回退：以 buildPdfNormalizedView
+ * (原始层文本) 构建规范化视图（视图与旧内核规范化页文本逐字等价，已在 A2 验算），
+ * 在视图上重试 quote/prefix/suffix，命中后经 sourceStarts/sourceEnds 映射回原始
+ * 偏移渲染 mark（命中落在展开字形内部时扩展到整个原始字形，与 A2 搜索链同口径）。
+ * 读路径适配：只在 resolve 时回退，不回写 anchor，标注存储 schema 零变更（R5）。
+ */
+export function resolvePdfTextQuoteOffsets(
+  text: string,
+  anchor: TextQuoteAnchor,
+): { start: number; end: number } | null {
+  const direct = resolveTextQuoteOffsets(text, anchor);
+  if (direct !== null) {
+    return direct; // fast path：原始坐标系严格命中（新内核 anchor 常态，零回退开销）
+  }
+  const view = buildPdfNormalizedView(text);
+  if (view.text === text) {
+    return null; // 层文本无可展开码点：视图与原文全等，回退不可能改写失败
+  }
+  const normalized = resolveTextQuoteOffsets(view.text, anchor);
+  if (normalized === null) {
+    return null; // 两种坐标系都不存在该 quote：回退不制造假命中
+  }
+  const sourceStart = view.sourceStarts[normalized.start];
+  const sourceEnd = normalized.end > normalized.start
+    ? view.sourceEnds[normalized.end - 1]
+    : sourceStart;
+  if (sourceStart === undefined || sourceEnd === undefined || sourceEnd < sourceStart) {
+    return null;
+  }
+  return { start: sourceStart, end: sourceEnd };
+}
+
 export function resolveTextQuoteRange(root: Node, anchor: TextQuoteAnchor): Range | null {
   const { text } = textSpans(root);
-  const offsets = resolveTextQuoteOffsets(text, anchor);
+  // PDF 文本层宿主多一条旧内核存量 anchor 的规范化回退；其余 root 维持严格 resolve。
+  const offsets = isPdfTextLayerRoot(root)
+    ? resolvePdfTextQuoteOffsets(text, anchor)
+    : resolveTextQuoteOffsets(text, anchor);
   return offsets === null ? null : rangeFromOffsets(root, offsets.start, offsets.end);
 }
 

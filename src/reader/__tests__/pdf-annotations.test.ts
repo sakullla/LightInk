@@ -4,15 +4,17 @@
  * PDF 文字级标注（T5 / R3+R5）测试：文本层 DOM 上 capture→locator→持久化往返→
  * resolve→mark→remove 闭环；旧页码级数据（无 anchor）兼容。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   pdfTextLocatorFromRange,
   markTextRange,
   removeTextRangeMarks,
+  resolvePdfTextQuoteOffsets,
   resolveTextQuoteOffsets,
   resolveTextQuoteRange,
 } from '../annotation-locator.js';
+import { buildPdfNormalizedView } from '../search-panel.js';
 import {
   annotationMarkSpec,
   paintAnnotationOverlays,
@@ -28,6 +30,12 @@ import {
   type Annotation,
 } from '../annotations.js';
 import { isTextLayerMutation, pdfTextLayerSelector } from '../reader-view.js';
+
+// 只为让「fast path 不构建规范化视图」可观察：spy 包装真实实现，行为不变。
+vi.mock('../search-panel.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../search-panel.js')>();
+  return { ...actual, buildPdfNormalizedView: vi.fn(actual.buildPdfNormalizedView) };
+});
 
 /**
  * 模拟官方 pdfjs 文本层（T4 结构）：
@@ -130,18 +138,55 @@ describe('PDF 文字级标注闭环', () => {
         ?.textContent,
     ).toBe('ﬁ');
 
-    // 反例钉：规范化 quote（旧内核默认 getTextContent 的形态，ﬁ→fi 长度 +1）在
-    // 原始字形层上失配 → 持久高亮静默消失（P1 的第二个受害面）。
+    // 新合同（P2 修复）：旧内核（默认 getTextContent，worker 规范化）创建的存量
+    // anchor 处于规范化坐标系（ﬁ→fi，长度 +1）。fast path 严格匹配确实失配（回退
+    // 触发条件），但规范化视图回退命中后经 sourceStarts/sourceEnds 映射回原始偏移，
+    // 官方层上渲染的 mark 对准原始字形——存量高亮不再静默消失（R1）。
+    const legacyAnchor = { start: 2, end: 4, quote: 'fi', prefix: 'De', suffix: 'ni' };
+    expect(resolveTextQuoteOffsets('Deﬁnition of ﬁle', legacyAnchor)).toBeNull();
+    expect(resolvePdfTextQuoteOffsets('Deﬁnition of ﬁle', legacyAnchor)).toEqual({
+      start: 2,
+      end: 3,
+    });
+    const legacyRange = resolveTextQuoteRange(rebuilt, legacyAnchor);
+    expect(legacyRange).not.toBeNull();
+    expect(legacyRange!.toString()).toBe('ﬁ');
+    expect(markTextRange(rebuilt, legacyRange!, 'legacy', 'highlight')).toBeGreaterThan(0);
     expect(
-      resolveTextQuoteOffsets('Deﬁnition of ﬁle', {
-        start: 2,
-        end: 4,
-        quote: 'fi',
-        prefix: 'De',
-        suffix: 'ni',
+      rebuilt.querySelector('mark.lightink-reader-highlight[data-annotation-id="legacy"]')
+        ?.textContent,
+    ).toBe('ﬁ');
+    removeTextRangeMarks(rebuilt, 'legacy');
+
+    // 反例强化：两种坐标系都不存在的 quote 仍失败——回退不得制造假命中。
+    expect(
+      resolvePdfTextQuoteOffsets('Deﬁnition of ﬁle', {
+        start: 0,
+        end: 3,
+        quote: 'zzz',
+        prefix: '',
+        suffix: '',
       }),
     ).toBeNull();
     removeTextRangeMarks(rebuilt, 'lig');
+  });
+
+  it('quote 无 NFKC 类码点的存量 anchor 走 fast path（不构建规范化视图）', () => {
+    // 旧内核对无可展开码点的文本不做改写：此类存量 anchor 在原始坐标系即有效，
+    // fast path 严格命中；含连字文本上的原始坐标 anchor 同样直命中——两种常态
+    // 都不应构建规范化视图（回退仅服务失配的规范化存量 anchor）。
+    vi.mocked(buildPdfNormalizedView).mockClear();
+    const plain = { start: 6, end: 11, quote: '正文内容甲', prefix: '第一章 开端', suffix: '' };
+    expect(resolvePdfTextQuoteOffsets('第一章 开端正文内容甲', plain)).toEqual({
+      start: 6,
+      end: 11,
+    });
+    const ligature = { start: 2, end: 3, quote: 'ﬁ', prefix: 'De', suffix: 'n' };
+    expect(resolvePdfTextQuoteOffsets('Deﬁnition of ﬁle', ligature)).toEqual({
+      start: 2,
+      end: 3,
+    });
+    expect(buildPdfNormalizedView).not.toHaveBeenCalled();
   });
 
   it('重开文档后 anchor 在文本层模糊重定位并渲染 mark，移除后清理', () => {
