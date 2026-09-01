@@ -2,10 +2,11 @@
 
 /**
  * 统一融合标注搜索面板（annotation-panel，R2/R8）测试：
- * 标注列表（文档位置排序）/类型与颜色筛选/同一查询框双语义检索（标注筛 +
- * 正文命中合并）/跳转/编辑备注/删除回调/tombstone 隐藏与空态基线/触屏
- * is-touch-sheet 底栏形态（拖拽把手与关闭）/正文搜索不支持空态（漫画）/
- * Escape 与 dismiss 分层。附笔记弹层 Promise 语义与 Markdown 标注宿主装载。
+ * 标注列表（文档位置排序）/高级范围面板（全部/正文/高亮/笔记/书签 + 色点）/
+ * 同一查询框双语义检索（标注筛 + 正文命中合并）/跳转/编辑备注/删除回调/
+ * tombstone 隐藏与空态基线/触屏 is-touch-sheet 底栏形态（拖拽把手与关闭）/
+ * 正文搜索不支持空态（漫画）/ Escape 与 dismiss 分层。附笔记弹层 Promise
+ * 语义与 Markdown 标注宿主装载。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -92,6 +93,26 @@ function mount(overrides: Record<string, unknown> = {}) {
   document.body.appendChild(panel.element);
   panel.render(annotations);
   return { panel, jumps, removals, edits };
+}
+
+function advancedButton(host: HTMLElement): HTMLButtonElement {
+  return host.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-search-advanced')!;
+}
+
+function scopePanel(host: HTMLElement): HTMLElement {
+  return host.querySelector<HTMLElement>('.lightink-reader-sidebar-search-scope')!;
+}
+
+function openScope(host: HTMLElement): HTMLElement {
+  const panel = scopePanel(host);
+  if (panel.hidden) {
+    advancedButton(host).click();
+  }
+  return panel;
+}
+
+function scopeOption(host: HTMLElement, filter: string): HTMLButtonElement {
+  return host.querySelector<HTMLButtonElement>(`[data-kind-filter="${filter}"]`)!;
 }
 
 afterEach(() => {
@@ -221,25 +242,23 @@ describe('annotation-panel 标注列表', () => {
 
   it('按类型筛选只显示对应标注；筛选无匹配显示筛选空态', () => {
     const { panel } = mount();
-    const filterButton = (key: string) =>
-      Array.from(
-        panel.element.querySelectorAll<HTMLButtonElement>('.lightink-reader-sidebar-filter'),
-      ).find((b) => b.textContent === key)!;
+    expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
+    openScope(panel.element);
 
-    filterButton('annotation.kind.highlight').click();
+    scopeOption(panel.element, 'highlight').click();
     let items = panel.element.querySelectorAll<HTMLElement>('.lightink-reader-sidebar-item');
     expect(items).toHaveLength(1);
     expect(items[0]!.dataset.annotationId).toBe('h1');
 
-    filterButton('annotation.kind.bookmark').click();
+    scopeOption(panel.element, 'bookmark').click();
     items = panel.element.querySelectorAll<HTMLElement>('.lightink-reader-sidebar-item');
     expect(items).toHaveLength(1);
     expect(items[0]!.dataset.annotationId).toBe('b1');
 
-    filterButton('annotation.filter.all').click();
+    scopeOption(panel.element, 'all').click();
     expect(panel.element.querySelectorAll('.lightink-reader-sidebar-item')).toHaveLength(3);
 
-    filterButton('annotation.kind.bookmark').click();
+    scopeOption(panel.element, 'bookmark').click();
     panel.render([annotations[0]!]);
     expect(panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent).toBe(
       'annotation.filter.empty',
@@ -270,6 +289,7 @@ describe('annotation-panel 标注列表', () => {
       },
     ]);
 
+    openScope(panel.element);
     const yellow = panel.element.querySelector<HTMLButtonElement>(
       `[data-color="${DEFAULT_ANNOTATION_COLOR}"]`,
     )!;
@@ -332,6 +352,8 @@ describe('annotation-panel 融合搜索', () => {
       '.lightink-reader-sidebar-note-search-input',
     )!;
     expect(input.placeholder).toBe('annotation.search.placeholder');
+    expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
+    openScope(panel.element);
     expect(panel.element.querySelector('[data-kind-filter="document"]')).not.toBeNull();
 
     // 默认「全部」分类：标注筛选立即生效，正文检索等输入停顿后再跑。
@@ -358,7 +380,7 @@ describe('annotation-panel 融合搜索', () => {
 
     // 选中具体类型后只筛标注，不再检索正文
     queries.length = 0;
-    (panel.element.querySelector('[data-kind-filter="note"]') as HTMLButtonElement).click();
+    scopeOption(panel.element, 'note').click();
     input.value = '旧备';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(queries).toEqual([]);
@@ -394,7 +416,8 @@ describe('annotation-panel 融合搜索', () => {
       '.lightink-reader-sidebar-note-search-input',
     )!;
     input.value = 'keyword';
-    (panel.element.querySelector('[data-kind-filter="document"]') as HTMLButtonElement).click();
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
     expect(queries).toEqual(['keyword']);
     expect(input.placeholder).toBe('reader.search.document');
 
@@ -432,7 +455,8 @@ describe('annotation-panel 融合搜索', () => {
     expect(panel.getSearchQuery()).toBe('');
 
     // 切回标注分类：清除正文搜索会话并恢复标注列表
-    (panel.element.querySelector('[data-kind-filter="all"]') as HTMLButtonElement).click();
+    openScope(panel.element);
+    scopeOption(panel.element, 'all').click();
     expect(cleared).toBe(2);
     expect(panel.element.querySelectorAll('.lightink-reader-sidebar-item')).toHaveLength(3);
     expect(input.placeholder).toBe('annotation.search.placeholder');
@@ -457,7 +481,8 @@ describe('annotation-panel 融合搜索', () => {
     });
     document.body.appendChild(panel.element);
     panel.render([]);
-    (panel.element.querySelector('[data-kind-filter="document"]') as HTMLButtonElement).click();
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
     panel.setSearchQuery('keyword');
 
     panel.renderHits(
@@ -537,10 +562,8 @@ describe('annotation-panel 融合搜索', () => {
     expect(title.hidden).toBe(true);
     expect(exportButton.hidden).toBe(true);
     expect(panel.element.dataset.searchPage).toBe('document');
-    expect(
-      panel.element.querySelector<HTMLElement>('.lightink-reader-sidebar-filters:not(.lightink-reader-sidebar-colors)')
-        ?.hidden,
-    ).toBe(true);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
+    expect(advancedButton(panel.element).hidden).toBe(false);
     expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
 
     panel.renderHits([
@@ -558,7 +581,8 @@ describe('annotation-panel 融合搜索', () => {
     expect(closed).toBe(0);
     expect(clear.hidden).toBe(true);
 
-    (panel.element.querySelector('[data-kind-filter="all"]') as HTMLButtonElement).click();
+    openScope(panel.element);
+    scopeOption(panel.element, 'all').click();
     expect(title.textContent).toBe('annotation.sidebar');
     expect(title.hidden).toBe(false);
     expect(exportButton.hidden).toBe(false);
@@ -610,7 +634,8 @@ describe('annotation-panel 融合搜索', () => {
       ),
     ).toEqual(['cbz-n1', 'cbz-b1']);
 
-    (panel.element.querySelector('[data-kind-filter="document"]') as HTMLButtonElement).click();
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
     expect(panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent).toBe(
       'reader.search.unsupported',
     );
@@ -654,6 +679,83 @@ describe('annotation-panel 融合搜索', () => {
     expect(panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent).toBe(
       'reader.search.empty',
     );
+  });
+});
+
+describe('annotation-panel 高级范围面板', () => {
+  it('种类/颜色 chip 行不再渲染；高级在胶囊右端，清空在其左侧且只清查询', () => {
+    let closed = 0;
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      onClose: () => {
+        closed += 1;
+      },
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render(annotations);
+
+    expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-colors')).toBeNull();
+    const pill = panel.element.querySelector('.lightink-reader-sidebar-search-pill')!;
+    const clear = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-sidebar-search-clear',
+    )!;
+    const advanced = advancedButton(panel.element);
+    expect(pill.contains(advanced)).toBe(true);
+    expect(pill.contains(clear)).toBe(true);
+    expect(clear.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(clear.hidden).toBe(true);
+    expect(scopePanel(panel.element).hidden).toBe(true);
+
+    advanced.click();
+    const scope = scopePanel(panel.element);
+    expect(scope.hidden).toBe(false);
+    expect(advanced.getAttribute('aria-expanded')).toBe('true');
+    expect(
+      Array.from(scope.querySelectorAll<HTMLButtonElement>('[data-kind-filter]')).map(
+        (button) => button.dataset.kindFilter,
+      ),
+    ).toEqual(['all', 'document', 'highlight', 'note', 'bookmark']);
+
+    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(
+      false,
+    );
+    scopeOption(panel.element, 'highlight').click();
+    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(
+      false,
+    );
+    scopeOption(panel.element, 'note').click();
+    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
+    scopeOption(panel.element, 'bookmark').click();
+    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
+    scopeOption(panel.element, 'document').click();
+    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
+    expect(panel.element.dataset.searchPage).toBe('document');
+
+    const input = panel.element.querySelector<HTMLInputElement>(
+      '.lightink-reader-sidebar-note-search-input',
+    )!;
+    input.value = 'keyword';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(clear.hidden).toBe(false);
+    expect(clear.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    clear.click();
+    expect(panel.getSearchQuery()).toBe('');
+    expect(clear.hidden).toBe(true);
+    expect(closed).toBe(0);
+    expect(scopeOption(panel.element, 'document').getAttribute('aria-pressed')).toBe('true');
+    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(scope.hidden).toBe(false);
+    expect(advanced.getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -791,8 +893,10 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(css).toMatch(
       /\.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-hit \.lightink-reader-sidebar-text\s*\{[^}]*-webkit-line-clamp:\s*2/,
     );
-    // 正文搜索模式藏颜色行：author display:flex 必须被 [hidden] 显式归零。
-    expect(css).toMatch(/\.lightink-reader-sidebar-filters\[hidden\]\s*\{[^}]*display:\s*none/);
+    // 高级弹出与色点行：author display:flex 必须被 [hidden] 显式归零。
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar-search-scope\[hidden\],\s*\.lightink-reader-sidebar-search-scope-colors\[hidden\]\s*\{[^}]*display:\s*none/,
+    );
   });
 
   it('触屏 sheet CSS：列表有最小高度保障且键盘态隐藏颜色行、压缩固定 chrome', () => {
@@ -806,15 +910,12 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(minHeight, 'touch sheet list declares a min-height').toBeTruthy();
     const minHeightPx = minHeight![2] === 'rem' ? parseFloat(minHeight![1]) * 16 : parseFloat(minHeight![1]);
     expect(minHeightPx).toBeGreaterThanOrEqual(9 * 16 * 0.9);
-    // 键盘态：隐藏颜色筛选行、收紧 header/搜索区/筛选行的 padding 与 margin。
+    // 键盘态：隐藏范围弹出色点行、收紧 header/搜索区。
     expect(css).toMatch(
-      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-colors\s*\{[^}]*display:\s*none/,
+      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-search-scope-colors\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-header\s*\{[^}]*padding:/,
-    );
-    expect(css).toMatch(
-      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-filters\s*\{[^}]*margin:/,
     );
     // 键盘态压缩不砍 chip 触控目标：data-keyboard 规则内不得出现 <44px 的 min-height。
     const keyboardRules = css.match(/html\[data-keyboard\][^{]*\{[^}]*\}/g) ?? [];
@@ -840,6 +941,27 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(css).toMatch(
       /\[data-search-page='document'\]:not\(\[data-open\]\)\s*\{[^}]*transform:\s*none/,
     );
+    // 窄屏触控：范围选项与搜索页清空 ≥44px；旧 32px/2rem 清空必须消失。
+    expect(css).toMatch(
+      /@media \(max-width:\s*760px\)[\s\S]*?\.lightink-reader-sidebar-search-scope-option,[\s\S]*?min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*width:\s*44px/,
+    );
+    expect(css).not.toMatch(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*width:\s*2rem/,
+    );
+    const phoneClear = css.match(
+      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*\}/,
+    )?.[0];
+    expect(phoneClear, 'search-page clear rule').toBeTruthy();
+    expect(phoneClear).not.toMatch(/width:\s*2rem/);
+    expect(phoneClear).not.toMatch(/height:\s*2rem/);
+    const optionMin = css.match(
+      /@media \(max-width:\s*760px\)[\s\S]*?\.lightink-reader-sidebar-search-scope-option[\s\S]*?min-height:\s*([\d.]+)px/,
+    );
+    expect(optionMin, 'phone scope option min-height').toBeTruthy();
+    expect(parseFloat(optionMin![1])).toBeGreaterThanOrEqual(44);
   });
 
   it('下拉拖拽把手经关闭按钮关面板（onClose 恰一次）；关闭按钮直点同语义', () => {

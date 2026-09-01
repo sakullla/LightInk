@@ -201,7 +201,7 @@
   display: none;
 }
 
-/* 查询清空按钮：输入非空时出现在胶囊右端，清词不关面板。 */
+/* 查询清空按钮：输入非空时出现在高级按钮左侧，只清词不清范围、不关面板。 */
 .lightink-reader-sidebar-search-clear {
   display: inline-grid;
   place-items: center;
@@ -218,9 +218,41 @@
   cursor: pointer;
 }
 
+/* 胶囊右端常驻高级：打开下方范围弹出。 */
+.lightink-reader-sidebar-search-advanced {
+  flex: 0 0 auto;
+  margin-right: 0.15rem;
+  padding: 0.2rem 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-reader-sidebar-search-advanced:hover,
+.lightink-reader-sidebar-search-advanced.is-open {
+  color: var(--lightink-accent);
+  background: color-mix(in srgb, var(--lightink-accent) 10%, transparent);
+}
+
+.lightink-reader-sidebar-search-advanced:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
 .lightink-reader-sidebar-search-clear:hover {
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
   color: var(--lightink-fg);
+}
+
+.lightink-reader-sidebar-search-clear[hidden] {
+  display: none;
 }
 
 .lightink-reader-sidebar-hit.is-current {
@@ -371,54 +403,93 @@
   white-space: nowrap;
 }
 
-/* ===== 筛选 chips：分段控件观感，激活态用 accent ===== */
+/* ===== 高级范围弹出：勾选列表 + 色点，贴住胶囊下方 ===== */
 
-.lightink-reader-sidebar-filters {
+.lightink-reader-sidebar-search-scope {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 4;
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  flex-wrap: wrap;
-  flex: 0 0 auto;
-  margin: 0.55rem 0.65rem;
-  padding: 0.25rem;
-  border: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem 0.35rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 12px;
+  background: var(--lightink-bg-elevated);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.08),
+    0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
-/* author display:flex 压过 UA [hidden]：正文搜索模式藏颜色行必须显式归零。 */
-.lightink-reader-sidebar-filters[hidden] {
+.lightink-reader-sidebar-search-scope[hidden],
+.lightink-reader-sidebar-search-scope-colors[hidden] {
   display: none;
-  border-radius: 12px;
+}
+
+.lightink-reader-sidebar-search-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.lightink-reader-sidebar-search-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.88em;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lightink-reader-sidebar-search-scope-option::before {
+  content: '';
+  flex: 0 0 0.85em;
+  width: 0.85em;
+  font-size: 0.9em;
+  line-height: 1;
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-sidebar-search-scope-option--active::before {
+  content: '✓';
+}
+
+.lightink-reader-sidebar-search-scope-option:hover {
   background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
 }
 
-.lightink-reader-sidebar-filter {
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.22rem 0.65rem;
-  font-size: 0.8em;
-  line-height: 1.4;
-  color: var(--lightink-muted);
-  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-}
-
-.lightink-reader-sidebar-filter:hover {
-  color: var(--lightink-fg);
-}
-
-.lightink-reader-sidebar-filter--active {
-  background: var(--lightink-bg-elevated);
-  border-color: transparent;
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.12),
-    0 0 0 1px color-mix(in srgb, var(--lightink-accent) 30%, transparent);
+.lightink-reader-sidebar-search-scope-option--active {
   color: var(--lightink-accent);
   font-weight: 600;
 }
 
+.lightink-reader-sidebar-search-scope-option:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
+.lightink-reader-sidebar-search-scope-colors {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem 0.15rem;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
 /* 颜色圆点：尺寸/形状由本规则承接，background-color 仍由内联 style 设置。
-   「全部」chip（data-color='all'）是文字按钮，不适用圆点几何。 */
+   「全部」色点（data-color='all'）是文字按钮，不适用圆点几何。 */
 .lightink-reader-sidebar-color,
 .lightink-reader-sidebar-color-filter:not([data-color='all']) {
   width: 1rem;
@@ -431,12 +502,28 @@
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
+.lightink-reader-sidebar-search-scope-color[data-color='all'] {
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+  font: inherit;
+  font-size: 0.78em;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-sidebar-search-scope-color[data-color='all'].lightink-reader-sidebar-search-scope-color--active {
+  color: var(--lightink-accent);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lightink-accent) 30%, transparent);
+}
+
 .lightink-reader-sidebar-color-filter:not([data-color='all']):hover {
   transform: scale(1.15);
 }
 
-/* 颜色圆点激活态：accent 环（背景色由内联 style 提供，此处不覆盖）；「全部」chip 走通用 chip 激活态。 */
-.lightink-reader-sidebar-color-filter:not([data-color='all']).lightink-reader-sidebar-filter--active {
+.lightink-reader-sidebar-color-filter:not([data-color='all']).lightink-reader-sidebar-search-scope-color--active {
   border-color: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
   box-shadow:
     0 0 0 2px var(--lightink-bg-elevated),
@@ -503,6 +590,8 @@
 /* ===== 搜索区（单输入框：标注分类下筛选标注，正文分类下搜索全书） ===== */
 
 .lightink-reader-sidebar-search-stack {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
@@ -555,7 +644,8 @@
   .lightink-reader-sidebar-close,
   .lightink-reader-sidebar-export,
   .lightink-reader-sidebar-note-search-input,
-  .lightink-reader-sidebar-filter,
+  .lightink-reader-sidebar-search-advanced,
+  .lightink-reader-sidebar-search-scope-option,
   .lightink-reader-sidebar-jump,
   .lightink-reader-sidebar-edit,
   .lightink-reader-sidebar-remove {
@@ -628,9 +718,8 @@
   line-height: 1.45;
 }
 
-/* 键盘弹起：隐藏颜色筛选行、收紧固定 chrome，把高度让给列表（chip 触控目标
-   仍由 pointer:coarse 的 44px min-height 保障，不在此处收紧）。 */
-html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-colors {
+/* 键盘弹起：收紧固定 chrome，把高度让给列表。范围弹出贴胶囊下方，不占列表流。 */
+html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-search-scope-colors {
   display: none;
 }
 
@@ -641,10 +730,6 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
 html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-search-stack {
   gap: 0.3rem;
   padding: 0.3rem 0.65rem 0.35rem;
-}
-
-html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-filters {
-  margin: 0.3rem 0.6rem;
 }
 
 /* 触屏书内搜索：整页。顶栏分两行——返回独占一行，搜索框拉满宽；列表占满剩余。
@@ -683,6 +768,7 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
   align-items: center;
   gap: 0.2rem;
   padding: 0.4rem 0.75rem 0.55rem 0.35rem;
+  overflow: visible;
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 45%, transparent);
 }
 
@@ -741,8 +827,10 @@ html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sid
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-sidebar.is-touch-sheet[data-search-page='document']
   .lightink-reader-sidebar-search-clear {
-  width: 2rem;
-  height: 2rem;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   font-size: 1.05rem;
 }
 
@@ -807,7 +895,8 @@ html[data-keyboard]
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-export,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-note-search-input,
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-advanced,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-scope-option,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-item,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-jump,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-edit,
@@ -828,11 +917,9 @@ html[data-keyboard]
   height: 44px;
 }
 
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter--active {
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-sidebar-search-scope-option--active {
   color: var(--lightink-fg);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.12),
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
 
 /* ===== 触屏按压反馈（T1）：标注面板控件族洗色 ===== */
@@ -846,7 +933,8 @@ html[data-keyboard]
 /* 头部/行操作按钮与筛选 chips 按压洗色。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-close:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-export:active,
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-filter:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-advanced:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-scope-option:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-jump:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-edit:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-remove:active {
@@ -878,10 +966,13 @@ html[data-keyboard]
   color: var(--lightink-muted);
 }
 
-/* 筛选 chip hover 字色中和（激活 chip 的 accent 字色保持）。 */
+/* 范围选项 hover 字色中和（当前勾选项保持 accent/字重）。 */
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-sidebar-filter:not(.lightink-reader-sidebar-filter--active):hover:not(:active) {
-  color: var(--lightink-muted);
+  .lightink-reader-sidebar-search-scope-option:not(
+    .lightink-reader-sidebar-search-scope-option--active
+  ):hover:not(:active) {
+  color: var(--lightink-fg);
+  background: transparent;
 }
 
 /* 行操作按钮 hover 中和：恢复透明底与 muted 字色（remove 保持 danger 字色）。 */
@@ -904,4 +995,24 @@ html[data-keyboard]
     .lightink-reader-sidebar-filter--active
   ):hover:not(:active) {
   transform: none;
+}
+
+/* 窄屏触控壳：范围选项与清空 ≥44×44，弹出贴在搜索框下方。 */
+@media (max-width: 760px) {
+  :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-advanced,
+  :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-scope-option,
+  :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-clear {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-clear {
+    width: 44px;
+    height: 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-reader-sidebar-search-scope {
+    left: 0.15rem;
+    right: 0.15rem;
+  }
 }

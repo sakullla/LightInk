@@ -3,11 +3,12 @@
  * 与 search-sheet）。
  *
  * 单一组件承载两件事：
- * - 标注笔记本：本书全部书签/高亮/笔记按文档位置排序，类型/颜色筛选，
- *   点击跳转、编辑备注、删除（删除由宿主走 removeAnnotation 产出 tombstone，
- *   本组件列表永远经 filterAnnotations 过滤，tombstone 不出列）；
- * - 同一查询框双语义检索：标注分类下本地筛标注；「全部」分类有查询时正文
- *   命中合并渲染；「搜索正文」分类只检索全书（可选 `search`）。
+ * - 标注笔记本：本书全部书签/高亮/笔记按文档位置排序，范围/颜色筛选
+ *   （胶囊右侧高级面板），点击跳转、编辑备注、删除（删除由宿主走
+ *   removeAnnotation 产出 tombstone，本组件列表永远经 filterAnnotations
+ *   过滤，tombstone 不出列）；
+ * - 同一查询框双语义检索：标注范围下本地筛标注；「全部」范围有查询时正文
+ *   命中合并渲染；「正文」范围只检索全书（可选 `search`）。
  *
  * 双端同一实现：桌面经 pinFixedOverlay 侧栏形态钉在阅读区右侧；触屏由宿主
  * portal 到 body。标注笔记本仍是 is-touch-sheet 底栏；「搜索正文」切到
@@ -18,7 +19,7 @@
  * 事件在面板内消费，不再冒泡到 chrome 返回分层（一次只关一层）。
  *
  * 正文搜索不可用的宿主（Markdown 编辑器宿主；漫画等位图格式）省略 search
- * 并可选 isDocumentSearchUnsupported：面板保留「搜索正文」分类，进入后显示
+ * 并可选 isDocumentSearchUnsupported：面板保留「正文」范围，进入后显示
  * 不支持空态（reader.search.unsupported），不回退「无结果」。
  *
  * 纯 DOM 装配；查询语义走 annotations.ts 的 filterAnnotations 与
@@ -40,12 +41,17 @@ import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 type AnnotationFilter = 'all' | AnnotationKind | 'document';
 type ColorFilter = 'all' | AnnotationColor;
 
-const FILTERS: readonly AnnotationFilter[] = ['all', 'highlight', 'bookmark', 'note'];
+/** 高级面板互斥范围：全部 / 高亮 / 笔记 / 书签；「正文」按需插入全部之后。 */
+const KIND_SCOPES: readonly AnnotationFilter[] = ['all', 'highlight', 'note', 'bookmark'];
 
 function filterLabelKey(filter: AnnotationFilter): MessageKey {
   if (filter === 'all') return 'annotation.filter.all';
-  if (filter === 'document') return 'reader.search.document';
+  if (filter === 'document') return 'reader.search.scope.document';
   return `annotation.kind.${filter}`;
+}
+
+function colorFiltersVisible(filter: AnnotationFilter): boolean {
+  return filter === 'all' || filter === 'highlight';
 }
 
 export interface SearchHitView {
@@ -255,8 +261,8 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   const noteField = document.createElement('div');
   noteField.className = 'lightink-reader-sidebar-search lightink-reader-sidebar-note-search';
   noteField.setAttribute('role', 'search');
-  // 填充胶囊：放大镜图标 + 输入框 + 命中计数 + 清空，聚焦环挂在胶囊上
-  // （Chrome 页内查找同构；样式见 annotation-panel.css search-pill 段）。
+  // 填充胶囊：放大镜 + 输入 + 命中计数 + 清空 + 高级，聚焦环挂在胶囊上
+  // （样式见 annotation-panel.css search-pill 段）。
   const searchPill = document.createElement('div');
   searchPill.className = 'lightink-reader-sidebar-search-pill';
   const searchIcon = document.createElement('span');
@@ -277,23 +283,36 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   clearButton.textContent = '×';
   clearButton.setAttribute('aria-label', deps.t('reader.search.clear'));
   clearButton.hidden = true;
+  const advancedButton = document.createElement('button');
+  advancedButton.type = 'button';
+  advancedButton.className = 'lightink-reader-sidebar-search-advanced';
+  advancedButton.textContent = deps.t('reader.search.advanced');
+  advancedButton.setAttribute('aria-label', deps.t('reader.search.advanced'));
+  advancedButton.setAttribute('aria-expanded', 'false');
+  advancedButton.setAttribute('aria-haspopup', 'dialog');
   const noteStatus = document.createElement('span');
   noteStatus.className = 'lightink-reader-sidebar-search-status';
   noteStatus.setAttribute('aria-live', 'polite');
-  searchPill.append(searchIcon, noteSearchInput, noteStatus, clearButton);
+  // 清空在高级左侧：查询非空时两者并存，清空只清词。
+  searchPill.append(searchIcon, noteSearchInput, noteStatus, clearButton, advancedButton);
   noteField.append(searchPill);
 
-  // 分类筛选：all + 三种 kind；宿主提供正文搜索（或声明不支持）时追加
-  // 「搜索正文」分类。同一个输入框：标注分类下筛选标注，正文分类下搜索全书。
-  const filters = document.createElement('div');
-  filters.className = 'lightink-reader-sidebar-filters';
-  filters.setAttribute('role', 'group');
+  const scopePanel = document.createElement('div');
+  scopePanel.className = 'lightink-reader-sidebar-search-scope';
+  scopePanel.hidden = true;
+  scopePanel.setAttribute('role', 'dialog');
+  scopePanel.setAttribute('aria-label', deps.t('reader.search.scope'));
+  const scopeList = document.createElement('div');
+  scopeList.className = 'lightink-reader-sidebar-search-scope-list';
+  scopeList.setAttribute('role', 'listbox');
   const filterButtons = new Map<AnnotationFilter, HTMLButtonElement>();
   let currentFilter: AnnotationFilter = 'all';
+  let scopeOpen = false;
 
   const colors = document.createElement('div');
-  colors.className = 'lightink-reader-sidebar-filters lightink-reader-sidebar-colors';
+  colors.className = 'lightink-reader-sidebar-search-scope-colors';
   colors.setAttribute('role', 'group');
+  colors.setAttribute('aria-label', deps.t('annotation.filter.all'));
   const colorButtons = new Map<ColorFilter, HTMLButtonElement>();
   let currentColor: ColorFilter = 'all';
 
@@ -312,57 +331,51 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
 
   const applyFilter = (): void => {
     for (const [filter, button] of filterButtons) {
-      button.setAttribute('aria-pressed', filter === currentFilter ? 'true' : 'false');
+      const active = filter === currentFilter;
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
       button.classList.toggle(
-        'lightink-reader-sidebar-filter--active',
-        filter === currentFilter,
+        'lightink-reader-sidebar-search-scope-option--active',
+        active,
       );
     }
     for (const [color, button] of colorButtons) {
-      button.setAttribute('aria-pressed', color === currentColor ? 'true' : 'false');
-      button.classList.toggle(
-        'lightink-reader-sidebar-filter--active',
-        color === currentColor,
-      );
+      const active = color === currentColor;
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      button.classList.toggle('lightink-reader-sidebar-search-scope-color--active', active);
+      button.classList.toggle('lightink-reader-sidebar-filter--active', active);
     }
+    colors.hidden = !colorFiltersVisible(currentFilter);
   };
 
   const search = deps.search;
   const unsupported = (): boolean => deps.isDocumentSearchUnsupported?.() === true;
   /** 正文检索可执行（宿主提供 search 且当前格式未声明不支持）。 */
   const documentSearchAvailable = (): boolean => search !== undefined && !unsupported();
-  /** 「搜索正文」分类可见：可执行或不支持（不支持也要有空态出口）。 */
+  /** 「正文」范围可见：可执行或不支持（不支持也要有空态出口）。 */
   const documentCategoryVisible = (): boolean => search !== undefined || unsupported();
 
-  for (const filter of FILTERS) {
+  const scopes: AnnotationFilter[] = [...KIND_SCOPES];
+  if (documentCategoryVisible()) {
+    scopes.splice(1, 0, 'document');
+  }
+  for (const filter of scopes) {
     const button = createFilterButton(
       {
-        className: 'lightink-reader-sidebar-filter',
+        className: 'lightink-reader-sidebar-search-scope-option',
         dataset: { kindFilter: filter },
         text: deps.t(filterLabelKey(filter)),
       },
       () => setFilter(filter),
     );
+    button.setAttribute('role', 'option');
     filterButtons.set(filter, button);
-    filters.appendChild(button);
-  }
-
-  if (documentCategoryVisible()) {
-    const documentButton = createFilterButton(
-      {
-        className: 'lightink-reader-sidebar-filter',
-        dataset: { kindFilter: 'document' },
-        text: deps.t('reader.search.document'),
-      },
-      () => setFilter('document'),
-    );
-    filterButtons.set('document', documentButton);
-    filters.appendChild(documentButton);
+    scopeList.appendChild(button);
   }
 
   const allColor = createFilterButton(
     {
-      className: 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter',
+      className: 'lightink-reader-sidebar-search-scope-color lightink-reader-sidebar-color-filter',
       dataset: { color: 'all' },
       text: deps.t('annotation.filter.all'),
       ariaLabel: deps.t('annotation.filter.all'),
@@ -379,7 +392,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   for (const color of ANNOTATION_COLORS) {
     const button = createFilterButton(
       {
-        className: 'lightink-reader-sidebar-filter lightink-reader-sidebar-color-filter',
+        className: 'lightink-reader-sidebar-search-scope-color lightink-reader-sidebar-color-filter',
         dataset: { color },
         ariaLabel: color,
         title: color,
@@ -399,15 +412,41 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   /** 正文检索命中：null 表示当前没有进行中的正文搜索。 */
   let lastHits: readonly SearchHitView[] | null = null;
 
+  scopePanel.append(scopeList, colors);
   const stack = document.createElement('div');
   stack.className = 'lightink-reader-sidebar-search-stack';
-  stack.append(noteField);
-  root.append(header, stack, filters, colors, list);
+  stack.append(noteField, scopePanel);
+  root.append(header, stack, list);
+
+  const setScopeOpen = (open: boolean): void => {
+    scopeOpen = open;
+    scopePanel.hidden = !open;
+    advancedButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+    advancedButton.classList.toggle('is-open', open);
+  };
+
+  advancedButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setScopeOpen(!scopeOpen);
+  });
+
+  const onPointerDownOutside = (event: PointerEvent): void => {
+    if (!scopeOpen) return;
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      (scopePanel.contains(target) || advancedButton.contains(target))
+    ) {
+      return;
+    }
+    setScopeOpen(false);
+  };
+  document.addEventListener('pointerdown', onPointerDownOutside);
 
   /**
-   * 输入框描述随分类切换：标注分类下筛选标注，「搜索正文」分类下只检索全书。
-   * 正文模式：藏导出与分类 chips；触屏把搜索框抬进顶栏并标 data-search-page，
-   * 让宿主改成整页而不是半高 sheet。
+   * 输入框描述随范围切换：标注范围下筛选标注，「正文」范围下只检索全书。
+   * 正文模式：藏导出与标题；触屏把搜索框抬进顶栏并标 data-search-page，
+   * 让宿主改成整页而不是半高 sheet。高级按钮与范围面板仍可用。
    */
   const syncSearchMode = (): void => {
     const documentMode = currentFilter === 'document' && documentCategoryVisible();
@@ -417,8 +456,6 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     );
     noteSearchInput.placeholder = label;
     noteSearchInput.setAttribute('aria-label', label);
-    colors.hidden = documentMode;
-    filters.hidden = documentMode;
     title.hidden = documentMode;
     title.textContent = deps.t(documentMode ? 'reader.search.document' : 'annotation.sidebar');
     if (exportButton !== null) {
@@ -441,7 +478,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       close.setAttribute('aria-label', deps.t('annotation.closeSidebar'));
       close.setAttribute('title', deps.t('annotation.closeSidebar'));
       if (stack.parentElement === header) {
-        root.insertBefore(stack, filters);
+        root.insertBefore(stack, list);
       }
       if (exportButton !== null) {
         header.appendChild(exportButton);
@@ -902,6 +939,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     destroy() {
       moreRelease?.();
       moreRelease = null;
+      document.removeEventListener('pointerdown', onPointerDownOutside);
       unbindQuery();
       root.remove();
     },
