@@ -1,8 +1,11 @@
+// @vitest-environment jsdom
 /**
  * Ctrl + 滚轮字号缩放（R5 / T2）。
  *
  * 用 fake target + 真实 installFontScale handle，直接观察 wheel 事件对
  * font-scale 档位的成功（放大/缩小）与失败（无修饰键 / deltaY=0 / 已到边界）。
+ * T2 增补：页锚点块选择器双轨合同——官方 `.pdfViewer .page`（PDF，T3 接线）
+ * 与 `.lightink-reader-page-slot`（漫画）同时命中，非页块不被命中。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +14,7 @@ import {
   captureWheelZoomAnchor,
   installWheelZoom,
   restoreWheelZoomAnchor,
+  ZOOM_ANCHOR_BLOCK_SELECTOR,
   type WheelListener,
   type WheelZoomAnchorElement,
   type WheelZoomTarget,
@@ -243,5 +247,75 @@ describe('wheel zoom 鼠标锚点（R5 修复）', () => {
     // 捕获时（scale 1）：frac = (110-100)/40 = 0.25；
     // 缩放后：top 80、height 45 → 同比例点 = 80+11.25 = 91.25 → scrollTop 减 18.75。
     expect(scroller.scrollTop).toBeCloseTo(481.25, 5);
+  });
+});
+
+describe('页锚点块选择器双轨（T2：官方 .page + 漫画 slot）', () => {
+  /** 真实 jsdom DOM 钉选择器合同：closest 由浏览器引擎语义求值，不做 fake map。 */
+  function mountHost(children: HTMLElement[]): HTMLElement {
+    const host = document.createElement('div');
+    host.className = 'lightink-reader-pages';
+    for (const child of children) host.appendChild(child);
+    document.body.appendChild(host);
+    return host;
+  }
+
+  it('官方 PDF 结构：canvas 命中并锚定到 .pdfViewer .page 页块（选择器漏配 .page 时必须失败）', () => {
+    const canvas = document.createElement('canvas');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'canvasWrapper';
+    wrapper.appendChild(canvas);
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.dataset.pageNumber = '2';
+    page.appendChild(wrapper);
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    viewer.appendChild(page);
+    const host = mountHost([viewer]);
+    try {
+      expect(canvas.closest(ZOOM_ANCHOR_BLOCK_SELECTOR)).toBe(page);
+      const anchor = captureWheelZoomAnchor({ elementFromPoint: () => canvas }, 10, 10);
+      expect(anchor).not.toBeNull();
+      expect(anchor!.block).toBe(page);
+      expect(anchor!.scroller).toBe(host);
+    } finally {
+      host.remove();
+    }
+  });
+
+  it('漫画结构：页内容命中并锚定到 .lightink-reader-page-slot 页块', () => {
+    const img = document.createElement('img');
+    const slot = document.createElement('div');
+    slot.className = 'lightink-reader-page-slot';
+    slot.dataset.pageIndex = '0';
+    slot.appendChild(img);
+    const host = mountHost([slot]);
+    try {
+      expect(img.closest(ZOOM_ANCHOR_BLOCK_SELECTOR)).toBe(slot);
+      const anchor = captureWheelZoomAnchor({ elementFromPoint: () => img }, 10, 10);
+      expect(anchor).not.toBeNull();
+      expect(anchor!.block).toBe(slot);
+      expect(anchor!.scroller).toBe(host);
+    } finally {
+      host.remove();
+    }
+  });
+
+  it('反例：普通 div 与脱离 .pdfViewer 的裸 .page 不被选择器命中（回退为命中元素自身）', () => {
+    const plain = document.createElement('div');
+    const barePage = document.createElement('div');
+    barePage.className = 'page';
+    const host = mountHost([plain, barePage]);
+    try {
+      expect(plain.closest(ZOOM_ANCHOR_BLOCK_SELECTOR)).toBeNull();
+      expect(barePage.closest(ZOOM_ANCHOR_BLOCK_SELECTOR)).toBeNull();
+      // 未命中页块时回退为命中元素自身：缩放仍生效，只是块锚退化为元素级。
+      const anchor = captureWheelZoomAnchor({ elementFromPoint: () => plain }, 10, 10);
+      expect(anchor).not.toBeNull();
+      expect(anchor!.block).toBe(plain);
+    } finally {
+      host.remove();
+    }
   });
 });

@@ -1,0 +1,360 @@
+/**
+ * pdf-viewer.css — pdfjs-dist 官方 viewer 样式裁剪版（PDF 页宿主合同，ADR-3 / T2）。
+ *
+ * 来源：pdfjs-dist@6.2.108 `web/pdf_viewer.css`（全量 6347 行），按下述官方行号裁剪：
+ *   - `.textLayer` 全套（615-762）：层容器与 span/br 定位、`--min-font-size` /
+ *     `--text-scale-factor` 变量、`.markedContent`、`[role="img"]`、`.highlight`
+ *     （含 forced-colors 变量，依赖 `.pdfViewer` 上的 `--hcm-*-filter`）、
+ *     `::selection` / `br::selection` / `.selectionRendering`、以及
+ *     `.endOfContent` + `.selecting` 选区护栏。
+ *   - `[data-main-rotation]` 旋转（6175-6183）。
+ *   - `.pdfViewer` 基础与 `.canvasWrapper`（6185-6235）。
+ *   - `.pdfViewer .page` 级联变量与布局（6237-6252）：`--total-scale-factor` 经
+ *     `.page` 级联（`--scale-factor` 由 viewer JS 写在 `.pdfViewer` 上），
+ *     `--scale-round-x/y` 由此定义，JS 不再手写。
+ *   - loading 占位（6312-6334）。
+ *   - 官方 `:root` 页变量（6133-6138、6145-6149）收敛为本文件 `.pdfViewer` 上的
+ *     定义（丢弃 `color-scheme` 与工具条/sidebar 变量，避免污染应用 `:root`）。
+ *     T3 如需对齐现行 slot 的 1rem 页距观感，可在更高优先级覆盖 `--page-margin`。
+ *
+ * 剔除：annotationEditor / annotationLayer / findbar / toolbar / print /
+ *   presentationMode / sidebar / newBadge，以及默认渲染模式用不到的
+ *   spread / scrollHorizontal / scrollWrapped / singlePageView /
+ *   removePageBorders / noUserSelect / dummyPage 块。
+ *
+ * 与官方的已知偏差（均为可追溯取舍）：
+ *   1. loading 图标官方为相对资产 `images/loading-icon.gif`；此处改为内联 SVG
+ *      数据 URI + 旋转动画，避免 Vite 构建解析 node_modules 相对资产失败。
+ *   2. `data-main-rotation` 官方为全局属性选择器；此处收敛到 `.pdfViewer`
+ *      作用域，避免命中应用内无关元素。
+ *
+ * 补齐（对照 reader.css `.lightink-reader-text-layer` 镜像 1028-1130：官方子集
+ * 没有、而现有渲染在用的规则）：选区底色沿用应用标注主题令牌；持久高亮 mark
+ * 与搜索命中 mark 的样式（T4 消费方注入 `.textLayer` 的类名不变，样式随本文件
+ * 就位）。官方 `.textLayer ::selection`（AccentColor 混色）被补齐规则覆盖为
+ * 应用令牌，作为底层兜底保留。
+ *
+ * 接线：由 T3（渲染内核替换）在渲染层接线 `pdf_viewer.mjs` 时 import；本文件
+ * 在此之前不进入任何入口，规则休眠（`.pdfViewer` 结构尚不存在）。勿在应用
+ * 入口静态引入。嵌套写法保留官方原样，便于对照上游 diff；esbuild 会在构建
+ * 目标不支持嵌套时自动降级展开。
+ */
+
+/* 官方 6185-6235（.pdfViewer 基础 + .canvasWrapper），并并入官方 6130-6155
+   中页宿主用到的 :root 变量（见文件头说明）。 */
+.pdfViewer{
+  --scale-factor:1;
+  --page-bg-color:unset;
+
+  padding-bottom:var(--pdfViewer-padding-bottom);
+
+  --hcm-highlight-filter:none;
+  --hcm-highlight-selected-filter:none;
+
+  @media screen and (forced-colors: active){
+    --hcm-highlight-filter:invert(100%);
+  }
+
+  &.copyAll{
+    cursor:wait;
+  }
+
+  .canvasWrapper{
+    overflow:hidden;
+    width:100%;
+    height:100%;
+
+    canvas{
+      position:absolute;
+      top:0;
+      left:0;
+      margin:0;
+      display:block;
+      width:100%;
+      height:100%;
+      contain:content;
+
+      .structTree{
+        contain:strict;
+      }
+
+      &.detailView{
+        image-rendering:pixelated;
+      }
+    }
+    .selection{
+      position:absolute;
+      top:0;
+      left:0;
+      width:100%;
+      height:100%;
+      pointer-events:none;
+      background:rgb(0 90 255 / 0.22);
+    }
+  }
+
+  /* 官方定义在 :root（6133-6138 / 6145-6149 的 forced-colors 覆盖）。 */
+  --pdfViewer-padding-bottom:0;
+  --page-margin:1px auto -8px;
+  --page-border:9px solid transparent;
+  --loading-icon-delay:400ms;
+
+  @media screen and (forced-colors: active){
+    --pdfViewer-padding-bottom:9px;
+    --page-margin:8px auto -1px;
+    --page-border:1px solid CanvasText;
+  }
+}
+
+/* 官方 6237-6252：页级联变量与布局。`--scale-round-x/y` 在此定义，
+   现有 pdf.ts 手写这两变量的做法由 T3 删除。 */
+.pdfViewer .page{
+  --user-unit:1;
+  --total-scale-factor:calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x:1px;
+  --scale-round-y:1px;
+
+  direction:ltr;
+  width:816px;
+  height:1056px;
+  margin:var(--page-margin);
+  position:relative;
+  overflow:visible;
+  border:var(--page-border);
+  background-clip:content-box;
+  background-color:var(--page-bg-color, rgb(255 255 255));
+}
+
+/* 官方 6175-6183：页面 /Rotate 时层容器带 data-main-rotation（官方为全局
+   选择器，此处收敛到 .pdfViewer 作用域）。 */
+.pdfViewer [data-main-rotation="90"]{
+  transform:rotate(90deg) translateY(-100%);
+}
+.pdfViewer [data-main-rotation="180"]{
+  transform:rotate(180deg) translate(-100%, -100%);
+}
+.pdfViewer [data-main-rotation="270"]{
+  transform:rotate(270deg) translateX(-100%);
+}
+
+/* 官方 6312-6334：loading 占位（页面等待栅格化时的延迟转圈）。
+   偏差：loading-icon.gif 改为内联 SVG（见文件头）。 */
+.pdfViewer .page.loadingIcon::after{
+  position:absolute;
+  top:0;
+  left:0;
+  content:"";
+  width:100%;
+  height:100%;
+  background:url("data:image/svg+xml;charset=UTF-8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='none' stroke='rgba(128,128,128,0.25)' stroke-width='4'/><path d='M16 4a12 12 0 0 1 12 12' fill='none' stroke='%23777168' stroke-width='4' stroke-linecap='round'/></svg>") center no-repeat;
+  animation:lightink-pdf-viewer-loading-spin 0.9s steps(12) infinite;
+  display:none;
+  transition-property:display;
+  transition-delay:var(--loading-icon-delay);
+  z-index:5;
+  contain:strict;
+}
+
+.pdfViewer .page.loading::after{
+  display:block;
+}
+
+.pdfViewer .page:not(.loading)::after{
+  transition-property:none;
+  display:none;
+}
+
+@keyframes lightink-pdf-viewer-loading-spin{
+  to{
+    transform:rotate(360deg);
+  }
+}
+
+/* 官方 615-762：.textLayer 全套（原样，含嵌套写法）。 */
+.textLayer{
+  color-scheme:only light;
+
+  position:absolute;
+  text-align:initial;
+  inset:0;
+  overflow:clip;
+  opacity:1;
+  line-height:1;
+  letter-spacing:normal;
+  word-spacing:normal;
+  -webkit-text-size-adjust:none;
+     -moz-text-size-adjust:none;
+          text-size-adjust:none;
+  forced-color-adjust:none;
+  transform-origin:0 0;
+  caret-color:CanvasText;
+  z-index:0;
+
+  &.highlighting{
+    touch-action:none;
+  }
+
+  :is(span, br){
+    color:transparent;
+    position:absolute;
+    white-space:pre;
+    cursor:text;
+    transform-origin:0% 0%;
+    -webkit-user-select:text;
+       -moz-user-select:text;
+            user-select:text;
+  }
+  --min-font-size:1;
+  --text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv:calc(1 / var(--min-font-size));
+
+  > :not(.markedContent),
+  .markedContent span:not(.markedContent){
+    z-index:1;
+
+    --font-height:0;
+    font-size:calc(var(--text-scale-factor) * var(--font-height));
+
+    --scale-x:1;
+    --rotate:0deg;
+    transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+
+  .markedContent{
+    display:contents;
+  }
+
+  span[role="img"]{
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+    cursor:default;
+  }
+
+  .highlight{
+    --highlight-bg-color:rgb(180 0 170 / 0.25);
+    --highlight-selected-bg-color:rgb(0 100 0 / 0.25);
+    --highlight-backdrop-filter:none;
+    --highlight-selected-backdrop-filter:none;
+
+    @media screen and (forced-colors: active){
+      --highlight-bg-color:transparent;
+      --highlight-selected-bg-color:transparent;
+      --highlight-backdrop-filter:var(--hcm-highlight-filter);
+      --highlight-selected-backdrop-filter:var(
+        --hcm-highlight-selected-filter
+      );
+    }
+
+    margin:-1px;
+    padding:1px;
+    background-color:var(--highlight-bg-color);
+    backdrop-filter:var(--highlight-backdrop-filter);
+    border-radius:4px;
+
+    &.appended{
+      position:initial;
+    }
+
+    &.begin{
+      border-radius:4px 0 0 4px;
+    }
+
+    &.end{
+      border-radius:0 4px 4px 0;
+    }
+
+    &.middle{
+      border-radius:0;
+    }
+
+    &.selected{
+      background-color:var(--highlight-selected-bg-color);
+      backdrop-filter:var(--highlight-selected-backdrop-filter);
+      scroll-margin-top:50px;
+    }
+  }
+
+  ::-moz-selection{
+    background:rgba(0 0 255 / 0.25);
+    background:color-mix(in srgb, AccentColor, transparent 50%);
+    color:transparent;
+  }
+
+  ::selection{
+    background:rgba(0 0 255 / 0.25);
+    background:color-mix(in srgb, AccentColor, transparent 50%);
+    color:transparent;
+  }
+
+  &.selectionRendering{
+    ::-moz-selection{
+      background:transparent;
+      color:transparent;
+    }
+    ::selection{
+      background:transparent;
+      color:transparent;
+    }
+  }
+  br::-moz-selection{
+    background:transparent;
+  }
+  br::selection{
+    background:transparent;
+  }
+
+  .endOfContent{
+    display:block;
+    position:absolute;
+    inset:100% 0 0;
+    z-index:0;
+    cursor:default;
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+  }
+
+  &.selecting .endOfContent{
+    top:0;
+  }
+}
+
+/* ---- 补齐：应用在用、官方子集没有的规则（对照 reader.css 1028-1130 镜像）----
+ * 选区底色沿用应用标注令牌（覆盖官方 AccentColor 混色，保持现有选色观感）；
+ * 持久高亮 / 搜索命中 mark 由应用注入 .textLayer（T4 消费方），类名不变。 */
+.pdfViewer .textLayer ::selection{
+  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  color:transparent;
+}
+
+/* PDF 持久高亮：半透明叠在 canvas 字形上，不能用不透明 --lightink-annotation。 */
+.pdfViewer .textLayer mark.lightink-reader-highlight{
+  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  color:transparent;
+  padding:0;
+  border-radius:0;
+}
+
+.pdfViewer .textLayer mark.lightink-reader-highlight[data-annotation-kind='note']{
+  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  box-shadow:inset 0 -0.12em 0 var(--lightink-accent);
+  cursor:pointer;
+}
+
+/* 搜索命中：position:initial 脱离 span 后代选择器的绝对定位
+   （对齐 pdfjs .appended 约定），命中片段保持在文档流内。 */
+.pdfViewer .textLayer .lightink-reader-search-mark{
+  position:initial;
+  background:var(--lightink-selection);
+  color:transparent;
+  overflow-anchor:none;
+}
+
+.pdfViewer .textLayer .lightink-reader-search-mark--current{
+  position:initial;
+  background:color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  color:transparent;
+  box-shadow:inset 0 0 0 1px var(--lightink-fg);
+  overflow-anchor:none;
+}

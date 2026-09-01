@@ -43,10 +43,14 @@ export interface WheelZoomOptions {
 export const ZOOM_SCROLLER_SELECTOR =
   '#lightink-editor-area, .lightink-reader-scroll, .lightink-reader-pages';
 
-/** 锚点取指针下最近的块级元素（行内元素随折行跳动，块级更稳）。 */
+/**
+ * 锚点取指针下最近的块级元素（行内元素随折行跳动，块级更稳）。
+ * 页式双轨（T2）：PDF 走官方 `.pdfViewer .page` 页块，漫画（CBZ）继续用
+ * `.lightink-reader-page-slot`——两类页体系分离，选择器并列命中。
+ */
 export const ZOOM_ANCHOR_BLOCK_SELECTOR =
   'p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, td, th, ' +
-  '.lightink-reader-chapter, .lightink-reader-page-slot';
+  '.lightink-reader-chapter, .lightink-reader-page-slot, .pdfViewer .page';
 
 /** 锚点捕获所需的 elementFromPoint 最小面。 */
 export interface WheelZoomAnchorSource {

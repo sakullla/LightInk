@@ -1012,7 +1012,9 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 
 /* PDF 连续滚动：每页一个 slot 占位，懒栅格化 canvas + 文本层。
    宿主是纵向 flex：slot 禁止收缩，否则清画布后空槽塌陷、滚动条消失，
-   宽度回弹再次触发 rerender（缩放后无限闪屏）。 */
+   宽度回弹再次触发 rerender（缩放后无限闪屏）。
+   T2 起 slot 体系收敛为漫画专用（CBZ）；PDF 于 T3 切换到官方
+   .pdfViewer/.page 结构（见 pdf-viewer.css），届时本规则随 PDF 侧删除。 */
 .lightink-reader-page-slot {
   position: relative;
   flex: 0 0 auto;
@@ -1024,6 +1026,8 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 /*
  * PDF 文本层（pdfjs TextLayer 约定）：容器按 --total-scale-factor 计算宽高，
  * span 按页内百分比定位、透明色仅承载文字选择；选区底色用标注主题令牌。
+ * T2 起官方结构的文本层样式由 pdf-viewer.css（.textLayer）承担；本镜像
+ * 规则仍被现行 slot 渲染消费，保留至 T3 切换 DOM 后随 PDF 侧删除。
  */
 .lightink-reader-text-layer {
   position: absolute;
@@ -1342,7 +1346,9 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 /* Live PDF uses the same viewport pin. Do not mark it as a comic: the page
- * host keeps overflow:auto so IntersectionObserver and the wheel stay there. */
+ * host keeps overflow:auto so IntersectionObserver and the wheel stay there.
+ * T3 note: 该 pin 选择器面向宿主 .lightink-reader-pages，不随内部结构变化——
+ * 官方 div.pdfViewer 挂进宿主后依旧命中，无需扩展。 */
 .lightink-reader:has(> .lightink-reader-pages[data-reader-active='true']) {
   position: absolute;
   inset: 0;
@@ -1350,6 +1356,15 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   height: 100%;
   overflow: hidden;
   flex-direction: column;
+}
+
+/* 官方 PDFViewer 构造器要求滚动宿主 position:absolute（pdf_viewer.mjs 校验）。
+ * 以 :has(> .pdfViewer) 收窄：仅当宿主内已挂官方 viewer 时生效；现行 slot
+ * 渲染不含 .pdfViewer，规则休眠直到 T3 接线。宿主自身保持 overflow:auto
+ * 与 scrollbar-gutter:stable（上方规则），此处只补定位。 */
+.lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true']:has(> .pdfViewer) {
+  position: absolute;
+  inset: 0;
 }
 
 .lightink-reader-cbz-slot[hidden] {
@@ -2205,7 +2220,9 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
   }
 }
 
-/* 页式格式：canvas（PDF 连续滚动 slot 内 / CBZ 逐页）。 */
+/* 页式格式：canvas（PDF 连续滚动 slot 内 / CBZ 逐页）。
+ * T2 起收敛为漫画专用：PDF 于 T3 切官方 canvasWrapper>canvas（pdf-viewer.css），
+ * 届时 PDF 侧不再消费 .lightink-reader-page。 */
 .lightink-reader-page {
   display: block;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
@@ -2218,7 +2235,9 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
 }
 
 /* 页内持久书签指示（R1）：有活书签的章/页右上角丝带角标；装饰性，不侵交互。
- * flow 挂在章容器上，pdf/cbz 挂在页 slot 上（页角，避开正文位图主体）。 */
+ * flow 挂在章容器上，pdf/cbz 挂在页 slot 上（页角，避开正文位图主体）。
+ * T2 起双轨：PDF 于 T3 把角标锚切到官方 .page（定位锚由 pdf-viewer.css 提供
+ * position:relative），slot 版保留给漫画（CBZ）。 */
 .lightink-reader-bookmark-ribbon {
   position: absolute;
   top: 0;
@@ -2230,6 +2249,15 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
   opacity: 0.92;
   pointer-events: none;
+}
+
+/* 官方页宿主变体（T3 起 PDF）：丝带角标挂 .pdfViewer .page 上，与 slot 版
+ * 并列；.page 的 position:relative 与页内层叠（textLayer/canvasWrapper）由
+ * pdf-viewer.css 提供，此处钉住页角偏移与层级，压在 canvas 与文本层之上。 */
+.pdfViewer .page .lightink-reader-bookmark-ribbon {
+  top: 0;
+  right: 1.1rem;
+  z-index: 3;
 }
 .lightink-reader-chapter-title {
   margin: 0 0 1.15rem;
