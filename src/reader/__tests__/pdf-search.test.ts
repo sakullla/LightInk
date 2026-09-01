@@ -5,6 +5,8 @@
  * 环形导航、overlay wrap/unwrap 与 offset→Range 定位。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import {
   bindImeSafeQuery,
@@ -12,6 +14,7 @@ import {
   capSearchHits,
   createSearchBusyReveal,
   findPdfMatches,
+  findPdfTextHits,
   findTextHits,
   htmlToSearchText,
   liveSearchMinChars,
@@ -296,6 +299,125 @@ describe('findTextHits', () => {
 
   it('小写化改变 UTF-16 长度时退化大小写敏感，偏移保持与 DOM 文本对齐', () => {
     expect(findTextHits('İabc', 'İ')).toEqual([{ start: 0, end: 1 }]);
+  });
+});
+
+describe('PDF 连字查询命中（T4 P1：原始字形坐标系）', () => {
+  /** 官方文本层夹具（T4）：.pdfViewer > .page[data-page-number] > .textLayer。 */
+  function layer(...texts: string[]): HTMLElement {
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.dataset.pageNumber = '1';
+    const root = document.createElement('div');
+    root.className = 'textLayer';
+    for (const text of texts) {
+      const span = document.createElement('span');
+      span.textContent = text;
+      root.appendChild(span);
+    }
+    page.appendChild(root);
+    viewer.appendChild(page);
+    document.body.appendChild(viewer);
+    return root;
+  }
+
+  /**
+   * worker 镜像 mock：pdf.worker normalizeUnicode（pdf.worker.mjs:722-726）在默认
+   * getTextContent 下把 ﬁ（U+FB01）NFKC 展开为 "fi"（ﬂ/ﬆ、希伯来/阿拉伯呈现形式
+   * 同理变长）；disableNormalization:true 时返回原始字形串——官方 TextLayerBuilder
+   * （pdf_viewer.mjs:6068-6071）与 PDFFindController #extractText
+   * （pdf_viewer.mjs:1160-1163）建层都用这个口径。
+   */
+  const workerMirroredGetTextContent = (
+    raw: string,
+    options?: { disableNormalization?: boolean },
+  ): Promise<{ items: Array<{ str: string }> }> =>
+    Promise.resolve({
+      items: [
+        {
+          str:
+            options?.disableNormalization === true
+              ? raw
+              : raw.replace(/ﬁ/g, 'fi'),
+        },
+      ],
+    });
+
+  /** ensurePageText 形态的页拼接文本（与 pdf.ts 同款 items.map(str).join('')）。 */
+  const pageTextFrom = async (
+    raw: string,
+    options?: { disableNormalization?: boolean },
+  ): Promise<string> => {
+    const content = await workerMirroredGetTextContent(raw, options);
+    return content.items.map((item) => item.str).join('');
+  };
+
+  /** 原始字形页文本：ﬁ（U+FB01）在原始偏移 2 与 13。 */
+  const RAW_PAGE = 'Deﬁnition of ﬁle';
+
+  it('正例：查询 fi 命中原始连字 ﬁ，offset 与 overlay 都对准原始字形', async () => {
+    // pdf.ts ensurePageText 的调用形态（disableNormalization:true）。
+    const pageText = await pageTextFrom(RAW_PAGE, { disableNormalization: true });
+    expect(pageText).toBe(RAW_PAGE); // pageTexts 与官方层 DOM 拼接文本同坐标系
+
+    const matches = findPdfMatches([pageText], 'fi');
+    expect(matches.map((match) => [match.start, match.end])).toEqual([
+      [2, 3],
+      [13, 14],
+    ]);
+    // 偏移切开的是原始字形本身（overlay 消费同一坐标系）。
+    for (const match of matches) {
+      expect(pageText.slice(match.start, match.end)).toBe('ﬁ');
+    }
+    // 大小写不敏感在规范化视图上保持：旧内核（worker 规范化 pageTexts）下
+    // "fi"/"FI" 能命中 "ﬁ" 的能力不回退（R1）。
+    expect(findPdfMatches([pageText], 'FI')).toHaveLength(2);
+
+    // 命中落在连字展开内部（"i" 只匹配 ﬁ 的后半）也扩展到整个原始字形，
+    // 同官方 PDFFindController getOriginalIndex 语义。
+    expect(findPdfTextHits(RAW_PAGE, 'i')).toEqual([
+      { start: 2, end: 3 },
+      { start: 4, end: 5 },
+      { start: 6, end: 7 },
+      { start: 13, end: 14 },
+    ]);
+
+    // overlay：官方层 DOM 以原始字形渲染，offsetRangeFrom 对准原始字形 span。
+    const root = layer('De', 'ﬁnition of ﬁle');
+    const range = offsetRangeFrom(root, matches[0]!.start, matches[0]!.end);
+    expect(range).not.toBeNull();
+    expect(range!.toString()).toBe('ﬁ');
+    expect(
+      wrapTextRangeWithSpan(root, range!, 'lightink-reader-search-mark', '1:2:3'),
+    ).toBeGreaterThan(0);
+    expect(root.querySelector('.lightink-reader-search-mark')?.textContent).toBe('ﬁ');
+  });
+
+  it('反例钉：坐标系回退（mock 去掉 disableNormalization → worker 规范化文本）即错位', async () => {
+    // ensurePageText 去掉 disableNormalization 的 mock 形态：worker normalizeUnicode
+    // 展开 ﬁ→fi，pageTexts 比官方层 DOM（原始字形）长 1，坐标系漂移。
+    const drifted = await pageTextFrom(RAW_PAGE);
+    expect(drifted).toBe('Definition of file');
+
+    // 漂移坐标系的命中映射回原始层不再对准原始字形（P1 的可观察形态）。
+    const [hit] = findPdfMatches([drifted], 'fi');
+    expect(hit).toMatchObject({ start: 2, end: 4 });
+    const root = layer('De', 'ﬁnition of ﬁle');
+    expect(root.textContent!.slice(hit.start, hit.end)).not.toBe('fi');
+    expect(offsetRangeFrom(root, hit.start, hit.end)!.toString()).not.toBe('fi');
+  });
+
+  it('坐标系合同：ensurePageText 必须以 disableNormalization:true 取原始字形串', () => {
+    // 源级钉（同 pdf-render-lifecycle 的 grep 合同模式）：pdf.ts 回退到默认
+    // getTextContent（worker 规范化生效）时本用例红——纯函数层无法观察该 flag，
+    // pageTexts 与层 DOM 的坐标系合同必须在产源侧钉住。
+    const source = readFileSync(
+      path.join(process.cwd(), 'src/reader/formats/pdf.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/getTextContent\(\{\s*disableNormalization:\s*true\s*\}\)/);
   });
 });
 

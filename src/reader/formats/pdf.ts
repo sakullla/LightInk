@@ -445,7 +445,7 @@ export async function renderPdfInto(
   let fitWidthScale = 1;
   /** pagesinit 时量得的第 1 页 CSS 宽（scale=1 口径；官方 page-fit 同式归一）。 */
   let firstPageCssWidth = 0;
-  /** 每页拼接文本缓存（文本层/搜索共用同一坐标系，懒填充）。 */
+  /** 每页拼接文本缓存（原始字形坐标系，与官方文本层 DOM 拼接文本一致；懒填充）。 */
   const pageTexts: string[] = [];
   /** 文本层选区护栏的卸载函数（destroy 时对称作废）。 */
   const textLayerUnbinds = new Set<() => void>();
@@ -562,14 +562,23 @@ export async function renderPdfInto(
     pdfViewer.scrollPageIntoView({ pageNumber: target });
   };
 
-  /** 懒取某页拼接文本（缓存优先；未渲染过的页经 getPage/getTextContent 补齐）。 */
+  /**
+   * 懒取某页拼接文本（缓存优先；未渲染过的页经 getPage/getTextContent 补齐）。
+   * 坐标系合同（T4 P1）：必须与官方 TextLayer DOM 同为**原始字形串**。默认
+   * getTextContent 会让 worker normalizeUnicode（pdf.worker.mjs:722-726）展开
+   * ﬁ/ﬂ/ﬀ/ﬆ 及希伯来/阿拉伯呈现形式（文本变长），命中 offset 映射到层 DOM 即
+   * 错位/整页缺失。官方 TextLayerBuilder（pdf_viewer.mjs:6068-6071
+   * streamTextContent disableNormalization:true）与 PDFFindController
+   * #extractText（pdf_viewer.mjs:1160-1163）同口径取原始字形串；连字查询命中
+   * 能力（"fi" 命中 "ﬁ"）由 findPdfTextHits 的规范化视图在匹配层保全。
+   */
   const ensurePageText = async (index: number): Promise<string> => {
     const cached = pageTexts[index];
     if (cached !== undefined) {
       return cached;
     }
     const page = await doc.getPage(index + 1);
-    const content = await page.getTextContent();
+    const content = await page.getTextContent({ disableNormalization: true });
     const text = content.items.map((item) => ('str' in item ? item.str : '')).join('');
     pageTexts[index] = text;
     return text;

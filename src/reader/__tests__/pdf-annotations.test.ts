@@ -10,6 +10,7 @@ import {
   pdfTextLocatorFromRange,
   markTextRange,
   removeTextRangeMarks,
+  resolveTextQuoteOffsets,
   resolveTextQuoteRange,
 } from '../annotation-locator.js';
 import {
@@ -105,6 +106,42 @@ describe('PDF 文字级标注闭环', () => {
     };
     const back = parseAnnotations(serializeAnnotations([annotation]));
     expect(back).toEqual([annotation]);
+  });
+
+  it('原始字形 quote 的高亮 anchor 在官方层 resolve 成功（T4 P1：原始坐标系）', () => {
+    // pageTexts 与官方层 DOM 同为原始字形串（disableNormalization:true）：以原始
+    // 连字 ﬁ（U+FB01）选区创建的 anchor quote 即原始字形，存储 schema 零变更。
+    const layer = textLayer('Deﬁnition of ﬁle');
+    const range = rangeBetween(layer, 2, 3);
+    const locator = pdfTextLocatorFromRange(layer, range, 2)!;
+    expect(locator).not.toBeNull();
+    expect(locator.quote).toBe('ﬁ');
+    expect(locator.anchor).toMatchObject({ start: 2, end: 3, quote: 'ﬁ' });
+
+    // 重开文档：官方层仍以原始字形渲染，resolve 命中并渲染 mark。
+    layer.remove();
+    const rebuilt = textLayer('Deﬁnition of ﬁle');
+    const resolved = resolveTextQuoteRange(rebuilt, locator.anchor!);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.toString()).toBe('ﬁ');
+    expect(markTextRange(rebuilt, resolved!, 'lig', 'highlight')).toBeGreaterThan(0);
+    expect(
+      rebuilt.querySelector('mark.lightink-reader-highlight[data-annotation-id="lig"]')
+        ?.textContent,
+    ).toBe('ﬁ');
+
+    // 反例钉：规范化 quote（旧内核默认 getTextContent 的形态，ﬁ→fi 长度 +1）在
+    // 原始字形层上失配 → 持久高亮静默消失（P1 的第二个受害面）。
+    expect(
+      resolveTextQuoteOffsets('Deﬁnition of ﬁle', {
+        start: 2,
+        end: 4,
+        quote: 'fi',
+        prefix: 'De',
+        suffix: 'ni',
+      }),
+    ).toBeNull();
+    removeTextRangeMarks(rebuilt, 'lig');
   });
 
   it('重开文档后 anchor 在文本层模糊重定位并渲染 mark，移除后清理', () => {

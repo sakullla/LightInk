@@ -1,7 +1,10 @@
 /**
  * `search-panel` — 阅读器搜索纯函数（PDF / 流式共用）。
  *
- * `findTextHits`/`findPdfMatches`/`nextMatchIndex`/`snippetAround` 为 node 可测算法。
+ * `findTextHits`/`findPdfTextHits`/`findPdfMatches`/`nextMatchIndex`/`snippetAround`
+ * 为 node 可测算法。PDF 页文本是原始字形坐标系（pdf.ts ensurePageText 以
+ * disableNormalization 取串，与官方 TextLayer DOM 一致），连字/呈现形式的查询命中
+ * 由规范化视图在匹配层保全；流式正文仍用 findTextHits 直配 DOM 文本。
  * 命中高亮 overlay 由 search-overlay 共享引擎完成；查找 UI 在标注侧栏，不在此装配。
  */
 
@@ -73,7 +76,96 @@ export function findTextHits(text: string, query: string): TextSearchHit[] {
 }
 
 /**
- * 在页文本数组（1:1 对应页码）中查找全部命中（大小写不敏感），按页序返回。空查询返回空。
+ * pdf.worker normalizeUnicode（pdf.worker.mjs:722-726）在默认 getTextContent 下
+ * 展开的原始字形集合：连字（ﬀﬁﬂﬃﬄ/ﬆ）、希伯来/阿拉伯呈现形式与兼容空格等经
+ * NFKC 展开（长度可变）。官方 TextLayerBuilder（pdf_viewer.mjs:6068-6071）与
+ * PDFFindController #extractText（pdf_viewer.mjs:1160-1163）都以 disableNormalization
+ * 建立层坐标系，归一化放在匹配层做。字符类与 worker 逐字一致，保证与旧内核
+ * （worker 规范化的 pageTexts）等价的查询命中口径。
+ */
+const WORKER_NFKC_SOURCE =
+  /[\u00a0\u00b5\u037e\u0eb3\u2000-\u200a\u202f\u2126\ufb00-\ufb04\ufb06\ufb20-\ufb36\ufb38-\ufb3c\ufb3e\ufb40\ufb41\ufb43\ufb44\ufb46-\ufba1\ufba4-\ufba9\ufbae-\ufbb1\ufbd3-\ufbdc\ufbde-\ufbe7\ufbea-\ufbf8\ufbfc\ufbfd\ufc00-\ufc5d\ufc64-\ufcf1\ufcf5-\ufd3d\ufd88\ufdf4\ufdfa\ufdfb\ufe71\ufe77\ufe79\ufe7b\ufe7d]/;
+
+/** ﬅ（U+FB05）在 worker 中映射为 ſt（U+017F + t，而非 NFKC 的 st），保持等价。 */
+const WORKER_LONG_S_T = 'ſt';
+
+/** 规范化视图：展开后的视图文本 + 视图偏移到原始码点区间的双坐标映射。 */
+export interface PdfNormalizedView {
+  /** 连字/呈现形式按 worker 集合展开后的视图文本（大小写不变）。 */
+  readonly text: string;
+  /** 视图偏移 k → 产生该视图字符的原始码点起始偏移（原始文本 UTF-16 下标）。 */
+  readonly sourceStarts: readonly number[];
+  /** 视图偏移 k → 产生该视图字符的原始码点结束偏移（不含）。 */
+  readonly sourceEnds: readonly number[];
+}
+
+/**
+ * 为原始字形文本构建规范化视图（worker normalizeUnicode 的最小等价）。逐码点展开：
+ * 官方 PDFFindController 对 NFKC 类做整段 run 展开，跨字符再组合只影响罕见的邻接
+ * 呈现形式；逐码点的展开让「视图偏移 → 原始码点区间」映射保持单调可预测。
+ */
+export function buildPdfNormalizedView(text: string): PdfNormalizedView {
+  let view = '';
+  const sourceStarts: number[] = [];
+  const sourceEnds: number[] = [];
+  for (let offset = 0; offset < text.length; ) {
+    const codePoint = text.codePointAt(offset)!;
+    const size = codePoint > 0xffff ? 2 : 1;
+    const source = String.fromCodePoint(codePoint);
+    const piece =
+      codePoint === 0xfb05
+        ? WORKER_LONG_S_T
+        : WORKER_NFKC_SOURCE.test(source)
+          ? source.normalize('NFKC')
+          : source;
+    for (let index = 0; index < piece.length; index += 1) {
+      sourceStarts.push(offset);
+      sourceEnds.push(offset + size);
+    }
+    view += piece;
+    offset += size;
+  }
+  return { text: view, sourceStarts, sourceEnds };
+}
+
+/**
+ * PDF 页拼接文本（原始字形坐标系）内的大小写不敏感命中：匹配在规范化视图上做，
+ * 偏移映射回原始文本（与官方层 DOM 拼接文本同坐标系，供 offsetRangeFrom/overlay
+ * 直接消费）。查询 "fi" 可命中原始连字 "ﬁ"；命中落在展开内部时扩展到整个原始
+ * 字形（同官方 getOriginalIndex 语义，overlay 永远包裹完整原始字形）。空查询返回空。
+ */
+export function findPdfTextHits(text: string, query: string): TextSearchHit[] {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) {
+    return [];
+  }
+  const view = buildPdfNormalizedView(text);
+  const needleView = buildPdfNormalizedView(trimmed).text;
+  // 与 findTextHits 相同的大小写变形长度保护：小写化改变视图 UTF-16 长度（如 İ）
+  // 时退化为大小写敏感。视图内偏移不被小写化扰动，原始偏移映射始终成立。
+  const loweredHay = view.text.toLowerCase();
+  const loweredNeedle = needleView.toLowerCase();
+  const caseStable =
+    loweredHay.length === view.text.length && loweredNeedle.length === needleView.length;
+  const hay = caseStable ? loweredHay : view.text;
+  const needle = caseStable ? loweredNeedle : needleView;
+  const hits: TextSearchHit[] = [];
+  let at = hay.indexOf(needle);
+  while (at >= 0) {
+    const start = view.sourceStarts[at]!;
+    // 同一原始字形内部的多次视图命中（如某呈现形式展开出重复字符）只计一次，
+    // 避免 overlay key（page:start:end）与命中列表重复。
+    if (hits.length === 0 || hits[hits.length - 1]!.start !== start) {
+      hits.push({ start, end: view.sourceEnds[at + needle.length - 1]! });
+    }
+    at = hay.indexOf(needle, at + needle.length);
+  }
+  return hits;
+}
+
+/**
+ * 在页文本数组（1:1 对应页码，原始字形坐标系）中查找全部命中（大小写不敏感，
+ * 连字/呈现形式经规范化视图等价命中），按页序返回。空查询返回空。
  */
 export function findPdfMatches(
   pageTexts: readonly string[],
@@ -85,7 +177,7 @@ export function findPdfMatches(
   }
   const matches: PdfSearchMatch[] = [];
   for (let index = 0; index < pageTexts.length; index += 1) {
-    for (const hit of findTextHits(pageTexts[index]!, trimmed)) {
+    for (const hit of findPdfTextHits(pageTexts[index]!, trimmed)) {
       matches.push({
         page: index + 1,
         ...hit,
