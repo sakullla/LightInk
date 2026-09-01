@@ -311,7 +311,12 @@ describe('PDF open chain (official kernel, unchanged contract)', () => {
     expect(source).toMatch(/MAP_UPSERT_POLYFILL_SOURCE/);
     expect(source).toMatch(/pdfWorkerBootModule/);
     expect(source).toMatch(/\/__lightink\/pdf\.worker\.boot\.mjs/);
-    expect(source).toMatch(/WorkerMessageHandler\.initializeFromPort\(self\)/);
+    // 官方 worker 的类 static 块在 worker 上下文总是自调 initializeFromPort；
+    // boot 再补调会双注册消息处理器（每条消息处理两遍，range 路径第二次
+    // getPdfManager 在已冻结 evaluatorOptions 上赋值抛错 → 「PDF 文件损坏
+    // 或无法解析」）。注释剥离后的 boot 源不得含任何再初始化调用。
+    const codeOnly = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(codeOnly).not.toMatch(/initializeFromPort/);
     expect(source).toMatch(/preparePdfjsWorker/);
     expect(source).toMatch(/pdfWorkerThreadsAvailable/);
     expect(source).not.toMatch(/createPdfModuleWorker/);

@@ -13,13 +13,15 @@ import {
 } from '../pdf-worker-entry.js';
 
 describe('pdfWorkerBootModule', () => {
-  it('polyfills upsert then imports the official worker and boots if needed', () => {
+  it('polyfills upsert then imports the official worker without re-initializing it', () => {
     const source = pdfWorkerBootModule(PDF_WORKER_OFFICIAL_SPECIFIER);
     expect(source).toContain('getOrInsertComputed');
     expect(source).toContain(`await import("${PDF_WORKER_OFFICIAL_SPECIFIER}")`);
-    expect(source).toContain('WorkerMessageHandler.initializeFromPort(self)');
-    expect(source).toContain('typeof self.onmessage !== "function"');
-    expect(source).toContain('export { WorkerMessageHandler }');
+    // 官方 worker 的类 static 块在 worker 上下文总是自调 initializeFromPort；
+    // boot 再补一次会双注册消息处理器（每条消息处理两遍，range 路径在已冻结
+    // evaluatorOptions 上赋值抛错）。boot 不得包含任何再初始化调用。
+    expect(source).not.toContain('initializeFromPort');
+    expect(source).not.toContain('WorkerMessageHandler');
   });
 });
 

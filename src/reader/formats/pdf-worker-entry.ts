@@ -9,9 +9,13 @@
  *    `initializeFromPort`，首开消息丢掉；若官方 worker 已经自己启动，
  *    再调一次会把 ready ping 卡死（第一次 Opening 超时）。
  *
- * 同源 boot：先装 upsert polyfill，再 import 官方 worker。静态块若已
- * `initializeFromPort` 就不再调；否则补一次。pdf.js 自己 `new Worker`
- * 并做 ready/test 握手。
+ * 同源 boot：先装 upsert polyfill，再 import 官方 worker。官方 worker 的
+ * `WorkerMessageHandler` 类 `static {}` 块在 worker 上下文**总会**自调
+ * `initializeFromPort(self)`（pdf.worker.mjs 类静态块，不设 `self.onmessage`，
+ * 旧守卫查该属性永远为真）——boot 绝不能再补调一次：双注册会让每条消息被
+ * 处理两遍，range 路径第二次 `getPdfManager` 在已冻结的 `evaluatorOptions`
+ * 上赋值抛 "Cannot assign to read only property"，表现为「PDF 文件损坏或
+ * 无法解析」。pdf.js 自己 `new Worker` 并做 ready/test 握手。
  *
  * 部分 WebView（含当前预览浏览器）里 `new Worker` 能构造但永远不跑、也不
  * 报错，getDocument 会一直停在 Opening。探测失败时在主线程 import 官方
@@ -33,11 +37,7 @@ let workerThreads: boolean | null = null;
 
 export function pdfWorkerBootModule(officialSpecifier: string): string {
   return `${MAP_UPSERT_POLYFILL_SOURCE}
-const { WorkerMessageHandler } = await import(${JSON.stringify(officialSpecifier)});
-if (typeof window === "undefined" && typeof self.onmessage !== "function") {
-  WorkerMessageHandler.initializeFromPort(self);
-}
-export { WorkerMessageHandler };
+await import(${JSON.stringify(officialSpecifier)});
 `;
 }
 
