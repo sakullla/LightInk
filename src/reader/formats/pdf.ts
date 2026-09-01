@@ -511,7 +511,11 @@ export async function renderPdfInto(
     teardown.abort();
     dragPan.release();
     releaseTextLayerBindings();
-    clearViewerDocument();
+    try {
+      clearViewerDocument();
+    } catch {
+      // 官方清空路径只触实例字段与 viewer DOM；极端抛错不阻断其余清理。
+    }
     rangeController?.abort();
     void loadingTask.destroy();
     void randomSource?.close().catch(() => undefined);
@@ -607,9 +611,10 @@ export async function renderPdfInto(
       releaseTextLayerBindings();
       // 先官方清空再 cleanup/destroy（贴官方 setDocument 卸载序）：释放
       // cleanup 覆盖不到的 FINISHED 页 canvas、页视图对象图与 document 级
-      // copy 监听，否则随会话内开关书次数无界累积。
-      clearViewerDocument();
+      // copy 监听，否则随会话内开关书次数无界累积。置于 try 内：清空极端
+      // 抛错时 finally 仍保证 range abort/源关闭/DOM 移除。
       try {
+        clearViewerDocument();
         pdfViewer.cleanup();
         await loadingTask.destroy();
       } finally {

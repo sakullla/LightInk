@@ -189,7 +189,10 @@ export function setupReaderSearchSurface(ctx: ReaderViewContext): ReaderSearchSu
         if (handle === ctx.pdfHandle) {
           sink.onResult(matches, true);
         }
-      })();
+      })().catch(() => {
+        // 关书/切换恰逢全文搜索：在飞的 getPage/getTextContent 随 destroy
+        // reject，会话已作废，静默收尾避免 unhandled rejection 噪音。
+      });
     },
     describePdfHits: (matches) =>
       matches.map((match) => ({
