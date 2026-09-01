@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
-import fs from "node:fs";
+// 不用 "node:fs"：@types/node 的 `declare module "node:fs" { export * from "fs" }`
+// 再导出在 moduleResolution:bundler 下会把 fs.readFileSync 塌缩成单签名
+// (path, encoding: "utf-8")，一参二进制读取报 TS2554；裸 "fs" 拿到完整重载。
+import fs from "fs";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import {
