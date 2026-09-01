@@ -236,28 +236,48 @@ describe('createOutlineView 渲染', () => {
 });
 
 describe('createOutlineView 折叠标记（T4/R2）', () => {
-  it('注入 toggleFoldAtOrdinal 时为有子标题的标题渲染折叠标记，叶子标题不渲染', () => {
+  it('注入 toggleFoldAtOrdinal 时为有子标题的标题渲染折叠标记，叶子标题不渲染，折叠祖先标记 is-folded', () => {
     const toggleFoldAtOrdinal = vi.fn();
-    const view = createOutlineView({
+    // 一 / 二 有子标题；一.1 / 二.1 是叶子（无子标题）。
+    const markdown = '# 一\n\n## 一.1\n\n# 二\n\n## 二.1\n';
+
+    // 全展开（无折叠序号）：四个条目全部可见，按叶子与否判定折叠三角。
+    const expanded = createOutlineView({
       doc: fakeDocument(),
       getActiveHost: () => null,
-      // 一 / 二 有子标题；一.1 / 二.1 是叶子（无子标题）。
-      getActiveMarkdown: () => '# 一\n\n## 一.1\n\n# 二\n\n## 二.1\n',
+      getActiveMarkdown: () => markdown,
       toggleFoldAtOrdinal,
-      getFoldedOrdinals: () => [0], // 第 0 个标题「一」已折叠
+      getFoldedOrdinals: () => [],
     });
-    const items = bodyOf(view).children;
-    // 「一」（anchor 0，非叶子，已折叠）→ 有标记且 is-folded。
-    expect(items[0]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
-    expect(items[0]?.firstChild?.classList.contains('is-folded')).toBe(true);
+    const expandedItems = bodyOf(expanded).children;
+    expect(itemTexts(expanded)).toEqual(['一', '一.1', '二', '二.1']);
+    // 「一」（anchor 0，非叶子）→ 有折叠三角。
+    expect(expandedItems[0]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
     // 「一.1」（anchor 1，叶子）→ 无折叠三角。
-    expect(items[1]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
-    // 「二」（anchor 2，非叶子，未折叠）→ 有标记但非 is-folded。
-    expect(items[2]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
-    expect(items[2]?.firstChild?.classList.contains('is-folded')).toBe(false);
+    expect(expandedItems[1]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
+    // 「二」（anchor 2，非叶子）→ 有折叠三角。
+    expect(expandedItems[2]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
     // 「二.1」（anchor 3，叶子）→ 无折叠三角。
-    expect(items[3]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
-    view.destroy();
+    expect(expandedItems[3]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(false);
+    expanded.destroy();
+
+    // 折叠第 0 个标题「一」：后代「一.1」被隐藏，DOM 为 [一, 二, 二.1]。
+    const folded = createOutlineView({
+      doc: fakeDocument(),
+      getActiveHost: () => null,
+      getActiveMarkdown: () => markdown,
+      toggleFoldAtOrdinal,
+      getFoldedOrdinals: () => [0],
+    });
+    const foldedItems = bodyOf(folded).children;
+    expect(itemTexts(folded)).toEqual(['一', '二', '二.1']);
+    // 「一」（anchor 0，非叶子，已折叠）→ 有标记且 is-folded。
+    expect(foldedItems[0]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
+    expect(foldedItems[0]?.firstChild?.classList.contains('is-folded')).toBe(true);
+    // 「二」（anchor 2，非叶子，未折叠）→ 有标记但非 is-folded。
+    expect(foldedItems[1]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
+    expect(foldedItems[1]?.firstChild?.classList.contains('is-folded')).toBe(false);
+    folded.destroy();
   });
 
   it('折叠祖先后大纲隐藏其后代，再次点击展开', () => {
