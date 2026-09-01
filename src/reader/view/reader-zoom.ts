@@ -45,7 +45,8 @@ export function setupReaderZoom(ctx: ReaderViewContext): ReaderZoomSurface {
    * - 翻页模式：仅视口相交章立即重分栏，离屏章标记惰性（激活时补分栏）；
    * - 滚动模式：复用基座缩放锚点数学（viewportAnchor），缩放后视口锚点
    *   内容不漂移（锚点比率按设计不钳制，见 reading-layout）。
-   * PDF 路径不动：pdf.ts 已是仅可见页栅格化 + 视口锚点的样板实现。
+   * PDF 路径不动：渲染缓冲与缩放锚点已由官方 viewer 组件层承担
+   * （src/reader/formats/pdf.ts 装配 PDFViewer，缩放走 currentScale）。
    */
   const FONT_SCALE_SETTLE_MS = 200;
   const settleFontScaleRefresh = createResizeSettle(FONT_SCALE_SETTLE_MS);
