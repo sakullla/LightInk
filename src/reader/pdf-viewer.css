@@ -15,7 +15,6 @@
  *   - loading 占位（6312-6334）。
  *   - 官方 `:root` 页变量（6133-6138、6145-6149）收敛为本文件 `.pdfViewer` 上的
  *     定义（丢弃 `color-scheme` 与工具条/sidebar 变量，避免污染应用 `:root`）。
- *     T3 如需对齐现行 slot 的 1rem 页距观感，可在更高优先级覆盖 `--page-margin`。
  *
  * 剔除：annotationEditor / annotationLayer / findbar / toolbar / print /
  *   presentationMode / sidebar / newBadge，以及默认渲染模式用不到的
@@ -35,12 +34,23 @@
  *      `br::selection` 两条透明护栏（特异性 ≥ wash，官方 290-305 语义），确保
  *      无论 T3 以何种 enableSelectionRendering 取值接线，护栏语义（渲染态整体
  *      透明、br 始终透明）都成立，不与官方覆盖层双重着色。
+ *   4. `--page-border` 归零、`--page-margin` 恢复旧 slot 的 `0 auto 1rem` 页距。
+ *      官方位图按整页 viewport 宽渲染（canvas.width = viewport × dpr），但
+ *      `.canvasWrapper`/canvas 的 `width/height:100%` 落在 `.page` 的 content
+ *      box：9px 透明边框把 canvas 布局盒缩小约 2.2%（dpr 1.5 下 Chrome 还会把
+ *      边框吸附到 13 设备像素 = 8.667 CSS），位图被压缩显示 → 字形发糊；而
+ *      textLayer 自带与 page 同宽的显式 width，span 百分比定位不随压缩缩放 →
+ *      越往右/下偏移越大（页底约一行高，选字错行）。边框归零后 canvas 盒 =
+ *      整页宽 = 位图/dpr，密度精确等于 devicePixelRatio，文本层与字形严格对齐
+ *      （2026-09-01 实测：density 1.5339 → 1.5000）。forced-colors 分支保留
+ *      官方 1px CanvasText 可见页描边（该模式下 0.25% 缩降可忽略）。
  *
- * 补齐（对照 reader.css `.lightink-reader-text-layer` 镜像 1028-1130：官方子集
- * 没有、而现有渲染在用的规则）：选区底色沿用应用标注主题令牌；持久高亮 mark
- * 与搜索命中 mark 的样式（T4 消费方注入 `.textLayer` 的类名不变，样式随本文件
- * 就位）。官方 `.textLayer ::selection`（AccentColor 混色）在非护栏状态被补齐
- * 规则覆盖为应用令牌，作为底层兜底保留（护栏态行为见偏差 3）。
+ * 补齐（官方子集没有、而应用在用的规则；历史上对照的 reader.css
+ * `.lightink-reader-text-layer` 镜像已随官方 DOM 切换删除）：选区底色沿用应用
+ * 标注主题令牌；持久高亮 mark 与搜索命中 mark 的样式（T4 消费方注入
+ * `.textLayer` 的类名不变，样式随本文件就位）。官方 `.textLayer ::selection`
+ * （AccentColor 混色）在非护栏状态被补齐规则覆盖为应用令牌，作为底层兜底
+ * 保留（护栏态行为见偏差 3）。
  *
  * 接线：由 T3（渲染内核替换）在渲染层接线 `pdf_viewer.mjs` 时 import；本文件
  * 在此之前不进入任何入口，规则休眠（`.pdfViewer` 结构尚不存在）。勿在应用
@@ -101,10 +111,13 @@
     }
   }
 
-  /* 官方定义在 :root（6133-6138 / 6145-6149 的 forced-colors 覆盖）。 */
+  /* 官方定义在 :root（6133-6138 / 6145-6149 的 forced-colors 覆盖）。
+     --page-border / --page-margin 偏离官方默认，原因见文件头偏差 4：
+     9px 透明边框会把 canvas 布局盒缩到 content box，位图（按整页宽渲染）
+     被压缩 ~2% 显示（发糊）且与整页宽 textLayer 产生渐进偏移（选字错行）。 */
   --pdfViewer-padding-bottom:0;
-  --page-margin:1px auto -8px;
-  --page-border:9px solid transparent;
+  --page-margin:0 auto 1rem;
+  --page-border:0px solid transparent;
   --loading-icon-delay:400ms;
 
   @media screen and (forced-colors: active){
@@ -328,7 +341,7 @@
   }
 }
 
-/* ---- 补齐：应用在用、官方子集没有的规则（对照 reader.css 1028-1130 镜像）----
+/* ---- 补齐：应用在用、官方子集没有的规则（原 reader.css 镜像已删除，本段为唯一来源）----
  * 选区底色沿用应用标注令牌（保持现有选色观感）；持久高亮 / 搜索命中 mark 由
  * 应用注入 .textLayer（T4 消费方），类名不变。
  * 选区 wash 收窄到非护栏状态（文件头偏差 3）：官方 enableSelectionRendering
