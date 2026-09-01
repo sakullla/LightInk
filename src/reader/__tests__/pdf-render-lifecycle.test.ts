@@ -15,7 +15,8 @@
  * 先 append `div.pdfViewer` 再构造 PDFViewer、构造参数、setDocument、
  * pagesinit→fitWidth→currentScale、pagechanging 页码回写（含触底钳制）、
  * scrollToPage 映射、rerender 重设 scale、destroy 对称作废（监听摘除/
- * loadingTask.destroy 恰一次/源关闭/viewer DOM 移除）与 grep 型负例。
+ * setDocument(null) 官方清空/loadingTask.destroy 恰一次/源关闭/viewer DOM
+ * 移除）与 grep 型负例。
  */
 
 import { readFileSync } from 'node:fs';
@@ -537,7 +538,7 @@ describe('viewer event wiring', () => {
 });
 
 describe('teardown symmetry', () => {
-  it('detaches every EventBus listener, cleans the viewer, destroys the task once, closes the source, removes the viewer DOM', async () => {
+  it('detaches listeners, runs the official setDocument(null) clearing, cleans the viewer, destroys the task once, closes the source', async () => {
     const runtime = mockPdf();
     const source = {
       size: 4,
@@ -562,6 +563,11 @@ describe('teardown symmetry', () => {
     expect(bus.listenerCount('pagechanging')).toBe(0);
     expect(bus.listenerCount('scalechanging')).toBe(0);
     expect(bus.listenerCount('textlayerrendered')).toBe(0);
+    // 官方清空路径负例观察点：destroy 不调 setDocument(null) 时官方
+    // _resetView 不执行——#eventAC 未 abort（document 级 copy 监听滞留）、
+    // viewer DOM/页视图对象图（含 FINISHED 页 canvas）不被释放，此断言失败。
+    expect(viewer.setDocument).toHaveBeenCalledTimes(2); // doc + null
+    expect(viewer.setDocument).toHaveBeenLastCalledWith(null);
     expect(viewer.cleanup).toHaveBeenCalledTimes(1);
     expect(runtime.destroy).toHaveBeenCalledTimes(1);
     expect(source.close).toHaveBeenCalledTimes(1);
@@ -569,6 +575,7 @@ describe('teardown symmetry', () => {
 
     // 幂等：二次 destroy 不再触发任何作废。
     await handle.destroy();
+    expect(viewer.setDocument).toHaveBeenCalledTimes(2);
     expect(viewer.cleanup).toHaveBeenCalledTimes(1);
     expect(runtime.destroy).toHaveBeenCalledTimes(1);
     expect(source.close).toHaveBeenCalledTimes(1);
@@ -620,6 +627,9 @@ describe('hand-rolled pipeline removal (grep contract)', () => {
       /PDF_RENDER_ROOT_MARGIN/,
       /installMapUpsertPolyfill/,
       /renderGeneration/,
+      // 手搓缩放锚点纯函数（R1：缩放锚点逻辑不再存在于 pdf.ts）不得回补。
+      /pdfViewportAnchor/,
+      /pdfScrollToKeepAnchor/,
     ];
     for (const pattern of forbidden) {
       expect(source).not.toMatch(pattern);

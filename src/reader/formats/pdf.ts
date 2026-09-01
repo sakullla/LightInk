@@ -68,67 +68,6 @@ export interface PdfPageController {
   syncScale(userZoom: number): boolean;
 }
 
-export interface PdfRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-/** Slot under the viewport center, plus the point inside that slot (0..1). */
-export function pdfViewportAnchor(
-  viewport: PdfRect,
-  slots: readonly PdfRect[],
-  fallbackIndex = 0,
-): { index: number; xRatio: number; yRatio: number } {
-  const cx = viewport.left + viewport.width / 2;
-  const cy = viewport.top + viewport.height / 2;
-  let index = Math.max(0, Math.min(slots.length - 1, fallbackIndex));
-  let best = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < slots.length; i += 1) {
-    const slot = slots[i]!;
-    const inside =
-      cx >= slot.left &&
-      cx <= slot.left + slot.width &&
-      cy >= slot.top &&
-      cy <= slot.top + slot.height;
-    if (inside) {
-      index = i;
-      break;
-    }
-    const midX = slot.left + slot.width / 2;
-    const midY = slot.top + slot.height / 2;
-    const dist = (midX - cx) ** 2 + (midY - cy) ** 2;
-    if (dist < best) {
-      best = dist;
-      index = i;
-    }
-  }
-  const slot = slots[index];
-  if (slot === undefined || slot.width <= 0 || slot.height <= 0) {
-    return { index, xRatio: 0.5, yRatio: 0.5 };
-  }
-  return {
-    index,
-    xRatio: (cx - slot.left) / slot.width,
-    yRatio: (cy - slot.top) / slot.height,
-  };
-}
-
-/** Keep the captured document point under the viewport center after a zoom. */
-export function pdfScrollToKeepAnchor(
-  scroller: { scrollLeft: number; scrollTop: number; clientWidth: number; clientHeight: number },
-  slotInViewport: PdfRect,
-  anchor: { xRatio: number; yRatio: number },
-): { scrollLeft: number; scrollTop: number } {
-  const targetX = scroller.scrollLeft + slotInViewport.left + slotInViewport.width * anchor.xRatio;
-  const targetY = scroller.scrollTop + slotInViewport.top + slotInViewport.height * anchor.yRatio;
-  return {
-    scrollLeft: Math.max(0, targetX - scroller.clientWidth / 2),
-    scrollTop: Math.max(0, targetY - scroller.clientHeight / 2),
-  };
-}
-
 /**
  * 创建页码/缩放状态机。所有变更返回是否真正改变（供调用方决定是否重绘）。
  * 纯逻辑、无 DOM，headless 可测。渲染内核接线时页码由 viewer `pagechanging`
@@ -447,8 +386,23 @@ export async function renderPdfInto(
   let firstPageCssWidth = 0;
   /** 每页拼接文本缓存（原始字形坐标系，与官方文本层 DOM 拼接文本一致；懒填充）。 */
   const pageTexts: string[] = [];
-  /** 文本层选区护栏的卸载函数（destroy 时对称作废）。 */
-  const textLayerUnbinds = new Set<() => void>();
+  /** 文本层选区护栏卸载函数（层根键控）：官方渲染缓冲驱逐/模块注册表 prune 掉
+   * detached 层后按连接性对称摘除，防已作废卸载闭包滞留到 destroy。 */
+  const textLayerUnbinds = new Map<HTMLElement, () => void>();
+
+  /** 修剪已脱离文档的层根条目（unbind 幂等，模块侧已执行过也无副作用）。 */
+  const pruneDetachedTextLayerUnbinds = (): void => {
+    for (const [layer, unbind] of textLayerUnbinds) {
+      if (!layer.isConnected) {
+        textLayerUnbinds.delete(layer);
+        try {
+          unbind();
+        } catch {
+          // 层根已被官方回收时卸载可能失效，忽略。
+        }
+      }
+    }
+  };
 
   const refreshFitWidth = (): void => {
     fitWidthScale = pdfFitWidthScale(pageHostContentWidth(container), firstPageCssWidth);
@@ -511,11 +465,13 @@ export async function renderPdfInto(
     if (destroyed || evt.error != null) {
       return;
     }
+    // 新层渲染 = 缓冲刚换页的时刻：顺手修剪被官方驱逐层的滞留条目。
+    pruneDetachedTextLayerUnbinds();
     const layerDiv = (
       pdfViewer.getPageView(evt.pageNumber - 1) as { textLayer?: { div?: unknown } } | undefined
     )?.textLayer?.div;
     if (layerDiv instanceof HTMLElement) {
-      textLayerUnbinds.add(bindTextLayerSelection(layerDiv));
+      textLayerUnbinds.set(layerDiv, bindTextLayerSelection(layerDiv));
     }
   };
 
@@ -527,20 +483,35 @@ export async function renderPdfInto(
   pdfViewer.setDocument(doc);
 
   const releaseTextLayerBindings = (): void => {
-    for (const unbind of textLayerUnbinds) {
+    for (const [layer, unbind] of textLayerUnbinds) {
+      textLayerUnbinds.delete(layer);
       try {
         unbind();
       } catch {
         // 页视图已被官方回收时层根随之失效。
       }
     }
-    textLayerUnbinds.clear();
+  };
+
+  /**
+   * 官方清空路径：`setDocument(null)` 同步 dispatch `pagesdestroy` →
+   * `_cancelRendering` → `_resetView`——abort `#eventAC`（摘除 setDocument 在
+   * document 上以 {signal} 注册的 copy 监听）、移除 `#hiddenCopyElement`、
+   * 清空 viewer DOM 与全部页视图对象图（`cleanup` 只 reset 非 FINISHED 页，
+   * 已渲染页的全分辨率 canvas 只有本路径能释放）。teardown.abort 之后调用
+   * 安全：清空路径只触实例字段与 viewer DOM，不依赖未中止的信号。类型上
+   * d.ts 的 setDocument 形参未声明 null（运行时官方清空分支支持），以窄化
+   * 断言传入。
+   */
+  const clearViewerDocument = (): void => {
+    (pdfViewer.setDocument as (pdfDocument: unknown) => void)(null);
   };
 
   const onAbort = (): void => {
     teardown.abort();
     dragPan.release();
     releaseTextLayerBindings();
+    clearViewerDocument();
     rangeController?.abort();
     void loadingTask.destroy();
     void randomSource?.close().catch(() => undefined);
@@ -634,6 +605,10 @@ export async function renderPdfInto(
       teardown.abort();
       dragPan.release();
       releaseTextLayerBindings();
+      // 先官方清空再 cleanup/destroy（贴官方 setDocument 卸载序）：释放
+      // cleanup 覆盖不到的 FINISHED 页 canvas、页视图对象图与 document 级
+      // copy 监听，否则随会话内开关书次数无界累积。
+      clearViewerDocument();
       try {
         pdfViewer.cleanup();
         await loadingTask.destroy();

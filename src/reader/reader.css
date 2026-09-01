@@ -1010,127 +1010,16 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   zoom: 1;
 }
 
-/* PDF 连续滚动：每页一个 slot 占位，懒栅格化 canvas + 文本层。
-   宿主是纵向 flex：slot 禁止收缩，否则清画布后空槽塌陷、滚动条消失，
-   宽度回弹再次触发 rerender（缩放后无限闪屏）。
-   T2 起 slot 体系收敛为漫画专用（CBZ）；PDF 于 T3 切换到官方
-   .pdfViewer/.page 结构（见 pdf-viewer.css），届时本规则随 PDF 侧删除。 */
+/* 漫画（CBZ）连续滚动：每页一个 slot 占位图片。宿主是纵向 flex：slot 禁止
+   收缩，否则图片未加载/缓存回收后空槽塌陷、滚动条消失，宽度回弹再次触发
+   rerender（闪屏循环）。PDF 不走 slot——由官方 .pdfViewer/.page 结构承担
+   （样式见 pdf-viewer.css）。 */
 .lightink-reader-page-slot {
   position: relative;
   flex: 0 0 auto;
   margin: 0 auto 1rem;
   content-visibility: auto;
   contain: layout style;
-}
-
-/*
- * PDF 文本层（pdfjs TextLayer 约定）：容器按 --total-scale-factor 计算宽高，
- * span 按页内百分比定位、透明色仅承载文字选择；选区底色用标注主题令牌。
- * T2 起官方结构的文本层样式由 pdf-viewer.css（.textLayer）承担；本镜像
- * 规则仍被现行 slot 渲染消费，保留至 T3 切换 DOM 后随 PDF 侧删除。
- */
-.lightink-reader-text-layer {
-  position: absolute;
-  inset: 0;
-  overflow: clip;
-  line-height: 1;
-  text-align: initial;
-  letter-spacing: normal;
-  word-spacing: normal;
-  text-size-adjust: none;
-  forced-color-adjust: none;
-  transform-origin: 0 0;
-  z-index: 1;
-  --min-font-size: 1;
-  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
-  --min-font-size-inv: calc(1 / var(--min-font-size));
-}
-
-.lightink-reader-text-layer span,
-.lightink-reader-text-layer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0 0;
-  user-select: text;
-}
-
-.lightink-reader-text-layer > :not(.endOfContent),
-.lightink-reader-text-layer .markedContent span:not(.markedContent) {
-  z-index: 1;
-  --font-height: 0;
-  font-size: calc(var(--text-scale-factor) * var(--font-height));
-  --scale-x: 1;
-  --rotate: 0deg;
-  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
-}
-
-.lightink-reader-text-layer .markedContent {
-  display: contents;
-}
-
-.lightink-reader-text-layer .endOfContent {
-  display: block;
-  position: absolute;
-  inset: 100% 0 0;
-  z-index: 0;
-  cursor: default;
-  user-select: none;
-}
-
-.lightink-reader-text-layer.selecting .endOfContent {
-  top: 0;
-}
-
-.lightink-reader-text-layer br::selection {
-  background: transparent;
-}
-
-/* pdfjs 约定：页面 /Rotate 时容器带 data-main-rotation，按官方规则旋转。 */
-.lightink-reader-text-layer[data-main-rotation='90'] {
-  transform: rotate(90deg) translateY(-100%);
-}
-.lightink-reader-text-layer[data-main-rotation='180'] {
-  transform: rotate(180deg) translate(-100%, -100%);
-}
-.lightink-reader-text-layer[data-main-rotation='270'] {
-  transform: rotate(270deg) translateX(-100%);
-}
-
-.lightink-reader-text-layer ::selection {
-  background: var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
-  color: transparent;
-}
-
-/* PDF 持久高亮：半透明叠在 canvas 字形上，不能用不透明 --lightink-annotation。 */
-.lightink-reader-text-layer mark.lightink-reader-highlight {
-  background: var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
-  color: transparent;
-  padding: 0;
-  border-radius: 0;
-}
-
-.lightink-reader-text-layer mark.lightink-reader-highlight[data-annotation-kind='note'] {
-  background: var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
-  box-shadow: inset 0 -0.12em 0 var(--lightink-accent);
-  cursor: pointer;
-}
-
-.lightink-reader-text-layer .lightink-reader-search-mark {
-  /* 脱离后代选择器的绝对定位（对齐 pdfjs .appended 约定），命中片段保持在文档流内。 */
-  position: initial;
-  background: var(--lightink-selection);
-  color: transparent;
-  overflow-anchor: none;
-}
-
-.lightink-reader-text-layer .lightink-reader-search-mark--current {
-  position: initial;
-  background: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
-  color: transparent;
-  box-shadow: inset 0 0 0 1px var(--lightink-fg);
-  overflow-anchor: none;
 }
 
 .lightink-reader-scroll .lightink-reader-search-mark {

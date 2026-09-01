@@ -23,8 +23,6 @@ import {
   PDF_SCALE_STEPS,
   pdfCssScale,
   pdfFitWidthScale,
-  pdfScrollToKeepAnchor,
-  pdfViewportAnchor,
 } from '../formats/pdf.js';
 import { ReaderLimitError } from '../formats/types.js';
 
@@ -121,32 +119,6 @@ describe('createPdfPageController', () => {
   it('totalPages 至少为 1', () => {
     expect(createPdfPageController(0).totalPages).toBe(1);
     expect(createPdfPageController(-3).totalPages).toBe(1);
-  });
-});
-
-describe('pdf viewport-centered zoom', () => {
-  it('anchors on the slot under the viewport center', () => {
-    const viewport = { left: 0, top: 100, width: 800, height: 600 };
-    const slots = [
-      { left: 200, top: 0, width: 400, height: 200 },
-      { left: 200, top: 220, width: 400, height: 400 },
-      { left: 200, top: 640, width: 400, height: 400 },
-    ];
-    expect(pdfViewportAnchor(viewport, slots)).toEqual({
-      index: 1,
-      xRatio: 0.5,
-      yRatio: 0.45,
-    });
-  });
-
-  it('keeps the captured point under the viewport center after a zoom', () => {
-    const next = pdfScrollToKeepAnchor(
-      { scrollLeft: 0, scrollTop: 400, clientWidth: 800, clientHeight: 600 },
-      { left: 100, top: 50, width: 600, height: 800 },
-      { xRatio: 0.5, yRatio: 0.25 },
-    );
-    expect(next.scrollLeft).toBe(0);
-    expect(next.scrollTop).toBe(350);
   });
 });
 
