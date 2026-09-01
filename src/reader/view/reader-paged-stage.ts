@@ -224,6 +224,7 @@ export function setupReaderPagedStage(ctx: ReaderViewContext): ReaderPagedStageS
         renderQueued = false;
         renderPdfHighlights();
         ctx.sessionSearch.rerender(); // 层重建后搜索命中 overlay 一并恢复
+        ctx.bookmarks.syncBookmarkIndicators(); // 官方 reset 的非 keep-list 清除会摘掉丝带，重建后补回
       });
     });
     ctx.textLayerObserver.observe(host, { childList: true, subtree: true });
