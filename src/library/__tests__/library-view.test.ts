@@ -4675,7 +4675,8 @@ describe('LibraryView mobile shelf', () => {
     expect(root.dataset.libraryNav).toBe('shelf');
     expect(root.dataset.libraryTab).toBe('shelf');
     expect(host.querySelector('.lightink-library-header h1')?.textContent).toBe('书架');
-    expect(host.querySelector<HTMLElement>('.lightink-library-header h1')?.hidden).toBe(true);
+    // jsdom 无 760 断点：flag 下 hidden 保持 false，标题由 CSS 在 ≤760 隐藏。
+    expect(host.querySelector<HTMLElement>('.lightink-library-header h1')?.hidden).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
 

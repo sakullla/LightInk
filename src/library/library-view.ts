@@ -2180,7 +2180,8 @@ export function createLibraryView(
     navPane.hidden = isMobileLibraryChrome() && inCatalog;
     if (activeSection === 'shelf') {
       heading.textContent = isMobileLibraryChrome() ? labels().tabShelf : labels().library;
-      heading.hidden = true;
+      // 宽屏触控仍显示标题；≤760 手机壳由 CSS 隐藏，勿对全部 chrome 强制 hidden。
+      heading.hidden = !isMobileLibraryChrome();
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       if (isMobileLibraryChrome()) {
