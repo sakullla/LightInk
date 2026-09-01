@@ -27,12 +27,20 @@
  *      数据 URI + 旋转动画，避免 Vite 构建解析 node_modules 相对资产失败。
  *   2. `data-main-rotation` 官方为全局属性选择器；此处收敛到 `.pdfViewer`
  *      作用域，避免命中应用内无关元素。
+ *   3. 补齐选区 wash 收窄到非护栏状态 `.pdfViewer .textLayer:not(
+ *      .selectionRendering) ::selection`（特异性 0,3，含 :not 参数）：仅在官方
+ *      选区渲染（enableSelectionRendering → DrawLayer `.selection` 覆盖层）未
+ *      激活时为原生选区着应用令牌，不再与官方透明护栏同特异性靠后胜出；wash
+ *      之后补偿置入 `.selectionRendering ::selection` 与带同样 :not 前缀的
+ *      `br::selection` 两条透明护栏（特异性 ≥ wash，官方 290-305 语义），确保
+ *      无论 T3 以何种 enableSelectionRendering 取值接线，护栏语义（渲染态整体
+ *      透明、br 始终透明）都成立，不与官方覆盖层双重着色。
  *
  * 补齐（对照 reader.css `.lightink-reader-text-layer` 镜像 1028-1130：官方子集
  * 没有、而现有渲染在用的规则）：选区底色沿用应用标注主题令牌；持久高亮 mark
  * 与搜索命中 mark 的样式（T4 消费方注入 `.textLayer` 的类名不变，样式随本文件
- * 就位）。官方 `.textLayer ::selection`（AccentColor 混色）被补齐规则覆盖为
- * 应用令牌，作为底层兜底保留。
+ * 就位）。官方 `.textLayer ::selection`（AccentColor 混色）在非护栏状态被补齐
+ * 规则覆盖为应用令牌，作为底层兜底保留（护栏态行为见偏差 3）。
  *
  * 接线：由 T3（渲染内核替换）在渲染层接线 `pdf_viewer.mjs` 时 import；本文件
  * 在此之前不进入任何入口，规则休眠（`.pdfViewer` 结构尚不存在）。勿在应用
@@ -321,11 +329,25 @@
 }
 
 /* ---- 补齐：应用在用、官方子集没有的规则（对照 reader.css 1028-1130 镜像）----
- * 选区底色沿用应用标注令牌（覆盖官方 AccentColor 混色，保持现有选色观感）；
- * 持久高亮 / 搜索命中 mark 由应用注入 .textLayer（T4 消费方），类名不变。 */
-.pdfViewer .textLayer ::selection{
+ * 选区底色沿用应用标注令牌（保持现有选色观感）；持久高亮 / 搜索命中 mark 由
+ * 应用注入 .textLayer（T4 消费方），类名不变。
+ * 选区 wash 收窄到非护栏状态（文件头偏差 3）：官方 enableSelectionRendering
+ * 激活时选区由 DrawLayer `.selection` 覆盖层着色，原生选区必须保持透明，
+ * 否则双重着色。 */
+.pdfViewer .textLayer:not(.selectionRendering) ::selection{
   background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
   color:transparent;
+}
+
+/* 补偿护栏（官方 290-305 语义，置后且特异性 ≥ 上一条 wash）：无论 T3 如何
+ * 接线，选区渲染态整体透明、br 选区始终透明。br 护栏带与 wash 相同的
+ * :not 前缀，否则 0,2,2 输给收窄后的 0,3,1，br 会被 wash 染色。 */
+.pdfViewer .textLayer.selectionRendering ::selection{
+  background:transparent;
+  color:transparent;
+}
+.pdfViewer .textLayer:not(.selectionRendering) br::selection{
+  background:transparent;
 }
 
 /* PDF 持久高亮：半透明叠在 canvas 字形上，不能用不透明 --lightink-annotation。 */

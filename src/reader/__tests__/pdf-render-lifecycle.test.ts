@@ -916,3 +916,53 @@ describe('PDF user-zoom tab targeting', () => {
     await hidden.destroy();
   });
 });
+
+describe('PDF page host CSS contract', () => {
+  it('pins the trimmed official subset and the narrowed selection wash in pdf-viewer.css', () => {
+    const raw = readFileSync(path.join(process.cwd(), 'src/reader/pdf-viewer.css'), 'utf-8');
+    // 只对规则区断言：文件头的来源/偏差注释同样提及这些类名与剔除项，先剥离
+    // 注释，"删规则留注释"的回归才会红。
+    const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // .pdfViewer 基础：官方 :root 页变量收敛在 .pdfViewer 上。
+    expect(css).toMatch(/\.pdfViewer\s*\{[^}]*--scale-factor:\s*1;/);
+    // .canvasWrapper：容器裁剪、canvas 绝对定位铺满。
+    expect(css).toMatch(/\.canvasWrapper\s*\{[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/canvas\s*\{[^}]*position:\s*absolute/);
+
+    // .page 级联变量：--scale-factor 由 viewer JS 写在 .pdfViewer 上，
+    // --total-scale-factor 经 .page 级联，--scale-round-x/y 在此定义（T3 不再手写）。
+    expect(css).toMatch(
+      /\.pdfViewer \.page\s*\{[^}]*--total-scale-factor:\s*calc\(var\(--scale-factor\) \* var\(--user-unit\)\)/,
+    );
+    expect(css).toMatch(/\.pdfViewer \.page\s*\{[^}]*--scale-round-x:\s*1px/);
+    expect(css).toMatch(/\.pdfViewer \.page\s*\{[^}]*--scale-round-y:\s*1px/);
+
+    // .textLayer 选区护栏：.endOfContent / .selecting（官方 615-762 原样）。
+    expect(css).toMatch(/\.endOfContent\s*\{[^}]*inset:\s*100% 0 0/);
+    expect(css).toMatch(/\.endOfContent\s*\{[^}]*user-select:\s*none/);
+    expect(css).toMatch(/\.selecting \.endOfContent\s*\{[^}]*top:\s*0/);
+
+    // 补齐 wash 收窄到非护栏状态 + 两条补偿护栏（pdf-viewer.css 文件头偏差 3）：
+    // enableSelectionRendering 激活时原生选区必须透明，不得与 DrawLayer
+    // `.selection` 覆盖层双重着色；br 选区始终透明。
+    expect(css).toMatch(
+      /\.pdfViewer \.textLayer:not\(\.selectionRendering\) ::selection\s*\{[^}]*background:\s*var\(--lightink-annotation-wash, rgba\(154, 88, 40, 0\.32\)\)/,
+    );
+    expect(css).toMatch(
+      /\.pdfViewer \.textLayer\.selectionRendering ::selection\s*\{[^}]*background:\s*transparent/,
+    );
+    expect(css).toMatch(
+      /\.pdfViewer \.textLayer:not\(\.selectionRendering\) br::selection\s*\{[^}]*background:\s*transparent/,
+    );
+    // 级联缺陷负例：未收窄的 wash 选择器（与官方护栏同特异性、靠后胜出）不得存在。
+    expect(css).not.toMatch(/\.pdfViewer \.textLayer ::selection/);
+
+    // 文件头裁剪声明的负例：这些官方区块不得回流。
+    expect(css).not.toMatch(/annotationEditor/);
+    expect(css).not.toMatch(/annotationLayer/);
+    expect(css).not.toMatch(/findbar/);
+    expect(css).not.toMatch(/toolbar/);
+    expect(css).not.toMatch(/print/);
+  });
+});
