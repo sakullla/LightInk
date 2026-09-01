@@ -307,6 +307,28 @@ describe('annotation-panel 标注列表', () => {
     expect(items[0]!.dataset.annotationId).toBe('h-green');
   });
 
+  it('选中高亮颜色后再切到笔记，笔记仍列出', () => {
+    const { panel } = mount();
+    openScope(panel.element);
+    panel.element
+      .querySelector<HTMLButtonElement>(`[data-color="${DEFAULT_ANNOTATION_COLOR}"]`)!
+      .click();
+    expect(
+      Array.from(
+        panel.element.querySelectorAll<HTMLElement>('.lightink-reader-sidebar-item'),
+      ).map((el) => el.dataset.annotationId),
+    ).toEqual(['h1']);
+
+    scopeOption(panel.element, 'note').click();
+    const items = panel.element.querySelectorAll<HTMLElement>('.lightink-reader-sidebar-item');
+    expect(items).toHaveLength(1);
+    expect(items[0]!.dataset.annotationId).toBe('n1');
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-sidebar-search-scope-colors')
+        ?.hidden,
+    ).toBe(true);
+  });
+
   it('笔记条目有编辑入口，其他类型没有；按钮派发跳转/编辑/删除回调', () => {
     const { panel, jumps, removals, edits } = mount();
     const byId = (id: string) =>

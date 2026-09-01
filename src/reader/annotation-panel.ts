@@ -862,7 +862,10 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     const visible = filterAnnotations(lastAnnotations, {
       query: annotationQuery,
       kind: kindFilter,
-      color: currentColor === 'all' ? undefined : currentColor,
+      color:
+        colorFiltersVisible(currentFilter) && currentColor !== 'all'
+          ? currentColor
+          : undefined,
     });
     visible.sort(byDocumentPosition);
     for (const annotation of visible) {
