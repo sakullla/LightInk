@@ -4033,6 +4033,9 @@ describe('LibraryView mobile shelf', () => {
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/,
     );
     expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(\s*3,\s*minmax\(0,\s*1fr\)/,
+    );
+    expect(css).not.toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall\s*\{[^}]*repeat\(\s*2,\s*minmax\(0,\s*1fr\)/,
     );
     expect(css).toMatch(
@@ -4183,6 +4186,9 @@ describe('LibraryView mobile shelf', () => {
     expect(desktopContinueTitle).toMatch(/white-space:\s*nowrap/);
     expect(desktopContinueTitle).not.toMatch(/-webkit-line-clamp/);
     const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0];
+    expect(desktopWall).toMatch(
+      /repeat\(\s*auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)/,
+    );
     expect(desktopWall).toMatch(/padding:\s*8px var\(--lightink-library-pad-x\) 56px/);
     const desktopItem = cssRuleBodies(css, /\.lightink-library-item(?![\w-])/)[0];
     expect(cssLengthPx(cssDeclaration(desktopItem, 'gap'))[0]).toBe(10);
@@ -4221,7 +4227,7 @@ describe('LibraryView mobile shelf', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/,
     );
 
-    // 两列 gutter 与封面–标题 gap 加大。
+    // 三列 gutter 与封面–标题 gap 加大。
     const itemBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item(?![\w-])/,
@@ -4247,6 +4253,36 @@ describe('LibraryView mobile shelf', () => {
     expect(wallPad).toMatch(/48px/);
     expect(wallPad).toMatch(/--lightink-safe-bottom/);
     expect(wallPad).not.toMatch(/28px\s*\+\s*var\(--lightink-safe-bottom/);
+  });
+
+  it('fails if the phone wall stays two columns, desktop auto-fill is rewritten, or phone search stays 40px', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+
+    const phoneWallBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall/,
+    );
+    const phoneWall = phoneWallBlocks[phoneWallBlocks.length - 1] ?? '';
+    expect(phoneWall).toMatch(/repeat\(\s*3,\s*minmax\(0,\s*1fr\)/);
+    expect(phoneWall).not.toMatch(/repeat\(\s*2,\s*minmax\(0,\s*1fr\)/);
+
+    const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0] ?? '';
+    expect(desktopWall).toMatch(
+      /repeat\(\s*auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)/,
+    );
+    expect(desktopWall).not.toMatch(/repeat\(\s*[23],\s*minmax\(0,\s*1fr\)/);
+
+    const searchBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-search(?![\w:-])/,
+    );
+    const searchBlock = searchBlocks[searchBlocks.length - 1] ?? '';
+    const searchHeights = [
+      ...cssLengthPx(cssDeclaration(searchBlock, 'min-height')),
+      ...cssLengthPx(cssDeclaration(searchBlock, 'height')),
+    ];
+    expect(Math.max(0, ...searchHeights)).toBeGreaterThanOrEqual(44);
+    expect(searchBlock).not.toMatch(/(?:^|[;\s])(?:min-)?height:\s*40px/);
   });
 
   it('gives the manage dialogs near-full viewport width and compact UI type on phone chrome', () => {

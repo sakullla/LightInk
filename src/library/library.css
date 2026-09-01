@@ -2698,11 +2698,13 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     grid-row: 1;
     flex: none;
     min-width: 0;
-    min-height: 40px;
+    min-height: 32px;
     overflow: visible;
     padding: 0;
-    font-size: var(--lightink-type-title);
-    line-height: 40px;
+    font-size: var(--lightink-type-subtitle);
+    font-weight: 500;
+    line-height: 32px;
+    letter-spacing: 0;
     text-overflow: unset;
     white-space: nowrap;
   }
@@ -2775,6 +2777,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     width: 44px;
     min-width: 44px;
     min-height: 44px;
+    background: transparent;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-search {
@@ -2785,12 +2788,16 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     flex: none;
     width: 100%;
     max-width: none;
-    height: 40px;
-    min-height: 40px;
+    height: 44px;
+    min-height: 44px;
     margin: 0;
-    padding: 0 32px 0 38px;
-    border-radius: 20px;
+    padding: 0 16px 0 40px;
+    border-radius: 22px;
     background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-search::before {
+    left: 12px;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-toolbar {
@@ -3404,7 +3411,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-cover-wall {
     flex: 1 1 auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-auto-rows: max-content;
     justify-content: start;
     align-content: start;
@@ -3427,6 +3434,36 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     gap: 12px;
   }
 
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cover-wall
+    .lightink-library-cover {
+    min-width: 0;
+    width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  }
+
+  /* 触屏取消 translateY 抬升；选中/焦点加深投影，不上浮。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cover-wall
+    .lightink-library-item:hover:not(:active)
+    .lightink-library-cover {
+    transform: none;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cover-wall
+    .lightink-library-item.is-selected:not(:active)
+    .lightink-library-cover,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-cover-wall
+    .lightink-library-item:focus-visible:not(:active)
+    .lightink-library-cover {
+    transform: none;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
+  }
+
   :is(html[data-android], html[data-touch-primary]) .lightink-library-workarea {
     flex: 1 1 auto;
     min-height: 0;
@@ -3444,6 +3481,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-item-text strong {
     font-size: var(--lightink-type-secondary);
+    font-weight: 500;
     line-height: 1.35;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -3458,14 +3496,29 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue {
     flex: 0 0 auto;
     gap: 12px;
-    margin: 8px 16px 8px;
-    padding: 10px;
+    margin: 8px 16px 16px;
+    padding: 12px;
+    border: 1px solid var(--lightink-border);
+    background: var(--lightink-bg-elevated);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 8%, transparent);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue-open {
     gap: 14px;
-    min-height: 56px !important;
-    padding: 6px 10px 6px 6px !important;
+    min-height: 72px !important;
+    padding: 0 8px 0 0 !important;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library-continue
+    .lightink-library-cover {
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    height: 72px;
+    aspect-ratio: 2 / 3;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue-text {
@@ -3477,8 +3530,16 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     overflow: hidden;
+    font-size: var(--lightink-type-body);
+    font-weight: 650;
     white-space: normal;
     text-overflow: ellipsis;
+  }
+
+  :is(html[data-android], html[data-touch-primary]) .lightink-library-continue-cue {
+    color: var(--lightink-accent);
+    font-size: var(--lightink-type-ui);
+    font-weight: 650;
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-detail-backdrop:not([hidden]) {
@@ -3601,9 +3662,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     transition: background-color 150ms ease, color 150ms ease, font-weight 150ms ease;
   }
 
-  /* 激活 tab：accent-soft 圆角底色 + 150ms 色值/字重/底色过渡。 */
+  /* 激活 tab：accent 字色/字重，不用满格 accent-soft 色块。 */
   :is(html[data-android], html[data-touch-primary]) .lightink-library-tabbar-tab.is-active {
-    background: var(--lightink-accent-soft);
+    background: transparent;
     color: var(--lightink-accent);
     font-weight: 600;
     transition: background-color 150ms ease, color 150ms ease, font-weight 150ms ease;
@@ -3616,7 +3677,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     transition: background-color 100ms ease;
   }
 
-  /* hover 驻留中和：抬手后 tab 恢复基础底色/字色（激活 tab 恢复 accent-soft 圆角底与 accent 字色）。 */
+  /* hover 驻留中和：抬手后 tab 恢复基础底色/字色（激活 tab 保持透明底与 accent 字色）。 */
   :is(html[data-android], html[data-touch-primary])
     .lightink-library-tabbar-tab:not(.is-active):hover:not(:active) {
     background: transparent;
@@ -3625,7 +3686,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library-tabbar-tab.is-active:hover:not(:active) {
-    background: var(--lightink-accent-soft);
+    background: transparent;
     color: var(--lightink-accent);
   }
 
