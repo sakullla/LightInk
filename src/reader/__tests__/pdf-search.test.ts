@@ -212,15 +212,23 @@ describe('nextMatchIndex', () => {
 });
 
 describe('搜索命中 overlay', () => {
+  /** 官方文本层夹具（T4）：.pdfViewer > .page[data-page-number] > .textLayer。 */
   function layer(...texts: string[]): HTMLElement {
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.dataset.pageNumber = '1';
     const root = document.createElement('div');
-    root.className = 'lightink-reader-text-layer';
+    root.className = 'textLayer';
     for (const text of texts) {
       const span = document.createElement('span');
       span.textContent = text;
       root.appendChild(span);
     }
-    document.body.appendChild(root);
+    page.appendChild(root);
+    viewer.appendChild(page);
+    document.body.appendChild(viewer);
     return root;
   }
 
@@ -292,15 +300,23 @@ describe('findTextHits', () => {
 });
 
 describe('搜索 overlay 共享幂等引擎（PDF 文本层 / 流式正文同引擎）', () => {
+  /** 官方文本层夹具（T4）：.pdfViewer > .page[data-page-number] > .textLayer。 */
   function layer(...texts: string[]): HTMLElement {
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.dataset.pageNumber = '1';
     const root = document.createElement('div');
-    root.className = 'lightink-reader-text-layer';
+    root.className = 'textLayer';
     for (const text of texts) {
       const span = document.createElement('span');
       span.textContent = text;
       root.appendChild(span);
     }
-    document.body.appendChild(root);
+    page.appendChild(root);
+    viewer.appendChild(page);
+    document.body.appendChild(viewer);
     return root;
   }
 
@@ -651,13 +667,21 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
    * mark 就绪时经 consumePendingScroll 消费首命中滚动。
    */
   const createPendingPdfHost = (layerTexts: readonly (string | null)[]) => {
-    const layers = layerTexts.map((text) => {
+    // 官方结构（T4）：单个 .pdfViewer，每页 .page[data-page-number] > .textLayer。
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    document.body.appendChild(viewer);
+    const layers = layerTexts.map((text, index) => {
+      const page = document.createElement('div');
+      page.className = 'page';
+      page.dataset.pageNumber = String(index + 1);
       const layer = document.createElement('div');
-      layer.className = 'lightink-reader-text-layer';
+      layer.className = 'textLayer';
       if (text !== null) {
         layer.textContent = text;
       }
-      document.body.appendChild(layer);
+      page.appendChild(layer);
+      viewer.appendChild(page);
       return layer;
     });
     const sinks: PdfSearchSink[] = [];

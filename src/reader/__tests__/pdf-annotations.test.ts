@@ -26,18 +26,32 @@ import {
   serializeAnnotations,
   type Annotation,
 } from '../annotations.js';
-import { isTextLayerMutation } from '../reader-view.js';
+import { isTextLayerMutation, pdfTextLayerSelector } from '../reader-view.js';
 
-/** 模拟 pdfjs 文本层：绝对定位 span 承载每段文字（结构同 pdfjs TextLayer 输出）。 */
+/**
+ * 模拟官方 pdfjs 文本层（T4 结构）：
+ * `.pdfViewer > .page[data-page-number] > .textLayer`，绝对定位 span 承载
+ * 每段文字（官方 TextLayerBuilder 输出），层末自带 `.endOfContent`。
+ */
 function textLayer(...texts: string[]): HTMLElement {
+  const viewer = document.createElement('div');
+  viewer.className = 'pdfViewer';
+  const page = document.createElement('div');
+  page.className = 'page';
+  page.dataset.pageNumber = '1';
   const layer = document.createElement('div');
-  layer.className = 'lightink-reader-text-layer';
+  layer.className = 'textLayer';
   for (const text of texts) {
     const span = document.createElement('span');
     span.textContent = text;
     layer.appendChild(span);
   }
-  document.body.appendChild(layer);
+  const end = document.createElement('div');
+  end.className = 'endOfContent';
+  layer.appendChild(end);
+  page.appendChild(layer);
+  viewer.appendChild(page);
+  document.body.appendChild(viewer);
   return layer;
 }
 
@@ -183,6 +197,41 @@ describe('PDF 文字级标注闭环', () => {
     expect(plain?.dataset.annotationColor).toBe(DEFAULT_ANNOTATION_COLOR);
   });
 
+  it('官方 .textLayer 宿主取半透明 color-mix；旧类名层不再被识别为 PDF 文本层宿主', () => {
+    const anchor = {
+      start: 0,
+      end: 3,
+      quote: '第一章',
+      prefix: '',
+      suffix: '',
+    };
+    // 官方结构内的层：半透明 color-mix 叠在 canvas 字形上。
+    const official = textLayer('第一章 开端');
+    renderAnnotationMarks(official, [{ id: 'mix', kind: 'highlight', color: '#86c28b', anchor }]);
+    const mixMark = official.querySelector<HTMLElement>('mark[data-annotation-id="mix"]');
+    expect(mixMark?.style.background).toContain('color-mix(in srgb, rgb(134, 194, 139) 32%, transparent)');
+
+    // 反例（Recipe outcome 3）：旧类名层视为非 PDF 文本层宿主（同流式正文），用不透明色。
+    const legacy = document.createElement('div');
+    legacy.className = 'lightink-reader-text-layer';
+    const span = document.createElement('span');
+    span.textContent = '第一章 开端';
+    legacy.appendChild(span);
+    document.body.appendChild(legacy);
+    renderAnnotationMarks(legacy, [{ id: 'opaque', kind: 'highlight', color: '#86c28b', anchor }]);
+    const opaqueMark = legacy.querySelector<HTMLElement>('mark[data-annotation-id="opaque"]');
+    expect(opaqueMark?.style.background).toBe('rgb(134, 194, 139)');
+
+    // .textLayer 但不在 .pdfViewer 内（防误伤 flow 内容的限定）同样按非层宿主处理。
+    const orphan = document.createElement('div');
+    orphan.className = 'textLayer';
+    orphan.appendChild(span.cloneNode(true));
+    document.body.appendChild(orphan);
+    renderAnnotationMarks(orphan, [{ id: 'orphan', kind: 'highlight', color: '#86c28b', anchor }]);
+    const orphanMark = orphan.querySelector<HTMLElement>('mark[data-annotation-id="orphan"]');
+    expect(orphanMark?.style.background).toBe('rgb(134, 194, 139)');
+  });
+
   it('paints one overlay box per mark client rect for paginated columns', () => {
     const layer = textLayer('划选整段文字可见高亮');
     renderAnnotationMarks(layer, [
@@ -245,7 +294,7 @@ describe('PDF 文字级标注闭环', () => {
     expect(back[1]!.locator.format === 'pdf' && back[1]!.locator.anchor).toBeDefined();
   });
 
-  it('文本层容器插入与层内异步 span 填充都触发重渲染判定（pdfjs 时序回归）', async () => {
+  it('文本层容器插入与层内异步 span 填充都触发重渲染判定（官方时序回归）', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     const delivered: MutationRecord[] = [];
@@ -257,10 +306,20 @@ describe('PDF 文字级标注闭环', () => {
       return records;
     };
 
-    // 第一步：pdfjs appendTextLayer 先插入空容器（此时 span 未填充）。
+    // 官方结构：宿主内先有 .pdfViewer > .page（页占位本身不是文本层变更）。
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.dataset.pageNumber = '1';
+    viewer.appendChild(page);
+    host.appendChild(viewer);
+    expect(isTextLayerMutation(await settle())).toBe(false);
+
+    // 第一步：官方 TextLayerBuilder 经 onAppend 插入层容器（此时 span 未填充）。
     const layer = document.createElement('div');
-    layer.className = 'lightink-reader-text-layer';
-    host.appendChild(layer);
+    layer.className = 'textLayer';
+    page.appendChild(layer);
     expect(isTextLayerMutation(await settle())).toBe(true);
 
     // 第二步：TextLayer.render() 微任务链异步追加 span。
@@ -269,15 +328,27 @@ describe('PDF 文字级标注闭环', () => {
     layer.appendChild(span);
     expect(isTextLayerMutation(await settle())).toBe(true);
 
-    // 无关变更不触发。
-    host.appendChild(document.createElement('div'));
+    // 无关变更（如 canvasWrapper 插入）不触发。
+    const canvasWrapper = document.createElement('div');
+    canvasWrapper.className = 'canvasWrapper';
+    page.appendChild(canvasWrapper);
     expect(isTextLayerMutation(await settle())).toBe(false);
 
-    // 拖选护栏移动 .endOfContent 不触发高亮重绘。
+    // 拖选护栏追加 .endOfContent 不触发高亮重绘（官方 render 完成时追加同样被排除）。
     const end = document.createElement('div');
     end.className = 'endOfContent';
     layer.appendChild(end);
     expect(isTextLayerMutation(await settle())).toBe(false);
+
+    // 反例（Recipe outcome 3）：旧类名层不再是官方文本层，插入不触发重渲染。
+    const legacy = document.createElement('div');
+    legacy.className = 'lightink-reader-text-layer';
+    host.appendChild(legacy);
+    expect(isTextLayerMutation(await settle())).toBe(false);
     observer.disconnect();
+  });
+
+  it('官方文本层选择器口径：命中与高亮渲染共用，页码即 data-page-number（1 基）', () => {
+    expect(pdfTextLayerSelector(3)).toBe('.pdfViewer .page[data-page-number="3"] .textLayer');
   });
 });

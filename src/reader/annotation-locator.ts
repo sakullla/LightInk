@@ -370,7 +370,11 @@ export function flowLocatorFromSelection(
   return { format, chapter, ...anchor };
 }
 
-/** PDF 文本层选区 → 文字级 PdfLocator（page + anchor；页码级书签/笔记仍无 anchor）。 */
+/**
+ * PDF 文本层选区 → 文字级 PdfLocator（page + anchor；页码级书签/笔记仍无 anchor）。
+ * 层根为官方 `.pdfViewer .page[data-page-number] .textLayer`（T4），拼接文本坐标
+ * 系不变，标注存储 schema 零变更（R5）。
+ */
 export function pdfTextLocatorFromRange(
   root: Node,
   range: Range,

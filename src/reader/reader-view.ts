@@ -328,6 +328,14 @@ function isEndOfContent(node: Node): boolean {
   return node.nodeType === 1 && (node as Element).classList.contains('endOfContent');
 }
 
+/**
+ * 官方文本层选择器（T4）：`.pdfViewer > .page[data-page-number] > .textLayer`。
+ * 页码为官方 `data-page-number`（1 基）；搜索命中与高亮渲染共用同一口径。
+ */
+export function pdfTextLayerSelector(page: number): string {
+  return `.pdfViewer .page[data-page-number="${page}"] .textLayer`;
+}
+
 export function isTextLayerMutation(records: readonly MutationRecord[]): boolean {
   return records.some((record) => {
     const nodes = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
@@ -337,7 +345,7 @@ export function isTextLayerMutation(records: readonly MutationRecord[]): boolean
     for (const node of Array.from(record.addedNodes)) {
       if (
         node.nodeType === 1 &&
-        (node as Element).classList.contains('lightink-reader-text-layer')
+        (node as Element).classList.contains('textLayer')
       ) {
         return true;
       }
@@ -346,7 +354,7 @@ export function isTextLayerMutation(records: readonly MutationRecord[]): boolean
     return (
       target.nodeType === 1 &&
       typeof (target as Element).closest === 'function' &&
-      (target as Element).closest('.lightink-reader-text-layer') !== null &&
+      (target as Element).closest('.textLayer') !== null &&
       !(target as Element).classList.contains('endOfContent')
     );
   });
@@ -636,9 +644,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     pdfCurrentPage: () => pdfHandle?.controller.page ?? 1,
     renderPdfHits: (hits, activeKey) => {
       const pdfTextLayerFor = (page: number): HTMLElement | null =>
-        pageHost.querySelector<HTMLElement>(
-          `.lightink-reader-page-slot[data-page-index="${page - 1}"] .lightink-reader-text-layer`,
-        );
+        pageHost.querySelector<HTMLElement>(pdfTextLayerSelector(page));
       const byPage = new Map<number, SearchMarkSpec[]>();
       for (const hit of hits) {
         if (hit.payload.kind !== 'pdf') {
@@ -1161,7 +1167,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       removeAnnotationMarks(doc.body, id);
       paintAnnotationOverlays(doc);
     }
-    for (const layer of pageHost.querySelectorAll('.lightink-reader-text-layer')) {
+    for (const layer of pageHost.querySelectorAll('.pdfViewer .textLayer')) {
       removeAnnotationMarks(layer, id);
     }
     renderSidebarAnnotations();
@@ -1399,6 +1405,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     };
     for (const article of scrollHost.querySelectorAll<HTMLElement>('.lightink-reader-chapter')) {
       syncBadge(article, chapters.has(Number(article.dataset.chapterIndex)));
+    }
+    // PDF：官方 .page[data-page-number]（1 基）为角标锚；CBZ：漫画 slot（0 基）双轨。
+    for (const page of pageHost.querySelectorAll<HTMLElement>('.pdfViewer .page[data-page-number]')) {
+      syncBadge(page, pages.has(Number(page.dataset.pageNumber)));
     }
     for (const slot of pageHost.querySelectorAll<HTMLElement>('.lightink-reader-page-slot')) {
       syncBadge(slot, pages.has(Number(slot.dataset.pageIndex) + 1));
@@ -2169,12 +2179,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       }
     }
     for (const [page, specs] of byPage) {
-      const slot = pageHost.querySelector<HTMLElement>(
-        `.lightink-reader-page-slot[data-page-index="${page - 1}"]`,
-      );
-      const layer = slot?.querySelector<HTMLElement>('.lightink-reader-text-layer') ?? null;
+      const layer = pageHost.querySelector<HTMLElement>(pdfTextLayerSelector(page));
       if (layer === null) {
-        continue; // 该页文本层尚未懒渲染，观察器会在层出现时重试
+        continue; // 该页文本层尚未懒渲染（官方缓冲已回收/未栅格化），观察器会在层出现时重试
       }
       renderAnnotationMarks(layer, specs);
     }
@@ -2223,18 +2230,17 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       range.commonAncestorContainer.nodeType === 1
         ? (range.commonAncestorContainer as Element)
         : range.commonAncestorContainer.parentElement;
-    const layer = container?.closest('.lightink-reader-text-layer') ?? null;
+    const layer = container?.closest('.textLayer') ?? null;
     if (layer === null) {
       // 非文本层选区（canvas/跨页拖选）不处理，但清掉可能滞留的工具栏与过期选区。
       hideSelectionToolbar();
       return;
     }
-    const slot = layer.closest<HTMLElement>('.lightink-reader-page-slot');
-    const pageIndex = Number(slot?.dataset.pageIndex ?? -1);
-    if (!(pageIndex >= 0)) {
+    const pageNumber = Number(layer.closest<HTMLElement>('.page')?.dataset.pageNumber ?? -1);
+    if (!(pageNumber >= 1)) {
       return;
     }
-    const locator = pdfTextLocatorFromRange(layer, range, pageIndex + 1);
+    const locator = pdfTextLocatorFromRange(layer, range, pageNumber);
     if (locator === null) {
       hideSelectionToolbar();
       return;
@@ -2330,7 +2336,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
 
   /** 清掉全部搜索命中 overlay（PDF 文本层与流式正文，span 解包保留文本）。 */
   const clearReaderSearchMarks = (): void => {
-    for (const layer of pageHost.querySelectorAll('.lightink-reader-text-layer')) {
+    for (const layer of pageHost.querySelectorAll('.pdfViewer .textLayer')) {
       clearSearchMarks(layer);
     }
     for (const doc of flowDocuments()) {

@@ -48,8 +48,17 @@ function marksForId(host: ParentNode, annotationId: string): HTMLElement[] {
   );
 }
 
+/**
+ * PDF 文本层宿主判定（T4 官方结构）：`.pdfViewer` 内的 `.textLayer`。
+ * 限定在 `.pdfViewer` 内，流式 iframe 正文（body）不会误判；层内 mark 用
+ * 半透明 color-mix 叠在 canvas 字形上，流式正文用不透明色。
+ */
 function isTextLayerHost(host: ParentNode): boolean {
-  return host instanceof Element && host.classList.contains('lightink-reader-text-layer');
+  return (
+    host instanceof Element &&
+    host.classList.contains('textLayer') &&
+    host.closest('.pdfViewer') !== null
+  );
 }
 
 /** Paint kind/color onto an existing mark without re-wrapping text. */

@@ -11,72 +11,109 @@ import {
   resolveTextQuoteOffsets,
   resolveTextQuoteRange,
 } from '../annotation-locator.js';
-import {
-  bindTextLayerSelection,
-  isEndOfContentNode,
-  isModifyingSelectionStart,
-  placeEndOfContent,
-  usesLegacyEndOfContentPlacement,
-} from '../text-layer-selection.js';
+import { bindTextLayerSelection } from '../text-layer-selection.js';
 
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe('bindTextLayerSelection', () => {
-  it('inserts endOfContent and marks the layer selecting on mousedown', () => {
-    const layer = document.createElement('div');
-    layer.className = 'lightink-reader-text-layer';
+/**
+ * 官方文本层夹具（T4）：`.pdfViewer > .page[data-page-number] > .textLayer`，
+ * 官方 TextLayerBuilder.render() 已在层末追加 `.endOfContent`（组件层自带，
+ * 本护栏不再注入）。
+ */
+function officialTextLayer(
+  pageNumber: number,
+  ...texts: string[]
+): { layer: HTMLElement; end: HTMLElement } {
+  const viewer = document.createElement('div');
+  viewer.className = 'pdfViewer';
+  const page = document.createElement('div');
+  page.className = 'page';
+  page.dataset.pageNumber = String(pageNumber);
+  const layer = document.createElement('div');
+  layer.className = 'textLayer';
+  for (const text of texts) {
     const span = document.createElement('span');
-    span.textContent = 'abc';
+    span.textContent = text;
     layer.appendChild(span);
-    document.body.appendChild(layer);
+  }
+  const end = document.createElement('div');
+  end.className = 'endOfContent';
+  layer.appendChild(end);
+  page.appendChild(layer);
+  viewer.appendChild(page);
+  document.body.appendChild(viewer);
+  return { layer, end };
+}
+
+describe('bindTextLayerSelection（官方 .textLayer 结构）', () => {
+  it('复用官方 endOfContent：不注入新元素，mousedown 置 selecting，卸载复位且不移除官方元素', () => {
+    const { layer, end } = officialTextLayer(1, 'abc');
 
     const unbind = bindTextLayerSelection(layer);
-    const end = layer.querySelector('.endOfContent');
-    expect(end).not.toBeNull();
-    expect(isEndOfContentNode(end!)).toBe(true);
+    // 官方 render() 已追加的 endOfContent 是唯一一个：护栏不再自建。
+    expect(layer.querySelectorAll('.endOfContent')).toHaveLength(1);
+    expect(layer.querySelector('.endOfContent')).toBe(end);
 
     layer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(layer.classList.contains('selecting')).toBe(true);
 
     unbind();
-    expect(layer.querySelector('.endOfContent')).toBeNull();
+    expect(layer.classList.contains('selecting')).toBe(false);
+    // 卸载只摘应用侧护栏；官方元素归组件层生命周期所有，不被移除。
+    expect(layer.querySelector('.endOfContent')).toBe(end);
+  });
+
+  it('同一层重复绑定幂等：缩放重渲染再发 textlayerrendered 复用同一卸载函数', () => {
+    const { layer } = officialTextLayer(2, 'abc');
+    const first = bindTextLayerSelection(layer);
+    const second = bindTextLayerSelection(layer);
+    expect(second).toBe(first);
+    first();
+    expect(layer.classList.contains('selecting')).toBe(false);
+    // 已卸载后重复调用旧句柄无害。
+    expect(() => second()).not.toThrow();
+  });
+
+  it('detached 层修剪（T3 接手点）：层脱离文档后经 selectionchange 解绑，重挂不再响应', () => {
+    const { layer } = officialTextLayer(1, 'abc');
+    bindTextLayerSelection(layer);
+    expect(layer.classList.contains('selecting')).toBe(false);
+
+    // 官方 PDFPageViewBuffer 回收页：层根随宿主脱离文档。
+    const viewer = layer.closest('.pdfViewer')!;
+    viewer.remove();
+
+    // 任意 selectionchange（包括空选区）先修剪注册表，再遍历剩余层。
+    document.dispatchEvent(new Event('selectionchange'));
+
+    // 层被重新挂回也不会复活旧绑定（页面重渲染时经 textlayerrendered 重绑）。
+    document.body.appendChild(viewer);
+    layer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(layer.classList.contains('selecting')).toBe(false);
   });
 
-  it('places the filler after the end when extending right, before the start when extending left', () => {
-    const layer = document.createElement('div');
-    layer.className = 'lightink-reader-text-layer';
-    const left = document.createElement('span');
-    left.textContent = 'left';
-    const right = document.createElement('span');
-    right.textContent = 'right';
-    layer.append(left, right);
-    document.body.appendChild(layer);
-    const end = document.createElement('div');
-    end.className = 'endOfContent';
-    layer.appendChild(end);
+  it('selectionchange 对相交层置 selecting、其余层复位', () => {
+    const inSelection = officialTextLayer(1, '选中文字');
+    const outside = officialTextLayer(2, '别的页');
+    bindTextLayerSelection(inSelection.layer);
+    bindTextLayerSelection(outside.layer);
 
-    const first = document.createRange();
-    first.setStart(right.firstChild!, 2);
-    first.setEnd(right.firstChild!, 5);
-    placeEndOfContent(layer, end, first, null);
-    expect(end.previousSibling).toBe(right);
+    const range = document.createRange();
+    range.selectNodeContents(inSelection.layer.querySelector('span')!.firstChild!);
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
 
-    const rtl = document.createRange();
-    rtl.setStart(left.firstChild!, 0);
-    rtl.setEnd(right.firstChild!, 5);
-    expect(isModifyingSelectionStart(first, rtl)).toBe(true);
-    placeEndOfContent(layer, end, rtl, first);
-    expect(end.nextSibling).toBe(left);
-  });
+    outside.layer.classList.add('selecting'); // 模拟上一次拖选遗留
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(inSelection.layer.classList.contains('selecting')).toBe(true);
+    expect(outside.layer.classList.contains('selecting')).toBe(false);
 
-  it('treats current WebView2 / unknown UA as modern (no live DOM move)', () => {
-    expect(usesLegacyEndOfContentPlacement(null)).toBe(false);
-    expect(usesLegacyEndOfContentPlacement({ userAgent: 'LightInk' })).toBe(false);
-    expect(usesLegacyEndOfContentPlacement({ userAgent: 'Chrome/149.0.0.0' })).toBe(false);
-    expect(usesLegacyEndOfContentPlacement({ userAgent: 'Chrome/120.0.0.0' })).toBe(true);
+    selection?.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(inSelection.layer.classList.contains('selecting')).toBe(false);
   });
 });
 
