@@ -2180,7 +2180,7 @@ export function createLibraryView(
     navPane.hidden = isMobileLibraryChrome() && inCatalog;
     if (activeSection === 'shelf') {
       heading.textContent = isMobileLibraryChrome() ? labels().tabShelf : labels().library;
-      heading.hidden = !isMobileLibraryChrome();
+      heading.hidden = true;
       toolbar.replaceChildren();
       itemList.classList.add('lightink-library-cover-wall');
       if (isMobileLibraryChrome()) {

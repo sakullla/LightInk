@@ -4059,6 +4059,15 @@ describe('LibraryView mobile shelf', () => {
       /@media \(max-width: 760px\)[\s\S]*:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-header-main[\s\S]*?\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto auto/,
     );
     expect(css).toMatch(
+      /\[data-library-tab=['"]?shelf['"]?\][\s\S]*?\.lightink-library-header-main[\s\S]*?\{[^}]*grid-template-rows:\s*auto(?!\s+auto)/,
+    );
+    expect(css).toMatch(
+      /\[data-library-tab=['"]?shelf['"]?\][\s\S]*?\.lightink-library-header[\s\S]*?h1\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\[data-library-tab=['"]?shelf['"]?\][\s\S]*?\.lightink-library-search[\s\S]*?\{[^}]*grid-row:\s*1/,
+    );
+    expect(css).toMatch(
       /\[data-library-nav-collapsed=['"]?true['"]?\]\s+\.lightink-library-header-main\s*\{[^}]*display:\s*grid/,
     );
     // 书架 Tab：页内导航整栏隐藏，封面落在 header 与底栏之间，不得再用 42vh 压在封面上。
@@ -4079,7 +4088,7 @@ describe('LibraryView mobile shelf', () => {
       /@media \(max-width: 760px\)[\s\S]*\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-chips\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*nowrap/,
     );
     expect(css).toMatch(
-      /\[data-library-nav=['"]?shelf['"]?\]\s+(?:\[data-library-shelf-groups\]|\.lightink-library-shelf-groups)\s*\{[^}]*min-(?:width|height):\s*48px[^}]*min-(?:width|height):\s*48px/,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+(?:\[data-library-shelf-groups\]|\.lightink-library-shelf-groups)\s*\{[^}]*min-(?:width|height):\s*44px[^}]*min-(?:width|height):\s*44px/,
     );
     expect(css.replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/文字…/);
     expect(css).not.toMatch(
@@ -4200,10 +4209,31 @@ describe('LibraryView mobile shelf', () => {
       /\[data-library-nav=['"]?shelf['"]?\]\s+(?:\[data-library-shelf-groups\]|\.lightink-library-shelf-groups(?![\w-]))/,
     );
     const groupsEntry = groupsEntryBlocks[groupsEntryBlocks.length - 1] ?? '';
-    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-width'))[0]).toBeGreaterThanOrEqual(48);
-    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-height'))[0]).toBeGreaterThanOrEqual(48);
+    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-width'))[0]).toBeGreaterThanOrEqual(44);
+    expect(cssLengthPx(cssDeclaration(groupsEntry, 'min-height'))[0]).toBeGreaterThanOrEqual(44);
+    expect(groupsEntry).toMatch(/background:\s*transparent/);
+    expect(groupsEntry).not.toMatch(/color-mix\(in srgb, var\(--lightink-fg\) 7%/);
+    expect(Number.parseInt(cssDeclaration(groupsEntry, 'font-weight') ?? '700', 10)).toBeLessThan(600);
 
-    // 继续阅读条：内边距加大，条与芯片/封面墙不再只剩 4px。
+    const filterEntryBlocks = cssRuleBodies(
+      css,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-filter(?![\w:-])/,
+    );
+    const filterEntry = filterEntryBlocks[filterEntryBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(filterEntry, 'min-width'))[0]).toBeGreaterThanOrEqual(44);
+    expect(cssLengthPx(cssDeclaration(filterEntry, 'min-height'))[0]).toBeGreaterThanOrEqual(44);
+    expect(filterEntry).toMatch(/background:\s*transparent/);
+    expect(filterEntry).not.toMatch(/color-mix\(in srgb, var\(--lightink-fg\) 7%/);
+    expect(Number.parseInt(cssDeclaration(filterEntry, 'font-weight') ?? '700', 10)).toBeLessThan(600);
+
+    const toolbarBlocks = cssRuleBodies(
+      css,
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-toolbar/,
+    );
+    const toolbarBlock = toolbarBlocks[toolbarBlocks.length - 1] ?? '';
+    expect(toolbarBlock).not.toMatch(/min-height:\s*48px/);
+
+    // 继续阅读是紧凑单行，不再用带边框抬升卡。
     const continueBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-continue/,
@@ -4211,17 +4241,29 @@ describe('LibraryView mobile shelf', () => {
     expect(continueBlocks.length).toBeGreaterThan(0);
     const continueBlock = continueBlocks[continueBlocks.length - 1] ?? '';
     const continuePadding = cssLengthPx(cssDeclaration(continueBlock, 'padding'));
-    expect(Math.max(0, ...continuePadding)).toBeGreaterThan(6);
-    const continueMargin = cssLengthPx(cssDeclaration(continueBlock, 'margin'));
-    expect(continueMargin[continueMargin.length - 1] ?? 0).toBeGreaterThan(4);
+    expect(Math.max(0, ...continuePadding)).toBeGreaterThanOrEqual(4);
+    expect(Math.max(0, ...continuePadding)).toBeLessThanOrEqual(8);
+    expect(continueBlock).not.toMatch(/border:\s*1px/);
+    expect(continueBlock).not.toMatch(/--lightink-bg-elevated/);
+    expect(continueBlock).toMatch(/background:\s*transparent/);
+    expect(continueBlock).toMatch(/box-shadow:\s*none/);
 
-    // 横幅标题最多两行；封面墙标题仍两行。
+    const dismissBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-continue-dismiss/,
+    );
+    const dismissBlock = dismissBlocks[dismissBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(dismissBlock, 'min-width'))[0]).toBeGreaterThanOrEqual(44);
+    expect(cssLengthPx(cssDeclaration(dismissBlock, 'min-height'))[0]).toBeGreaterThanOrEqual(44);
+
+    // 继续阅读标题单行省略；封面墙标题仍两行。
     const bannerTitleBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]{0,80}?\.lightink-library-continue-text strong/,
     );
-    expect(bannerTitleBlocks.join('\n')).toMatch(/-webkit-line-clamp:\s*2/);
-    expect(bannerTitleBlocks.join('\n')).toMatch(/white-space:\s*normal/);
+    expect(bannerTitleBlocks.join('\n')).toMatch(/white-space:\s*nowrap/);
+    expect(bannerTitleBlocks.join('\n')).not.toMatch(/-webkit-line-clamp:\s*2/);
+    expect(bannerTitleBlocks.join('\n')).not.toMatch(/white-space:\s*normal/);
     expect(css).toMatch(/\.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/);
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/,
@@ -4265,6 +4307,7 @@ describe('LibraryView mobile shelf', () => {
     const phoneWall = phoneWallBlocks[phoneWallBlocks.length - 1] ?? '';
     expect(phoneWall).toMatch(/repeat\(\s*3,\s*minmax\(0,\s*1fr\)/);
     expect(phoneWall).not.toMatch(/repeat\(\s*2,\s*minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/\.lightink-library-cover\s*\{[^}]*aspect-ratio:\s*2\s*\/\s*3/);
 
     const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0] ?? '';
     expect(desktopWall).toMatch(
@@ -4632,7 +4675,7 @@ describe('LibraryView mobile shelf', () => {
     expect(root.dataset.libraryNav).toBe('shelf');
     expect(root.dataset.libraryTab).toBe('shelf');
     expect(host.querySelector('.lightink-library-header h1')?.textContent).toBe('书架');
-    expect(host.querySelector<HTMLElement>('.lightink-library-header h1')?.hidden).toBe(false);
+    expect(host.querySelector<HTMLElement>('.lightink-library-header h1')?.hidden).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
 
