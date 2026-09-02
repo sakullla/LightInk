@@ -996,7 +996,7 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(panel.element.querySelector('.lightink-reader-sidebar-close')).not.toBeNull();
   });
 
-  it('键盘弹起时 pinFixedOverlay 双锚定上下沿、摘除 data-keyboard 后回到全页窗口', async () => {
+  it('键盘弹起时全页窗口顶缘不下塌，只把底缘抬到键盘上方；摘除 data-keyboard 后回到全页窗口', async () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     document.documentElement.setAttribute('data-keyboard', '');
     const host = document.createElement('div');
@@ -1008,7 +1008,10 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     pinFixedOverlay(panel.element, host, { innerWidth: 390, innerHeight: 700 });
 
     expect(panel.element.classList.contains('is-touch-sheet')).toBe(true);
-    expect(panel.element.style.top).toBe('calc(var(--lightink-safe-top, 0px) + 4.5rem)');
+    // 顶缘仍贴视口顶（不让出 safe-top + 4.5rem 的底栏面板 chrome 位），左右铺满。
+    expect(panel.element.style.top).toBe('0px');
+    expect(panel.element.style.left).toBe('0px');
+    expect(panel.element.style.right).toBe('0px');
     expect(panel.element.style.bottom).toBe('var(--lightink-keyboard-inset, 0px)');
     expect(panel.element.style.height).toBe('auto');
     expect(panel.element.style.maxHeight).toBe('none');
@@ -1080,7 +1083,7 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     );
   });
 
-  it('触屏 sheet CSS：列表有最小高度保障且键盘态隐藏颜色行、压缩固定 chrome', () => {
+  it('触屏 sheet CSS：列表有最小高度保障且键盘态保留颜色行、压缩固定 chrome', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
     // 列表仍是唯一滚动区，is-touch-sheet 下 min-height 保障 ≥3 行条目。
     const listRule = css.match(
@@ -1091,9 +1094,9 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(minHeight, 'touch sheet list declares a min-height').toBeTruthy();
     const minHeightPx = minHeight![2] === 'rem' ? parseFloat(minHeight![1]) * 16 : parseFloat(minHeight![1]);
     expect(minHeightPx).toBeGreaterThanOrEqual(9 * 16 * 0.9);
-    // 键盘态：隐藏范围弹出色点行、收紧 header/搜索区。
-    expect(css).toMatch(
-      /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-search-scope-colors\s*\{[^}]*display:\s*none/,
+    // 键盘态：色点行（颜色筛选）必须保持可见，只收紧 header/搜索区。
+    expect(css).not.toMatch(
+      /html\[data-keyboard\][^{]*\.lightink-reader-sidebar-search-scope-colors\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /html\[data-keyboard\] \.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-header\s*\{[^}]*padding:/,

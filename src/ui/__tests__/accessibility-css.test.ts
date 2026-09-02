@@ -229,26 +229,34 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
     ).not.toContain('--lightink-keyboard-inset');
   });
 
-  it('presents the source/group modals as bottom sheets on touch phones', () => {
-    const sheetBlocks = mediaQueryBlocks(libraryCss, '(max-width: 760px)').filter((block) =>
-      block.includes('.lightink-library-source-modal'),
+  it('keeps the source/group dialogs centered cards on touch phones (no bottom sheet)', () => {
+    // 旧 ≤760px sheet 块在无显式列的 grid 里用 width:100% 会退化成内容宽度，
+    // 渲成贴底窄盒；居中卡片不再有任何 sheet 媒体块。
+    const sheetBlocks = mediaQueryBlocks(libraryCss, '(max-width: 760px)').filter(
+      (block) =>
+        block.includes('.lightink-library-source-modal') ||
+        block.includes('.lightink-library-group-modal'),
     );
-    expect(sheetBlocks).toHaveLength(1);
-    const sheet = sheetBlocks[0]!;
+    expect(sheetBlocks).toHaveLength(0);
     for (const token of ['.lightink-library-source-modal', '.lightink-library-group-modal']) {
-      expect(sheet, `${token} joins the bottom-sheet form`).toContain(token);
+      const centered = cssDeclarationBlocks(libraryCss).find(
+        (rule) =>
+          rule.selector.includes('html[data-android]') &&
+          rule.selector.includes(token) &&
+          !rule.selector.includes('.lightink-modal-dialog') &&
+          /place-items:\s*center/.test(rule.body),
+      );
+      expect(centered, `${token} is a centered card on touch`).toBeDefined();
+      // 任何触屏/键盘态规则都不得把来源/组锚到底部。
+      const bottomAnchored = cssDeclarationBlocks(libraryCss).filter(
+        (rule) => rule.selector.includes(token) && /align-items:\s*end/.test(rule.body),
+      );
+      expect(bottomAnchored, `${token} must not anchor to the bottom`).toHaveLength(0);
     }
-    // 缓存上限是短表单：触屏保持视口居中，不加入底栏 sheet。
-    expect(sheet).not.toContain('.lightink-library-cache-limit-modal');
-    // 底部锚定；safe-bottom/keyboard-inset 经 bottom 通道单一消费。
-    expect(sheet).toMatch(/align-items:\s*end/);
-    expect(sheet).toMatch(
-      /padding-bottom:\s*max\(var\(--lightink-safe-bottom, 0px\), var\(--lightink-keyboard-inset, 0px\)\)/,
+    // 卡片宽度沿通用触屏规则（近全宽、16px 圆角）。
+    expect(libraryCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-group-modal\s*\.lightink-modal-dialog,[\s\S]*?\.lightink-library-membership-dialog\s*\{[^}]*width:\s*calc\(100vw - 24px\)[^}]*border-radius:\s*16px/,
     );
-    // 底部 sheet：圆角只在上缘（16-20px），高度随内容盒（无 inset 项）。
-    expect(sheet).toMatch(/border-radius:\s*20px 20px 0 0/);
-    expect(sheet).toMatch(/border-bottom:\s*none/);
-    expect(sheet).toMatch(/max-height:\s*100%/);
   });
 
   it('keeps the cache-limit dialog centered on touch instead of a bottom sheet', () => {
@@ -264,24 +272,37 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
     expect(keyboardEnd, 'cache-limit must not pin to the keyboard top').toBeUndefined();
   });
 
-  it('anchors dialogs above the keyboard via html[data-keyboard] without double deduction', () => {
+  it('keeps source/group dialogs centered above the keyboard and caps their height without double deduction', () => {
     for (const token of ['.lightink-library-source-modal', '.lightink-library-group-modal']) {
-      const anchored = cssDeclarationBlocks(libraryCss).find(
+      // 键盘态：1fr 行让 dialog 的百分比 max-height 有定高可解析；避开 safe-top。
+      const row = cssDeclarationBlocks(libraryCss).find(
         (rule) =>
           rule.selector.includes('html[data-keyboard]') &&
           rule.selector.includes(token) &&
-          /align-items:\s*end/.test(rule.body),
+          !rule.selector.includes('.lightink-modal-dialog') &&
+          /grid-template-rows:\s*minmax\(0, 1fr\)/.test(rule.body),
       );
-      expect(anchored, `${token} anchors to the keyboard top when open`).toBeDefined();
+      expect(row, `${token} gives the dialog a definite row when the keyboard is open`).toBeDefined();
+      expect(row!.body).toMatch(/padding-top:\s*var\(--lightink-safe-top, 0px\)/);
+      expect(row!.body).not.toMatch(/align-items:\s*end/);
       const capped = cssDeclarationBlocks(libraryCss).find(
         (rule) =>
           rule.selector.includes('html[data-keyboard]') &&
           rule.selector.includes(token) &&
           rule.selector.includes('.lightink-modal-dialog') &&
-          /max-height:\s*100%/.test(rule.body),
+          /max-height:\s*calc\(100% - 24px\)/.test(rule.body),
       );
       expect(capped, `${token} dialog caps to the visible area when open`).toBeDefined();
     }
+    // 成员 sheet 仍锚到键盘上缘。
+    expect(
+      cssDeclarationBlocks(libraryCss).some(
+        (rule) =>
+          rule.selector.includes('html[data-keyboard]') &&
+          rule.selector.includes('.lightink-library-membership-overlay') &&
+          /align-items:\s*end/.test(rule.body),
+      ),
+    ).toBe(true);
     // 密码对话框（flex overlay）同样锚到键盘上缘、高度收敛可视区。
     expect(
       cssDeclarationBlocks(libraryCss).some(

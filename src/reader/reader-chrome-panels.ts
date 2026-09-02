@@ -1126,7 +1126,16 @@ export function pinFixedOverlay(
     overlay.style.left = `${Math.max(0, box.left)}px`;
     overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
     overlay.classList.remove('is-touch-search-page');
-    if (keyboardOpen) {
+    if (keyboardOpen && overlay.classList.contains('lightink-reader-annotation-panel')) {
+      // 标注/搜索全页窗口：键盘弹起只把底缘抬到键盘上方，顶缘仍贴视口顶，
+      // 不能像底栏面板那样让出顶部 chrome（否则整页窗口会“下塌”露出阅读器顶栏）。
+      overlay.style.top = '0px';
+      overlay.style.right = '0px';
+      overlay.style.left = '0px';
+      overlay.style.bottom = 'var(--lightink-keyboard-inset, 0px)';
+      overlay.style.maxHeight = 'none';
+      overlay.style.height = 'auto';
+    } else if (keyboardOpen) {
       // Keyboard up: double-anchor between the safe top and the keyboard top;
       // the keyboard already covers the footer, so no footer inset is added.
       overlay.style.top = 'calc(var(--lightink-safe-top, 0px) + 4.5rem)';

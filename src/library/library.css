@@ -4076,48 +4076,32 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 }
 
 /*
- * T4 触屏 ≤760px：来源/组底部 sheet 化（沿 theme.css sync panel 触屏基线）：
- * 底部锚定、圆角只在上缘、safe-bottom/keyboard-inset 经 bottom 通道单一消费。
- * 缓存上限短表单保持视口居中卡片（place-items:center），不加入本块。
- * 44px 控件与 16px 输入字号由上方通用触屏规则提供。
+ * 触屏手机：来源/组表单是视口居中卡片（与缓存上限同款），不做底部 sheet。
+ * overlay 是无显式列的 grid，旧 sheet 规则的 `width: 100%` 会循环退化成
+ * 内容宽度，实际渲成贴底的窄盒而非全宽 sheet；居中卡片只依赖上方通用触屏
+ * 宽度规则（calc(100vw - 24px)）。键盘 inset 只走 overlay padding-bottom，
+ * 卡片在键盘上方的剩余可视区居中。
  */
-@media (max-width: 760px) {
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
-  :is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal {
-    grid-template-rows: minmax(0, 1fr);
-    align-items: end;
-    padding-bottom: max(var(--lightink-safe-bottom, 0px), var(--lightink-keyboard-inset, 0px));
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-group-modal
-    .lightink-modal-dialog,
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library-source-modal
-    .lightink-modal-dialog {
-    width: 100%;
-    max-width: 100vw;
-    /* 高度收敛到内容盒（已扣 safe-bottom/keyboard-inset 的可视区），不含 inset 项。 */
-    max-height: 100%;
-    padding: 16px 16px 14px;
-    border: 1px solid var(--lightink-border);
-    border-bottom: none;
-    border-radius: 20px 20px 0 0;
-    box-shadow: var(--lightink-shadow-strong);
-  }
+:is(html[data-android], html[data-touch-primary]) .lightink-library-group-modal,
+:is(html[data-android], html[data-touch-primary]) .lightink-library-source-modal {
+  place-items: center;
 }
 
 /*
- * T4 键盘态锚定（reader-chrome-panels.ts pinFixedOverlay 范式）：safe-area.ts 在
- * inset ≥ 80px 时写 html[data-keyboard]。来源/组/成员 sheet 键盘打开时锚到键盘
- * 上缘；缓存上限保持 place-items:center，由 overlay padding-bottom 把居中区域
- * 收到键盘上方。高度收敛不含 keyboard-inset，杜绝双倍扣减。
+ * 键盘态（safe-area.ts 在 inset ≥ 80px 时写 html[data-keyboard]）：
+ * 成员 sheet 锚到键盘上缘；来源/组卡片保持居中，只把高度收敛到键盘上方
+ * （避开 safe-top，留 24px 边距），内容多时在卡片内滚动而不是被顶出屏幕。
+ * 高度收敛不含 keyboard-inset，杜绝双倍扣减。
  */
-html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-group-modal,
-html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-source-modal,
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-overlay {
   grid-template-rows: minmax(0, 1fr);
   align-items: end;
+}
+
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-group-modal,
+html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-source-modal {
+  grid-template-rows: minmax(0, 1fr);
+  padding-top: var(--lightink-safe-top, 0px);
 }
 
 html[data-keyboard]:is([data-android], [data-touch-primary])
@@ -4125,7 +4109,10 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   .lightink-modal-dialog,
 html[data-keyboard]:is([data-android], [data-touch-primary])
   .lightink-library-source-modal
-  .lightink-modal-dialog,
+  .lightink-modal-dialog {
+  max-height: calc(100% - 24px);
+}
+
 html[data-keyboard]:is([data-android], [data-touch-primary]) .lightink-library-membership-dialog {
   max-height: 100%;
 }

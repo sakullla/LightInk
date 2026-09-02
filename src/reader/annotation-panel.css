@@ -884,11 +884,8 @@
   line-height: 1.58;
 }
 
-/* 键盘弹起：收紧固定 chrome，把高度让给列表；色点行先藏。 */
-html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-search-scope-colors {
-  display: none;
-}
-
+/* 键盘弹起：收紧固定 chrome，把高度让给列表。色点行保持可见——它是筛选
+ * 的一部分，键盘态藏掉会让用户以为颜色筛选消失了。 */
 html[data-keyboard] .lightink-reader-sidebar.is-touch-sheet .lightink-reader-sidebar-header {
   padding: 0.4rem 0.75rem 0.35rem;
 }
