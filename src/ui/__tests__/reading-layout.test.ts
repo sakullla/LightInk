@@ -20,6 +20,10 @@ import {
   pagedFrameStep,
   PAGED_TOUCH_SLIDE_MS,
   pagedProgressRatio,
+  pagedContentLooksColumnized,
+  pagedGlyphInView,
+  pagedHitPagePlausible,
+  pagedScrollLeftForClientX,
   pagedSpreadMetrics,
   parseReadingLayout,
   type PagedScrollMotion,
@@ -27,6 +31,7 @@ import {
   readingColumnLayout,
   readingNavDirection,
   rafFrameScheduler,
+  realPagedFragmentBox,
   saveReadingLayout,
   scrollPagedScrollerToEdge,
   scrollToKeepViewportAnchor,
@@ -107,6 +112,27 @@ describe('paged navigation', () => {
     expect(pagedProgressRatio(scroller)).toBe(0.5);
     applyPagedProgress(scroller, 1);
     expect(scroller.scrollLeft).toBe(500);
+    applyPagedProgress(scroller, 0);
+    expect(scroller.scrollLeft).toBe(0);
+  });
+
+  it('drops CSS-column phantom boxes and pages to the real glyph', () => {
+    const phantom = { left: 8, width: 0.4, height: 640 };
+    const tall = { left: 8, width: 12, height: 80 };
+    const real = { left: 816, width: 18, height: 18 };
+    expect(realPagedFragmentBox([phantom, tall, real], 20)).toEqual(real);
+    expect(realPagedFragmentBox([phantom], 20)).toBeNull();
+    expect(pagedScrollLeftForClientX(816, 8, 0, 400)).toBe(800);
+    expect(pagedScrollLeftForClientX(8, 8, 0, 400)).toBe(0);
+    expect(pagedGlyphInView(816, 8, 400)).toBe(false);
+    expect(pagedGlyphInView(16, 8, 400)).toBe(true);
+    expect(pagedGlyphInView(408, 8, 400)).toBe(false);
+    expect(pagedContentLooksColumnized(2112, 352, 2400)).toBe(true);
+    expect(pagedContentLooksColumnized(352, 352, 2400)).toBe(false);
+    expect(pagedContentLooksColumnized(352, 352, 120)).toBe(true);
+    expect(pagedHitPagePlausible(0, 2112, 352, 1800, 2400)).toBe(false);
+    expect(pagedHitPagePlausible(704, 2112, 352, 1800, 2400)).toBe(true);
+    expect(pagedHitPagePlausible(0, 352, 352, 12, 80)).toBe(true);
   });
 
   it('snaps a leftover sliver back to a whole page', () => {

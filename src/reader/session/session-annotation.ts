@@ -274,11 +274,9 @@ export function createReaderSessionAnnotation(
       if (!visible && sidebarVisible) {
         if (!host.preserveSearchOnHide()) {
           host.resetSearch();
-        } else {
-          // 整页搜索关闭：会话与查询保留，但正文 mark 滞后清除（跳转命中
-          // 短暂高亮后消失，不在正文里永久残留）。
-          host.releaseSearchMarks();
         }
+        // 点结果关搜索：linger 改由跳转 endFlowHitReveal 启动。
+        // 远章冷加载常超过 1.8s，这里先 dropMarks 会把还没画上的命中清掉。
       }
       sidebarVisible = visible;
       if (visible) {

@@ -4,16 +4,15 @@
  *
  * 单一组件承载两件事：
  * - 标注笔记本：本书全部书签/高亮/笔记按文档位置排序，范围/颜色筛选
- *   （胶囊右侧高级面板），点击跳转、编辑备注、删除（删除由宿主走
+ *   （搜索框下常显 chips），点击跳转、编辑备注、删除（删除由宿主走
  *   removeAnnotation 产出 tombstone，本组件列表永远经 filterAnnotations
  *   过滤，tombstone 不出列）；
  * - 同一查询框双语义检索：标注范围下本地筛标注；「全部」范围有查询时正文
  *   命中合并渲染；「正文」范围只检索全书（可选 `search`）。
  *
  * 双端同一实现：桌面经 pinFixedOverlay 侧栏形态钉在阅读区右侧；触屏由宿主
- * portal 到 body。标注笔记本仍是 is-touch-sheet 底栏；「搜索正文」切到
- * data-search-page=document 整页（返回 + 搜索框占顶栏，结果占满其余空间），
- * 不再用半高 sheet 把命中挤在键盘上方。
+ * portal 到 body，触屏是铺满阅读器的全页窗口。范围 chips 常显，
+ * 选「正文」只换检索语义与占位符，不改搜索框骨架。
  *
  * Escape 分层：查询非空先清查询（不关面板），为空退一层经 onClose 关面板；
  * 事件在面板内消费，不再冒泡到 chrome 返回分层（一次只关一层）。
@@ -41,7 +40,7 @@ import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 type AnnotationFilter = 'all' | AnnotationKind | 'document';
 type ColorFilter = 'all' | AnnotationColor;
 
-/** 高级面板互斥范围：全部 / 高亮 / 笔记 / 书签；「正文」按需插入全部之后。 */
+/** 互斥范围 chips：全部 / 高亮 / 笔记 / 书签；「正文」按需插入全部之后。 */
 const KIND_SCOPES: readonly AnnotationFilter[] = ['all', 'highlight', 'note', 'bookmark'];
 
 function filterLabelKey(filter: AnnotationFilter): MessageKey {
@@ -59,6 +58,9 @@ export interface SearchHitView {
   snippet: string;
   location: string | null;
   current: boolean;
+  /** 本条命中在 snippet 内的 [markStart, markEnd)；有则只高亮这一处。 */
+  markStart?: number;
+  markEnd?: number;
 }
 
 export interface SearchHitsState {
@@ -88,15 +90,6 @@ export interface AnnotationPanelDeps {
   onEditNote?: (annotation: Annotation) => void;
   /** Close the panel from its close button / Escape layering. */
   onClose?: () => void;
-  /**
-   * 触屏「搜索正文」整页与标注 sheet 切换时通知宿主重 pin（几何不同）。
-   */
-  onLayoutChange?: () => void;
-  /**
-   * 可选：导出当前书全部标注为 Markdown（R5，宿主装配 save 对话框 + 原子写）。
-   * 缺省时头部导出按钮隐藏（与 search deps 缺省同模式；Markdown 编辑器宿主不传）。
-   */
-  onExport?: () => void;
   /** Reader-only document search. Markdown hosts and bitmap formats omit this. */
   search?: AnnotationPanelSearch;
   /**
@@ -224,8 +217,9 @@ function createFilterButton(
 
 /**
  * 创建统一融合标注搜索面板。element 由宿主挂载：桌面钉在阅读区右侧
- * （pinFixedOverlay）；触屏 portal 到 body——标注笔记本是 is-touch-sheet
- * 底栏，「搜索正文」是 data-search-page 整页。
+ * （pinFixedOverlay）；触屏 portal 到 body，始终是独立的 is-touch-sheet
+ * 弹窗。范围 chips 常显，不改搜索框骨架。触屏为铺满视口的全页窗口，
+ * 不留阅读器底栏。
  */
 export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPanel {
   const root = document.createElement('aside');
@@ -236,6 +230,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   const header = document.createElement('div');
   header.className = 'lightink-reader-sidebar-header';
   const title = document.createElement('span');
+  title.className = 'lightink-reader-sidebar-title';
   title.textContent = deps.t('annotation.sidebar');
   const close = document.createElement('button');
   close.type = 'button';
@@ -244,25 +239,12 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   close.setAttribute('aria-label', deps.t('annotation.closeSidebar'));
   close.setAttribute('title', deps.t('annotation.closeSidebar'));
   close.addEventListener('click', () => deps.onClose?.());
-  header.append(title);
-  let exportButton: HTMLButtonElement | null = null;
-  if (deps.onExport !== undefined) {
-    exportButton = createActionButton(
-      'lightink-reader-sidebar-export',
-      deps.t('annotation.export.button'),
-      () => deps.onExport?.(),
-      deps.t('annotation.export.button'),
-    );
-    exportButton.setAttribute('title', deps.t('annotation.export.button'));
-    header.appendChild(exportButton);
-  }
-  header.appendChild(close);
+  header.append(title, close);
 
   const noteField = document.createElement('div');
   noteField.className = 'lightink-reader-sidebar-search lightink-reader-sidebar-note-search';
   noteField.setAttribute('role', 'search');
-  // 填充胶囊：放大镜 + 输入 + 命中计数 + 清空 + 高级，聚焦环挂在胶囊上
-  // （样式见 annotation-panel.css search-pill 段）。
+  // 填充胶囊：放大镜 + 输入 + 命中计数 + 清空，聚焦环挂在胶囊上。
   const searchPill = document.createElement('div');
   searchPill.className = 'lightink-reader-sidebar-search-pill';
   const searchIcon = document.createElement('span');
@@ -283,31 +265,21 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   clearButton.textContent = '×';
   clearButton.setAttribute('aria-label', deps.t('reader.search.clear'));
   clearButton.hidden = true;
-  const advancedButton = document.createElement('button');
-  advancedButton.type = 'button';
-  advancedButton.className = 'lightink-reader-sidebar-search-advanced';
-  advancedButton.textContent = deps.t('reader.search.advanced');
-  advancedButton.setAttribute('aria-label', deps.t('reader.search.advanced'));
-  advancedButton.setAttribute('aria-expanded', 'false');
-  advancedButton.setAttribute('aria-haspopup', 'dialog');
   const noteStatus = document.createElement('span');
   noteStatus.className = 'lightink-reader-sidebar-search-status';
   noteStatus.setAttribute('aria-live', 'polite');
-  // 清空在高级左侧：查询非空时两者并存，清空只清词。
-  searchPill.append(searchIcon, noteSearchInput, noteStatus, clearButton, advancedButton);
+  searchPill.append(searchIcon, noteSearchInput, noteStatus, clearButton);
   noteField.append(searchPill);
 
   const scopePanel = document.createElement('div');
   scopePanel.className = 'lightink-reader-sidebar-search-scope';
-  scopePanel.hidden = true;
-  scopePanel.setAttribute('role', 'dialog');
+  scopePanel.setAttribute('role', 'group');
   scopePanel.setAttribute('aria-label', deps.t('reader.search.scope'));
   const scopeList = document.createElement('div');
   scopeList.className = 'lightink-reader-sidebar-search-scope-list';
-  scopeList.setAttribute('role', 'listbox');
+  scopeList.setAttribute('role', 'tablist');
   const filterButtons = new Map<AnnotationFilter, HTMLButtonElement>();
   let currentFilter: AnnotationFilter = 'all';
-  let scopeOpen = false;
 
   const colors = document.createElement('div');
   colors.className = 'lightink-reader-sidebar-search-scope-colors';
@@ -328,16 +300,30 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     },
     { passive: true },
   );
+  const hitKeyFromEvent = (event: Event): string | null => {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest('button') !== null) {
+      return null;
+    }
+    const hit = target.closest<HTMLElement>('[data-search-key]');
+    if (hit === null || !list.contains(hit)) {
+      return null;
+    }
+    return hit.dataset.searchKey ?? null;
+  };
+  list.addEventListener('click', (event) => {
+    const key = hitKeyFromEvent(event);
+    if (key !== null && key !== '') {
+      deps.search?.onJump(key);
+    }
+  });
 
   const applyFilter = (): void => {
     for (const [filter, button] of filterButtons) {
       const active = filter === currentFilter;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
       button.setAttribute('aria-selected', active ? 'true' : 'false');
-      button.classList.toggle(
-        'lightink-reader-sidebar-search-scope-option--active',
-        active,
-      );
+      button.classList.toggle('lightink-reader-sidebar-search-scope-option--active', active);
     }
     for (const [color, button] of colorButtons) {
       const active = color === currentColor;
@@ -368,7 +354,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       },
       () => setFilter(filter),
     );
-    button.setAttribute('role', 'option');
+    button.setAttribute('role', 'tab');
     filterButtons.set(filter, button);
     scopeList.appendChild(button);
   }
@@ -418,76 +404,17 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   stack.append(noteField, scopePanel);
   root.append(header, stack, list);
 
-  const setScopeOpen = (open: boolean): void => {
-    scopeOpen = open;
-    scopePanel.hidden = !open;
-    advancedButton.setAttribute('aria-expanded', open ? 'true' : 'false');
-    advancedButton.classList.toggle('is-open', open);
-  };
-
-  advancedButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    setScopeOpen(!scopeOpen);
-  });
-
-  const onPointerDownOutside = (event: PointerEvent): void => {
-    if (!scopeOpen) return;
-    const target = event.target;
-    if (
-      target instanceof Node &&
-      (scopePanel.contains(target) || advancedButton.contains(target))
-    ) {
-      return;
-    }
-    setScopeOpen(false);
-  };
-  document.addEventListener('pointerdown', onPointerDownOutside);
-
   /**
-   * 输入框描述随范围切换：标注范围下筛选标注，「正文」范围下只检索全书。
-   * 正文模式：藏导出与标题；触屏把搜索框抬进顶栏并标 data-search-page，
-   * 让宿主改成整页而不是半高 sheet。高级按钮与范围面板仍可用。
+   * 输入框描述随范围切换：标注范围下筛选标注，「正文」范围下检索全书。
+   * 不改弹窗骨架——范围 chips 与搜索胶囊始终留在同一 sheet 里。
    */
   const syncSearchMode = (): void => {
     const documentMode = currentFilter === 'document' && documentCategoryVisible();
-    const wasSearchPage = root.dataset.searchPage === 'document';
     const label = deps.t(
       documentMode ? 'reader.search.document' : 'annotation.search.placeholder',
     );
     noteSearchInput.placeholder = label;
     noteSearchInput.setAttribute('aria-label', label);
-    title.hidden = documentMode;
-    title.textContent = deps.t(documentMode ? 'reader.search.document' : 'annotation.sidebar');
-    if (exportButton !== null) {
-      exportButton.hidden = documentMode;
-    }
-    if (documentMode) {
-      root.dataset.searchPage = 'document';
-      root.setAttribute('aria-label', deps.t('reader.search.document'));
-      close.textContent = '‹';
-      close.setAttribute('aria-label', deps.t('reader.search.back'));
-      close.setAttribute('title', deps.t('reader.search.back'));
-      header.insertBefore(close, header.firstChild);
-      if (stack.parentElement !== header) {
-        header.appendChild(stack);
-      }
-    } else {
-      delete root.dataset.searchPage;
-      root.setAttribute('aria-label', deps.t('annotation.sidebar'));
-      close.textContent = '×';
-      close.setAttribute('aria-label', deps.t('annotation.closeSidebar'));
-      close.setAttribute('title', deps.t('annotation.closeSidebar'));
-      if (stack.parentElement === header) {
-        root.insertBefore(stack, list);
-      }
-      if (exportButton !== null) {
-        header.appendChild(exportButton);
-      }
-      header.appendChild(close);
-    }
-    if (wasSearchPage !== documentMode) {
-      deps.onLayoutChange?.();
-    }
   };
 
   const clearDocumentSearch = (): void => {
@@ -717,24 +644,63 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   applyFilter();
   syncSearchMode();
 
-  /** 命中片段内高亮当前查询词（大小写不敏感首次命中；查不到退回纯文本）。 */
-  const paintSnippet = (host: HTMLElement, snippet: string): void => {
-    const query = noteSearchInput.value.trim();
-    if (query !== '') {
-      const at = snippet.toLowerCase().indexOf(query.toLowerCase());
-      if (at >= 0) {
-        host.append(snippet.slice(0, at));
-        const mark = document.createElement('mark');
-        mark.className = 'lightink-reader-sidebar-hit-mark';
-        mark.textContent = snippet.slice(at, at + query.length);
-        host.append(mark, snippet.slice(at + query.length));
-        return;
+  /** 命中片段只高亮本条 [start, end)，避免片段里另一处同词被点进去却跳到本行 key。 */
+  const paintSnippet = (host: HTMLElement, hit: SearchHitView): void => {
+    const snippet = hit.snippet;
+    const markStart = hit.markStart;
+    const markEnd = hit.markEnd;
+    if (
+      markStart !== undefined &&
+      markEnd !== undefined &&
+      markStart >= 0 &&
+      markEnd > markStart &&
+      markEnd <= snippet.length
+    ) {
+      if (markStart > 0) {
+        host.append(snippet.slice(0, markStart));
       }
+      const mark = document.createElement('mark');
+      mark.className = 'lightink-reader-sidebar-hit-mark';
+      mark.textContent = snippet.slice(markStart, markEnd);
+      host.append(mark);
+      if (markEnd < snippet.length) {
+        host.append(snippet.slice(markEnd));
+      }
+      return;
     }
-    host.textContent = snippet;
+    const query = noteSearchInput.value.trim();
+    if (query === '') {
+      host.textContent = snippet;
+      return;
+    }
+    const hay = snippet.toLowerCase();
+    const needle = query.toLowerCase();
+    if (needle.length === 0 || hay.length !== snippet.length) {
+      host.textContent = snippet;
+      return;
+    }
+    const at = hay.indexOf(needle);
+    if (at < 0) {
+      host.textContent = snippet;
+      return;
+    }
+    if (at > 0) {
+      host.append(snippet.slice(0, at));
+    }
+    const mark = document.createElement('mark');
+    mark.className = 'lightink-reader-sidebar-hit-mark';
+    mark.textContent = snippet.slice(at, at + query.length);
+    host.append(mark);
+    if (at + query.length < snippet.length) {
+      host.append(snippet.slice(at + query.length));
+    }
   };
 
-  const appendHits = (hits: readonly SearchHitView[], showEmpty: boolean): void => {
+  const appendHits = (
+    hits: readonly SearchHitView[],
+    showEmpty: boolean,
+    previousLocation: string | null = null,
+  ): void => {
     if (hits.length === 0) {
       if (showEmpty) {
         const emptyItem = document.createElement('li');
@@ -744,22 +710,23 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       }
       return;
     }
+    let lastLocation = previousLocation;
     for (const hit of hits) {
       const li = document.createElement('li');
       li.className = 'lightink-reader-sidebar-item lightink-reader-sidebar-hit';
       li.classList.toggle('is-current', hit.current);
       li.dataset.searchKey = hit.key;
-      if (hit.location !== null) {
+      if (hit.location !== null && hit.location !== lastLocation) {
         const where = document.createElement('span');
         where.className = 'lightink-reader-sidebar-location';
         where.textContent = hit.location;
         li.appendChild(where);
       }
+      lastLocation = hit.location;
       const snippet = document.createElement('span');
       snippet.className = 'lightink-reader-sidebar-text';
-      paintSnippet(snippet, hit.snippet);
+      paintSnippet(snippet, hit);
       li.appendChild(snippet);
-      li.addEventListener('click', () => search?.onJump(hit.key));
       list.appendChild(li);
     }
   };
@@ -772,7 +739,13 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
    * 自然退化为整表重建）。
    */
   const reconcileHitList = (hits: readonly SearchHitView[], showEmpty: boolean): void => {
-    const rows = Array.from(list.children) as HTMLElement[];
+    const rows = Array.from(list.children).filter(
+      (node): node is HTMLElement =>
+        node instanceof HTMLElement &&
+        (node.classList.contains('lightink-reader-sidebar-hit') ||
+          node.classList.contains('lightink-reader-sidebar-empty') ||
+          node.classList.contains('lightink-reader-sidebar-more')),
+    );
     let prefix = 0;
     while (prefix < rows.length && prefix < hits.length) {
       const row = rows[prefix]!;
@@ -786,7 +759,8 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     for (const row of rows.slice(prefix)) {
       row.remove(); // 含空态/「加载更多」哨兵行：有状态尾部每批重建
     }
-    appendHits(hits.slice(prefix), showEmpty && hits.length === 0);
+    const previousLocation = prefix > 0 ? (hits[prefix - 1]?.location ?? null) : null;
+    appendHits(hits.slice(prefix), showEmpty && hits.length === 0, previousLocation);
   };
 
   /** 统一渲染：标注分类下为标注列表，「全部」分类有查询时下方合并正文命中。 */
@@ -795,6 +769,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     if (lastHitsState.searching !== true && lastHitsState.hasMore !== true) return;
     const more = document.createElement('li');
     more.className = 'lightink-reader-sidebar-more';
+    more.classList.toggle('is-busy', lastHitsState.searching === true);
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent =
@@ -855,7 +830,6 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       appendMore();
       return;
     }
-    list.replaceChildren();
     const kindFilter: AnnotationKind | undefined =
       currentFilter === 'all' ? undefined : currentFilter;
     // 列表必经 filterAnnotations：tombstone（已删除记录）永不出列。
@@ -868,14 +842,27 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
           : undefined,
     });
     visible.sort(byDocumentPosition);
-    for (const annotation of visible) {
-      list.appendChild(renderItem(annotation));
+    for (const child of Array.from(list.children)) {
+      if (!(child instanceof HTMLElement)) continue;
+      if (child.classList.contains('lightink-reader-sidebar-hit')) continue;
+      child.remove();
     }
+    const firstHit = list.querySelector(':scope > .lightink-reader-sidebar-hit');
+    for (const annotation of visible) {
+      list.insertBefore(renderItem(annotation), firstHit);
+    }
+    reconcileHitList(lastHits ?? [], false);
     if (lastHits !== null) {
-      appendHits(lastHits, false);
       appendMore();
     }
     if (visible.length === 0 && (lastHits === null || lastHits.length === 0)) {
+      const quiet =
+        lastHits !== null &&
+        (lastHitsState.searching === true || lastHitsState.pending === true);
+      if (quiet) {
+        // 正文检索进行中：不要用「无标注」空态盖住等待态。
+        return;
+      }
       const empty = document.createElement('li');
       empty.className = 'lightink-reader-sidebar-empty';
       // 区分无标注、搜索无命中（标注与正文都没有）、类型/颜色筛无匹配。
@@ -883,11 +870,13 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       // 无标注同文案，不再失真为筛选空态。
       const liveCount = filterAnnotations(lastAnnotations).length;
       empty.textContent =
-        liveCount === 0
-          ? deps.t('annotation.empty')
-          : annotationQuery.trim() !== ''
-            ? deps.t('reader.search.empty')
-            : deps.t('annotation.filter.empty');
+        lastHits !== null
+          ? deps.t('reader.search.empty')
+          : liveCount === 0
+            ? deps.t('annotation.empty')
+            : annotationQuery.trim() !== ''
+              ? deps.t('reader.search.empty')
+              : deps.t('annotation.filter.empty');
       list.appendChild(empty);
     }
   };
@@ -911,22 +900,11 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     renderCombined();
   };
 
-  const activateDocumentFilter = (): void => {
-    if (documentCategoryVisible() && currentFilter !== 'document') {
-      currentFilter = 'document';
-      applyFilter();
-      syncSearchMode();
-    }
-  };
-
   return {
     element: root,
     render: renderList,
     renderHits,
     setSearchQuery(query) {
-      if (query.trim() !== '') {
-        activateDocumentFilter();
-      }
       noteSearchInput.value = query;
       annotationQuery = query;
       clearButton.hidden = query === '';
@@ -935,14 +913,12 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       return noteSearchInput.value;
     },
     focusSearch() {
-      activateDocumentFilter();
       noteSearchInput.focus({ preventScroll: true });
       noteSearchInput.select();
     },
     destroy() {
       moreRelease?.();
       moreRelease = null;
-      document.removeEventListener('pointerdown', onPointerDownOutside);
       unbindQuery();
       root.remove();
     },

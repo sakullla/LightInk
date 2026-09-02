@@ -2,7 +2,7 @@
 
 /**
  * 统一融合标注搜索面板（annotation-panel，R2/R8）测试：
- * 标注列表（文档位置排序）/高级范围面板（全部/正文/高亮/笔记/书签 + 色点）/
+ * 标注列表（文档位置排序）/范围 chips（全部/正文/高亮/笔记/书签 + 色点）/
  * 同一查询框双语义检索（标注筛 + 正文命中合并）/跳转/编辑备注/删除回调/
  * tombstone 隐藏与空态基线/触屏 is-touch-sheet 底栏形态（拖拽把手与关闭）/
  * 正文搜索不支持空态（漫画）/ Escape 与 dismiss 分层。附笔记弹层 Promise
@@ -95,20 +95,12 @@ function mount(overrides: Record<string, unknown> = {}) {
   return { panel, jumps, removals, edits };
 }
 
-function advancedButton(host: HTMLElement): HTMLButtonElement {
-  return host.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-search-advanced')!;
-}
-
 function scopePanel(host: HTMLElement): HTMLElement {
   return host.querySelector<HTMLElement>('.lightink-reader-sidebar-search-scope')!;
 }
 
 function openScope(host: HTMLElement): HTMLElement {
-  const panel = scopePanel(host);
-  if (panel.hidden) {
-    advancedButton(host).click();
-  }
-  return panel;
+  return scopePanel(host);
 }
 
 function scopeOption(host: HTMLElement, filter: string): HTMLButtonElement {
@@ -550,7 +542,114 @@ describe('annotation-panel 融合搜索', () => {
     expect(panel.element.querySelectorAll('.lightink-reader-sidebar-hit')).toHaveLength(1);
   });
 
-  it('正文模式：头部改名并藏导出，清除按钮清词不关面板，命中片段高亮查询词', () => {
+  it('全部范围扫描分批也不重建已有命中行，点结果能跳', () => {
+    const jumps: string[] = [];
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: (key) => jumps.push(key),
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+        onLoadMore: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render(annotations);
+    panel.setSearchQuery('宋');
+    panel.renderHits(
+      [{ key: 'a', snippet: 'one 宋', location: 'Chapter 2', current: true }],
+      { searching: true, hasMore: true },
+    );
+    const first = panel.element.querySelector('[data-search-key="a"]');
+    expect(first).not.toBeNull();
+    panel.renderHits(
+      [
+        { key: 'a', snippet: 'one 宋', location: 'Chapter 2', current: true },
+        { key: 'b', snippet: 'two 宋', location: 'Chapter 7', current: false },
+      ],
+      { searching: true, hasMore: true },
+    );
+    expect(panel.element.querySelector('[data-search-key="a"]')).toBe(first);
+    (first as HTMLElement).click();
+    expect(jumps).toEqual(['a']);
+    panel.element.remove();
+  });
+
+  it('点到哪一行就跳哪一行；行被换掉后不拿按下时的旧 key 乱跳', () => {
+    const jumps: string[] = [];
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: (key) => jumps.push(key),
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    panel.setSearchQuery('宋');
+    panel.renderHits([
+      { key: 'a', snippet: 'one 宋青书', location: 'Chapter 2', current: true },
+      { key: 'b', snippet: 'two 宋卿疏', location: 'Chapter 2', current: false },
+    ]);
+    const first = panel.element.querySelector('[data-search-key="a"]') as HTMLElement;
+    const second = panel.element.querySelector('[data-search-key="b"]') as HTMLElement;
+    first.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true }));
+    second.click();
+    expect(jumps).toEqual(['b']);
+
+    first.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true }));
+    panel.renderHits([{ key: 'z', snippet: 'other 宋', location: 'Chapter 9', current: true }]);
+    panel.element.querySelector('.lightink-reader-sidebar-list')!.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    expect(jumps).toEqual(['b']);
+    panel.element.remove();
+  });
+
+  it('连续同章命中只在首条展示章节，避免每条都盖 Chapter 标签', () => {
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    panel.setSearchQuery('宋');
+    panel.renderHits([
+      { key: 'a', snippet: 'one 宋', location: 'Chapter 2', current: true },
+      { key: 'b', snippet: 'two 宋', location: 'Chapter 2', current: false },
+      { key: 'c', snippet: 'three 宋', location: 'Chapter 3', current: false },
+    ]);
+    const rows = Array.from(
+      panel.element.querySelectorAll<HTMLElement>('.lightink-reader-sidebar-hit'),
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.querySelector('.lightink-reader-sidebar-location')?.textContent).toBe(
+      'Chapter 2',
+    );
+    expect(rows[1]!.querySelector('.lightink-reader-sidebar-location')).toBeNull();
+    expect(rows[2]!.querySelector('.lightink-reader-sidebar-location')?.textContent).toBe(
+      'Chapter 3',
+    );
+    panel.element.remove();
+  });
+
+  it('正文范围只换占位符，不改弹窗骨架；清除按钮清词不关面板，命中片段高亮查询词', () => {
     let closed = 0;
     const panel = createAnnotationPanel({
       t: t as never,
@@ -558,7 +657,6 @@ describe('annotation-panel 融合搜索', () => {
       onClose: () => {
         closed += 1;
       },
-      onExport: vi.fn(),
       search: {
         onQuery: () => undefined,
         onJump: () => undefined,
@@ -573,26 +671,50 @@ describe('annotation-panel 融合搜索', () => {
     const title = panel.element.querySelector<HTMLElement>(
       '.lightink-reader-sidebar-header span',
     )!;
-    const exportButton = panel.element.querySelector<HTMLButtonElement>(
-      '.lightink-reader-sidebar-export',
-    )!;
     expect(title.textContent).toBe('annotation.sidebar');
-    expect(exportButton.hidden).toBe(false);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-export')).toBeNull();
 
     panel.setSearchQuery('命中');
-    expect(title.textContent).toBe('reader.search.document');
-    expect(title.hidden).toBe(true);
-    expect(exportButton.hidden).toBe(true);
-    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(title.textContent).toBe('annotation.sidebar');
+    expect(title.hidden).toBe(false);
+    expect(panel.element.dataset.searchPage).toBeUndefined();
     expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
-    expect(advancedButton(panel.element).hidden).toBe(false);
-    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
+    expect(panel.element.querySelector('.lightink-reader-sidebar-search-advanced')).toBeNull();
+    expect(scopePanel(panel.element).hidden).toBe(false);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
+
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    const input = panel.element.querySelector<HTMLInputElement>(
+      '.lightink-reader-sidebar-note-search-input',
+    )!;
+    expect(input.placeholder).toBe('reader.search.document');
+    expect(title.textContent).toBe('annotation.sidebar');
+    expect(panel.element.dataset.searchPage).toBeUndefined();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
 
     panel.renderHits([
       { key: '1:0:2', snippet: '前文 命中 后文', location: 'page 1', current: true },
     ]);
     const mark = panel.element.querySelector('.lightink-reader-sidebar-hit-mark');
     expect(mark?.textContent).toBe('命中');
+
+    panel.setSearchQuery('宋');
+    panel.renderHits([
+      {
+        key: '9:0:2',
+        snippet: '变成了宋青书，宋卿疏逐渐醒来',
+        location: 'page 1',
+        current: true,
+        markStart: 3,
+        markEnd: 6,
+      },
+    ]);
+    expect(
+      Array.from(panel.element.querySelectorAll('.lightink-reader-sidebar-hit-mark')).map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['宋青书']);
 
     const clear = panel.element.querySelector<HTMLButtonElement>(
       '.lightink-reader-sidebar-search-clear',
@@ -606,10 +728,35 @@ describe('annotation-panel 融合搜索', () => {
     openScope(panel.element);
     scopeOption(panel.element, 'all').click();
     expect(title.textContent).toBe('annotation.sidebar');
-    expect(title.hidden).toBe(false);
-    expect(exportButton.hidden).toBe(false);
+    expect(input.placeholder).toBe('annotation.search.placeholder');
     expect(panel.element.dataset.searchPage).toBeUndefined();
     expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
+  });
+
+  it('全部范围下正文检索进行中不闪「无标注」空态，也不改弹窗骨架', () => {
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    panel.setSearchQuery('keyword');
+    panel.renderHits([], { pending: true });
+
+    expect(panel.element.classList.contains('is-searching')).toBe(true);
+    expect(panel.element.querySelector('.lightink-reader-sidebar-empty')).toBeNull();
+    expect(panel.element.dataset.searchPage).toBeUndefined();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-sidebar-header span')?.hidden,
+    ).toBe(false);
   });
 
   it('omits the document category when search is not enabled and not declared unsupported', () => {
@@ -704,8 +851,8 @@ describe('annotation-panel 融合搜索', () => {
   });
 });
 
-describe('annotation-panel 高级范围面板', () => {
-  it('种类/颜色 chip 行不再渲染；高级在胶囊右端，清空在其左侧且只清查询', () => {
+describe('annotation-panel 范围 chips', () => {
+  it('范围 chips 常显在搜索框下；清空只清查询，不关面板、不改范围', () => {
     let closed = 0;
     const panel = createAnnotationPanel({
       t: t as never,
@@ -726,41 +873,35 @@ describe('annotation-panel 高级范围面板', () => {
 
     expect(panel.element.querySelector('.lightink-reader-sidebar-filters')).toBeNull();
     expect(panel.element.querySelector('.lightink-reader-sidebar-colors')).toBeNull();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-search-advanced')).toBeNull();
     const pill = panel.element.querySelector('.lightink-reader-sidebar-search-pill')!;
     const clear = panel.element.querySelector<HTMLButtonElement>(
       '.lightink-reader-sidebar-search-clear',
     )!;
-    const advanced = advancedButton(panel.element);
-    expect(pill.contains(advanced)).toBe(true);
     expect(pill.contains(clear)).toBe(true);
-    expect(clear.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(clear.hidden).toBe(true);
-    expect(scopePanel(panel.element).hidden).toBe(true);
-
-    advanced.click();
     const scope = scopePanel(panel.element);
     expect(scope.hidden).toBe(false);
-    expect(advanced.getAttribute('aria-expanded')).toBe('true');
+    expect(pill.contains(scope)).toBe(false);
     expect(
       Array.from(scope.querySelectorAll<HTMLButtonElement>('[data-kind-filter]')).map(
         (button) => button.dataset.kindFilter,
       ),
     ).toEqual(['all', 'document', 'highlight', 'note', 'bookmark']);
 
-    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(
-      false,
-    );
+    const colorsHidden = (): boolean | undefined =>
+      scope.querySelector<HTMLElement>('.lightink-reader-sidebar-search-scope-colors')?.hidden;
+    expect(colorsHidden()).toBe(false);
     scopeOption(panel.element, 'highlight').click();
-    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(
-      false,
-    );
+    expect(colorsHidden()).toBe(false);
     scopeOption(panel.element, 'note').click();
-    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
+    expect(colorsHidden()).toBe(true);
     scopeOption(panel.element, 'bookmark').click();
-    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
+    expect(colorsHidden()).toBe(true);
     scopeOption(panel.element, 'document').click();
-    expect(scope.querySelector('.lightink-reader-sidebar-search-scope-colors')?.hidden).toBe(true);
-    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(colorsHidden()).toBe(true);
+    expect(panel.element.dataset.searchPage).toBeUndefined();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
 
     const input = panel.element.querySelector<HTMLInputElement>(
       '.lightink-reader-sidebar-note-search-input',
@@ -768,16 +909,14 @@ describe('annotation-panel 高级范围面板', () => {
     input.value = 'keyword';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(clear.hidden).toBe(false);
-    expect(clear.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     clear.click();
     expect(panel.getSearchQuery()).toBe('');
     expect(clear.hidden).toBe(true);
     expect(closed).toBe(0);
     expect(scopeOption(panel.element, 'document').getAttribute('aria-pressed')).toBe('true');
-    expect(panel.element.dataset.searchPage).toBe('document');
+    expect(panel.element.dataset.searchPage).toBeUndefined();
     expect(scope.hidden).toBe(false);
-    expect(advanced.getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -857,7 +996,7 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(panel.element.querySelector('.lightink-reader-sidebar-close')).not.toBeNull();
   });
 
-  it('键盘弹起时 pinFixedOverlay 双锚定上下沿、摘除 data-keyboard 后回到 footer 之上锚定', async () => {
+  it('键盘弹起时 pinFixedOverlay 双锚定上下沿、摘除 data-keyboard 后回到全页窗口', async () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     document.documentElement.setAttribute('data-keyboard', '');
     const host = document.createElement('div');
@@ -876,12 +1015,13 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
 
     document.documentElement.removeAttribute('data-keyboard');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(panel.element.style.top).toBe('auto');
-    expect(panel.element.style.bottom).toBe('calc(0px + var(--lightink-keyboard-inset, 0px))');
-    expect(panel.element.style.maxHeight).toBe('');
+    expect(panel.element.style.top).toBe('0px');
+    expect(panel.element.style.bottom).toBe('0px');
+    expect(panel.element.style.height).toBe('100dvh');
+    expect(panel.element.style.maxHeight).toBe('none');
   });
 
-  it('触屏书内搜索 pin 为整页：顶到底，无 sheet 把手', () => {
+  it('触屏书内搜索是全页窗口，不改搜索框骨架', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     host.className = 'lightink-reader';
@@ -900,14 +1040,33 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     panel.setSearchQuery('宋');
     pinFixedOverlay(panel.element, host, { innerWidth: 390, innerHeight: 700 });
 
-    expect(panel.element.dataset.searchPage).toBe('document');
-    expect(panel.element.classList.contains('is-touch-search-page')).toBe(true);
+    expect(panel.element.dataset.searchPage).toBeUndefined();
+    expect(panel.element.classList.contains('is-touch-search-page')).toBe(false);
+    expect(panel.element.classList.contains('is-touch-sheet')).toBe(true);
     expect(panel.element.style.top).toBe('0px');
-    expect(panel.element.style.bottom).toBe('0px');
     expect(panel.element.style.height).toBe('100dvh');
-    expect(panel.element.style.maxHeight).toBe('none');
-    expect(panel.element.querySelector('.lightink-reader-sheet-handle')).toBeNull();
-    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('‹');
+    expect(panel.element.querySelector('.lightink-reader-sheet-handle')).not.toBeNull();
+    expect(panel.element.querySelector('.lightink-reader-sidebar-close')?.textContent).toBe('×');
+  });
+
+  it('正文命中是发丝扁平行，不用标注卡片壳', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
+    const hitRule = css.match(
+      /\.lightink-reader-sidebar-item\.lightink-reader-sidebar-hit\s*\{[^}]*\}/,
+    )?.[0];
+    expect(hitRule, 'flattened hit row rule').toBeTruthy();
+    expect(hitRule).toMatch(/background:\s*transparent/);
+    expect(hitRule).toMatch(/border-radius:\s*0/);
+    expect(hitRule).toMatch(/box-shadow:\s*none/);
+    expect(hitRule).toMatch(/border-bottom:\s*1px solid/);
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar-item\.lightink-reader-sidebar-hit\.is-current\s*\{[^}]*background:\s*color-mix/,
+    );
+    const markRule = css.match(/\.lightink-reader-sidebar-hit-mark\s*\{[^}]*\}/)?.[0];
+    expect(markRule, 'search hit mark uses a highlighter wash').toBeTruthy();
+    expect(markRule).toMatch(/background:\s*#f6d45e/);
+    expect(markRule).toMatch(/color:\s*inherit/);
+    expect(markRule).not.toMatch(/font-weight:\s*600/);
   });
 
   it('触屏 sheet CSS：正文命中片段两行截断，一屏可扫多条结果', () => {
@@ -915,7 +1074,7 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     expect(css).toMatch(
       /\.lightink-reader-sidebar\.is-touch-sheet \.lightink-reader-sidebar-hit \.lightink-reader-sidebar-text\s*\{[^}]*-webkit-line-clamp:\s*2/,
     );
-    // 高级弹出与色点行：author display:flex 必须被 [hidden] 显式归零。
+    // 色点行：author display:flex 必须被 [hidden] 显式归零。
     expect(css).toMatch(
       /\.lightink-reader-sidebar-search-scope\[hidden\],\s*\.lightink-reader-sidebar-search-scope-colors\[hidden\]\s*\{[^}]*display:\s*none/,
     );
@@ -947,43 +1106,24 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
         expect(parseFloat(declared[1])).toBeGreaterThanOrEqual(44);
       }
     }
-    // D5：死 token 无残留消费。
+    // D5：死 token 无残留消费；搜索不得再切整页骨架（全页由 is-touch-sheet 几何承担）。
     expect(css).not.toContain('--lightink-reader-sheet-inset');
-    expect(css).toMatch(/\[data-search-page='document'\][\s\S]*?height:\s*100dvh/);
+    expect(css).not.toContain("data-search-page='document'");
+    expect(css).toMatch(/\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*height:\s*100dvh/);
+    expect(css).toMatch(/\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*0/);
+    expect(css).not.toContain('lightink-reader-sidebar-search-advanced');
+    // 窄屏：范围 chips 紧凑常显，查询字段保持 44，清空不撑破字段。
     expect(css).toMatch(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sheet-handle\s*\{[^}]*display:\s*none/,
-    );
-    // 整页搜索顶栏单行：返回箭头与搜索胶囊同排。
-    expect(css).toMatch(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-header\s*\{[^}]*flex-direction:\s*row/,
-    );
-    expect(css).toMatch(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-note-search-input\s*\{[^}]*min-height:\s*48px/,
+      /@media \(max-width:\s*760px\)[\s\S]*?\.lightink-reader-sidebar-search-scope-option\s*\{[^}]*min-height:\s*36px/,
     );
     expect(css).toMatch(
-      /\[data-search-page='document'\]:not\(\[data-open\]\)\s*\{[^}]*transform:\s*none/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-sidebar-search-pill\s*\{[^}]*min-height:\s*44px/,
     );
-    // 窄屏触控：范围选项与搜索页清空 ≥44px；旧 32px/2rem 清空必须消失。
-    expect(css).toMatch(
-      /@media \(max-width:\s*760px\)[\s\S]*?\.lightink-reader-sidebar-search-scope-option,[\s\S]*?min-height:\s*44px/,
-    );
-    expect(css).toMatch(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*width:\s*44px/,
-    );
-    expect(css).not.toMatch(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*width:\s*2rem/,
-    );
-    const phoneClear = css.match(
-      /\[data-search-page='document'\][\s\S]*?\.lightink-reader-sidebar-search-clear\s*\{[^}]*\}/,
-    )?.[0];
-    expect(phoneClear, 'search-page clear rule').toBeTruthy();
-    expect(phoneClear).not.toMatch(/width:\s*2rem/);
-    expect(phoneClear).not.toMatch(/height:\s*2rem/);
     const optionMin = css.match(
       /@media \(max-width:\s*760px\)[\s\S]*?\.lightink-reader-sidebar-search-scope-option[\s\S]*?min-height:\s*([\d.]+)px/,
     );
-    expect(optionMin, 'phone scope option min-height').toBeTruthy();
-    expect(parseFloat(optionMin![1])).toBeGreaterThanOrEqual(44);
+    expect(optionMin, 'phone scope chip min-height').toBeTruthy();
+    expect(parseFloat(optionMin![1])).toBeGreaterThanOrEqual(36);
   });
 
   it('下拉拖拽把手经关闭按钮关面板（onClose 恰一次）；关闭按钮直点同语义', () => {

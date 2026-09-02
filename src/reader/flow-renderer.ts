@@ -1635,13 +1635,20 @@ export function createFlowRenderer(
     frame.style.outline = 'none';
     frame.style.background = readerPaperColor(root);
     padFinalSpread(pageBox, frameDocument, columnWidth, columns, gap);
-    const restoreRatio =
-      options?.restoreRatio ??
-      (frame.dataset.pagedRestore === 'end'
-        ? 1
-        : frame.dataset.pagedRestore === 'start'
-          ? 0
-          : undefined);
+    // 搜索跳转：iframe load 的 rAF 重测 / 邻章 pagedRestore=start 会把
+    // scrollLeft 吸回章首。hold 期间只重分栏，不恢复、不 snap。
+    const searchHold = frame.dataset.pagedSearchHold === 'true';
+    if (searchHold) {
+      delete frame.dataset.pagedRestore;
+    }
+    const restoreRatio = searchHold
+      ? undefined
+      : (options?.restoreRatio ??
+        (frame.dataset.pagedRestore === 'end'
+          ? 1
+          : frame.dataset.pagedRestore === 'start'
+            ? 0
+            : undefined));
     if (restoreRatio !== undefined) {
       applyPagedProgress(pageBox, restoreRatio, step);
       if (restoreRatio >= 1) {
@@ -1651,7 +1658,7 @@ export function createFlowRenderer(
       } else {
         snapPagedScroller(pageBox, step);
       }
-    } else if (options?.snap !== false) {
+    } else if (options?.snap !== false && !searchHold) {
       snapPagedScroller(pageBox, step);
       if (pageBox.scrollLeft === 0 && previousRatio > 0) {
         applyPagedProgress(pageBox, previousRatio, step);

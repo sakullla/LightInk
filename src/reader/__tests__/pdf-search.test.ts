@@ -26,6 +26,10 @@ import {
   SEARCH_HIT_CAP,
   SEARCH_QUERY_DEBOUNCE_MS,
   snippetAround,
+  snippetWithMark,
+  trimSnippetLead,
+  SNIPPET_LEAD_KEEP,
+  collapseNearbyHits,
   offsetRangeFrom,
   textLengthOf,
   unwrapSpans,
@@ -37,6 +41,7 @@ import {
   clearSearchMarks,
   flowSearchMarkKey,
   limitSearchMarkSpecs,
+  parseFlowSearchMarkKey,
   renderSearchMarks,
   SEARCH_MARK_CLASS,
   SEARCH_MARK_CURRENT_CLASS,
@@ -59,10 +64,13 @@ describe('findPdfMatches', () => {
 
   it('跨页大小写不敏感查找全部命中，按页序返回', () => {
     const matches = findPdfMatches(pages, 'Keyword');
+    const page2 = snippetWithMark(pages[1]!, 5, 12);
+    const page3a = snippetWithMark(pages[2]!, 0, 7);
+    const page3b = snippetWithMark(pages[2]!, 12, 19);
     expect(matches).toEqual([
-      { page: 2, start: 5, end: 12, snippet: snippetAround(pages[1]!, 5, 12) },
-      { page: 3, start: 0, end: 7, snippet: snippetAround(pages[2]!, 0, 7) },
-      { page: 3, start: 12, end: 19, snippet: snippetAround(pages[2]!, 12, 19) },
+      { page: 2, start: 5, end: 12, snippet: page2.text, markStart: page2.markStart, markEnd: page2.markEnd },
+      { page: 3, start: 0, end: 7, snippet: page3a.text, markStart: page3a.markStart, markEnd: page3a.markEnd },
+      { page: 3, start: 12, end: 19, snippet: page3b.text, markStart: page3b.markStart, markEnd: page3b.markEnd },
     ]);
   });
 
@@ -499,6 +507,13 @@ describe('搜索 overlay 共享幂等引擎（PDF 文本层 / 流式正文同引
     // 查询命中 existing 分支只校正类名，高亮停留旧长度）。
     expect(flowSearchMarkKey(0, 0, 4, 6)).not.toBe(flowSearchMarkKey(0, 0, 4, 7));
     expect(flowSearchMarkKey(0, 0, 4, 7)).toBe('0:0:4:7');
+    expect(parseFlowSearchMarkKey('100:2:1800:1806')).toEqual({
+      chapter: 100,
+      ordinal: 2,
+      start: 1800,
+      end: 1806,
+    });
+    expect(parseFlowSearchMarkKey('bad')).toBeNull();
 
     const root = layer('正文 abc 后续');
     const shortKey = flowSearchMarkKey(0, 0, 3, 5); // "ab"
@@ -543,6 +558,67 @@ describe('snippetAround', () => {
     expect(snippetAround(text, 10, 12, 3)).toBe('…hijklmno…');
     expect(snippetAround('short hit', 6, 9, 40)).toBe('short hit');
     expect(snippetAround('', 0, 0)).toBe('');
+  });
+
+  it('collapses decorative punctuation runs so snippets do not open on =====', () => {
+    const text = '========偷香高手作者：六如和尚 当主角醒来发现自己变成了宋青书';
+    const at = text.indexOf('宋青书');
+    expect(snippetAround(text, at, at + 3, 40)).toBe(
+      '六如和尚 当主角醒来发现自己变成了宋青书',
+    );
+  });
+
+  it('starts after nearby punctuation instead of mid-clause ellipsis', () => {
+    const text = '前文结束。当主角醒来发现自己变成了宋青书，边上躺着周芷若。后面还有。';
+    const at = text.indexOf('宋青书');
+    expect(snippetAround(text, at, at + 3, 24)).toBe(
+      '当主角醒来发现自己变成了宋青书，边上躺着周芷若。',
+    );
+  });
+
+  it('marks the source hit inside a snippet that also contains a later query', () => {
+    const text = '变成了宋青书，宋卿疏逐渐醒来';
+    const first = text.indexOf('宋青书');
+    const second = text.indexOf('宋卿疏');
+    const aroundFirst = snippetWithMark(text, first, first + 3);
+    const aroundSecond = snippetWithMark(text, second, second + 3);
+    expect(aroundFirst.text.slice(aroundFirst.markStart, aroundFirst.markEnd)).toBe('宋青书');
+    expect(aroundSecond.text.slice(aroundSecond.markStart, aroundSecond.markEnd)).toBe('宋卿疏');
+  });
+});
+
+describe('trimSnippetLead', () => {
+  it('命中离片段开头太远时从命中前 keep 个字符起、以省略号开头，命中区间同步平移', () => {
+    const lead = '的威势却差不多是之前的两倍，宋青书应对之间不得不避其锋芒，可惜欧阳锋招式虽慢，但';
+    const text = `…${lead}每一招每一式都极为精妙`;
+    const markStart = 1 + lead.length;
+    const trimmed = trimSnippetLead({ text, markStart, markEnd: markStart + 6 });
+    expect(trimmed.text.startsWith('…')).toBe(true);
+    expect(trimmed.text.slice(trimmed.markStart, trimmed.markEnd)).toBe('每一招每一式');
+    expect(trimmed.markStart).toBeLessThanOrEqual(SNIPPET_LEAD_KEEP + 1);
+    expect(trimmed.text).not.toContain('……');
+  });
+
+  it('命中已经靠前或没有命中区间：原样返回', () => {
+    const near = { text: '林平之的每一招每一式', markStart: 4, markEnd: 10 };
+    expect(trimSnippetLead(near)).toBe(near);
+    const noMark = { text: `${'x'.repeat(60)}hit`, markStart: 0, markEnd: 0 };
+    expect(trimSnippetLead(noMark)).toBe(noMark);
+  });
+});
+
+describe('collapseNearbyHits', () => {
+  it('keeps the first hit and drops later hits in the same window', () => {
+    expect(
+      collapseNearbyHits([
+        { start: 10, key: 'a' },
+        { start: 28, key: 'b' },
+        { start: 200, key: 'c' },
+      ]),
+    ).toEqual([
+      { start: 10, key: 'a' },
+      { start: 200, key: 'c' },
+    ]);
   });
 });
 
@@ -619,9 +695,14 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
       ensureFlowChapter: (chapter) => {
         calls.ensured.push(chapter);
       },
+      whenFlowFrameReady: async () => {},
+      flowHitReady: () => true,
       revealFlowHit: (key) => {
         calls.revealed.push(key);
+        return true;
       },
+      endFlowHitReveal: () => {},
+      releaseFlowHitHold: () => {},
     };
     return { host, calls };
   };
@@ -642,6 +723,45 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
       session.activateKey('0:0:0:2');
     }).not.toThrow();
     expect(session.hitViews()).toEqual([]);
+  });
+
+  it('没有已挂载 mark（sequence 为空）时任何一行都不是 current', async () => {
+    const { host } = createFlowHost({ chapterTexts: ['甲 hit', '乙 hit', '丙 hit'] });
+    host.collectFlowMarks = () => ({ keys: [], firstAtOrAfter: -1 }); // 目标章都没挂载
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    const views = session.hitViews();
+    expect(views).toHaveLength(3);
+    expect(views.every((view) => view.current === false)).toBe(true);
+  });
+
+  it('长书扫描按时间片让步、按间隔发布：两千章不再逐两章重绘', async () => {
+    const chapterTexts = Array.from({ length: 2000 }, (_, index) =>
+      index % 50 === 0 ? `第 ${index} 章有 hit` : `第 ${index} 章无`,
+    );
+    const { host, calls } = createFlowHost({ chapterTexts });
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    expect(session.hitViews().length).toBeGreaterThan(0);
+    // 起始空发布 + 首批命中即时发布 + 完成发布 + 少量按间隔的中间发布。
+    expect(calls.syncHits).toBeLessThan(40);
+  });
+
+  it('未挂载章源文本按窗口预取：不会等上一章 resolve 才请求下一章', async () => {
+    const resolvers: Array<(text: string) => void> = [];
+    const { host } = createFlowHost({
+      chapterTexts: Array.from({ length: 5 }, () => '占位'),
+      chapterText: () => new Promise<string>((resolve) => resolvers.push(resolve)),
+    });
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    expect(resolvers.length).toBe(5); // 五章一起进入解压/解析，而不是串行
+    resolvers.forEach((resolve, index) => resolve(index === 2 ? '这里有 hit' : '无'));
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    expect(session.hitViews()).toHaveLength(1);
+    expect(session.hitViews()[0]!.payload).toMatchObject({ kind: 'flow', chapter: 2 });
   });
 
   it('新查询使旧结果世代失效：迟到的旧章文本批次整批丢弃，会话只反映新查询', async () => {
@@ -700,7 +820,11 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
       renderFlowHits: () => {},
       collectFlowMarks: () => ({ keys: [], firstAtOrAfter: -1 }),
       ensureFlowChapter: () => {},
-      revealFlowHit: () => {},
+      whenFlowFrameReady: async () => {},
+      flowHitReady: () => false,
+      revealFlowHit: () => false,
+      endFlowHitReveal: () => {},
+      releaseFlowHitHold: () => {},
     };
     const session = createReaderSessionSearch(host);
     session.run('a');
@@ -712,6 +836,114 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
     expect(session.query()).toBe('b');
     expect(session.hitViews().map((hit) => hit.key)).toEqual(['5:0:2']);
     expect(session.hitViews()[0]!.current).toBe(true);
+  });
+
+  it('activateKey 已在序列中也先 ensure 目标章，避免翻页隐藏章第一次落到章首', async () => {
+    const { host, calls } = createFlowHost({
+      chapterTexts: ['前面 hit', '后面也有 hit'],
+    });
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    const views = session.hitViews();
+    expect(views).toHaveLength(2);
+    const later = views[1]!;
+    expect(later.payload.kind).toBe('flow');
+    calls.ensured.length = 0;
+    calls.revealed.length = 0;
+    session.activateKey(later.key);
+    expect(calls.ensured).toContain(1);
+    await vi.waitFor(() => expect(calls.revealed).toEqual([later.key]));
+  });
+
+  it('被更新一跳取代的异章跳转：松开自己那章的 hold；同章被取代则留给新一跳收尾', async () => {
+    const frameReady = new Map<number, Array<() => void>>();
+    const { host } = createFlowHost({
+      chapterTexts: ['甲 hit', '乙 hit', '丙 hit'],
+    });
+    host.whenFlowFrameReady = (chapter) =>
+      new Promise<void>((resolve) => {
+        frameReady.set(chapter, [...(frameReady.get(chapter) ?? []), resolve]);
+      });
+    const ended: string[] = [];
+    const released: string[] = [];
+    host.endFlowHitReveal = (key) => {
+      ended.push(key);
+    };
+    host.releaseFlowHitHold = (key) => {
+      released.push(key);
+    };
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    const [first, second, third] = session.hitViews();
+
+    // 第 1 章还在等帧就绪时就点了第 2 章：旧跳世代失配，但它那章的 hold 必须有人松。
+    session.activateKey(second!.key);
+    session.activateKey(third!.key);
+    frameReady.get(1)![0]!();
+    await vi.waitFor(() => expect(released).toEqual([second!.key]));
+    expect(ended).toEqual([]);
+
+    // 同章连点两次：旧跳不能松 hold（会打断新一跳的分栏），由新一跳 endFlowHitReveal 收尾。
+    released.length = 0;
+    session.activateKey(first!.key);
+    session.activateKey(first!.key);
+    const [staleReady, latestReady] = frameReady.get(0)!;
+    staleReady!();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(released).toEqual([]);
+    expect(ended).toEqual([]);
+    latestReady!();
+    await vi.waitFor(() => expect(ended).toEqual([first!.key]));
+    expect(released).toEqual([]);
+  });
+
+  it('邻章已挂载同 query mark 也不立刻 reveal，等目标章 flowHitReady（1606/1608）', async () => {
+    let targetReady = false;
+    const { host, calls } = createFlowHost({
+      chapterTexts: ['前面 hit', '后面也有 hit'],
+    });
+    host.flowHitReady = (_key, chapter) => chapter === 1 && targetReady;
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    const later = session.hitViews()[1]!;
+    calls.ensured.length = 0;
+    calls.revealed.length = 0;
+    session.activateKey(later.key);
+    expect(calls.ensured).toContain(1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(calls.revealed).toEqual([]);
+    targetReady = true;
+    await vi.waitFor(() => expect(calls.revealed).toEqual([later.key]));
+  });
+
+  it('等 whenFlowFrameReady 之后才 reveal，避免关搜索层把 rAF 预算耗尽', async () => {
+    let releaseFrame: (() => void) | undefined;
+    const { host, calls } = createFlowHost({
+      chapterTexts: ['前面 hit', '后面也有 hit'],
+    });
+    host.whenFlowFrameReady = () =>
+      new Promise((resolve) => {
+        releaseFrame = resolve;
+      });
+    const session = createReaderSessionSearch(host);
+    session.run('hit');
+    await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
+    const later = session.hitViews()[1]!;
+    calls.revealed.length = 0;
+    session.activateKey(later.key);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
+    expect(calls.revealed).toEqual([]);
+    releaseFrame?.();
+    await vi.waitFor(() => expect(calls.revealed).toEqual([later.key]));
   });
 
   it('命中上限：首屏 SEARCH_HIT_CAP、loadMore 逐档展开，到总数封口', async () => {
@@ -740,12 +972,15 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
     expect(session.activeIndex()).toBe(0);
     session.step(1);
     expect(session.activeIndex()).toBe(1);
+    await vi.waitFor(() => expect(calls.revealed).toHaveLength(1));
     session.step(1);
+    await vi.waitFor(() => expect(calls.revealed).toHaveLength(2));
     session.step(1);
     expect(session.activeIndex()).toBe(0); // 末尾回绕
+    await vi.waitFor(() => expect(calls.revealed).toHaveLength(3));
     session.step(-1);
     expect(session.activeIndex()).toBe(2);
-    expect(calls.revealed).toHaveLength(4); // 每次步进按活动命中 reveal 一次
+    await vi.waitFor(() => expect(calls.revealed).toHaveLength(4));
 
     session.run('hit', { preserveActive: 2 });
     await vi.waitFor(() => expect(session.hitsState()).toEqual(doneState));
@@ -877,7 +1112,11 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
       renderFlowHits: () => {},
       collectFlowMarks: () => ({ keys: [], firstAtOrAfter: -1 }),
       ensureFlowChapter: () => {},
-      revealFlowHit: () => {},
+      whenFlowFrameReady: async () => {},
+      flowHitReady: () => false,
+      revealFlowHit: () => false,
+      endFlowHitReveal: () => {},
+      releaseFlowHitHold: () => {},
     };
     session = createReaderSessionSearch(host);
     return {
@@ -959,9 +1198,14 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
         ensured.push(chapter);
         mounted.add(chapter); // 模拟 flowRenderer.ensureChapter 挂载该章
       },
+      whenFlowFrameReady: async () => {},
+      flowHitReady: (_key, chapter) => mounted.has(chapter),
       revealFlowHit: (key) => {
         revealed.push(key);
+        return true;
       },
+      endFlowHitReveal: () => {},
+      releaseFlowHitHold: () => {},
     };
     return { host, revealed, ensured, renderedKeys };
   };
@@ -1015,8 +1259,8 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
     expect(h.consumedScrolls).toEqual([target]);
   });
 
-  it('activateKey 未挂载章：ensure 挂载后重收集对齐并 reveal（12 次让步上限原样搬迁）', async () => {
-    expect(FLOW_HIT_REVEAL_MAX_ATTEMPTS).toBe(12);
+  it('activateKey 未挂载章：ensure 挂载后重收集对齐并 reveal（冷加载 rAF 让步）', async () => {
+    expect(FLOW_HIT_REVEAL_MAX_ATTEMPTS).toBe(24);
     const h = createMountedFlowHost(['第一章', '第二章', '目标 词'], [0, 1]); // 章 2 未挂载
     const session = createReaderSessionSearch(h.host);
     session.run('目标');
@@ -1067,7 +1311,7 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
     const key = session.hitViews()[0]!.key;
     session.activateKey(key);
     expect(h.renderedKeys).toEqual([key]);
-    expect(h.revealed).toEqual([key]);
+    await vi.waitFor(() => expect(h.revealed).toEqual([key]));
     h.renderedKeys.length = 0;
     session.rerender();
     expect(h.renderedKeys).toEqual([key]); // 释放态解除后重放恢复

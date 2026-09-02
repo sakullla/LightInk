@@ -157,6 +157,94 @@ export function pagedColumnStep(viewportWidth: number, gapPx = 0): number {
 }
 
 /**
+ * CSS columns fragment a mark into real glyph boxes plus hairline / extra-tall
+ * phantoms. getBoundingClientRect unions those into a box that starts in
+ * column 0, so search jump lands at the chapter start. Keep the first real
+ * glyph box instead (same filter as annotation overlay painting).
+ */
+export function realPagedFragmentBox<T extends { width: number; height: number }>(
+  boxes: readonly T[],
+  lineHeight: number,
+): T | null {
+  const cap = (Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 28) * 2.5;
+  for (const box of boxes) {
+    if (box.width >= 2 && box.height >= 1 && box.height <= cap) {
+      return box;
+    }
+  }
+  return null;
+}
+
+/** Page-aligned scrollLeft that puts `clientX` inside the visible spread. */
+export function pagedScrollLeftForClientX(
+  clientX: number,
+  scrollerClientLeft: number,
+  scrollLeft: number,
+  step: number,
+): number {
+  if (!(step > 0)) {
+    return scrollLeft;
+  }
+  const left = clientX - scrollerClientLeft + scrollLeft;
+  return Math.max(0, Math.floor(left / step) * step);
+}
+
+/** True when a glyph's clientX sits in the current paged spread viewport. */
+export function pagedGlyphInView(
+  glyphLeft: number,
+  viewLeft: number,
+  viewWidth: number,
+): boolean {
+  if (!(viewWidth > 0)) {
+    return false;
+  }
+  return glyphLeft >= viewLeft - 1 && glyphLeft < viewLeft + viewWidth;
+}
+
+/**
+ * Long chapters must occupy more than one column page. A single page of long
+ * text means CSS columns have not fragmented yet — every glyph looks like page 0.
+ */
+export function pagedContentLooksColumnized(
+  scrollWidth: number,
+  step: number,
+  textLength: number,
+): boolean {
+  if (!(step > 1) || !(scrollWidth > 0)) {
+    return false;
+  }
+  if (textLength < 320) {
+    return true;
+  }
+  return scrollWidth >= step * 1.5;
+}
+
+/**
+ * Reject a chapter-start landing when the hit is clearly later in the chapter.
+ * Column-0 phantoms look in-view at scrollLeft=0; do not treat that as success.
+ * Do not compare expected page by offset ratio — typesetting is not uniform.
+ */
+export function pagedHitPagePlausible(
+  scrollLeft: number,
+  scrollWidth: number,
+  step: number,
+  textStart: number,
+  textLength: number,
+): boolean {
+  if (!(step > 0) || !(scrollWidth > 0)) {
+    return false;
+  }
+  if (!(textLength > 0)) {
+    return true;
+  }
+  const page = Math.floor(scrollLeft / step + 1e-6);
+  if (page > 0) {
+    return true;
+  }
+  return textLength < 320 || textStart < Math.max(80, textLength * 0.12);
+}
+
+/**
  * Touch page-turn slide duration. Same fast-settling family as the 280ms
  * desktop `data-page-anim` keyframes, one notch shorter for direct finger
  * feedback (T2: 触屏翻页统一水平 slide).

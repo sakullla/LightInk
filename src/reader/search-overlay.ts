@@ -111,6 +111,23 @@ export function flowSearchMarkKey(
   return `${chapter}:${ordinal}:${start}:${end}`;
 }
 
+export function parseFlowSearchMarkKey(
+  key: string,
+): { chapter: number; ordinal: number; start: number; end: number } | null {
+  const parts = key.split(':');
+  if (parts.length < 4) {
+    return null;
+  }
+  const chapter = Number(parts[0]);
+  const ordinal = Number(parts[1]);
+  const start = Number(parts[2]);
+  const end = Number(parts[3]);
+  if (![chapter, ordinal, start, end].every((n) => Number.isFinite(n))) {
+    return null;
+  }
+  return { chapter, ordinal, start, end };
+}
+
 /**
  * 在单个 host 上幂等渲染命中 overlay：陈旧 key 解包、缺失 key 包裹、
  * 已有 key 只校正类名。currentKey 为当前活动命中（无则为 null）。

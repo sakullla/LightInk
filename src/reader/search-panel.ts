@@ -16,10 +16,120 @@ export interface PdfSearchMatch {
   end: number;
   /** 命中附近有界上下文，供侧栏片段列表使用。 */
   snippet: string;
+  /** 本条命中在 snippet 内的 [markStart, markEnd)，供列表只标这一处。 */
+  markStart?: number;
+  markEnd?: number;
+}
+
+/** 有界片段及其在片段内的命中区间（与扫描 [start, end) 同一处，不是片段里第一个查询词）。 */
+export interface SearchSnippet {
+  text: string;
+  markStart: number;
+  markEnd: number;
 }
 
 /** Characters of context kept on each side of a hit when building a snippet. */
 export const SEARCH_SNIPPET_RADIUS = 40;
+
+const SNIPPET_SENTENCE_BREAK = /[。！？!?；;\n]/;
+const SNIPPET_CLAUSE_BREAK = /[，、,：:]/;
+
+function lastMatchEnd(hay: string, pattern: RegExp): number {
+  let end = -1;
+  const re = new RegExp(pattern.source, 'g');
+  for (const match of hay.matchAll(re)) {
+    end = (match.index ?? 0) + match[0].length;
+  }
+  return end;
+}
+
+const SNIPPET_HIT_OPEN = '\u0001';
+const SNIPPET_HIT_CLOSE = '\u0002';
+
+/**
+ * 有界上下文 + 本条命中在清洗后片段里的偏移。清洗会折叠空白/装饰符，
+ * 不能用原文 [start, end) 直接当片段下标；用哨兵跟着切片走，避免列表
+ * 把「片段里第一个查询词」标成命中、点进去却跳到另一处。
+ */
+export function snippetWithMark(
+  text: string,
+  start: number,
+  end: number,
+  radius = SEARCH_SNIPPET_RADIUS,
+): SearchSnippet {
+  const safeStart = Math.max(0, Math.min(start, text.length));
+  const safeEnd = Math.max(safeStart, Math.min(end, text.length));
+  const rawFrom = Math.max(0, safeStart - radius);
+  const rawTo = Math.min(text.length, safeEnd + radius);
+  let from = rawFrom;
+  let to = rawTo;
+  const left = text.slice(rawFrom, safeStart);
+  const sentenceAt = lastMatchEnd(left, SNIPPET_SENTENCE_BREAK);
+  if (sentenceAt >= 0) {
+    from = rawFrom + sentenceAt;
+  } else {
+    const clauseAt = lastMatchEnd(left, SNIPPET_CLAUSE_BREAK);
+    if (clauseAt >= 0 && safeStart - (rawFrom + clauseAt) >= 6) {
+      from = rawFrom + clauseAt;
+    }
+  }
+  const right = text.slice(safeEnd, rawTo);
+  const stop = right.search(SNIPPET_SENTENCE_BREAK);
+  if (stop >= 0) {
+    to = safeEnd + stop + 1;
+  }
+  const raw = `${text.slice(from, safeStart)}${SNIPPET_HIT_OPEN}${text.slice(safeStart, safeEnd)}${SNIPPET_HIT_CLOSE}${text.slice(safeEnd, to)}`;
+  const cleaned = raw
+    .replace(/\s+/g, ' ')
+    .replace(/[=*_~]{3,}/g, ' ')
+    .replace(/^[.…\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const openAt = cleaned.indexOf(SNIPPET_HIT_OPEN);
+  const closeAt = cleaned.indexOf(SNIPPET_HIT_CLOSE);
+  const core = cleaned.replace(new RegExp(`[${SNIPPET_HIT_OPEN}${SNIPPET_HIT_CLOSE}]`, 'g'), '');
+  if (core === '') {
+    return { text: '', markStart: 0, markEnd: 0 };
+  }
+  const lead = from === rawFrom && rawFrom > 0;
+  const tail = to === rawTo && rawTo < text.length;
+  const prefix = lead ? '…' : '';
+  const snippet = `${prefix}${core}${tail ? '…' : ''}`;
+  if (openAt < 0 || closeAt < 0) {
+    return { text: snippet, markStart: 0, markEnd: 0 };
+  }
+  const markStart = prefix.length + openAt;
+  const markEnd = prefix.length + closeAt - (openAt < closeAt ? 1 : 0);
+  return { text: snippet, markStart, markEnd };
+}
+
+/** 片段里命中前最多保留的字符数（窄列表两行截断时命中不能被挤出第二行）。 */
+export const SNIPPET_LEAD_KEEP = 16;
+
+/**
+ * 收紧片段前导：句首距命中太远时从命中前 keep 个字符起、以省略号开头，
+ * 命中区间同步平移。命中已经靠前或片段无命中区间则原样返回。
+ */
+export function trimSnippetLead(snippet: SearchSnippet, keep = SNIPPET_LEAD_KEEP): SearchSnippet {
+  if (snippet.markEnd <= snippet.markStart) {
+    return snippet;
+  }
+  const lead = snippet.text.startsWith('…') ? 1 : 0;
+  const excess = snippet.markStart - lead - keep;
+  if (excess <= 4) {
+    return snippet;
+  }
+  let cut = lead + excess;
+  while (cut < snippet.markStart && snippet.text[cut] === ' ') {
+    cut += 1;
+  }
+  const shift = cut - 1;
+  return {
+    text: `…${snippet.text.slice(cut)}`,
+    markStart: snippet.markStart - shift,
+    markEnd: snippet.markEnd - shift,
+  };
+}
 
 /** Bounded context around [start, end) in the same concatenated text used for matching. */
 export function snippetAround(
@@ -28,15 +138,27 @@ export function snippetAround(
   end: number,
   radius = SEARCH_SNIPPET_RADIUS,
 ): string {
-  const safeStart = Math.max(0, Math.min(start, text.length));
-  const safeEnd = Math.max(safeStart, Math.min(end, text.length));
-  const from = Math.max(0, safeStart - radius);
-  const to = Math.min(text.length, safeEnd + radius);
-  const core = text.slice(from, to).replace(/\s+/g, ' ').trim();
-  if (core === '') {
-    return '';
+  return snippetWithMark(text, start, end, radius).text;
+}
+
+/**
+ * 邻近命中折叠（仅算法/测试保留）。列表必须一行一 key：折叠后片段里
+ * 后一处同词被点进去会跳到簇首，表现为随机跳错。
+ */
+export function collapseNearbyHits<T extends { start: number }>(
+  hits: readonly T[],
+  minGap = SEARCH_SNIPPET_RADIUS * 2,
+): T[] {
+  if (hits.length === 0) {
+    return [];
   }
-  return `${from > 0 ? '…' : ''}${core}${to < text.length ? '…' : ''}`;
+  const kept: T[] = [hits[0]!];
+  for (const hit of hits.slice(1)) {
+    if (hit.start - kept[kept.length - 1]!.start >= minGap) {
+      kept.push(hit);
+    }
+  }
+  return kept;
 }
 
 export interface TextSearchHit {
@@ -178,10 +300,13 @@ export function findPdfMatches(
   const matches: PdfSearchMatch[] = [];
   for (let index = 0; index < pageTexts.length; index += 1) {
     for (const hit of findPdfTextHits(pageTexts[index]!, trimmed)) {
+      const snippet = snippetWithMark(pageTexts[index]!, hit.start, hit.end);
       matches.push({
         page: index + 1,
         ...hit,
-        snippet: snippetAround(pageTexts[index]!, hit.start, hit.end),
+        snippet: snippet.text,
+        markStart: snippet.markStart,
+        markEnd: snippet.markEnd,
       });
     }
   }

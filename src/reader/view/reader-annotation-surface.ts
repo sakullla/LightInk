@@ -100,6 +100,11 @@ export interface ReaderAnnotationSurface {
 }
 
 export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnnotationSurface {
+  /** 触屏点结果关面板时保留查询；× / 下拉关闭仍清会话。 */
+  let preserveSearchOnNextHide = false;
+  /** 点搜索结果关面板：不要立刻 remasure+snap，否则 0 视口会把滚动吸回章首。 */
+  let skipVisibleFrameSyncOnce = false;
+
   // —— 标注宿主会话（session-annotation）：启用判定（标注存储 × adapter
   // 能力声明 × 身份可用）、写队列与侧栏显隐策略唯一实现在核心；本壳只按
   // host 供数（侧栏 DOM/portal/焦点机械）并消费其裁决。 ——
@@ -127,8 +132,11 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     focusReaderRoot: () => ctx.root.focus(),
     closeChromePanel: () => ctx.chrome.closeChromePanel(),
     resetSearch: () => ctx.search.resetReaderSearch(),
-    preserveSearchOnHide: () =>
-      readerChromeTouchMode() && ctx.sidebar?.element.dataset.searchPage === 'document',
+    preserveSearchOnHide: () => {
+      const keep = preserveSearchOnNextHide;
+      preserveSearchOnNextHide = false;
+      return keep;
+    },
     releaseSearchMarks: () => {
       ctx.search.cancelSearchMarkLinger();
       ctx.searchMarkLingerTimer = setTimeout(() => {
@@ -138,7 +146,13 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         }
       }, SEARCH_MARK_LINGER_MS);
     },
-    afterSidebarSync: () => ctx.flow.syncVisibleFlowFrames(),
+    afterSidebarSync: () => {
+      if (skipVisibleFrameSyncOnce) {
+        skipVisibleFrameSyncOnce = false;
+        return;
+      }
+      ctx.flow.syncVisibleFlowFrames();
+    },
     sidebarSearchQuery: () => ctx.sidebar?.getSearchQuery() ?? '',
     renderSidebarList: () => ctx.sidebar?.render(ctx.annotations),
   });
@@ -451,7 +465,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     ctx.sidebar = createAnnotationPanel({
       t: ctx.t,
       onClose: () => setSidebarVisible(false),
-      onLayoutChange: () => pinSidebarOverlay(),
       // 漫画等位图格式无文本层：正文搜索固定为「不支持」空态（能力矩阵声明）。
       isDocumentSearchUnsupported: () => {
         if (ctx.loadedExt === '') {
@@ -469,11 +482,15 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           ctx.sessionSearch.run(nextQuery);
         },
         onJump: (key) => {
-          ctx.sessionSearch.activateKey(key);
-          // 触屏：点结果即回正文看命中（Books/Kindle 同行为）；桌面留面板步进。
+          // 触屏：先关全页搜索再跳。搜索层盖住阅读器时量到的分栏/命中矩形
+          // 不可用；关面板的 afterSidebarSync 还会 applyPaginatedDocument 把
+          // 滚动吸回原页。先关、跳过这次 remasure，落点以命中为准。
           if (readerChromeTouchMode()) {
+            preserveSearchOnNextHide = true;
+            skipVisibleFrameSyncOnce = true;
             setSidebarVisible(false);
           }
+          ctx.sessionSearch.activateKey(key);
         },
         onNext: () => ctx.sessionSearch.step(1),
         onPrev: () => ctx.sessionSearch.step(-1),
@@ -495,14 +512,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       onEditNote: (annotation) => {
         openNote(annotation);
       },
-      // 标注导出（R5）：宿主未装配 exportAnnotations 时按钮隐藏（markdown 编辑器
-      // 宿主不传，与 search deps 缺省同模式）。
-      onExport:
-        ctx.deps.exportAnnotations === undefined
-          ? undefined
-          : () => {
-              void ctx.deps.exportAnnotations?.({ title: ctx.loadedTitle, annotations: ctx.annotations });
-            },
     });
     const { visible, shown } = ctx.sessionAnnotation.sidebarVisibility();
     ctx.sidebarShown = shown;

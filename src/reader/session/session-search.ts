@@ -18,7 +18,7 @@
  *   （renderPdfHits 内 consumePendingScroll 报告 mark 已渲染）时滚动一次即
  *   消费，observer 驱动的重渲染不回吸视口；
  * - 活动命中步进：环形 next/prev（nextMatchIndex）、按 key 激活（flow 未
- *   挂载章 ensureFlowChapter 后重收集对齐，至多 12 次让步重试）、重扫保序
+ *   挂载章 ensureFlowChapter 后等 iframe 就绪再重收集对齐）、重扫保序
  *   （preserveMatchIndex + 当前阅读位置回落 nearestMatchIndex）。
  *
  * 匹配器留格式侧（host 供数，adapter 模式同 session-progress 先例）：
@@ -80,6 +80,9 @@ export interface SessionSearchHit {
   readonly snippet: string;
   readonly location: string;
   readonly payload: SessionSearchHitPayload;
+  /** 本条命中在 snippet 内的区间；缺省时列表退回标出片段里第一处查询词。 */
+  readonly markStart?: number;
+  readonly markEnd?: number;
 }
 
 /** 侧栏/搜索层渲染的命中视图（current = 会话活动命中）。 */
@@ -105,8 +108,32 @@ export interface PdfSearchSink {
   onResult(matches: readonly PdfSearchMatch[], done: boolean): void;
 }
 
-/** 未挂载章命中激活的让步重试上限（原 revealFlowSearchKey 的 12 次原样搬迁）。 */
-export const FLOW_HIT_REVEAL_MAX_ATTEMPTS = 12;
+/** 目标章 iframe load 最长等待（srcdoc 冷加载，不能用一串 rAF 代替墙钟）。 */
+export const FLOW_FRAME_READY_MS = 3000;
+
+/** 帧就绪后分栏/命中几何让步次数。 */
+export const FLOW_HIT_REVEAL_MAX_ATTEMPTS = 24;
+
+/** flow 扫描单个时间片：连续扫章超过这么久就让步给输入/滚动。 */
+export const SEARCH_SCAN_SLICE_MS = 12;
+
+/** flow 扫描期两次列表发布的最短间隔（首批命中不受此限，立刻出）。 */
+export const SEARCH_PUBLISH_INTERVAL_MS = 120;
+
+/** 未挂载章源文本预取窗口：并行解压/解析而不是逐章串行 await。 */
+export const SEARCH_TEXT_LOOKAHEAD = 8;
+
+function yieldForReveal(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 16);
+  });
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
 
 /** 视图侧钩子：核心持有会话规则与状态机，匹配器/overlay/DOM 留在视图层。 */
 export interface SessionSearchHost {
@@ -149,8 +176,28 @@ export interface SessionSearchHost {
   };
   /** flow 确保章挂载并置为活动章（未挂载命中激活的第一步）。 */
   ensureFlowChapter(chapter: number): void;
-  /** flow 激活滚动：按 key 解析 mark 后分栏对齐或滚入视口。 */
-  revealFlowHit(key: string): void;
+  /**
+   * 等目标章 iframe srcdoc 真正 load（dataset.frameReady）。关搜索层会连打
+   * 几十个 rAF，不能用 rAF 次数代替墙钟。
+   */
+  whenFlowFrameReady(chapter: number): Promise<void>;
+  /**
+   * 目标章已可按 key 落点：该章帧就绪、已是活动章、且 mark 画在这一章
+   * （不是邻章隐藏帧里同 key 的幽灵）。Readium/epub.js：先 go 到资源再 go 文本。
+   */
+  flowHitReady(key: string, chapter: number): boolean;
+  /**
+   * flow 激活滚动：按 key 解析 mark 后分栏对齐或滚入视口。
+   * 返回 true 表示当前已落在命中页（分栏几何可量且未停在章首幽灵页）。
+   */
+  revealFlowHit(key: string): boolean;
+  /** 结束这一跳：松开 pagedSearchHold，允许分栏恢复/吸附。 */
+  endFlowHitReveal(key: string): void;
+  /**
+   * 这一跳被更新的一跳取代且目标章不同：只松开该章的 hold，不重启 mark linger。
+   * 否则被取代章的 hold 永远没人收尾，分栏恢复/吸附会一直被压住。
+   */
+  releaseFlowHitHold(key: string): void;
 }
 
 /** 搜索会话句柄：reader-view 以 host 供数并消费其规则裁决。 */
@@ -219,6 +266,10 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
   let pendingScrollKey: string | null = null;
   /** 正文 mark 已释放（dropMarks）：rerender 与在飞发布不再重涂，run/激活复位。 */
   let marksReleased = false;
+  /** 在飞的 flow 落点世代：后一次点击作废前一次等待，避免落到邻章。 */
+  let revealGeneration = 0;
+  /** 最新一跳的目标章：被取代的旧跳据此判断自己的 hold 该谁松。 */
+  let revealChapter: number | null = null;
   const searchBusy = createSearchBusyReveal(() => {
     host.syncHits();
   });
@@ -317,7 +368,11 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     host.syncHits();
   };
 
-  /** 执行 flow 搜索（原 runFlowSearch）：空查询/页式漫画清空；逐章扫描按 cadence 发布并让步 UI。 */
+  /**
+   * 执行 flow 搜索（原 runFlowSearch）：空查询/页式漫画清空；逐章扫描按时间片
+   * 让步 UI、按 SEARCH_PUBLISH_INTERVAL_MS 发布（首批命中即时出），源文本按
+   * SEARCH_TEXT_LOOKAHEAD 窗口并行预取。
+   */
   const runFlowSearch = (query: string, options?: { readonly preserveActive?: number }): void => {
     const trimmed = query.trim();
     if (trimmed === '' || !host.flowSearchable()) {
@@ -335,25 +390,70 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     void (async () => {
       const byChapter = new Map<number, readonly SearchMarkSpec[]>();
       const total = host.flowChapterCount();
+      // 每两章发布一次会把 2500 章的书拖成上千次 DOM 重绘 + setTimeout；
+      // 改成时间片让步、按间隔发布，源文本按窗口预取并行。
+      const pending: Array<string | Promise<string> | undefined> = new Array<
+        string | Promise<string> | undefined
+      >(total);
+      const requested = new Uint8Array(total);
+      const request = (index: number): void => {
+        if (index >= total || requested[index] === 1) {
+          return;
+        }
+        requested[index] = 1;
+        const source = host.flowChapterText(index);
+        pending[index] =
+          source === undefined
+            ? ''
+            : typeof source === 'string'
+              ? source
+              : source.then(
+                  (text) => text ?? '',
+                  () => '',
+                );
+      };
+      let sliceStart = nowMs();
+      let lastPublish = sliceStart;
+      let publishedChapters = 0;
       for (let chapter = 0; chapter < total; chapter += 1) {
         if (!isLive(generation)) {
           return;
         }
-        const textOrPromise = host.flowChapterText(chapter);
-        const text =
-          typeof textOrPromise === 'string' ? textOrPromise : (await textOrPromise) ?? '';
-        if (!isLive(generation)) {
-          return;
+        for (let ahead = chapter; ahead <= chapter + SEARCH_TEXT_LOOKAHEAD; ahead += 1) {
+          request(ahead);
+        }
+        const entry = pending[chapter];
+        pending[chapter] = undefined;
+        let text: string;
+        if (typeof entry === 'string') {
+          text = entry;
+        } else {
+          text = (await entry) ?? '';
+          if (!isLive(generation)) {
+            return;
+          }
+          sliceStart = nowMs(); // await 已让出主线程
         }
         const specs = host.flowMatchChapter(chapter, text, trimmed);
         if (specs.length > 0) {
           byChapter.set(chapter, specs);
         }
-        if (chapter === 0 || (chapter + 1) % 2 === 0 || chapter === total - 1) {
-          publishFlowSearch(trimmed, byChapter, chapter === total - 1, options?.preserveActive);
-          if (chapter < total - 1) {
-            await yieldToUi();
+        const last = chapter === total - 1;
+        if (last) {
+          break;
+        }
+        const firstHits = publishedChapters === 0 && byChapter.size > 0;
+        if (firstHits || nowMs() - lastPublish >= SEARCH_PUBLISH_INTERVAL_MS) {
+          publishFlowSearch(trimmed, byChapter, false, options?.preserveActive);
+          lastPublish = nowMs();
+          publishedChapters = byChapter.size;
+        }
+        if (nowMs() - sliceStart >= SEARCH_SCAN_SLICE_MS) {
+          await yieldToUi();
+          if (!isLive(generation)) {
+            return;
           }
+          sliceStart = nowMs();
         }
       }
       if (isLive(generation)) {
@@ -382,30 +482,65 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
       }
       host.renderPdfHits(session.hits, key);
     } else {
+      const hit = session.hits.find((candidate) => candidate.key === key);
+      if (hit !== undefined && hit.payload.kind === 'flow') {
+        // 序列里有 key 只说明 ±2 邻章隐藏帧上画过 mark。同步 reveal 会量到
+        // 当前章（例如 1606）的几何，第二次点击目标章（1608）才就绪。
+        // 先切章并重涂，落点等目标章 flowHitReady（Readium：先资源后文本）。
+        host.ensureFlowChapter(hit.payload.chapter);
+        host.renderFlowHits(flowGroupsOf(session), key);
+        host.syncHits();
+        void ensureFlowHit(key, hit.payload.chapter);
+        return;
+      }
       host.renderFlowHits(flowGroupsOf(session), key);
       host.revealFlowHit(key);
     }
     host.syncHits();
   };
 
-  /** 未挂载章命中激活（原 revealFlowSearchKey）：ensure 章后至多 12 次让步重收集对齐。 */
+  /** 目标章 load 后再 reveal：墙钟等帧就绪，邻章 mark 不算就绪，hold 必须松开。 */
   const ensureFlowHit = async (key: string, chapter: number): Promise<void> => {
     marksReleased = false;
+    const generation = (revealGeneration += 1);
+    revealChapter = chapter;
     host.ensureFlowChapter(chapter);
-    for (let attempt = 0; attempt < FLOW_HIT_REVEAL_MAX_ATTEMPTS; attempt += 1) {
-      await yieldToUi();
-      const session = state;
-      if (session === null || session.kind !== 'flow') {
-        return; // 会话已清空/换代：迟到的激活静默丢弃
+    try {
+      await host.whenFlowFrameReady(chapter);
+      if (generation !== revealGeneration) {
+        return;
       }
-      host.renderFlowHits(flowGroupsOf(session), key);
-      const { keys, firstAtOrAfter } = host.collectFlowMarks(flowGroupsOf(session));
-      session.sequence = keys;
-      session.active = preserveMatchIndex(keys.length, keys.indexOf(key), firstAtOrAfter);
-      if (keys.includes(key)) {
-        host.revealFlowHit(key);
+      for (let attempt = 0; attempt < FLOW_HIT_REVEAL_MAX_ATTEMPTS; attempt += 1) {
+        // 帧就绪就先试一次；只有落点失败才让步一帧再量。
+        if (attempt > 0) {
+          await yieldForReveal();
+        }
+        if (generation !== revealGeneration) {
+          return;
+        }
+        const session = state;
+        if (session === null || session.kind !== 'flow') {
+          return; // 会话已清空/换代：迟到的激活静默丢弃
+        }
+        host.renderFlowHits(flowGroupsOf(session), key);
+        const { keys, firstAtOrAfter } = host.collectFlowMarks(flowGroupsOf(session));
+        session.sequence = keys;
+        session.active = preserveMatchIndex(keys.length, keys.indexOf(key), firstAtOrAfter);
+        if (!host.flowHitReady(key, chapter)) {
+          continue;
+        }
+        if (!host.revealFlowHit(key)) {
+          continue;
+        }
         host.syncHits();
         return;
+      }
+    } finally {
+      if (generation === revealGeneration) {
+        host.endFlowHitReveal(key);
+      } else if (revealChapter !== chapter) {
+        // 被取代：同章由新一跳收尾（松了会打断它的分栏），异章这里就得松开。
+        host.releaseFlowHitHold(key);
       }
     }
   };
@@ -419,9 +554,12 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
       if (session === null) {
         return [];
       }
+      // 没有已挂载 mark 时 sequence 为空、active 为 -1：indexOf 也是 -1，
+      // 按下标比较会把每一行都标成 current。按 key 比较。
+      const activeKey = activeKeyOf(session);
       const views = session.hits.map((hit) => ({
         ...hit,
-        current: session.sequence.indexOf(hit.key) === session.active,
+        current: activeKey !== null && hit.key === activeKey,
       }));
       return capSearchHits(views, displayLimit);
     },

@@ -150,8 +150,8 @@
 }
 
 .lightink-reader-chrome-action--search::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
 }
 
 .lightink-reader-chrome-action:hover {
@@ -660,8 +660,8 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-action--search::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer {
@@ -801,8 +801,8 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   }
 
   .lightink-reader-chrome-action--search::before {
-    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
-    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M10 2a8 8 0 0 1 4.9 14.3l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'/></svg>");
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
   }
 
   .lightink-reader-chrome-footer {

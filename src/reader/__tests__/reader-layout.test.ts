@@ -873,9 +873,14 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
     expect(css).toMatch(
       /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*bottom:\s*var\(--lightink-keyboard-inset,\s*0px\)/,
     );
-    expect(
-      readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8'),
-    ).toMatch(
+    const annotationCss = readFileSync(
+      resolve(process.cwd(), 'src/reader/annotation-panel.css'),
+      'utf-8',
+    );
+    expect(annotationCss).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*z-index:\s*50/,
+    );
+    expect(annotationCss).toMatch(
       /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*padding-bottom:\s*calc\(12px \+ var\(--lightink-safe-bottom/,
     );
     // Real handle node is the grabber; decorative ::after is not the only hit target.
@@ -910,7 +915,7 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
   it('docks the annotation notebook as a touch bottom sheet instead of a side drawer', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/annotation-panel.css'), 'utf-8');
     expect(css).toMatch(
-      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*0/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader-sidebar-note-search-input\s*\{[^}]*font-size:\s*16px/,
