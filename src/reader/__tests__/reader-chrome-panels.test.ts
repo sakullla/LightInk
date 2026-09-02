@@ -632,29 +632,26 @@ describe('reader chrome panels', () => {
     expect(panel.querySelector('[data-type-section="theme"]')).not.toBeNull();
     expect(panel.querySelector('[data-type-section="layout"]')).not.toBeNull();
     expect(panel.querySelectorAll('.lightink-reader-type-section').length).toBeGreaterThanOrEqual(5);
-    const visibleLabels: Array<[string, string]> = [
-      ['theme', '纸张'],
-      ['font', '字体'],
-      ['layout', '版式'],
-    ];
-    for (const [kind, text] of visibleLabels) {
+    for (const kind of ['size', 'theme', 'font', 'layout', 'spacing', 'measure']) {
       const label = panel
         .querySelector(`[data-type-section="${kind}"]`)!
         .querySelector('.lightink-reader-type-label');
-      expect(label).not.toBeNull();
-      expect(label!.classList.contains('lightink-reader-type-label--hidden')).toBe(false);
-      expect(label!.textContent).toBe(text);
+      expect(label, kind).not.toBeNull();
+      expect(label!.classList.contains('lightink-reader-type-label--hidden'), kind).toBe(true);
     }
-    const sizeLabel = panel
-      .querySelector('[data-type-section="size"]')!
-      .querySelector('.lightink-reader-type-label');
-    expect(sizeLabel?.classList.contains('lightink-reader-type-label--hidden')).toBe(true);
     expect(panel.querySelectorAll('.lightink-reader-theme-swatch')).toHaveLength(4);
     expect(panel.querySelectorAll('.lightink-reader-theme-page')).toHaveLength(4);
+    expect(panel.querySelector('.lightink-reader-theme-page')?.querySelectorAll('i')).toHaveLength(3);
     expect(panel.querySelector('.lightink-reader-theme-swatch-name')?.textContent).toBe('白纸');
-    expect(panel.querySelector('.lightink-reader-type-hero-sample')?.textContent).toBe('轻墨');
+    expect(panel.querySelector('.lightink-reader-type-preview')).not.toBeNull();
+    expect(panel.querySelector('.lightink-reader-type-hero-sample')?.textContent).toBe(
+      '春江潮水连海平，海上明月共潮生。',
+    );
     expect(panel.querySelector('.lightink-reader-type-step-mark')?.textContent).toBe('100%');
+    expect(panel.querySelector('.lightink-reader-type-size-track')).not.toBeNull();
     expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(4);
+    expect(panel.querySelectorAll('.lightink-reader-type-font-glyph')).toHaveLength(4);
+    expect(panel.querySelector('.lightink-reader-type-font-glyph')?.textContent).toBe('汉');
     expect(panel.querySelectorAll('.lightink-reader-type-mode')).toHaveLength(2);
     expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(2);
     expect(
@@ -696,6 +693,26 @@ describe('reader chrome panels', () => {
     track.dispatchEvent(pointerEvent('pointermove', { clientX: 10, clientY: 14 }));
     track.dispatchEvent(pointerEvent('pointerup', { clientX: 10, clientY: 14 }));
     expect(onTypography).toHaveBeenCalledWith({ lineHeight: 1.5 });
+  });
+
+  it('lets the size track commit a font scale step by dragging', () => {
+    const panel = document.createElement('div');
+    const onTypography = vi.fn();
+    fillReaderTypographyPanel(
+      panel,
+      DEFAULT_READER_TYPOGRAPHY,
+      'white',
+      defaultReaderChromePanelCopy(),
+      onTypography,
+      vi.fn(),
+      vi.fn(),
+    );
+    const track = panel.querySelector<HTMLElement>('.lightink-reader-type-size-track')!;
+    stubRect(track, { width: 240, height: 28, top: 0, left: 0 });
+    track.dispatchEvent(pointerEvent('pointerdown', { clientX: 8, clientY: 14 }));
+    track.dispatchEvent(pointerEvent('pointermove', { clientX: 8, clientY: 14 }));
+    track.dispatchEvent(pointerEvent('pointerup', { clientX: 8, clientY: 14 }));
+    expect(onTypography).toHaveBeenCalledWith({ fontScaleStep: 0.85 });
   });
 
   it('lets a mouse drag starting on a tick finish on window after leaving the track', () => {
@@ -781,9 +798,71 @@ describe('reader chrome panels', () => {
     expect(panelsCss()).toMatch(
       /\.lightink-reader-type-tick\s*\{[^}]*pointer-events:\s*none/,
     );
-    // 标签列必须按内容自适应：西文 “LINE SPACING” 固定 2.2rem 会画进轨道首点。
     expect(panelsCss()).toMatch(
-      /\.lightink-reader-type-slider\s*\{[^}]*grid-template-columns:\s*fit-content\(/,
+      /\.lightink-reader-type-slider\s*\{[^}]*flex-direction:\s*column/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-preview\s*\{/,
+    );
+    expect(panelsCss()).not.toMatch(
+      /\.lightink-reader-theme-page\s*\{[^}]*border-radius:\s*50%/,
+    );
+  });
+
+  it('touch typography sheet is a short Aa menu so the book stays the preview', () => {
+    const css = panelsCss();
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\.lightink-reader-chrome-typography\s*\{[^}]*max-height:\s*min\(56vh/,
+    );
+    // Sheet is paper-coloured like the page and the footer, not the elevated tint.
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\.lightink-reader-chrome-typography\s*\{[^}]*background:\s*var\(--lightink-bg\)/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-type-preview\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\[data-type-section='measure'\]\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-theme-swatch-name\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-type-font-glyph\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-type-step\s*\{[^}]*min-height:\s*44px/,
+    );
+  });
+
+  it('touch typography rows are label + control, with one segmented style for font/layout/spacing', () => {
+    const css = panelsCss();
+    // Section labels are visually hidden on desktop; the touch sheet shows them in a left column.
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\[data-type-section='font'\]\s+\.lightink-reader-type-label[^{]*\{[^}]*position:\s*static/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\[data-type-section='spacing'\]\s*\{[^}]*grid-template-columns:\s*3\.1rem/,
+    );
+    // Fonts, layout modes and the line-height track share the segmented track + active pill tokens.
+    for (const control of [
+      '\\.lightink-reader-type-fonts',
+      '\\.lightink-reader-type-modes',
+      "\\[data-type-section='spacing'\\] \\.lightink-reader-type-track",
+    ]) {
+      expect(css, control).toMatch(
+        new RegExp(`\\.is-touch-sheet\\s+${control}[^{]*\\{[^}]*background:\\s*var\\(--lightink-reader-seg-track\\)`),
+      );
+    }
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-type-font\.is-active,[\s\S]*?\{[^}]*background:\s*var\(--lightink-reader-seg-active\)/,
+    );
+    // Paper swatches are round chips; the active one gets an ink ring with a paper gap.
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-theme-page\s*\{[^}]*border-radius:\s*999px/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-theme-swatch\.is-active\s+\.lightink-reader-theme-page\s*\{[^}]*0 0 0 2\.5px var\(--lightink-bg\),\s*0 0 0 4\.5px var\(--lightink-fg\)/,
     );
   });
 

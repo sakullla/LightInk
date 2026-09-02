@@ -1,12 +1,14 @@
 /**
  * Reader TOC and typography sheets.
  *
- * Typography is a visual Aa sheet (Apple Books Themes & Settings / Kindle):
- * size is the hero, paper is a page card, fonts are live specimens, layout
- * is two mode tiles, spacing and measure are discrete tracks. Reader-only.
+ * Desktop: a reading instrument (preview page, paper cards, font specimens,
+ * layout tiles, spacing/measure tracks).
+ * Phone: Apple Books / Kindle Aa menu — short bottom sheet so the book is
+ * the live preview; size steppers, paper chips, compact font/layout rows.
+ * Reader-only.
  */
 
-import { FONT_SCALE_STEPS } from '../ui/font-scale.js';
+import { FONT_SCALE_STEPS, formatFontScaleLabel } from '../ui/font-scale.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
 import {
   filterOutlineItems,
@@ -25,6 +27,7 @@ export {
 } from '../outline/outline-model.js';
 import {
   READER_FONT_FAMILY_PRESETS,
+  resolveReaderFontFamily,
   type ReaderFontFamilyPreset,
   type ReaderTypography,
 } from './reader-typography.js';
@@ -99,6 +102,8 @@ export interface ReaderChromePanelCopy {
   /** 标题行右侧的章节总数（{n} 占位），缺省不显示。 */
   tocCount?: string;
   typeTitle: string;
+  /** Two-line sample painted on the live preview page. */
+  preview?: string;
   theme: string;
   size: string;
   font: string;
@@ -148,6 +153,7 @@ export function defaultReaderChromePanelCopy(): ReaderChromePanelCopy {
     tocSearchCount: '{n} 条匹配',
     tocCount: '{n} 章',
     typeTitle: '排版',
+    preview: '春江潮水连海平，海上明月共潮生。',
     theme: '纸张',
     size: '字号',
     font: '字体',
@@ -499,10 +505,10 @@ export function fillReaderTypographyPanel(
   const flowOnly = kind === 'flow';
 
   if (flowOnly) {
-    appendSizeSection(panel, typography, copy, onSize);
+    appendSizeSection(panel, typography, theme, copy, onSize, onTypography);
   }
 
-  const themeSection = section(copy.theme, 'theme');
+  const themeSection = section(copy.theme, 'theme', true);
   const swatches = document.createElement('div');
   swatches.className = 'lightink-reader-theme-swatches';
   swatches.setAttribute('role', 'radiogroup');
@@ -545,7 +551,7 @@ export function fillReaderTypographyPanel(
 
   appendFontSection(panel, typography, copy, onTypography);
 
-  const layoutSection = section(copy.layout, 'layout');
+  const layoutSection = section(copy.layout, 'layout', true);
   const modes = document.createElement('div');
   modes.className = 'lightink-reader-type-modes';
   modes.setAttribute('role', 'group');
@@ -582,15 +588,42 @@ export function fillReaderTypographyPanel(
   );
 }
 
+const FONT_SPECIMENS: Readonly<Record<ReaderFontFamilyPreset, string>> = {
+  body: '汉',
+  sans: '汉',
+  serif: '汉',
+  mono: 'Aa',
+};
+
+const PREVIEW_SAMPLE = '春江潮水连海平，海上明月共潮生。';
+
 function appendSizeSection(
   panel: HTMLElement,
   typography: ReaderTypography,
+  theme: ReaderThemeId,
   copy: ReaderChromePanelCopy,
   onSize: (direction: 'in' | 'out') => void,
+  onTypography: (patch: Partial<ReaderTypography>) => void,
 ): void {
   const minScale = FONT_SCALE_STEPS[0] ?? 0.85;
   const maxScale = FONT_SCALE_STEPS[FONT_SCALE_STEPS.length - 1] ?? 5;
+  const paper = READER_THEMES.find((item) => item.id === theme) ?? READER_THEMES[0]!;
   const sizeSection = section(copy.size, 'size', true);
+
+  const preview = document.createElement('div');
+  preview.className = 'lightink-reader-type-preview';
+  preview.setAttribute('aria-hidden', 'true');
+  preview.style.setProperty('--lightink-reader-swatch-page', paper.page);
+  preview.style.setProperty('--lightink-reader-swatch-ink', paper.ink);
+  preview.style.setProperty('--lightink-reader-hero-scale', String(typography.fontScaleStep));
+  preview.style.setProperty('--lightink-reader-preview-leading', String(typography.lineHeight));
+  preview.style.fontFamily = resolveReaderFontFamily(typography.fontFamily);
+  const sample = document.createElement('p');
+  sample.className = 'lightink-reader-type-hero-sample';
+  sample.textContent = copy.preview ?? PREVIEW_SAMPLE;
+  preview.appendChild(sample);
+  sizeSection.appendChild(preview);
+
   const sizeRow = document.createElement('div');
   sizeRow.className = 'lightink-reader-type-hero';
   const smaller = document.createElement('button');
@@ -605,18 +638,39 @@ function appendSizeSection(
     event.stopPropagation();
     onSize('out');
   });
-  const preview = document.createElement('div');
-  preview.className = 'lightink-reader-type-hero-preview';
-  preview.setAttribute('aria-hidden', 'true');
-  const sample = document.createElement('span');
-  sample.className = 'lightink-reader-type-hero-sample';
-  sample.textContent = '轻墨';
-  sample.style.fontFamily = typography.fontFamily;
-  sample.style.setProperty('--lightink-reader-hero-scale', String(typography.fontScaleStep));
+  const track = document.createElement('div');
+  track.className = 'lightink-reader-type-track lightink-reader-type-size-track';
+  track.setAttribute('role', 'group');
+  track.setAttribute('aria-label', copy.size);
+  const sizeChoices = FONT_SCALE_STEPS.map((step) => ({
+    label: formatFontScaleLabel(step),
+    selected: typography.fontScaleStep === step,
+    apply: () => onTypography({ fontScaleStep: step }),
+  }));
+  const active = Math.max(0, sizeChoices.findIndex((choice) => choice.selected));
+  track.style.setProperty(
+    '--lightink-reader-track-fill',
+    `${(active / Math.max(1, sizeChoices.length - 1)) * 100}%`,
+  );
+  for (const choice of sizeChoices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lightink-reader-type-choice lightink-reader-type-tick';
+    button.setAttribute('aria-label', choice.label);
+    button.setAttribute('aria-pressed', choice.selected ? 'true' : 'false');
+    button.title = choice.label;
+    button.classList.toggle('is-active', choice.selected);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      choice.apply();
+    });
+    track.appendChild(button);
+  }
+  bindDiscreteTrackDrag(track, sizeChoices);
   const sizeMark = document.createElement('span');
-  sizeMark.className = 'lightink-reader-type-step-mark';
-  sizeMark.textContent = `${Math.round(typography.fontScaleStep * 100)}%`;
-  preview.append(sample, sizeMark);
+  sizeMark.className = 'lightink-reader-type-step-mark lightink-reader-type-label--hidden';
+  sizeMark.textContent = formatFontScaleLabel(typography.fontScaleStep);
   const larger = document.createElement('button');
   larger.type = 'button';
   larger.className = 'lightink-reader-type-step lightink-reader-type-step--in';
@@ -629,8 +683,8 @@ function appendSizeSection(
     event.stopPropagation();
     onSize('in');
   });
-  sizeRow.append(smaller, preview, larger);
-  sizeSection.appendChild(sizeRow);
+  sizeRow.append(smaller, track, larger);
+  sizeSection.append(sizeRow, sizeMark);
   panel.appendChild(sizeSection);
 }
 
@@ -640,7 +694,7 @@ function appendFontSection(
   copy: ReaderChromePanelCopy,
   onTypography: (patch: Partial<ReaderTypography>) => void,
 ): void {
-  const fontSection = section(copy.font, 'font');
+  const fontSection = section(copy.font, 'font', true);
   const fonts = document.createElement('div');
   fonts.className = 'lightink-reader-type-fonts';
   fonts.setAttribute('role', 'group');
@@ -650,7 +704,6 @@ function appendFontSection(
     button.type = 'button';
     button.className = 'lightink-reader-type-font';
     button.style.fontFamily = READER_FONT_FAMILY_PRESETS[family];
-    button.textContent = copy.fonts[family];
     button.setAttribute('aria-pressed', (
       typography.fontFamily === family ||
       typography.fontFamily === READER_FONT_FAMILY_PRESETS[family]
@@ -660,6 +713,14 @@ function appendFontSection(
       typography.fontFamily === family ||
         typography.fontFamily === READER_FONT_FAMILY_PRESETS[family],
     );
+    const glyph = document.createElement('span');
+    glyph.className = 'lightink-reader-type-font-glyph';
+    glyph.setAttribute('aria-hidden', 'true');
+    glyph.textContent = FONT_SPECIMENS[family];
+    const name = document.createElement('span');
+    name.className = 'lightink-reader-type-font-name';
+    name.textContent = copy.fonts[family];
+    button.append(glyph, name);
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -776,7 +837,7 @@ function comicChoiceSection(
 ): HTMLElement {
   const block = section(label, kind);
   const group = document.createElement('div');
-  group.className = 'lightink-reader-type-fonts lightink-reader-type-comic-group';
+  group.className = 'lightink-reader-type-comic-group';
   group.setAttribute('role', 'group');
   group.setAttribute('aria-label', label);
   for (const choice of choices) {
@@ -1064,36 +1125,32 @@ export function pinFixedOverlay(
     overlay.style.position = 'fixed';
     overlay.style.left = `${Math.max(0, box.left)}px`;
     overlay.style.right = `${Math.max(0, viewport.innerWidth - box.right)}px`;
-    const searchPage = overlay.dataset.searchPage === 'document';
-    overlay.classList.toggle('is-touch-search-page', searchPage);
-    if (searchPage) {
-      // In-book search is a full page (Kindle / Books / 微信读书): not a sheet.
-      overlay.style.top = '0px';
-      overlay.style.bottom = keyboardOpen ? 'var(--lightink-keyboard-inset, 0px)' : '0px';
-      overlay.style.maxHeight = 'none';
-      overlay.style.height = keyboardOpen ? 'auto' : '100dvh';
-      overlay.style.width = 'auto';
-      overlay.style.zIndex = '50';
-      trackTouchSheetPin(overlay, pane, viewport);
-      releaseTouchSheetDrag(overlay);
-      return;
-    }
+    overlay.classList.remove('is-touch-search-page');
     if (keyboardOpen) {
       // Keyboard up: double-anchor between the safe top and the keyboard top;
       // the keyboard already covers the footer, so no footer inset is added.
       overlay.style.top = 'calc(var(--lightink-safe-top, 0px) + 4.5rem)';
       overlay.style.bottom = 'var(--lightink-keyboard-inset, 0px)';
       overlay.style.maxHeight = 'none';
+      overlay.style.height = 'auto';
+    } else if (overlay.classList.contains('lightink-reader-annotation-panel')) {
+      // 标注/搜索是新开的全页窗口：铺满视口，不留阅读器底栏。
+      overlay.style.top = '0px';
+      overlay.style.right = '0px';
+      overlay.style.bottom = '0px';
+      overlay.style.left = '0px';
+      overlay.style.maxHeight = 'none';
+      overlay.style.height = '100dvh';
     } else {
       const inset = readerChromeFooterInset(overlay.ownerDocument);
       const bottomGap = Math.max(0, viewport.innerHeight - box.bottom);
       overlay.style.top = 'auto';
       overlay.style.bottom = `calc(${bottomGap + inset}px + var(--lightink-keyboard-inset, 0px))`;
       overlay.style.removeProperty('max-height');
+      overlay.style.height = 'auto';
     }
     overlay.style.width = 'auto';
-    overlay.style.height = 'auto';
-    overlay.style.zIndex = '40';
+    overlay.style.zIndex = '50';
     trackTouchSheetPin(overlay, pane, viewport);
     bindTouchSheetDrag(overlay);
     return;
@@ -1200,7 +1257,7 @@ function sliderRow(
     glyph: HTMLElement;
   }[],
 ): HTMLElement {
-  const block = section(label, kind);
+  const block = section(label, kind, true);
   block.classList.add('lightink-reader-type-slider');
   const track = document.createElement('div');
   track.className = 'lightink-reader-type-track';

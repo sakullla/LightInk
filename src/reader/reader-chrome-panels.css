@@ -4,6 +4,8 @@
  * 现代浮层卡片方向（参照 Apple Books / 微信读书）：圆角卡片、柔和分层阴影、
  * 分组清晰、间距宽松。由 reader.css 顶部 @import 引入；选择器族从 reader.css
  * 迁入（chrome-panel / chrome-popover / toc / theme-swatch / type-sheet）。
+ * 排版面板：桌面是阅读仪器（预览页、纸张页卡、字体样张、版式磁贴）；
+ * 手机是短 Aa 底栏（书页当预览，色块/字号步进/单行字体与版式）。
  * 交互钩子（--lightink-reader-popover-arrow、--lightink-reader-hero-scale、
  * --lightink-reader-swatch-page/-ink、--lightink-reader-track-fill）由
  * reader-chrome-panels.ts 内联注入，机制保持不变。
@@ -183,14 +185,14 @@
   pointer-events: none;
 }
 
-/* ===== 排版浮层（现代浮层卡片重设计） ===== */
+/* ===== 排版浮层：阅读仪器，不是设置表单 ===== */
 
 .lightink-reader-chrome-typography {
   top: 3.1rem;
   left: 0.75rem;
   right: auto;
-  width: min(20.5rem, calc(100% - 1.5rem));
-  padding: 0.85rem;
+  width: min(22.5rem, calc(100% - 1.5rem));
+  padding: 0.45rem 0.9rem 1rem;
   overflow: visible;
 }
 
@@ -201,39 +203,30 @@
 .lightink-reader-type-sheet {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
-  max-height: min(64vh, 26rem);
+  gap: 0.85rem;
+  max-height: min(72vh, 36rem);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
 }
 
-/* 每个分组一张软卡：浅底 + 圆角 + 内边距，替代旧的分隔线。 */
 .lightink-reader-type-section {
   margin: 0;
-  padding: 0.6rem 0.7rem 0.75rem;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--lightink-fg) 4%, transparent);
-}
-
-.lightink-reader-type-section + .lightink-reader-type-section:not(.lightink-reader-type-slider),
-.lightink-reader-type-section:not(.lightink-reader-type-slider) + .lightink-reader-type-slider {
-  margin-top: 0;
-  padding-top: 0.6rem;
-  border-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .lightink-reader-type-label {
-  margin: 0 0 0.55rem;
-  font-size: 0.66rem;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--lightink-muted);
 }
 
-/* --hidden 变体：视觉隐藏但对辅助技术可访问。 */
 .lightink-reader-type-label--hidden {
   position: absolute;
   width: 1px;
@@ -246,71 +239,69 @@
   border: 0;
 }
 
-/* 字号 hero：两侧圆形 A-/A+ 按钮，中央样字突出。 */
-.lightink-reader-type-hero {
-  display: grid;
-  grid-template-columns: 2.2rem 1fr 2.2rem;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 3.4rem;
-}
-
-.lightink-reader-type-hero-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-  min-width: 0;
+/* 当前纸张上的正文预览：字号、字体、行距都反映在这段样文上。 */
+.lightink-reader-type-preview {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 5.5rem;
+  margin: 0 0 0.7rem;
+  padding: 0.95rem 1.05rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, var(--lightink-fg)) 16%, transparent);
+  border-radius: 14px;
+  background: var(--lightink-reader-swatch-page, var(--lightink-bg));
+  color: var(--lightink-reader-swatch-ink, var(--lightink-fg));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 28%, transparent),
+    0 8px 20px color-mix(in srgb, var(--lightink-fg) 8%, transparent);
 }
 
 .lightink-reader-type-hero-sample {
-  font-size: calc(1.45rem * var(--lightink-reader-hero-scale, 1));
-  line-height: 1;
-  letter-spacing: 0.06em;
-  font-weight: 500;
+  margin: 0;
+  font-size: calc(1.05rem * var(--lightink-reader-hero-scale, 1));
+  line-height: var(--lightink-reader-preview-leading, 1.8);
+  letter-spacing: 0.03em;
+  font-weight: 400;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
-.lightink-reader-type-step-mark {
-  font-size: 0.68rem;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-  color: var(--lightink-muted);
+.lightink-reader-type-hero {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr 2.6rem;
+  align-items: center;
+  gap: 0.15rem;
 }
 
 .lightink-reader-type-step {
   display: grid;
   place-items: center;
-  width: 2.2rem;
-  height: 2.2rem;
+  width: 2.6rem;
+  height: 2.6rem;
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: var(--lightink-bg-elevated);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.1),
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  background: transparent;
+  box-shadow: none;
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background-color 120ms ease, box-shadow 120ms ease;
 }
 
 .lightink-reader-type-step--out {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
+  font-weight: 500;
 }
 
 .lightink-reader-type-step--in {
-  font-size: 1.35rem;
+  font-size: 1.45rem;
   font-weight: 500;
 }
 
 .lightink-reader-type-step:hover {
-  background: color-mix(in srgb, var(--lightink-accent) 12%, var(--lightink-bg-elevated));
-  box-shadow:
-    0 2px 6px rgba(0, 0, 0, 0.12),
-    0 0 0 1px color-mix(in srgb, var(--lightink-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
 }
 
 .lightink-reader-type-step:disabled {
@@ -318,11 +309,18 @@
   cursor: default;
 }
 
-/* 主题 swatch：四列网格，页面卡片圆角，is-active 用主题 accent 描边。 */
+.lightink-reader-type-step-mark {
+  font-size: 0.68rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--lightink-muted);
+}
+
+/* 纸张：迷你书页，不是色点。 */
 .lightink-reader-theme-swatches {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.45rem;
+  gap: 0.55rem 0.45rem;
 }
 
 .lightink-reader-theme-swatch {
@@ -330,6 +328,8 @@
   flex-direction: column;
   align-items: center;
   gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -338,28 +338,20 @@
 }
 
 .lightink-reader-theme-page {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.22rem;
-  box-sizing: border-box;
+  gap: 0.28rem;
   width: 100%;
-  height: 2.9rem;
-  padding: 0.45rem 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, #111) 14%, transparent);
-  border-radius: 12px;
+  max-width: 4.4rem;
+  aspect-ratio: 3 / 4;
+  padding: 0.55rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, #111) 18%, transparent);
+  border-radius: 7px;
   background: var(--lightink-reader-swatch-page, #fff);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 3px 8px rgba(0, 0, 0, 0.06);
-  transition: box-shadow 120ms ease, transform 120ms ease;
-}
-
-.lightink-reader-theme-swatch:hover .lightink-reader-theme-page {
-  transform: translateY(-1px);
-  box-shadow:
-    0 2px 4px rgba(0, 0, 0, 0.08),
-    0 6px 14px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  transition: box-shadow 140ms ease, transform 140ms ease;
 }
 
 .lightink-reader-theme-page i {
@@ -367,17 +359,22 @@
   height: 2px;
   border-radius: 1px;
   background: var(--lightink-reader-swatch-ink, #111);
-  opacity: 0.42;
+  opacity: 0.38;
 }
 
-.lightink-reader-theme-page i:nth-child(1) { width: 88%; }
+.lightink-reader-theme-page i:nth-child(1) { width: 100%; }
 .lightink-reader-theme-page i:nth-child(2) { width: 72%; }
-.lightink-reader-theme-page i:nth-child(3) { width: 80%; }
+.lightink-reader-theme-page i:nth-child(3) { width: 88%; }
+
+.lightink-reader-theme-swatch:hover .lightink-reader-theme-page {
+  transform: translateY(-1px);
+}
 
 .lightink-reader-theme-swatch-name {
   max-width: 100%;
   overflow: hidden;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
+  font-weight: 500;
   line-height: 1.2;
   color: var(--lightink-muted);
   text-overflow: ellipsis;
@@ -385,88 +382,117 @@
 }
 
 .lightink-reader-theme-swatch.is-active .lightink-reader-theme-page {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--lightink-accent) 16%, transparent);
+  box-shadow:
+    0 0 0 2px var(--lightink-bg-elevated),
+    0 0 0 3.5px var(--lightink-fg),
+    0 8px 16px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
 .lightink-reader-theme-swatch.is-active .lightink-reader-theme-swatch-name {
   color: var(--lightink-fg);
-  font-weight: 600;
 }
 
-/* 字体与翻页模式：分段控件观感（容器深一点浅底、is-active 项浮起卡片）。 */
-.lightink-reader-type-fonts,
-.lightink-reader-type-modes {
+/* 字体：样张卡，不是分段条。 */
+.lightink-reader-type-fonts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
-  padding: 0.25rem;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
-}
-
-.lightink-reader-type-modes {
-  grid-template-columns: 1fr 1fr;
-}
-
-.lightink-reader-type-font,
-.lightink-reader-type-mode {
-  min-height: 2rem;
-  padding: 0.2rem 0.25rem;
-  border: 0;
-  border-radius: 9px;
+  gap: 0.45rem;
+  padding: 0;
+  border-radius: 0;
   background: transparent;
-  color: var(--lightink-muted);
-  font-size: 0.78rem;
-  line-height: 1.2;
-  cursor: pointer;
-  transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
 }
 
-.lightink-reader-type-font:hover,
-.lightink-reader-type-mode:hover {
-  color: var(--lightink-fg);
-}
-
-.lightink-reader-type-font.is-active,
-.lightink-reader-type-mode.is-active {
-  background: var(--lightink-bg-elevated);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.12),
-    0 3px 8px rgba(0, 0, 0, 0.08),
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 5%, transparent);
-  color: var(--lightink-fg);
-  font-weight: 600;
-}
-
-.lightink-reader-type-mode {
-  display: inline-flex;
-  flex-direction: row;
+.lightink-reader-type-font {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
+  gap: 0.15rem;
+  min-height: 4.4rem;
+  padding: 0.45rem 0.2rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--lightink-fg) 3%, var(--lightink-bg-elevated));
+  color: var(--lightink-fg);
+  cursor: pointer;
+}
+
+.lightink-reader-type-font-glyph {
+  font-size: 1.45rem;
+  line-height: 1.1;
+  font-weight: 500;
+}
+
+.lightink-reader-type-font-name {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--lightink-muted);
+  letter-spacing: 0;
+}
+
+.lightink-reader-type-font.is-active {
+  border-color: color-mix(in srgb, var(--lightink-fg) 45%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg-elevated));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
+}
+
+.lightink-reader-type-font.is-active .lightink-reader-type-font-name {
+  color: var(--lightink-fg);
+}
+
+/* 版式：两张大磁贴。 */
+.lightink-reader-type-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.lightink-reader-type-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 4.6rem;
+  padding: 0.7rem 0.4rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lightink-fg) 3%, var(--lightink-bg-elevated));
+  color: var(--lightink-muted);
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.lightink-reader-type-mode.is-active {
+  border-color: color-mix(in srgb, var(--lightink-fg) 45%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg-elevated));
+  color: var(--lightink-fg);
+  font-weight: 600;
 }
 
 .lightink-reader-type-mode-art {
   position: relative;
-  width: 0.95rem;
-  height: 0.8rem;
+  width: 1.7rem;
+  height: 1.35rem;
   flex: 0 0 auto;
 }
 
 .lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i {
   position: absolute;
-  width: 0.58rem;
-  height: 0.7rem;
+  width: 0.95rem;
+  height: 1.2rem;
   border: 1.5px solid currentColor;
-  border-radius: 1px;
+  border-radius: 2px;
   background: var(--lightink-bg-elevated);
 }
 
 .lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i:first-child {
   left: 0;
-  top: 0.12rem;
+  top: 0.16rem;
 }
 
 .lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i:last-child {
@@ -478,7 +504,7 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.22rem;
+  gap: 0.28rem;
 }
 
 .lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i {
@@ -493,32 +519,22 @@
 .lightink-reader-type-mode--scroll .lightink-reader-type-mode-art i:nth-child(3) { width: 90%; }
 
 .lightink-reader-type-mode-name {
-  font-size: inherit;
+  font-size: 0.75rem;
   font-weight: inherit;
 }
 
-/* 行距/行长滑块组：保留 track 轨道与 --lightink-reader-track-fill 填充机制。 */
+/* 行距/行长：图标档位，拖轨道仍可调。 */
 .lightink-reader-type-slider {
-  display: grid;
-  /* 标签列按内容自适应（上限内换行）：西文 “LINE SPACING” 不再画进轨道首点。 */
-  grid-template-columns: fit-content(4.6rem) 1fr;
-  align-items: center;
-  gap: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
 }
 
 .lightink-reader-type-slider .lightink-reader-type-label {
   overflow-wrap: break-word;
-}
-
-.lightink-reader-type-slider + .lightink-reader-type-slider {
-  margin-top: 0;
-  padding-top: 0.6rem;
-  border-top: 0;
-}
-
-.lightink-reader-type-slider .lightink-reader-type-label {
   margin: 0;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .lightink-reader-type-track {
@@ -526,7 +542,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 1.8rem;
+  height: 2.4rem;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -537,73 +553,146 @@
   cursor: grabbing;
 }
 
-.lightink-reader-type-track::before {
+.lightink-reader-type-size-track {
+  height: 1.8rem;
+}
+
+.lightink-reader-type-size-track::before,
+.lightink-reader-type-size-track::after {
   content: '';
   position: absolute;
-  left: 0.45rem;
-  right: 0.45rem;
   top: 50%;
-  height: 4px;
+  height: 2px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
   transform: translateY(-50%);
 }
 
-.lightink-reader-type-track::after {
-  content: '';
-  position: absolute;
-  left: 0.45rem;
-  top: 50%;
+.lightink-reader-type-size-track::before {
+  left: 0.4rem;
+  right: 0.4rem;
+  background: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
+}
+
+.lightink-reader-type-size-track::after {
+  left: 0.4rem;
   width: var(--lightink-reader-track-fill, 0%);
-  max-width: calc(100% - 0.9rem);
-  height: 4px;
-  border-radius: 999px;
-  background: var(--lightink-accent);
-  transform: translateY(-50%);
+  max-width: calc(100% - 0.8rem);
+  background: var(--lightink-fg);
 }
 
-/* tick 圆点化：默认空心圆点，is-active 实心 accent 圆点。 */
 .lightink-reader-type-tick {
   position: relative;
   z-index: 1;
   display: grid;
   place-items: center;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: 2.4rem;
+  height: 2.4rem;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  /* Hits go to the track so mouse can drag off a tick; keyboard click still works. */
   pointer-events: none;
 }
 
-.lightink-reader-type-tick .lightink-reader-type-glyph {
-  display: none;
+.lightink-reader-type-size-track .lightink-reader-type-tick {
+  width: 1.1rem;
+  height: 1.8rem;
 }
 
-.lightink-reader-type-tick::before {
+.lightink-reader-type-size-track .lightink-reader-type-tick::before {
   content: '';
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.28rem;
+  height: 0.28rem;
   border-radius: 999px;
-  background: var(--lightink-bg-elevated);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--lightink-fg) 26%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
 
-.lightink-reader-type-tick.is-active::before {
+.lightink-reader-type-size-track .lightink-reader-type-tick.is-active::before {
   width: 0.9rem;
   height: 0.9rem;
-  background: var(--lightink-accent);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.18),
-    0 0 0 3.5px color-mix(in srgb, var(--lightink-accent) 18%, transparent);
+  background: var(--lightink-fg);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
+
+.lightink-reader-type-slider .lightink-reader-type-tick {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 10px;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-type-slider .lightink-reader-type-tick.is-active {
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-type-glyph {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.18rem;
+  width: 1.1rem;
+  pointer-events: none;
+}
+
+.lightink-reader-type-glyph--spacing i {
+  display: block;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.lightink-reader-type-glyph--spacing[data-level='1'] { gap: 0.1rem; }
+.lightink-reader-type-glyph--spacing[data-level='2'] { gap: 0.18rem; }
+.lightink-reader-type-glyph--spacing[data-level='3'] { gap: 0.26rem; }
+.lightink-reader-type-glyph--spacing[data-level='4'] { gap: 0.34rem; }
+
+.lightink-reader-type-glyph--measure {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightink-reader-type-glyph--measure i {
+  display: block;
+  height: 0.85rem;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.lightink-reader-type-glyph--measure[data-level='1'] i { width: 0.35rem; }
+.lightink-reader-type-glyph--measure[data-level='2'] i { width: 0.5rem; }
+.lightink-reader-type-glyph--measure[data-level='3'] i { width: 0.7rem; }
+.lightink-reader-type-glyph--measure[data-level='4'] i { width: 0.9rem; }
+.lightink-reader-type-glyph--measure[data-level='5'] i { width: 1.1rem; }
 
 .lightink-reader-type-choice {
   color: inherit;
   font: inherit;
+}
+
+.lightink-reader-type-comic-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.lightink-reader-type-comic-choice {
+  min-height: 2.4rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 3%, var(--lightink-bg-elevated));
+  color: var(--lightink-muted);
+  cursor: pointer;
+}
+
+.lightink-reader-type-comic-choice.is-active {
+  border-color: color-mix(in srgb, var(--lightink-fg) 45%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg-elevated));
+  color: var(--lightink-fg);
+  font-weight: 600;
 }
 
 /* Overlay lists: thin themed thumb, no Windows classic arrow buttons.
@@ -696,6 +785,259 @@
   border-bottom: 0;
   padding-top: 0;
   padding-bottom: calc(12px + var(--lightink-safe-bottom, 0px));
+}
+
+/*
+ * 触屏 Aa sheet：书页当预览（Apple Books / Kindle 同款），sheet 本身是一张
+ * 和正文同色的纸，不是深一档的米色块。第一行是字号滑杆（A ——●—— A），
+ * 之后每行「左侧小标签 + 右侧控件」：纸张色片 / 字体 / 版式 / 行距，
+ * 后三者统一成 iOS 式分段控件（灰槽 + 浮起的白色活动段）。
+ */
+.lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-typography {
+  --lightink-reader-seg-track: color-mix(in srgb, var(--lightink-fg) 6.5%, transparent);
+  --lightink-reader-seg-active: color-mix(in srgb, #fff 58%, var(--lightink-bg));
+  --lightink-reader-seg-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.1),
+    0 0 0 0.5px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  max-height: min(56vh, calc(100dvh - var(--lightink-safe-top, 0px) - 6.5rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-left: 1.15rem;
+  padding-right: 1.15rem;
+  padding-bottom: calc(14px + var(--lightink-safe-bottom, 0px));
+  background: var(--lightink-bg);
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 20px 20px 0 0;
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--lightink-fg) 4%, transparent),
+    0 -12px 36px rgba(0, 0, 0, 0.12);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-typography[data-reader-theme='gray'],
+.lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-typography[data-reader-theme='night'] {
+  --lightink-reader-seg-track: color-mix(in srgb, var(--lightink-fg) 9%, transparent);
+  --lightink-reader-seg-active: color-mix(in srgb, var(--lightink-fg) 16%, var(--lightink-bg));
+  --lightink-reader-seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-typography
+  .lightink-reader-type-sheet {
+  gap: 0.85rem;
+  max-height: none;
+  overflow: visible;
+  padding-top: 0.15rem;
+}
+
+/* The open book is the preview (NN/G: bottom sheet keeps page context). */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-preview {
+  display: none;
+}
+
+/* ---- 字号：A ——●—— A ---- */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-hero {
+  grid-template-columns: 2.75rem 1fr 2.75rem;
+  gap: 0.5rem;
+  padding: 0 0.1rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-step {
+  width: 2.75rem;
+  height: 2.75rem;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-step--out {
+  font-size: 0.95rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-step--in {
+  font-size: 1.55rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-size-track {
+  height: 2.75rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-size-track::before {
+  height: 3px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-size-track::after {
+  height: 3px;
+  background: color-mix(in srgb, var(--lightink-fg) 78%, transparent);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-size-track .lightink-reader-type-tick {
+  width: 1rem;
+  height: 2.75rem;
+  min-width: 0;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-size-track .lightink-reader-type-tick::before {
+  width: 0.2rem;
+  height: 0.2rem;
+  background: color-mix(in srgb, var(--lightink-fg) 18%, transparent);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet
+  .lightink-reader-type-size-track
+  .lightink-reader-type-tick.is-active::before {
+  width: 1.15rem;
+  height: 1.15rem;
+  background: var(--lightink-fg);
+  box-shadow:
+    0 0 0 2.5px var(--lightink-bg),
+    0 1px 4px rgba(0, 0, 0, 0.22);
+}
+
+/* ---- 标签行：左侧小标签 + 右侧控件 ---- */
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='theme'],
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='font'],
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='layout'],
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] {
+  display: grid;
+  grid-template-columns: 3.1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='theme'] .lightink-reader-type-label,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='font'] .lightink-reader-type-label,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='layout'] .lightink-reader-type-label,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] .lightink-reader-type-label {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  color: var(--lightink-muted);
+}
+
+/* ---- 纸张：圆形色片，活动项一圈墨色描边 ---- */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-swatches {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.25rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-swatch {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-page {
+  width: 2.1rem;
+  max-width: 2.1rem;
+  aspect-ratio: 1;
+  padding: 0;
+  gap: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, #111) 14%, transparent);
+  box-shadow: none;
+  transition: box-shadow 140ms ease;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-page i,
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-swatch-name {
+  display: none;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-theme-swatch.is-active .lightink-reader-theme-page {
+  box-shadow:
+    0 0 0 2.5px var(--lightink-bg),
+    0 0 0 4.5px var(--lightink-fg);
+}
+
+/* ---- 分段控件：字体 / 版式 / 行距共用一套 ---- */
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-fonts,
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-modes,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] .lightink-reader-type-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0;
+  height: auto;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--lightink-reader-seg-track);
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font,
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-mode,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] .lightink-reader-type-tick {
+  min-width: 0;
+  min-height: 44px;
+  width: auto;
+  height: auto;
+  flex-direction: row;
+  gap: 0.35rem;
+  padding: 0.3rem 0.2rem;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: color-mix(in srgb, var(--lightink-fg) 72%, transparent);
+  font-size: 0.85rem;
+  font-weight: 500;
+  box-shadow: none;
+  transition: background-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font.is-active,
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-mode.is-active,
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] .lightink-reader-type-tick.is-active {
+  background: var(--lightink-reader-seg-active);
+  box-shadow: var(--lightink-reader-seg-shadow);
+  color: var(--lightink-fg);
+  font-weight: 600;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font-glyph {
+  display: none;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font-name {
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-mode-art {
+  width: 1.05rem;
+  height: 0.95rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-mode--paginated .lightink-reader-type-mode-art i {
+  background: transparent;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-mode-name {
+  font-size: inherit;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='spacing'] .lightink-reader-type-glyph {
+  width: 1.05rem;
+}
+
+/* Line length is a desktop/tablet concern (Readwise: web-only). On a phone
+   the measure is the screen; hiding it keeps the sheet one-handed. */
+.lightink-reader-chrome-panel.is-touch-sheet [data-type-section='measure'] {
+  display: none;
 }
 
 .lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-popover::before {
@@ -842,10 +1184,8 @@
 
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-type-step:not(:disabled):hover:not(:active) {
-  background: var(--lightink-bg-elevated);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.1),
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  background: transparent;
+  box-shadow: none;
 }
 
 :is(html[data-android], html[data-touch-primary])
@@ -855,12 +1195,9 @@
   color: var(--lightink-muted);
 }
 
-/* 主题卡 hover 抬升驻留中和（T1-A2）：恢复基础位移与阴影（激活卡的 is-active 描边保持）。 */
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-theme-swatch:not(.is-active):hover:not(:active)
   .lightink-reader-theme-page {
   transform: none;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 3px 8px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
 }
