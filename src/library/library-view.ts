@@ -927,6 +927,16 @@ function itemAuthors(item: LibraryItem): readonly string[] {
   return Array.isArray(item.authors) ? item.authors : [];
 }
 
+/** Stable 0–359 hue from the title so a book keeps its jacket colour across reloads. */
+export function jacketHue(title: string): number {
+  let hash = 5381;
+  for (let index = 0; index < title.length; index += 1) {
+    hash = ((hash << 5) + hash + title.charCodeAt(index)) | 0;
+  }
+  // Spread neighbouring titles apart instead of clustering near one hue.
+  return Math.abs(hash * 137) % 360;
+}
+
 function isLocalItem(item: LibraryItem): boolean {
   return item.sourceKind === 'local' || item.sourceKind === 'managed';
 }
@@ -3260,13 +3270,38 @@ export function createLibraryView(
       image.referrerPolicy = 'no-referrer';
       image.addEventListener('error', () => {
         image.remove();
-        const initial = itemTitle(display.item).slice(0, 1);
-        cover.textContent = initial === '' ? '?' : initial.toUpperCase();
+        appendJacket(cover, display.item);
       });
       cover.appendChild(image);
     } else {
-      const initial = itemTitle(display.item).slice(0, 1);
-      cover.textContent = initial === '' ? '?' : initial.toUpperCase();
+      appendJacket(cover, display.item);
+    }
+  }
+
+  /**
+   * Books without artwork get a typeset jacket (title + author on a hue keyed
+   * to the title) instead of a grey tile with one letter. Small covers (rows,
+   * continue strip) fall back to the initial via the title's `data-cover-initial`.
+   */
+  function appendJacket(cover: HTMLElement, item: LibraryItem): void {
+    const title = itemTitle(item);
+    const initial = title.slice(0, 1);
+    cover.classList.add('lightink-library-cover--jacket');
+    cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
+    // Decorative like an <img alt="">: the row text already names the book.
+    const jacketTitle = doc.createElement('span');
+    jacketTitle.className = 'lightink-library-cover-jacket-title';
+    jacketTitle.setAttribute('aria-hidden', 'true');
+    jacketTitle.textContent = title === '' ? '?' : title;
+    jacketTitle.dataset.coverInitial = initial === '' ? '?' : initial.toUpperCase();
+    cover.appendChild(jacketTitle);
+    const author = itemAuthors(item)[0];
+    if (author !== undefined && author !== '') {
+      const jacketAuthor = doc.createElement('span');
+      jacketAuthor.className = 'lightink-library-cover-jacket-author';
+      jacketAuthor.setAttribute('aria-hidden', 'true');
+      jacketAuthor.textContent = author;
+      cover.appendChild(jacketAuthor);
     }
   }
 

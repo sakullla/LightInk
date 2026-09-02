@@ -40,12 +40,14 @@ function cssDeclarationBlocks(css: string): Array<{ selector: string; body: stri
 
 /**
  * Touch-branch `:active` blocks: selector carries the html gate so desktop
- * output stays identical without the flags.
+ * output stays identical without the flags. `:not(:active)` is the released
+ * state (hover / selected neutralisation), not a press state, so it does not
+ * count — those blocks legitimately restore base shadows.
  */
 function touchActiveBlocks(css: string): Array<{ selector: string; body: string }> {
   return cssDeclarationBlocks(stripComments(css)).filter(
     (rule) =>
-      rule.selector.includes(':active') &&
+      rule.selector.replace(/:not\(\s*:active\s*\)/g, '').includes(':active') &&
       !rule.selector.includes(':hover') &&
       rule.selector.includes(TOUCH_GATE),
   );
@@ -58,15 +60,16 @@ describe('touch press feedback baseline (T1)', () => {
     );
   });
 
-  it('washes the tab bar tab on :active and gives is-active an accent-soft rounded base', () => {
+  it('washes the tab bar tab on :active and marks is-active by accent ink, not a filled block', () => {
     expect(libraryCss).toMatch(
       new RegExp(
         `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab:not\\(:disabled\\):active\\s*\\{[^}]*${WASH_RE}`,
       ),
     );
+    // 激活 tab 只换 accent 字色/字重（透明底），过渡曲线与基块一致，按压洗色仍可见。
     expect(libraryCss).toMatch(
       new RegExp(
-        `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab\\.is-active\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)[^}]*transition:\\s*background-color 150ms ease, color 150ms ease, font-weight 150ms ease`,
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab\\.is-active\\s*\\{[^}]*background:\\s*transparent[^}]*color:\\s*var\\(--lightink-accent\\)[^}]*transition:\\s*background-color 150ms ease, color 150ms ease, font-weight 150ms ease`,
       ),
     );
     // 底色来自既有 token，基块圆角 10px 两态一致（下方形状断言兜底）。

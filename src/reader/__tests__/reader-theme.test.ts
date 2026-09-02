@@ -129,13 +129,13 @@ describe('library shelf themes', () => {
   it('maps shelf themes onto native caption colors', () => {
     expect(libraryNativeWindowChrome('gallery')).toEqual({
       dark: false,
-      caption: '#e8edf2',
-      text: '#243038',
+      caption: '#f2efe8',
+      text: '#2a261f',
     });
     expect(libraryNativeWindowChrome('paper')).toEqual({
       dark: false,
-      caption: '#f4efe6',
-      text: '#3a3228',
+      caption: '#f6eadc',
+      text: '#3a2f24',
     });
     expect(libraryNativeWindowChrome('ink')).toEqual({
       dark: true,
@@ -152,7 +152,7 @@ describe('library shelf themes', () => {
     const overlay = document.createElement('div');
     adoptLibraryOverlayTheme(overlay, host);
     mountLibraryOverlay(overlay, host);
-    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('#f7f9fb');
+    expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('#fffcf8');
     expect(overlay.dataset.libraryTheme).toBe('gallery');
     expect(overlay.parentElement).toBe(document.body);
     overlay.remove();

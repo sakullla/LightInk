@@ -10,7 +10,7 @@ import {
   type LibraryProgressQuery,
 } from '../library-progress.js';
 import { classifyLibraryKind } from '../library-kind.js';
-import { createLibraryView, type LibraryViewDependencies } from '../library-view.js';
+import { createLibraryView, jacketHue, type LibraryViewDependencies } from '../library-view.js';
 import {
   type LibraryGroup,
   type LibraryGroupMembership,
@@ -770,6 +770,58 @@ describe('LibraryView my-books home', () => {
     expect(comicRow.textContent).toContain('第 12 页');
     expect(comicRow.textContent).toContain('已读 37%');
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
+    view.destroy();
+  });
+
+  it('typesets a title-keyed jacket for books without artwork instead of one grey letter', async () => {
+    const bare = localItem({ id: 'local:/books/bare.epub', title: '围城', authors: ['钱钟书'] });
+    const nameless = localItem({ id: 'local:/books/nameless.txt', title: '', authors: [] });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [bare, nameless]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const cover = itemRow(host, bare.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    expect(cover.classList.contains('lightink-library-cover--jacket')).toBe(true);
+    expect(cover.querySelector('img')).toBeNull();
+    const hue = Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'));
+    expect(hue).toBe(jacketHue('围城'));
+    expect(hue).toBeGreaterThanOrEqual(0);
+    expect(hue).toBeLessThan(360);
+    const title = cover.querySelector<HTMLElement>('.lightink-library-cover-jacket-title')!;
+    expect(title.textContent).toBe('围城');
+    // Small covers (continue strip / rows) collapse to this initial via CSS attr().
+    expect(title.dataset.coverInitial).toBe('围');
+    expect(cover.querySelector('.lightink-library-cover-jacket-author')?.textContent).toBe('钱钟书');
+
+    const blank = itemRow(host, nameless.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    expect(blank.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('?');
+    expect(blank.querySelector('.lightink-library-cover-jacket-author')).toBeNull();
+
+    // Same title, same hue; different titles spread out rather than clustering.
+    expect(jacketHue('围城')).toBe(jacketHue('围城'));
+    expect(jacketHue('围城')).not.toBe(jacketHue('围城2'));
+
+    // The jacket is a real gradient keyed to that hue, and the continue strip
+    // only shows the initial (title collapses, author hidden).
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-library-cover--jacket\s*\{[^}]*hsl\(var\(--lightink-library-jacket-h\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-continue \.lightink-library-cover-jacket-title::after[^{]*\{[^}]*content:\s*attr\(data-cover-initial\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-continue \.lightink-library-cover-jacket-author[^{]*\{[^}]*display:\s*none/,
+    );
+    // Continue-strip thumbnail must not inherit the wall's min-width (it used to stretch to 160px).
+    expect(css).toMatch(
+      /\.lightink-library-continue \.lightink-library-cover\s*\{[^}]*min-width:\s*0/,
+    );
     view.destroy();
   });
 
@@ -2971,7 +3023,7 @@ describe('LibraryView sources, manage, and catalog', () => {
 
     const root = libraryRoot(host);
     expect(root.dataset.libraryTheme).toBe('gallery');
-    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#e8edf2');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#f2efe8');
     expect(host.querySelector('.lightink-library-header .lightink-library-theme-swatches')).toBeNull();
     expect(host.querySelector('.lightink-library-manage-panel .lightink-library-appearance')).toBeTruthy();
     expect(host.querySelector('.lightink-library-appearance-hint')?.textContent).toContain('书架');
@@ -4111,6 +4163,9 @@ describe('LibraryView mobile shelf', () => {
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-groups::after\s*\{/,
     );
     expect(css).toMatch(
+      /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-toolbar\s*\{[^}]*justify-content:\s*space-between/,
+    );
+    expect(css).not.toMatch(
       /\[data-library-nav=['"]?shelf['"]?\]\s+\.lightink-library-shelf-toolbar\s*\{[^}]*justify-content:\s*flex-start/,
     );
     expect(css).not.toMatch(
@@ -4224,7 +4279,9 @@ describe('LibraryView mobile shelf', () => {
     expect(cssLengthPx(cssDeclaration(filterEntry, 'min-height'))[0]).toBeGreaterThanOrEqual(44);
     expect(filterEntry).toMatch(/background:\s*transparent/);
     expect(filterEntry).not.toMatch(/color-mix\(in srgb, var\(--lightink-fg\) 7%/);
-    expect(Number.parseInt(cssDeclaration(filterEntry, 'font-weight') ?? '700', 10)).toBeLessThan(600);
+    const filterWeight = Number.parseInt(cssDeclaration(filterEntry, 'font-weight') ?? '700', 10);
+    expect(filterWeight).toBeGreaterThanOrEqual(500);
+    expect(filterWeight).toBeLessThanOrEqual(650);
 
     const toolbarBlocks = cssRuleBodies(
       css,
@@ -4269,13 +4326,14 @@ describe('LibraryView mobile shelf', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item-text strong\s*\{[^}]*-webkit-line-clamp:\s*2/,
     );
 
-    // 三列 gutter 与封面–标题 gap 加大。
+    // 封面贴近标题；封面才是视觉主体。
     const itemBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-item(?![\w-])/,
     );
     const itemGap = cssLengthPx(cssDeclaration(itemBlocks[itemBlocks.length - 1] ?? '', 'gap'));
-    expect(itemGap[0]).toBeGreaterThan(10);
+    expect(itemGap[0]).toBeGreaterThanOrEqual(6);
+    expect(itemGap[0]).toBeLessThanOrEqual(10);
     const wallBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-cover-wall/,
@@ -4326,6 +4384,19 @@ describe('LibraryView mobile shelf', () => {
     ];
     expect(Math.max(0, ...searchHeights)).toBeGreaterThanOrEqual(44);
     expect(searchBlock).not.toMatch(/(?:^|[;\s])(?:min-)?height:\s*40px/);
+
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-search\s*\{[^}]*background:\s*var\(--lightink-bg-elevated\)/,
+    );
+    expect(css).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-tabbar\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-cover-wall[\s\S]{0,80}\.lightink-library-item--import\s*\{[^}]*order:\s*1/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-cover--import\s*\{[^}]*border:\s*1\.5px dashed/,
+    );
   });
 
   it('gives the manage dialogs near-full viewport width and compact UI type on phone chrome', () => {
