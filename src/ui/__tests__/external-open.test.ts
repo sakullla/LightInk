@@ -10,6 +10,7 @@ import {
   displayNameForExternalOpen,
   EXTERNAL_OPEN_LABELS,
   handleExternalOpen,
+  planColdStartSurface,
   revealExistingWindow,
   type ExternalOpenDeps,
   type ExternalOpenedTab,
@@ -284,6 +285,36 @@ describe('handleExternalOpen (running instance)', () => {
     expect(workspace.surface).toBe('editor');
     expect(notifyOf(deps, 'warning')[0][0]).toBe(
       EXTERNAL_OPEN_LABELS.en.revealFailed(tab.title),
+    );
+  });
+});
+
+describe('planColdStartSurface', () => {
+  const isReaderPath = (path: string): boolean => /\.(epub|pdf|cbz)$/i.test(path);
+
+  it('keeps the shelf for a bare start and for ebooks (R3/R5)', () => {
+    expect(planColdStartSurface(null, { isReaderPath, immersive: false })).toBe('shelf');
+    expect(planColdStartSurface(null, { isReaderPath, immersive: true })).toBe('shelf');
+    expect(planColdStartSurface('/books/dune.epub', { isReaderPath, immersive: false })).toBe(
+      'shelf',
+    );
+    expect(planColdStartSurface('/books/dune.epub', { isReaderPath, immersive: true })).toBe(
+      'shelf',
+    );
+  });
+
+  it('enters the editor before opening desktop Markdown so the shelf is never built (R1)', () => {
+    expect(planColdStartSurface('/docs/notes.md', { isReaderPath, immersive: false })).toBe(
+      'editor',
+    );
+    expect(planColdStartSurface('C:\\docs\\README.MARKDOWN', { isReaderPath, immersive: false })).toBe(
+      'editor',
+    );
+  });
+
+  it('lets the open itself pick the reader surface on immersive platforms (R1)', () => {
+    expect(planColdStartSurface('/docs/notes.md', { isReaderPath, immersive: true })).toBe(
+      'open-first',
     );
   });
 });

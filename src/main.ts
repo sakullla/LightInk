@@ -132,6 +132,7 @@ import {
 import { createReaderChrome, type ReaderChrome } from './reader/reader-chrome.js';
 import {
   handleExternalOpen,
+  planColdStartSurface,
   revealExistingWindow,
   type ExternalOpenOrigin,
   type ExternalOpenTab,
@@ -473,7 +474,12 @@ const sourceViews = new Map<string, SourceView>();
 const markdownAnnotations = new Map<string, MarkdownAnnotationHost>();
 // R14：自动保存控制器在 TabManager 之后创建（见下），菜单回调用 ?. 短路。
 let autosave: AutosaveController;
+// 书架按需创建（见 ensureLibraryView）：关联/CLI 打开 Markdown 的进程可能自始至终
+// 没有书架，所有引用点都必须容忍 undefined。
 let libraryView: LibraryView | undefined;
+// 冷启动表面要等 bootstrap 取出首个待打开文件后才落定；此前 shelf 表面不得
+// 创建/加载书架，否则双击 .md 会先跑一遍封面墙再切编辑器。
+let startupShelfDeferred = true;
 // R6：Android 阅读侧裁剪——编辑器不可达，默认书架、enterEditor 空操作（桌面不变）。
 const workspace = createWorkspaceMode({ editorEnabled: !isAndroidApp });
 
@@ -856,6 +862,9 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
     const markdownOpen = activeMarkdownTab() !== null;
     const vis = workspaceVisibility(state.surface, { markdownOpen });
     setLibraryVisibility(vis.outlineHidden);
+    if (state.surface === 'shelf' && !startupShelfDeferred) {
+      ensureLibraryView();
+    }
     if (libraryView !== undefined) {
       applyWorkspaceVisibility({ shelf: libraryView.element }, state.surface, {
         markdownOpen,
@@ -1936,7 +1945,7 @@ shell = createAppShell(
     onEnterReaderHome: () => {
       workspace.enterReaderHome();
       if (isAndroidApp || isTouchPrimary) {
-        void libraryView?.show();
+        void ensureLibraryView().show();
       }
     },
     isReaderBookOpen: () => workspace.mode === 'reader' && workspace.hasOpenBook,
@@ -2774,53 +2783,77 @@ const syncedOpdsClient = {
   search: (sourceId: string, query: string) => opdsClient.search(sourceId, query),
 };
 
-libraryView = createLibraryView(shell.editorArea, {
-  opds: syncedOpdsClient,
-  library: libraryClient,
-  getLocale: () => i18n.locale,
-  getProgress: bindLibraryProgress(syncableStorage),
-  // R6：Android 不接线编辑器入口——书架 manage 面板「编辑」按钮与
-  // travel 按钮迁移同时缺席（library-view 以 deps 缺省抑制渲染）。
-  ...(isAndroidApp
-    ? {}
-    : {
-        workspaceTravel: shell.enterEditorButton,
-        onEnterEditor: () => workspace.enterEditor(),
-      }),
-  webdavSource: webDavSourceClient,
-  onOpenSyncPanel: openWebDavSyncPanel,
-  themeStorage: syncableStorage,
-  readerPrefsStorage: syncableStorage,
-  // R4：手动改阅读状态必须经 SyncableStorage 边界写入，才能触发 onChange、
-  // 进入 dirtyKeys 并调度同步；缺省会回退裸 window.localStorage 断开同步。
-  progressStorage: syncableStorage,
-  enrichLocalItem: enrichLocalLibraryItem,
-  onOpen: openLibraryItem,
-  onCache: cacheLibraryItem,
-  onDownload: async (item, signal) => {
-    throwIfOperationAborted(signal);
-    const path = await syncRecordClient.downloadBook(item.id);
-    throwIfOperationAborted(signal);
-    return path;
-  },
-  onImportLocal: importLocalLibraryItem,
-  onLocalChange: () => applicationStateSync?.schedule(),
-  notify: (message) => {
-    void showAppAlert(message);
-  },
-  confirmGroupDelete: async (_group, message) =>
-    (await showConfirmDialog(document, {
-      title: i18n.t('app.name'),
-      message,
-      buttons: [
-        { id: 'delete', label: i18n.t('dialog.discard'), kind: 'danger' },
-        { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
-      ],
-      cancelId: 'cancel',
-    })) === 'delete',
-  onVisibilityChange: onLibraryVisibilityChange,
-});
+/**
+ * 书架（封面墙）按需创建：首次进入 shelf 表面时才构建并挂到编辑区。
+ * 以 Markdown 关联/CLI 启动、从未点「阅读/书架」的进程不会创建它；
+ * 一旦创建即常驻，切编辑器只隐藏不销毁。
+ */
+function ensureLibraryView(): LibraryView {
+  if (libraryView !== undefined) {
+    return libraryView;
+  }
+  libraryView = createLibraryView(shell.editorArea, {
+    opds: syncedOpdsClient,
+    library: libraryClient,
+    getLocale: () => i18n.locale,
+    getProgress: bindLibraryProgress(syncableStorage),
+    // R6：Android 不接线编辑器入口——书架 manage 面板「编辑」按钮与
+    // travel 按钮迁移同时缺席（library-view 以 deps 缺省抑制渲染）。
+    ...(isAndroidApp
+      ? {}
+      : {
+          workspaceTravel: shell.enterEditorButton,
+          onEnterEditor: () => workspace.enterEditor(),
+        }),
+    webdavSource: webDavSourceClient,
+    onOpenSyncPanel: openWebDavSyncPanel,
+    themeStorage: syncableStorage,
+    readerPrefsStorage: syncableStorage,
+    // R4：手动改阅读状态必须经 SyncableStorage 边界写入，才能触发 onChange、
+    // 进入 dirtyKeys 并调度同步；缺省会回退裸 window.localStorage 断开同步。
+    progressStorage: syncableStorage,
+    enrichLocalItem: enrichLocalLibraryItem,
+    onOpen: openLibraryItem,
+    onCache: cacheLibraryItem,
+    onDownload: async (item, signal) => {
+      throwIfOperationAborted(signal);
+      const path = await syncRecordClient.downloadBook(item.id);
+      throwIfOperationAborted(signal);
+      return path;
+    },
+    onImportLocal: importLocalLibraryItem,
+    onLocalChange: () => applicationStateSync?.schedule(),
+    notify: (message) => {
+      void showAppAlert(message);
+    },
+    confirmGroupDelete: async (_group, message) =>
+      (await showConfirmDialog(document, {
+        title: i18n.t('app.name'),
+        message,
+        buttons: [
+          { id: 'delete', label: i18n.t('dialog.discard'), kind: 'danger' },
+          { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
+        ],
+        cancelId: 'cancel',
+      })) === 'delete',
+    onVisibilityChange: onLibraryVisibilityChange,
+  });
+  return libraryView;
+}
+
+// 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。
 applyWorkspaceState();
+
+/** 启动表面落定：解除书架延迟；此刻仍在 shelf 表面则立即创建并显示封面墙。 */
+function settleStartupShelf(): void {
+  if (!startupShelfDeferred) {
+    return;
+  }
+  startupShelfDeferred = false;
+  if (workspace.surface === 'shelf') {
+    applyWorkspaceState();
+  }
+}
 
 applicationStateSync = new ApplicationStateSync({
   storage: syncableStorage,
@@ -3965,14 +3998,27 @@ async function bootstrap(): Promise<void> {
   const androidViewPending = installExternalOpenBridge((path) => {
     void openExternalAssociationPath(path, externalOpenOrigin);
   });
+  // R1：取出启动/关联文件（首实例 argv 经后端 take_pending_file；命令未就绪时静默）。
+  const pendingFile = await invoke<string | null>('take_pending_file').catch(() => null);
+  // 启动表面按首个待打开文件落定：无文件/电子书先建书架（现状不变）；桌面 Markdown
+  // 先进编辑器再打开，书架全程不创建（文件缺失也停在编辑器，只弹既有错误框）；
+  // 触控 Markdown 由打开本身落到阅读器表面，仅在打开失败仍停留 shelf 时才建书架。
+  const startupPlan = planColdStartSurface(androidViewPending ?? pendingFile, {
+    isReaderPath,
+    immersive: isImmersiveMarkdownPlatform(),
+  });
+  if (startupPlan === 'shelf') {
+    settleStartupShelf();
+  } else if (startupPlan === 'editor') {
+    workspace.enterEditor();
+  }
   if (androidViewPending !== null) {
     await openExternalAssociationPath(androidViewPending, 'cold-start');
   }
-  // R1：取出启动/关联文件（首实例 argv 经后端 take_pending_file；命令未就绪时静默）。
-  const pendingFile = await invoke<string | null>('take_pending_file').catch(() => null);
   if (pendingFile !== null) {
     await openExternalAssociationPath(pendingFile, 'cold-start');
   }
+  settleStartupShelf();
   externalOpenOrigin = 'runtime';
   // 无标签（无恢复草稿、无启动文件）则新建欢迎标签。
   if (manager.tabList.length === 0) {
@@ -3983,4 +4029,6 @@ async function bootstrap(): Promise<void> {
 bootstrap().catch((err: unknown) => {
   // eslint-disable-next-line no-console
   console.error('[lightink] bootstrap failed:', err);
+  // 启动失败也不能把窗口留在空白 shelf 上。
+  settleStartupShelf();
 });

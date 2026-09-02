@@ -172,6 +172,29 @@ function isColdStart(source: ExternalOpenOrigin): boolean {
   return source === 'cold-start';
 }
 
+/**
+ * Where a cold start lands before its first pending file is opened.
+ *
+ * - `shelf`: no file, or an ebook — build and show the cover wall first
+ *   (existing behavior; the book then lands on the reader).
+ * - `editor`: desktop Markdown — enter the editor before the open so the
+ *   shelf is never built or loaded, even if the file turns out missing.
+ * - `open-first`: immersive (Android/touch) Markdown — the reader surface
+ *   comes from the open itself; only fall back to the shelf when the open
+ *   fails and the workspace is still on the shelf.
+ */
+export type ColdStartSurfacePlan = 'shelf' | 'editor' | 'open-first';
+
+export function planColdStartSurface(
+  startupPath: string | null,
+  options: { readonly isReaderPath: (path: string) => boolean; readonly immersive: boolean },
+): ColdStartSurfacePlan {
+  if (startupPath === null || options.isReaderPath(startupPath)) {
+    return 'shelf';
+  }
+  return options.immersive ? 'open-first' : 'editor';
+}
+
 function announceExternalOpen(
   source: ExternalOpenOrigin,
   restored: boolean,
