@@ -262,6 +262,48 @@ describe('link affordance (R5)', () => {
     expect(document.querySelector('.lightink-link-dialog')).toBeNull();
   });
 
+  it('hides href tooltip after the pointer leaves the tip for elsewhere in the editor', () => {
+    vi.useFakeTimers();
+    const { host, link, controller } = mountAffordance(
+      '<p><a href="https://example.com/path">docs</a></p>',
+    );
+
+    link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    vi.advanceTimersByTime(LINK_HOVER_TOOLTIP_DELAY_MS);
+    expect(controller.isTooltipVisible()).toBe(true);
+    const tooltip = controller.tooltipElement();
+    expect(tooltip).not.toBeNull();
+
+    link.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: tooltip }),
+    );
+    tooltip!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    tooltip!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, relatedTarget: host }));
+    expect(controller.isTooltipVisible()).toBe(true);
+    vi.advanceTimersByTime(LINK_HOVER_TOOLTIP_HIDE_GRACE_MS);
+    expect(controller.isTooltipVisible()).toBe(false);
+  });
+
+  it('keeps href tooltip when the pointer returns from the tip to the same link', () => {
+    vi.useFakeTimers();
+    const { link, controller } = mountAffordance(
+      '<p><a href="https://example.com/path">docs</a></p>',
+    );
+
+    link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    vi.advanceTimersByTime(LINK_HOVER_TOOLTIP_DELAY_MS);
+    const tooltip = controller.tooltipElement();
+    expect(tooltip).not.toBeNull();
+
+    link.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: tooltip }),
+    );
+    tooltip!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    tooltip!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, relatedTarget: link }));
+    vi.advanceTimersByTime(LINK_HOVER_TOOLTIP_HIDE_GRACE_MS + 20);
+    expect(controller.isTooltipVisible()).toBe(true);
+  });
+
   it('skips tooltip for a bare URL whose visible text is the href', () => {
     vi.useFakeTimers();
     const { link, controller } = mountAffordance(

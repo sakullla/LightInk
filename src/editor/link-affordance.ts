@@ -266,11 +266,14 @@ export class LinkAffordanceController {
     this.clearHideTimer();
   };
 
-  private onTooltipLeave = (): void => {
+  private onTooltipLeave = (event: MouseEvent): void => {
     this.pointerOverTooltip = false;
-    if (this.hoveredLink === null) {
-      this.scheduleHide();
+    const related = event.relatedTarget;
+    if (related instanceof Node && this.hoveredLink?.contains(related)) {
+      return;
     }
+    this.hoveredLink = null;
+    this.scheduleHide();
   };
 
   private onTooltipMouseDown = (event: MouseEvent): void => {
