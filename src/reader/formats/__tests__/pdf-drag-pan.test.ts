@@ -10,7 +10,11 @@
  * 双击窗口（280ms/36px）判定、缩放锚点滚动修正；多指手势层（注入 scale
  * 绑定）：第二指取消进行中平移、捏合 rAF 合并直写 currentScale + 两指中点
  * 锚定、捏合回 1 指不恢复旧基线、双击适宽↔2× 档切换锚定双击点、窗口内单击
- * 暂扣 ≤280ms 后原样放行、非触屏（含绑定注入）仍为 no-op。
+ * 暂扣 ≤280ms 后原样放行、非触屏（含绑定注入）仍为 no-op；修复回归：吞
+ * click 布防在下一次 pointerdown 清除（真机捏合无尾随 click，不得吃掉下一次
+ * 真点按）、新点击顶替暂扣槽位前先按序放行旧击（各恰好一次）、捏合基指抬起
+ * 且仍有两指在屏时重定基线（比值口径不换对）、捏合期 sync() 恒 touch-action
+ * none（缩小到无溢出也不中途收敛）。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -529,6 +533,155 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     expect(el.style.touchAction).toBe('');
     expect(el.scrollLeft).toBe(0);
     handle.sync();
+    handle.release();
+  });
+
+  it('clears the click-swallow arm on the next pointerdown so the tap after a real pinch fires', () => {
+    vi.useFakeTimers();
+    const frames = fakeFrames();
+    const el = makeScroller();
+    const { binding } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    const clicks: Array<{ x: number; y: number }> = [];
+    el.addEventListener('click', (event) => {
+      clicks.push({ x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY });
+    });
+
+    // 真机捏合：两指张开（位移远超点击阈值）→ 没有尾随合成 click。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 40, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 260, clientY: 300 }));
+    frames.flush();
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 40, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 260, clientY: 300 }));
+    expect(clicks).toEqual([]);
+
+    // 捏合后的第一次真点按：pointerdown 清掉残留吞布防，click 只被双击窗口暂扣。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 150, clientY: 150 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 150 }));
+    const tap = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 150,
+      clientY: 150,
+    });
+    el.dispatchEvent(tap);
+    expect(clicks).toEqual([]);
+    // 超时无第二击 → 原样放行：布防不再吃掉捏合后的第一次点按。
+    vi.advanceTimersByTime(PDF_DOUBLE_TAP_MS);
+    expect(clicks).toEqual([{ x: 150, y: 150 }]);
+    handle.release();
+  });
+
+  it('releases the previous held click when a second rapid click replaces the slot', () => {
+    vi.useFakeTimers();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    const { binding } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    const clicks: Array<{ x: number; y: number }> = [];
+    el.addEventListener('click', (event) => {
+      clicks.push({ x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY });
+    });
+
+    // 第一击：暂扣。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 60, clientY: 60 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 60, clientY: 60 }));
+    const first = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 60,
+      clientY: 60,
+    });
+    el.dispatchEvent(first);
+    expect(clicks).toEqual([]);
+
+    // 120ms 后第二击，位移 140px > 36px：不是双击 → 同样暂扣；顶替槽位前先
+    // 按序原样放行第一击（旧实现直接顶掉，第一击丢失且旧定时器重派第二击）。
+    vi.advanceTimersByTime(120);
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 200, clientY: 60 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 200, clientY: 60 }));
+    const second = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 200,
+      clientY: 60,
+    });
+    el.dispatchEvent(second);
+    expect(clicks).toEqual([{ x: 60, y: 60 }]);
+
+    // 第二击超时放行：两击各恰好派发一次、顺序不变。
+    vi.advanceTimersByTime(PDF_DOUBLE_TAP_MS);
+    expect(clicks).toEqual([
+      { x: 60, y: 60 },
+      { x: 200, y: 60 },
+    ]);
+    vi.advanceTimersByTime(PDF_DOUBLE_TAP_MS);
+    expect(clicks).toHaveLength(2);
+    handle.release();
+  });
+
+  it('re-baselines the pinch when a base pointer lifts with two pointers still down', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    const { binding, current } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+
+    // 基指 1/2 进入捏合（指距 200），张开到 250：2.5 × 1.25 = 3.125。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 300, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 50, clientY: 300 }));
+    frames.flush();
+    expect(current()).toBeCloseTo(3.125);
+
+    // 第 3 指落下/移动不参与：基指仍是 1/2，比例不因第 3 指变化。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 3, clientX: 70, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 3, clientX: 100, clientY: 300 }));
+    frames.flush();
+    expect(current()).toBeCloseTo(3.125);
+
+    // 基指 1 抬起、2/3 仍在屏：以剩余首两指（2@300 / 3@100，指距 200）重定
+    // 基线，捏合继续（不结束、不写比例）。
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 50, clientY: 300 }));
+    expect(current()).toBeCloseTo(3.125);
+    expect(el.style.touchAction).toBe('none');
+
+    // 剩余两指收拢到指距 150：按新基线 3.125 × 150/200 = 2.34375（旧实现沿用
+    // 旧基线口径 2.5 × 0.75 = 1.875，换对导致比例跳变）。
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 3, clientX: 150, clientY: 300 }));
+    frames.flush();
+    expect(current()).toBeCloseTo(2.34375);
+
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 300, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 3, clientX: 150, clientY: 300 }));
+    expect(el.style.touchAction).toBe(''); // 全部离屏：捏合结束，按溢出收敛
+    handle.release();
+  });
+
+  it('keeps touch-action none during an active pinch even without overflow', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    const { binding, setCurrentScale } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    expect(el.style.touchAction).toBe('');
+
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    expect(el.style.touchAction).toBe('none'); // 捏合进入即接管
+
+    // pdf.ts 的 scalechanging→sync() 在每次写比例后同步重估：捏合中缩小到无
+    // 横向溢出也不得中途收敛（原生手势一旦接管会 pointercancel 抢走剩余指）。
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 120, clientY: 300 }));
+    frames.flush();
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    handle.sync();
+    expect(el.style.touchAction).toBe('none');
+    handle.sync(); // 重复重估同样保持
+    expect(el.style.touchAction).toBe('none');
+
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 200, clientY: 300 }));
+    expect(el.style.touchAction).toBe(''); // 捏合结束才按溢出收敛
     handle.release();
   });
 });
