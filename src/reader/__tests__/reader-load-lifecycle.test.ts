@@ -1639,11 +1639,13 @@ describe('Reader load lifecycle', () => {
     frames[1]!.contentDocument!.body.innerHTML = '<p>keyword again</p>';
     view.openSearch?.('keyword');
     const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel')!;
+    // 搜索按章增量渲染：等两章命中都落地再取第二个，否则负载高时第一次轮询
+    // 只看到第一章的 1 条命中（CI 抖动），且失败会泄漏 view 的 document Escape
+    // 监听连带拖垮后续用例。
     await vi.waitFor(() => {
-      expect(sidebar.querySelector('[data-search-key]')).not.toBeNull();
+      expect(sidebar.querySelectorAll('[data-search-key]').length).toBeGreaterThanOrEqual(2);
     });
     const hits = sidebar.querySelectorAll<HTMLElement>('[data-search-key]');
-    expect(hits.length).toBeGreaterThanOrEqual(2);
     const laterKey = hits[1]!.dataset.searchKey ?? '';
     expect(laterKey).not.toBe('');
     hits[1]!.click();
