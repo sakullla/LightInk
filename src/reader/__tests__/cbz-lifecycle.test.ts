@@ -1495,8 +1495,10 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
     try {
       const container = document.createElement('div');
       sizeCanvas(container);
+      const onPageChange = vi.fn();
       const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
         preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+        onPageChange,
       });
       // 预取就绪后提交路径无 decode hold，落位断言确定。
       await vi.waitFor(() =>
@@ -1535,6 +1537,9 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
         clock.set(250);
         frames.flush();
         expect(handle.currentPage).toBe(2);
+        // A3（P1）：拖动提交与 scrollToIndex 同契约触发换页回调，
+        // 否则进度持久化与外层阅读器状态停留在旧页。
+        expect(onPageChange).toHaveBeenCalledTimes(1);
         // 拖动提交不走 View Transition：跟手已有实时帧。
         expect(updates).toHaveLength(0);
         // 落位后无残留：transform 清零、旧 spread 隐藏、邻居槽回常规流。
@@ -1559,8 +1564,10 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
   it('bounces back below the release threshold and restores the neighbor hidden state', async () => {
     const container = document.createElement('div');
     sizeCanvas(container);
+    const onPageChange = vi.fn();
     const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
       preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      onPageChange,
     });
     const frames = fakeFrames();
     const clock = controllableClock();
@@ -1578,6 +1585,7 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
       clock.set(250);
       frames.flush();
       expect(handle.currentPage).toBe(1);
+      expect(onPageChange).not.toHaveBeenCalled(); // 回弹不换页：无回调
       expect(readComicDragTranslateX(container)).toBeNull(); // transform 归零
       const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
       expect(neighbor.hidden).toBe(true);
@@ -1970,6 +1978,65 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
       } finally {
         frames.restore();
         clock.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
+  });
+
+  it('skips an in-flight turn View Transition when a drag starts inside its window', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    let skipCalls = 0;
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => {
+          skipCalls += 1;
+        },
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      try {
+        // 边区点按翻页进入 View Transition（finished 未决：仍处转场窗口）。
+        clickCanvas(container, 950);
+        expect(updates).toHaveLength(1);
+        expect(skipCalls).toBe(0); // 首个转场提交时无在飞转场可跳
+        expect(handle.currentPage).toBe(2);
+
+        // 转场窗口内开始拖动：新手势接管必须跳过在飞 VT，跟手 transform
+        // 不再被旧快照遮挡；首个跟手帧即写入位移。
+        touchDragTo(container, 800, 700);
+        expect(skipCalls).toBe(1);
+        frames.flush();
+        expect(readComicDragTranslateX(container)).toBe(-100);
+
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 700,
+          clientY: 400,
+        });
+        finishedResolvers.splice(0).forEach((resolve) => resolve());
+        await vi.waitFor(() =>
+          expect(document.documentElement.dataset.comicTurn).toBeUndefined(),
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
       }
     } finally {
       Reflect.deleteProperty(document, 'startViewTransition');

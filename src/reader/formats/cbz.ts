@@ -1722,10 +1722,22 @@ export async function renderCbzInto(
 
     const enterDragTurn = (pointerId: number, dx: number, dy: number): void => {
       resetDragTurn(false); // 作废在飞缓动与残留（快速连翻最新手势胜出）
-      spreadSwapGeneration += 1; // 新拖动手势取代上一翻页挂起的 decode-hold 提交
+      // A3（P3）：与 showPagedSpread 的新提交一致，接管时跳过仍在飞的非拖动
+      // 翻页 View Transition——否则跟手 transform 写在旧快照之下，转场结束前
+      // 不可见、结束后跳变。
+      try {
+        activeTurnTransition?.skipTransition();
+      } catch {
+        // 转场已结束时 skip 可能抛错，忽略。
+      }
       if (viewScale > 1) return;
       const turnDirection = comicSwipePageDirection(dx, dy, preferences.direction);
       if (turnDirection === null) return;
+      // 世代号作废必须与下面的视图收敛重写同生共死：任何作废挂起 decode-hold
+      // 提交的路径都要执行收敛（对齐 applySwap 语义），否则 hold 已并入
+      // visible 的 spread 残留未隐藏。防御性提前返回不触碰世代号，挂起提交
+      // 仍可正常落位，故增量放在两个防御返回之后。
+      spreadSwapGeneration += 1; // 新拖动手势取代上一翻页挂起的 decode-hold 提交
       const spreadPrefs = layoutSpreadPrefs();
       const currentIndex = comicSpreadStart(
         currentPage - 1,
@@ -1834,7 +1846,11 @@ export async function renderCbzInto(
       startDragTurnEase(dx, settleTo, () => {
         if (commit && !destroyed) {
           // 拖动触发的提交不走 View Transition / slot 滑入：跟手已有实时帧。
+          // A3（P1）：与 scrollToIndex 同契约——提交换页须在赋值前判定并回调
+          // onPageChange，否则拖动翻页永不通知宿主（进度持久化与外层状态滞后）。
+          const changed = currentPage !== targetIndex + 1;
           showPagedSpread(targetIndex, turnDirection, 'drag');
+          if (changed) options.onPageChange?.();
           return;
         }
         resetDragTurn();
