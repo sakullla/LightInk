@@ -1733,6 +1733,28 @@ export async function renderCbzInto(
         spreadPrefs,
         landscapePages,
       );
+      // 上一翻页挂起的 decode-hold 提交已被本手势的世代号作废，其 applySwap
+      // 不会再权威重写 hidden：这里先按当前 spread 收敛（对齐 applySwap 语义，
+      // 含 tap 翻页 hold 期目标 spread 尚未 unhide 的情形），否则 hold 已并入
+      // visible 的 spread 会残留未隐藏，与新邻居并排成多 spread 垃圾视图，
+      // 在松手回弹或书籍边缘提前返回后持续存在。
+      const keepPages = comicVisiblePages(
+        currentIndex,
+        images.length,
+        spreadPrefs,
+        landscapePages,
+      );
+      const keepSet = new Set(keepPages);
+      for (const index of [...visible]) {
+        if (keepSet.has(index)) continue;
+        const slot = slots[index];
+        if (slot !== undefined) slot.hidden = true;
+        visible.delete(index);
+      }
+      for (const index of keepPages) {
+        const slot = slots[index];
+        if (slot !== undefined) slot.hidden = false;
+      }
       const targetIndex = advanceComicPage(
         currentIndex,
         images.length,
@@ -2259,8 +2281,9 @@ export async function renderCbzInto(
           }
         } else if (event.type === 'pointercancel' && dragTurn !== null) {
           // 孤儿 pointercancel（如拖动指被系统打断且基线已被清）：只清理不翻页；
-          // 正常松手后的新点按不得作废在飞的提交缓动。
-          resetDragTurn();
+          // 松手后的提交缓动在飞（released）时，无关新指（如手掌误触）的
+          // pointercancel 不得作废已提交的翻页。
+          if (!dragTurn.released) resetDragTurn();
         } else if (gestureMoved) {
           lastGestureUp = { x: event.clientX, y: event.clientY };
           lastTap = null;

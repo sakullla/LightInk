@@ -1517,6 +1517,13 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
         });
         expect(handle.currentPage).toBe(1); // 提交发生在缓动完成后
 
+        clock.set(10); // 首帧即须越过拖动偏移：从 0 重启的回退实现此处仅 ~-186
+        frames.flush();
+        const early = readComicDragTranslateX(container);
+        expect(early).not.toBeNull();
+        expect(early!).toBeLessThan(-300);
+        expect(handle.currentPage).toBe(1); // 缓动中尚未提交
+
         clock.set(100); // 半程：从当前拖动偏移继续向 -1000（视口宽）
         frames.flush();
         const mid = readComicDragTranslateX(container);
@@ -1778,6 +1785,135 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
       frames.flush();
       expect(handle.currentPage).toBe(2); // 最新手势的松手提交生效
       expect(readComicDragTranslateX(container)).toBeNull();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('collapses the view to the current spread when a new drag supersedes a decode-hold', async () => {
+    // 首页 decode 直通；后续页悬挂，使拖动提交落进 decode-hold（目标页未物化）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    // 预取把页 1 的解码挂在悬挂态：提交时页 1 未物化 → 换屏被 decode-hold 挂起。
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，远过提交阈
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 缓动到位：showPagedSpread 进入 hold，页码已前进
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决（decode 悬挂）时立即重拖：挂起提交被世代号作废，
+      // 视图必须收敛到当前 spread（页 1），旧页 0 不得残留未隐藏。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      expect(visiblePageIndices(container)).toEqual(['1', '2']); // 当前 spread + 新邻居
+      const current = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(current.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(current.style.position).toBe(''); // 当前 spread 回常规流
+      expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(true);
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="2"]')!;
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(true);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-45);
+
+      // 新拖动不过阈回弹：视图恰为当前 spread，无残留偏移。
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+
+      // 被作废的 hold 提交不得随后落位：解码完成后无额外换屏。
+      queued.splice(0).forEach((resolve) => resolve());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('lets a committed drag turn finish easing despite an unrelated pointercancel', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(100);
+      frames.flush(); // 提交缓动在飞
+      expect(handle.currentPage).toBe(1);
+
+      // 无关新指（如手掌误触）落下即被系统取消：未过 slop、非拖动指。
+      pointerOn(container, 'pointerdown', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 600,
+        clientY: 400,
+      });
+      pointerOn(container, 'pointercancel', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 600,
+        clientY: 400,
+      });
+
+      // 已提交的翻页必须完成：缓动走完、页码前进、落位无残留。
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(visiblePageIndices(container)).toEqual(['1']);
       await handle.destroy();
     } finally {
       frames.restore();
