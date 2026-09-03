@@ -2,9 +2,11 @@
  * tokens.css 结构性测试（node 环境，经 fs 读取文件文本断言）：
  *   - warm-light / dark 两个内置主题块均存在；
  *   - warm-light 背景为暖色护眼、非纯白；
- *   - 两个主题都定义了主要语法令牌（keyword/comment/string/number/
- *     function/title/attr/builtin/literal）；
- *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源）。
+ *   - 四个主题都定义了主要语法令牌（keyword/comment/string/number/
+ *     function/title/attr/builtin/literal/punctuation）；
+ *   - number 与 literal 在每套主题里必须是不同 hex；
+ *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源），
+ *     含 .hljs-punctuation 与 .hljs-meta。
  *
  * 说明：视觉效果无法 headless 验证，这里只断言结构约束。
  * 注：项目未装 @types/node 且 vitest 会把 CSS 的 `?raw` 导入存根为空，
@@ -103,7 +105,7 @@ describe('tokens.css 内置主题', () => {
     expect((r + g + b) / 3).toBeGreaterThan(0x50);
   });
 
-  it.each(['warm-light', 'dark'])('%s 定义全部主要语法令牌', (id) => {
+  it.each(['warm-light', 'cool-light', 'dark', 'midnight'])('%s 定义全部主要语法令牌', (id) => {
     const block = themeBlock(id);
     for (const token of [
       '--lightink-syntax-keyword',
@@ -115,6 +117,7 @@ describe('tokens.css 内置主题', () => {
       '--lightink-syntax-attr',
       '--lightink-syntax-builtin',
       '--lightink-syntax-literal',
+      '--lightink-syntax-punctuation',
     ]) {
       const value = tokenValue(block, token);
       expect(value, `${id} 的 ${token} 应有颜色值`).toMatch(/^#[0-9a-f]{3,8}$/i);
@@ -131,6 +134,18 @@ describe('tokens.css 内置主题', () => {
       tokenValue(block, token);
     }
   });
+
+  it.each(['warm-light', 'cool-light', 'dark', 'midnight'])(
+    '%s number 与 literal 令牌颜色不同',
+    (id) => {
+      const block = themeBlock(id);
+      const number = tokenValue(block, '--lightink-syntax-number').toLowerCase();
+      const literal = tokenValue(block, '--lightink-syntax-literal').toLowerCase();
+      expect(number, `${id} number 与 literal 不得同色`).not.toBe(literal);
+      expect(number).toMatch(/^#[0-9a-f]{3,8}$/i);
+      expect(literal).toMatch(/^#[0-9a-f]{3,8}$/i);
+    },
+  );
 });
 
 describe('tokens.css hljs 类映射', () => {
@@ -145,6 +160,8 @@ describe('tokens.css hljs 类映射', () => {
       '.hljs-attr',
       '.hljs-built_in',
       '.hljs-literal',
+      '.hljs-punctuation',
+      '.hljs-meta',
     ]) {
       expect(css).toContain(cls);
     }
@@ -154,5 +171,7 @@ describe('tokens.css hljs 类映射', () => {
     expect(css).toMatch(/\.hljs-string[^{]*\{[^}]*var\(--lightink-syntax-string\)/);
     expect(css).toMatch(/\.hljs-number[^{]*\{[^}]*var\(--lightink-syntax-number\)/);
     expect(css).toMatch(/\.hljs-built_in[^{]*\{[^}]*var\(--lightink-syntax-builtin\)/);
+    expect(css).toMatch(/\.hljs-punctuation[^{]*\{[^}]*var\(--lightink-syntax-punctuation\)/);
+    expect(css).toMatch(/\.hljs-meta\s*\{[^}]*var\(--lightink-syntax-comment\)/);
   });
 });

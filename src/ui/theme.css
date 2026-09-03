@@ -1127,6 +1127,9 @@ html[data-reading-layout='scroll']:has(
 .lightink-tab-host .ProseMirror h1 { font-size: 1.75em; margin: 1.1em 0 0.5em; }
 .lightink-tab-host .ProseMirror h2 { font-size: 1.4em; margin: 1.05em 0 0.45em; }
 .lightink-tab-host .ProseMirror h3 { font-size: 1.2em; margin: 1em 0 0.4em; }
+.lightink-tab-host .ProseMirror h4 { font-size: 1.1em; margin: 0.95em 0 0.36em; }
+.lightink-tab-host .ProseMirror h5 { font-size: 1.05em; margin: 0.9em 0 0.32em; }
+.lightink-tab-host .ProseMirror h6 { font-size: 1em; margin: 0.85em 0 0.3em; }
 
 .lightink-tab-host pre,
 .lightink-code-block > .lightink-code-pre,
@@ -1212,8 +1215,8 @@ html[data-reading-layout='scroll']:has(
   flex: 0 0 auto;
   height: 36px;
   padding: 0 10px 0 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
-  background: color-mix(in srgb, var(--lightink-bg-elevated) 70%, var(--lightink-code-bg));
+  border-bottom: 1px solid var(--lightink-border);
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, var(--lightink-code-bg));
 }
 
 /* Code surface under the header — no second border/background. */
@@ -1728,29 +1731,30 @@ html[data-reading-layout='scroll']:has(
 
 .lightink-tab-host :not(pre) > code {
   background: var(--lightink-code-bg);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 82%, transparent);
   border-radius: 4px;
-  padding: 1px 5px;
+  padding: 0.08em 0.36em;
   font-size: 0.92em;
 }
 
 .lightink-tab-host blockquote {
-  margin: 0;
-  padding: 2px 14px;
-  border-left: 3px solid var(--lightink-accent-soft);
-  color: var(--lightink-muted);
-  background: var(--lightink-bg-elevated);
-  border-radius: 0 4px 4px 0;
+  margin: 0.75em 0;
+  padding: 0.4em 1em;
+  border-left: 3px solid color-mix(in srgb, var(--lightink-accent) 52%, var(--lightink-border));
+  color: color-mix(in srgb, var(--lightink-fg) 74%, var(--lightink-muted));
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, var(--lightink-accent-soft));
+  border-radius: 0 6px 6px 0;
 }
 
 /* Lists: comfortable vertical rhythm for long-session reading. */
 .lightink-tab-host .ProseMirror ul,
 .lightink-tab-host .ProseMirror ol {
-  margin: 0.55em 0;
-  padding-left: 1.55em;
+  margin: 0.65em 0;
+  padding-left: 1.6em;
 }
 
 .lightink-tab-host .ProseMirror li {
-  margin: 0.28em 0;
+  margin: 0.32em 0;
   padding-left: 0.15em;
 }
 
@@ -1849,7 +1853,7 @@ html[data-reading-layout='scroll']:has(
 /* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。 */
 .lightink-tab-host .tableWrapper {
   overflow-x: auto;
-  margin: 10px 0;
+  margin: 0.85em 0;
   border-radius: 8px;
   border: 1px solid var(--lightink-border);
   background: var(--lightink-bg-elevated);
@@ -1932,11 +1936,14 @@ html[data-reading-layout='scroll']:has(
 
 .lightink-tab-host a {
   color: var(--lightink-accent);
+  cursor: text;
+  text-decoration: none;
 }
 
 .lightink-tab-host hr {
   border: none;
-  border-top: 1px solid var(--lightink-border);
+  margin: 1.35em 0;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 80%, var(--lightink-muted));
 }
 
 .lightink-tab-host img {
@@ -1944,7 +1951,9 @@ html[data-reading-layout='scroll']:has(
      大图双向约束——宽度不超栏宽，高度不超 60vh，避免一张高图占满整个视口。 */
   max-width: 100%;
   max-height: 60vh;
-  border-radius: 4px;
+  margin: 0.7em 0;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--lightink-border);
 }
 
 /* 下拉菜单栏（R2）：与原工具栏同高，不挤占编辑区纵向空间。 */

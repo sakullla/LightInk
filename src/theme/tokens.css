@@ -83,12 +83,13 @@
   --lightink-syntax-keyword: #8b3354;
   --lightink-syntax-comment: #6a6354; /* critical: muted comments must stay readable */
   --lightink-syntax-string: #3f6b28;
-  --lightink-syntax-number: #9a4f1c;
+  --lightink-syntax-number: #9a4f1c; /* terracotta numerals */
   --lightink-syntax-function: #24527a;
   --lightink-syntax-title: #24527a;
   --lightink-syntax-attr: #6b5424;
   --lightink-syntax-builtin: #53428c;
-  --lightink-syntax-literal: #9a4f1c;
+  --lightink-syntax-literal: #3d5f6a; /* slate-ink true/false/null — not number rust */
+  --lightink-syntax-punctuation: #5c5648; /* braces/colons: quieter than keys, not bare ink */
 }
 
 /* 云白浅色：雾白底、青蓝强调，干净利落。 */
@@ -135,7 +136,8 @@
   --lightink-syntax-title: #1f4f8f;
   --lightink-syntax-attr: #63501f;
   --lightink-syntax-builtin: #463f96;
-  --lightink-syntax-literal: #9a4e1c;
+  --lightink-syntax-literal: #2c5d6e;
+  --lightink-syntax-punctuation: #4e5764;
 }
 
 /* 墨夜深色：暖炭底、蜜蜡强调，夜间护眼。 */
@@ -177,12 +179,13 @@
   --lightink-syntax-keyword: #e09ab0;
   --lightink-syntax-comment: #8f8778;
   --lightink-syntax-string: #b3c77a;
-  --lightink-syntax-number: #e0ae72;
+  --lightink-syntax-number: #e0ae72; /* honey numerals */
   --lightink-syntax-function: #93b8dc;
   --lightink-syntax-title: #93b8dc;
   --lightink-syntax-attr: #d0b870;
   --lightink-syntax-builtin: #c0a8e4;
-  --lightink-syntax-literal: #e0ae72;
+  --lightink-syntax-literal: #8eb8a8; /* dusty celadon — distinct from honey numbers */
+  --lightink-syntax-punctuation: #a89f8e;
 }
 
 /* 深空深色：夜空蓝底、星蓝强调，冷调沉静。 */
@@ -229,7 +232,8 @@
   --lightink-syntax-title: #93c0ea;
   --lightink-syntax-attr: #d4c074;
   --lightink-syntax-builtin: #bca8e4;
-  --lightink-syntax-literal: #e2ae70;
+  --lightink-syntax-literal: #8ab4b0;
+  --lightink-syntax-punctuation: #8e97a6;
 }
 
 /* hljs 类 → 主题令牌映射：T5 的 code-highlight 只输出 hljs-* 类名，
@@ -263,6 +267,13 @@
 .hljs-bullet,
 .hljs-link {
   color: var(--lightink-syntax-literal);
+}
+.hljs-punctuation {
+  color: var(--lightink-syntax-punctuation);
+}
+/* yaml --- / refs: muted but not bare code-fg; nested .hljs-string stays string. */
+.hljs-meta {
+  color: var(--lightink-syntax-comment);
 }
 .hljs-title,
 .hljs-title.function_,
