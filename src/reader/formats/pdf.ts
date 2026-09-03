@@ -377,13 +377,24 @@ export async function renderPdfInto(
     throw error;
   }
 
-  // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
-  // 触屏环境：放大出横向溢出后由指针拖拽平移（官方不提供，见 pdf-drag-pan）。
-  const dragPan = bindPdfDragPan(container);
-
   let fitWidthScale = 1;
   /** pagesinit 时量得的第 1 页 CSS 宽（scale=1 口径；官方 page-fit 同式归一）。 */
   let firstPageCssWidth = 0;
+
+  // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
+  // 触屏环境：放大出横向溢出后由指针拖拽平移；捏合/双击经注入的 scale 绑定
+  // 直写 currentScale（rAF 合并 + 应用侧锚点修正），落档仍由下方
+  // scalechanging→syncScale 吸档回环负责（官方不提供触屏手势，见 pdf-drag-pan）。
+  const dragPan = bindPdfDragPan(container, {
+    scale: {
+      getCurrentScale: () => pdfViewer.currentScale,
+      setCurrentScale: (scale: number): void => {
+        pdfViewer.currentScale = scale;
+      },
+      getFitWidthScale: () => fitWidthScale,
+      steps: PDF_SCALE_STEPS,
+    },
+  });
   /** 每页拼接文本缓存（原始字形坐标系，与官方文本层 DOM 拼接文本一致；懒填充）。 */
   const pageTexts: string[] = [];
   /** 文本层选区护栏卸载函数（层根键控）：官方渲染缓冲驱逐/模块注册表 prune 掉

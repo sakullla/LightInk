@@ -256,6 +256,21 @@ function defineClientSize(element: HTMLElement, measures: { clientWidth?: number
   }
 }
 
+/** 手写 PointerEvent 替身（jsdom 无 PointerEvent 构造器，同 drag-pan 测试）。 */
+function pointerEvent(
+  type: string,
+  init: { pointerId?: number; clientX?: number; clientY?: number; button?: number },
+): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(event, {
+    pointerId: init.pointerId ?? 1,
+    clientX: init.clientX ?? 0,
+    clientY: init.clientY ?? 0,
+    button: init.button ?? 0,
+  });
+  return event;
+}
+
 describe('PDF open chain (official kernel, unchanged contract)', () => {
   it('uses PDF.js range transport for a random-access source', async () => {
     mockPdf();
@@ -510,6 +525,56 @@ describe('viewer event wiring', () => {
     expect(handle.controller.scale).toBe(1); // 同档位不跳
     bus.dispatch('scalechanging', { source: viewer, scale: 5 }); // userZoom = 2
     expect(handle.controller.scale).toBe(2);
+    await handle.destroy();
+  });
+
+  it('injects the scale binding so a touch pinch writes official currentScale, snapped by scalechanging', async () => {
+    mockPdf();
+    // 触屏优先环境：bindPdfDragPan 进入手势层（非触屏仍为 no-op 空实现）。
+    document.documentElement.setAttribute('data-touch-primary', 'true');
+    const container = document.createElement('div');
+    defineClientSize(container, { clientWidth: 400 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    const viewer = lastViewer();
+    viewer.pageViews = [{ width: 160, scale: 1, textLayer: null }];
+    lastEventBus().dispatch('pagesinit', { source: viewer }); // fit = 2.5, currentScale 2.5
+    expect(viewerRuntime.scaleSets).toEqual([2.5]);
+
+    // 手动帧队列：rAF 合并（每帧至多一次写）可观察。
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        frames.push(callback);
+        return frames.length;
+      },
+    );
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((): void => undefined);
+
+    // 双指捏合（无横向溢出的适宽状态也要接管）。
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    expect(container.style.touchAction).toBe('none');
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 75, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 225, clientY: 300 }));
+    // 帧前零写入。
+    expect(viewerRuntime.scaleSets).toEqual([2.5]);
+    frames.splice(0).forEach((callback) => {
+      callback(0);
+    });
+    // 指距 100 → 150：2.5 × 1.5 = 3.75（钳制区间 2.5×[0.5,3]）。
+    expect(viewer.currentScale).toBeCloseTo(3.75);
+    expect(viewerRuntime.scaleSets).toEqual([2.5, 3.75]);
+
+    // 落档权威保持：scalechanging → syncScale 吸档回环把 userZoom 吸到 1.5。
+    lastEventBus().dispatch('scalechanging', { source: viewer, scale: viewer.currentScale });
+    expect(handle.controller.scale).toBe(1.5);
+
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 75, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
+    expect(container.style.touchAction).toBe('');
+    document.documentElement.removeAttribute('data-touch-primary');
     await handle.destroy();
   });
 
