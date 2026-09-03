@@ -107,6 +107,7 @@ import {
   readerNativeWindowChrome,
 } from './reader/reader-theme.js';
 import { applyReaderPrefs, loadReaderPrefs } from './reader/reader-prefs.js';
+import { restoreEditorDocumentLayout } from './reader/reader-layout.js';
 import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
 import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
@@ -2570,6 +2571,10 @@ manager = new TabManager({
       return;
     }
     if (tab.kind === 'markdown') {
+      // Comic/PDF leave html[data-reading-layout=paginated]. Restore the
+      // editor key before Markdown CSS can turn scroll mode into columns.
+      restoreEditorDocumentLayout(document.documentElement, readingLayout);
+      syncReadingColumns();
       editorScroller.scrollTop = manager.getScrollPosition(tab.id);
     }
     syncMarkdownReaderChrome();

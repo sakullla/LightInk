@@ -32,6 +32,7 @@ import {
   READER_FLOW_PAGED_PADDING_X_REM,
   applyReaderDocumentLayout,
   applyReaderLayout,
+  restoreEditorDocumentLayout,
   clampReaderPageExtent,
   readerPageInnerPadPx,
   readerSurfaceIsCompact,
@@ -185,6 +186,33 @@ describe('applyReaderDocumentLayout', () => {
     applyReadingLayout(document.documentElement, 'scroll');
     expect(document.documentElement.dataset.readingLayout).toBe('paginated');
     expect(document.documentElement.classList.contains('is-paginated')).toBe(true);
+  });
+});
+
+describe('restoreEditorDocumentLayout', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.readingLayout;
+    delete document.documentElement.dataset.workspaceMode;
+    document.documentElement.classList.remove('is-paginated');
+  });
+
+  it('clears a leftover reader paginated stamp so Markdown scroll mode can use overflow-y', () => {
+    applyReaderDocumentLayout(document.documentElement, 'reader', 'paginated', 'scroll');
+    expect(document.documentElement.dataset.readingLayout).toBe('paginated');
+    expect(document.documentElement.dataset.workspaceMode).toBe('reader');
+    expect(document.documentElement.classList.contains('is-paginated')).toBe(true);
+
+    expect(restoreEditorDocumentLayout(document.documentElement, 'scroll')).toBe('scroll');
+    expect(document.documentElement.dataset.readingLayout).toBe('scroll');
+    expect(document.documentElement.dataset.workspaceMode).toBe('editor');
+    expect(document.documentElement.classList.contains('is-paginated')).toBe(false);
+  });
+
+  it('keeps the editor paginated key when Markdown itself is in page mode', () => {
+    applyReaderDocumentLayout(document.documentElement, 'reader', 'paginated', 'scroll');
+    expect(restoreEditorDocumentLayout(document.documentElement, 'paginated')).toBe('paginated');
+    expect(document.documentElement.dataset.readingLayout).toBe('paginated');
+    expect(document.documentElement.dataset.workspaceMode).toBe('editor');
   });
 });
 
@@ -461,7 +489,19 @@ describe('readerPageInnerPadPx', () => {
       /#app\.is-workspace-shelf #lightink-editor-area[\s\S]*overflow:\s*hidden/,
     );
     expect(css).toMatch(
-      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]:has\(\[data-comic-reader='true'\]\)\s*\{[^}]*overflow:\s*hidden/,
+      /html\[data-workspace-mode='editor'\]\[data-reading-layout='paginated'\][\s\S]*?#lightink-editor-area\[data-surface='markdown'\]\s*\{[^}]*overflow-y:\s*hidden/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-reading-layout='paginated'\] #lightink-editor-area\[data-surface='markdown'\]\s*\{/,
+    );
+    expect(css).toMatch(
+      /html\[data-reading-layout='scroll'\][\s\S]*?#lightink-editor-area\[data-surface='reader'\]:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\[data-comic-reader='true'\]\s*\)[\s\S]*?\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-reading-layout='scroll'\] #lightink-editor-area\[data-surface='reader'\]:has\(\[data-comic-reader='true'\]\)\s*\{/,
+    );
+    expect(css).not.toMatch(
+      /html\[data-reading-layout='scroll'\]:has\(\[data-comic-reader='true'\]\) \.lightink-tab-host\.lightink-tab-host--reader/,
     );
     expect(css).toMatch(
       /html\[data-reading-layout='scroll'\][\s\S]*?#lightink-editor-area\[data-surface='reader'\]:has\(\s*\.lightink-tab-host:not\(\[style\*='display: none'\]\)\s*\.lightink-reader-pages\[data-reader-active='true'\]\s*\)[\s\S]*?\{[^}]*overflow:\s*hidden/,

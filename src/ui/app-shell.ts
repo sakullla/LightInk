@@ -1082,25 +1082,26 @@ export function createAppShell(
     for (const reader of hosts) {
       applyReaderShellChrome(reader, layout, prefs, storage);
     }
-    // Live PDF: persist the EPUB flow key only. Do not restamp html or
-    // broadcast a presentation change that would paginate .lightink-reader.
-    if (livePdf) {
-      dispatchReaderPrefEvent('lightink:reader-typography', prefs);
-      return;
-    }
     const workspace =
       actions.getWorkspaceMode?.() ?? actions.getWorkspaceSnapshot?.()?.mode ?? 'editor';
     const documentRoot =
       typeof document !== 'undefined' && document.documentElement != null
         ? document.documentElement
         : null;
+    const editorLayout = actions.getReadingLayout?.() ?? 'scroll';
+    // Live PDF: persist the EPUB flow key only. Do not restamp html or
+    // broadcast a presentation change that would paginate .lightink-reader.
+    // Editor workspace still restores the Markdown key: a visible comic/PDF
+    // tab during enterEditor must not leave html paginated for the next MD tab.
+    if (livePdf) {
+      if (workspace !== 'reader' && documentRoot !== null) {
+        applyReaderDocumentLayout(documentRoot, 'editor', layout, editorLayout);
+      }
+      dispatchReaderPrefEvent('lightink:reader-typography', prefs);
+      return;
+    }
     if (documentRoot !== null) {
-      applyReaderDocumentLayout(
-        documentRoot,
-        workspace,
-        layout,
-        actions.getReadingLayout?.() ?? 'scroll',
-      );
+      applyReaderDocumentLayout(documentRoot, workspace, layout, editorLayout);
     }
     dispatchReaderPrefEvent('lightink:reader-flow-layout', layout);
     dispatchReaderPrefEvent('lightink:reader-typography', prefs);

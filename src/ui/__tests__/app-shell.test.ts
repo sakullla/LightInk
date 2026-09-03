@@ -1180,6 +1180,52 @@ describe('buildMenus 生产结构', () => {
     expect(flowEvents).toEqual([]);
     shell.destroy();
   });
+
+  it('restores editor html scroll when entering editor with a live PDF still visible', () => {
+    const doc = installFakeDocument();
+    const store: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getWorkspaceMode: () => 'editor',
+        getWorkspaceSnapshot: () => ({ mode: 'editor', surface: 'editor' }),
+        getReadingLayout: () => 'scroll',
+      },
+      {
+        shortcutBindings: () => [],
+        storage: {
+          getItem: (key) => store[key] ?? null,
+          setItem: (key, value) => {
+            store[key] = value;
+          },
+        },
+      },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const editor = fakeRoot.querySelector('#lightink-editor-area');
+    const reader = document.createElement('div') as unknown as FakeEl;
+    reader.className = 'lightink-reader';
+    const pages = document.createElement('div') as unknown as FakeEl;
+    pages.className = 'lightink-reader-pages';
+    pages.dataset.readerFormat = 'pdf';
+    pages.dataset.readerActive = 'true';
+    pages.dataset.comicReader = 'true';
+    reader.appendChild(pages);
+    editor?.appendChild(reader);
+    doc.documentElement.dataset.readingLayout = 'paginated';
+    doc.documentElement.dataset.workspaceMode = 'reader';
+    doc.documentElement.classList.toggle('is-paginated', true);
+
+    shell.applyWorkspace({ mode: 'editor', surface: 'editor' });
+    expect(reader.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.readingLayout).toBe('scroll');
+    expect(doc.documentElement.dataset.workspaceMode).toBe('editor');
+    expect(doc.documentElement.classList.contains('is-paginated')).toBe(false);
+    expect(store['lightink.reader.flow.layout']).toBe('paginated');
+    shell.destroy();
+  });
 });
 
 describe('buildRecentsMenuItems（R12 最近打开子菜单）', () => {

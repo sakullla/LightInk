@@ -828,8 +828,11 @@ body.lightink-outline-resizing * {
   position: relative;
 }
 
-/* Markdown 翻页只作用在编辑表面；阅读器自己在 iframe 里分栏。 */
-html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='markdown'] {
+/* Markdown 翻页只作用在编辑表面；阅读器自己在 iframe 里分栏。
+   Require editor workspace: a leftover reader paginated stamp (comic/PDF
+   still mounted) must not turn Markdown scroll mode into horizontal columns. */
+html[data-workspace-mode='editor'][data-reading-layout='paginated']
+  #lightink-editor-area[data-surface='markdown'] {
   overflow-x: auto;
   overflow-y: hidden;
   column-width: var(--lightink-reader-column-width, 42rem);
@@ -839,7 +842,9 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='markdo
   scrollbar-color: var(--lightink-border) transparent;
 }
 
-html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='markdown'] .lightink-tab-host {
+html[data-workspace-mode='editor'][data-reading-layout='paginated']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
   max-width: none;
   height: auto;
   min-height: 100%;
@@ -971,15 +976,30 @@ html[data-reading-layout='scroll'] .lightink-tab-host.lightink-tab-host--reader,
   min-height: 100%;
 }
 
-/* Comics keep a viewport-sized pane even if the last book left scroll layout on. */
-html[data-reading-layout='scroll'] #lightink-editor-area[data-surface='reader']:has([data-comic-reader='true']) {
+/* Comics keep a viewport-sized pane even if the last book left scroll layout on.
+   Gate on a visible tab host: a hidden CBZ (display:none) must not clip
+   Markdown or restyle another open reader tab. Direct .lightink-reader
+   children cover tests / hosts that are not wrapped. */
+html[data-reading-layout='scroll']
+  #lightink-editor-area[data-surface='reader']:has(
+    .lightink-tab-host:not([style*='display: none']) [data-comic-reader='true']
+  ),
+html[data-reading-layout='scroll']
+  #lightink-editor-area[data-surface='reader']:has(
+    > .lightink-reader [data-comic-reader='true']
+  ) {
   overflow: hidden;
 }
 
 html[data-reading-layout='scroll']
-  #lightink-editor-area[data-surface='reader']:has([data-comic-reader='true'])
+  #lightink-editor-area[data-surface='reader']:has(
+    .lightink-tab-host:not([style*='display: none']) [data-comic-reader='true']
+  )
   .lightink-tab-host,
-html[data-reading-layout='scroll']:has([data-comic-reader='true']) .lightink-tab-host.lightink-tab-host--reader {
+html[data-reading-layout='scroll']:has(
+    .lightink-tab-host:not([style*='display: none']) [data-comic-reader='true']
+  )
+  .lightink-tab-host.lightink-tab-host--reader {
   height: 100%;
   min-height: 0;
 }

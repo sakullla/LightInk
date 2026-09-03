@@ -100,6 +100,24 @@ export function applyReaderDocumentLayout(
   return next;
 }
 
+/**
+ * Markdown shares `#lightink-editor-area` with reader/comic tabs.
+ * A leftover reader `paginated` stamp turns scroll-mode prose into CSS
+ * columns (`overflow-y: hidden`). Restore the editor key whenever the
+ * visible tab is Markdown — do not wait for a workspace-mode change.
+ */
+export function restoreEditorDocumentLayout(
+  documentRoot: { dataset: DOMStringMap; classList: DOMTokenList },
+  editorLayout: ReadingLayout = DEFAULT_READING_LAYOUT,
+): ReadingLayout {
+  return applyReaderDocumentLayout(
+    documentRoot,
+    'editor',
+    DEFAULT_READER_FLOW_LAYOUT,
+    editorLayout,
+  );
+}
+
 export function toggleReaderFlowLayout(layout: ReaderFlowLayout): ReaderFlowLayout {
   return toggleReadingLayout(parseReaderLayout(layout));
 }
