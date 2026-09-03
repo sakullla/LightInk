@@ -126,9 +126,9 @@ export interface LinkNavigationOptions {
   confirmOpen?: (href: string) => boolean | Promise<boolean>;
 }
 
-function isModifiedClick(event: MouseEvent | undefined): boolean {
+/** Ctrl on Windows/Linux, Meta (⌘) on macOS — never plain click. */
+export function isModifiedClick(event: MouseEvent | undefined): boolean {
   if (event === undefined) return false;
-  // Ctrl on Windows/Linux, Meta (⌘) on macOS — never plain click.
   return event.ctrlKey === true || event.metaKey === true;
 }
 
@@ -235,40 +235,45 @@ function findMarkRangeFromMark(
 }
 
 /**
+ * Native ProseMirror plugin: Ctrl/Cmd+click on a link mark → confirm → navigate.
+ * Plain click returns false so the caret can move into the link for editing.
+ */
+export function createLinkNavigationProsePlugin(opts: LinkNavigationOptions): Plugin {
+  return new Plugin({
+    props: {
+      handleClick(view, pos, event) {
+        if (!isModifiedClick(event)) {
+          // Plain click: let ProseMirror place the caret (editable links).
+          return false;
+        }
+        const href = hrefAtPos(view, pos);
+        if (href === null) {
+          return false;
+        }
+        // Prevent default focus/selection jump while we confirm.
+        event.preventDefault();
+        const gate = opts.confirmOpen;
+        if (gate === undefined) {
+          opts.onLinkNavigate(href);
+          return true;
+        }
+        void Promise.resolve(gate(href)).then((ok) => {
+          if (ok) {
+            opts.onLinkNavigate(href);
+          }
+        });
+        return true;
+      },
+    },
+  });
+}
+
+/**
  * ProseMirror plugin: Ctrl/Cmd+click on a link mark → confirm → navigate.
  * Plain click returns false so the caret can move into the link for editing.
  */
 export function linkNavigationPlugin(opts: LinkNavigationOptions) {
-  return $prose(
-    () =>
-      new Plugin({
-        props: {
-          handleClick(view, pos, event) {
-            if (!isModifiedClick(event)) {
-              // Plain click: let ProseMirror place the caret (editable links).
-              return false;
-            }
-            const href = hrefAtPos(view, pos);
-            if (href === null) {
-              return false;
-            }
-            // Prevent default focus/selection jump while we confirm.
-            event.preventDefault();
-            const gate = opts.confirmOpen;
-            if (gate === undefined) {
-              opts.onLinkNavigate(href);
-              return true;
-            }
-            void Promise.resolve(gate(href)).then((ok) => {
-              if (ok) {
-                opts.onLinkNavigate(href);
-              }
-            });
-            return true;
-          },
-        },
-      }),
-  );
+  return $prose(() => createLinkNavigationProsePlugin(opts));
 }
 
 /**

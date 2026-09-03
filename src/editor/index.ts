@@ -47,6 +47,7 @@ import { emojiCompletePlugin } from './plugins/emoji-complete.js';
 import { findReplacePlugin } from './plugins/find-replace.js';
 import { formatToolbarPlugin } from './plugins/format-toolbar.js';
 import { frontmatterPlugin } from './plugins/front-matter.js';
+import { linkAffordancePlugin } from './link-affordance.js';
 import { linkExclusiveEndsPlugin, linkNavigationPlugin } from './link-navigation.js';
 import { inputAssistPlugin } from './plugins/input-assist.js';
 import { imageAssetPlugin, insertImageAt, type ImageAssetMountOptions } from './plugins/image.js';
@@ -255,6 +256,8 @@ export async function mountEditor(
       }
       // Prevent typing after a link from extending the link title.
       editor.use(linkExclusiveEndsPlugin());
+      // R5: href hover tooltip + Ctrl/Cmd-held pointer; does not open or edit links.
+      editor.use(linkAffordancePlugin());
       // Progressive Ctrl/Cmd+A: current block first, then whole document.
       editor.use(progressiveSelectPlugin);
       // GFM task list: clickable checkboxes (toggle checked ↔ markdown - [ ] / - [x]).

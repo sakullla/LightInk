@@ -1940,6 +1940,29 @@ html[data-reading-layout='scroll']:has(
   text-decoration: none;
 }
 
+/* Pointer + "can open" only while Ctrl/Cmd is held on the editor root. */
+.lightink-tab-host .lightink-mod-held a:hover {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+  text-decoration-thickness: 1.5px;
+}
+
+.lightink-link-href-tooltip {
+  z-index: 40;
+  max-width: min(28rem, calc(100vw - 16px));
+  padding: 5px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  box-shadow: var(--lightink-shadow-strong);
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-all;
+  pointer-events: auto;
+}
+
 .lightink-tab-host hr {
   border: none;
   margin: 1.35em 0;
