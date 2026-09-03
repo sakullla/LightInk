@@ -14,7 +14,9 @@
  * click 布防在下一次 pointerdown 清除（真机捏合无尾随 click，不得吃掉下一次
  * 真点按）、新点击顶替暂扣槽位前先按序放行旧击（各恰好一次）、捏合基指抬起
  * 且仍有两指在屏时重定基线（比值口径不换对）、捏合期 sync() 恒 touch-action
- * none（缩小到无溢出也不中途收敛）。
+ * none（缩小到无溢出也不中途收敛）、scale 替身复刻官方 currentScale setter
+ * 的同步滚动重锚后锚定修正仍恰好一次（读写后值会把 scroll 项乘两次 ratio，
+ * 非零阅读偏移下捏合/双击过度修正跳读位）。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -306,14 +308,28 @@ describe('bindPdfDragPan', () => {
   });
 });
 
-/** scale 绑定测试替身：记录写入、current 状态可读（真源在官方 viewer 侧）。 */
-function makeScaleBinding(initial: { current: number; fit: number }): {
+/**
+ * scale 绑定测试替身：记录写入、current 状态可读（真源在官方 viewer 侧）。
+ * 复刻官方 currentScale setter 的同步重锚：#setScale(noScroll:false) →
+ * _setScaleUpdatePages 以跟踪的 _location 调 scrollPageIntoView，把滚动口
+ * 赋值回 pre × ratio——写入返回后 scrollLeft/Top 已是重锚值（pdfjs-dist
+ * web/pdf_viewer.mjs 的 set currentScale 路径）。旧替身漏了这一步，锚定
+ * 修正的过度应用（scroll 项乘两次 ratio）在 jsdom 里测不出来。
+ */
+function makeScaleBinding(
+  scroller: HTMLElement,
+  initial: { current: number; fit: number },
+): {
   readonly binding: PdfScaleBinding;
   readonly setCurrentScale: ReturnType<typeof vi.fn>;
   current(): number;
 } {
   let current = initial.current;
   const setCurrentScale = vi.fn((value: number): void => {
+    // 内置重锚：滚动偏移同步按新/旧比例缩放（pre × ratio）。
+    const ratio = value / current;
+    scroller.scrollLeft = scroller.scrollLeft * ratio;
+    scroller.scrollTop = scroller.scrollTop * ratio;
     current = value;
   });
   const binding: PdfScaleBinding = {
@@ -369,7 +385,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
 
   it('keeps the single-pointer JS pan while a scale binding is present', () => {
     const el = makeScroller();
-    const { binding, setCurrentScale } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 40, clientY: 100 }));
@@ -388,7 +404,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     const frames = fakeFrames();
     // 适宽（无横向溢出）：捏合路径不依赖溢出，但仍必须接管。
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding, setCurrentScale, current } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, setCurrentScale, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
@@ -422,10 +438,39 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     handle.release();
   });
 
+  it('applies the pinch anchor correction exactly once from a non-zero reading offset', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    // 正常阅读态：缩放前滚动不为零（放大后已竖滚/横滚过）。
+    el.scrollLeft = 5000;
+    el.scrollTop = 1200;
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    // 指距 100 → 120：2.5 × 1.2 = 3；两指中点 (155, 300)。
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
+    frames.flush();
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    // 官方 setter 写入时已把滚动口同步重锚到 pre × ratio；锚定修正必须以写前
+    // 偏移为基准恰好一次——读写后值再修正会把 scroll 项乘两次 ratio
+    // （5000 → 6000 → 7231，每帧过度修正跳读位）。
+    const expected = pdfZoomAnchorScroll(5000, 1200, 155, 300, 3 / 2.5);
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
+    // 锚点下的内容坐标缩放前后不动（与 pdfZoomAnchorScroll 纯函数同口径）。
+    expect((155 + el.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
+    expect((300 + el.scrollTop) / 3).toBeCloseTo((300 + 1200) / 2.5);
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
+    handle.release();
+  });
+
   it('does not resume the pan baseline when the pinch ends with one finger down', () => {
     const frames = fakeFrames();
     const el = makeScroller(); // 横向溢出：平移路径可用
-    const { binding, setCurrentScale } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
@@ -450,7 +495,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
   it('toggles between fit-width and 2x on double-tap, anchored at the tap point', () => {
     vi.useFakeTimers();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding, current } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     const clicks: Array<{ x: number; y: number }> = [];
     el.addEventListener('click', (event) => {
@@ -490,10 +535,48 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     handle.release();
   });
 
+  it('applies the double-tap anchor correction exactly once from a non-zero reading offset', () => {
+    vi.useFakeTimers();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    // 正常阅读态：缩放前滚动不为零（如已竖滚 5000px）。
+    el.scrollLeft = 5000;
+    el.scrollTop = 1200;
+    const { binding, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+
+    // 第一击：click 暂扣。
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 400 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 300, clientY: 400 }));
+    const first = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 300,
+      clientY: 400,
+    });
+    el.dispatchEvent(first);
+    expect(first.defaultPrevented).toBe(true);
+
+    // 150ms/≈2.8px 内第二击：双击 → 2× 档（2.5 → 5，ratio 2），锚定 (302, 402)。
+    vi.advanceTimersByTime(150);
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 302, clientY: 402 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 302, clientY: 402 }));
+    expect(current()).toBeCloseTo(5);
+    // 官方 setter 的同步重锚（pre × 2）之上只能修正一次：最终值 =
+    // pdfZoomAnchorScroll(写前偏移, 锚点, 2)。读写后值（10000/2400）再修正
+    // 会得到 20302/5202——scroll 项乘两次 ratio，双击跳读位。
+    const expected = pdfZoomAnchorScroll(5000, 1200, 302, 402, 2);
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
+    // 双击点下的内容坐标缩放前后不动。
+    expect((302 + el.scrollLeft) / 5).toBeCloseTo((302 + 5000) / 2.5);
+    expect((402 + el.scrollTop) / 5).toBeCloseTo((402 + 1200) / 2.5);
+    handle.release();
+  });
+
   it('delays a single click by at most the double-tap window and then releases it unchanged', () => {
     vi.useFakeTimers();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     const clicks: Array<{ x: number; y: number; prevented: boolean }> = [];
     el.addEventListener('click', (event) => {
@@ -523,7 +606,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
   it('stays a no-op outside touch-primary environments even with a scale binding', () => {
     const frames = fakeFrames();
     const el = makeScroller();
-    const { binding, setCurrentScale } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: false, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
@@ -540,7 +623,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     vi.useFakeTimers();
     const frames = fakeFrames();
     const el = makeScroller();
-    const { binding } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     const clicks: Array<{ x: number; y: number }> = [];
     el.addEventListener('click', (event) => {
@@ -577,7 +660,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
   it('releases the previous held click when a second rapid click replaces the slot', () => {
     vi.useFakeTimers();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     const clicks: Array<{ x: number; y: number }> = [];
     el.addEventListener('click', (event) => {
@@ -624,7 +707,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
   it('re-baselines the pinch when a base pointer lifts with two pointers still down', () => {
     const frames = fakeFrames();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding, current } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
 
     // 基指 1/2 进入捏合（指距 200），张开到 250：2.5 × 1.25 = 3.125。
@@ -661,7 +744,7 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
   it('keeps touch-action none during an active pinch even without overflow', () => {
     const frames = fakeFrames();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const { binding, setCurrentScale } = makeScaleBinding({ current: 2.5, fit: 2.5 });
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     expect(el.style.touchAction).toBe('');
 

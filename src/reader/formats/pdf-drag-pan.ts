@@ -10,7 +10,8 @@
  * 恰好 2 指进入捏合——第二指落下取消进行中的单指平移，捏合中回到 1 指不
  * 恢复旧平移基线（等新手势）；指距比值经 pdfPinchScale 钳制后 rAF 合并直写
  * currentScale（每帧至多一次），并按两指中点用 pdfZoomAnchorScroll 修正滚动
- * 锚点。捏合基指固定为进入时的首两指（第 3 指不参与）；基指抬起但仍有
+ * 锚点（以写比例前的滚动为基准恰好一次——官方 currentScale setter 写入时
+ * 已同步重锚滚动口，读写后值再修正等于乘两次 ratio，见 writeScaleAnchored）。捏合基指固定为进入时的首两指（第 3 指不参与）；基指抬起但仍有
  * ≥2 指在屏时以剩余首两指重定 {startDistance, startScale} 基线，比值口径
  * 不悄悄换对。捏合期 touch-action 恒 none——包括 sync() 重估（pdf.ts 的
  * scalechanging 在每次写比例后同步回调，中途收敛会让原生手势抢走剩余指），
@@ -229,7 +230,15 @@ export function bindPdfDragPan(
     return fit !== undefined && Number.isFinite(fit) && fit > 0 ? fit : 1;
   };
 
-  /** 写比例并按锚点修正滚动（ratio = 新/旧 currentScale，锚点为滚动口偏移）。 */
+  /**
+   * 写比例并按锚点修正滚动（ratio = 新/旧 currentScale，锚点为滚动口偏移）。
+   * 锚定修正以写比例前的滚动为基准：官方 currentScale setter 内部会同步重锚
+   * 滚动口（#setScaleUpdatePages → scrollPageIntoView 按跟踪的 _location 赋
+   * scrollLeft/Top ≈ pre×ratio），写入返回后再读已是重锚值——在其上叠加修正
+   * 会把 scroll 项乘两次 ratio，非零阅读偏移下每个捏合帧/每次双击都过度修正
+   * 跳读位。故先取写前偏移，写后用修正结果整体覆盖（内置重锚只留下一次正确
+   * 的最终应用），不试图抑制官方内部行为。
+   */
   const writeScaleAnchored = (nextScale: number, anchorX: number, anchorY: number): void => {
     if (scaleBinding === undefined) {
       return;
@@ -238,14 +247,10 @@ export function bindPdfDragPan(
     if (!Number.isFinite(current) || current <= 0) {
       return;
     }
+    const preLeft = scroller.scrollLeft;
+    const preTop = scroller.scrollTop;
     scaleBinding.setCurrentScale(nextScale);
-    const corrected = pdfZoomAnchorScroll(
-      scroller.scrollLeft,
-      scroller.scrollTop,
-      anchorX,
-      anchorY,
-      nextScale / current,
-    );
+    const corrected = pdfZoomAnchorScroll(preLeft, preTop, anchorX, anchorY, nextScale / current);
     scroller.scrollLeft = corrected.left;
     scroller.scrollTop = corrected.top;
   };
