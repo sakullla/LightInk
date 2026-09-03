@@ -265,6 +265,75 @@ function dragCanvas(container: HTMLElement, pointerType: 'mouse' | 'touch'): voi
   });
 }
 
+/** 手动帧队列（pdf-drag-pan.test.ts fakeFrames 模式）：flush() 前不产生任何写。 */
+function fakeFrames(): { flush(): void; restore(): void } {
+  const queue: FrameRequestCallback[] = [];
+  const request = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+    (callback: FrameRequestCallback): number => {
+      queue.push(callback);
+      return queue.length;
+    },
+  );
+  const cancel = vi
+    .spyOn(window, 'cancelAnimationFrame')
+    .mockImplementation(() => undefined);
+  return {
+    flush(): void {
+      queue.splice(0).forEach((callback) => {
+        callback(0);
+      });
+    },
+    restore(): void {
+      request.mockRestore();
+      cancel.mockRestore();
+    },
+  };
+}
+
+/** 可拨动的 performance.now：速度采样与缓动时长在测试里确定性推进。 */
+function controllableClock(): { set(ms: number): void; restore(): void } {
+  let current = 0;
+  const spy = vi.spyOn(performance, 'now').mockImplementation(() => current);
+  return {
+    set(ms: number): void {
+      current = ms;
+    },
+    restore(): void {
+      spy.mockRestore();
+    },
+  };
+}
+
+/** 拖动跟手写入的 pagesRoot 水平位移；无写入时为 null。 */
+function readComicDragTranslateX(container: HTMLElement): number | null {
+  const transform = comicSurface(container).style.transform;
+  const matched = transform.match(/translate3d\(\s*([-\d.]+)px/);
+  return matched === null ? null : Number.parseFloat(matched[1]!);
+}
+
+/** 单指触屏拖动到 toX（不抬指），便于断言拖动态中间过程。 */
+function touchDragTo(
+  container: HTMLElement,
+  fromX: number,
+  toX: number,
+  pointerId = 1,
+): void {
+  pointerOn(container, 'pointerdown', {
+    pointerId,
+    pointerType: 'touch',
+    buttons: 1,
+    clientX: fromX,
+    clientY: 400,
+  });
+  pointerOn(container, 'pointermove', {
+    pointerId,
+    pointerType: 'touch',
+    buttons: 1,
+    clientX: toX,
+    clientY: 400,
+  });
+}
+
 async function buildCbz(pageCount: number): Promise<Uint8Array> {
   const writer = new ZipWriter(new Uint8ArrayWriter());
   for (let index = 1; index <= pageCount; index += 1) {
@@ -901,14 +970,15 @@ describe('CBZ page materialization', () => {
       preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
     });
 
+    // T1 drag-to-turn：翻页在松手缓动（rAF ~200ms）后提交，用 waitFor 等落位。
     swipeCanvas(container, 800, 200, 'touch');
-    expect(handle.currentPage).toBe(2);
+    await vi.waitFor(() => expect(handle.currentPage).toBe(2));
     clickCanvas(container, 200);
     expect(handle.currentPage).toBe(2);
     swipeCanvas(container, 200, 800, 'mouse');
     expect(handle.currentPage).toBe(2);
     swipeCanvas(container, 200, 800, 'touch');
-    expect(handle.currentPage).toBe(1);
+    await vi.waitFor(() => expect(handle.currentPage).toBe(1));
     clickCanvas(container, 950);
     expect(handle.currentPage).toBe(2);
     pinchByPointers(container, true);
@@ -926,11 +996,11 @@ describe('CBZ page materialization', () => {
       preferenceStorage: pagedStorage({ direction: 'rtl', spread: 'single' }),
     });
     swipeCanvas(rtl, 200, 800, 'touch');
-    expect(rtlHandle.currentPage).toBe(2);
+    await vi.waitFor(() => expect(rtlHandle.currentPage).toBe(2));
     clickCanvas(rtl, 800);
     expect(rtlHandle.currentPage).toBe(2);
     swipeCanvas(rtl, 800, 200, 'touch');
-    expect(rtlHandle.currentPage).toBe(1);
+    await vi.waitFor(() => expect(rtlHandle.currentPage).toBe(1));
     await rtlHandle.destroy();
   });
 
@@ -1310,6 +1380,467 @@ function androidTauriHost(
 ): Window & ComicSystemBarsHost {
   return { __TAURI_INTERNALS__: {}, ...extras } as unknown as Window & ComicSystemBarsHost;
 }
+
+describe('CBZ drag-to-turn gesture (T1)', () => {
+  it('tracks the drag with a rAF-coalesced transform and reveals the adjacent spread', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+
+      touchDragTo(container, 800, 700);
+      // rAF 合并：帧提交前不产生任何 transform 写。
+      expect(readComicDragTranslateX(container)).toBeNull();
+      // 进入拖动态即取消相邻 spread 的 [hidden] 并布局为右侧横向邻居。
+      expect(neighbor.hidden).toBe(false);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(true);
+      expect(neighbor.style.left).toBe('100%');
+      expect(neighbor.style.width).toBe('100%');
+
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 500,
+        clientY: 400,
+      });
+      expect(readComicDragTranslateX(container)).toBe(-100); // 帧内旧值
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-300);
+      expect(handle.currentPage).toBe(1); // 未松手不翻页
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('never enters the drag state for mouse pointers', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      swipeCanvas(container, 800, 200, 'mouse');
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(comicSurface(container).style.position).toBe('');
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('never enters the drag state in strip mode', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ mode: 'strip' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(container, 800, 200);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBeNull();
+      const slots = container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot');
+      for (const slot of slots) {
+        expect(slot.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      }
+      expect(handle.currentPage).toBe(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 200,
+        clientY: 400,
+      });
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('commits a past-threshold release with an eased continuation from the drag offset', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      // 预取就绪后提交路径无 decode hold，落位断言确定。
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      const clock = controllableClock();
+      try {
+        touchDragTo(container, 800, 500); // dx=-300，远过提交阈 48
+        frames.flush();
+        expect(readComicDragTranslateX(container)).toBe(-300);
+
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 500,
+          clientY: 400,
+        });
+        expect(handle.currentPage).toBe(1); // 提交发生在缓动完成后
+
+        clock.set(100); // 半程：从当前拖动偏移继续向 -1000（视口宽）
+        frames.flush();
+        const mid = readComicDragTranslateX(container);
+        expect(mid).not.toBeNull();
+        expect(mid!).toBeLessThan(-300);
+        expect(mid!).toBeGreaterThan(-1000);
+        expect(handle.currentPage).toBe(1); // 缓动中尚未提交
+
+        clock.set(250);
+        frames.flush();
+        expect(handle.currentPage).toBe(2);
+        // 拖动提交不走 View Transition：跟手已有实时帧。
+        expect(updates).toHaveLength(0);
+        // 落位后无残留：transform 清零、旧 spread 隐藏、邻居槽回常规流。
+        expect(readComicDragTranslateX(container)).toBeNull();
+        const landed = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+        expect(landed.hidden).toBe(false);
+        expect(landed.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+        expect(landed.style.left).toBe('');
+        expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(
+          true,
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
+        clock.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+    }
+  });
+
+  it('bounces back below the release threshold and restores the neighbor hidden state', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 755); // dx=-45：过 slop(40)，未过提交阈(48)
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-45);
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(1);
+      expect(readComicDragTranslateX(container)).toBeNull(); // transform 归零
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(
+        false,
+      );
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('turns on a fast small-displacement flick via the velocity threshold', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      clock.set(0);
+      pointerOn(container, 'pointerdown', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 800,
+        clientY: 400,
+      });
+      clock.set(4);
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 760, // dx=-40：刚过 slop 进入拖动态
+        clientY: 400,
+      });
+      clock.set(8);
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 757, // dx=-43 < 48，速度 (-43+40)/4ms = -0.75px/ms
+        clientY: 400,
+      });
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-43);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 757,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(2); // 位移未过阈但速度过阈
+      expect(readComicDragTranslateX(container)).toBeNull();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('abandons the drag when a second pointer lands, handing over to pinch', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(container, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+
+      pointerOn(container, 'pointerdown', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 400,
+        clientY: 400,
+      });
+      // 第二指落下瞬间：拖动残留全部清理，无可见偏移。
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(comicSurface(container).style.position).toBe('');
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+
+      // 双指张开进入 pinch：只缩放，不翻页。
+      pointerOn(container, 'pointermove', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 300,
+        clientY: 400,
+      });
+      expect(readComicScale(container)).toBeGreaterThan(1);
+      expect(handle.currentPage).toBe(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 400,
+      });
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('cleans the drag state on destroy and on relayout', async () => {
+    const first = document.createElement('div');
+    sizeCanvas(first);
+    const firstHandle = await renderCbzInto(await buildCbz(4), first, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(first, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(first)).toBe(-100);
+      await firstHandle.destroy();
+      expect(readComicDragTranslateX(first)).toBeNull();
+      expect(first.querySelector<HTMLElement>('[data-page-index="1"]')!.hidden).toBe(true);
+      expect(comicSurface(first).style.position).toBe('');
+
+      const second = document.createElement('div');
+      sizeCanvas(second);
+      const secondHandle = await renderCbzInto(await buildCbz(4), second, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      touchDragTo(second, 800, 650);
+      frames.flush();
+      expect(readComicDragTranslateX(second)).toBe(-150);
+      secondHandle.setPreferences({ fit: 'width' }); // 重排版：spreadSwapGeneration 作废
+      expect(readComicDragTranslateX(second)).toBeNull();
+      const neighbor = second.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      pointerOn(second, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 650,
+        clientY: 400,
+      });
+      expect(secondHandle.currentPage).toBe(1); // 作废手势的残余松手不翻页
+      await secondHandle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('cancels the in-flight release easing when a new drag starts', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手将提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(100);
+      frames.flush(); // 提交缓动在飞（中途）
+      expect(handle.currentPage).toBe(1);
+
+      // 缓动未完成时立即开始新拖动：在飞缓动作废，最新手势接管 transform。
+      clock.set(120);
+      touchDragTo(container, 900, 850);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-50);
+      expect(handle.currentPage).toBe(1); // 旧提交未发生
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 850,
+        clientY: 400,
+      });
+      clock.set(400);
+      frames.flush();
+      expect(handle.currentPage).toBe(2); // 最新手势的松手提交生效
+      expect(readComicDragTranslateX(container)).toBeNull();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('keeps View Transition for edge taps but never for drag turns', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      const clock = controllableClock();
+      try {
+        touchDragTo(container, 800, 500);
+        frames.flush();
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 500,
+          clientY: 400,
+        });
+        clock.set(250);
+        frames.flush();
+        expect(handle.currentPage).toBe(2);
+        expect(updates).toHaveLength(0); // 拖动路径不触发 VT
+
+        clickCanvas(container, 50); // 边区点按（返回上一页）仍走 VT
+        expect(updates).toHaveLength(1);
+        expect(document.documentElement.dataset.comicTurn).toBe('prev');
+        expect(handle.currentPage).toBe(1);
+        finishedResolvers.splice(0).forEach((resolve) => resolve());
+        await vi.waitFor(() =>
+          expect(document.documentElement.dataset.comicTurn).toBeUndefined(),
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
+        clock.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
+  });
+});
 
 describe('CBZ chrome overlay and system bars (R4)', () => {
   it('keeps a single comic overlay and no EPUB footer actions', async () => {

@@ -147,7 +147,8 @@ describe('linkNavigationPlugin click contract (R5)', () => {
     });
     const handleClick = plugin.props.handleClick;
     expect(handleClick).toBeTypeOf('function');
-    const result = handleClick!(
+    // ProseMirror 把 handleClick 的 this 绑到 Plugin 上；独立调用前先绑定。
+    const result = handleClick!.bind(plugin)(
       mockLinkView('https://example.com/docs'),
       1,
       clickEvent({}),
@@ -169,7 +170,7 @@ describe('linkNavigationPlugin click contract (R5)', () => {
         return true;
       },
     });
-    const result = plugin.props.handleClick!(
+    const result = plugin.props.handleClick!.bind(plugin)(
       mockLinkView('https://example.com/docs'),
       1,
       clickEvent({ ctrlKey: true }),

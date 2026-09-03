@@ -1260,6 +1260,18 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   display: none !important;
 }
 
+/*
+ * T1 drag-to-turn：拖动跟手期相邻 spread 的临时邻居槽。几何（position/
+ * left/width/height）由 cbz.ts 拖动态内联写入，这里只关掉 flex 收缩与
+ * aspect-ratio 宽度推导对绝对定位的干扰。松手提交/回弹/手势作废后
+ * cbz.ts 移除类与内联样式并恢复 [hidden] 语义。
+ */
+.lightink-reader-comic-pages .lightink-reader-cbz-slot.lightink-comic-drag-neighbor {
+  flex: none;
+  margin: 0;
+  aspect-ratio: auto;
+}
+
 .lightink-reader-pages[data-comic-reader='true'],
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages,
 .lightink-reader-cbz-slot,
