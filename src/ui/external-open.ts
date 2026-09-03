@@ -20,6 +20,8 @@ export interface RevealableWindow {
   unminimize(): Promise<void>;
   show(): Promise<void>;
   setFocus(): Promise<void>;
+  isMinimized?(): Promise<boolean>;
+  isVisible?(): Promise<boolean>;
 }
 
 export interface ExternalOpenedTab {
@@ -90,9 +92,41 @@ export async function getRevealableWindow(): Promise<RevealableWindow | null> {
 }
 
 /**
+ * True when the window is known to be on-screen, false when it is still
+ * minimized or hidden, and undefined when neither query is available.
+ */
+async function windowIsShown(win: RevealableWindow): Promise<boolean | undefined> {
+  let minimized: boolean | undefined;
+  let visible: boolean | undefined;
+  if (typeof win.isMinimized === 'function') {
+    try {
+      minimized = await win.isMinimized();
+    } catch {
+      /* query is best-effort */
+    }
+  }
+  if (typeof win.isVisible === 'function') {
+    try {
+      visible = await win.isVisible();
+    } catch {
+      /* query is best-effort */
+    }
+  }
+  if (minimized === undefined && visible === undefined) {
+    return undefined;
+  }
+  if (minimized === true || visible === false) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Unminimize, show, and focus an existing window so a file-association
  * or second-instance open is not a silent background tab change.
  * No native window (pure frontend) is treated as already visible.
+ * An already-visible window counts as restored even if unminimize/show
+ * throw; setFocus failure never decides the result.
  */
 export async function revealExistingWindow(
   getWindow: () => Promise<RevealableWindow | null> = getRevealableWindow,
@@ -106,16 +140,16 @@ export async function revealExistingWindow(
   if (win === null) {
     return true;
   }
-  let shown = false;
+  let restored = false;
   try {
     await win.unminimize();
-    shown = true;
+    restored = true;
   } catch {
     /* window may already be visible */
   }
   try {
     await win.show();
-    shown = true;
+    restored = true;
   } catch {
     /* show can fail independently of unminimize */
   }
@@ -125,7 +159,10 @@ export async function revealExistingWindow(
     // Windows often denies focus steal when the app is already in the
     // foreground or another window owns the input queue.
   }
-  return shown;
+  if (restored) {
+    return true;
+  }
+  return (await windowIsShown(win)) === true;
 }
 
 /** Tab title, or the last path segment when the title is empty. */

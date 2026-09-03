@@ -36,24 +36,45 @@ function markdownTab(overrides: Partial<ExternalOpenedTab> = {}): ExternalOpened
   };
 }
 
+type RevealFailPoint = 'unminimize' | 'show' | 'setFocus';
+
 function fakeWindow(
   order: string[],
-  failAt?: 'unminimize' | 'show' | 'setFocus',
+  failAt?: RevealFailPoint | {
+    fail?: RevealFailPoint | readonly RevealFailPoint[];
+    minimized?: boolean;
+    visible?: boolean;
+  },
 ): RevealableWindow {
-  return {
+  const config = typeof failAt === 'string' || failAt === undefined ? { fail: failAt } : failAt;
+  const failSet = new Set<RevealFailPoint>(
+    config.fail === undefined
+      ? []
+      : typeof config.fail === 'string'
+        ? [config.fail]
+        : [...config.fail],
+  );
+  const win: RevealableWindow = {
     unminimize: async () => {
       order.push('unminimize');
-      if (failAt === 'unminimize') throw new Error('unminimize failed');
+      if (failSet.has('unminimize')) throw new Error('unminimize failed');
     },
     show: async () => {
       order.push('show');
-      if (failAt === 'show') throw new Error('show failed');
+      if (failSet.has('show')) throw new Error('show failed');
     },
     setFocus: async () => {
       order.push('setFocus');
-      if (failAt === 'setFocus') throw new Error('setFocus failed');
+      if (failSet.has('setFocus')) throw new Error('setFocus failed');
     },
   };
+  if (config.minimized !== undefined) {
+    win.isMinimized = async () => config.minimized === true;
+  }
+  if (config.visible !== undefined) {
+    win.isVisible = async () => config.visible === true;
+  }
+  return win;
 }
 
 function harness(
@@ -169,6 +190,34 @@ describe('revealExistingWindow', () => {
     expect(order).toEqual(['unminimize', 'show', 'setFocus']);
   });
 
+  it('treats an already-visible window as restored when unminimize and show throw', async () => {
+    const order: string[] = [];
+    await expect(
+      revealExistingWindow(async () =>
+        fakeWindow(order, {
+          fail: ['unminimize', 'show'],
+          minimized: false,
+          visible: true,
+        }),
+      ),
+    ).resolves.toBe(true);
+    expect(order).toEqual(['unminimize', 'show', 'setFocus']);
+  });
+
+  it('returns false when the window stays minimized and restore calls fail', async () => {
+    const order: string[] = [];
+    await expect(
+      revealExistingWindow(async () =>
+        fakeWindow(order, {
+          fail: ['unminimize', 'show'],
+          minimized: true,
+          visible: false,
+        }),
+      ),
+    ).resolves.toBe(false);
+    expect(order).toEqual(['unminimize', 'show', 'setFocus']);
+  });
+
   it('treats a missing native window as already visible', async () => {
     await expect(revealExistingWindow(async () => null)).resolves.toBe(true);
   });
@@ -269,6 +318,29 @@ describe('handleExternalOpen (running instance)', () => {
     const warnings = notifyOf(deps, 'warning');
     expect(warnings).toHaveLength(1);
     expect(warnings[0][0]).toBe(EXTERNAL_OPEN_LABELS.en.revealFailed(tab.title));
+    expect(reportOpen).not.toHaveBeenCalled();
+  });
+
+  it('does not warn revealFailed when an already-visible restore succeeds', async () => {
+    const tab = markdownTab();
+    const order: string[] = [];
+    const { deps, reportOpen } = harness({ tab, start: 'shelf' });
+    deps.restoreWindow = vi.fn(async () =>
+      revealExistingWindow(async () =>
+        fakeWindow(order, {
+          fail: ['unminimize', 'show'],
+          minimized: false,
+          visible: true,
+        }),
+      ),
+    );
+
+    await expect(handleExternalOpen(tab.filePath!, 'running', deps)).resolves.toBe(tab);
+
+    expect(notifyOf(deps, 'warning')).toHaveLength(0);
+    const success = notifyOf(deps, 'success');
+    expect(success).toHaveLength(1);
+    expect(success[0][0]).toBe(EXTERNAL_OPEN_LABELS.en.opened(tab.title));
     expect(reportOpen).not.toHaveBeenCalled();
   });
 
