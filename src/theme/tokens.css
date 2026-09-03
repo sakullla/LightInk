@@ -69,6 +69,16 @@
   --lightink-font-size-code: 13.5px;
   --lightink-line-height-body: 1.75;
   --lightink-line-height-code: 1.55;
+  --lightink-heading-ratio: 1.16;
+  --lightink-heading-line-height: 1.3;
+  --lightink-heading-line-height-tight: 1.2;
+  --lightink-letter-spacing-body: 0;
+  --lightink-gap-list-item: 0.25;
+  --lightink-gap-paragraph: 0.5;
+  --lightink-gap-block: 0.75;
+  --lightink-gap-rule: 1;
+  --lightink-gap-heading-minor: 1;
+  --lightink-gap-heading-major: 1.5;
   /* Middle column cap; scaled per display tier (see theme.css data-display). */
   --lightink-measure: min(56rem, 94%);
   /* Page chrome spacing (scaled per display tier in theme.css). */

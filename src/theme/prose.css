@@ -1,0 +1,127 @@
+/*
+ * LightInk Markdown 排版唯一源。选择器一律 .lightink-prose <el>。
+ * 标题字号：单一模数 --lightink-heading-ratio 的 calc 乘法链（不用 pow）。
+ * 纵向节奏：--lightink-rhythm-unit 为 font-size × font-scale × line-height-body
+ * 的 px/数值运算（不用 em、rem 或属性注册）。
+ */
+
+.lightink-prose {
+  --lightink-rhythm-unit: calc(
+    var(--lightink-font-size, 16px) * var(--lightink-font-scale, 1) *
+      var(--lightink-line-height-body, 1.75)
+  );
+  letter-spacing: var(--lightink-letter-spacing-body, 0);
+  text-autospace: normal;
+  text-spacing-trim: trim-start;
+}
+
+.lightink-prose pre,
+.lightink-prose code,
+.lightink-prose .katex {
+  text-autospace: no-autospace;
+  text-spacing-trim: space-all;
+}
+
+@supports not (text-spacing-trim: trim-start) {
+  .lightink-prose {
+    font-feature-settings: 'halt' 1;
+  }
+
+  .lightink-prose pre,
+  .lightink-prose code,
+  .lightink-prose .katex {
+    font-feature-settings: normal;
+  }
+}
+
+.lightink-prose h6 {
+  font-size: 1em;
+  line-height: var(--lightink-heading-line-height);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-minor));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose h5 {
+  font-size: calc(1em * var(--lightink-heading-ratio));
+  line-height: var(--lightink-heading-line-height);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-minor));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose h4 {
+  font-size: calc(1em * var(--lightink-heading-ratio) * var(--lightink-heading-ratio));
+  line-height: var(--lightink-heading-line-height);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-minor));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose h3 {
+  font-size: calc(
+    1em * var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
+      var(--lightink-heading-ratio)
+  );
+  line-height: var(--lightink-heading-line-height);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-minor));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose h2 {
+  font-size: calc(
+    1em * var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
+      var(--lightink-heading-ratio) * var(--lightink-heading-ratio)
+  );
+  line-height: var(--lightink-heading-line-height-tight);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-major));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose h1 {
+  font-size: calc(
+    1em * var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
+      var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
+      var(--lightink-heading-ratio)
+  );
+  line-height: var(--lightink-heading-line-height-tight);
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-major));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose p {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose ul,
+.lightink-prose ol {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+}
+
+.lightink-prose li {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-list-item));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-list-item));
+}
+
+.lightink-prose li > p {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.lightink-prose blockquote,
+.lightink-prose .lightink-code-block,
+.lightink-prose .tableWrapper,
+.lightink-prose img,
+.lightink-prose .lightink-math-preview,
+.lightink-prose .lightink-mermaid {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-block));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-block));
+}
+
+.lightink-prose hr {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-rule));
+  margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-rule));
+}
+
+.lightink-prose > :first-child {
+  margin-top: 0;
+}

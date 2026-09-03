@@ -915,7 +915,6 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
   /* Tier baseline × user font scale (View → 放大/缩小字体). */
   font-size: calc(var(--lightink-font-size, 16px) * var(--lightink-font-scale, 1));
   line-height: var(--lightink-line-height-body, 1.75);
-  letter-spacing: 0.01em;
   color: var(--lightink-fg);
 }
 
@@ -1092,17 +1091,12 @@ html[data-reading-layout='scroll']:has(
   line-height: inherit;
 }
 
-.lightink-tab-host .ProseMirror p {
-  margin: 0.55em 0;
-}
-
 .lightink-tab-host .ProseMirror h1,
 .lightink-tab-host .ProseMirror h2,
 .lightink-tab-host .ProseMirror h3,
 .lightink-tab-host .ProseMirror h4,
 .lightink-tab-host .ProseMirror h5,
 .lightink-tab-host .ProseMirror h6 {
-  line-height: 1.35;
   letter-spacing: 0;
   font-weight: 650;
   color: var(--lightink-fg);
@@ -1143,13 +1137,6 @@ html[data-reading-layout='scroll']:has(
 .lightink-fold-marker:hover {
   opacity: 0.95;
 }
-
-.lightink-tab-host .ProseMirror h1 { font-size: 1.75em; margin: 1.1em 0 0.5em; }
-.lightink-tab-host .ProseMirror h2 { font-size: 1.4em; margin: 1.05em 0 0.45em; }
-.lightink-tab-host .ProseMirror h3 { font-size: 1.2em; margin: 1em 0 0.4em; }
-.lightink-tab-host .ProseMirror h4 { font-size: 1.1em; margin: 0.95em 0 0.36em; }
-.lightink-tab-host .ProseMirror h5 { font-size: 1.05em; margin: 0.9em 0 0.32em; }
-.lightink-tab-host .ProseMirror h6 { font-size: 1em; margin: 0.85em 0 0.3em; }
 
 .lightink-tab-host pre,
 .lightink-code-block > .lightink-code-pre,
@@ -1219,7 +1206,6 @@ html[data-reading-layout='scroll']:has(
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 1em 0;
   border: 1px solid var(--lightink-border);
   border-radius: 10px;
   background: var(--lightink-code-bg);
@@ -1503,7 +1489,6 @@ html[data-reading-layout='scroll']:has(
 /* Diagram preview widget (inserted after the code_block node). */
 .lightink-mermaid {
   position: relative;
-  margin: 0.35em 0 1em;
   padding: 12px 14px;
   border: 1px solid var(--lightink-border);
   border-radius: 10px;
@@ -1586,7 +1571,6 @@ html[data-reading-layout='scroll']:has(
 
 .lightink-math-preview {
   position: relative;
-  margin: 0.35em 0 1em;
   padding: 14px 16px;
   border: 1px solid var(--lightink-border);
   border-radius: 10px;
@@ -1595,9 +1579,6 @@ html[data-reading-layout='scroll']:has(
   overflow-y: visible;
   text-align: center;
   cursor: pointer;
-  font-size: 1.1em;
-  /* Multi-line aligned/gather blocks need vertical room. */
-  line-height: 1.6;
 }
 
 .lightink-preview-edit {
@@ -1671,6 +1652,8 @@ html[data-reading-layout='scroll']:has(
   user-select: text;
   /* 与 applySourceMetrics 双保险：防止主题/宿主继承再次拉开两层几何。 */
   letter-spacing: normal !important;
+  text-autospace: no-autospace;
+  text-spacing-trim: space-all;
   text-rendering: auto !important;
   font-kerning: none !important;
   font-variant-ligatures: none !important;
@@ -1691,6 +1674,8 @@ html[data-reading-layout='scroll']:has(
   border-radius: 0;
   padding: 8px;
   letter-spacing: normal !important;
+  text-autospace: no-autospace;
+  text-spacing-trim: space-all;
   text-rendering: auto !important;
   font-kerning: none !important;
   font-variant-ligatures: none !important;
@@ -1758,7 +1743,6 @@ html[data-reading-layout='scroll']:has(
 }
 
 .lightink-tab-host blockquote {
-  margin: 0.75em 0;
   padding: 0.4em 1em;
   border-left: 3px solid color-mix(in srgb, var(--lightink-accent) 52%, var(--lightink-border));
   color: color-mix(in srgb, var(--lightink-fg) 74%, var(--lightink-muted));
@@ -1769,17 +1753,11 @@ html[data-reading-layout='scroll']:has(
 /* Lists: comfortable vertical rhythm for long-session reading. */
 .lightink-tab-host .ProseMirror ul,
 .lightink-tab-host .ProseMirror ol {
-  margin: 0.65em 0;
   padding-left: 1.6em;
 }
 
 .lightink-tab-host .ProseMirror li {
-  margin: 0.32em 0;
   padding-left: 0.15em;
-}
-
-.lightink-tab-host .ProseMirror li > p {
-  margin: 0.15em 0;
 }
 
 /*
@@ -1794,11 +1772,6 @@ html[data-reading-layout='scroll']:has(
   position: relative;
   margin-left: -0.35em;
   padding-left: 1.55em;
-}
-
-.lightink-tab-host .ProseMirror li[data-item-type='task'] > p,
-.lightink-tab-host .ProseMirror li.lightink-task-item > p {
-  margin: 0.1em 0;
 }
 
 .lightink-task-checkbox {
@@ -1873,7 +1846,6 @@ html[data-reading-layout='scroll']:has(
 /* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。 */
 .lightink-tab-host .tableWrapper {
   overflow-x: auto;
-  margin: 0.85em 0;
   border-radius: 8px;
   border: 1px solid var(--lightink-border);
   background: var(--lightink-bg-elevated);
@@ -1985,7 +1957,6 @@ html[data-reading-layout='scroll']:has(
 
 .lightink-tab-host hr {
   border: none;
-  margin: 1.35em 0;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 80%, var(--lightink-muted));
 }
 
@@ -1994,7 +1965,6 @@ html[data-reading-layout='scroll']:has(
      大图双向约束——宽度不超栏宽，高度不超 60vh，避免一张高图占满整个视口。 */
   max-width: 100%;
   max-height: 60vh;
-  margin: 0.7em 0;
   border-radius: 6px;
   box-shadow: 0 0 0 1px var(--lightink-border);
 }

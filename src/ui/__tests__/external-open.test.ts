@@ -325,15 +325,17 @@ describe('handleExternalOpen (running instance)', () => {
     const tab = markdownTab();
     const order: string[] = [];
     const { deps, reportOpen } = harness({ tab, start: 'shelf' });
-    deps.restoreWindow = vi.fn(async () =>
-      revealExistingWindow(async () =>
-        fakeWindow(order, {
-          fail: ['unminimize', 'show'],
-          minimized: false,
-          visible: true,
-        }),
+    Object.assign(deps, {
+      restoreWindow: vi.fn(async () =>
+        revealExistingWindow(async () =>
+          fakeWindow(order, {
+            fail: ['unminimize', 'show'],
+            minimized: false,
+            visible: true,
+          }),
+        ),
       ),
-    );
+    });
 
     await expect(handleExternalOpen(tab.filePath!, 'running', deps)).resolves.toBe(tab);
 

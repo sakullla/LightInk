@@ -21,6 +21,7 @@
 import {
   defaultValueCtx,
   editorViewCtx,
+  editorViewOptionsCtx,
   Editor as MilkdownEditor,
   EditorStatus,
   parserCtx,
@@ -199,6 +200,12 @@ export async function mountEditor(
           // initial markdown so the editor isn't empty on mount.
           ctx.set(rootCtx, container);
           ctx.set(defaultValueCtx, state.cachedMarkdown);
+          ctx.update(editorViewOptionsCtx, (prev) => ({
+            ...prev,
+            attributes: {
+              class: 'lightink-prose',
+            },
+          }));
         })
         // R4：Typora 式配对输入 + 空列表项回车退出 + 表格 Tab。注册早于 preset，
         // 使 Enter(空列表项 lift 退出)/Tab(表格 goToNextCell) 优先于 preset keymap。

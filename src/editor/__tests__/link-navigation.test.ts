@@ -147,7 +147,8 @@ describe('linkNavigationPlugin click contract (R5)', () => {
     });
     const handleClick = plugin.props.handleClick;
     expect(handleClick).toBeTypeOf('function');
-    const result = handleClick!(
+    const result = handleClick!.call(
+      plugin,
       mockLinkView('https://example.com/docs'),
       1,
       clickEvent({}),
@@ -169,7 +170,8 @@ describe('linkNavigationPlugin click contract (R5)', () => {
         return true;
       },
     });
-    const result = plugin.props.handleClick!(
+    const result = plugin.props.handleClick!.call(
+      plugin,
       mockLinkView('https://example.com/docs'),
       1,
       clickEvent({ ctrlKey: true }),

@@ -225,6 +225,7 @@ import {
   type VersionMeta,
 } from './ui/versions.js';
 import './theme/tokens.css';
+import './theme/prose.css';
 import './ui/theme.css';
 import './ui/window-titlebar.css';
 import './library/library.css';
