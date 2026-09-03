@@ -8,12 +8,13 @@
  * 装饰原样携带，「与编辑器内渲染一致」由构造保证。样式由
  * export-css.ts 装配并整体内嵌进 `<style>`。
  *
- * 图片内嵌：编辑器内的图片引用是相对路径 `assets/<name>.<ext>`，独立
- * HTML 离开文档目录后即失效，因此导出时把相对 src 的图片读为 base64
- * 并改写为 data URI（读取由注入的 resolver 完成，生产走 Rust
- * `read_image_base64`）。已是绝对 URL（http(s):/data:/blob: 等）的图片
- * 保留原 src 不动。读取失败的图片：保留原 src 并列入 `missing`（导出
- * 继续，调用方负责提示），不静默丢弃也不中断整个导出。
+ * 图片内嵌：编辑器内的图片引用是相对路径（`assets/<name>.<ext>`、
+ * 同级 `*-assets/…` 等），独立 HTML 离开文档目录后即失效，因此导出时
+ * 把相对 src 的图片读为 base64 并改写为 data URI（读取由注入的 resolver
+ * 完成，生产走 Rust `read_image_base64`，已保存文档按文档目录沙箱）。
+ * 已是绝对 URL（http(s):/data:/blob: 等）的图片保留原 src 不动。读取
+ * 失败的图片：保留原 src 并列入 `missing`（导出继续，调用方负责提示），
+ * 不静默丢弃也不中断整个导出。
  */
 
 export interface HtmlExportOutlineItem {
@@ -165,9 +166,9 @@ export function mimeFromPath(path: string): string {
 }
 
 /**
- * 该 src 是否需要/可以内嵌：仅相对路径（`assets/x.png`、`./x.png`）。
- * 带 scheme 的（http:/https:/data:/blob:/file: 等）与协议相对（//host/x）
- * 一律保留原样。
+ * 该 src 是否需要/可以内嵌：仅相对路径（`assets/x.png`、`./x.png`、
+ * `note-assets/x.png`）。带 scheme 的（http:/https:/data:/blob:/file: 等）
+ * 与协议相对（//host/x）一律保留原样。越界 `../` 由后端沙箱拒绝读取。
  */
 export function isEmbeddableImageSrc(src: string): boolean {
   if (src.startsWith('//')) {

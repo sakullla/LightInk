@@ -269,9 +269,12 @@ describe('processImageDrop', () => {
 });
 
 describe('isRelativeAssetSrc（图片显示解析判定）', () => {
-  it('文档内 assets/… 相对引用需要解析', () => {
+  it('文档内 assets/… 与同级 *-assets/ 相对引用需要解析', () => {
     expect(isRelativeAssetSrc('assets/img-x.png')).toBe(true);
     expect(isRelativeAssetSrc('assets/sub/图.jpg')).toBe(true);
+    expect(isRelativeAssetSrc('note-jira-summary-assets/image.png')).toBe(true);
+    expect(isRelativeAssetSrc('./note-assets/pic.webp')).toBe(true);
+    expect(isRelativeAssetSrc('../secret.png')).toBe(true);
   });
 
   it('外链/协议相对/data/blob/file/绝对路径不需要解析', () => {

@@ -1013,6 +1013,7 @@ export class TabManager {
           sessionId: args.syntheticId,
           getDocPath: () => this.tabs.find((t) => t.id === id)?.filePath ?? null,
         }),
+        getDocPath: () => this.tabs.find((t) => t.id === id)?.filePath ?? null,
         remoteImageLoadLabel: this.deps.remoteImageLoadLabel,
         onAssetError: (message, error) => this.deps.reportError(message, error),
         onLinkNavigate: this.deps.onLinkNavigate,

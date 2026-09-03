@@ -27,6 +27,7 @@ import {
   sessionRemoteImagePolicy,
   type RemoteImagePolicy,
 } from '../../media/remote-image-policy.js';
+import { isModifiedClick } from '../link-navigation.js';
 import { isRelativeAssetSrc } from './image.js';
 
 export type ImageAlign = 'left' | 'center' | 'right';
@@ -244,6 +245,99 @@ interface NodeViewArgs {
 export interface ImageNodeViewOptions {
   readonly remoteImagePolicy?: RemoteImagePolicy;
   readonly remoteImageLoadLabel?: string;
+  /**
+   * Ctrl/Cmd+click 打开：复用链接的 confirm + onLinkNavigate（localFile /
+   * open_path_default）。缺省时修饰键点击不打开。
+   */
+  readonly onLinkNavigate?: (href: string) => void;
+  readonly confirmOpen?: (href: string) => boolean | Promise<boolean>;
+  /** 已保存文档路径；未保存或缺失时相对图不能打开原文件。 */
+  readonly getDocPath?: () => string | null;
+}
+
+/** 普通点击选中缩放；修饰键且可打开时走确认 + 系统默认程序。 */
+export type ImageClickIntent = 'select' | 'open';
+
+/**
+ * 与 Rust `sanitize_rel_path` 对齐：拒绝 `..`、盘符、UNC、空路径。
+ * 前端打开通道在调用 onLinkNavigate 前用同一规则，避免 `../` 经 classifyLink 逃逸。
+ */
+export function isDocumentDirSandboxedSrc(src: string): boolean {
+  if (src === '' || src.startsWith('/') || src.startsWith('\\')) {
+    return false;
+  }
+  const parts: string[] = [];
+  for (const seg of src.split(/[/\\]/)) {
+    if (seg === '' || seg === '.') {
+      continue;
+    }
+    if (seg === '..' || seg.includes(':')) {
+      return false;
+    }
+    parts.push(seg);
+  }
+  return parts.length > 0;
+}
+
+/**
+ * 相对图打开 href：远程/绝对不自动打开；未保存无文档路径不能打开；
+ * `../` / 盘符 / UNC 与 ADR-3 同一沙箱拒绝。返回值交给 confirm + onLinkNavigate。
+ */
+export function resolveImageOpenHref(src: string, docPath: string | null): string | null {
+  if (docPath === null || docPath === '') {
+    return null;
+  }
+  if (!isRelativeAssetSrc(src) || !isDocumentDirSandboxedSrc(src)) {
+    return null;
+  }
+  return src;
+}
+
+export function imageClickIntent(
+  event: Pick<MouseEvent, 'ctrlKey' | 'metaKey'>,
+  src: string,
+  docPath: string | null,
+): ImageClickIntent {
+  if (!isModifiedClick(event as MouseEvent)) {
+    return 'select';
+  }
+  return resolveImageOpenHref(src, docPath) === null ? 'select' : 'open';
+}
+
+function srcOfImageNode(node: PMNode): string | null {
+  if (node.type.name !== 'image') {
+    return null;
+  }
+  const src = typeof node.attrs.src === 'string' ? node.attrs.src : '';
+  return src === '' ? null : src;
+}
+
+/** 点击位置处的 image src（inline atom 可能落在 node 本身或相邻）。 */
+export function imageSrcAtClickPos(doc: PMNode, pos: number): string | null {
+  const at = doc.nodeAt(pos);
+  if (at !== null) {
+    const src = srcOfImageNode(at);
+    if (src !== null) {
+      return src;
+    }
+  }
+  try {
+    const $pos = doc.resolve(pos);
+    const after = $pos.nodeAfter;
+    if (after !== null) {
+      const src = srcOfImageNode(after);
+      if (src !== null) {
+        return src;
+      }
+    }
+    const before = $pos.nodeBefore;
+    if (before !== null) {
+      return srcOfImageNode(before);
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /**
@@ -495,6 +589,33 @@ export function imageSizeNodeViewPlugin(
           nodeViews: {
             image: (node: PMNode, view: EditorView, getPos: () => number | undefined) =>
               createResizableImageNodeView(node, resolver, { view, getPos }, options),
+          },
+          handleClick(view, pos, event) {
+            const src = imageSrcAtClickPos(view.state.doc, pos);
+            if (src === null) {
+              return false;
+            }
+            const docPath = options.getDocPath?.() ?? null;
+            if (imageClickIntent(event, src, docPath) !== 'open') {
+              return false;
+            }
+            const href = resolveImageOpenHref(src, docPath);
+            if (href === null || options.onLinkNavigate === undefined) {
+              return false;
+            }
+            event.preventDefault();
+            const navigate = options.onLinkNavigate;
+            const gate = options.confirmOpen;
+            if (gate === undefined) {
+              navigate(href);
+              return true;
+            }
+            void Promise.resolve(gate(href)).then((ok) => {
+              if (ok) {
+                navigate(href);
+              }
+            });
+            return true;
           },
         },
       }),

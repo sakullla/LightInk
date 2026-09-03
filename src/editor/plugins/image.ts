@@ -33,10 +33,12 @@ export interface ImageAssetMountOptions {
   readonly assetSaver?: AssetSaver;
   /** 落盘失败上报（生产接到 TabManager 的 reportError）。 */
   readonly onAssetError?: (message: string, error: unknown) => void;
-  /** 相对引用 `assets/…` → 可显示 URL 的解析器；缺省时 <img> 按原样渲染。 */
+  /** 相对引用 `assets/…` / `*-assets/…` → 可显示 URL 的解析器；缺省时 <img> 按原样渲染。 */
   readonly imageSrcResolver?: ImageSrcResolver;
   /** Localized command shown while a remote image is blocked. */
   readonly remoteImageLoadLabel?: string;
+  /** 当前文档路径；未保存为 null。Ctrl/Cmd+点击打开相对图时需要已保存路径。 */
+  readonly getDocPath?: () => string | null;
 }
 
 /** 事件处理器依赖（与 mount 选项同形，便于内部传递）。 */
@@ -421,8 +423,9 @@ export function imageAssetPlugin(deps: ImageAssetDeps) {
 
 /**
  * src 是否需要解析的相对资源引用：无 scheme、非 //、非 / 或盘符绝对路径、
- * 非 data:/blob: —— 即文档内的 `assets/…` 相对引用（webview 对其无静态服务，
- * 原样渲染会裂图）。
+ * 非 data:/blob: —— 文档内 `assets/…`、同级 `*-assets/…` 等相对引用
+ * （webview 对其无静态服务，原样渲染会裂图）。`../` 在前端仍为相对引用，
+ * 由后端文档目录沙箱拒绝读取。
  */
 export function isRelativeAssetSrc(src: string): boolean {
   if (src === '') return false;

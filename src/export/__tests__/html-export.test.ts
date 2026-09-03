@@ -142,6 +142,7 @@ describe('isEmbeddableImageSrc', () => {
   it('仅相对路径可内嵌；绝对 URL / data URI / 协议相对保留', () => {
     expect(isEmbeddableImageSrc('assets/a.png')).toBe(true);
     expect(isEmbeddableImageSrc('./assets/a.png')).toBe(true);
+    expect(isEmbeddableImageSrc('note-jira-summary-assets/image.png')).toBe(true);
     expect(isEmbeddableImageSrc('https://example.com/a.png')).toBe(false);
     expect(isEmbeddableImageSrc('http://asset.localhost/a.png')).toBe(false);
     expect(isEmbeddableImageSrc('data:image/png;base64,xx')).toBe(false);
@@ -159,6 +160,30 @@ describe('embedImages', () => {
     );
     expect(result.embedded).toEqual(['assets/a.png']);
     expect(result.missing).toEqual([]);
+  });
+
+  it('同级 *-assets 相对路径在 resolver 返回数据时可内嵌', async () => {
+    const resolve = vi.fn(async (rel: string) =>
+      rel === 'note-jira-summary-assets/image.png' ? 'QUJD' : null,
+    );
+    const result = await embedImages(
+      '<p><img src="note-jira-summary-assets/image.png" alt="图"></p>',
+      resolve,
+    );
+    expect(resolve).toHaveBeenCalledWith('note-jira-summary-assets/image.png');
+    expect(result.html).toBe(
+      '<p><img src="data:image/png;base64,QUJD" alt="图"></p>',
+    );
+    expect(result.embedded).toEqual(['note-jira-summary-assets/image.png']);
+    expect(result.missing).toEqual([]);
+  });
+
+  it('../ 越界路径交给 resolver；拒绝读取时保留原 src', async () => {
+    const resolve = vi.fn(async () => null);
+    const result = await embedImages('<img src="../secret.png">', resolve);
+    expect(resolve).toHaveBeenCalledWith('../secret.png');
+    expect(result.html).toBe('<img src="../secret.png">');
+    expect(result.missing).toEqual(['../secret.png']);
   });
 
   it('读取失败（null 或抛错）保留原 src 并记入 missing', async () => {

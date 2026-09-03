@@ -1,15 +1,15 @@
-//! 导出辅助服务（T10，R5）。
+//! 导出辅助服务（T10，R5 / R4）。
 //!
 //! 导出 HTML / PDF 的唯一 Rust 侧需求：把文档引用的**相对路径图片**
-//! （`assets/<name>.<ext>`）读成 base64，供前端内嵌为 data URI 生成
-//! 独立 HTML。PDF 打印管线与样式内嵌全部在前端完成（见
-//! src/export/pdf-export.ts），这里不做 PDF 生成。
+//! 读成 base64，供前端内嵌为 data URI 生成独立 HTML。PDF 打印管线与
+//! 样式内嵌全部在前端完成（见 src/export/pdf-export.ts），这里不做 PDF 生成。
 //!
-//! 路径解析规则（与 asset.rs 的落盘布局对应）：
-//!   - 文档已保存（`doc_path` 为 Some）→ 仅在 `<文档目录>/assets/` 解析；
+//! 路径解析规则：
+//!   - 文档已保存（`doc_path` 为 Some）→ 相对路径必须解析到**文档所在
+//!     目录之内**的常规文件（`assets/…`、同级 `*-assets/…` 等均可）；
 //!   - 文档未保存 → 相对应用数据目录下 `staging-assets/<session_id>/`
 //!     解析，此时相对路径必须位于 `assets/` 前缀之下（剥离前缀后即为
-//!     暂存目录内的文件名）。
+//!     暂存目录内的文件名）。粘贴落盘仍只写 `assets/`。
 //!
 //! 安全：相对路径逐段校验并在读取前 canonicalize，拒绝 `..`、盘符/UNC、
 //! 绝对路径与 symlink 越界；会话 id 验证规则与 asset.rs 一致。base64
@@ -87,7 +87,7 @@ fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf, String> 
 fn require_path_within(path: &Path, root: &Path, description: &str) -> Result<(), String> {
     if path == root || !path.starts_with(root) {
         return Err(format!(
-            "{}必须位于允许的 assets 目录内: {}",
+            "{}必须位于允许的目录内: {}",
             description,
             path.display()
         ));
@@ -95,10 +95,20 @@ fn require_path_within(path: &Path, root: &Path, description: &str) -> Result<()
     Ok(())
 }
 
+fn require_assets_prefix(parts: &[String], rel_path: &str) -> Result<(), String> {
+    if parts.first().map(String::as_str) != Some(ASSETS_DIR_NAME) || parts.len() < 2 {
+        return Err(format!(
+            "图片路径必须位于 {}/ 之下: {:?}",
+            ASSETS_DIR_NAME, rel_path
+        ));
+    }
+    Ok(())
+}
+
 /// 读取相对路径图片并返回 base64。
 ///
-/// - `doc_dir` 为 Some：`rel_path` 必须位于 `assets/`，解析为
-///   `<doc_dir>/assets/<path>`；
+/// - `doc_dir` 为 Some：`rel_path` 必须解析到文档目录之内的常规文件
+///   （`assets/…`、同级 `*-assets/…` 等）；
 /// - 为 None（文档未保存）：`rel_path` 必须以 `assets/` 开头，剥离后解析
 ///   `<staging_root>/staging-assets/<session_id>/<name>`；`session_id`
 ///   缺失时报错。
@@ -110,24 +120,17 @@ pub fn read_image_base64_impl(
 ) -> Result<String, String> {
     let session_id = session_id.map(validate_session_id).transpose()?;
     let parts = sanitize_rel_path(rel_path)?;
-    if parts.first().map(String::as_str) != Some(ASSETS_DIR_NAME) || parts.len() < 2 {
-        return Err(format!(
-            "图片路径必须位于 {}/ 之下: {:?}",
-            ASSETS_DIR_NAME, rel_path
-        ));
-    }
 
     let (allowed_root, full): (PathBuf, PathBuf) = match doc_dir {
         Some(dir) => {
             let canonical_doc = canonicalize_path(dir, "文档目录")?;
-            let assets_root = canonicalize_path(&dir.join(ASSETS_DIR_NAME), "资源目录")?;
-            require_path_within(&assets_root, &canonical_doc, "资源目录")?;
-            let full = parts[1..]
+            let full = parts
                 .iter()
-                .fold(assets_root.clone(), |acc, part| acc.join(part));
-            (assets_root, full)
+                .fold(dir.to_path_buf(), |acc, part| acc.join(part));
+            (canonical_doc, full)
         }
         None => {
+            require_assets_prefix(&parts, rel_path)?;
             let session =
                 session_id.ok_or_else(|| "文档未保存且缺少会话 id，无法定位暂存图片".to_owned())?;
             let staging_assets = staging_root.join(STAGING_DIR_NAME);
@@ -503,7 +506,7 @@ mod tests {
     // -- 读取 --
 
     #[test]
-    fn reads_image_relative_to_doc_dir() {
+    fn read_image_base64_relative_to_doc_dir() {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
         fs::create_dir_all(doc_dir.join("assets")).unwrap();
@@ -514,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_image_from_session_staging_when_unsaved() {
+    fn read_image_base64_from_session_staging_when_unsaved() {
         let dir = temp_dir();
         let staged = dir.path().join(STAGING_DIR_NAME).join("untitled-ab12");
         fs::create_dir_all(&staged).unwrap();
@@ -525,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn unsaved_requires_session_and_assets_prefix() {
+    fn read_image_base64_unsaved_requires_session_and_assets_prefix() {
         let dir = temp_dir();
         // 缺 session id
         assert!(read_image_base64_impl(None, dir.path(), None, "assets/a.png").is_err());
@@ -534,18 +537,48 @@ mod tests {
     }
 
     #[test]
-    fn saved_document_requires_assets_prefix() {
+    fn read_image_base64_saved_document_sibling_folder() {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
-        fs::create_dir_all(doc_dir.join("assets")).unwrap();
-        fs::write(doc_dir.join("outside.png"), b"outside").unwrap();
-
-        assert!(read_image_base64_impl(Some(&doc_dir), dir.path(), None, "outside.png").is_err());
-        assert!(read_image_base64_impl(Some(&doc_dir), dir.path(), None, "./outside.png").is_err());
+        let sibling = doc_dir.join("note-jira-summary-assets");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("image.png"), b"sibling-img").unwrap();
+        let b64 = read_image_base64_impl(
+            Some(&doc_dir),
+            dir.path(),
+            None,
+            "note-jira-summary-assets/image.png",
+        )
+        .expect("sibling folder inside document directory");
+        assert_eq!(b64, encode_base64(b"sibling-img"));
     }
 
     #[test]
-    fn rejects_traversal_and_reports_missing() {
+    fn read_image_base64_saved_document_sandbox() {
+        let dir = temp_dir();
+        let doc_dir = dir.path().join("docs");
+        fs::create_dir_all(doc_dir.join("assets")).unwrap();
+        fs::write(doc_dir.join("assets").join("a.png"), b"in-assets").unwrap();
+        fs::write(doc_dir.join("outside.png"), b"in-doc").unwrap();
+        fs::write(dir.path().join("secret.png"), b"secret").unwrap();
+
+        assert_eq!(
+            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/a.png").unwrap(),
+            encode_base64(b"in-assets")
+        );
+        assert_eq!(
+            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "outside.png").unwrap(),
+            encode_base64(b"in-doc")
+        );
+        assert_eq!(
+            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "./outside.png").unwrap(),
+            encode_base64(b"in-doc")
+        );
+        assert!(read_image_base64_impl(Some(&doc_dir), dir.path(), None, "../secret.png").is_err());
+    }
+
+    #[test]
+    fn read_image_base64_rejects_traversal_and_reports_missing() {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
         fs::create_dir_all(doc_dir.join(ASSETS_DIR_NAME)).unwrap();
@@ -556,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn staging_session_id_is_rejected_instead_of_rewritten() {
+    fn read_image_base64_staging_session_id_is_rejected_instead_of_rewritten() {
         let dir = temp_dir();
         let staged = dir.path().join(STAGING_DIR_NAME).join("valid-session");
         fs::create_dir_all(&staged).unwrap();
@@ -567,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversized_image() {
+    fn read_image_base64_rejects_oversized_image() {
         let dir = temp_dir();
         let doc_dir = dir.path().join("docs");
         fs::create_dir_all(doc_dir.join("assets")).unwrap();
@@ -583,7 +616,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn rejects_symlink_escape_from_assets_directory() {
+    fn read_image_base64_rejects_symlink_escape_from_document_directory() {
         use std::os::unix::fs::symlink;
 
         let dir = temp_dir();
@@ -596,6 +629,6 @@ mod tests {
 
         let error = read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/linked.png")
             .expect_err("symlink escape must fail");
-        assert!(error.contains("assets 目录内"), "unexpected: {}", error);
+        assert!(error.contains("允许的目录内"), "unexpected: {}", error);
     }
 }

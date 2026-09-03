@@ -7,7 +7,10 @@ import { describe, expect, it } from 'vitest';
 import {
   alignStyle,
   buildImageStyle,
+  imageClickIntent,
+  isDocumentDirSandboxedSrc,
   parseImageHtml,
+  resolveImageOpenHref,
   serializeImageHtml,
 } from '../plugins/image-size.js';
 
@@ -67,5 +70,56 @@ describe('image-size 序列化往返（R12）', () => {
     expect(html).toContain('src="a&quot;b.png"');
     expect(html).toContain('alt="x&lt;y&gt;"');
     expect(parseImageHtml(html)?.alt).toBe('x<y>');
+  });
+});
+
+describe('image click intent（R4 / ADR-4）', () => {
+  const docPath = 'C:/notes/note.md';
+
+  it('普通点击始终 select，不打开', () => {
+    expect(imageClickIntent({ ctrlKey: false, metaKey: false }, 'assets/a.png', docPath)).toBe(
+      'select',
+    );
+    expect(
+      imageClickIntent(
+        { ctrlKey: false, metaKey: false },
+        'note-jira-summary-assets/image.png',
+        docPath,
+      ),
+    ).toBe('select');
+  });
+
+  it('Ctrl/Cmd+点击已保存文档内相对图 → open', () => {
+    expect(imageClickIntent({ ctrlKey: true, metaKey: false }, 'assets/a.png', docPath)).toBe(
+      'open',
+    );
+    expect(
+      imageClickIntent(
+        { ctrlKey: false, metaKey: true },
+        'note-jira-summary-assets/image.png',
+        docPath,
+      ),
+    ).toBe('open');
+    expect(resolveImageOpenHref('note-jira-summary-assets/image.png', docPath)).toBe(
+      'note-jira-summary-assets/image.png',
+    );
+  });
+
+  it('远程图、未保存、../ 不打开', () => {
+    expect(
+      imageClickIntent({ ctrlKey: true, metaKey: false }, 'https://example.com/a.png', docPath),
+    ).toBe('select');
+    expect(imageClickIntent({ ctrlKey: true, metaKey: false }, 'assets/a.png', null)).toBe(
+      'select',
+    );
+    expect(imageClickIntent({ ctrlKey: true, metaKey: false }, '../secret.png', docPath)).toBe(
+      'select',
+    );
+    expect(resolveImageOpenHref('../secret.png', docPath)).toBe(null);
+    expect(resolveImageOpenHref('assets/a.png', null)).toBe(null);
+    expect(isDocumentDirSandboxedSrc('../secret.png')).toBe(false);
+    expect(isDocumentDirSandboxedSrc('\\\\server\\share\\a.png')).toBe(false);
+    expect(isDocumentDirSandboxedSrc('C:/pics/a.png')).toBe(false);
+    expect(isDocumentDirSandboxedSrc('note-assets/image.png')).toBe(true);
   });
 });

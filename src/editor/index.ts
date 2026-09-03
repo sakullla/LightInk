@@ -273,12 +273,16 @@ export async function mountEditor(
           }),
         );
       }
-      // 注入相对引用解析器时，image 节点经 nodeView 把 assets/… 解析为可显示
-      // 的 data URL；T8/R12 同 nodeView 提供选中后的缩放柄 + 浮动对齐条。
+      // 注入相对引用解析器时，image 节点经 nodeView 把文档目录内相对引用解析为
+      // 可显示的 data URL；T8/R12 同 nodeView 提供选中后的缩放柄 + 浮动对齐条。
+      // Ctrl/Cmd+点击复用链接 confirm + onLinkNavigate（localFile / open_path_default）。
       if (options.imageSrcResolver !== undefined) {
         editor.use(
           imageSizeNodeViewPlugin(options.imageSrcResolver, {
             remoteImageLoadLabel: options.remoteImageLoadLabel,
+            onLinkNavigate: options.onLinkNavigate,
+            confirmOpen: options.confirmLinkOpen,
+            getDocPath: options.getDocPath,
           }),
         );
       }
