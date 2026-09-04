@@ -429,6 +429,51 @@ describe('official viewer assembly', () => {
 });
 
 describe('viewer event wiring', () => {
+  it('retries fit-width after pagesinit when the host is still 0-wide', async () => {
+    mockPdf();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const container = document.createElement('div');
+    defineClientSize(container, { clientWidth: 0 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    const viewer = lastViewer();
+    viewer.pageViews = [{ width: 160, scale: 1, textLayer: null }];
+    lastEventBus().dispatch('pagesinit', { source: viewer });
+    expect(viewerRuntime.scaleSets).toEqual([]);
+
+    defineClientSize(container, { clientWidth: 400 });
+    frames.splice(0).forEach((callback) => {
+      callback(0);
+    });
+    expect(viewer.currentScale).toBe(2.5);
+    expect(viewerRuntime.scaleSets).toEqual([2.5]);
+    await handle.destroy();
+  });
+
+  it('caps fit-width to the visual viewport when the host box is inflated', async () => {
+    mockPdf();
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: { width: 360, height: 640 },
+    });
+    const container = document.createElement('div');
+    defineClientSize(container, { clientWidth: 980 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    const viewer = lastViewer();
+    viewer.pageViews = [{ width: 160, scale: 1, textLayer: null }];
+    lastEventBus().dispatch('pagesinit', { source: viewer });
+    expect(viewer.currentScale).toBe(2.25);
+    await handle.destroy();
+    Reflect.deleteProperty(window, 'visualViewport');
+  });
+
   it('measures page 1 on pagesinit and sets currentScale to fit-width × user step', async () => {
     mockPdf();
     const container = document.createElement('div');

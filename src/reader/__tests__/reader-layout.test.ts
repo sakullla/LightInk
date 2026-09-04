@@ -1331,12 +1331,19 @@ describe('flow host touch paging', () => {
 
   it('settles host swipes on the visible column scroller instead of adding a second step', () => {
     const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    const view = readFileSync(resolve(process.cwd(), 'src/reader/reader-view.ts'), 'utf-8');
+    const zoom = readFileSync(resolve(process.cwd(), 'src/reader/view/reader-zoom.ts'), 'utf-8');
     expect(flow).toMatch(/createPagedGestureLock/);
     expect(flow).toMatch(/pagedGesture\.take\(\)/);
     expect(flow).toMatch(/bindTouchPaging\(scrollHost, \{/);
     expect(flow).toMatch(/settleVisiblePagedRelease\(startLeft, dx\)/);
     expect(flow).toMatch(/touch-action:\s*pan-y/);
     expect(flow).toMatch(/overscroll-behavior-x:\s*none/);
+    expect(flow).toMatch(/matchMedia\.bind\(globalThis\)/);
+    expect(flow).toMatch(/touchPrimary:\s*true/);
+    expect(flow).not.toMatch(/pagedTouchSlideMotion = \(\): PagedScrollMotion \| undefined => undefined/);
+    expect(view).toMatch(/visualViewport\?\.addEventListener\('resize'/);
+    expect(zoom).toMatch(/visualViewport\?\.removeEventListener\('resize'/);
   });
 
   it('pages a host swipe once when settle cannot see a column scroller', () => {

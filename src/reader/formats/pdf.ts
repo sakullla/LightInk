@@ -47,6 +47,35 @@ export function pdfFitWidthScale(hostContentWidth: number, pageCssWidth: number)
   return hostContentWidth / pageCssWidth;
 }
 
+/**
+ * Fit-width box: host content width, never larger than the visual viewport.
+ * clientWidth 0 (Android first paint / hidden tab) falls back to the painted
+ * rect so pagesinit does not lock onto PDF-point scale 1.
+ */
+export function pdfHostFitContentWidth(
+  host: {
+    clientWidth: number;
+    getBoundingClientRect?: () => { width: number };
+  },
+  paddingPx = 0,
+  viewportWidth?: number,
+): number {
+  const client = Number.isFinite(host.clientWidth) ? host.clientWidth : 0;
+  const painted =
+    typeof host.getBoundingClientRect === 'function' ? host.getBoundingClientRect().width : 0;
+  let box = client > 0 ? client : painted > 0 ? painted : 0;
+  if (
+    typeof viewportWidth === 'number' &&
+    Number.isFinite(viewportWidth) &&
+    viewportWidth > 0 &&
+    box > viewportWidth
+  ) {
+    box = viewportWidth;
+  }
+  const pad = Number.isFinite(paddingPx) && paddingPx > 0 ? paddingPx : 0;
+  return Math.max(0, box - pad);
+}
+
 /** PDF 唯一比例：适合页宽 × 用户档。 */
 export function pdfCssScale(fitWidthScale: number, userZoom: number): number {
   return fitWidthScale * userZoom;
@@ -180,13 +209,34 @@ export interface PdfRenderHandle {
 
 export type { PdfSearchMatch };
 
-function pageHostContentWidth(host: HTMLElement): number {
+function visualViewportCssWidth(): number {
+  if (typeof window === 'undefined') {
+    return Number.NaN;
+  }
+  const visual = window.visualViewport?.width;
+  if (typeof visual === 'number' && Number.isFinite(visual) && visual > 0) {
+    return visual;
+  }
+  return Number.isFinite(window.innerWidth) && window.innerWidth > 0
+    ? window.innerWidth
+    : Number.NaN;
+}
+
+function hostPaddingPx(host: HTMLElement): number {
   const style = typeof getComputedStyle === 'function' ? getComputedStyle(host) : null;
-  const pad =
-    style !== null
-      ? (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)
-      : 0;
-  return Math.max(0, host.clientWidth - pad);
+  if (style === null) {
+    return 0;
+  }
+  return (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+}
+
+function pageHostContentWidth(host: HTMLElement): number {
+  const visual = visualViewportCssWidth();
+  return pdfHostFitContentWidth(
+    host,
+    hostPaddingPx(host),
+    Number.isFinite(visual) ? visual : undefined,
+  );
 }
 
 type PdfjsComponents = Awaited<ReturnType<typeof loadPdfjsComponents>>;
@@ -424,8 +474,40 @@ export async function renderPdfInto(
     pdfViewer.currentScale = pdfCssScale(fitWidthScale, controller.scale);
   };
 
+  let fitRetryHandle: number | null = null;
+  let fitRetryCount = 0;
+  const MAX_FIT_RETRIES = 8;
+  const cancelFitRetry = (): void => {
+    if (fitRetryHandle !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(fitRetryHandle);
+    }
+    fitRetryHandle = null;
+  };
+  const tryApplyFitWidth = (): void => {
+    if (destroyed) {
+      return;
+    }
+    const hostWidth = pageHostContentWidth(container);
+    if (hostWidth > 0 && firstPageCssWidth > 0) {
+      fitRetryCount = 0;
+      refreshFitWidth();
+      applyScale();
+      dragPan.sync();
+      return;
+    }
+    if (fitRetryCount >= MAX_FIT_RETRIES || typeof requestAnimationFrame !== 'function') {
+      return;
+    }
+    fitRetryCount += 1;
+    fitRetryHandle = requestAnimationFrame(() => {
+      fitRetryHandle = null;
+      tryApplyFitWidth();
+    });
+  };
+
   // pagesinit：第 1 页已就位（官方在 firstPagePromise 后建页并写 --scale-factor），
   // 量页宽定适合页宽并落初始比例；文本层/画布渲染由官方渲染队列自管。
+  // 宿主仍为 0 宽时不落 PDF 点阵 1:1（手机上比屏宽、必须捏合），下一帧再量。
   const onPagesInit = (): void => {
     if (destroyed) {
       return;
@@ -439,9 +521,7 @@ export async function renderPdfInto(
     ) {
       firstPageCssWidth = first.width / first.scale;
     }
-    refreshFitWidth();
-    applyScale();
-    dragPan.sync();
+    tryApplyFitWidth();
   };
 
   // 页码回写：viewer 以可见度选中当前页；触底钳制保留现行语义——缩小后多页
@@ -519,6 +599,7 @@ export async function renderPdfInto(
   };
 
   const onAbort = (): void => {
+    cancelFitRetry();
     teardown.abort();
     dragPan.release();
     releaseTextLayerBindings();
@@ -538,8 +619,7 @@ export async function renderPdfInto(
     if (destroyed) {
       return;
     }
-    refreshFitWidth();
-    applyScale();
+    tryApplyFitWidth();
   };
 
   const scrollToPage = (page: number): void => {
@@ -616,6 +696,7 @@ export async function renderPdfInto(
         return;
       }
       destroyed = true;
+      cancelFitRetry();
       signal?.removeEventListener('abort', onAbort);
       teardown.abort();
       dragPan.release();

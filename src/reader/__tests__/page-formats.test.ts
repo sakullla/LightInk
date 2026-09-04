@@ -23,6 +23,7 @@ import {
   PDF_SCALE_STEPS,
   pdfCssScale,
   pdfFitWidthScale,
+  pdfHostFitContentWidth,
 } from '../formats/pdf.js';
 import { ReaderLimitError } from '../formats/types.js';
 
@@ -108,6 +109,12 @@ describe('createPdfPageController', () => {
     expect(pdfFitWidthScale(800, 400)).toBe(2);
     expect(pdfFitWidthScale(0, 400)).toBe(1);
     expect(pdfFitWidthScale(800, 0)).toBe(1);
+    expect(pdfHostFitContentWidth({ clientWidth: 0 }, 0)).toBe(0);
+    expect(pdfHostFitContentWidth({ clientWidth: 0, getBoundingClientRect: () => ({ width: 390 }) }, 0)).toBe(
+      390,
+    );
+    expect(pdfHostFitContentWidth({ clientWidth: 980 }, 0, 360)).toBe(360);
+    expect(pdfHostFitContentWidth({ clientWidth: 390 }, 16, 390)).toBe(374);
     const c = createPdfPageController(2);
     c.zoomIn();
     expect(pdfCssScale(2.5, c.scale)).toBeGreaterThan(2.5);

@@ -289,6 +289,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', ctx.zoom.onWindowResize);
+    window.visualViewport?.addEventListener('resize', ctx.zoom.onWindowResize);
   }
 
   const layoutRoot =

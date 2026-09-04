@@ -1390,10 +1390,22 @@ export function createFlowRenderer(
   const pagedGesture = createPagedGestureLock();
 
   /**
-   * 翻页 scrollLeft 一律瞬跳。触屏 rAF 插值会和原生 overflow 拖动、换章重分栏
-   * 抢主线程，换章后第一下滑动会卡死；做不到流畅就不要滚动动画。
+   * Touch page turns animate scrollLeft (~200ms). Native horizontal overflow
+   * is disabled (`touch-action: pan-y`); touchstart cancels an in-flight
+   * slide so a new drag does not fight rAF. Chapter landings stay instant.
+   * Bind matchMedia — a raw call throws Illegal invocation in the WebView.
    */
-  const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => undefined;
+  const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => {
+    if (!hostHasTouchFlags(root)) {
+      return undefined;
+    }
+    const media =
+      typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
+    return {
+      touchPrimary: true,
+      reducedMotion: media?.('(prefers-reduced-motion: reduce)').matches === true,
+    };
+  };
 
   const resolveVisiblePageStep = (
     frame: HTMLIFrameElement | null,

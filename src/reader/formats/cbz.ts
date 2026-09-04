@@ -2220,7 +2220,7 @@ export async function renderCbzInto(
         const reduceMotion = media?.('(prefers-reduced-motion: reduce)').matches === true;
         const doc = container.ownerDocument as ComicViewTransitionDocument;
         // Android WebView 的 View Transition 快照常带黑底，旧页滑开就是闪屏。
-        // 手机走跟手双页（drag）或 decode-gated 直切，不走 VT / slot 滑入。
+        // 手机跳过 VT，改走 slot 滑入（合成器 transform，不截 canvas）。
         const androidComic = androidReaderRoot(doc.documentElement) !== null;
         // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
         // 中途不露底色。跳转（direction 0）、reduce-motion、Android 与拖动
@@ -2253,14 +2253,13 @@ export async function renderCbzInto(
         }
         const entering = applySwap();
         // T2 回退路径：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；
-        // strip 模式、重排版/非连续跳转（direction 0，见 scrollToIndex）与拖动
+        // Android 同样走这条（不走 VT）。strip、跳转（direction 0）与拖动
         // 提交（跟手→缓动→落位已是一段连续运动）不 slide。
         if (
           entering.length > 0 &&
           direction !== 0 &&
           source !== 'drag' &&
           !reduceMotion &&
-          !androidComic &&
           isTouchPrimaryDocument(container.ownerDocument)
         ) {
           slideEnteringComicSlots(entering, direction);
@@ -2268,9 +2267,11 @@ export async function renderCbzInto(
       };
       // decode-gated swap：相邻翻页（±1）且新页图片未就绪时旧页保持在屏，
       // 待解码完成或超时后一次性换屏。跳转（direction 0）仍硬落位——远跳的
-      // 旧页多已被缓存窗口释放，等待无意义。
+      // 旧页多已被缓存窗口释放，等待无意义。Android 点按不等 hold：先滑入
+      // （未物化页带加载态），解码在动画里完成，避免整屏停顿再直切。
+      const androidComic = androidReaderRoot(container.ownerDocument.documentElement) !== null;
       const awaited =
-        direction === 0
+        direction === 0 || androidComic
           ? []
           : shown.filter(
               (next) =>

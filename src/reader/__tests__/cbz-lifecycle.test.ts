@@ -797,6 +797,40 @@ describe('CBZ page materialization', () => {
     }
   });
 
+  it('slides the entering Android slot instead of a decode-gated hard cut', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const updates: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: Promise.resolve(),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+        preferenceStorage: pagedStorage({ spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.nextPage()).toBe(true);
+      expect(updates).toHaveLength(0);
+      expect(document.documentElement.dataset.comicTurn).toBeUndefined();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      expect(container.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0);
+      await handle.destroy();
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+      document.documentElement.removeAttribute('data-android');
+    }
+  });
+
   it('skips View Transition on Android so a swipe does not snapshot a black canvas', async () => {
     document.documentElement.setAttribute('data-android', '');
     const updates: Array<() => void> = [];

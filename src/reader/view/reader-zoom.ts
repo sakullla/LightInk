@@ -262,6 +262,7 @@ export function setupReaderZoom(ctx: ReaderViewContext): ReaderZoomSurface {
   const cancelViewportRefresh = (): void => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', onWindowResize);
+      window.visualViewport?.removeEventListener('resize', onWindowResize);
     }
     cancelSettledRefresh?.();
     cancelSettledRefresh = null;
