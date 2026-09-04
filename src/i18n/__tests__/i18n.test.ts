@@ -7,6 +7,16 @@ describe('translate', () => {
   it('returns zh / en strings and interpolates', () => {
     expect(translate('zh-CN', 'file.save')).toBe('保存');
     expect(translate('en', 'file.save')).toBe('Save');
+    expect(translate('en', 'reader.chrome.backToShelf')).toBe('Back to Shelf');
+    expect(translate('zh-CN', 'reader.chrome.backToShelf')).toBe('返回书架');
+    expect(translate('en', 'reader.chrome.toc')).toBe('Contents');
+    expect(translate('zh-CN', 'reader.chrome.toc')).toBe('目录');
+    expect(translate('en', 'reader.chrome.typography')).toBe('Typography');
+    expect(translate('zh-CN', 'reader.chrome.typography')).toBe('排版');
+    expect(translate('en', 'reader.chrome.bookmark')).toBe('Bookmark');
+    expect(translate('zh-CN', 'reader.chrome.bookmark')).toBe('书签');
+    expect(translate('en', 'reader.chrome.search')).toBe('Search');
+    expect(translate('zh-CN', 'reader.chrome.search')).toBe('搜索');
     expect(translate('en', 'dialog.closeTab.message', { title: 'a.md' })).toContain('a.md');
   });
 });

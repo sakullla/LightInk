@@ -10,7 +10,12 @@ import {
   type LibraryProgressQuery,
 } from '../library-progress.js';
 import { classifyLibraryKind } from '../library-kind.js';
-import { createLibraryView, jacketHue, type LibraryViewDependencies } from '../library-view.js';
+import {
+  CONTINUE_LAST_OPENED_KEY,
+  createLibraryView,
+  jacketHue,
+  type LibraryViewDependencies,
+} from '../library-view.js';
 import {
   type LibraryGroup,
   type LibraryGroupMembership,
@@ -726,6 +731,7 @@ afterEach(() => {
   document.documentElement.removeAttribute('data-keyboard');
   document.documentElement.style.removeProperty('--lightink-keyboard-inset');
   delete document.documentElement.dataset.readerProgressBar;
+  window.localStorage.removeItem(CONTINUE_LAST_OPENED_KEY);
 });
 
 describe('LibraryView my-books home', () => {
@@ -1572,6 +1578,140 @@ describe('LibraryView reading management (R4)', () => {
     expect(freshRow.dataset.progressStatus).toBe('not-started');
     expect(freshRow.textContent).toContain('未开始');
     expect(freshRow.textContent).not.toContain('已读');
+    view.destroy();
+  });
+
+  it('puts the most recently read book at the front of the shelf', async () => {
+    const older = localItem({
+      id: 'local:/books/old.epub',
+      title: '旧书',
+      localPath: '/books/old.epub',
+      updatedAt: 400,
+    });
+    const justRead = localItem({
+      id: 'local:/books/read.epub',
+      title: '刚读的书',
+      localPath: '/books/read.epub',
+      updatedAt: 50,
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === justRead.id) {
+        return {
+          status: 'in-progress' as const,
+          updatedAt: 900,
+          index: 2,
+          unit: 'chapter' as const,
+          ratio: 0,
+          percent: 10,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [older, justRead]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const tiles = Array.from(
+      host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
+    );
+    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([justRead.id, older.id]);
+    view.destroy();
+  });
+
+  it('keeps a newly added unread book ahead of older reads instead of burying it', async () => {
+    const oldUnread = localItem({
+      id: 'local:/books/old-unread.epub',
+      title: '更早未读',
+      localPath: '/books/old-unread.epub',
+      updatedAt: 100,
+    });
+    const oldRead = localItem({
+      id: 'local:/books/old-read.epub',
+      title: '更早在读',
+      localPath: '/books/old-read.epub',
+      updatedAt: 10,
+    });
+    const newUnread = localItem({
+      id: 'local:/books/new-unread.epub',
+      title: '新加的书',
+      localPath: '/books/new-unread.epub',
+      updatedAt: 1000,
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === oldRead.id) {
+        return {
+          status: 'in-progress' as const,
+          updatedAt: 800,
+          index: 1,
+          unit: 'chapter' as const,
+          ratio: 0,
+          percent: 12,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => [oldUnread, oldRead, newUnread]),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const tiles = Array.from(
+      host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
+    );
+    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([
+      newUnread.id,
+      oldRead.id,
+      oldUnread.id,
+    ]);
+    view.destroy();
+  });
+
+  it('moves a book to the front after it is opened from the shelf', async () => {
+    const first = localItem({
+      id: 'local:/books/first.epub',
+      title: '甲',
+      localPath: '/books/first.epub',
+      updatedAt: 200,
+    });
+    const second = localItem({
+      id: 'local:/books/second.epub',
+      title: '乙',
+      localPath: '/books/second.epub',
+      updatedAt: 100,
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [first, second]) },
+      onOpen: vi.fn(async () => undefined),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    itemRow(host, second.id).click();
+    await settle();
+    await view.show();
+
+    const tiles = Array.from(
+      host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
+    );
+    expect(tiles[0]?.dataset.itemId).toBe(second.id);
+    expect(deps.onOpen).toHaveBeenCalledTimes(1);
     view.destroy();
   });
 

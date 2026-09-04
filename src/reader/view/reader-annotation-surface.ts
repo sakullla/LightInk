@@ -37,7 +37,7 @@ import { showNoteDialog } from '../note-dialog.js';
 import { sessionCapabilitiesForExtension } from '../session/adapters.js';
 import type { SessionAnnotationHost } from '../session/session-annotation.js';
 import type { ReaderTarget } from '../sources/types.js';
-import { mapFrameClientRect } from '../flow-renderer.js';
+import { mapFrameClientRect, revealPagedElement } from '../flow-renderer.js';
 import {
   concealSheet,
   revealSheet,
@@ -377,6 +377,30 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     appendAnnotation(kind, currentPositionLocator(), undefined, undefined);
   };
 
+  /** 翻页分栏用 scrollLeft 对齐；滚动模式仍走 scrollIntoView。 */
+  const revealFlowAnnotationTarget = (target: HTMLElement): void => {
+    if (!ctx.flowIsPaginated()) {
+      target.scrollIntoView({ block: 'center' });
+      return;
+    }
+    const frameElement = target.ownerDocument.defaultView?.frameElement;
+    const frame = frameElement instanceof HTMLIFrameElement ? frameElement : null;
+    const article = frame?.closest<HTMLElement>('.lightink-reader-chapter') ?? null;
+    const markChapter = Number(article?.dataset.chapterIndex);
+    if (Number.isSafeInteger(markChapter)) {
+      ctx.flow.setActiveChapter(markChapter);
+    }
+    if (
+      frame !== null &&
+      revealPagedElement(frame, target.ownerDocument, target, (nextFrame, nextDocument, options) => {
+        ctx.flow.applyPaginatedDocument(nextFrame, nextDocument, options);
+      })
+    ) {
+      return;
+    }
+    target.scrollIntoView({ block: 'center' });
+  };
+
   /** 跳到标注位置（面板行跳转与进度轨书签刻度共用）：pdf/cbz 按页，flow/text 优先定位 mark。 */
   const jumpToAnnotation = (annotation: Annotation): void => {
     const loc = annotation.locator;
@@ -414,7 +438,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       )
       .find((candidate): candidate is HTMLElement => candidate !== null);
     if (mark !== undefined) {
-      mark.scrollIntoView({ block: 'center' });
+      revealFlowAnnotationTarget(mark);
       return;
     }
     if (loc.format === 'flow' || loc.format === 'text') {
@@ -434,12 +458,12 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
             ? null
             : resolveTextQuoteRange(frame.contentDocument.body, loc);
         const boundary = range?.startContainer;
-        const target =
-          boundary?.nodeType === Node.ELEMENT_NODE
-            ? (boundary as Element)
-            : boundary?.parentElement;
-        if (target !== undefined && target !== null) {
-          target.scrollIntoView({ block: 'center' });
+        const raw =
+          boundary instanceof HTMLElement
+            ? boundary
+            : boundary?.parentElement ?? null;
+        if (raw !== null) {
+          revealFlowAnnotationTarget(raw);
           return;
         }
       }

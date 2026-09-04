@@ -8,7 +8,11 @@
  * 行为不变。
  */
 
-import { createReaderChrome } from '../reader-chrome.js';
+import type { MessageKey } from '../../i18n/messages.js';
+import {
+  createReaderChrome,
+  type ReaderChromeLabels,
+} from '../reader-chrome.js';
 import { syncReaderTitlebarReveal } from '../../ui/window-titlebar.js';
 import {
   activateReaderTocPanel,
@@ -56,6 +60,26 @@ import {
   readerChromeTouchMode,
 } from './reader-dom.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
+
+function readerChromeCopy(
+  t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string,
+): Partial<ReaderChromeLabels> {
+  const take = (key: MessageKey, field: keyof ReaderChromeLabels): Partial<ReaderChromeLabels> => {
+    const value = t(key);
+    return value === key ? {} : { [field]: value };
+  };
+  return {
+    ...take('reader.chrome.backToShelf', 'backToShelf'),
+    ...take('reader.chrome.toc', 'toc'),
+    ...take('reader.chrome.typography', 'typography'),
+    ...take('reader.chrome.bookmark', 'bookmark'),
+    ...take('reader.chrome.search', 'search'),
+    ...take('reader.chrome.toolbar', 'toolbar'),
+    ...take('reader.chrome.progress', 'progress'),
+    ...take('reader.chrome.footer', 'footer'),
+    ...take('reader.chrome.bookmarkTick', 'bookmarkTick'),
+  };
+}
 
 function canMountReaderChrome(): boolean {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
@@ -575,10 +599,8 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     }
     ctx.readerChrome = createReaderChrome(ctx.root, {
       touchMode: readerChromeTouchMode(),
-      labels: {
-        bookmark: ctx.t('reader.chrome.bookmark'),
-        bookmarkTick: ctx.t('reader.chrome.bookmarkTick'),
-      },
+      locale: ctx.t('reader.chrome.bookmark') === 'Bookmark' ? 'en' : 'zh-CN',
+      labels: readerChromeCopy(ctx.t),
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),

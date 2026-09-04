@@ -262,6 +262,17 @@ describe('createReaderChrome reveal', () => {
     }
   });
 
+  it('uses English chrome labels when locale is en', () => {
+    const { host, page } = mount({ locale: 'en' });
+    clickPage(page, 120);
+    const actions = ['backToShelf', 'toc', 'typography', 'bookmark', 'search'] as const;
+    expect(
+      actions.map((action) =>
+        host.querySelector(`[data-reader-chrome-action="${action}"]`)?.textContent?.trim(),
+      ),
+    ).toEqual(['Back to Shelf', 'Contents', 'Typography', 'Bookmark', 'Search']);
+  });
+
   it('hides the flow whisper while comic chrome would cover it', () => {
     const { chrome } = mount({ suppressProgressDock: () => true });
     expect(chrome.whisper.hidden).toBe(true);

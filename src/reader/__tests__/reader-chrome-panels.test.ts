@@ -802,10 +802,19 @@ describe('reader chrome panels', () => {
       /\.lightink-reader-type-slider\s*\{[^}]*flex-direction:\s*column/,
     );
     expect(panelsCss()).toMatch(
-      /\.lightink-reader-type-preview\s*\{/,
+      /\.lightink-reader-type-preview\s*\{[^}]*display:\s*none/,
     );
     expect(panelsCss()).not.toMatch(
       /\.lightink-reader-theme-page\s*\{[^}]*border-radius:\s*50%/,
+    );
+    expect(panelsCss()).not.toMatch(
+      /\.lightink-reader-theme-page\s*\{[^}]*aspect-ratio:\s*3\s*\/\s*4/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-fonts,\s*\.lightink-reader-type-modes\s*\{[^}]*background:\s*var\(--lightink-reader-seg-track\)/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-type-font-glyph\s*\{[^}]*display:\s*none/,
     );
   });
 

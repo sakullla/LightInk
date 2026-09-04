@@ -2105,8 +2105,37 @@ export function createLibraryView(
     }
   }
 
+  /**
+   * 书架按最近活动排：阅读进度时钟与条目加入/更新时间取较新值。
+   * 未读新书凭 updatedAt 靠前，不因未读沉底；刚打开而进度尚未落盘时用 lastOpened 记一次现在。
+   */
+  function shelfRecency(display: DisplayItem): number {
+    const progress = progressFor(display);
+    const readAt = progress === null ? 0 : progressClock(progress);
+    const openedAt = lastOpenedItemId === display.item.id ? Date.now() : 0;
+    return Math.max(readAt, display.item.updatedAt, openedAt);
+  }
+
+  function compareShelfItems(left: DisplayItem, right: DisplayItem): number {
+    const recency = shelfRecency(right) - shelfRecency(left);
+    if (recency !== 0) {
+      return recency;
+    }
+    const title = itemTitle(left.item).localeCompare(itemTitle(right.item), undefined, {
+      sensitivity: 'base',
+    });
+    if (title !== 0) {
+      return title;
+    }
+    return left.item.id.localeCompare(right.item.id);
+  }
+
   function visibleItems(): DisplayItem[] {
-    return activeSection === 'shelf' ? items.filter(matchesGroup) : items;
+    const filtered = activeSection === 'shelf' ? items.filter(matchesGroup) : items;
+    if (activeSection !== 'shelf') {
+      return filtered;
+    }
+    return filtered.slice().sort(compareShelfItems);
   }
 
   function latestInProgress(): DisplayItem | null {

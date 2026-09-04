@@ -33,7 +33,9 @@ import {
   isReadingNavKey,
   pagedColumnStep,
   pagedFrameStep,
+  pagedGlyphInView,
   pagedProgressRatio,
+  pagedScrollLeftForClientX,
   type PagedScrollMotion,
   readingNavDirection,
   settlePagedRelease,
@@ -597,6 +599,45 @@ export function readerPagedScroller(frameDocument: Document): HTMLElement {
   return (
     frameDocument.querySelector<HTMLElement>(`.${READER_SPREAD_CLASS}`) ??
     frameDocument.documentElement
+  );
+}
+
+/**
+ * Align a paginated chapter iframe so `element` sits in the visible spread.
+ * `scrollIntoView` only moves the vertical axis; CSS columns need scrollLeft.
+ */
+export function revealPagedElement(
+  frame: HTMLIFrameElement,
+  frameDocument: Document,
+  element: HTMLElement,
+  applyColumns: (
+    frame: HTMLIFrameElement,
+    frameDocument: Document,
+    options?: { snap?: boolean },
+  ) => void,
+): boolean {
+  applyColumns(frame, frameDocument, { snap: false });
+  const scroller = readerPagedScroller(frameDocument);
+  void scroller.offsetWidth;
+  const step = pagedFrameStep(scroller);
+  if (!(step > 0)) {
+    return false;
+  }
+  const box = element.getBoundingClientRect();
+  const target = pagedScrollLeftForClientX(
+    box.left,
+    scroller.getBoundingClientRect().left,
+    scroller.scrollLeft,
+    step,
+  );
+  cancelPagedTouchSlide(scroller);
+  scroller.scrollLeft = target;
+  snapPagedScroller(scroller, step);
+  const after = element.getBoundingClientRect();
+  return pagedGlyphInView(
+    after.left,
+    scroller.getBoundingClientRect().left,
+    scroller.clientWidth,
   );
 }
 
