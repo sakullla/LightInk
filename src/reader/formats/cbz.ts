@@ -1729,13 +1729,29 @@ export async function renderCbzInto(
      * 优先级 + fetchPriority high）。手势未提交结束（回弹/作废/让位/重排版）
      * 时退出，恢复 [hidden] 与缓存窗口回收语义；提交路径不经此处——目标
      * spread 已成为新当前页，由 applySwap 权威收敛 visible。
-     * 目标 spread 与当前 spread 不相交（advanceComicPage 按整 spread 前进），
-     * 删除不会误伤当前页的 visible 语义。
+     * A2（P1）：提交后 dragTurn 存活到 decode-hold 竞速结束（commit 内才
+     * clearDragTurnDom），此窗口内的 reset（快速重拖、第二指让位 pinch）不得
+     * 把已提交的当前 spread 移出 visible——否则 stripDragTurnSlots 将其回
+     * 隐藏（回看旧页），且 enterDragTurn 收敛与 applySwap 都只遍历 visible，
+     * 残留槽从此无人再隐藏，直到重排版。当前 spread 之外的页照旧退出。
+     * 目标 spread 与提交前当前 spread 不相交（advanceComicPage 按整 spread
+     * 前进），正常路径删除不会误伤当前页的 visible 语义。
      */
     const releaseDragTurnUrgentPages = (): void => {
       const state = dragTurn;
       if (state === null) return;
-      for (const index of state.revealed) visible.delete(index);
+      const keep = new Set(
+        comicVisiblePages(
+          comicSpreadStart(currentPage - 1, images.length, layoutSpreadPrefs(), landscapePages),
+          images.length,
+          layoutSpreadPrefs(),
+          landscapePages,
+        ),
+      );
+      for (const index of state.revealed) {
+        if (keep.has(index)) continue;
+        visible.delete(index);
+      }
     };
     const restoreDragTurnSurface = (): void => {
       pagesRoot.style.removeProperty('will-change');

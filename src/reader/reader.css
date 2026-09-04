@@ -1294,8 +1294,11 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   animation: lightink-comic-page-loading 1.8s ease-in-out infinite;
 }
 
+/* 同宿主前缀提升特异性（0,3,1）与触屏动画声明打平：reduce 块靠源顺序胜出，
+   脱离 theme.css 全局 !important 兜底也能独立成立。 */
 @media (prefers-reduced-motion: reduce) {
-  .lightink-reader-cbz-slot.lightink-comic-page-loading {
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-reader-cbz-slot.lightink-comic-page-loading {
     animation: none;
   }
 }

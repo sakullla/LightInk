@@ -2181,6 +2181,242 @@ describe('CBZ drag-turn urgent prefetch and loading feedback (T2)', () => {
       frames.restore();
     }
   });
+
+  it('keeps the committed spread visible through a re-drag inside the decode-hold window', async () => {
+    // 首页 decode 直通；后续页悬挂，使拖动提交落进 decode-hold（目标页未物化）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    // 预取把页 1 的解码挂在悬挂态：提交时页 1 未物化 → 换屏被 decode-hold 挂起。
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，远过提交阈
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 缓动到位：showPagedSpread 进入 hold，页码已前进
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决（decode 悬挂）时快速重拖：提交后的当前 spread（页 1）必须
+      // 留在 visible——重拖被拒（回弹）后没有任何路径再把它并入，而后续换屏
+      // 的 applySwap 只遍历 visible 收敛，掉出即成永久未隐藏残留。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      expect(visiblePageIndices(container)).toEqual(['1', '2']); // 当前 spread + 新邻居
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush(); // 回弹到位：视图恰为当前 spread
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+
+      // 解码完成后页 1 物化（其预取优先级解码让出并发 1 的解码门），页 2 的
+      // 在飞加载随后进入解码并物化。再边区点按前翻：applySwap 必须能隐藏仍在
+      // visible 的旧当前页——若当前 spread 曾在 hold 窗口内掉出 visible，
+      // 此处就会残留 ['1','2'] 双 spread 垃圾视图。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(3));
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="2"] img')).not.toBeNull(),
+      );
+      clickCanvas(container, 950);
+      expect(handle.currentPage).toBe(3);
+      expect(visiblePageIndices(container)).toEqual(['2']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('keeps the committed current spread visible when a pinch lands inside the decode-hold window', async () => {
+    // 同一 hold 窗口的 pinch 变体：第二指落下让位缩放时，reset 不得把已提交
+    // 的当前 spread 回隐藏（中途闪回旧页）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 提交进入 decode-hold：页码已到页 1，旧页 0 仍在屏
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决时第二指落下：拖动让位 pinch 的 reset 清理拖动 DOM，但已
+      // 提交的当前 spread（页 1）保持可见——旧页 0 由 decode-hold 语义继续
+      // 在屏，等待挂起的 commit 权威收敛。
+      const surface = comicSurface(container);
+      pointerOn(surface, 'pointerdown', {
+        pointerId: 3,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 600,
+        clientY: 400,
+      });
+      pointerOn(surface, 'pointerdown', {
+        pointerId: 4,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 700,
+        clientY: 400,
+      });
+      expect(visiblePageIndices(container)).toEqual(['0', '1']);
+      const committed = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(committed.hidden).toBe(false); // 当前 spread 未被回隐藏（不闪回旧页）
+      expect(committed.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(committed.style.position).toBe(''); // 拖动邻居几何已摘除
+      pointerOn(surface, 'pointerup', {
+        pointerId: 4,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      pointerOn(surface, 'pointerup', {
+        pointerId: 3,
+        pointerType: 'touch',
+        clientX: 600,
+        clientY: 400,
+      });
+
+      // pinch 不作废挂起的提交：解码完成后 hold commit 收敛为恰当前 spread。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('runs the tightest cache window inside the decode-hold without aborting the urgent load', async () => {
+    // 覆盖判别：提交进入 hold 时 showPagedSpread 内部的 refreshCacheWindow 以
+    // 「仅目标 spread」的最窄窗口在 dragTurn 存活期执行（预取定时器尚未把
+    // 窗口放宽到 ±1），随后 0ms 定时器又在 hold 窗口内再次刷新——两次都不得
+    // abort/revoke 拖动已触发的在飞 urgent 加载。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      // 全程同步推进（无真实定时器让渡）：拖动提交时 prefetchNeighbors 仍为
+      // false，commit 内的缓存刷新窗口只含目标 spread。
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // showPagedSpread('drag')：最窄窗口刷新 + decode-hold
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['0', '1']); // 旧页保持在屏
+
+      // 0ms 预取定时器此刻才在 hold 窗口内触发：窗口放宽为 ±1 再刷新。
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['0', '1']); // hold 仍未换屏
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+
+      // hold 窗口内重拖被拒（回弹）：当前 spread 收敛，与 T1 语义一致。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+
+      // 解码完成：在飞 urgent 加载照常物化，无 abort 造成的 revoke/丢弃。
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(3)); // 页 2 解码已悬挂
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="2"] img')).not.toBeNull(),
+      );
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
 });
 
 describe('CBZ chrome overlay and system bars (R4)', () => {
