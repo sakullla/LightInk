@@ -34,6 +34,7 @@ import {
 } from '../../ui/reading-layout.js';
 import {
   applyComicCropDisplay,
+  comicDisplayCeilingCssPx,
   comicDisplayWidthPx,
   COMIC_CROP_NONE,
   comicCroppedSize,
@@ -106,6 +107,25 @@ const COMIC_ZOOM_TOGGLE = 2;
 const COMIC_DOUBLE_TAP_MS = 280;
 const COMIC_PAN_SLOP = 8;
 const COMIC_SWIPE_SLOP = 40;
+/**
+ * T1 drag-to-turn 松手判定（settlePagedRelease 同族数学）：位移过
+ * min(48px, 视口宽×0.22) 或速度过阈（px/ms，短促轻扫）即翻页，否则回弹。
+ */
+const COMIC_DRAG_COMMIT_PX = 48;
+const COMIC_DRAG_COMMIT_RATIO = 0.22;
+const COMIC_DRAG_FLICK_VELOCITY = 0.5;
+/** 松手接续/回弹缓动时长（与 slot 滑入 / writePagedScrollLeft 同曲线族）。 */
+const COMIC_DRAG_SETTLE_MS = 200;
+/** 速度采样窗口内保留的最近 pointermove 样本数。 */
+const COMIC_DRAG_SAMPLE_LIMIT = 8;
+/**
+ * R3（ADR-4 修订版）：缩放提交点的布局级重栅格停顿窗口。捏合进行中维持既有
+ * 合成器 transform 缩放（逐帧便宜、不重栅格）；双击/捏合 settle、ctrl+wheel
+ * 与 adjustZoom 停顿后把可见 spread 的布局尺寸钉到放大后的视觉尺寸，pagesRoot
+ * transform 退化为纯平移——布局尺寸即位图栅格分辨率，放大倍数由此进入栅格，
+ * 不依赖引擎对 transform 的重栅格行为（01 §4 unknown 的确定性替代）。
+ */
+const COMIC_ZOOM_RASTER_SETTLE_MS = 160;
 const COMIC_INTERACTIVE_SELECTOR =
   '.lightink-reader-comic-error, input, button, a';
 
@@ -811,6 +831,29 @@ export async function renderCbzInto(
     let viewScale = 1;
     let viewX = 0;
     let viewY = 0;
+    /**
+     * R3：布局级缩放的钉住槽（空 = 既有合成器 transform 缩放模式）。钉住时
+     * slot 的布局盒 = fit 盒 × viewScale，img 的栅格分辨率随之按放大倍数提高；
+     * 退出放大（resetViewTransform/zoomAt ≤1/setPreferences）对称摘除。
+     */
+    interface ComicZoomRasterPin {
+      readonly index: number;
+      readonly slot: HTMLElement;
+      width: number;
+      height: number;
+      /** natural 变量的未缩放基线；repin 重钉时按 applySlotWidth 的新值同步。 */
+      naturalWidthVar: string;
+      naturalHeightVar: string;
+    }
+    let zoomRasterPins: ComicZoomRasterPin[] = [];
+    /**
+     * 钉住期的内容范围：pin 时在改写布局前记录的未钉住态 scroll 测量值。
+     * 钉住后 pagesRoot 是居中 flex，溢出只计入尾侧 ((视口+内容)/2)，读钉住
+     * 态 scroll 会低估范围（提交瞬间跳动、起始侧不可达），因此钉住期间
+     * clamp 一律用这份记录，解钉清空。
+     */
+    let zoomRasterContentRange: { width: number; height: number } | null = null;
+    let zoomRasterTimer: ReturnType<typeof setTimeout> | null = null;
     let destroyed = false;
     let destruction: Promise<void> | null = null;
     let observer: IntersectionObserver | null = null;
@@ -1042,6 +1085,7 @@ export async function renderCbzInto(
       if (preferences.fit === 'width' || preferences.fit === 'original') {
         slot.style.maxHeight = 'none';
       }
+      repinZoomRasterSlot(index); // 钉住槽的 fit 内联样式被重写后按新几何重钉
     };
 
     const applySurfaceMetrics = (): void => {
@@ -1075,14 +1119,21 @@ export async function renderCbzInto(
         return;
       }
       const viewport = container.getBoundingClientRect();
+      // 钉住期不读 pagesRoot 的 scroll 尺寸（居中 flex 尾侧溢出会低估范围），
+      // 用 pin 时记录的未钉住态测量值，与未钉住路径同一份 clamp 语义。
+      const pinned = zoomRasterPins.length > 0;
+      const measured =
+        pinned && zoomRasterContentRange !== null
+          ? zoomRasterContentRange
+          : {
+              width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+              height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+            };
       const clamped = clampComicViewOffset(
         { x: viewX, y: viewY },
         viewScale,
         { width: viewport.width, height: viewport.height },
-        {
-          width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
-          height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
-        },
+        measured,
       );
       viewX = clamped.x;
       viewY = clamped.y;
@@ -1103,7 +1154,10 @@ export async function renderCbzInto(
       pagesRoot.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
       if (zoomed) {
         pagesRoot.style.transformOrigin = '0 0';
-        pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+        pagesRoot.style.transform =
+          zoomRasterPins.length > 0
+            ? `translate(${viewX}px, ${viewY}px)`
+            : `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
       } else {
         pagesRoot.style.removeProperty('transform');
         pagesRoot.style.removeProperty('transform-origin');
@@ -1118,7 +1172,183 @@ export async function renderCbzInto(
       }
     };
 
+    const cancelZoomRasterCommit = (): void => {
+      if (zoomRasterTimer === null) return;
+      clearTimeout(zoomRasterTimer);
+      zoomRasterTimer = null;
+    };
+
+    const restoreZoomRasterVar = (slot: HTMLElement, name: string, value: string): void => {
+      if (value === '') slot.style.removeProperty(name);
+      else slot.style.setProperty(name, value);
+    };
+
+    const scaleZoomRasterVar = (slot: HTMLElement, name: string, current: string): void => {
+      if (current === '') return;
+      const px = Number.parseFloat(current);
+      if (!Number.isFinite(px) || px <= 0) return;
+      slot.style.setProperty(name, `${px * viewScale}px`);
+    };
+
+    /**
+     * 解除钉住：slot 布局回到 fit 尺寸、transform 恢复 translate+scale。钉住与
+     * 解钉互为逆变换，flex 居中/padding 造成的常量偏移由前后测量差回补进
+     * translate，同一任务内无中间帧，视觉逐像素不变。
+     */
+    const unpinZoomRaster = (): void => {
+      cancelZoomRasterCommit();
+      if (zoomRasterPins.length === 0) return;
+      const reference = zoomRasterPins[0]!.slot;
+      const before = reference.getBoundingClientRect();
+      for (const pin of zoomRasterPins) {
+        pin.slot.style.removeProperty('width');
+        pin.slot.style.removeProperty('height');
+        pin.slot.style.removeProperty('flex');
+        pin.slot.style.removeProperty('max-width');
+        pin.slot.style.removeProperty('max-height');
+        restoreZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-width',
+          pin.naturalWidthVar,
+        );
+        restoreZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-height',
+          pin.naturalHeightVar,
+        );
+      }
+      zoomRasterPins = [];
+      zoomRasterContentRange = null;
+      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      const after = reference.getBoundingClientRect();
+      viewX += before.left - after.left;
+      viewY += before.top - after.top;
+      applyViewTransform();
+    };
+
+    /**
+     * 钉住：把可见 spread 的布局尺寸设为当前视觉尺寸（= fit 盒 × viewScale），
+     * pagesRoot transform 退化为纯平移。全有或全无：8192 设备像素预算（按
+     * 夹取 dpr 折算）超限、或任一可见槽不可测（fit-width/fit-original 双页
+     * spread 的未物化半页 height:auto 塌缩为零盒）都整体放弃，维持 transform
+     * 缩放路径——否则晚物化的半页会以 1× 渲染在放大槽旁（混合倍率）。
+     * 仅 paged；strip 模式零变化。捏合进行中（双指在屏）不钉住。
+     */
+    const pinZoomRaster = (): boolean => {
+      if (preferences.mode !== 'paged' || viewScale <= 1 || activePointers.size >= 2) {
+        return false;
+      }
+      const cap = comicDisplayCeilingCssPx();
+      const pins: ComicZoomRasterPin[] = [];
+      for (const index of visible) {
+        const slot = slots[index];
+        if (slot === undefined || slot.hidden) continue;
+        const rect = slot.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false; // 全有或全无，见上
+        if (rect.width > cap || rect.height > cap) return false;
+        pins.push({
+          index,
+          slot,
+          width: rect.width,
+          height: rect.height,
+          naturalWidthVar: slot.style.getPropertyValue('--lightink-comic-natural-width'),
+          naturalHeightVar: slot.style.getPropertyValue('--lightink-comic-natural-height'),
+        });
+      }
+      if (pins.length === 0) return false;
+      const viewport = container.getBoundingClientRect();
+      // 改写布局前记录未钉住态的内容范围：transform 缩放不影响 scroll 尺寸，
+      // 此刻读数即未放大 fit 布局，与未钉住路径的 clamp 输入同源。
+      zoomRasterContentRange = {
+        width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+        height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+      };
+      const before = pins[0]!.slot.getBoundingClientRect();
+      for (const pin of pins) {
+        pin.slot.style.width = `${pin.width}px`;
+        pin.slot.style.height = `${pin.height}px`;
+        pin.slot.style.flex = 'none';
+        pin.slot.style.maxWidth = 'none';
+        pin.slot.style.maxHeight = 'none';
+        scaleZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-width',
+          pin.naturalWidthVar,
+        );
+        scaleZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-height',
+          pin.naturalHeightVar,
+        );
+      }
+      zoomRasterPins = pins;
+      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px)`;
+      const after = pins[0]!.slot.getBoundingClientRect();
+      viewX -= after.left - before.left;
+      viewY -= after.top - before.top;
+      applyViewTransform();
+      return true;
+    };
+
+    /** settle/提交点：先解钉再按当前几何重钉（resize/换屏后的新 fit 盒）。 */
+    const commitZoomRaster = (): void => {
+      cancelZoomRasterCommit();
+      if (zoomRasterPins.length > 0) unpinZoomRaster();
+      if (preferences.mode !== 'paged' || viewScale <= 1) return;
+      pinZoomRaster();
+    };
+
+    /** ctrl+wheel / adjustZoom 连发缩放只在停顿后提交一次布局级重栅格。 */
+    const scheduleZoomRasterCommit = (): void => {
+      cancelZoomRasterCommit();
+      zoomRasterTimer = setTimeout(() => {
+        zoomRasterTimer = null;
+        if (!destroyed) commitZoomRaster();
+      }, COMIC_ZOOM_RASTER_SETTLE_MS);
+    };
+
+    /**
+     * applySlotFit 重写了 fit 内联样式（新物化页、裁边扫描、重排版落位）：
+     * 钉住槽按新 fit 几何重钉（钉住盒 = 测量宽高 × viewScale；宽高不含平移，
+     * 测量不受 translate 影响）。不可测（隐藏/jsdom 零盒）时按记录盒重写，
+     * 保持钉住态一致。applySlotWidth 刚按 natural+裁边重写了 natural 变量：
+     * 把未缩放新基线同步回记录（并把内容范围按几何差量平移），解钉才不会
+     * 把钉住前的旧值恢复回去（丢裁边显示）。
+     */
+    const repinZoomRasterSlot = (index: number): void => {
+      const pin = zoomRasterPins.find((entry) => entry.index === index);
+      if (pin === undefined) return;
+      const rect = pin.slot.getBoundingClientRect();
+      const measurable = rect.width > 0 && rect.height > 0;
+      if (measurable) {
+        if (zoomRasterContentRange !== null) {
+          zoomRasterContentRange = {
+            width: Math.max(
+              1,
+              zoomRasterContentRange.width + rect.width - pin.width / viewScale,
+            ),
+            height: Math.max(
+              1,
+              zoomRasterContentRange.height + rect.height - pin.height / viewScale,
+            ),
+          };
+        }
+        pin.width = rect.width * viewScale;
+        pin.height = rect.height * viewScale;
+      }
+      pin.slot.style.width = `${pin.width}px`;
+      pin.slot.style.height = `${pin.height}px`;
+      pin.slot.style.flex = 'none';
+      pin.slot.style.maxWidth = 'none';
+      pin.slot.style.maxHeight = 'none';
+      pin.naturalWidthVar = pin.slot.style.getPropertyValue('--lightink-comic-natural-width');
+      pin.naturalHeightVar = pin.slot.style.getPropertyValue('--lightink-comic-natural-height');
+      scaleZoomRasterVar(pin.slot, '--lightink-comic-natural-width', pin.naturalWidthVar);
+      scaleZoomRasterVar(pin.slot, '--lightink-comic-natural-height', pin.naturalHeightVar);
+    };
+
     const resetViewTransform = (): void => {
+      unpinZoomRaster(); // 先回到 transform 缩放形态再归零，退出放大即恢复原尺寸
       viewScale = 1;
       viewX = 0;
       viewY = 0;
@@ -1126,6 +1356,7 @@ export async function renderCbzInto(
     };
 
     const zoomAt = (clientX: number, clientY: number, nextScale: number): void => {
+      if (zoomRasterPins.length > 0) unpinZoomRaster(); // 焦点数学按未缩放内容坐标
       const rect = container.getBoundingClientRect();
       const pointX = clientX - rect.left;
       const pointY = clientY - rect.top;
@@ -1144,6 +1375,7 @@ export async function renderCbzInto(
 
     const toggleZoomAt = (clientX: number, clientY: number): void => {
       zoomAt(clientX, clientY, viewScale > 1 ? 1 : COMIC_ZOOM_TOGGLE);
+      commitZoomRaster(); // 双击是离散手势：settle 点同步提交布局级重栅格
     };
 
     const releasePage = (index: number): void => {
@@ -1152,6 +1384,24 @@ export async function renderCbzInto(
       materialized.delete(index);
       page.image.remove();
       if (page.url !== '') URL.revokeObjectURL(page.url);
+    };
+
+    /**
+     * R2（ADR-3）：未物化页槽的轻量加载指示。类只标记「可见且未物化」的
+     * paged 图片页槽（拖动邻居揭示、换屏/跳转落位、decode-hold 超时露占位
+     * 都经此同步）；动画本体在 reader.css——纯背景呼吸微光，不占布局、无
+     * 新增元素/图标/文案，触屏宿主外与 reduce-motion 下均无动画。
+     */
+    const syncComicPageLoading = (index: number): void => {
+      const slot = slots[index];
+      if (slot === undefined) return;
+      const loading =
+        preferences.mode === 'paged' &&
+        images[index]?.kind === 'image' &&
+        !slot.hidden &&
+        !materialized.has(index) &&
+        !failed.has(index);
+      slot.classList.toggle('lightink-comic-page-loading', loading);
     };
 
     const showPageError = (index: number): void => {
@@ -1171,12 +1421,14 @@ export async function renderCbzInto(
       retry.addEventListener('click', () => {
         failed.delete(index);
         slots[index]!.replaceChildren();
+        syncComicPageLoading(index);
         void loadPage(index).catch((loadError: unknown) => {
           if (!isAbortError(loadError, signal) && !destroyed) showPageError(index);
         });
       });
       error.append(text, retry);
       slots[index]!.replaceChildren(error);
+      syncComicPageLoading(index);
     };
 
     const updatePageList = (
@@ -1384,6 +1636,7 @@ export async function renderCbzInto(
           });
           slots[index]!.replaceChildren(mounted.element);
           applySlotFit(index);
+          syncComicPageLoading(index);
         } catch (error) {
           if (
             destroyed ||
@@ -1438,6 +1691,13 @@ export async function renderCbzInto(
       const wanted = prefetchNeighbors
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
         : new Set(centers);
+      // R2（ADR-3）：拖动态（含松手缓动在飞）目标 spread 保持 wanted——
+      // 拖动期内任何缓存刷新（预取定时器启用、decode-hold 交错后的换屏等）
+      // 不得 abort 拖动已触发的 urgent 加载；手势结束（提交/回弹/作废）后
+      // 由正常窗口逻辑接管，不再并集。
+      if (dragTurn !== null) {
+        for (const index of dragTurn.revealed) wanted.add(index);
+      }
       for (const index of materialized.keys()) {
         // paged 换屏挂起期（decode-gated swap）旧页仍在屏：跳过释放，等下次
         // 刷新（slot 已隐藏）再回收，避免持有期旧 slot 被掏空闪底色。
@@ -1468,6 +1728,8 @@ export async function renderCbzInto(
 
     const applyLayout = (notify = true): void => {
       spreadSwapGeneration += 1; // 重排版同步重写 hidden：作废挂起的换屏
+      resetDragTurn(); // 同时作废拖动态/在飞缓动，避免残留邻居槽与偏移
+      unpinZoomRaster(); // 重排版在既有 transform 缩放语义下落位，钉住在结尾重提
       const previousPage = currentPage;
       const spreadPrefs = layoutSpreadPrefs();
       const currentIndex = comicSpreadStart(
@@ -1497,6 +1759,7 @@ export async function renderCbzInto(
         );
         slots.forEach((slot, index) => {
           slot.hidden = !shown.has(index);
+          syncComicPageLoading(index);
         });
         visible.clear();
         shown.forEach((index) => visible.add(index));
@@ -1506,9 +1769,13 @@ export async function renderCbzInto(
           slot.hidden = false;
         });
         visible.clear();
-        slots.forEach((_slot, index) => applySlotFit(index));
+        slots.forEach((_slot, index) => {
+          applySlotFit(index);
+          syncComicPageLoading(index); // strip：mode 门控内只会摘除指示类
+        });
       }
       applyViewTransform();
+      commitZoomRaster(); // 仍处放大时按重排版后的新几何重钉（resize 后保持清晰栅格）
       updateToolbar();
       refreshCacheWindow(currentIndex);
       scheduleVisibleCropScans();
@@ -1547,13 +1814,368 @@ export async function renderCbzInto(
       }
     };
 
-    const showPagedSpread = (requestedIndex: number, direction: 1 | -1 | 0 = 0): void => {
+    /**
+     * T1 drag-to-turn：触屏 paged viewScale=1 单指拖动过 slop 后的跟手状态。
+     * 拖动开始即取消目标方向相邻 spread 的 [hidden]，按绝对定位布局为当前
+     * spread 的横向邻居（pagesRoot 水平 transform 跟手）；松手按位移+速度
+     * 判定翻页（rAF 缓动从当前偏移接续后走 showPagedSpread 提交）或回弹。
+     * 第二指让位 pinch、pointercancel、destroy、重排版均对称清理。
+     */
+    interface DragTurnSample {
+      readonly dx: number;
+      readonly t: number;
+    }
+    interface DragTurnState {
+      readonly pointerId: number;
+      readonly direction: 1 | -1;
+      readonly targetIndex: number;
+      /** 相邻 spread 在视觉上的落侧：+1 右 / -1 左（ltr 前翻在右，rtl 反之）。 */
+      readonly sideSign: 1 | -1;
+      readonly revealed: number[];
+      lastDx: number;
+      samples: DragTurnSample[];
+      /** 松手后为 true：状态只剩在飞缓动，新手势过 slop 即重进入取代。 */
+      released: boolean;
+    }
+    let dragTurn: DragTurnState | null = null;
+    const dragTurnFrames = rafFrameScheduler();
+    const dragTurnNow = (): number =>
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    const writeDragTurnTransform = (dx: number): void => {
+      pagesRoot.style.transform = `translate3d(${dx}px, 0, 0)`;
+    };
+
+    // —— rAF 合并跟踪（pdf-drag-pan pinch 模式）：帧内多次 move 只写最新值。
+    let dragTurnFramePending = false;
+    let dragTurnFrameHandle: number | null = null;
+    let dragTurnPendingDx = 0;
+    const cancelDragTurnFrame = (): void => {
+      dragTurnFramePending = false;
+      if (dragTurnFrameHandle !== null && dragTurnFrames !== null) {
+        dragTurnFrames.cancel(dragTurnFrameHandle);
+      }
+      dragTurnFrameHandle = null;
+    };
+    const flushDragTurnFrame = (): void => {
+      dragTurnFramePending = false;
+      dragTurnFrameHandle = null;
+      if (dragTurn === null) return;
+      writeDragTurnTransform(dragTurnPendingDx);
+    };
+    const scheduleDragTurnFrame = (dx: number): void => {
+      dragTurnPendingDx = dx;
+      if (dragTurnFramePending) return;
+      if (dragTurnFrames === null) {
+        writeDragTurnTransform(dx); // 无 rAF 环境退化为逐次写
+        return;
+      }
+      dragTurnFramePending = true;
+      dragTurnFrameHandle = dragTurnFrames.request(flushDragTurnFrame);
+    };
+
+    // —— 松手接续/回弹缓动（writePagedScrollLeft 同族 easeOutQuart）。
+    interface DragTurnEase {
+      cancelled: boolean;
+      handle: number | null;
+    }
+    let dragTurnEase: DragTurnEase | null = null;
+    const cancelDragTurnEase = (): void => {
+      if (dragTurnEase === null) return;
+      dragTurnEase.cancelled = true;
+      if (dragTurnEase.handle !== null && dragTurnFrames !== null) {
+        dragTurnFrames.cancel(dragTurnEase.handle);
+      }
+      dragTurnEase = null;
+    };
+    const startDragTurnEase = (from: number, to: number, done: () => void): void => {
+      cancelDragTurnEase();
+      cancelDragTurnFrame();
+      if (dragTurnFrames === null) {
+        writeDragTurnTransform(to);
+        done();
+        return;
+      }
+      const startAt = dragTurnNow();
+      const ease: DragTurnEase = { cancelled: false, handle: null };
+      dragTurnEase = ease;
+      const tick = (): void => {
+        if (ease.cancelled || dragTurnEase !== ease) return;
+        const elapsed = dragTurnNow() - startAt;
+        const ratio = Math.min(1, Math.max(0, elapsed / COMIC_DRAG_SETTLE_MS));
+        const progress = 1 - Math.pow(1 - ratio, 4);
+        writeDragTurnTransform(from + (to - from) * progress);
+        if (ratio >= 1) {
+          dragTurnEase = null;
+          done();
+          return;
+        }
+        ease.handle = dragTurnFrames.request(tick);
+      };
+      ease.handle = dragTurnFrames.request(tick);
+    };
+
+    const pushDragTurnSample = (state: DragTurnState, dx: number): void => {
+      state.samples.push({ dx, t: dragTurnNow() });
+      if (state.samples.length > COMIC_DRAG_SAMPLE_LIMIT) {
+        state.samples.splice(0, state.samples.length - COMIC_DRAG_SAMPLE_LIMIT);
+      }
+    };
+    const dragTurnVelocityPxPerMs = (samples: readonly DragTurnSample[]): number => {
+      if (samples.length < 2) return 0;
+      const first = samples[0]!;
+      const last = samples[samples.length - 1]!;
+      const dt = last.t - first.t;
+      if (dt <= 0) return 0;
+      return (last.dx - first.dx) / dt;
+    };
+
+    /** 摘除拖动期邻居槽的内联几何与标记；rehide 时按 visible 语义恢复 [hidden]。 */
+    const stripDragTurnSlots = (rehide: boolean): void => {
+      const state = dragTurn;
+      if (state === null) return;
+      for (const index of state.revealed) {
+        const slot = slots[index];
+        if (slot === undefined) continue;
+        slot.classList.remove('lightink-comic-drag-neighbor');
+        slot.style.removeProperty('position');
+        slot.style.removeProperty('top');
+        slot.style.removeProperty('left');
+        slot.style.removeProperty('width');
+        slot.style.removeProperty('height');
+        if (rehide && !visible.has(index)) slot.hidden = true;
+      }
+    };
+    /**
+     * R2（ADR-3）：拖动 urgent 曾把目标 spread 并入 visible（loadPage 解码
+     * 优先级 + fetchPriority high）。手势未提交结束（回弹/作废/让位/重排版）
+     * 时退出，恢复 [hidden] 与缓存窗口回收语义；提交路径不经此处——目标
+     * spread 已成为新当前页，由 applySwap 权威收敛 visible。
+     * A2（P1）：提交后 dragTurn 存活到 decode-hold 竞速结束（commit 内才
+     * clearDragTurnDom），此窗口内的 reset（快速重拖、第二指让位 pinch）不得
+     * 把已提交的当前 spread 移出 visible——否则 stripDragTurnSlots 将其回
+     * 隐藏（回看旧页），且 enterDragTurn 收敛与 applySwap 都只遍历 visible，
+     * 残留槽从此无人再隐藏，直到重排版。当前 spread 之外的页照旧退出。
+     * 目标 spread 与提交前当前 spread 不相交（advanceComicPage 按整 spread
+     * 前进），正常路径删除不会误伤当前页的 visible 语义。
+     */
+    const releaseDragTurnUrgentPages = (): void => {
+      const state = dragTurn;
+      if (state === null) return;
+      const keep = new Set(
+        comicVisiblePages(
+          comicSpreadStart(currentPage - 1, images.length, layoutSpreadPrefs(), landscapePages),
+          images.length,
+          layoutSpreadPrefs(),
+          landscapePages,
+        ),
+      );
+      for (const index of state.revealed) {
+        if (keep.has(index)) continue;
+        visible.delete(index);
+      }
+    };
+    const restoreDragTurnSurface = (): void => {
+      pagesRoot.style.removeProperty('will-change');
+      pagesRoot.style.removeProperty('position');
+      applyViewTransform(); // scale=1 分支移除拖动 transform 并恢复 overflow/touch-action
+    };
+    /**
+     * 对称清理：取消在飞缓动/帧、恢复相邻 spread hidden、transform 归零。
+     * cancelPendingSwipe=true 时同时作废挂起的 swipe 基线（重排版/destroy/
+     * pinch 等外部作废），使残余 move/up 不再进入拖动或旧 swipe 路径；
+     * 拖动重进入（enterDragTurn）传 false 保留当前手势基线。
+     */
+    const resetDragTurn = (cancelPendingSwipe = true): void => {
+      cancelDragTurnEase();
+      cancelDragTurnFrame();
+      releaseDragTurnUrgentPages(); // 先退出 urgent visible，邻居槽才能按语义回隐藏
+      stripDragTurnSlots(true);
+      dragTurn = null;
+      if (cancelPendingSwipe) swipeOrigin = null;
+      restoreDragTurnSurface();
+    };
+    /** 提交换屏前的清理：不回隐藏（applySwap 随后权威重写 hidden）。 */
+    const clearDragTurnDom = (): void => {
+      cancelDragTurnEase();
+      cancelDragTurnFrame();
+      stripDragTurnSlots(false);
+      dragTurn = null;
+      restoreDragTurnSurface();
+    };
+
+    const enterDragTurn = (pointerId: number, dx: number, dy: number): void => {
+      resetDragTurn(false); // 作废在飞缓动与残留（快速连翻最新手势胜出）
+      // A3（P3）：与 showPagedSpread 的新提交一致，接管时跳过仍在飞的非拖动
+      // 翻页 View Transition——否则跟手 transform 写在旧快照之下，转场结束前
+      // 不可见、结束后跳变。
+      try {
+        activeTurnTransition?.skipTransition();
+      } catch {
+        // 转场已结束时 skip 可能抛错，忽略。
+      }
+      if (viewScale > 1) return;
+      const turnDirection = comicSwipePageDirection(dx, dy, preferences.direction);
+      if (turnDirection === null) return;
+      // 世代号作废必须与下面的视图收敛重写同生共死：任何作废挂起 decode-hold
+      // 提交的路径都要执行收敛（对齐 applySwap 语义），否则 hold 已并入
+      // visible 的 spread 残留未隐藏。防御性提前返回不触碰世代号，挂起提交
+      // 仍可正常落位，故增量放在两个防御返回之后。
+      spreadSwapGeneration += 1; // 新拖动手势取代上一翻页挂起的 decode-hold 提交
+      const spreadPrefs = layoutSpreadPrefs();
+      const currentIndex = comicSpreadStart(
+        currentPage - 1,
+        images.length,
+        spreadPrefs,
+        landscapePages,
+      );
+      // 上一翻页挂起的 decode-hold 提交已被本手势的世代号作废，其 applySwap
+      // 不会再权威重写 hidden：这里先按当前 spread 收敛（对齐 applySwap 语义，
+      // 含 tap 翻页 hold 期目标 spread 尚未 unhide 的情形），否则 hold 已并入
+      // visible 的 spread 会残留未隐藏，与新邻居并排成多 spread 垃圾视图，
+      // 在松手回弹或书籍边缘提前返回后持续存在。
+      const keepPages = comicVisiblePages(
+        currentIndex,
+        images.length,
+        spreadPrefs,
+        landscapePages,
+      );
+      const keepSet = new Set(keepPages);
+      for (const index of [...visible]) {
+        if (keepSet.has(index)) continue;
+        const slot = slots[index];
+        if (slot !== undefined) slot.hidden = true;
+        visible.delete(index);
+      }
+      for (const index of keepPages) {
+        const slot = slots[index];
+        if (slot !== undefined) slot.hidden = false;
+      }
+      const targetIndex = advanceComicPage(
+        currentIndex,
+        images.length,
+        turnDirection,
+        spreadPrefs,
+        landscapePages,
+      );
+      if (targetIndex === currentIndex) return; // 边缘无相邻 spread：不进入拖动态
+      const neighborPages = comicVisiblePages(
+        targetIndex,
+        images.length,
+        spreadPrefs,
+        landscapePages,
+      );
+      const sideSign: 1 | -1 =
+        preferences.direction === 'rtl' ? (turnDirection > 0 ? -1 : 1) : turnDirection;
+      const count = Math.max(1, neighborPages.length);
+      const revealed: number[] = [];
+      neighborPages.forEach((index, offset) => {
+        const slot = slots[index];
+        if (slot === undefined) return;
+        applySlotFit(index); // 先落位 fit 样式，再写邻居几何覆盖
+        slot.hidden = false;
+        syncComicPageLoading(index); // 未物化邻居立即呈现加载指示
+        slot.classList.add('lightink-comic-drag-neighbor');
+        slot.style.position = 'absolute';
+        slot.style.top = '0';
+        slot.style.left = `${sideSign * 100 + (offset * 100) / count}%`;
+        slot.style.width = `${100 / count}%`;
+        slot.style.height = '100%';
+        revealed.push(index);
+      });
+      if (revealed.length === 0) return;
+      pagesRoot.style.position = 'relative';
+      pagesRoot.style.overflow = 'hidden'; // 邻居越界绝对定位不产生滚动条
+      pagesRoot.style.willChange = 'transform';
+      cancelPendingTap(); // 拖动期点按/双击不触发
+      // R2（ADR-3）：方向确定即把目标 spread 并入 visible 并触发 urgent
+      // 加载——urgent 在解码门按 visible 判定，绕过预取解码限流（并发 1）
+      // 并给 fetchPriority high，读取+解码在跟手期被掩盖，不等松手。已在飞
+      // （含预取先发起、尚未过解码门的页由此升级 urgent）/已物化/已失败的
+      // 页由 loadPage 去重守卫跳过；嵌套归档未展开前其后页索引会重排，维持
+      // 阻塞-after 语义不抢跑。手势反向（新手势取代）时 resetDragTurn 先让
+      // 旧目标退出 visible，旧在飞加载交还正常缓存窗口裁决。
+      const firstUnresolved = images.findIndex((page) => page.kind === 'archive');
+      for (const index of revealed) {
+        if (firstUnresolved >= 0 && index > firstUnresolved) continue;
+        visible.add(index);
+        // loadPage 读取完成后按 wantedPages 丢弃不在窗口的页：这里同步并入，
+        // 拖动触发的加载立即有效，不依赖下一次缓存刷新。
+        wantedPages.add(index);
+        void loadPage(index).catch((error: unknown) => {
+          if (!isAbortError(error, signal) && !destroyed) showPageError(index);
+        });
+      }
+      const state: DragTurnState = {
+        pointerId,
+        direction: turnDirection,
+        targetIndex,
+        sideSign,
+        revealed,
+        lastDx: dx,
+        samples: [],
+        released: false,
+      };
+      pushDragTurnSample(state, dx);
+      dragTurn = state;
+      scheduleDragTurnFrame(dx);
+    };
+
+    /** 松手判定与接续：commit → 缓动滑到目标位后 showPagedSpread('drag') 提交。 */
+    const finishDragTurn = (cancelled: boolean): void => {
+      const state = dragTurn;
+      if (state === null) return;
+      state.released = true;
+      if (cancelled) {
+        resetDragTurn();
+        return;
+      }
+      const width = pagesRoot.clientWidth || container.getBoundingClientRect().width;
+      const commitPx = Math.min(
+        COMIC_DRAG_COMMIT_PX,
+        Math.max(1, width * COMIC_DRAG_COMMIT_RATIO),
+      );
+      const dx = state.lastDx;
+      const velocity = dragTurnVelocityPxPerMs(state.samples);
+      const revealSign = -state.sideSign; // 露出邻居的拖动方向（dx 符号）
+      const dxSign = dx === 0 ? 0 : Math.sign(dx);
+      const velocitySign = velocity === 0 ? 0 : Math.sign(velocity);
+      const commit =
+        (dxSign === revealSign && Math.abs(dx) >= commitPx) ||
+        (velocitySign === revealSign && Math.abs(velocity) >= COMIC_DRAG_FLICK_VELOCITY);
+      const settleTo = commit ? revealSign * Math.max(1, width) : 0;
+      const targetIndex = state.targetIndex;
+      const turnDirection = state.direction;
+      startDragTurnEase(dx, settleTo, () => {
+        if (commit && !destroyed) {
+          // 拖动触发的提交不走 View Transition / slot 滑入：跟手已有实时帧。
+          // A3（P1）：与 scrollToIndex 同契约——提交换页须在赋值前判定并回调
+          // onPageChange，否则拖动翻页永不通知宿主（进度持久化与外层状态滞后）。
+          const changed = currentPage !== targetIndex + 1;
+          showPagedSpread(targetIndex, turnDirection, 'drag');
+          if (changed) options.onPageChange?.();
+          return;
+        }
+        resetDragTurn();
+      });
+    };
+
+    const showPagedSpread = (
+      requestedIndex: number,
+      direction: 1 | -1 | 0 = 0,
+      source: 'turn' | 'drag' = 'turn',
+    ): void => {
       const spreadPrefs = layoutSpreadPrefs();
       const index = comicSpreadStart(requestedIndex, images.length, spreadPrefs, landscapePages);
       currentPage = index + 1;
       const shown = comicVisiblePages(index, images.length, spreadPrefs, landscapePages);
       const shownSet = new Set(shown);
       const generation = ++spreadSwapGeneration;
+      // 非拖动翻页先清拖动残留（在飞缓动/邻居槽/transform）；拖动提交路径
+      // 保留被拖 frame，等 commit 内与 applySwap 同步原子清理。
+      if (source !== 'drag') resetDragTurn();
+      unpinZoomRaster(); // 换屏在既有 transform 缩放语义下进行，落位后由 applySwap 重钉
       // 新页先进 visible 提升 loadPage 的解码优先级（urgent）；换屏在 commit。
       for (const next of shown) visible.add(next);
       updateToolbar();
@@ -1574,20 +2196,33 @@ export async function renderCbzInto(
           if (slot.hidden) entering.push(next);
           slot.hidden = false;
           applySlotFit(next);
+          syncComicPageLoading(next);
         }
         pagesRoot.scrollTop = 0;
         pagesRoot.scrollLeft = 0;
+        commitZoomRaster(); // 放大中的换屏落位后，新 spread 以布局尺寸承接放大
         return entering;
       };
       const commit = (): void => {
         if (destroyed || generation !== spreadSwapGeneration) return;
+        if (source === 'drag') {
+          // 拖动提交：清拖动 DOM 与 transform，与 applySwap 同一同步块落位，
+          // 邻居槽从绝对定位回到常规流时无中间帧。
+          clearDragTurnDom();
+        }
         const media =
           typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
         const reduceMotion = media?.('(prefers-reduced-motion: reduce)').matches === true;
         const doc = container.ownerDocument as ComicViewTransitionDocument;
         // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
-        // 中途不露底色。跳转（direction 0）与 reduce-motion 直切。
-        if (direction !== 0 && !reduceMotion && typeof doc.startViewTransition === 'function') {
+        // 中途不露底色。跳转（direction 0）、reduce-motion 与拖动提交（跟手
+        // 已有实时帧，快照重截旧帧反而跳变）直切。
+        if (
+          source !== 'drag' &&
+          direction !== 0 &&
+          !reduceMotion &&
+          typeof doc.startViewTransition === 'function'
+        ) {
           try {
             activeTurnTransition?.skipTransition();
             doc.documentElement.dataset.comicTurn = comicSlotSlideToken(direction > 0);
@@ -1609,10 +2244,12 @@ export async function renderCbzInto(
         }
         const entering = applySwap();
         // T2 回退路径：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；
-        // strip 模式与重排版/非连续跳转（direction 0，见 scrollToIndex）不 slide。
+        // strip 模式、重排版/非连续跳转（direction 0，见 scrollToIndex）与拖动
+        // 提交（跟手→缓动→落位已是一段连续运动）不 slide。
         if (
           entering.length > 0 &&
           direction !== 0 &&
+          source !== 'drag' &&
           !reduceMotion &&
           isTouchPrimaryDocument(container.ownerDocument)
         ) {
@@ -1851,6 +2488,7 @@ export async function renderCbzInto(
       gestureMoved = false;
       if (activePointers.size === 2) {
         cancelPendingTap();
+        resetDragTurn(); // 第二指落下：拖动让位 pinch，残留/在飞缓动立即清理
         lastGestureUp = { x: event.clientX, y: event.clientY };
         const points = [...activePointers.values()];
         pinchDistance = comicPointerDistance(points[0]!, points[1]!);
@@ -1904,17 +2542,40 @@ export async function renderCbzInto(
       if (swipeOrigin !== null && viewScale <= 1 && preferences.mode === 'paged') {
         const dx = event.clientX - swipeOrigin.x;
         const dy = event.clientY - swipeOrigin.y;
+        if (dragTurn !== null) {
+          if (!dragTurn.released && event.pointerId === dragTurn.pointerId) {
+            // 拖动态：跟手 transform 经 rAF 合并写入（帧内最新值胜出）。
+            gestureMoved = true;
+            lastGestureUp = { x: event.clientX, y: event.clientY };
+            dragTurn.lastDx = dx;
+            pushDragTurnSample(dragTurn, dx);
+            scheduleDragTurnFrame(dx);
+            event.preventDefault();
+          } else if (dragTurn.released && isComicSwipeTurn(dx, dy)) {
+            // 上一松手的缓动仍在飞：新手势过 slop 即重进入，最新手势胜出。
+            gestureMoved = true;
+            lastGestureUp = { x: event.clientX, y: event.clientY };
+            event.preventDefault();
+            enterDragTurn(event.pointerId, dx, dy);
+          }
+          return;
+        }
         if (isComicSwipeTurn(dx, dy)) {
           gestureMoved = true;
           lastGestureUp = { x: event.clientX, y: event.clientY };
           event.preventDefault();
+          enterDragTurn(event.pointerId, dx, dy);
         }
       }
     };
 
     const onPointerUp = (event: PointerEvent): void => {
       if (!activePointers.has(event.pointerId)) return;
+      const wasPinchPair = activePointers.size >= 2;
       activePointers.delete(event.pointerId);
+      if (wasPinchPair && activePointers.size < 2) {
+        commitZoomRaster(); // 捏合 settle：逐帧 transform 路径到此为止，提交重栅格
+      }
       if (activePointers.size < 2) {
         pinchDistance = 0;
         pinchScale = viewScale;
@@ -1934,10 +2595,22 @@ export async function renderCbzInto(
           const dy = event.clientY - swipeStart.y;
           lastGestureUp = { x: event.clientX, y: event.clientY };
           lastTap = null;
-          const swipeDirection = comicSwipePageDirection(dx, dy, preferences.direction);
-          if (swipeDirection !== null) {
-            advancePage(swipeDirection);
+          if (dragTurn !== null) {
+            // 拖动跟手后的松手：位移+速度双阈值判定（pointercancel 只清理）。
+            dragTurn.lastDx = dx;
+            pushDragTurnSample(dragTurn, dx);
+            finishDragTurn(event.type === 'pointercancel');
+          } else {
+            const swipeDirection = comicSwipePageDirection(dx, dy, preferences.direction);
+            if (swipeDirection !== null) {
+              advancePage(swipeDirection);
+            }
           }
+        } else if (event.type === 'pointercancel' && dragTurn !== null) {
+          // 孤儿 pointercancel（如拖动指被系统打断且基线已被清）：只清理不翻页；
+          // 松手后的提交缓动在飞（released）时，无关新指（如手掌误触）的
+          // pointercancel 不得作废已提交的翻页。
+          if (!dragTurn.released) resetDragTurn();
         } else if (gestureMoved) {
           lastGestureUp = { x: event.clientX, y: event.clientY };
           lastTap = null;
@@ -2001,8 +2674,10 @@ export async function renderCbzInto(
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
         event.stopPropagation();
+        resetDragTurn(); // 轨道板捏合让位缩放，同触屏第二指互斥
         const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
         zoomAt(event.clientX, event.clientY, viewScale * factor);
+        scheduleZoomRasterCommit(); // 连发轮缩放停顿后一次布局级重栅格
         return;
       }
       if (viewScale > 1) {
@@ -2097,8 +2772,11 @@ export async function renderCbzInto(
       cropGeneration += 1;
       cropQueue.length = 0;
       clearTimeout(prefetchTimer);
+      cancelZoomRasterCommit(); // 停顿提交定时器随销毁取消
+      unpinZoomRaster(); // 钉住的内联几何对称摘除
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
+      resetDragTurn(); // 在飞缓动帧、邻居槽、transform 对称清理
       try {
         activeTurnTransition?.skipTransition();
       } catch {
@@ -2185,6 +2863,7 @@ export async function renderCbzInto(
         const rect = container.getBoundingClientRect();
         const factor = action === 'in' ? 1.25 : 1 / 1.25;
         zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, viewScale * factor);
+        scheduleZoomRasterCommit(); // 键盘连发放大同样在停顿后提交重栅格
       },
       destroy: async () => {
         signal?.removeEventListener('abort', onAbort);

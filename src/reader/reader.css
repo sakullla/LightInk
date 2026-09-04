@@ -1260,6 +1260,49 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   display: none !important;
 }
 
+/*
+ * T1 drag-to-turn：拖动跟手期相邻 spread 的临时邻居槽。几何（position/
+ * left/width/height）由 cbz.ts 拖动态内联写入，这里只关掉 flex 收缩与
+ * aspect-ratio 宽度推导对绝对定位的干扰。松手提交/回弹/手势作废后
+ * cbz.ts 移除类与内联样式并恢复 [hidden] 语义。
+ */
+.lightink-reader-comic-pages .lightink-reader-cbz-slot.lightink-comic-drag-neighbor {
+  flex: none;
+  margin: 0;
+  aspect-ratio: auto;
+}
+
+/*
+ * R2（ADR-3）：未物化页槽的轻量加载指示。类由 cbz.ts 维护在可见且未物化
+ * 的 paged 图片页槽上（拖动邻居揭示、换屏/跳转落位、decode-hold 超时露
+ * 占位），页面物化/失败即摘除。近黑底上的微弱呼吸微光：纯背景动画不占
+ * 布局，无叠加元素/图标/文案；动画声明位高于槽上的内联透明背景。与
+ * slot 滑入同域：仅触屏漫画宿主播放，reduce-motion 完全静止。
+ */
+@keyframes lightink-comic-page-loading {
+  from,
+  to {
+    background-color: var(--lightink-comic-canvas, #111);
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 7%, #111);
+  }
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-cbz-slot.lightink-comic-page-loading {
+  animation: lightink-comic-page-loading 1.8s ease-in-out infinite;
+}
+
+/* 同宿主前缀提升特异性（0,3,1）与触屏动画声明打平：reduce 块靠源顺序胜出，
+   脱离 theme.css 全局 !important 兜底也能独立成立。 */
+@media (prefers-reduced-motion: reduce) {
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-reader-cbz-slot.lightink-comic-page-loading {
+    animation: none;
+  }
+}
+
 .lightink-reader-pages[data-comic-reader='true'],
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages,
 .lightink-reader-cbz-slot,

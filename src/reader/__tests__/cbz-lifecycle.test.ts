@@ -15,6 +15,22 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
+/**
+ * P2 回归：jsdom 无 2d canvas，detectComicCropInsets 永远返回空。按需注入
+ * 裁边结果驱动 pumpCropScans→applySlotFit→applySlotWidth 的钉住期重写；
+ * null 时与真实实现一致返回 COMIC_CROP_NONE（无 canvas 源的宽度门结果）。
+ */
+const cropScanResult = vi.hoisted(() => ({
+  insets: null as null | { top: number; right: number; bottom: number; left: number },
+}));
+vi.mock('../comic-model.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../comic-model.js')>();
+  return {
+    ...actual,
+    detectComicCropInsets: () => cropScanResult.insets ?? actual.COMIC_CROP_NONE,
+  };
+});
+
 const invokeMock = vi.mocked(invoke);
 
 let observerCallback: IntersectionObserverCallback | null = null;
@@ -262,6 +278,75 @@ function dragCanvas(container: HTMLElement, pointerType: 'mouse' | 'touch'): voi
     pointerType,
     clientX: 380,
     clientY: 330,
+  });
+}
+
+/** 手动帧队列（pdf-drag-pan.test.ts fakeFrames 模式）：flush() 前不产生任何写。 */
+function fakeFrames(): { flush(): void; restore(): void } {
+  const queue: FrameRequestCallback[] = [];
+  const request = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+    (callback: FrameRequestCallback): number => {
+      queue.push(callback);
+      return queue.length;
+    },
+  );
+  const cancel = vi
+    .spyOn(window, 'cancelAnimationFrame')
+    .mockImplementation(() => undefined);
+  return {
+    flush(): void {
+      queue.splice(0).forEach((callback) => {
+        callback(0);
+      });
+    },
+    restore(): void {
+      request.mockRestore();
+      cancel.mockRestore();
+    },
+  };
+}
+
+/** 可拨动的 performance.now：速度采样与缓动时长在测试里确定性推进。 */
+function controllableClock(): { set(ms: number): void; restore(): void } {
+  let current = 0;
+  const spy = vi.spyOn(performance, 'now').mockImplementation(() => current);
+  return {
+    set(ms: number): void {
+      current = ms;
+    },
+    restore(): void {
+      spy.mockRestore();
+    },
+  };
+}
+
+/** 拖动跟手写入的 pagesRoot 水平位移；无写入时为 null。 */
+function readComicDragTranslateX(container: HTMLElement): number | null {
+  const transform = comicSurface(container).style.transform;
+  const matched = transform.match(/translate3d\(\s*([-\d.]+)px/);
+  return matched === null ? null : Number.parseFloat(matched[1]!);
+}
+
+/** 单指触屏拖动到 toX（不抬指），便于断言拖动态中间过程。 */
+function touchDragTo(
+  container: HTMLElement,
+  fromX: number,
+  toX: number,
+  pointerId = 1,
+): void {
+  pointerOn(container, 'pointerdown', {
+    pointerId,
+    pointerType: 'touch',
+    buttons: 1,
+    clientX: fromX,
+    clientY: 400,
+  });
+  pointerOn(container, 'pointermove', {
+    pointerId,
+    pointerType: 'touch',
+    buttons: 1,
+    clientX: toX,
+    clientY: 400,
   });
 }
 
@@ -901,14 +986,15 @@ describe('CBZ page materialization', () => {
       preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
     });
 
+    // T1 drag-to-turn：翻页在松手缓动（rAF ~200ms）后提交，用 waitFor 等落位。
     swipeCanvas(container, 800, 200, 'touch');
-    expect(handle.currentPage).toBe(2);
+    await vi.waitFor(() => expect(handle.currentPage).toBe(2));
     clickCanvas(container, 200);
     expect(handle.currentPage).toBe(2);
     swipeCanvas(container, 200, 800, 'mouse');
     expect(handle.currentPage).toBe(2);
     swipeCanvas(container, 200, 800, 'touch');
-    expect(handle.currentPage).toBe(1);
+    await vi.waitFor(() => expect(handle.currentPage).toBe(1));
     clickCanvas(container, 950);
     expect(handle.currentPage).toBe(2);
     pinchByPointers(container, true);
@@ -926,11 +1012,11 @@ describe('CBZ page materialization', () => {
       preferenceStorage: pagedStorage({ direction: 'rtl', spread: 'single' }),
     });
     swipeCanvas(rtl, 200, 800, 'touch');
-    expect(rtlHandle.currentPage).toBe(2);
+    await vi.waitFor(() => expect(rtlHandle.currentPage).toBe(2));
     clickCanvas(rtl, 800);
     expect(rtlHandle.currentPage).toBe(2);
     swipeCanvas(rtl, 800, 200, 'touch');
-    expect(rtlHandle.currentPage).toBe(1);
+    await vi.waitFor(() => expect(rtlHandle.currentPage).toBe(1));
     await rtlHandle.destroy();
   });
 
@@ -1305,11 +1391,1414 @@ describe('CBZ page materialization', () => {
   });
 });
 
+describe('CBZ zoom render quality (R3)', () => {
+  /**
+   * R3（ADR-4 修订版）：放大提交点把可见页的布局尺寸钉到放大后的视觉尺寸
+   * （fit 盒 × viewScale），pagesRoot transform 退化为纯平移——布局尺寸即
+   * 位图栅格分辨率。stub 返回恒定 rect（= 提交倍数下的视觉盒）使提交 Δ=0，
+   * 断言确定。scrollWidth/scrollHeight 按真实居中 flex 语义建模：内容溢出
+   * 只计入尾侧（(视口+内容)/2，非对称），未钉住内容 = width/2，钉住后 =
+   * 钉住内联盒——对称溢出的旧 stub 会掩盖钉住态内容范围的低估。
+   */
+  function stubZoomGeometry(
+    container: HTMLElement,
+    width: number,
+    height: number,
+  ): void {
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    for (const slot of slots) {
+      Object.defineProperty(slot, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
+      });
+    }
+    const surface = comicSurface(container);
+    const contentExtent = (): { width: number; height: number } => {
+      const pinned = slots.find((slot) => !slot.hidden && slot.style.width !== '');
+      const pinnedWidth = Number.parseFloat(pinned?.style.width ?? '');
+      const pinnedHeight = Number.parseFloat(pinned?.style.height ?? '');
+      return {
+        width: Number.isFinite(pinnedWidth) ? pinnedWidth : width / 2,
+        height: Number.isFinite(pinnedHeight) ? pinnedHeight : height / 2,
+      };
+    };
+    const viewportWidth = 1000;
+    const viewportHeight = 800;
+    Object.defineProperty(surface, 'scrollWidth', {
+      configurable: true,
+      get: () => Math.max(viewportWidth, (viewportWidth + contentExtent().width) / 2),
+    });
+    Object.defineProperty(surface, 'scrollHeight', {
+      configurable: true,
+      get: () => Math.max(viewportHeight, (viewportHeight + contentExtent().height) / 2),
+    });
+  }
+
+  function firstVisibleSlot(container: HTMLElement): HTMLElement {
+    return container.querySelector<HTMLElement>('.lightink-reader-cbz-slot:not([hidden])')!;
+  }
+
+  afterEach(() => {
+    cropScanResult.insets = null;
+  });
+
+  it('pins the visible page render box to the zoomed size and pans without rescaling', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    const slot = firstVisibleSlot(container);
+    // scale=1 默认路径：槽宽/高/flex/max 全部交给既有 fit CSS，逐字节保持现状。
+    expect(slot.style.width).toBe('');
+    expect(slot.style.height).toBe('');
+    expect(slot.style.flex).toBe('');
+    expect(slot.style.maxWidth).toBe('');
+    expect(slot.style.maxHeight).toBe('');
+
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 提交点：放大倍数直接进入可见页布局尺寸（fit 800×600 × 2 → 1600×1200）。
+    expect(slot.style.width).toBe('1600px');
+    expect(slot.style.height).toBe('1200px');
+    expect(slot.style.flex).toBe('0 0 auto'); // flex:none 的 CSSOM 序列化
+    expect(slot.style.maxWidth).toBe('none');
+    expect(slot.style.maxHeight).toBe('none');
+    // 布局承担放大：inline transform 只剩平移；缩放语义变量/dataset 不变。
+    const surface = comicSurface(container);
+    expect(surface.style.transform).not.toContain('scale');
+    expect(surface.dataset.comicScale).toBe('2');
+    expect(container.dataset.comicZoomed).toBe('true');
+
+    // 钉住态下平移：仍走既有 pan 数学，clamp 用钉住前记录的内容范围
+    // （fit=screen 内容铺满视口 → 1000×800），完整范围 [-1000,0]/[-800,0]
+    // 内的 -120/-70 原样保留，不被钉住态的低估 scroll 夹回。
+    dragCanvas(container, 'mouse');
+    const pan = readComicPan(container);
+    expect(pan.x).toBeCloseTo(-620, 3);
+    expect(pan.y).toBeCloseTo(-470, 3);
+    expect(surface.style.transform).not.toContain('scale');
+
+    // 退出放大：恢复原尺寸与 transform 形态（逐字节回到现状）。
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.width).toBe('');
+    expect(slot.style.height).toBe('');
+    expect(slot.style.flex).toBe('');
+    expect(slot.style.maxWidth).toBe('');
+    expect(slot.style.maxHeight).toBe('');
+    expect(surface.style.transform).toBe('');
+    expect(surface.dataset.comicScale).toBe('1');
+    await handle.destroy();
+  });
+
+  it('raises the render box only at pinch settle, not per pinch move', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    const slot = firstVisibleSlot(container);
+    stubZoomGeometry(container, 1600, 1200);
+    const surface = comicSurface(container);
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 400,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 560,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointermove', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 720,
+      clientY: 400,
+    });
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 捏合进行中：不逐帧重栅格——布局尺寸未动，transform 仍承担缩放。
+    expect(slot.style.width).toBe('');
+    expect(surface.style.transform).toContain('scale');
+    // 松指（捏合结束）：settle 提交，布局尺寸承接放大。
+    pointerOn(surface, 'pointerup', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 720,
+      clientY: 400,
+    });
+    expect(slot.style.width).toBe('1600px');
+    expect(surface.style.transform).not.toContain('scale');
+    pointerOn(surface, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 400,
+      clientY: 400,
+    });
+    expect(slot.style.width).toBe('1600px');
+    await handle.destroy();
+  });
+
+  it('keeps the 8192 device-pixel paint budget at the higher zoom sizes', async () => {
+    const originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+      const wide = document.createElement('div');
+      sizeCanvas(wide);
+      const wideHandle = await renderCbzInto(await buildCbz(4), wide, undefined, {
+        preferenceStorage: pagedStorage(),
+      });
+      stubZoomGeometry(wide, 9000, 7200);
+      zoomByDoubleClick(wide);
+      expect(readComicScale(wide)).toBeGreaterThan(1);
+      // 视觉 9000px > 8192 设备像素预算（dpr 1）：拒绝钉住，维持 transform 缩放。
+      expect(firstVisibleSlot(wide).style.width).toBe('');
+      expect(comicSurface(wide).style.transform).toContain('scale');
+      await wideHandle.destroy();
+
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+      const retina = document.createElement('div');
+      sizeCanvas(retina);
+      const retinaHandle = await renderCbzInto(await buildCbz(4), retina, undefined, {
+        preferenceStorage: pagedStorage(),
+      });
+      stubZoomGeometry(retina, 5000, 4000);
+      zoomByDoubleClick(retina);
+      expect(readComicScale(retina)).toBeGreaterThan(1);
+      // dpr 2：预算折半为 4096 css px，5000px 同样拒绝钉住。
+      expect(firstVisibleSlot(retina).style.width).toBe('');
+      expect(comicSurface(retina).style.transform).toContain('scale');
+      await retinaHandle.destroy();
+    } finally {
+      if (originalDpr === undefined) {
+        Reflect.deleteProperty(window, 'devicePixelRatio');
+      } else {
+        Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+      }
+    }
+  });
+
+  it('scales the natural-size custom properties of original-fit pages while pinned', async () => {
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get: () => 2400,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get: () => 3600,
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(2), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'original' }),
+    });
+    const slot = firstVisibleSlot(container);
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 原图档的 img 宽高来自 natural 变量：钉住时按放大倍数同步放大。
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4800px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('7200px');
+    expect(slot.style.width).toBe('1600px');
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    expect(slot.style.width).toBe('');
+    await handle.destroy();
+  });
+
+  it('keeps the pinned pan range equal to the unpinned range under centered overflow', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    const surface = comicSurface(container);
+    // 聚焦起始半屏（x=350 → viewX=-350）：提交点不得因钉住态低估的内容
+    // 范围发生跳动（fit=screen 内容铺满视口 1000×800，范围 [-1000,0]/
+    // [-800,0] 与未钉住态一致）。
+    surface.dispatchEvent(
+      new MouseEvent('dblclick', { clientX: 350, clientY: 400, bubbles: true }),
+    );
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    const atCommit = readComicPan(container);
+    expect(atCommit.x).toBeCloseTo(-350, 3);
+    expect(atCommit.y).toBeCloseTo(-400, 3);
+    // 布局级栅格化仍在（钉住未因范围修正被放弃）。
+    expect(firstVisibleSlot(container).style.width).toBe('1600px');
+    // 大幅左拖：起始侧可达完整范围下沿 -1000，而不是被低估范围夹回。
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: 500,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: -2000,
+      clientY: 400,
+    });
+    expect(readComicPan(container).x).toBeCloseTo(-1000, 3);
+    pointerOn(surface, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: -2000,
+      clientY: 400,
+    });
+    await handle.destroy();
+  });
+
+  it('refuses the pin entirely when a visible double-spread half is unmeasurable', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'double' }),
+    });
+    expect(handle.nextPage()).toBe(true);
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['1', '2']));
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    const materialized = slots.find((slot) => slot.dataset.pageIndex === '1')!;
+    const collapsed = slots.find((slot) => slot.dataset.pageIndex === '2')!;
+    await vi.waitFor(() => expect(materialized.querySelector('img')).not.toBeNull());
+    // 只有已物化半页可测（1600×1200）；另一半保持 jsdom 零盒，模拟
+    // fit-width/fit-original 双页 spread 未物化槽 height:auto 塌缩为零盒。
+    Object.defineProperty(materialized, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 1600, height: 1200, right: 1600, bottom: 1200 }),
+    });
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 全有或全无（与 8192 预算守卫同语义）：任一可见槽不可测即整体拒绝
+    // 钉住，保留 transform 缩放路径——晚物化的半页不会以 1× 渲染在
+    // 放大槽旁形成混合倍率。
+    expect(materialized.style.width).toBe('');
+    expect(collapsed.style.width).toBe('');
+    expect(comicSurface(container).style.transform).toContain('scale');
+    await handle.destroy();
+  });
+
+  it('keeps crop-rewritten natural vars when unpinning after a mid-pin crop scan', async () => {
+    document.documentElement.lang = 'en';
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get: () => 2400,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get: () => 3600,
+    });
+    // 裁掉上/下 10%、左/右 5%：cropped 基线 = 2160×2880（2400×3600 × 0.9/0.8）。
+    cropScanResult.insets = { top: 0.1, right: 0.05, bottom: 0.1, left: 0.05 };
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(2), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'original' }),
+    });
+    const slot = firstVisibleSlot(container);
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4800px');
+    // 钉住期间开启裁边（crop-only 补丁不退出放大）：扫描完成后
+    // applySlotWidth 重写基线为裁边值，repin 再放大到 4320/5760。
+    container.querySelector<HTMLButtonElement>('[aria-label="Crop margins"]')!.click();
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4320px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('5760px');
+    });
+    // 退出放大：解钉恢复裁边后的未缩放基线，而不是钉住前记录的旧值
+    //（旧值会丢掉裁边显示）。
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2160px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('2880px');
+    expect(slot.style.width).toBe('');
+    await handle.destroy();
+  });
+
+  it('leaves strip-mode zoom on the transform path', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ mode: 'strip' }),
+    });
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    // strip 的 fit 内联样式是现状基线：放大前后必须逐字节不变。快照取
+    // cssText 全量内联（钉住路径可能写 width/height/flex/max-* 与 natural
+    // 变量），任何一条泄漏都会被捕捉，而不只 width/flex。
+    const before = slots.map((slot) => slot.style.cssText);
+    stubZoomGeometry(container, 1600, 1200);
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(slots.map((slot) => slot.style.cssText)).toEqual(before);
+    expect(comicSurface(container).style.transform).toContain('scale');
+    await handle.destroy();
+  });
+});
+
 function androidTauriHost(
   extras: ComicSystemBarsHost = {},
 ): Window & ComicSystemBarsHost {
   return { __TAURI_INTERNALS__: {}, ...extras } as unknown as Window & ComicSystemBarsHost;
 }
+
+describe('CBZ drag-to-turn gesture (T1)', () => {
+  it('tracks the drag with a rAF-coalesced transform and reveals the adjacent spread', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+
+      touchDragTo(container, 800, 700);
+      // rAF 合并：帧提交前不产生任何 transform 写。
+      expect(readComicDragTranslateX(container)).toBeNull();
+      // 进入拖动态即取消相邻 spread 的 [hidden] 并布局为右侧横向邻居。
+      expect(neighbor.hidden).toBe(false);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(true);
+      expect(neighbor.style.left).toBe('100%');
+      expect(neighbor.style.width).toBe('100%');
+
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 500,
+        clientY: 400,
+      });
+      expect(readComicDragTranslateX(container)).toBe(-100); // 帧内旧值
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-300);
+      expect(handle.currentPage).toBe(1); // 未松手不翻页
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('never enters the drag state for mouse pointers', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      swipeCanvas(container, 800, 200, 'mouse');
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(comicSurface(container).style.position).toBe('');
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('never enters the drag state in strip mode', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ mode: 'strip' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(container, 800, 200);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBeNull();
+      const slots = container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot');
+      for (const slot of slots) {
+        expect(slot.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      }
+      expect(handle.currentPage).toBe(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 200,
+        clientY: 400,
+      });
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('commits a past-threshold release with an eased continuation from the drag offset', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const onPageChange = vi.fn();
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+        onPageChange,
+      });
+      // 预取就绪后提交路径无 decode hold，落位断言确定。
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      const clock = controllableClock();
+      try {
+        touchDragTo(container, 800, 500); // dx=-300，远过提交阈 48
+        frames.flush();
+        expect(readComicDragTranslateX(container)).toBe(-300);
+
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 500,
+          clientY: 400,
+        });
+        expect(handle.currentPage).toBe(1); // 提交发生在缓动完成后
+
+        clock.set(10); // 首帧即须越过拖动偏移：从 0 重启的回退实现此处仅 ~-186
+        frames.flush();
+        const early = readComicDragTranslateX(container);
+        expect(early).not.toBeNull();
+        expect(early!).toBeLessThan(-300);
+        expect(handle.currentPage).toBe(1); // 缓动中尚未提交
+
+        clock.set(100); // 半程：从当前拖动偏移继续向 -1000（视口宽）
+        frames.flush();
+        const mid = readComicDragTranslateX(container);
+        expect(mid).not.toBeNull();
+        expect(mid!).toBeLessThan(-300);
+        expect(mid!).toBeGreaterThan(-1000);
+        expect(handle.currentPage).toBe(1); // 缓动中尚未提交
+
+        clock.set(250);
+        frames.flush();
+        expect(handle.currentPage).toBe(2);
+        // A3（P1）：拖动提交与 scrollToIndex 同契约触发换页回调，
+        // 否则进度持久化与外层阅读器状态停留在旧页。
+        expect(onPageChange).toHaveBeenCalledTimes(1);
+        // 拖动提交不走 View Transition：跟手已有实时帧。
+        expect(updates).toHaveLength(0);
+        // 落位后无残留：transform 清零、旧 spread 隐藏、邻居槽回常规流。
+        expect(readComicDragTranslateX(container)).toBeNull();
+        const landed = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+        expect(landed.hidden).toBe(false);
+        expect(landed.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+        expect(landed.style.left).toBe('');
+        expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(
+          true,
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
+        clock.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+    }
+  });
+
+  it('bounces back below the release threshold and restores the neighbor hidden state', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const onPageChange = vi.fn();
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      onPageChange,
+    });
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 755); // dx=-45：过 slop(40)，未过提交阈(48)
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-45);
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(1);
+      expect(onPageChange).not.toHaveBeenCalled(); // 回弹不换页：无回调
+      expect(readComicDragTranslateX(container)).toBeNull(); // transform 归零
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(
+        false,
+      );
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('turns on a fast small-displacement flick via the velocity threshold', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      clock.set(0);
+      pointerOn(container, 'pointerdown', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 800,
+        clientY: 400,
+      });
+      clock.set(4);
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 760, // dx=-40：刚过 slop 进入拖动态
+        clientY: 400,
+      });
+      clock.set(8);
+      pointerOn(container, 'pointermove', {
+        pointerId: 1,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 757, // dx=-43 < 48，速度 (-43+40)/4ms = -0.75px/ms
+        clientY: 400,
+      });
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-43);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 757,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(2); // 位移未过阈但速度过阈
+      expect(readComicDragTranslateX(container)).toBeNull();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('abandons the drag when a second pointer lands, handing over to pinch', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(container, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+
+      pointerOn(container, 'pointerdown', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 400,
+        clientY: 400,
+      });
+      // 第二指落下瞬间：拖动残留全部清理，无可见偏移。
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(comicSurface(container).style.position).toBe('');
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+
+      // 双指张开进入 pinch：只缩放，不翻页。
+      pointerOn(container, 'pointermove', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 300,
+        clientY: 400,
+      });
+      expect(readComicScale(container)).toBeGreaterThan(1);
+      expect(handle.currentPage).toBe(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 400,
+      });
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      expect(handle.currentPage).toBe(1);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('cleans the drag state on destroy and on relayout', async () => {
+    const first = document.createElement('div');
+    sizeCanvas(first);
+    const firstHandle = await renderCbzInto(await buildCbz(4), first, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      touchDragTo(first, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(first)).toBe(-100);
+      await firstHandle.destroy();
+      expect(readComicDragTranslateX(first)).toBeNull();
+      expect(first.querySelector<HTMLElement>('[data-page-index="1"]')!.hidden).toBe(true);
+      expect(comicSurface(first).style.position).toBe('');
+
+      const second = document.createElement('div');
+      sizeCanvas(second);
+      const secondHandle = await renderCbzInto(await buildCbz(4), second, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      touchDragTo(second, 800, 650);
+      frames.flush();
+      expect(readComicDragTranslateX(second)).toBe(-150);
+      secondHandle.setPreferences({ fit: 'width' }); // 重排版：spreadSwapGeneration 作废
+      expect(readComicDragTranslateX(second)).toBeNull();
+      const neighbor = second.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      pointerOn(second, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 650,
+        clientY: 400,
+      });
+      expect(secondHandle.currentPage).toBe(1); // 作废手势的残余松手不翻页
+      await secondHandle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('cancels the in-flight release easing when a new drag starts', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手将提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(100);
+      frames.flush(); // 提交缓动在飞（中途）
+      expect(handle.currentPage).toBe(1);
+
+      // 缓动未完成时立即开始新拖动：在飞缓动作废，最新手势接管 transform。
+      clock.set(120);
+      touchDragTo(container, 900, 850);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-50);
+      expect(handle.currentPage).toBe(1); // 旧提交未发生
+
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 850,
+        clientY: 400,
+      });
+      clock.set(400);
+      frames.flush();
+      expect(handle.currentPage).toBe(2); // 最新手势的松手提交生效
+      expect(readComicDragTranslateX(container)).toBeNull();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('collapses the view to the current spread when a new drag supersedes a decode-hold', async () => {
+    // 首页 decode 直通；后续页悬挂，使拖动提交落进 decode-hold（目标页未物化）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    // 预取把页 1 的解码挂在悬挂态：提交时页 1 未物化 → 换屏被 decode-hold 挂起。
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，远过提交阈
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 缓动到位：showPagedSpread 进入 hold，页码已前进
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决（decode 悬挂）时立即重拖：挂起提交被世代号作废，
+      // 视图必须收敛到当前 spread（页 1），旧页 0 不得残留未隐藏。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      expect(visiblePageIndices(container)).toEqual(['1', '2']); // 当前 spread + 新邻居
+      const current = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(current.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(current.style.position).toBe(''); // 当前 spread 回常规流
+      expect(container.querySelector<HTMLElement>('[data-page-index="0"]')!.hidden).toBe(true);
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="2"]')!;
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(true);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-45);
+
+      // 新拖动不过阈回弹：视图恰为当前 spread，无残留偏移。
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      expect(neighbor.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+
+      // 被作废的 hold 提交不得随后落位：解码完成后无额外换屏。
+      queued.splice(0).forEach((resolve) => resolve());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('lets a committed drag turn finish easing despite an unrelated pointercancel', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+    );
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(100);
+      frames.flush(); // 提交缓动在飞
+      expect(handle.currentPage).toBe(1);
+
+      // 无关新指（如手掌误触）落下即被系统取消：未过 slop、非拖动指。
+      pointerOn(container, 'pointerdown', {
+        pointerId: 2,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 600,
+        clientY: 400,
+      });
+      pointerOn(container, 'pointercancel', {
+        pointerId: 2,
+        pointerType: 'touch',
+        clientX: 600,
+        clientY: 400,
+      });
+
+      // 已提交的翻页必须完成：缓动走完、页码前进、落位无残留。
+      clock.set(250);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(readComicDragTranslateX(container)).toBeNull();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('keeps View Transition for edge taps but never for drag turns', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      const clock = controllableClock();
+      try {
+        touchDragTo(container, 800, 500);
+        frames.flush();
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 500,
+          clientY: 400,
+        });
+        clock.set(250);
+        frames.flush();
+        expect(handle.currentPage).toBe(2);
+        expect(updates).toHaveLength(0); // 拖动路径不触发 VT
+
+        clickCanvas(container, 50); // 边区点按（返回上一页）仍走 VT
+        expect(updates).toHaveLength(1);
+        expect(document.documentElement.dataset.comicTurn).toBe('prev');
+        expect(handle.currentPage).toBe(1);
+        finishedResolvers.splice(0).forEach((resolve) => resolve());
+        await vi.waitFor(() =>
+          expect(document.documentElement.dataset.comicTurn).toBeUndefined(),
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
+        clock.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
+  });
+
+  it('skips an in-flight turn View Transition when a drag starts inside its window', async () => {
+    const updates: Array<() => void> = [];
+    const finishedResolvers: Array<() => void> = [];
+    let skipCalls = 0;
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: new Promise<void>((resolve) => finishedResolvers.push(resolve)),
+        skipTransition: () => {
+          skipCalls += 1;
+        },
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+        preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      const frames = fakeFrames();
+      try {
+        // 边区点按翻页进入 View Transition（finished 未决：仍处转场窗口）。
+        clickCanvas(container, 950);
+        expect(updates).toHaveLength(1);
+        expect(skipCalls).toBe(0); // 首个转场提交时无在飞转场可跳
+        expect(handle.currentPage).toBe(2);
+
+        // 转场窗口内开始拖动：新手势接管必须跳过在飞 VT，跟手 transform
+        // 不再被旧快照遮挡；首个跟手帧即写入位移。
+        touchDragTo(container, 800, 700);
+        expect(skipCalls).toBe(1);
+        frames.flush();
+        expect(readComicDragTranslateX(container)).toBe(-100);
+
+        pointerOn(container, 'pointerup', {
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 700,
+          clientY: 400,
+        });
+        finishedResolvers.splice(0).forEach((resolve) => resolve());
+        await vi.waitFor(() =>
+          expect(document.documentElement.dataset.comicTurn).toBeUndefined(),
+        );
+        await handle.destroy();
+      } finally {
+        frames.restore();
+      }
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
+  });
+});
+
+describe('CBZ drag-turn urgent prefetch and loading feedback (T2)', () => {
+  it('urgent-prefetches the drag target during the drag, before release', async () => {
+    // decode 桩顺带捕获 fetchPriority：urgent=high（绕过并发 1 的预取解码
+    // 限流），非 urgent 预取为 low——这是拖动 urgent 语义的直接判别器。
+    const priorities: string[] = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value(this: HTMLImageElement) {
+        priorities.push(String(this.fetchPriority));
+        return Promise.resolve();
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      // 同步进入拖动（预取定时器尚未触发）：目标页 1 的加载只能来自拖动。
+      touchDragTo(container, 800, 700); // 不抬指
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      expect(handle.currentPage).toBe(1); // 未松手不翻页
+      // 拖动期目标页的读取+解码已开始（不等松手），且走 urgent 优先级。
+      await vi.waitFor(() => expect(priorities.length).toBeGreaterThanOrEqual(2));
+      expect(priorities[1]).toBe('high');
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.currentPage).toBe(1); // 全程未松手，页已就绪
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('marks the unmaterialized drag neighbor with the loading class until it materializes', async () => {
+    // 首页 decode 直通让 renderCbzInto 完成；后续页悬挂，锁定未物化中间态。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(false); // 隐藏槽无指示
+
+      touchDragTo(container, 800, 700);
+      expect(neighbor.hidden).toBe(false);
+      // 纯 CSS 指示：未物化邻居只加类，不引入任何叠加元素/图标/文案。
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(true);
+      expect(neighbor.children).toHaveLength(0);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      // 拖动 urgent 加载已推进到目标页解码（页 0 初始 + 页 1 拖动触发）。
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+
+      // 物化完成：类随 img 挂载摘除，槽内只有页面元素。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() => expect(neighbor.querySelector('img')).not.toBeNull());
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(false);
+      expect(neighbor.children).toHaveLength(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('keeps the drag-triggered urgent load alive through mid-drag cache refreshes', async () => {
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      // 同步进入拖动：目标页 1 的在飞 urgent 加载由拖动发起，解码悬挂。
+      touchDragTo(container, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      // 预取定时器在拖动期内触发 refreshCacheWindow：不得 abort 拖动目标
+      // 的在飞加载（abort 会在解码拒绝时 revoke 其 blob URL 并丢弃挂载）。
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(readComicDragTranslateX(container)).toBe(-100); // 手势仍在
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+
+      // 重排版（setPreferences → applyLayout）按 T1 语义作废手势本身，
+      // 但其缓存刷新同样不得丢弃在飞加载：解码完成后页面照常物化。
+      handle.setPreferences({ fit: 'width' });
+      expect(readComicDragTranslateX(container)).toBeNull();
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('keeps the committed spread visible through a re-drag inside the decode-hold window', async () => {
+    // 首页 decode 直通；后续页悬挂，使拖动提交落进 decode-hold（目标页未物化）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    // 预取把页 1 的解码挂在悬挂态：提交时页 1 未物化 → 换屏被 decode-hold 挂起。
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，远过提交阈
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 缓动到位：showPagedSpread 进入 hold，页码已前进
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决（decode 悬挂）时快速重拖：提交后的当前 spread（页 1）必须
+      // 留在 visible——重拖被拒（回弹）后没有任何路径再把它并入，而后续换屏
+      // 的 applySwap 只遍历 visible 收敛，掉出即成永久未隐藏残留。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      expect(visiblePageIndices(container)).toEqual(['1', '2']); // 当前 spread + 新邻居
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush(); // 回弹到位：视图恰为当前 spread
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+
+      // 解码完成后页 1 物化（其预取优先级解码让出并发 1 的解码门），页 2 的
+      // 在飞加载随后进入解码并物化。再边区点按前翻：applySwap 必须能隐藏仍在
+      // visible 的旧当前页——若当前 spread 曾在 hold 窗口内掉出 visible，
+      // 此处就会残留 ['1','2'] 双 spread 垃圾视图。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(3));
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="2"] img')).not.toBeNull(),
+      );
+      clickCanvas(container, 950);
+      expect(handle.currentPage).toBe(3);
+      expect(visiblePageIndices(container)).toEqual(['2']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('keeps the committed current spread visible when a pinch lands inside the decode-hold window', async () => {
+    // 同一 hold 窗口的 pinch 变体：第二指落下让位缩放时，reset 不得把已提交
+    // 的当前 spread 回隐藏（中途闪回旧页）。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // 提交进入 decode-hold：页码已到页 1，旧页 0 仍在屏
+      expect(handle.currentPage).toBe(2);
+
+      // hold 未决时第二指落下：拖动让位 pinch 的 reset 清理拖动 DOM，但已
+      // 提交的当前 spread（页 1）保持可见——旧页 0 由 decode-hold 语义继续
+      // 在屏，等待挂起的 commit 权威收敛。
+      const surface = comicSurface(container);
+      pointerOn(surface, 'pointerdown', {
+        pointerId: 3,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 600,
+        clientY: 400,
+      });
+      pointerOn(surface, 'pointerdown', {
+        pointerId: 4,
+        pointerType: 'touch',
+        buttons: 1,
+        clientX: 700,
+        clientY: 400,
+      });
+      expect(visiblePageIndices(container)).toEqual(['0', '1']);
+      const committed = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(committed.hidden).toBe(false); // 当前 spread 未被回隐藏（不闪回旧页）
+      expect(committed.classList.contains('lightink-comic-drag-neighbor')).toBe(false);
+      expect(committed.style.position).toBe(''); // 拖动邻居几何已摘除
+      pointerOn(surface, 'pointerup', {
+        pointerId: 4,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      pointerOn(surface, 'pointerup', {
+        pointerId: 3,
+        pointerType: 'touch',
+        clientX: 600,
+        clientY: 400,
+      });
+
+      // pinch 不作废挂起的提交：解码完成后 hold commit 收敛为恰当前 spread。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+
+  it('runs the tightest cache window inside the decode-hold without aborting the urgent load', async () => {
+    // 覆盖判别：提交进入 hold 时 showPagedSpread 内部的 refreshCacheWindow 以
+    // 「仅目标 spread」的最窄窗口在 dragTurn 存活期执行（预取定时器尚未把
+    // 窗口放宽到 ±1），随后 0ms 定时器又在 hold 窗口内再次刷新——两次都不得
+    // abort/revoke 拖动已触发的在飞 urgent 加载。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    const clock = controllableClock();
+    try {
+      // 全程同步推进（无真实定时器让渡）：拖动提交时 prefetchNeighbors 仍为
+      // false，commit 内的缓存刷新窗口只含目标 spread。
+      touchDragTo(container, 800, 500); // dx=-300，松手即提交
+      frames.flush();
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 500,
+        clientY: 400,
+      });
+      clock.set(250);
+      frames.flush(); // showPagedSpread('drag')：最窄窗口刷新 + decode-hold
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['0', '1']); // 旧页保持在屏
+
+      // 0ms 预取定时器此刻才在 hold 窗口内触发：窗口放宽为 ±1 再刷新。
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['0', '1']); // hold 仍未换屏
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+
+      // hold 窗口内重拖被拒（回弹）：当前 spread 收敛，与 T1 语义一致。
+      clock.set(260);
+      touchDragTo(container, 800, 755); // dx=-45：过 slop，未过提交阈
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 755,
+        clientY: 400,
+      });
+      clock.set(500);
+      frames.flush();
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+
+      // 解码完成：在飞 urgent 加载照常物化，无 abort 造成的 revoke/丢弃。
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(3)); // 页 2 解码已悬挂
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="2"] img')).not.toBeNull(),
+      );
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      frames.restore();
+      clock.restore();
+    }
+  });
+});
 
 describe('CBZ chrome overlay and system bars (R4)', () => {
   it('keeps a single comic overlay and no EPUB footer actions', async () => {

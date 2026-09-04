@@ -6,6 +6,7 @@ import {
   applyComicCropDisplay,
   comicCropInsetsFromRgba,
   comicCroppedSize,
+  comicDisplayCeilingCssPx,
   comicDisplayWidthPx,
   COMIC_CROP_NONE,
   isComicCropEmpty,
@@ -212,6 +213,14 @@ describe('comic page model', () => {
     expect(comicDisplayWidthPx(hidden, 800, { devicePixelRatio: 1 })).toBe(720);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x1, 0x2]);
     expect(comicImageBlob(jpeg, 'page.jpg').type).toBe('image/jpeg');
+  });
+
+  it('exposes the zoom raster ceiling as the 8192 device-pixel budget at the clamped dpr', () => {
+    expect(comicDisplayCeilingCssPx({ devicePixelRatio: 1 })).toBe(8192);
+    expect(comicDisplayCeilingCssPx({ devicePixelRatio: 2 })).toBe(4096);
+    expect(comicDisplayCeilingCssPx({ devicePixelRatio: 8 })).toBe(2048);
+    expect(comicDisplayCeilingCssPx({ devicePixelRatio: 0.5 })).toBe(8192);
+    expect(comicDisplayCeilingCssPx(null)).toBe(8192);
   });
 
   it('rejects unsafe ComicInfo and bounds the decoded page window by bytes', () => {
