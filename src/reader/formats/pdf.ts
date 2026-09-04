@@ -382,8 +382,8 @@ export async function renderPdfInto(
   let firstPageCssWidth = 0;
 
   // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
-  // 触屏环境：放大出横向溢出后由指针拖拽平移；捏合/双击经注入的 scale 绑定
-  // 直写 currentScale（rAF 合并 + 应用侧锚点修正），落档仍由下方
+  // 触屏环境：单指原生双轴滚动；捏合进行中只做 CSS 预览，松手才写
+  // currentScale（避免每帧重栅格卡死），落档仍由下方
   // scalechanging→syncScale 吸档回环负责（官方不提供触屏手势，见 pdf-drag-pan）。
   const dragPan = bindPdfDragPan(container, {
     scale: {

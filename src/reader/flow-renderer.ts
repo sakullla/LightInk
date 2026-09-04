@@ -29,6 +29,7 @@ import {
   cancelPagedTouchSlide,
   scrollPagedScrollerToEdge,
   clearPagedSpreadVars,
+  createPagedGestureLock,
   createPagedWheelGate,
   isReadingNavKey,
   pagedColumnStep,
@@ -179,6 +180,10 @@ html[data-reading-layout='paginated'] .lightink-reader-spread {
      for multicol + overflow:hidden, so wheel/click paging cannot move. */
   overflow-x: auto !important;
   overflow-y: hidden !important;
+  /* JS owns horizontal turns. Native overflow-x inertia + host/iframe
+     swipe handlers stacked several pages on one flick. */
+  touch-action: pan-y;
+  overscroll-behavior-x: none;
   scrollbar-width: none;
   background: var(--lightink-bg, transparent) !important;
   box-shadow: none !important;
@@ -1382,6 +1387,7 @@ export function createFlowRenderer(
   };
 
   const gatePagedWheel = createPagedWheelGate();
+  const pagedGesture = createPagedGestureLock();
 
   /**
    * 翻页 scrollLeft 一律瞬跳。触屏 rAF 插值会和原生 overflow 拖动、换章重分栏
@@ -1595,6 +1601,8 @@ export function createFlowRenderer(
     pageBox.style.setProperty('max-height', `${height}px`, 'important');
     pageBox.style.setProperty('overflow-x', 'auto', 'important');
     pageBox.style.setProperty('overflow-y', 'hidden', 'important');
+    pageBox.style.touchAction = 'pan-y';
+    pageBox.style.overscrollBehaviorX = 'none';
     pageBox.style.scrollbarWidth = 'none';
     pageBox.style.setProperty('column-width', columnWidthCss, 'important');
     pageBox.style.setProperty('column-count', String(columns), 'important');
@@ -2138,16 +2146,35 @@ export function createFlowRenderer(
               hooks.dismissSelectionToolbar();
               return true;
             }
-            return isFlowPaginated(root) && advanceFlowPage(direction);
+            if (pagedGesture.consumed()) {
+              return true;
+            }
+            const moved = isFlowPaginated(root) && advanceFlowPage(direction);
+            if (moved) {
+              pagedGesture.take();
+            }
+            return moved;
           },
           pagedScroller: () => readerPagedScroller(frameDocument),
           settleDrag: (startLeft, dx) => {
             if (ignorePagingGesture || frameQuote().length > 0 || selectionToolbarOpen()) {
               return false;
             }
-            return settleVisiblePagedRelease(startLeft, dx);
+            if (pagedGesture.consumed()) {
+              return true;
+            }
+            const settled = settleVisiblePagedRelease(startLeft, dx);
+            if (settled) {
+              pagedGesture.take();
+            }
+            return settled;
           },
-          onScrollIdle: snapVisiblePagedScroller,
+          onScrollIdle: () => {
+            if (pagedGesture.consumed()) {
+              return;
+            }
+            snapVisiblePagedScroller();
+          },
         });
         if (root.tabIndex < 0) {
           root.tabIndex = -1;
@@ -2593,7 +2620,37 @@ export function createFlowRenderer(
     const hostPaging = {
       enabled: () => flowReaderHostActive(root),
       viewportWidth: () => scrollHost.clientWidth,
-      page: (direction: 1 | -1) => hooks.advancePagedWheel(direction),
+      page: (direction: 1 | -1) => {
+        if (pagedGesture.consumed()) {
+          return true;
+        }
+        const moved = hooks.advancePagedWheel(direction);
+        if (moved) {
+          pagedGesture.take();
+        }
+        return moved;
+      },
+      pagedScroller: () => {
+        const frame = visibleFrame();
+        const doc = frame?.contentDocument;
+        return doc === undefined || doc === null ? null : readerPagedScroller(doc);
+      },
+      settleDrag: (startLeft: number, dx: number) => {
+        if (pagedGesture.consumed()) {
+          return true;
+        }
+        const settled = settleVisiblePagedRelease(startLeft, dx);
+        if (settled) {
+          pagedGesture.take();
+        }
+        return settled;
+      },
+      onScrollIdle: () => {
+        if (pagedGesture.consumed()) {
+          return;
+        }
+        snapVisiblePagedScroller();
+      },
     };
     // 触控点按走非对称热区（显式传值固定绑定合同）；click 兜底
     // （桌面/无 touch 流的 WebView）不传比例，保持对称 TOUCH_TAP_EDGE_RATIO 桌面热区。

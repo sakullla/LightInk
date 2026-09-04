@@ -79,7 +79,8 @@
 
   .canvasWrapper{
     overflow:hidden;
-    width:100%;
+    /* WebKit：相对宽度 canvas 在父级缩放时不重绘（pdf.js #17571）。 */
+    width:inherit !important;
     height:100%;
 
     canvas{

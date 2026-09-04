@@ -782,6 +782,42 @@ export function createResizeSettle(delayMs = 180): (run: () => void) => () => vo
  * Lock until the stream has been idle for `idleMs`, and extend the lock while
  * events keep arriving so one flick cannot chain into the next chapter.
  */
+/**
+ * One consumed touch gesture across iframe + host bindings.
+ * Android WebView often delivers the same swipe to both documents in one
+ * turn; without a lock, settle/page run twice and one flick skips columns.
+ * The lock is turn-scoped (microtask) so the next tap/swipe can page.
+ */
+export function createPagedGestureLock(): {
+  take(): boolean;
+  consumed(): boolean;
+} {
+  let held = false;
+  let generation = 0;
+  return {
+    take() {
+      if (held) {
+        return false;
+      }
+      held = true;
+      const token = ++generation;
+      if (typeof queueMicrotask === 'function') {
+        queueMicrotask(() => {
+          if (generation === token) {
+            held = false;
+          }
+        });
+      } else {
+        held = false;
+      }
+      return true;
+    },
+    consumed() {
+      return held;
+    },
+  };
+}
+
 export function createPagedWheelGate(idleMs = 240): (
   direction: 1 | -1,
   advance: (direction: 1 | -1) => boolean,

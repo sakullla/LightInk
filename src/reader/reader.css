@@ -993,9 +993,17 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
 }
 
-/* 放大出横向溢出后由指针拖拽平移（pdf-drag-pan）；grab 光标提示可拖。 */
+/* 命中页/画布时跟宿主同一套手势：闲时双轴滚，捏合期随宿主 none。 */
+.lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] .pdfViewer,
+.lightink-reader-pages[data-reader-format='pdf'][data-reader-active='true'] .pdfViewer .page {
+  touch-action: inherit;
+}
+
+/* 放大出横向溢出后仍走原生双轴滚动；grab 只作光标提示。 */
 .lightink-reader-pages[data-reader-format='pdf'][data-pdf-pan] {
   cursor: grab;
 }
@@ -1270,6 +1278,19 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   flex: none;
   margin: 0;
   aspect-ratio: auto;
+}
+
+/*
+ * 跟手翻页：裁切在视口宿主，不在被 translate 的 pages 轨道上。
+ * 轨道 overflow:hidden + transform 会裁掉绝对定位邻居，露出近黑画布。
+ */
+.lightink-reader-pages[data-comic-reader='true'][data-comic-drag-turn='true'] {
+  overflow: hidden;
+}
+
+.lightink-reader-pages[data-comic-reader='true'][data-comic-drag-turn='true']
+  .lightink-reader-comic-pages {
+  overflow: visible;
 }
 
 /*
@@ -2033,9 +2054,15 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   view-transition-name: lightink-comic-pages;
 }
 
+/* WebView / Chromium 默认 ::view-transition 底是黑的；push 滑开露底即闪屏。 */
+::view-transition {
+  background-color: transparent;
+}
+
 ::view-transition-group(lightink-comic-pages),
 ::view-transition-image-pair(lightink-comic-pages) {
   overflow: hidden;
+  background-color: transparent;
 }
 
 @keyframes lightink-comic-turn-in-next {

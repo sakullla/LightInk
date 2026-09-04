@@ -64,6 +64,7 @@ const COMIC_HOST_DATASET_KEYS = [
   'comicZoomed',
   'comicScale',
   'comicPanning',
+  'comicDragTurn',
 ] as const;
 
 /** Drop leftover comic surface attrs so EPUB/PDF do not keep :has() / dock rules. */

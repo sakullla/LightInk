@@ -398,6 +398,8 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(pageBox.style.columnWidth).toBe(`${metrics.columnWidth}px`);
     expect(pageBox.style.overflowX).toBe('auto');
     expect(pageBox.style.overflowY).toBe('hidden');
+    expect(pageBox.style.touchAction).toBe('pan-y');
+    expect(pageBox.style.overscrollBehaviorX).toBe('none');
     expect(metrics.columnWidth * metrics.columns + metrics.gap).toBeLessThanOrEqual(1020);
     expect(html.style.getPropertyValue('--lightink-reader-column-width')).toBe(
       `${metrics.columnWidth}px`,

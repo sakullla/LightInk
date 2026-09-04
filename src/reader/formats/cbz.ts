@@ -1977,6 +1977,7 @@ export async function renderCbzInto(
       }
     };
     const restoreDragTurnSurface = (): void => {
+      delete container.dataset.comicDragTurn;
       pagesRoot.style.removeProperty('will-change');
       pagesRoot.style.removeProperty('position');
       applyViewTransform(); // scale=1 分支移除拖动 transform 并恢复 overflow/touch-action
@@ -2085,8 +2086,12 @@ export async function renderCbzInto(
         revealed.push(index);
       });
       if (revealed.length === 0) return;
+      // web.dev / Readium 跟手转场：viewport（container）裁切，track（pagesRoot）
+      // 做 transform。overflow:hidden 写在被平移的 track 上会在本地坐标裁掉
+      // 邻居，只剩近黑画布跟着整页平移——手机左右滑就是半屏黑。
+      container.dataset.comicDragTurn = 'true';
       pagesRoot.style.position = 'relative';
-      pagesRoot.style.overflow = 'hidden'; // 邻居越界绝对定位不产生滚动条
+      pagesRoot.style.overflow = 'visible';
       pagesRoot.style.willChange = 'transform';
       cancelPendingTap(); // 拖动期点按/双击不触发
       // R2（ADR-3）：方向确定即把目标 spread 并入 visible 并触发 urgent
@@ -2214,13 +2219,17 @@ export async function renderCbzInto(
           typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
         const reduceMotion = media?.('(prefers-reduced-motion: reduce)').matches === true;
         const doc = container.ownerDocument as ComicViewTransitionDocument;
+        // Android WebView 的 View Transition 快照常带黑底，旧页滑开就是闪屏。
+        // 手机走跟手双页（drag）或 decode-gated 直切，不走 VT / slot 滑入。
+        const androidComic = androidReaderRoot(doc.documentElement) !== null;
         // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
-        // 中途不露底色。跳转（direction 0）、reduce-motion 与拖动提交（跟手
-        // 已有实时帧，快照重截旧帧反而跳变）直切。
+        // 中途不露底色。跳转（direction 0）、reduce-motion、Android 与拖动
+        // 提交（跟手已有实时帧，快照重截旧帧反而跳变）直切。
         if (
           source !== 'drag' &&
           direction !== 0 &&
           !reduceMotion &&
+          !androidComic &&
           typeof doc.startViewTransition === 'function'
         ) {
           try {
@@ -2251,6 +2260,7 @@ export async function renderCbzInto(
           direction !== 0 &&
           source !== 'drag' &&
           !reduceMotion &&
+          !androidComic &&
           isTouchPrimaryDocument(container.ownerDocument)
         ) {
           slideEnteringComicSlots(entering, direction);

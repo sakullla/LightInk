@@ -791,10 +791,43 @@ describe('CBZ page materialization', () => {
       expect(document.documentElement.dataset.comicTurn).toBe('prev');
       expect(visiblePageIndices(container)).toEqual(['0']);
       await handle.destroy();
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+    }
+  });
+
+  it('skips View Transition on Android so a swipe does not snapshot a black canvas', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const updates: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: Promise.resolve(),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+        preferenceStorage: pagedStorage({ spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.nextPage()).toBe(true);
+      expect(updates).toHaveLength(0);
+      expect(document.documentElement.dataset.comicTurn).toBeUndefined();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
       expect(document.documentElement.dataset.comicTurn).toBeUndefined();
     } finally {
       Reflect.deleteProperty(document, 'startViewTransition');
       delete document.documentElement.dataset.comicTurn;
+      document.documentElement.removeAttribute('data-android');
     }
   });
 
@@ -1785,6 +1818,10 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
 
       frames.flush();
       expect(readComicDragTranslateX(container)).toBe(-100);
+      // 裁切在视口宿主：被平移的轨道必须 overflow:visible，否则邻居被裁成半屏黑。
+      expect(container.dataset.comicDragTurn).toBe('true');
+      expect(comicSurface(container).style.overflow).toBe('visible');
+      expect(container.style.overflow).toBe('hidden');
 
       pointerOn(container, 'pointermove', {
         pointerId: 1,

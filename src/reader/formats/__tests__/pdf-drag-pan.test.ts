@@ -1,22 +1,12 @@
 // @vitest-environment jsdom
 
 /**
- * pdf-drag-pan — PDF 放大后的指针拖拽平移与触屏手势纯函数。
+ * pdf-drag-pan — PDF 触屏滚动与捏合。
  *
- * 覆盖：横向溢出判定（≤4px 亚像素容差，不锁原生双轴滚动）、触屏环境门控、
- * 拖拽回写 scrollLeft/Top、点按（slop 内）不平移且不吞 click、拖完吞一次
- * 合成 click、pointercancel 不布防吞点击、sync 随溢出增减切 touch-action、
- * release 还原宿主状态；纯函数：捏合指距比值 → 适宽×档位钳制 currentScale、
- * 双击窗口（280ms/36px）判定、缩放锚点滚动修正；多指手势层（注入 scale
- * 绑定）：第二指取消进行中平移、捏合 rAF 合并直写 currentScale + 两指中点
- * 锚定、捏合回 1 指不恢复旧基线、双击适宽↔2× 档切换锚定双击点、窗口内单击
- * 暂扣 ≤280ms 后原样放行、非触屏（含绑定注入）仍为 no-op；修复回归：吞
- * click 布防在下一次 pointerdown 清除（真机捏合无尾随 click，不得吃掉下一次
- * 真点按）、新点击顶替暂扣槽位前先按序放行旧击（各恰好一次）、捏合基指抬起
- * 且仍有两指在屏时重定基线（比值口径不换对）、捏合期 sync() 恒 touch-action
- * none（缩小到无溢出也不中途收敛）、scale 替身复刻官方 currentScale setter
- * 的同步滚动重锚后锚定修正仍恰好一次（读写后值会把 scroll 项乘两次 ratio，
- * 非零阅读偏移下捏合/双击过度修正跳读位）。
+ * 覆盖：横向溢出判定（≤4px 亚像素容差）、触屏环境门控、单指交给原生
+ * pan-x pan-y、捏合 CSS 预览且松手才写 currentScale、双击适宽↔2×、
+ * 窗口内单击暂扣、非触屏 no-op、捏合期 sync() 恒 none、重定基线不换对、
+ * 松手早于 rAF 预览仍按末次两指中点锚定。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -181,11 +171,11 @@ describe('bindPdfDragPan', () => {
     handle.release();
   });
 
-  it('marks the host and disables native gestures while overflowing', () => {
+  it('marks overflow but keeps native two-axis scrolling', () => {
     const el = makeScroller();
     const handle = bindPdfDragPan(el, { touchPrimary: true });
     expect(el.getAttribute('data-pdf-pan')).toBe('true');
-    expect(el.style.touchAction).toBe('none');
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     handle.release();
     expect(el.getAttribute('data-pdf-pan')).toBeNull();
     expect(el.style.touchAction).toBe('');
@@ -195,65 +185,37 @@ describe('bindPdfDragPan', () => {
     const el = makeScroller({ scrollWidth: 404, clientWidth: 400 });
     const handle = bindPdfDragPan(el, { touchPrimary: true });
     expect(el.getAttribute('data-pdf-pan')).toBeNull();
-    expect(el.style.touchAction).toBe('');
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
     el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
-    // 不写 touch-action:none 也不指针平移，原生双轴滚动接管。
     expect(el.scrollLeft).toBe(0);
     handle.release();
   });
 
-  it('locks gestures as soon as overflow passes the tolerance', () => {
-    const el = makeScroller({ scrollWidth: 405, clientWidth: 400 });
+  it('does not steal single-finger drags even after overflow appears', () => {
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
     const handle = bindPdfDragPan(el, { touchPrimary: true });
-    expect(el.getAttribute('data-pdf-pan')).toBe('true');
-    expect(el.style.touchAction).toBe('none');
-    handle.release();
-  });
-
-  it('pans both axes by writing scrollLeft/scrollTop during a drag', () => {
-    const el = makeScroller();
-    el.scrollLeft = 50;
-    el.scrollTop = 200;
-    const handle = bindPdfDragPan(el, { touchPrimary: true });
+    expect(el.style.touchAction).toBe('pan-x pan-y');
+    (el as unknown as { scrollWidth: number }).scrollWidth = 800;
+    handle.sync();
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 130 }));
-    // 手指左移 40 → 内容右移（scrollLeft +40）；下移 30 → scrollTop -30。
-    expect(el.scrollLeft).toBe(90);
-    expect(el.scrollTop).toBe(170);
-    expect(el.getAttribute('data-pdf-panning')).toBe('true');
-    el.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 130 }));
-    expect(el.getAttribute('data-pdf-panning')).toBeNull();
+    el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
+    expect(el.scrollLeft).toBe(0);
     handle.release();
   });
 
-  it('leaves taps within the slop to the click path', () => {
+  it('leaves a single-finger tap on the click path', () => {
     const el = makeScroller();
     const handle = bindPdfDragPan(el, { touchPrimary: true });
     el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
     el.dispatchEvent(
       pointerEvent('pointermove', { clientX: 100 + PDF_PAN_SLOP_PX - 1, clientY: 100 }),
     );
-    expect(el.scrollLeft).toBe(0);
     el.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 100 }));
     const click = new Event('click', { bubbles: true, cancelable: true });
     el.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(false);
-    handle.release();
-  });
-
-  it('swallows the synthetic click after a pan, once', () => {
-    const el = makeScroller();
-    const handle = bindPdfDragPan(el, { touchPrimary: true });
-    el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointerup', { clientX: 30, clientY: 100 }));
-    const first = new Event('click', { bubbles: true, cancelable: true });
-    el.dispatchEvent(first);
-    expect(first.defaultPrevented).toBe(true);
-    const second = new Event('click', { bubbles: true, cancelable: true });
-    el.dispatchEvent(second);
-    expect(second.defaultPrevented).toBe(false);
     handle.release();
   });
 
@@ -263,27 +225,9 @@ describe('bindPdfDragPan', () => {
     el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
     el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
     el.dispatchEvent(pointerEvent('pointercancel', { clientX: 30, clientY: 100 }));
-    expect(el.getAttribute('data-pdf-panning')).toBeNull();
     const click = new Event('click', { bubbles: true, cancelable: true });
     el.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(false);
-    handle.release();
-  });
-
-  it('ignores drags while the page fits the viewport and re-enables after sync', () => {
-    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    const handle = bindPdfDragPan(el, { touchPrimary: true });
-    expect(el.style.touchAction).toBe('');
-    el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
-    expect(el.scrollLeft).toBe(0);
-    // 放大后出现横向溢出 → sync 重新启用。
-    (el as unknown as { scrollWidth: number }).scrollWidth = 800;
-    handle.sync();
-    expect(el.style.touchAction).toBe('none');
-    el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
-    expect(el.scrollLeft).toBe(70);
     handle.release();
   });
 
@@ -293,17 +237,6 @@ describe('bindPdfDragPan', () => {
     el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100, button: 2 }));
     el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
     expect(el.scrollLeft).toBe(0);
-    handle.release();
-  });
-
-  it('disables text selection only while a pan is active', () => {
-    const el = makeScroller();
-    const handle = bindPdfDragPan(el, { touchPrimary: true });
-    el.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 100 }));
-    expect(el.style.userSelect).toBe('none');
-    el.dispatchEvent(pointerEvent('pointerup', { clientX: 30, clientY: 100 }));
-    expect(el.style.userSelect).toBe('');
     handle.release();
   });
 });
@@ -360,128 +293,143 @@ function fakeFrames(): { flush(): void } {
   };
 }
 
+function readPreviewScale(el: HTMLElement): number | null {
+  const matched = el.style.transform.match(/scale\(\s*([-\d.]+)\s*\)/);
+  return matched === null ? null : Number.parseFloat(matched[1]!);
+}
+
 describe('bindPdfDragPan multi-pointer gestures', () => {
-  it('cancels an in-progress pan when the second pointer lands', () => {
+  it('does not write scroll or scale on a single finger when a binding is present', () => {
     const el = makeScroller();
     el.scrollLeft = 50;
-    el.scrollTop = 200;
-    const handle = bindPdfDragPan(el, { touchPrimary: true });
-    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
-    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 60, clientY: 130 }));
-    expect(el.getAttribute('data-pdf-panning')).toBe('true');
-    expect(el.scrollLeft).toBe(90);
-    // 第二指落下：平移立即取消（标记/userSelect 还原），不保留旧基线。
-    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 200 }));
-    expect(el.getAttribute('data-pdf-panning')).toBeNull();
-    expect(el.style.userSelect).toBe('');
-    // 第 1 指继续移动：既不恢复平移也不产生新基线。
-    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 20, clientY: 130 }));
-    expect(el.scrollLeft).toBe(90);
-    expect(el.scrollTop).toBe(170);
-    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 20, clientY: 130 }));
-    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 200, clientY: 200 }));
-    handle.release();
-  });
-
-  it('keeps the single-pointer JS pan while a scale binding is present', () => {
-    const el = makeScroller();
     const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 40, clientY: 100 }));
-    expect(el.getAttribute('data-pdf-panning')).toBe('true');
-    expect(el.scrollLeft).toBe(60);
-    // 单指平移只写滚动，不经绑定写比例。
+    expect(el.scrollLeft).toBe(50);
     expect(setCurrentScale).not.toHaveBeenCalled();
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 40, clientY: 100 }));
-    const click = new Event('click', { bubbles: true, cancelable: true });
-    el.dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(true);
     handle.release();
   });
 
-  it('pinches through the binding coalesced to one write per frame, anchored at the midpoint', () => {
+  it('previews a pinch with CSS scale and commits currentScale only on release', () => {
     const frames = fakeFrames();
-    // 适宽（无横向溢出）：捏合路径不依赖溢出，但仍必须接管。
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
     const { binding, setCurrentScale, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
-    // 捏合期 touch-action 恒 none（适宽单指本来是原生滚动）。
     expect(el.style.touchAction).toBe('none');
-    // 指距 100 → 150 → 155：帧前零写入。
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 75, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 225, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 70, clientY: 300 }));
     expect(setCurrentScale).not.toHaveBeenCalled();
     frames.flush();
-    // 同帧多次 move 只写一次，且写最新值：2.5 × 155/100 = 3.875（区间 [1.25,7.5]）。
-    expect(setCurrentScale).toHaveBeenCalledTimes(1);
-    expect(current()).toBeCloseTo(3.875);
-    // 锚点修正：中点 (147.5,300)、ratio = 3.875/2.5 = 1.55 → left = 147.5×0.55。
-    expect(el.scrollLeft).toBeCloseTo(81.125);
-    expect(el.scrollTop).toBeCloseTo(165);
-    // 新帧才有第二次写（合并窗口随帧重开）。
+    // 进行中：2.5 × 155/100 = 3.875 → CSS scale 3.875/2.5 = 1.55，不重栅格。
+    expect(setCurrentScale).not.toHaveBeenCalled();
+    expect(current()).toBe(2.5);
+    expect(readPreviewScale(el)).toBeCloseTo(1.55);
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 60, clientY: 300 }));
-    expect(setCurrentScale).toHaveBeenCalledTimes(1);
     frames.flush();
-    expect(setCurrentScale).toHaveBeenCalledTimes(2);
-    expect(current()).toBeCloseTo(2.5 * 1.65);
+    expect(setCurrentScale).not.toHaveBeenCalled();
+    expect(readPreviewScale(el)).toBeCloseTo(1.65);
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 60, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
-    // 捏合结束回适宽（无溢出）→ touch-action 收敛为空；尾随 click 不进点按链。
-    expect(el.style.touchAction).toBe('');
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    expect(current()).toBeCloseTo(2.5 * 1.65);
+    expect(el.style.transform).toBe('');
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     const click = new Event('click', { bubbles: true, cancelable: true });
     el.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
     handle.release();
   });
 
-  it('applies the pinch anchor correction exactly once from a non-zero reading offset', () => {
+  it('previews the pinch on .pdfViewer when that child is present', () => {
     const frames = fakeFrames();
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
-    // 正常阅读态：缩放前滚动不为零（放大后已竖滚/横滚过）。
+    const viewer = document.createElement('div');
+    viewer.className = 'pdfViewer';
+    el.appendChild(viewer);
+    const { binding, setCurrentScale, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 75, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 225, clientY: 300 }));
+    frames.flush();
+    expect(setCurrentScale).not.toHaveBeenCalled();
+    expect(readPreviewScale(el)).toBeNull();
+    expect(readPreviewScale(viewer)).toBeCloseTo(1.5);
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 75, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
+    expect(current()).toBeCloseTo(3.75);
+    expect(viewer.style.transform).toBe('');
+    handle.release();
+  });
+
+  it('applies the pinch anchor correction exactly once on release', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
     el.scrollLeft = 5000;
     el.scrollTop = 1200;
     const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
-    // 指距 100 → 120：2.5 × 1.2 = 3；两指中点 (155, 300)。
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
     frames.flush();
+    expect(setCurrentScale).not.toHaveBeenCalled();
+    expect(el.scrollLeft).toBe(5000);
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
     expect(setCurrentScale).toHaveBeenCalledTimes(1);
-    // 官方 setter 写入时已把滚动口同步重锚到 pre × ratio；锚定修正必须以写前
-    // 偏移为基准恰好一次——读写后值再修正会把 scroll 项乘两次 ratio
-    // （5000 → 6000 → 7231，每帧过度修正跳读位）。
     const expected = pdfZoomAnchorScroll(5000, 1200, 155, 300, 3 / 2.5);
     expect(el.scrollLeft).toBeCloseTo(expected.left);
     expect(el.scrollTop).toBeCloseTo(expected.top);
-    // 锚点下的内容坐标缩放前后不动（与 pdfZoomAnchorScroll 纯函数同口径）。
     expect((155 + el.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
     expect((300 + el.scrollTop) / 3).toBeCloseTo((300 + 1200) / 2.5);
-    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
-    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
     handle.release();
   });
 
-  it('does not resume the pan baseline when the pinch ends with one finger down', () => {
+  it('anchors the commit at the last pinch midpoint when release beats the preview frame', () => {
+    fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    el.scrollLeft = 5000;
+    el.scrollTop = 1200;
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
+    // 拦截 rAF 且不 flush：快速松手时预览从未跑，lastPinchAnchor 不得停在 (0, 0)。
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    const expected = pdfZoomAnchorScroll(5000, 1200, 155, 300, 3 / 2.5);
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
+    expect((155 + el.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
+    expect((300 + el.scrollTop) / 3).toBeCloseTo((300 + 1200) / 2.5);
+    handle.release();
+  });
+
+  it('does not start a JS pan when the pinch ends with one finger down', () => {
     const frames = fakeFrames();
-    const el = makeScroller(); // 横向溢出：平移路径可用
+    const el = makeScroller();
     const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 150, clientY: 300 }));
     frames.flush();
-    expect(setCurrentScale).toHaveBeenCalledTimes(1);
-    const scrollAfterPinch = el.scrollLeft;
-    // 抬起第 2 指：捏合结束（仍有横向溢出 → touch-action 保持 none）。
+    expect(setCurrentScale).not.toHaveBeenCalled();
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 200, clientY: 300 }));
-    expect(el.style.touchAction).toBe('none');
-    // 剩余 1 指移动：不恢复旧平移基线（不平移、不写比例）。
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    expect(el.style.touchAction).toBe('pan-x pan-y');
+    const scrollAfterPinch = el.scrollLeft;
     setCurrentScale.mockClear();
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 30, clientY: 300 }));
     expect(el.scrollLeft).toBe(scrollAfterPinch);
@@ -710,34 +658,33 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     const { binding, current } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
 
-    // 基指 1/2 进入捏合（指距 200），张开到 250：2.5 × 1.25 = 3.125。
+    // 基指 1/2 进入捏合（指距 200），张开到 250：视觉 3.125，尚未落盘。
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 300, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 50, clientY: 300 }));
     frames.flush();
-    expect(current()).toBeCloseTo(3.125);
+    expect(current()).toBe(2.5);
+    expect(readPreviewScale(el)).toBeCloseTo(3.125 / 2.5);
 
-    // 第 3 指落下/移动不参与：基指仍是 1/2，比例不因第 3 指变化。
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 3, clientX: 70, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 3, clientX: 100, clientY: 300 }));
     frames.flush();
-    expect(current()).toBeCloseTo(3.125);
+    expect(readPreviewScale(el)).toBeCloseTo(3.125 / 2.5);
 
-    // 基指 1 抬起、2/3 仍在屏：以剩余首两指（2@300 / 3@100，指距 200）重定
-    // 基线，捏合继续（不结束、不写比例）。
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 50, clientY: 300 }));
-    expect(current()).toBeCloseTo(3.125);
+    expect(current()).toBe(2.5);
     expect(el.style.touchAction).toBe('none');
 
-    // 剩余两指收拢到指距 150：按新基线 3.125 × 150/200 = 2.34375（旧实现沿用
-    // 旧基线口径 2.5 × 0.75 = 1.875，换对导致比例跳变）。
+    // 新基线 3.125 × 150/200 = 2.34375。
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 3, clientX: 150, clientY: 300 }));
     frames.flush();
-    expect(current()).toBeCloseTo(2.34375);
+    expect(current()).toBe(2.5);
+    expect(readPreviewScale(el)).toBeCloseTo(2.34375 / 2.5);
 
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 300, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 3, clientX: 150, clientY: 300 }));
-    expect(el.style.touchAction).toBe(''); // 全部离屏：捏合结束，按溢出收敛
+    expect(current()).toBeCloseTo(2.34375);
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     handle.release();
   });
 
@@ -746,25 +693,24 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
     const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
     const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
-    expect(el.style.touchAction).toBe('');
+    expect(el.style.touchAction).toBe('pan-x pan-y');
 
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
-    expect(el.style.touchAction).toBe('none'); // 捏合进入即接管
+    expect(el.style.touchAction).toBe('none');
 
-    // pdf.ts 的 scalechanging→sync() 在每次写比例后同步重估：捏合中缩小到无
-    // 横向溢出也不得中途收敛（原生手势一旦接管会 pointercancel 抢走剩余指）。
     el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 120, clientY: 300 }));
     frames.flush();
-    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    expect(setCurrentScale).not.toHaveBeenCalled();
     handle.sync();
     expect(el.style.touchAction).toBe('none');
-    handle.sync(); // 重复重估同样保持
+    handle.sync();
     expect(el.style.touchAction).toBe('none');
 
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 300 }));
     el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 200, clientY: 300 }));
-    expect(el.style.touchAction).toBe(''); // 捏合结束才按溢出收敛
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    expect(el.style.touchAction).toBe('pan-x pan-y');
     handle.release();
   });
 });

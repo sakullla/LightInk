@@ -5,6 +5,7 @@ import {
   applyPagedProgress,
   applyReadingLayout,
   createCoalescedScrollHandler,
+  createPagedGestureLock,
   createPagedWheelGate,
   createResizeSettle,
   DEFAULT_READING_LAYOUT,
@@ -497,6 +498,16 @@ describe('reading nav keys', () => {
     expect(readingNavDirection('ArrowLeft')).toBe(-1);
     expect(readingNavDirection('ArrowUp')).toBe(-1);
     expect(readingNavDirection(' ', true)).toBe(-1);
+  });
+
+  it('lets only one paged handler win in the same turn', async () => {
+    const lock = createPagedGestureLock();
+    expect(lock.take()).toBe(true);
+    expect(lock.consumed()).toBe(true);
+    expect(lock.take()).toBe(false);
+    await Promise.resolve();
+    expect(lock.consumed()).toBe(false);
+    expect(lock.take()).toBe(true);
   });
 
   it('coalesces paged wheel turns', () => {

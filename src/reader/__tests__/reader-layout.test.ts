@@ -555,6 +555,17 @@ describe('comic surface layout (R1/R3/R4)', () => {
     );
   });
 
+  it('clips drag-to-turn on the viewport host so the translating track can show the neighbor', () => {
+    const css = readerCss();
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-comic-reader='true'\]\[data-comic-drag-turn='true'\]\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /\[data-comic-drag-turn='true'\]\s+\.lightink-reader-comic-pages\s*\{[^}]*overflow:\s*visible/,
+    );
+    expect(css).toMatch(/::view-transition\s*\{[^}]*background-color:\s*transparent/);
+  });
+
   it('paints only the comic host with a dedicated near-black canvas token', () => {
     const css = readerCss();
     expect(css).toMatch(/--lightink-comic-canvas:\s*#111\b/);
@@ -1317,6 +1328,37 @@ describe('flow host touch paging', () => {
     Object.defineProperty(event, 'changedTouches', { value: points });
     return event;
   }
+
+  it('settles host swipes on the visible column scroller instead of adding a second step', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    expect(flow).toMatch(/createPagedGestureLock/);
+    expect(flow).toMatch(/pagedGesture\.take\(\)/);
+    expect(flow).toMatch(/bindTouchPaging\(scrollHost, \{/);
+    expect(flow).toMatch(/settleVisiblePagedRelease\(startLeft, dx\)/);
+    expect(flow).toMatch(/touch-action:\s*pan-y/);
+    expect(flow).toMatch(/overscroll-behavior-x:\s*none/);
+  });
+
+  it('pages a host swipe once when settle cannot see a column scroller', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    const dirs: Array<1 | -1> = [];
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: (direction) => {
+          dirs.push(direction);
+          return true;
+        },
+      }),
+    );
+    scrollHost.dispatchEvent(touchEvent('touchstart', { clientX: 300, clientY: 100 }));
+    const end = touchEvent('touchend', { clientX: 80, clientY: 104 });
+    scrollHost.dispatchEvent(end);
+    expect(dirs).toEqual([1]);
+    expect(end.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
 
   it('delegates a right-zone tap to advancePagedWheel (same entry as wheel)', () => {
     const { root, scrollHost } = mountFlowRoot();

@@ -528,7 +528,7 @@ describe('viewer event wiring', () => {
     await handle.destroy();
   });
 
-  it('injects the scale binding so a touch pinch writes official currentScale, snapped by scalechanging', async () => {
+  it('injects the scale binding so a touch pinch previews with CSS and commits currentScale on release', async () => {
     mockPdf();
     // 触屏优先环境：bindPdfDragPan 进入手势层（非触屏仍为 no-op 空实现）。
     document.documentElement.setAttribute('data-touch-primary', 'true');
@@ -563,17 +563,23 @@ describe('viewer event wiring', () => {
     frames.splice(0).forEach((callback) => {
       callback(0);
     });
-    // 指距 100 → 150：2.5 × 1.5 = 3.75（钳制区间 2.5×[0.5,3]）。
+    // 进行中只做 CSS 预览（写在 .pdfViewer 上），不写 currentScale。
+    expect(viewer.currentScale).toBe(2.5);
+    expect(viewerRuntime.scaleSets).toEqual([2.5]);
+    const viewerDiv = container.querySelector<HTMLElement>('.pdfViewer');
+    expect(viewerDiv?.style.transform).toContain('scale(');
+    expect(container.style.transform).toBe('');
+
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 75, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
+    // 指距 100 → 150：松手才落 2.5 × 1.5 = 3.75。
     expect(viewer.currentScale).toBeCloseTo(3.75);
     expect(viewerRuntime.scaleSets).toEqual([2.5, 3.75]);
 
     // 落档权威保持：scalechanging → syncScale 吸档回环把 userZoom 吸到 1.5。
     lastEventBus().dispatch('scalechanging', { source: viewer, scale: viewer.currentScale });
     expect(handle.controller.scale).toBe(1.5);
-
-    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 75, clientY: 300 }));
-    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
-    expect(container.style.touchAction).toBe('');
+    expect(container.style.touchAction).toBe('pan-x pan-y');
     document.documentElement.removeAttribute('data-touch-primary');
     await handle.destroy();
   });
@@ -749,6 +755,12 @@ describe('page host CSS contract', () => {
     );
     expect(css).toMatch(
       /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*scrollbar-gutter:\s*stable/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\][\s\S]*?\{[^}]*touch-action:\s*pan-x pan-y/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-pages\[data-reader-format='pdf'\]\[data-reader-active='true'\] \.pdfViewer[\s\S]*?\{[^}]*touch-action:\s*inherit/,
     );
     // 漫画 slot（.lightink-reader-page-slot 现为 CBZ 专用）保持禁收缩 +
     // content-visibility，防止清画布后空槽塌陷触发宽度回弹。
