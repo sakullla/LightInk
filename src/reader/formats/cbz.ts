@@ -841,10 +841,18 @@ export async function renderCbzInto(
       readonly slot: HTMLElement;
       width: number;
       height: number;
-      readonly naturalWidthVar: string;
-      readonly naturalHeightVar: string;
+      /** natural 变量的未缩放基线；repin 重钉时按 applySlotWidth 的新值同步。 */
+      naturalWidthVar: string;
+      naturalHeightVar: string;
     }
     let zoomRasterPins: ComicZoomRasterPin[] = [];
+    /**
+     * 钉住期的内容范围：pin 时在改写布局前记录的未钉住态 scroll 测量值。
+     * 钉住后 pagesRoot 是居中 flex，溢出只计入尾侧 ((视口+内容)/2)，读钉住
+     * 态 scroll 会低估范围（提交瞬间跳动、起始侧不可达），因此钉住期间
+     * clamp 一律用这份记录，解钉清空。
+     */
+    let zoomRasterContentRange: { width: number; height: number } | null = null;
     let zoomRasterTimer: ReturnType<typeof setTimeout> | null = null;
     let destroyed = false;
     let destruction: Promise<void> | null = null;
@@ -1111,20 +1119,21 @@ export async function renderCbzInto(
         return;
       }
       const viewport = container.getBoundingClientRect();
-      // 钉住时内容布局已经是放大后的尺寸（scrollWidth/scrollHeight 已含倍数）：
-      // 折算回未缩放尺寸喂给既有 clamp 数学，×viewScale 后与视觉范围一致。
+      // 钉住期不读 pagesRoot 的 scroll 尺寸（居中 flex 尾侧溢出会低估范围），
+      // 用 pin 时记录的未钉住态测量值，与未钉住路径同一份 clamp 语义。
       const pinned = zoomRasterPins.length > 0;
-      const measured = {
-        width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
-        height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
-      };
+      const measured =
+        pinned && zoomRasterContentRange !== null
+          ? zoomRasterContentRange
+          : {
+              width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+              height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+            };
       const clamped = clampComicViewOffset(
         { x: viewX, y: viewY },
         viewScale,
         { width: viewport.width, height: viewport.height },
-        pinned
-          ? { width: measured.width / viewScale, height: measured.height / viewScale }
-          : measured,
+        measured,
       );
       viewX = clamped.x;
       viewY = clamped.y;
@@ -1209,6 +1218,7 @@ export async function renderCbzInto(
         );
       }
       zoomRasterPins = [];
+      zoomRasterContentRange = null;
       pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
       const after = reference.getBoundingClientRect();
       viewX += before.left - after.left;
@@ -1218,8 +1228,10 @@ export async function renderCbzInto(
 
     /**
      * 钉住：把可见 spread 的布局尺寸设为当前视觉尺寸（= fit 盒 × viewScale），
-     * pagesRoot transform 退化为纯平移。8192 设备像素预算（按夹取 dpr 折算）
-     * 内才提交；任一可见页超预算即整体放弃，维持 transform 缩放路径。
+     * pagesRoot transform 退化为纯平移。全有或全无：8192 设备像素预算（按
+     * 夹取 dpr 折算）超限、或任一可见槽不可测（fit-width/fit-original 双页
+     * spread 的未物化半页 height:auto 塌缩为零盒）都整体放弃，维持 transform
+     * 缩放路径——否则晚物化的半页会以 1× 渲染在放大槽旁（混合倍率）。
      * 仅 paged；strip 模式零变化。捏合进行中（双指在屏）不钉住。
      */
     const pinZoomRaster = (): boolean => {
@@ -1232,7 +1244,7 @@ export async function renderCbzInto(
         const slot = slots[index];
         if (slot === undefined || slot.hidden) continue;
         const rect = slot.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.width <= 0 || rect.height <= 0) return false; // 全有或全无，见上
         if (rect.width > cap || rect.height > cap) return false;
         pins.push({
           index,
@@ -1244,6 +1256,13 @@ export async function renderCbzInto(
         });
       }
       if (pins.length === 0) return false;
+      const viewport = container.getBoundingClientRect();
+      // 改写布局前记录未钉住态的内容范围：transform 缩放不影响 scroll 尺寸，
+      // 此刻读数即未放大 fit 布局，与未钉住路径的 clamp 输入同源。
+      zoomRasterContentRange = {
+        width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+        height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+      };
       const before = pins[0]!.slot.getBoundingClientRect();
       for (const pin of pins) {
         pin.slot.style.width = `${pin.width}px`;
@@ -1292,7 +1311,9 @@ export async function renderCbzInto(
      * applySlotFit 重写了 fit 内联样式（新物化页、裁边扫描、重排版落位）：
      * 钉住槽按新 fit 几何重钉（钉住盒 = 测量宽高 × viewScale；宽高不含平移，
      * 测量不受 translate 影响）。不可测（隐藏/jsdom 零盒）时按记录盒重写，
-     * 保持钉住态一致。
+     * 保持钉住态一致。applySlotWidth 刚按 natural+裁边重写了 natural 变量：
+     * 把未缩放新基线同步回记录（并把内容范围按几何差量平移），解钉才不会
+     * 把钉住前的旧值恢复回去（丢裁边显示）。
      */
     const repinZoomRasterSlot = (index: number): void => {
       const pin = zoomRasterPins.find((entry) => entry.index === index);
@@ -1300,6 +1321,18 @@ export async function renderCbzInto(
       const rect = pin.slot.getBoundingClientRect();
       const measurable = rect.width > 0 && rect.height > 0;
       if (measurable) {
+        if (zoomRasterContentRange !== null) {
+          zoomRasterContentRange = {
+            width: Math.max(
+              1,
+              zoomRasterContentRange.width + rect.width - pin.width / viewScale,
+            ),
+            height: Math.max(
+              1,
+              zoomRasterContentRange.height + rect.height - pin.height / viewScale,
+            ),
+          };
+        }
         pin.width = rect.width * viewScale;
         pin.height = rect.height * viewScale;
       }
@@ -1308,16 +1341,10 @@ export async function renderCbzInto(
       pin.slot.style.flex = 'none';
       pin.slot.style.maxWidth = 'none';
       pin.slot.style.maxHeight = 'none';
-      scaleZoomRasterVar(
-        pin.slot,
-        '--lightink-comic-natural-width',
-        pin.slot.style.getPropertyValue('--lightink-comic-natural-width'),
-      );
-      scaleZoomRasterVar(
-        pin.slot,
-        '--lightink-comic-natural-height',
-        pin.slot.style.getPropertyValue('--lightink-comic-natural-height'),
-      );
+      pin.naturalWidthVar = pin.slot.style.getPropertyValue('--lightink-comic-natural-width');
+      pin.naturalHeightVar = pin.slot.style.getPropertyValue('--lightink-comic-natural-height');
+      scaleZoomRasterVar(pin.slot, '--lightink-comic-natural-width', pin.naturalWidthVar);
+      scaleZoomRasterVar(pin.slot, '--lightink-comic-natural-height', pin.naturalHeightVar);
     };
 
     const resetViewTransform = (): void => {

@@ -15,6 +15,22 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
+/**
+ * P2 回归：jsdom 无 2d canvas，detectComicCropInsets 永远返回空。按需注入
+ * 裁边结果驱动 pumpCropScans→applySlotFit→applySlotWidth 的钉住期重写；
+ * null 时与真实实现一致返回 COMIC_CROP_NONE（无 canvas 源的宽度门结果）。
+ */
+const cropScanResult = vi.hoisted(() => ({
+  insets: null as null | { top: number; right: number; bottom: number; left: number },
+}));
+vi.mock('../comic-model.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../comic-model.js')>();
+  return {
+    ...actual,
+    detectComicCropInsets: () => cropScanResult.insets ?? actual.COMIC_CROP_NONE,
+  };
+});
+
 const invokeMock = vi.mocked(invoke);
 
 let observerCallback: IntersectionObserverCallback | null = null;
@@ -1379,28 +1395,52 @@ describe('CBZ zoom render quality (R3)', () => {
   /**
    * R3（ADR-4 修订版）：放大提交点把可见页的布局尺寸钉到放大后的视觉尺寸
    * （fit 盒 × viewScale），pagesRoot transform 退化为纯平移——布局尺寸即
-   * 位图栅格分辨率。stub 返回恒定 rect 使提交 Δ=0，断言确定。scrollWidth/
-   * scrollHeight 提供 clamp 的内容范围（钉住后 = 钉住盒，与真实布局一致）。
+   * 位图栅格分辨率。stub 返回恒定 rect（= 提交倍数下的视觉盒）使提交 Δ=0，
+   * 断言确定。scrollWidth/scrollHeight 按真实居中 flex 语义建模：内容溢出
+   * 只计入尾侧（(视口+内容)/2，非对称），未钉住内容 = width/2，钉住后 =
+   * 钉住内联盒——对称溢出的旧 stub 会掩盖钉住态内容范围的低估。
    */
   function stubZoomGeometry(
     container: HTMLElement,
     width: number,
     height: number,
   ): void {
-    for (const slot of container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')) {
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    for (const slot of slots) {
       Object.defineProperty(slot, 'getBoundingClientRect', {
         configurable: true,
         value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
       });
     }
     const surface = comicSurface(container);
-    Object.defineProperty(surface, 'scrollWidth', { configurable: true, value: width });
-    Object.defineProperty(surface, 'scrollHeight', { configurable: true, value: height });
+    const contentExtent = (): { width: number; height: number } => {
+      const pinned = slots.find((slot) => !slot.hidden && slot.style.width !== '');
+      const pinnedWidth = Number.parseFloat(pinned?.style.width ?? '');
+      const pinnedHeight = Number.parseFloat(pinned?.style.height ?? '');
+      return {
+        width: Number.isFinite(pinnedWidth) ? pinnedWidth : width / 2,
+        height: Number.isFinite(pinnedHeight) ? pinnedHeight : height / 2,
+      };
+    };
+    const viewportWidth = 1000;
+    const viewportHeight = 800;
+    Object.defineProperty(surface, 'scrollWidth', {
+      configurable: true,
+      get: () => Math.max(viewportWidth, (viewportWidth + contentExtent().width) / 2),
+    });
+    Object.defineProperty(surface, 'scrollHeight', {
+      configurable: true,
+      get: () => Math.max(viewportHeight, (viewportHeight + contentExtent().height) / 2),
+    });
   }
 
   function firstVisibleSlot(container: HTMLElement): HTMLElement {
     return container.querySelector<HTMLElement>('.lightink-reader-cbz-slot:not([hidden])')!;
   }
+
+  afterEach(() => {
+    cropScanResult.insets = null;
+  });
 
   it('pins the visible page render box to the zoomed size and pans without rescaling', async () => {
     document.documentElement.lang = 'en';
@@ -1432,11 +1472,13 @@ describe('CBZ zoom render quality (R3)', () => {
     expect(surface.dataset.comicScale).toBe('2');
     expect(container.dataset.comicZoomed).toBe('true');
 
-    // 钉住态下平移：仍走既有 pan 数学（clamp 按 1×已放大内容范围）。
+    // 钉住态下平移：仍走既有 pan 数学，clamp 用钉住前记录的内容范围
+    // （fit=screen 内容铺满视口 → 1000×800），完整范围 [-1000,0]/[-800,0]
+    // 内的 -120/-70 原样保留，不被钉住态的低估 scroll 夹回。
     dragCanvas(container, 'mouse');
     const pan = readComicPan(container);
-    expect(pan.x).toBeCloseTo(-600, 3);
-    expect(pan.y).toBeCloseTo(-400, 3);
+    expect(pan.x).toBeCloseTo(-620, 3);
+    expect(pan.y).toBeCloseTo(-470, 3);
     expect(surface.style.transform).not.toContain('scale');
 
     // 退出放大：恢复原尺寸与 transform 形态（逐字节回到现状）。
@@ -1575,6 +1617,125 @@ describe('CBZ zoom render quality (R3)', () => {
     await handle.destroy();
   });
 
+  it('keeps the pinned pan range equal to the unpinned range under centered overflow', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    const surface = comicSurface(container);
+    // 聚焦起始半屏（x=350 → viewX=-350）：提交点不得因钉住态低估的内容
+    // 范围发生跳动（fit=screen 内容铺满视口 1000×800，范围 [-1000,0]/
+    // [-800,0] 与未钉住态一致）。
+    surface.dispatchEvent(
+      new MouseEvent('dblclick', { clientX: 350, clientY: 400, bubbles: true }),
+    );
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    const atCommit = readComicPan(container);
+    expect(atCommit.x).toBeCloseTo(-350, 3);
+    expect(atCommit.y).toBeCloseTo(-400, 3);
+    // 布局级栅格化仍在（钉住未因范围修正被放弃）。
+    expect(firstVisibleSlot(container).style.width).toBe('1600px');
+    // 大幅左拖：起始侧可达完整范围下沿 -1000，而不是被低估范围夹回。
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: 500,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: -2000,
+      clientY: 400,
+    });
+    expect(readComicPan(container).x).toBeCloseTo(-1000, 3);
+    pointerOn(surface, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+      clientX: -2000,
+      clientY: 400,
+    });
+    await handle.destroy();
+  });
+
+  it('refuses the pin entirely when a visible double-spread half is unmeasurable', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'double' }),
+    });
+    expect(handle.nextPage()).toBe(true);
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['1', '2']));
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    const materialized = slots.find((slot) => slot.dataset.pageIndex === '1')!;
+    const collapsed = slots.find((slot) => slot.dataset.pageIndex === '2')!;
+    await vi.waitFor(() => expect(materialized.querySelector('img')).not.toBeNull());
+    // 只有已物化半页可测（1600×1200）；另一半保持 jsdom 零盒，模拟
+    // fit-width/fit-original 双页 spread 未物化槽 height:auto 塌缩为零盒。
+    Object.defineProperty(materialized, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 1600, height: 1200, right: 1600, bottom: 1200 }),
+    });
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 全有或全无（与 8192 预算守卫同语义）：任一可见槽不可测即整体拒绝
+    // 钉住，保留 transform 缩放路径——晚物化的半页不会以 1× 渲染在
+    // 放大槽旁形成混合倍率。
+    expect(materialized.style.width).toBe('');
+    expect(collapsed.style.width).toBe('');
+    expect(comicSurface(container).style.transform).toContain('scale');
+    await handle.destroy();
+  });
+
+  it('keeps crop-rewritten natural vars when unpinning after a mid-pin crop scan', async () => {
+    document.documentElement.lang = 'en';
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get: () => 2400,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get: () => 3600,
+    });
+    // 裁掉上/下 10%、左/右 5%：cropped 基线 = 2160×2880（2400×3600 × 0.9/0.8）。
+    cropScanResult.insets = { top: 0.1, right: 0.05, bottom: 0.1, left: 0.05 };
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(2), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'original' }),
+    });
+    const slot = firstVisibleSlot(container);
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4800px');
+    // 钉住期间开启裁边（crop-only 补丁不退出放大）：扫描完成后
+    // applySlotWidth 重写基线为裁边值，repin 再放大到 4320/5760。
+    container.querySelector<HTMLButtonElement>('[aria-label="Crop margins"]')!.click();
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4320px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('5760px');
+    });
+    // 退出放大：解钉恢复裁边后的未缩放基线，而不是钉住前记录的旧值
+    //（旧值会丢掉裁边显示）。
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2160px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('2880px');
+    expect(slot.style.width).toBe('');
+    await handle.destroy();
+  });
+
   it('leaves strip-mode zoom on the transform path', async () => {
     const container = document.createElement('div');
     sizeCanvas(container);
@@ -1582,12 +1743,14 @@ describe('CBZ zoom render quality (R3)', () => {
       preferenceStorage: pagedStorage({ mode: 'strip' }),
     });
     const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
-    // strip 的 fit 内联样式是现状基线：放大前后必须逐字节不变。
-    const before = slots.map((slot) => `${slot.style.width}|${slot.style.flex}`);
+    // strip 的 fit 内联样式是现状基线：放大前后必须逐字节不变。快照取
+    // cssText 全量内联（钉住路径可能写 width/height/flex/max-* 与 natural
+    // 变量），任何一条泄漏都会被捕捉，而不只 width/flex。
+    const before = slots.map((slot) => slot.style.cssText);
     stubZoomGeometry(container, 1600, 1200);
     pinchByPointers(container, true);
     expect(readComicScale(container)).toBeGreaterThan(1);
-    expect(slots.map((slot) => `${slot.style.width}|${slot.style.flex}`)).toEqual(before);
+    expect(slots.map((slot) => slot.style.cssText)).toEqual(before);
     expect(comicSurface(container).style.transform).toContain('scale');
     await handle.destroy();
   });
