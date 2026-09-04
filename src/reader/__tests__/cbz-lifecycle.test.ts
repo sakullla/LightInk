@@ -2045,6 +2045,144 @@ describe('CBZ drag-to-turn gesture (T1)', () => {
   });
 });
 
+describe('CBZ drag-turn urgent prefetch and loading feedback (T2)', () => {
+  it('urgent-prefetches the drag target during the drag, before release', async () => {
+    // decode 桩顺带捕获 fetchPriority：urgent=high（绕过并发 1 的预取解码
+    // 限流），非 urgent 预取为 low——这是拖动 urgent 语义的直接判别器。
+    const priorities: string[] = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value(this: HTMLImageElement) {
+        priorities.push(String(this.fetchPriority));
+        return Promise.resolve();
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      // 同步进入拖动（预取定时器尚未触发）：目标页 1 的加载只能来自拖动。
+      touchDragTo(container, 800, 700); // 不抬指
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      expect(handle.currentPage).toBe(1); // 未松手不翻页
+      // 拖动期目标页的读取+解码已开始（不等松手），且走 urgent 优先级。
+      await vi.waitFor(() => expect(priorities.length).toBeGreaterThanOrEqual(2));
+      expect(priorities[1]).toBe('high');
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.currentPage).toBe(1); // 全程未松手，页已就绪
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('marks the unmaterialized drag neighbor with the loading class until it materializes', async () => {
+    // 首页 decode 直通让 renderCbzInto 完成；后续页悬挂，锁定未物化中间态。
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      const neighbor = container.querySelector<HTMLElement>('[data-page-index="1"]')!;
+      expect(neighbor.hidden).toBe(true);
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(false); // 隐藏槽无指示
+
+      touchDragTo(container, 800, 700);
+      expect(neighbor.hidden).toBe(false);
+      // 纯 CSS 指示：未物化邻居只加类，不引入任何叠加元素/图标/文案。
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(true);
+      expect(neighbor.children).toHaveLength(0);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      // 拖动 urgent 加载已推进到目标页解码（页 0 初始 + 页 1 拖动触发）。
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+
+      // 物化完成：类随 img 挂载摘除，槽内只有页面元素。
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() => expect(neighbor.querySelector('img')).not.toBeNull());
+      expect(neighbor.classList.contains('lightink-comic-page-loading')).toBe(false);
+      expect(neighbor.children).toHaveLength(1);
+      pointerOn(container, 'pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 700,
+        clientY: 400,
+      });
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it('keeps the drag-triggered urgent load alive through mid-drag cache refreshes', async () => {
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ direction: 'ltr', spread: 'single' }),
+    });
+    const frames = fakeFrames();
+    try {
+      // 同步进入拖动：目标页 1 的在飞 urgent 加载由拖动发起，解码悬挂。
+      touchDragTo(container, 800, 700);
+      frames.flush();
+      expect(readComicDragTranslateX(container)).toBe(-100);
+      // 预取定时器在拖动期内触发 refreshCacheWindow：不得 abort 拖动目标
+      // 的在飞加载（abort 会在解码拒绝时 revoke 其 blob URL 并丢弃挂载）。
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(readComicDragTranslateX(container)).toBe(-100); // 手势仍在
+      await vi.waitFor(() => expect(decodeCalls).toBeGreaterThanOrEqual(2));
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+
+      // 重排版（setPreferences → applyLayout）按 T1 语义作废手势本身，
+      // 但其缓存刷新同样不得丢弃在飞加载：解码完成后页面照常物化。
+      handle.setPreferences({ fit: 'width' });
+      expect(readComicDragTranslateX(container)).toBeNull();
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
+      await handle.destroy();
+    } finally {
+      frames.restore();
+    }
+  });
+});
+
 describe('CBZ chrome overlay and system bars (R4)', () => {
   it('keeps a single comic overlay and no EPUB footer actions', async () => {
     document.documentElement.lang = 'en';

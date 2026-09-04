@@ -1165,6 +1165,24 @@ export async function renderCbzInto(
       if (page.url !== '') URL.revokeObjectURL(page.url);
     };
 
+    /**
+     * R2（ADR-3）：未物化页槽的轻量加载指示。类只标记「可见且未物化」的
+     * paged 图片页槽（拖动邻居揭示、换屏/跳转落位、decode-hold 超时露占位
+     * 都经此同步）；动画本体在 reader.css——纯背景呼吸微光，不占布局、无
+     * 新增元素/图标/文案，触屏宿主外与 reduce-motion 下均无动画。
+     */
+    const syncComicPageLoading = (index: number): void => {
+      const slot = slots[index];
+      if (slot === undefined) return;
+      const loading =
+        preferences.mode === 'paged' &&
+        images[index]?.kind === 'image' &&
+        !slot.hidden &&
+        !materialized.has(index) &&
+        !failed.has(index);
+      slot.classList.toggle('lightink-comic-page-loading', loading);
+    };
+
     const showPageError = (index: number): void => {
       failed.add(index);
       const nestedArchive = images[index]?.kind === 'archive';
@@ -1182,12 +1200,14 @@ export async function renderCbzInto(
       retry.addEventListener('click', () => {
         failed.delete(index);
         slots[index]!.replaceChildren();
+        syncComicPageLoading(index);
         void loadPage(index).catch((loadError: unknown) => {
           if (!isAbortError(loadError, signal) && !destroyed) showPageError(index);
         });
       });
       error.append(text, retry);
       slots[index]!.replaceChildren(error);
+      syncComicPageLoading(index);
     };
 
     const updatePageList = (
@@ -1395,6 +1415,7 @@ export async function renderCbzInto(
           });
           slots[index]!.replaceChildren(mounted.element);
           applySlotFit(index);
+          syncComicPageLoading(index);
         } catch (error) {
           if (
             destroyed ||
@@ -1449,6 +1470,13 @@ export async function renderCbzInto(
       const wanted = prefetchNeighbors
         ? selectComicCacheWindow(estimatedBytes, centers, cacheBudget)
         : new Set(centers);
+      // R2（ADR-3）：拖动态（含松手缓动在飞）目标 spread 保持 wanted——
+      // 拖动期内任何缓存刷新（预取定时器启用、decode-hold 交错后的换屏等）
+      // 不得 abort 拖动已触发的 urgent 加载；手势结束（提交/回弹/作废）后
+      // 由正常窗口逻辑接管，不再并集。
+      if (dragTurn !== null) {
+        for (const index of dragTurn.revealed) wanted.add(index);
+      }
       for (const index of materialized.keys()) {
         // paged 换屏挂起期（decode-gated swap）旧页仍在屏：跳过释放，等下次
         // 刷新（slot 已隐藏）再回收，避免持有期旧 slot 被掏空闪底色。
@@ -1509,6 +1537,7 @@ export async function renderCbzInto(
         );
         slots.forEach((slot, index) => {
           slot.hidden = !shown.has(index);
+          syncComicPageLoading(index);
         });
         visible.clear();
         shown.forEach((index) => visible.add(index));
@@ -1518,7 +1547,10 @@ export async function renderCbzInto(
           slot.hidden = false;
         });
         visible.clear();
-        slots.forEach((_slot, index) => applySlotFit(index));
+        slots.forEach((_slot, index) => {
+          applySlotFit(index);
+          syncComicPageLoading(index); // strip：mode 门控内只会摘除指示类
+        });
       }
       applyViewTransform();
       updateToolbar();
@@ -1692,6 +1724,19 @@ export async function renderCbzInto(
         if (rehide && !visible.has(index)) slot.hidden = true;
       }
     };
+    /**
+     * R2（ADR-3）：拖动 urgent 曾把目标 spread 并入 visible（loadPage 解码
+     * 优先级 + fetchPriority high）。手势未提交结束（回弹/作废/让位/重排版）
+     * 时退出，恢复 [hidden] 与缓存窗口回收语义；提交路径不经此处——目标
+     * spread 已成为新当前页，由 applySwap 权威收敛 visible。
+     * 目标 spread 与当前 spread 不相交（advanceComicPage 按整 spread 前进），
+     * 删除不会误伤当前页的 visible 语义。
+     */
+    const releaseDragTurnUrgentPages = (): void => {
+      const state = dragTurn;
+      if (state === null) return;
+      for (const index of state.revealed) visible.delete(index);
+    };
     const restoreDragTurnSurface = (): void => {
       pagesRoot.style.removeProperty('will-change');
       pagesRoot.style.removeProperty('position');
@@ -1706,6 +1751,7 @@ export async function renderCbzInto(
     const resetDragTurn = (cancelPendingSwipe = true): void => {
       cancelDragTurnEase();
       cancelDragTurnFrame();
+      releaseDragTurnUrgentPages(); // 先退出 urgent visible，邻居槽才能按语义回隐藏
       stripDragTurnSlots(true);
       dragTurn = null;
       if (cancelPendingSwipe) swipeOrigin = null;
@@ -1790,6 +1836,7 @@ export async function renderCbzInto(
         if (slot === undefined) return;
         applySlotFit(index); // 先落位 fit 样式，再写邻居几何覆盖
         slot.hidden = false;
+        syncComicPageLoading(index); // 未物化邻居立即呈现加载指示
         slot.classList.add('lightink-comic-drag-neighbor');
         slot.style.position = 'absolute';
         slot.style.top = '0';
@@ -1803,6 +1850,24 @@ export async function renderCbzInto(
       pagesRoot.style.overflow = 'hidden'; // 邻居越界绝对定位不产生滚动条
       pagesRoot.style.willChange = 'transform';
       cancelPendingTap(); // 拖动期点按/双击不触发
+      // R2（ADR-3）：方向确定即把目标 spread 并入 visible 并触发 urgent
+      // 加载——urgent 在解码门按 visible 判定，绕过预取解码限流（并发 1）
+      // 并给 fetchPriority high，读取+解码在跟手期被掩盖，不等松手。已在飞
+      // （含预取先发起、尚未过解码门的页由此升级 urgent）/已物化/已失败的
+      // 页由 loadPage 去重守卫跳过；嵌套归档未展开前其后页索引会重排，维持
+      // 阻塞-after 语义不抢跑。手势反向（新手势取代）时 resetDragTurn 先让
+      // 旧目标退出 visible，旧在飞加载交还正常缓存窗口裁决。
+      const firstUnresolved = images.findIndex((page) => page.kind === 'archive');
+      for (const index of revealed) {
+        if (firstUnresolved >= 0 && index > firstUnresolved) continue;
+        visible.add(index);
+        // loadPage 读取完成后按 wantedPages 丢弃不在窗口的页：这里同步并入，
+        // 拖动触发的加载立即有效，不依赖下一次缓存刷新。
+        wantedPages.add(index);
+        void loadPage(index).catch((error: unknown) => {
+          if (!isAbortError(error, signal) && !destroyed) showPageError(index);
+        });
+      }
       const state: DragTurnState = {
         pointerId,
         direction: turnDirection,
@@ -1891,6 +1956,7 @@ export async function renderCbzInto(
           if (slot.hidden) entering.push(next);
           slot.hidden = false;
           applySlotFit(next);
+          syncComicPageLoading(next);
         }
         pagesRoot.scrollTop = 0;
         pagesRoot.scrollLeft = 0;

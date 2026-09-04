@@ -1272,6 +1272,34 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   aspect-ratio: auto;
 }
 
+/*
+ * R2（ADR-3）：未物化页槽的轻量加载指示。类由 cbz.ts 维护在可见且未物化
+ * 的 paged 图片页槽上（拖动邻居揭示、换屏/跳转落位、decode-hold 超时露
+ * 占位），页面物化/失败即摘除。近黑底上的微弱呼吸微光：纯背景动画不占
+ * 布局，无叠加元素/图标/文案；动画声明位高于槽上的内联透明背景。与
+ * slot 滑入同域：仅触屏漫画宿主播放，reduce-motion 完全静止。
+ */
+@keyframes lightink-comic-page-loading {
+  from,
+  to {
+    background-color: var(--lightink-comic-canvas, #111);
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 7%, #111);
+  }
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-cbz-slot.lightink-comic-page-loading {
+  animation: lightink-comic-page-loading 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-reader-cbz-slot.lightink-comic-page-loading {
+    animation: none;
+  }
+}
+
 .lightink-reader-pages[data-comic-reader='true'],
 .lightink-reader-pages[data-comic-reader='true'] .lightink-reader-comic-pages,
 .lightink-reader-cbz-slot,
