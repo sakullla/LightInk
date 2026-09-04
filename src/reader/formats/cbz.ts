@@ -34,6 +34,7 @@ import {
 } from '../../ui/reading-layout.js';
 import {
   applyComicCropDisplay,
+  comicDisplayCeilingCssPx,
   comicDisplayWidthPx,
   COMIC_CROP_NONE,
   comicCroppedSize,
@@ -117,6 +118,14 @@ const COMIC_DRAG_FLICK_VELOCITY = 0.5;
 const COMIC_DRAG_SETTLE_MS = 200;
 /** 速度采样窗口内保留的最近 pointermove 样本数。 */
 const COMIC_DRAG_SAMPLE_LIMIT = 8;
+/**
+ * R3（ADR-4 修订版）：缩放提交点的布局级重栅格停顿窗口。捏合进行中维持既有
+ * 合成器 transform 缩放（逐帧便宜、不重栅格）；双击/捏合 settle、ctrl+wheel
+ * 与 adjustZoom 停顿后把可见 spread 的布局尺寸钉到放大后的视觉尺寸，pagesRoot
+ * transform 退化为纯平移——布局尺寸即位图栅格分辨率，放大倍数由此进入栅格，
+ * 不依赖引擎对 transform 的重栅格行为（01 §4 unknown 的确定性替代）。
+ */
+const COMIC_ZOOM_RASTER_SETTLE_MS = 160;
 const COMIC_INTERACTIVE_SELECTOR =
   '.lightink-reader-comic-error, input, button, a';
 
@@ -822,6 +831,21 @@ export async function renderCbzInto(
     let viewScale = 1;
     let viewX = 0;
     let viewY = 0;
+    /**
+     * R3：布局级缩放的钉住槽（空 = 既有合成器 transform 缩放模式）。钉住时
+     * slot 的布局盒 = fit 盒 × viewScale，img 的栅格分辨率随之按放大倍数提高；
+     * 退出放大（resetViewTransform/zoomAt ≤1/setPreferences）对称摘除。
+     */
+    interface ComicZoomRasterPin {
+      readonly index: number;
+      readonly slot: HTMLElement;
+      width: number;
+      height: number;
+      readonly naturalWidthVar: string;
+      readonly naturalHeightVar: string;
+    }
+    let zoomRasterPins: ComicZoomRasterPin[] = [];
+    let zoomRasterTimer: ReturnType<typeof setTimeout> | null = null;
     let destroyed = false;
     let destruction: Promise<void> | null = null;
     let observer: IntersectionObserver | null = null;
@@ -1053,6 +1077,7 @@ export async function renderCbzInto(
       if (preferences.fit === 'width' || preferences.fit === 'original') {
         slot.style.maxHeight = 'none';
       }
+      repinZoomRasterSlot(index); // 钉住槽的 fit 内联样式被重写后按新几何重钉
     };
 
     const applySurfaceMetrics = (): void => {
@@ -1086,14 +1111,20 @@ export async function renderCbzInto(
         return;
       }
       const viewport = container.getBoundingClientRect();
+      // 钉住时内容布局已经是放大后的尺寸（scrollWidth/scrollHeight 已含倍数）：
+      // 折算回未缩放尺寸喂给既有 clamp 数学，×viewScale 后与视觉范围一致。
+      const pinned = zoomRasterPins.length > 0;
+      const measured = {
+        width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
+        height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
+      };
       const clamped = clampComicViewOffset(
         { x: viewX, y: viewY },
         viewScale,
         { width: viewport.width, height: viewport.height },
-        {
-          width: pagesRoot.scrollWidth || pagesRoot.clientWidth || viewport.width,
-          height: pagesRoot.scrollHeight || pagesRoot.clientHeight || viewport.height,
-        },
+        pinned
+          ? { width: measured.width / viewScale, height: measured.height / viewScale }
+          : measured,
       );
       viewX = clamped.x;
       viewY = clamped.y;
@@ -1114,7 +1145,10 @@ export async function renderCbzInto(
       pagesRoot.style.setProperty('--lightink-comic-translate-y', `${viewY}px`);
       if (zoomed) {
         pagesRoot.style.transformOrigin = '0 0';
-        pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+        pagesRoot.style.transform =
+          zoomRasterPins.length > 0
+            ? `translate(${viewX}px, ${viewY}px)`
+            : `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
       } else {
         pagesRoot.style.removeProperty('transform');
         pagesRoot.style.removeProperty('transform-origin');
@@ -1129,7 +1163,165 @@ export async function renderCbzInto(
       }
     };
 
+    const cancelZoomRasterCommit = (): void => {
+      if (zoomRasterTimer === null) return;
+      clearTimeout(zoomRasterTimer);
+      zoomRasterTimer = null;
+    };
+
+    const restoreZoomRasterVar = (slot: HTMLElement, name: string, value: string): void => {
+      if (value === '') slot.style.removeProperty(name);
+      else slot.style.setProperty(name, value);
+    };
+
+    const scaleZoomRasterVar = (slot: HTMLElement, name: string, current: string): void => {
+      if (current === '') return;
+      const px = Number.parseFloat(current);
+      if (!Number.isFinite(px) || px <= 0) return;
+      slot.style.setProperty(name, `${px * viewScale}px`);
+    };
+
+    /**
+     * 解除钉住：slot 布局回到 fit 尺寸、transform 恢复 translate+scale。钉住与
+     * 解钉互为逆变换，flex 居中/padding 造成的常量偏移由前后测量差回补进
+     * translate，同一任务内无中间帧，视觉逐像素不变。
+     */
+    const unpinZoomRaster = (): void => {
+      cancelZoomRasterCommit();
+      if (zoomRasterPins.length === 0) return;
+      const reference = zoomRasterPins[0]!.slot;
+      const before = reference.getBoundingClientRect();
+      for (const pin of zoomRasterPins) {
+        pin.slot.style.removeProperty('width');
+        pin.slot.style.removeProperty('height');
+        pin.slot.style.removeProperty('flex');
+        pin.slot.style.removeProperty('max-width');
+        pin.slot.style.removeProperty('max-height');
+        restoreZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-width',
+          pin.naturalWidthVar,
+        );
+        restoreZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-height',
+          pin.naturalHeightVar,
+        );
+      }
+      zoomRasterPins = [];
+      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      const after = reference.getBoundingClientRect();
+      viewX += before.left - after.left;
+      viewY += before.top - after.top;
+      applyViewTransform();
+    };
+
+    /**
+     * 钉住：把可见 spread 的布局尺寸设为当前视觉尺寸（= fit 盒 × viewScale），
+     * pagesRoot transform 退化为纯平移。8192 设备像素预算（按夹取 dpr 折算）
+     * 内才提交；任一可见页超预算即整体放弃，维持 transform 缩放路径。
+     * 仅 paged；strip 模式零变化。捏合进行中（双指在屏）不钉住。
+     */
+    const pinZoomRaster = (): boolean => {
+      if (preferences.mode !== 'paged' || viewScale <= 1 || activePointers.size >= 2) {
+        return false;
+      }
+      const cap = comicDisplayCeilingCssPx();
+      const pins: ComicZoomRasterPin[] = [];
+      for (const index of visible) {
+        const slot = slots[index];
+        if (slot === undefined || slot.hidden) continue;
+        const rect = slot.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.width > cap || rect.height > cap) return false;
+        pins.push({
+          index,
+          slot,
+          width: rect.width,
+          height: rect.height,
+          naturalWidthVar: slot.style.getPropertyValue('--lightink-comic-natural-width'),
+          naturalHeightVar: slot.style.getPropertyValue('--lightink-comic-natural-height'),
+        });
+      }
+      if (pins.length === 0) return false;
+      const before = pins[0]!.slot.getBoundingClientRect();
+      for (const pin of pins) {
+        pin.slot.style.width = `${pin.width}px`;
+        pin.slot.style.height = `${pin.height}px`;
+        pin.slot.style.flex = 'none';
+        pin.slot.style.maxWidth = 'none';
+        pin.slot.style.maxHeight = 'none';
+        scaleZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-width',
+          pin.naturalWidthVar,
+        );
+        scaleZoomRasterVar(
+          pin.slot,
+          '--lightink-comic-natural-height',
+          pin.naturalHeightVar,
+        );
+      }
+      zoomRasterPins = pins;
+      pagesRoot.style.transform = `translate(${viewX}px, ${viewY}px)`;
+      const after = pins[0]!.slot.getBoundingClientRect();
+      viewX -= after.left - before.left;
+      viewY -= after.top - before.top;
+      applyViewTransform();
+      return true;
+    };
+
+    /** settle/提交点：先解钉再按当前几何重钉（resize/换屏后的新 fit 盒）。 */
+    const commitZoomRaster = (): void => {
+      cancelZoomRasterCommit();
+      if (zoomRasterPins.length > 0) unpinZoomRaster();
+      if (preferences.mode !== 'paged' || viewScale <= 1) return;
+      pinZoomRaster();
+    };
+
+    /** ctrl+wheel / adjustZoom 连发缩放只在停顿后提交一次布局级重栅格。 */
+    const scheduleZoomRasterCommit = (): void => {
+      cancelZoomRasterCommit();
+      zoomRasterTimer = setTimeout(() => {
+        zoomRasterTimer = null;
+        if (!destroyed) commitZoomRaster();
+      }, COMIC_ZOOM_RASTER_SETTLE_MS);
+    };
+
+    /**
+     * applySlotFit 重写了 fit 内联样式（新物化页、裁边扫描、重排版落位）：
+     * 钉住槽按新 fit 几何重钉（钉住盒 = 测量宽高 × viewScale；宽高不含平移，
+     * 测量不受 translate 影响）。不可测（隐藏/jsdom 零盒）时按记录盒重写，
+     * 保持钉住态一致。
+     */
+    const repinZoomRasterSlot = (index: number): void => {
+      const pin = zoomRasterPins.find((entry) => entry.index === index);
+      if (pin === undefined) return;
+      const rect = pin.slot.getBoundingClientRect();
+      const measurable = rect.width > 0 && rect.height > 0;
+      if (measurable) {
+        pin.width = rect.width * viewScale;
+        pin.height = rect.height * viewScale;
+      }
+      pin.slot.style.width = `${pin.width}px`;
+      pin.slot.style.height = `${pin.height}px`;
+      pin.slot.style.flex = 'none';
+      pin.slot.style.maxWidth = 'none';
+      pin.slot.style.maxHeight = 'none';
+      scaleZoomRasterVar(
+        pin.slot,
+        '--lightink-comic-natural-width',
+        pin.slot.style.getPropertyValue('--lightink-comic-natural-width'),
+      );
+      scaleZoomRasterVar(
+        pin.slot,
+        '--lightink-comic-natural-height',
+        pin.slot.style.getPropertyValue('--lightink-comic-natural-height'),
+      );
+    };
+
     const resetViewTransform = (): void => {
+      unpinZoomRaster(); // 先回到 transform 缩放形态再归零，退出放大即恢复原尺寸
       viewScale = 1;
       viewX = 0;
       viewY = 0;
@@ -1137,6 +1329,7 @@ export async function renderCbzInto(
     };
 
     const zoomAt = (clientX: number, clientY: number, nextScale: number): void => {
+      if (zoomRasterPins.length > 0) unpinZoomRaster(); // 焦点数学按未缩放内容坐标
       const rect = container.getBoundingClientRect();
       const pointX = clientX - rect.left;
       const pointY = clientY - rect.top;
@@ -1155,6 +1348,7 @@ export async function renderCbzInto(
 
     const toggleZoomAt = (clientX: number, clientY: number): void => {
       zoomAt(clientX, clientY, viewScale > 1 ? 1 : COMIC_ZOOM_TOGGLE);
+      commitZoomRaster(); // 双击是离散手势：settle 点同步提交布局级重栅格
     };
 
     const releasePage = (index: number): void => {
@@ -1508,6 +1702,7 @@ export async function renderCbzInto(
     const applyLayout = (notify = true): void => {
       spreadSwapGeneration += 1; // 重排版同步重写 hidden：作废挂起的换屏
       resetDragTurn(); // 同时作废拖动态/在飞缓动，避免残留邻居槽与偏移
+      unpinZoomRaster(); // 重排版在既有 transform 缩放语义下落位，钉住在结尾重提
       const previousPage = currentPage;
       const spreadPrefs = layoutSpreadPrefs();
       const currentIndex = comicSpreadStart(
@@ -1553,6 +1748,7 @@ export async function renderCbzInto(
         });
       }
       applyViewTransform();
+      commitZoomRaster(); // 仍处放大时按重排版后的新几何重钉（resize 后保持清晰栅格）
       updateToolbar();
       refreshCacheWindow(currentIndex);
       scheduleVisibleCropScans();
@@ -1952,6 +2148,7 @@ export async function renderCbzInto(
       // 非拖动翻页先清拖动残留（在飞缓动/邻居槽/transform）；拖动提交路径
       // 保留被拖 frame，等 commit 内与 applySwap 同步原子清理。
       if (source !== 'drag') resetDragTurn();
+      unpinZoomRaster(); // 换屏在既有 transform 缩放语义下进行，落位后由 applySwap 重钉
       // 新页先进 visible 提升 loadPage 的解码优先级（urgent）；换屏在 commit。
       for (const next of shown) visible.add(next);
       updateToolbar();
@@ -1976,6 +2173,7 @@ export async function renderCbzInto(
         }
         pagesRoot.scrollTop = 0;
         pagesRoot.scrollLeft = 0;
+        commitZoomRaster(); // 放大中的换屏落位后，新 spread 以布局尺寸承接放大
         return entering;
       };
       const commit = (): void => {
@@ -2346,7 +2544,11 @@ export async function renderCbzInto(
 
     const onPointerUp = (event: PointerEvent): void => {
       if (!activePointers.has(event.pointerId)) return;
+      const wasPinchPair = activePointers.size >= 2;
       activePointers.delete(event.pointerId);
+      if (wasPinchPair && activePointers.size < 2) {
+        commitZoomRaster(); // 捏合 settle：逐帧 transform 路径到此为止，提交重栅格
+      }
       if (activePointers.size < 2) {
         pinchDistance = 0;
         pinchScale = viewScale;
@@ -2448,6 +2650,7 @@ export async function renderCbzInto(
         resetDragTurn(); // 轨道板捏合让位缩放，同触屏第二指互斥
         const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
         zoomAt(event.clientX, event.clientY, viewScale * factor);
+        scheduleZoomRasterCommit(); // 连发轮缩放停顿后一次布局级重栅格
         return;
       }
       if (viewScale > 1) {
@@ -2542,6 +2745,8 @@ export async function renderCbzInto(
       cropGeneration += 1;
       cropQueue.length = 0;
       clearTimeout(prefetchTimer);
+      cancelZoomRasterCommit(); // 停顿提交定时器随销毁取消
+      unpinZoomRaster(); // 钉住的内联几何对称摘除
       if (chromeTimer !== null) clearTimeout(chromeTimer);
       cancelPendingTap();
       resetDragTurn(); // 在飞缓动帧、邻居槽、transform 对称清理
@@ -2631,6 +2836,7 @@ export async function renderCbzInto(
         const rect = container.getBoundingClientRect();
         const factor = action === 'in' ? 1.25 : 1 / 1.25;
         zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, viewScale * factor);
+        scheduleZoomRasterCommit(); // 键盘连发放大同样在停顿后提交重栅格
       },
       destroy: async () => {
         signal?.removeEventListener('abort', onAbort);

@@ -153,6 +153,16 @@ export function comicDisplayWidthPx(
   return Math.min(COMIC_DISPLAY_MAX_DEVICE_PX, Math.max(1, device));
 }
 
+/**
+ * Zoom raster ceiling in CSS px: the device-pixel paint budget at the clamped
+ * dpr. Zoom pinning must never lay a page out beyond this per-axis ceiling.
+ */
+export function comicDisplayCeilingCssPx(
+  host: { readonly devicePixelRatio?: number } | null = typeof window !== 'undefined' ? window : null,
+): number {
+  return COMIC_DISPLAY_MAX_DEVICE_PX / comicDevicePixelRatio(host);
+}
+
 export interface ComicPageElement {
   readonly element: HTMLElement;
   readonly url: string;

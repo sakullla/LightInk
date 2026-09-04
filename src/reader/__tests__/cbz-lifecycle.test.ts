@@ -1375,6 +1375,224 @@ describe('CBZ page materialization', () => {
   });
 });
 
+describe('CBZ zoom render quality (R3)', () => {
+  /**
+   * R3（ADR-4 修订版）：放大提交点把可见页的布局尺寸钉到放大后的视觉尺寸
+   * （fit 盒 × viewScale），pagesRoot transform 退化为纯平移——布局尺寸即
+   * 位图栅格分辨率。stub 返回恒定 rect 使提交 Δ=0，断言确定。scrollWidth/
+   * scrollHeight 提供 clamp 的内容范围（钉住后 = 钉住盒，与真实布局一致）。
+   */
+  function stubZoomGeometry(
+    container: HTMLElement,
+    width: number,
+    height: number,
+  ): void {
+    for (const slot of container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot')) {
+      Object.defineProperty(slot, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
+      });
+    }
+    const surface = comicSurface(container);
+    Object.defineProperty(surface, 'scrollWidth', { configurable: true, value: width });
+    Object.defineProperty(surface, 'scrollHeight', { configurable: true, value: height });
+  }
+
+  function firstVisibleSlot(container: HTMLElement): HTMLElement {
+    return container.querySelector<HTMLElement>('.lightink-reader-cbz-slot:not([hidden])')!;
+  }
+
+  it('pins the visible page render box to the zoomed size and pans without rescaling', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    const slot = firstVisibleSlot(container);
+    // scale=1 默认路径：槽宽/高/flex/max 全部交给既有 fit CSS，逐字节保持现状。
+    expect(slot.style.width).toBe('');
+    expect(slot.style.height).toBe('');
+    expect(slot.style.flex).toBe('');
+    expect(slot.style.maxWidth).toBe('');
+    expect(slot.style.maxHeight).toBe('');
+
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 提交点：放大倍数直接进入可见页布局尺寸（fit 800×600 × 2 → 1600×1200）。
+    expect(slot.style.width).toBe('1600px');
+    expect(slot.style.height).toBe('1200px');
+    expect(slot.style.flex).toBe('0 0 auto'); // flex:none 的 CSSOM 序列化
+    expect(slot.style.maxWidth).toBe('none');
+    expect(slot.style.maxHeight).toBe('none');
+    // 布局承担放大：inline transform 只剩平移；缩放语义变量/dataset 不变。
+    const surface = comicSurface(container);
+    expect(surface.style.transform).not.toContain('scale');
+    expect(surface.dataset.comicScale).toBe('2');
+    expect(container.dataset.comicZoomed).toBe('true');
+
+    // 钉住态下平移：仍走既有 pan 数学（clamp 按 1×已放大内容范围）。
+    dragCanvas(container, 'mouse');
+    const pan = readComicPan(container);
+    expect(pan.x).toBeCloseTo(-600, 3);
+    expect(pan.y).toBeCloseTo(-400, 3);
+    expect(surface.style.transform).not.toContain('scale');
+
+    // 退出放大：恢复原尺寸与 transform 形态（逐字节回到现状）。
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.width).toBe('');
+    expect(slot.style.height).toBe('');
+    expect(slot.style.flex).toBe('');
+    expect(slot.style.maxWidth).toBe('');
+    expect(slot.style.maxHeight).toBe('');
+    expect(surface.style.transform).toBe('');
+    expect(surface.dataset.comicScale).toBe('1');
+    await handle.destroy();
+  });
+
+  it('raises the render box only at pinch settle, not per pinch move', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage(),
+    });
+    const slot = firstVisibleSlot(container);
+    stubZoomGeometry(container, 1600, 1200);
+    const surface = comicSurface(container);
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 400,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointerdown', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 560,
+      clientY: 400,
+    });
+    pointerOn(surface, 'pointermove', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 720,
+      clientY: 400,
+    });
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 捏合进行中：不逐帧重栅格——布局尺寸未动，transform 仍承担缩放。
+    expect(slot.style.width).toBe('');
+    expect(surface.style.transform).toContain('scale');
+    // 松指（捏合结束）：settle 提交，布局尺寸承接放大。
+    pointerOn(surface, 'pointerup', {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 720,
+      clientY: 400,
+    });
+    expect(slot.style.width).toBe('1600px');
+    expect(surface.style.transform).not.toContain('scale');
+    pointerOn(surface, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 400,
+      clientY: 400,
+    });
+    expect(slot.style.width).toBe('1600px');
+    await handle.destroy();
+  });
+
+  it('keeps the 8192 device-pixel paint budget at the higher zoom sizes', async () => {
+    const originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+      const wide = document.createElement('div');
+      sizeCanvas(wide);
+      const wideHandle = await renderCbzInto(await buildCbz(4), wide, undefined, {
+        preferenceStorage: pagedStorage(),
+      });
+      stubZoomGeometry(wide, 9000, 7200);
+      zoomByDoubleClick(wide);
+      expect(readComicScale(wide)).toBeGreaterThan(1);
+      // 视觉 9000px > 8192 设备像素预算（dpr 1）：拒绝钉住，维持 transform 缩放。
+      expect(firstVisibleSlot(wide).style.width).toBe('');
+      expect(comicSurface(wide).style.transform).toContain('scale');
+      await wideHandle.destroy();
+
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+      const retina = document.createElement('div');
+      sizeCanvas(retina);
+      const retinaHandle = await renderCbzInto(await buildCbz(4), retina, undefined, {
+        preferenceStorage: pagedStorage(),
+      });
+      stubZoomGeometry(retina, 5000, 4000);
+      zoomByDoubleClick(retina);
+      expect(readComicScale(retina)).toBeGreaterThan(1);
+      // dpr 2：预算折半为 4096 css px，5000px 同样拒绝钉住。
+      expect(firstVisibleSlot(retina).style.width).toBe('');
+      expect(comicSurface(retina).style.transform).toContain('scale');
+      await retinaHandle.destroy();
+    } finally {
+      if (originalDpr === undefined) {
+        Reflect.deleteProperty(window, 'devicePixelRatio');
+      } else {
+        Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+      }
+    }
+  });
+
+  it('scales the natural-size custom properties of original-fit pages while pinned', async () => {
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', {
+      configurable: true,
+      get: () => 2400,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalHeight', {
+      configurable: true,
+      get: () => 3600,
+    });
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(2), container, undefined, {
+      preferenceStorage: pagedStorage({ fit: 'original' }),
+    });
+    const slot = firstVisibleSlot(container);
+    await vi.waitFor(() => {
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+      expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    });
+    stubZoomGeometry(container, 1600, 1200);
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    // 原图档的 img 宽高来自 natural 变量：钉住时按放大倍数同步放大。
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('4800px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('7200px');
+    expect(slot.style.width).toBe('1600px');
+    zoomByDoubleClick(container);
+    expect(readComicScale(container)).toBeCloseTo(1, 3);
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-width')).toBe('2400px');
+    expect(slot.style.getPropertyValue('--lightink-comic-natural-height')).toBe('3600px');
+    expect(slot.style.width).toBe('');
+    await handle.destroy();
+  });
+
+  it('leaves strip-mode zoom on the transform path', async () => {
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: pagedStorage({ mode: 'strip' }),
+    });
+    const slots = Array.from(container.querySelectorAll<HTMLElement>('.lightink-reader-cbz-slot'));
+    // strip 的 fit 内联样式是现状基线：放大前后必须逐字节不变。
+    const before = slots.map((slot) => `${slot.style.width}|${slot.style.flex}`);
+    stubZoomGeometry(container, 1600, 1200);
+    pinchByPointers(container, true);
+    expect(readComicScale(container)).toBeGreaterThan(1);
+    expect(slots.map((slot) => `${slot.style.width}|${slot.style.flex}`)).toEqual(before);
+    expect(comicSurface(container).style.transform).toContain('scale');
+    await handle.destroy();
+  });
+});
+
 function androidTauriHost(
   extras: ComicSystemBarsHost = {},
 ): Window & ComicSystemBarsHost {
