@@ -88,6 +88,7 @@ describe('extractPrintParts', () => {
 /** 最小 fake 元素：覆盖 printViaMainWindow 用到的 DOM 子集。 */
 class FakeEl {
   id = '';
+  className = '';
   textContent = '';
   innerHTML = '';
   scrollWidth = 800;
@@ -196,6 +197,8 @@ describe('printViaMainWindow', () => {
     const root = byId.get(EXPORT_ROOT_ID);
     const style = byId.get(PRINT_STYLE_ID);
     expect(root).toBeDefined();
+    expect(root?.className).toBe('lightink-prose');
+    expect(root?.getAttribute('data-theme')).toBe('warm-light');
     expect(root?.innerHTML).toContain('<h1>导出</h1>');
     expect(style?.textContent).toContain('/* theme */');
     expect(style?.textContent).toContain(MAIN_WINDOW_PRINT_CSS);
@@ -279,6 +282,8 @@ describe('printToPdfFile', () => {
       const root = byId.get(EXPORT_ROOT_ID);
       const style = byId.get(PRINT_STYLE_ID);
       expect(root).toBeDefined();
+      expect(root?.className).toBe('lightink-prose');
+      expect(root?.getAttribute('data-theme')).toBe('warm-light');
       expect(root?.innerHTML).toContain('<h1>正文标题</h1>');
       expect(root?.getAttribute('style') ?? '').toMatch(/width:\s*100%/);
       expect(root?.getAttribute('style') ?? '').toMatch(/opacity:\s*1/);

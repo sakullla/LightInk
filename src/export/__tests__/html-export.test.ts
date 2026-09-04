@@ -29,7 +29,8 @@ describe('buildHtmlDocument', () => {
     expect(html).toContain('<html lang="zh-CN" data-theme="dark">');
     expect(html).toContain('<style>:root{--x:1}</style>');
     expect(html).toContain('<title>笔记</title>');
-    expect(html).toContain('<body>\n<h1>标题</h1><p>正文</p>\n</body>');
+    expect(html).toContain('<body class="lightink-prose">');
+    expect(html).toContain('<body class="lightink-prose">\n<h1>标题</h1><p>正文</p>\n</body>');
   });
 
   it('标题与主题做 HTML 转义；空主题回退 warm-light', () => {

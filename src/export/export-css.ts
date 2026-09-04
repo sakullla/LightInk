@@ -10,13 +10,17 @@
  *     内联为 data URI（woff2/ttf 超过默认 4KB 上限，不设该回调时字体仍是
  *     独立文件、独立 HTML 经 file:// 打开会 404），公式在独立 HTML 中
  *     离线可用；
- *   - `EXPORT_BASE_CSS` 是编辑器内容排版的精简复刻（正文/代码块/引用/表格/
- *     图片等，取自 src/ui/theme.css 的 `.lightink-tab-host` 部分并把作用域
- *     换成 `body`），应用外壳样式（工具栏/标签栏）不进入导出文档。
+ *   - `prose.css` 经 `?raw` 原样读入：标题比例、块级节奏与 CJK 处理的唯一源，
+ *     选择器为 `.lightink-prose`；导出 body / PDF 根挂同一 class 即复用；
+ *   - `EXPORT_BASE_CSS` 只保留导出文档壳层（背景/栏宽/内边距/代码块边框等），
+ *     并在 `body.lightink-prose` 上以令牌覆盖 14px/1.7 打印向基准，使
+ *     `--lightink-rhythm-unit` 与 font-size/line-height 取同一组值。
+ *     应用外壳样式（工具栏/标签栏）不进入导出文档。
  *
- * 中文字体策略（R5「PDF 中文无乱码」）：正文 font-family 栈含
- * "Microsoft YaHei" / "PingFang SC" 等系统 CJK 字体，WebView 打印走系统
- * 字体，Windows/macOS 上中文不会出现豆腐块；KaTeX 数学字体随 CSS 内嵌。
+ * 中文字体策略（R5「PDF 中文无乱码」）：正文与等宽字体走
+ * `var(--lightink-font-body)` / `var(--lightink-font-mono)`（tokens.css
+ * 系统 CJK 栈），WebView 打印走系统字体，Windows/macOS 上中文不会出现
+ * 豆腐块；KaTeX 数学字体随 CSS 内嵌。
  *
  * 注意：vitest（node 环境）不处理 CSS 导入，`?raw`/`?inline` 在测试下得到
  * 空串。因此纯逻辑（html-export / pdf-export）一律以 `cssText` 参数注入，
@@ -24,19 +28,31 @@
  */
 
 import katexCss from 'katex/dist/katex.min.css?inline';
+import proseCss from '../theme/prose.css?raw';
 import tokensCss from '../theme/tokens.css?raw';
 
-/** 与编辑器内容排版对应的导出基础样式（作用域为 body，无外壳样式）。 */
-export const EXPORT_BASE_CSS = `/* LightInk 导出文档基础样式（与编辑器内容排版一致，作用域 body） */
-body {
+/** 导出文档壳层（栏宽/色/边框）。排版节奏由 prose.css 提供；14px/1.7 打印向基准在此覆盖。 */
+export const EXPORT_BASE_CSS = `/* LightInk 导出文档基础样式（与编辑器共用 prose.css，作用域 body.lightink-prose） */
+body.lightink-prose {
   background: var(--lightink-bg);
   color: var(--lightink-fg);
-  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.7;
+  --lightink-font-size: 14px;
+  --lightink-line-height-body: 1.7;
+  font-family: var(--lightink-font-body);
+  font-size: var(--lightink-font-size);
+  line-height: var(--lightink-line-height-body);
   max-width: 860px;
   margin: 0 auto;
   padding: 24px 32px 48px;
+}
+/* PDF 主窗口根不是 body：同一组打印向令牌必须挂在 .lightink-prose 根上，
+   否则 rhythm-unit 会落到 tokens.css 的 16px/1.75。 */
+#lightink-export-print-root.lightink-prose {
+  --lightink-font-size: 14px;
+  --lightink-line-height-body: 1.7;
+  font-family: var(--lightink-font-body);
+  font-size: var(--lightink-font-size);
+  line-height: var(--lightink-line-height-body);
 }
 pre {
   background: var(--lightink-code-bg);
@@ -44,11 +60,9 @@ pre {
   border-radius: 6px;
   padding: 12px 16px;
   overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.5;
 }
 code {
-  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-family: var(--lightink-font-mono);
 }
 :not(pre) > code {
   background: var(--lightink-code-bg);
@@ -57,7 +71,6 @@ code {
   font-size: 0.92em;
 }
 blockquote {
-  margin: 0;
   padding-left: 14px;
   border-left: 3px solid var(--lightink-border);
   color: var(--lightink-muted);
@@ -70,10 +83,9 @@ img[style*="width"] { max-width: none; }
 /* nodeView 交互 chrome（缩放柄/对齐条）不得外泄到导出文档——PM 失焦不调
    deselectNode，选中态可能保留，故用 !important 兜底隐藏（R12 导出无回归）。 */
 .lightink-image-handle, .lightink-image-alignbar { display: none !important; }
-table { border-collapse: collapse; margin: 8px 0; }
+table { border-collapse: collapse; }
 th, td { border: 1px solid var(--lightink-border); padding: 4px 10px; }
 th { background: var(--lightink-bg-elevated); }
-.lightink-math-block, .lightink-mermaid { margin: 8px 0; }
 .lightink-export-toc {
   margin: 0 0 1.5rem;
   padding: 0.75rem 1rem;
@@ -99,11 +111,11 @@ th { background: var(--lightink-bg-elevated); }
 `;
 
 /**
- * 装配导出 CSS：主题令牌 + KaTeX 样式（含内嵌字体）+ 基础排版 + 可选附加
- * CSS（生产为当前自定义主题文本；内置主题时传空串）。
+ * 装配导出 CSS：主题令牌 + prose 排版 + KaTeX 样式（含内嵌字体）+ 导出壳层
+ * + 可选附加 CSS（生产为当前自定义主题文本；内置主题时传空串）。
  */
 export function buildExportCss(extraCss = ''): string {
-  return [tokensCss, katexCss, EXPORT_BASE_CSS, extraCss]
+  return [tokensCss, proseCss, katexCss, EXPORT_BASE_CSS, extraCss]
     .filter((part) => part.length > 0)
     .join('\n');
 }

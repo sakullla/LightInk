@@ -135,7 +135,7 @@ export function buildHtmlDocument(opts: HtmlExportOptions): string {
     `<title>${escapeHtmlText(opts.title)}</title>`,
     `<style>${opts.cssText}</style>`,
     '</head>',
-    '<body>',
+    '<body class="lightink-prose">',
     ...(toc === '' ? [] : [toc]),
     opts.bodyHtml,
     '</body>',

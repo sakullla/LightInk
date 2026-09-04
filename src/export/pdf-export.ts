@@ -14,7 +14,7 @@
  *     用 `@media print` 隐藏其余 UI 后对 **主窗口** `window.print()`。
  *     这样三端同一实现，且不依赖 iframe 打印。
  *
- * 中文无乱码策略：与 HTML 导出共用 export-css 的字体栈（系统 CJK 字体，
+ * 中文无乱码策略：与 HTML 导出共用 export-css 的字体令牌（系统 CJK 栈，
  * 见 export-css.ts 头部注释），打印渲染由 WebView 使用系统字体完成，
  * Windows/macOS 上无需内嵌中文字体；KaTeX 数学字体已随 CSS 内嵌。
  */
@@ -150,6 +150,7 @@ function mountExportRoot(
 
   const root = doc.createElement('div');
   root.id = EXPORT_ROOT_ID;
+  root.className = 'lightink-prose';
   root.setAttribute('data-theme', PRINT_THEME);
   root.setAttribute(
     'style',
