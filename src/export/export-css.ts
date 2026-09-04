@@ -38,6 +38,7 @@ body.lightink-prose {
   color: var(--lightink-fg);
   --lightink-font-size: 14px;
   --lightink-line-height-body: 1.7;
+  --lightink-font-scale: 1;
   font-family: var(--lightink-font-body);
   font-size: var(--lightink-font-size);
   line-height: var(--lightink-line-height-body);
@@ -50,6 +51,7 @@ body.lightink-prose {
 #lightink-export-print-root.lightink-prose {
   --lightink-font-size: 14px;
   --lightink-line-height-body: 1.7;
+  --lightink-font-scale: 1;
   font-family: var(--lightink-font-body);
   font-size: var(--lightink-font-size);
   line-height: var(--lightink-line-height-body);

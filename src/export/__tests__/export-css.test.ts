@@ -15,9 +15,15 @@ import { buildExportCss, EXPORT_BASE_CSS } from '../export-css.js';
 describe('buildExportCss', () => {
   it('基础排版样式以令牌声明 14px/1.7 基准并挂 lightink-prose', () => {
     expect(EXPORT_BASE_CSS).toContain('body.lightink-prose');
+    expect(EXPORT_BASE_CSS).toContain('#lightink-export-print-root.lightink-prose');
     expect(EXPORT_BASE_CSS).toContain('var(--lightink-font-body)');
     expect(EXPORT_BASE_CSS).toContain('--lightink-font-size: 14px');
     expect(EXPORT_BASE_CSS).toContain('--lightink-line-height-body: 1.7');
+    const bodyRule = EXPORT_BASE_CSS.match(/body\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
+    const printRootRule =
+      EXPORT_BASE_CSS.match(/#lightink-export-print-root\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(bodyRule).toContain('--lightink-font-scale: 1');
+    expect(printRootRule).toContain('--lightink-font-scale: 1');
     expect(EXPORT_BASE_CSS).not.toContain('Microsoft YaHei');
     expect(EXPORT_BASE_CSS).not.toContain('font-size: 13px');
     expect(EXPORT_BASE_CSS).toContain('table');
