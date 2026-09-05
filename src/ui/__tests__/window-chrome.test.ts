@@ -8,6 +8,7 @@ import {
   setNativeCaptionColors,
   setNativeTheme,
   setNativeTitleBar,
+  syncNativeWindowOuterRounded,
   toggleFullscreen,
   type AppWindowLike,
 } from '../window-chrome.js';
@@ -33,6 +34,79 @@ describe('toggleFullscreen', () => {
     };
     await expect(toggleFullscreen(async () => win)).resolves.toBe(false);
     expect(win.setFullscreen).toHaveBeenCalledWith(false);
+  });
+
+  it('clears outer rounding after entering fullscreen', async () => {
+    let fullscreen = false;
+    const invoke = vi.fn(async () => undefined);
+    const win: AppWindowLike = {
+      isFullscreen: vi.fn(async () => fullscreen),
+      isMaximized: vi.fn(async () => false),
+      setFullscreen: vi.fn(async (value) => {
+        fullscreen = value;
+      }),
+    };
+    await expect(toggleFullscreen(async () => win, invoke)).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: false });
+  });
+
+  it('restores outer rounding after leaving fullscreen unless maximized', async () => {
+    let fullscreen = true;
+    const invoke = vi.fn(async () => undefined);
+    const win: AppWindowLike = {
+      isFullscreen: vi.fn(async () => fullscreen),
+      isMaximized: vi.fn(async () => false),
+      setFullscreen: vi.fn(async (value) => {
+        fullscreen = value;
+      }),
+    };
+    await expect(toggleFullscreen(async () => win, invoke)).resolves.toBe(false);
+    expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: true });
+  });
+});
+
+describe('syncNativeWindowOuterRounded', () => {
+  it('rounds only when restored, not maximized or fullscreen', async () => {
+    const invoke = vi.fn(async () => undefined);
+    const restored: AppWindowLike = {
+      isFullscreen: vi.fn(async () => false),
+      setFullscreen: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+    };
+    await syncNativeWindowOuterRounded(async () => restored, invoke);
+    expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: true });
+
+    invoke.mockClear();
+    const maximized: AppWindowLike = {
+      isFullscreen: vi.fn(async () => false),
+      setFullscreen: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => true),
+    };
+    await syncNativeWindowOuterRounded(async () => maximized, invoke);
+    expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: false });
+
+    invoke.mockClear();
+    const fullscreen: AppWindowLike = {
+      isFullscreen: vi.fn(async () => true),
+      setFullscreen: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+    };
+    await syncNativeWindowOuterRounded(async () => fullscreen, invoke);
+    expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: false });
+  });
+
+  it('no-ops without a window and swallows invoke failures', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('not tauri');
+    });
+    await expect(syncNativeWindowOuterRounded(async () => null, invoke)).resolves.toBeUndefined();
+    expect(invoke).not.toHaveBeenCalled();
+    const win: AppWindowLike = {
+      isFullscreen: vi.fn(async () => false),
+      setFullscreen: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+    };
+    await expect(syncNativeWindowOuterRounded(async () => win, invoke)).resolves.toBeUndefined();
   });
 });
 

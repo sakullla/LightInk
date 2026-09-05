@@ -177,6 +177,8 @@ pub fn run() {
             // 编译期排除注册，消除未验证调用（02 D2）。
             #[cfg(desktop)]
             window_chrome::set_window_caption_color,
+            #[cfg(desktop)]
+            window_chrome::set_window_outer_rounded,
         ])
         // 用 build + run 才能接 RunEvent::Opened（macOS/iOS/Android 文件关联）。
         // Builder::run 会消费 builder 且不暴露事件循环钩子。

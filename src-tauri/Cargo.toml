@@ -47,13 +47,15 @@ tauri-runtime-wry = "2.11"
 windows = "0.61"
 
 # 仅 macOS：WKWebView createPDF（macOS 11+）原生矢量 PDF 导出，对齐 Windows
-# WebView2 PrintToPdf。版本与 wry 0.55 对齐。NSWindow/NSColor 用于阅读纸张染标题栏。
+# WebView2 PrintToPdf。版本与 wry 0.55 对齐。NSWindow/NSColor 用于阅读纸张染标题栏；
+# NSView + CALayer 用于还原态外框圆角。
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSError"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["objc2"] }
-objc2-app-kit = { version = "0.3", features = ["NSColor", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSColor", "NSWindow", "NSView", "NSResponder", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-foundation"] }
 block2 = "0.6"
 
 # 仅 Linux：GTK CSD 标题栏跟阅读纸张染色（GNOME 等自绘装饰）。

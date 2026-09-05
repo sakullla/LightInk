@@ -37,9 +37,38 @@ export async function getAppWindow(): Promise<AppWindowLike | null> {
   return null;
 }
 
+export type NativeWindowOuterRoundedInvoke = (
+  cmd: string,
+  args: { rounded: boolean },
+) => Promise<unknown>;
+
+/**
+ * Sync native outer rounding with restore vs maximize/fullscreen.
+ * Restored: rounded; maximized or fullscreen: square. Linux host is a no-op.
+ */
+export async function syncNativeWindowOuterRounded(
+  getWindow: () => Promise<AppWindowLike | null> = getAppWindow,
+  invokeFn?: NativeWindowOuterRoundedInvoke,
+): Promise<void> {
+  const win = await getWindow();
+  if (win === null) {
+    return;
+  }
+  try {
+    const maximized = typeof win.isMaximized === 'function' ? await win.isMaximized() : false;
+    const fullscreen = await win.isFullscreen();
+    const rounded = !maximized && !fullscreen;
+    const invoke = invokeFn ?? (await import('@tauri-apps/api/core')).invoke;
+    await invoke('set_window_outer_rounded', { rounded });
+  } catch {
+    /* browser preview or unsupported host */
+  }
+}
+
 /** Toggle native fullscreen; returns the new fullscreen state (false if unavailable). */
 export async function toggleFullscreen(
   getWindow: () => Promise<AppWindowLike | null> = getAppWindow,
+  invokeFn?: NativeWindowOuterRoundedInvoke,
 ): Promise<boolean> {
   const win = await getWindow();
   if (win === null) {
@@ -49,6 +78,7 @@ export async function toggleFullscreen(
     const current = await win.isFullscreen();
     const next = !current;
     await win.setFullscreen(next);
+    await syncNativeWindowOuterRounded(async () => win, invokeFn);
     return next;
   } catch (error) {
     // Permission / platform failure — do not throw into UI hotkey path.

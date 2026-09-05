@@ -3,13 +3,19 @@
  * Replaces the native Windows/Linux strip so the shelf and editor share one chrome.
  */
 
-import { getAppWindow, type AppWindowLike } from './window-chrome.js';
+import {
+  getAppWindow,
+  syncNativeWindowOuterRounded,
+  type AppWindowLike,
+  type NativeWindowOuterRoundedInvoke,
+} from './window-chrome.js';
 
 export type TitlebarLocale = 'en' | 'zh-CN';
 
 export interface WindowTitlebarOptions {
   getWindow?: () => Promise<AppWindowLike | null>;
   getLocale?: () => TitlebarLocale;
+  invokeOuterRounded?: NativeWindowOuterRoundedInvoke;
 }
 
 export interface WindowTitlebar {
@@ -87,6 +93,7 @@ export function createWindowTitlebar(
 ): WindowTitlebar {
   const getWindow = options.getWindow ?? getAppWindow;
   const getLocale = options.getLocale ?? ((): TitlebarLocale => 'zh-CN');
+  const invokeOuterRounded = options.invokeOuterRounded;
 
   const element = doc.createElement('div');
   element.id = 'lightink-window-titlebar';
@@ -136,9 +143,11 @@ export function createWindowTitlebar(
 
   const refreshMaximized = (): void => {
     void withWindow(async (win) => {
-      if (typeof win.isMaximized !== 'function') return;
-      maximized = await win.isMaximized();
-      syncLabels();
+      if (typeof win.isMaximized === 'function') {
+        maximized = await win.isMaximized();
+        syncLabels();
+      }
+      await syncNativeWindowOuterRounded(async () => win, invokeOuterRounded);
     });
   };
 

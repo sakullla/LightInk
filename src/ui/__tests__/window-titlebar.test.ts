@@ -52,6 +52,49 @@ describe('window titlebar', () => {
     bar.dispose();
   });
 
+  it('syncs native outer rounding on refresh and resize without restoring decorations', async () => {
+    const invoke = vi.fn(async () => undefined);
+    let onResized: (() => void) | undefined;
+    let maximized = false;
+    const win: AppWindowLike = {
+      isFullscreen: vi.fn(async () => false),
+      setFullscreen: vi.fn(async () => undefined),
+      setDecorations: vi.fn(async () => undefined),
+      toggleMaximize: vi.fn(async () => {
+        maximized = !maximized;
+      }),
+      isMaximized: vi.fn(async () => maximized),
+      onResized: vi.fn(async (handler) => {
+        onResized = handler;
+        return () => undefined;
+      }),
+    };
+    const bar = createWindowTitlebar(document, {
+      getWindow: async () => win,
+      getLocale: () => 'en',
+      invokeOuterRounded: invoke,
+    });
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: true });
+    });
+    expect(win.setDecorations).not.toHaveBeenCalled();
+
+    invoke.mockClear();
+    bar.element.querySelector<HTMLButtonElement>('[data-window-caption="max"]')!.click();
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: false });
+    });
+    expect(win.setDecorations).not.toHaveBeenCalled();
+
+    invoke.mockClear();
+    maximized = false;
+    onResized?.();
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('set_window_outer_rounded', { rounded: true });
+    });
+    bar.dispose();
+  });
+
   it('stamps reader chrome reveal on the app root so caption chips can appear', () => {
     const app = document.createElement('div');
     app.id = 'app';

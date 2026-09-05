@@ -1,9 +1,10 @@
-//! Native title-bar colors for reader paper.
+//! Native window chrome: caption tint and outer rounding.
 //!
-//! - Windows 11: DWM caption / text tint
-//! - macOS: transparent titlebar + window background
+//! - Windows 11: DWM caption / text tint and `DWMWA_WINDOW_CORNER_PREFERENCE`
+//! - macOS: transparent titlebar + window background; contentView layer radius
 //! - Linux: GTK CSS on client-side decorations (GNOME). Server-side
 //!   window-manager bars (many KDE / XFCE / i3 setups) only follow light/dark.
+//!   Outer rounding is a no-op so we do not stack on the compositor.
 
 /// Parse `#rrggbb` into `(red, green, blue)`.
 ///
@@ -28,6 +29,42 @@ pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
 pub fn parse_hex_colorref(raw: &str) -> Option<u32> {
     let (red, green, blue) = parse_hex_rgb(raw)?;
     Some(u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16))
+}
+
+/// Restored windows keep native outer rounding; maximize and fullscreen go square.
+#[cfg(test)]
+pub fn window_outer_should_round(maximized: bool, fullscreen: bool) -> bool {
+    !maximized && !fullscreen
+}
+
+/// DWMWA_WINDOW_CORNER_PREFERENCE (Windows 11).
+#[cfg(any(windows, test))]
+const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+#[cfg(any(windows, test))]
+const DWMWCP_DONOTROUND: u32 = 1;
+#[cfg(any(windows, test))]
+const DWMWCP_ROUND: u32 = 2;
+
+#[cfg(any(windows, test))]
+pub fn windows_corner_preference(rounded: bool) -> u32 {
+    if rounded {
+        DWMWCP_ROUND
+    } else {
+        DWMWCP_DONOTROUND
+    }
+}
+
+/// Restored macOS content layer radius in points (system 10–12pt range).
+#[cfg(any(target_os = "macos", test))]
+const MACOS_RESTORED_CORNER_RADIUS_PT: f64 = 12.0;
+
+#[cfg(any(target_os = "macos", test))]
+pub fn macos_content_corner_radius_pt(rounded: bool) -> f64 {
+    if rounded {
+        MACOS_RESTORED_CORNER_RADIUS_PT
+    } else {
+        0.0
+    }
 }
 
 #[cfg(any(
@@ -120,6 +157,44 @@ pub fn set_window_caption_color(
     }
 }
 
+/// Apply native outer rounding. Linux is a no-op (no app-drawn outer radius).
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_window_outer_rounded(window: tauri::WebviewWindow, rounded: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        apply_windows_outer_rounded(&window, rounded)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        apply_macos_outer_rounded(&window, rounded)
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        let _ = (window, rounded);
+        Ok(())
+    }
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    {
+        let _ = (window, rounded);
+        Ok(())
+    }
+}
+
 #[cfg(windows)]
 #[link(name = "dwmapi")]
 extern "system" {
@@ -167,6 +242,22 @@ fn apply_windows_caption_color(
     Ok(())
 }
 
+#[cfg(windows)]
+fn apply_windows_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    let preference = windows_corner_preference(rounded);
+    // Win10 / older builds reject corner preference; leave the frame as-is.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&preference as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn apply_macos_caption_color(
     window: &tauri::WebviewWindow,
@@ -200,6 +291,34 @@ fn apply_macos_caption_color(
                 ns_window
                     .setBackgroundColor(Some(&objc2_app_kit::NSColor::windowBackgroundColor()));
             }
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> Result<(), String> {
+    let radius = macos_content_corner_radius_pt(rounded);
+    let window = window.clone();
+    window
+        .clone()
+        .run_on_main_thread(move || {
+            let Ok(raw) = window.ns_window() else {
+                return;
+            };
+            let Some(ns_window) =
+                (unsafe { objc2::rc::Retained::retain(raw.cast::<objc2_app_kit::NSWindow>()) })
+            else {
+                return;
+            };
+            let Some(content_view) = ns_window.contentView() else {
+                return;
+            };
+            content_view.setWantsLayer(true);
+            if let Some(layer) = content_view.layer() {
+                layer.setCornerRadius(radius);
+                layer.setMasksToBounds(true);
+            }
+            ns_window.invalidateShadow();
         })
         .map_err(|error| error.to_string())
 }
@@ -365,7 +484,11 @@ mod tests {
         target_os = "openbsd"
     ))]
     use super::linux_caption_css;
-    use super::{constrain_max_extent, parse_hex_colorref, parse_hex_rgb, work_area_needs_fit};
+    use super::{
+        constrain_max_extent, macos_content_corner_radius_pt, parse_hex_colorref, parse_hex_rgb,
+        window_outer_should_round, windows_corner_preference, work_area_needs_fit,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+    };
 
     #[test]
     fn parses_sepia_page_to_colorref() {
@@ -419,5 +542,19 @@ mod tests {
             (0, 0),
             (1920, 1032)
         ));
+    }
+
+    #[test]
+    fn restored_windows_round_and_max_or_fullscreen_do_not() {
+        assert!(window_outer_should_round(false, false));
+        assert!(!window_outer_should_round(true, false));
+        assert!(!window_outer_should_round(false, true));
+        assert!(!window_outer_should_round(true, true));
+        assert_eq!(DWMWA_WINDOW_CORNER_PREFERENCE, 33);
+        assert_eq!(windows_corner_preference(true), DWMWCP_ROUND);
+        assert_eq!(windows_corner_preference(false), DWMWCP_DONOTROUND);
+        let restored = macos_content_corner_radius_pt(true);
+        assert!(restored >= 10.0 && restored <= 12.0);
+        assert_eq!(macos_content_corner_radius_pt(false), 0.0);
     }
 }
