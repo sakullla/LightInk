@@ -1,7 +1,9 @@
 //! Native window chrome: caption tint and outer rounding.
 //!
 //! - Windows 11: DWM caption / text tint and `DWMWA_WINDOW_CORNER_PREFERENCE`
-//! - macOS: transparent titlebar + window background; contentView layer radius
+//! - macOS: restored windows are non-opaque so contentView layer radius is the
+//!   compositor silhouette; paper stays on that clipped layer. Maximize and
+//!   fullscreen restore opaque + radius 0. Overlay titlebar stays decorations:false.
 //! - Linux: GTK CSS on client-side decorations (GNOME). Server-side
 //!   window-manager bars (many KDE / XFCE / i3 setups) only follow light/dark.
 //!   Outer rounding is a no-op so we do not stack on the compositor.
@@ -65,6 +67,18 @@ pub fn macos_content_corner_radius_pt(rounded: bool) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Borderless `NSWindow` stays a square compositor silhouette while opaque.
+#[cfg(any(target_os = "macos", test))]
+pub fn macos_window_opaque(rounded: bool) -> bool {
+    !rounded
+}
+
+/// Window fill must be clear when rounded so clipped corners are transparent.
+#[cfg(any(target_os = "macos", test))]
+pub fn macos_window_background_clear(rounded: bool) -> bool {
+    rounded
 }
 
 #[cfg(any(
@@ -259,12 +273,65 @@ fn apply_windows_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> 
 }
 
 #[cfg(target_os = "macos")]
-fn apply_macos_caption_color(
-    window: &tauri::WebviewWindow,
-    caption: Option<&str>,
-    _text: Option<&str>,
-) -> Result<(), String> {
-    let caption = caption.map(str::to_string);
+#[derive(Clone, Copy)]
+struct MacosChromeState {
+    rounded: bool,
+    caption: Option<(u8, u8, u8)>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_chrome_state() -> std::sync::MutexGuard<'static, MacosChromeState> {
+    static STATE: std::sync::Mutex<MacosChromeState> = std::sync::Mutex::new(MacosChromeState {
+        // Window starts restored (`maximized` is omitted / false in tauri.conf).
+        rounded: true,
+        caption: None,
+    });
+    STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(target_os = "macos")]
+fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChromeState) {
+    let rounded = state.rounded;
+    // Opaque borderless windows keep a square compositor silhouette even when
+    // contentView is clipped; restored rounding needs a clear, non-opaque fill
+    // with paper on the clipped content layer.
+    ns_window.setOpaque(macos_window_opaque(rounded));
+    let paper = match state.caption {
+        Some((red, green, blue)) => objc2_app_kit::NSColor::colorWithSRGBRed_green_blue_alpha(
+            f64::from(red) / 255.0,
+            f64::from(green) / 255.0,
+            f64::from(blue) / 255.0,
+            1.0,
+        ),
+        None => objc2_app_kit::NSColor::windowBackgroundColor(),
+    };
+    if macos_window_background_clear(rounded) {
+        ns_window.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
+    } else {
+        ns_window.setBackgroundColor(Some(&paper));
+    }
+    ns_window.setTitlebarAppearsTransparent(state.caption.is_some() || rounded);
+
+    if let Some(content_view) = ns_window.contentView() {
+        content_view.setWantsLayer(true);
+        if let Some(layer) = content_view.layer() {
+            layer.setCornerRadius(macos_content_corner_radius_pt(rounded));
+            layer.setMasksToBounds(rounded);
+            if rounded {
+                let cg_paper = paper.CGColor();
+                layer.setBackgroundColor(Some(&cg_paper));
+            } else {
+                layer.setBackgroundColor(None);
+            }
+        }
+    }
+    ns_window.invalidateShadow();
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_chrome_paint(window: &tauri::WebviewWindow) -> Result<(), String> {
     let window = window.clone();
     window
         .clone()
@@ -277,50 +344,26 @@ fn apply_macos_caption_color(
             else {
                 return;
             };
-            if let Some((red, green, blue)) = caption.as_deref().and_then(parse_hex_rgb) {
-                let color = objc2_app_kit::NSColor::colorWithSRGBRed_green_blue_alpha(
-                    f64::from(red) / 255.0,
-                    f64::from(green) / 255.0,
-                    f64::from(blue) / 255.0,
-                    1.0,
-                );
-                ns_window.setTitlebarAppearsTransparent(true);
-                ns_window.setBackgroundColor(Some(&color));
-            } else {
-                ns_window.setTitlebarAppearsTransparent(false);
-                ns_window
-                    .setBackgroundColor(Some(&objc2_app_kit::NSColor::windowBackgroundColor()));
-            }
+            let state = *macos_chrome_state();
+            paint_macos_ns_window(&ns_window, state);
         })
         .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
+fn apply_macos_caption_color(
+    window: &tauri::WebviewWindow,
+    caption: Option<&str>,
+    _text: Option<&str>,
+) -> Result<(), String> {
+    macos_chrome_state().caption = caption.and_then(parse_hex_rgb);
+    run_macos_chrome_paint(window)
+}
+
+#[cfg(target_os = "macos")]
 fn apply_macos_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> Result<(), String> {
-    let radius = macos_content_corner_radius_pt(rounded);
-    let window = window.clone();
-    window
-        .clone()
-        .run_on_main_thread(move || {
-            let Ok(raw) = window.ns_window() else {
-                return;
-            };
-            let Some(ns_window) =
-                (unsafe { objc2::rc::Retained::retain(raw.cast::<objc2_app_kit::NSWindow>()) })
-            else {
-                return;
-            };
-            let Some(content_view) = ns_window.contentView() else {
-                return;
-            };
-            content_view.setWantsLayer(true);
-            if let Some(layer) = content_view.layer() {
-                layer.setCornerRadius(radius);
-                layer.setMasksToBounds(true);
-            }
-            ns_window.invalidateShadow();
-        })
-        .map_err(|error| error.to_string())
+    macos_chrome_state().rounded = rounded;
+    run_macos_chrome_paint(window)
 }
 
 #[cfg(any(
@@ -485,9 +528,10 @@ mod tests {
     ))]
     use super::linux_caption_css;
     use super::{
-        constrain_max_extent, macos_content_corner_radius_pt, parse_hex_colorref, parse_hex_rgb,
-        window_outer_should_round, windows_corner_preference, work_area_needs_fit,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+        constrain_max_extent, macos_content_corner_radius_pt, macos_window_background_clear,
+        macos_window_opaque, parse_hex_colorref, parse_hex_rgb, window_outer_should_round,
+        windows_corner_preference, work_area_needs_fit, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND, DWMWCP_ROUND,
     };
 
     #[test]
@@ -556,5 +600,9 @@ mod tests {
         let restored = macos_content_corner_radius_pt(true);
         assert!(restored >= 10.0 && restored <= 12.0);
         assert_eq!(macos_content_corner_radius_pt(false), 0.0);
+        assert!(!macos_window_opaque(true));
+        assert!(macos_window_opaque(false));
+        assert!(macos_window_background_clear(true));
+        assert!(!macos_window_background_clear(false));
     }
 }
