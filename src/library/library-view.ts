@@ -1646,7 +1646,7 @@ export function createLibraryView(
   const activeOperations = new Set<AbortController>();
   const trail: Array<{ title: string; url?: string }> = [];
   let groupListCollapsed = false;
-  let smartGroupListCollapsed = true;
+  let smartGroupListCollapsed = false;
   const smartTypeCollapsed: Record<SmartGroupTypeId, boolean> = {
     fixed: true,
     format: true,
@@ -2996,11 +2996,10 @@ export function createLibraryView(
     for (const node of filterGroupNodes(customGroupTree(groups), groupFilterQuery.trim())) {
       appendCustomGroupNode(node);
     }
-    if (groupList.childElementCount === 0) {
+    if (groupList.childElementCount === 0 && groupFilterQuery.trim() !== '') {
       const empty = doc.createElement('p');
       empty.className = 'lightink-library-nav-empty';
-      empty.textContent =
-        groupFilterQuery.trim() === '' ? labels().emptyGroups : labels().noMatch;
+      empty.textContent = labels().noMatch;
       groupList.appendChild(empty);
     }
     renderSmartGroups();

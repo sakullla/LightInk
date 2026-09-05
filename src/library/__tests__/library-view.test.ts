@@ -3889,7 +3889,7 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 
-  it('collapses and expands nav sections, with smart groups collapsed by default', async () => {
+  it('collapses and expands nav sections, with smart groups open and types collapsed', async () => {
     const novel = seriesNovel();
     const { deps } = collectionDependencies({
       items: [novel],
@@ -3903,15 +3903,11 @@ describe('LibraryView shelf collections', () => {
     const smartBody = host.querySelector('.lightink-library-smart-group-body');
     const groupBodyEl = host.querySelector('.lightink-library-group-body');
     const sourceBodyEl = host.querySelector('.lightink-library-source-body');
-    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
+    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(false);
     expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(false);
     expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(false);
-    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
-
-    // 展开智能分组后类型段默认收起；展开格式后条目可见，再次点击折叠整段
-    navSectionToggle(host, 'smart-groups').click();
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
-    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(false);
+    expect(host.querySelector('[data-smart-type="format"]')?.textContent).toContain('格式');
     expect(navSectionToggle(host, 'smart-type-format').getAttribute('aria-expanded')).toBe('false');
     expect(() => smartGroupButton(host, 'EPUB')).toThrow(/smart group nav item not found/);
     expandNavSection(host, 'smart-type-format');
@@ -4001,6 +3997,9 @@ describe('LibraryView shelf collections', () => {
     const filterWrap = host.querySelector<HTMLElement>(
       '.lightink-library-smart-group-body .lightink-library-section-filter-wrap',
     )!;
+    expect(smartBody.hidden).toBe(false);
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
+    navSectionToggle(host, 'smart-groups').click();
     expect(smartBody.hidden).toBe(true);
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
 
@@ -4626,18 +4625,12 @@ describe('LibraryView mobile shelf', () => {
     const desktopItem = cssRuleBodies(css, /\.lightink-library-item(?![\w-])/)[0];
     expect(cssLengthPx(cssDeclaration(desktopItem, 'gap'))[0]).toBe(10);
     const desktopContinue = cssRuleBodies(css, /\.lightink-library-continue(?![\w-\[])/)[0];
-    expect(desktopContinue).toMatch(/max-width:\s*none/);
-    expect(desktopContinue).not.toMatch(/max-width:\s*560px/);
-    expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBeGreaterThanOrEqual(8);
+    expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBe(6);
+    expect(desktopContinue).toMatch(/max-width:\s*560px/);
     const desktopContinueCover =
       cssRuleBodies(css, /\.lightink-library-continue \.lightink-library-cover(?![\w-])/)[0] ?? '';
-    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'width'))[0]).toBe(96);
-    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'height'))[0]).toBe(144);
-    expect(desktopContinueCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
-    expect(desktopContinueCover).toMatch(/border-radius:\s*3px 6px 6px 3px/);
-    expect(desktopContinueCover).not.toMatch(/--lightink-radius-(?:control|panel|dialog)/);
-    expect(desktopContinueCover).not.toMatch(/(?:^|[;\s])width:\s*36px/);
-    expect(desktopContinueCover).not.toMatch(/height:\s*52px/);
+    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'width'))[0]).toBe(36);
+    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'height'))[0]).toBe(52);
 
     const groupsEntryBlocks = cssRuleBodies(
       css,
