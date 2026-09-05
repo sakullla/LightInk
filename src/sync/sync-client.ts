@@ -66,6 +66,10 @@ export interface SyncStatus {
   readonly uploaded: number;
   readonly downloaded: number;
   readonly conflicts: number;
+  readonly phase?: string;
+  readonly current?: number;
+  readonly total?: number;
+  readonly skipped?: number;
 }
 
 export interface SyncRecordClientInvoker {

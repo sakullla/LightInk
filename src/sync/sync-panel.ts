@@ -65,6 +65,8 @@ type Labels = {
   status: string;
   ready: string;
   running: string;
+  cancelled: string;
+  success: string;
   needsCredential: string;
   saved: string;
   failed: string;
@@ -73,6 +75,7 @@ type Labels = {
   dangerZone: string;
   authHintBasic: string;
   authHintBearer: string;
+  progressTitle: string;
 };
 
 const LABELS: Record<'en' | 'zh-CN', Labels> = {
@@ -102,6 +105,8 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     status: 'Status',
     ready: 'Ready',
     running: 'Syncing…',
+    cancelled: 'Cancelled',
+    success: 'Synced',
     needsCredential: 'Credentials required on this device',
     saved: 'Saved',
     failed: 'Operation failed',
@@ -110,6 +115,7 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     dangerZone: 'Danger zone',
     authHintBasic: 'Use the username plus an app-specific password from your provider — not the web login password.',
     authHintBearer: 'Paste the access token only. Username and password are not used.',
+    progressTitle: 'Syncing',
   },
   'zh-CN': {
     title: 'WebDAV 同步',
@@ -137,6 +143,8 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     status: '状态',
     ready: '就绪',
     running: '同步中…',
+    cancelled: '已取消',
+    success: '已同步',
     needsCredential: '此设备需要重新输入凭据',
     saved: '已保存',
     failed: '操作失败',
@@ -145,11 +153,63 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     dangerZone: '危险操作',
     authHintBasic: '填写网盘用户名，以及单独生成的应用密码，不是网页登录密码。',
     authHintBearer: '只需粘贴访问令牌，不用填写用户名和密码。',
+    progressTitle: '正在同步',
+  },
+};
+
+const PHASE_LABELS: Record<'en' | 'zh-CN', Record<string, string>> = {
+  en: {
+    connect: 'Connecting',
+    compare: 'Comparing remote files',
+    layout: 'Preparing remote folders',
+    'upload-books': 'Uploading books',
+    'upload-docs': 'Uploading documents',
+    merge: 'Merging records',
+    download: 'Downloading offline books',
+    snapshot: 'Saving snapshot',
+    cleanup: 'Cleaning remote files',
+    done: 'Done',
+  },
+  'zh-CN': {
+    connect: '连接服务器',
+    compare: '对比远程文件',
+    layout: '准备远程目录',
+    'upload-books': '上传书籍',
+    'upload-docs': '上传文档',
+    merge: '合并记录',
+    download: '下载离线书',
+    snapshot: '保存快照',
+    cleanup: '清理远程文件',
+    done: '完成',
   },
 };
 
 function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? '');
+}
+
+function phaseCaption(locale: 'en' | 'zh-CN', value: SyncStatus, fallback: string): string {
+  const phase = value.phase ?? '';
+  const name = PHASE_LABELS[locale][phase] ?? fallback;
+  const current = value.current ?? 0;
+  const total = value.total ?? 0;
+  if (total > 0) return `${name} ${current} / ${total}`;
+  return name;
+}
+
+function formatFinishedAt(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return ` · ${date.toLocaleString()}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function uploadCount(value: SyncStatus): number {
+  return value.uploaded + (value.skipped ?? 0);
 }
 
 function button(doc: Document, label: string, kind = 'plain'): HTMLButtonElement {
@@ -218,7 +278,8 @@ function applySyncPanelSurfaceTheme(overlay: HTMLElement, deps: SyncPanelDeps): 
 /** Render the complete sync configuration/status surface. */
 export function showSyncPanel(deps: SyncPanelDeps): void {
   const doc = deps.doc;
-  const L = LABELS[deps.locale ?? 'zh-CN'];
+  const locale = deps.locale ?? 'zh-CN';
+  const L = LABELS[locale];
   const overlay = doc.createElement('div');
   overlay.className = 'lightink-modal-overlay';
   const dialog = doc.createElement('div');
@@ -303,7 +364,9 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   statusDownloaded.className = 'lightink-sync-metric';
   const statusConflicts = doc.createElement('span');
   statusConflicts.className = 'lightink-sync-metric';
-  metrics.append(statusUploaded, statusDownloaded, statusConflicts);
+  const statusSkipped = doc.createElement('span');
+  statusSkipped.className = 'lightink-sync-metric';
+  metrics.append(statusUploaded, statusDownloaded, statusConflicts, statusSkipped);
   const statusActions = doc.createElement('div');
   statusActions.className = 'lightink-sync-status-actions';
   const sync = button(doc, L.sync, 'primary');
@@ -352,7 +415,35 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   }
   body.append(dangerSection);
   dialog.append(header, body, footer);
-  overlay.appendChild(dialog);
+  const progress = doc.createElement('div');
+  progress.className = 'lightink-sync-progress lightink-open-progress';
+  progress.hidden = true;
+  progress.setAttribute('role', 'dialog');
+  progress.setAttribute('aria-modal', 'true');
+  progress.setAttribute('aria-busy', 'true');
+  progress.setAttribute('aria-label', L.progressTitle);
+  const progressDialog = doc.createElement('div');
+  progressDialog.className = 'lightink-modal-dialog lightink-sync-progress-dialog lightink-open-progress-dialog';
+  const progressTitle = doc.createElement('h2');
+  progressTitle.className = 'lightink-modal-title';
+  progressTitle.textContent = L.progressTitle;
+  const progressLabel = doc.createElement('p');
+  progressLabel.className = 'lightink-modal-message lightink-sync-progress-label';
+  const progressTrack = doc.createElement('div');
+  progressTrack.className = 'lightink-open-progress-track';
+  progressTrack.setAttribute('role', 'progressbar');
+  progressTrack.setAttribute('aria-valuemin', '0');
+  progressTrack.setAttribute('aria-valuemax', '100');
+  const progressFill = doc.createElement('div');
+  progressFill.className = 'lightink-open-progress-fill';
+  progressTrack.appendChild(progressFill);
+  const progressPercent = doc.createElement('p');
+  progressPercent.className = 'lightink-open-progress-percent';
+  const progressCancel = button(doc, L.cancelSync, 'plain');
+  progressCancel.classList.add('lightink-open-progress-cancel');
+  progressDialog.append(progressTitle, progressLabel, progressTrack, progressPercent, progressCancel);
+  progress.appendChild(progressDialog);
+  overlay.append(dialog, progress);
   applySyncPanelSurfaceTheme(overlay, deps);
   doc.body.appendChild(overlay);
 
@@ -369,7 +460,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   };
   close.addEventListener('click', closePanel);
   overlay.addEventListener('pointerdown', (event) => {
-    if (event.target === overlay) closePanel();
+    if (event.target === overlay && progress.hidden) closePanel();
   });
   const updateCredentialVisibility = (): void => {
     const isBasic = auth.value === 'basic';
@@ -403,17 +494,68 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     message.hidden = text === '';
     message.dataset.kind = kind;
   };
+  const renderProgress = (value: SyncStatus): void => {
+    const running = value.state === 'running';
+    progress.hidden = !running;
+    const current = value.current ?? 0;
+    const total = value.total ?? 0;
+    progress.dataset.progressDeterminate = running && total > 0 ? 'true' : 'false';
+    if (!running) {
+      progress.style.removeProperty('--lightink-open-progress');
+      return;
+    }
+    progressLabel.textContent = phaseCaption(locale, value, L.running);
+    const skipped = value.skipped ?? 0;
+    progressPercent.textContent =
+      skipped > 0
+        ? `↑${uploadCount(value)}  ↓${value.downloaded}  ↷${skipped}`
+        : `↑${uploadCount(value)}  ↓${value.downloaded}`;
+    progressPercent.hidden = false;
+    if (total > 0) {
+      const ratio = Math.min(1, Math.max(0, current / total));
+      progress.style.setProperty('--lightink-open-progress', String(ratio));
+      progressTrack.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
+    } else {
+      progress.style.removeProperty('--lightink-open-progress');
+      progressTrack.removeAttribute('aria-valuenow');
+    }
+  };
+  const armStatusTimer = (running: boolean): void => {
+    if (timer !== null) clearInterval(timer);
+    timer = setInterval(() => {
+      void refreshStatus();
+    }, running ? 250 : 1000);
+  };
   const renderStatus = (value: SyncStatus): void => {
     const running = value.state === 'running';
     status.classList.toggle('is-running', running);
-    status.classList.toggle('is-error', false);
-    statusState.textContent = running ? L.running : L.ready;
-    statusUploaded.textContent = `↑${value.uploaded}`;
+    status.classList.toggle('is-error', value.state === 'error');
+    if (running) {
+      statusState.textContent = phaseCaption(locale, value, L.running);
+    } else if (value.state === 'error') {
+      statusState.textContent = value.lastError ? `${L.failed}: ${value.lastError}` : L.failed;
+    } else if (value.state === 'cancelled') {
+      statusState.textContent = L.cancelled;
+    } else if (value.state === 'success') {
+      statusState.textContent = `${L.success}${formatFinishedAt(value.finishedAt)}`;
+    } else {
+      statusState.textContent = L.ready;
+    }
+    status.title = value.lastError ?? '';
+    statusUploaded.textContent = `↑${uploadCount(value)}`;
     statusDownloaded.textContent = `↓${value.downloaded}`;
     statusConflicts.textContent = `⚠${value.conflicts}`;
     statusConflicts.classList.toggle('is-warn', value.conflicts > 0);
+    const skipped = value.skipped ?? 0;
+    statusSkipped.textContent = `↷${skipped}`;
+    statusSkipped.hidden = skipped === 0;
+    statusSkipped.title = locale === 'zh-CN' ? '远程已存在，已跳过' : 'Already on remote, skipped';
+    sync.disabled = running;
     cancelSync.disabled = !running;
     cancelSync.hidden = !running;
+    progressCancel.disabled = !running;
+    renderProgress(value);
+    armStatusTimer(running);
   };
   const refreshStatus = async (): Promise<void> => {
     try {
@@ -421,7 +563,26 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     } catch {
       statusState.textContent = L.failed;
       status.classList.add('is-error');
+      progress.hidden = true;
     }
+  };
+  const watchUntilSettled = async (): Promise<SyncStatus | null> => {
+    let value = await deps.sync.status().catch(() => null);
+    if (value !== null) renderStatus(value);
+    while (value?.state === 'running') {
+      await delay(250);
+      value = await deps.sync.status().catch(() => null);
+      if (value !== null) renderStatus(value);
+    }
+    return value;
+  };
+  const cancelRunning = (): void => {
+    cancelSync.disabled = true;
+    progressCancel.disabled = true;
+    void deps.sync
+      .cancel()
+      .then(() => refreshStatus())
+      .catch(() => refreshStatus());
   };
   const renderConflicts = async (): Promise<void> => {
     conflicts.replaceChildren();
@@ -509,18 +670,34 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   sync.addEventListener('click', async () => {
     sync.disabled = true;
     try {
-      const result = deps.syncNow !== undefined ? await deps.syncNow() : await deps.sync.run();
-      if (result !== null) renderStatus(result);
+      const current = await deps.sync.status().catch(() => null);
+      if (current?.state === 'running') {
+        renderStatus(current);
+        await watchUntilSettled();
+      } else {
+        renderStatus({
+          state: 'running',
+          uploaded: current?.uploaded ?? 0,
+          downloaded: current?.downloaded ?? 0,
+          conflicts: current?.conflicts ?? 0,
+          skipped: current?.skipped ?? 0,
+          phase: 'connect',
+        });
+        const result = await (deps.syncNow !== undefined ? deps.syncNow() : deps.sync.run());
+        if (result != null) renderStatus(result);
+        else await refreshStatus();
+      }
       await renderConflicts();
     } catch (error) {
       setMessage(`${L.failed}: ${textOf(error)}`, 'error');
       await refreshStatus();
-    } finally {
-      sync.disabled = false;
     }
   });
-  cancelSync.addEventListener('click', () => {
-    void deps.sync.cancel().catch(() => undefined);
+  cancelSync.addEventListener('click', cancelRunning);
+  progressCancel.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelRunning();
   });
   forget.addEventListener('click', async () => {
     forget.disabled = true;
@@ -579,12 +756,18 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       updateCredentialVisibility();
       return Promise.all([refreshStatus(), renderConflicts()]);
     })
-    .catch(() => updateCredentialVisibility());
-  timer = setInterval(() => {
-    void refreshStatus();
-  }, 1000);
+    .catch(() => {
+      updateCredentialVisibility();
+      void refreshStatus();
+    });
   releaseModal = mountModalFocus(doc, overlay, dialog, {
     initialFocus: name,
-    onEscape: closePanel,
+    onEscape: () => {
+      if (!progress.hidden) {
+        cancelRunning();
+        return;
+      }
+      closePanel();
+    },
   });
 }

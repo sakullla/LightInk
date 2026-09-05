@@ -116,29 +116,41 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-brand {
   display: flex;
   align-items: center;
+  gap: 8px;
+  width: 100%;
   min-width: 0;
   min-height: var(--lightink-titlebar-height, 36px);
-  padding: 0 12px 0 18px;
+  padding: 0 6px 0 18px;
   overflow: hidden;
   color: var(--lightink-fg);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.03em;
+}
+
+.lightink-library-brand-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Collapsed rail is too narrow for 「轻墨」; keep the word on the window edge. */
+/* Collapsed rail is too narrow for 「轻墨」; keep the panel icon as the expand control. */
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-header {
   display: flex;
   align-items: center;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand {
-  flex: 0 0 auto;
-  justify-content: flex-start;
-  padding: 0 16px 0 18px;
-  font-size: 15px;
+  flex: 0 0 var(--lightink-library-nav-collapsed);
+  justify-content: center;
+  width: var(--lightink-library-nav-collapsed);
+  padding: 0 4px;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand-label {
+  display: none;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-header-main {
@@ -357,7 +369,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 2px;
   min-width: 0;
   min-height: 0;
-  padding: 4px 8px 20px;
+  padding: 6px 8px 12px;
   overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
@@ -457,22 +469,34 @@ html[data-touch-primary] .lightink-library-header {
   letter-spacing: 0.06em;
 }
 
-/* 可折叠分区标题：组织者，不是目的地。左侧小三角 + 类型图标，和筛选项拉开层级。 */
+/* 分区标题可点折叠，不画三角。智能分组 / 书库源默认收起。 */
 .lightink-library-pane-heading {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
   min-height: 28px;
-  margin-top: 10px;
-  padding: 3px 6px;
+  margin-top: 8px;
+  padding: 3px 8px;
   border-radius: 7px;
   cursor: pointer;
   user-select: none;
 }
 
+.lightink-library-pane-heading > .lightink-library-collapse-toggle,
+.lightink-library-smart-type-heading > .lightink-library-collapse-toggle {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
 .lightink-library-filter-list + .lightink-library-pane-heading {
-  margin-top: 14px;
+  margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
 }
@@ -497,20 +521,32 @@ html[data-touch-primary] .lightink-library-header {
   color: var(--lightink-muted);
 }
 
-/* 分区操作：固定两列（筛选 | +），没有 + 的分区留空，保证三行放大镜对齐。 */
+/* Finder / Linear：标题在左，+ 在行尾。筛选悬停才出现，不占空盒。 */
 .lightink-library-pane-actions {
-  display: grid;
-  grid-template-columns: 28px 28px;
+  display: flex;
   align-items: center;
-  justify-items: center;
-  gap: 2px;
-  width: 58px;
-  flex: 0 0 58px;
+  justify-content: flex-end;
+  gap: 0;
+  width: auto;
+  flex: 0 0 auto;
   margin-left: auto;
+}
+
+.lightink-library-pane-actions .lightink-library-icon-button {
+  width: 22px;
+  min-width: 22px !important;
+  height: 22px;
+  min-height: 22px !important;
+  font-size: 14px !important;
+  border-radius: 4px !important;
 }
 
 .lightink-library-pane-action {
   opacity: 0;
+  width: 0;
+  min-width: 0 !important;
+  overflow: hidden;
+  pointer-events: none;
   transition: opacity 150ms ease;
 }
 
@@ -518,6 +554,17 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-pane-heading:focus-within .lightink-library-pane-action,
 .lightink-library-pane-action[aria-expanded='true'] {
   opacity: 1;
+  width: 22px;
+  min-width: 22px !important;
+  pointer-events: auto;
+}
+
+.lightink-library-pane-heading .lightink-library-group-add,
+.lightink-library-sources .lightink-library-pane-actions > .lightink-library-pane-action:last-child {
+  opacity: 0.55;
+  width: 22px;
+  min-width: 22px !important;
+  pointer-events: auto;
 }
 
 .lightink-library-pane-action[aria-expanded='true'] {
@@ -669,10 +716,10 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-smart-type-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-height: 26px;
-  padding: 2px 6px;
-  border-radius: 7px;
+  padding: 3px 8px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
 }
@@ -683,21 +730,39 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-smart-type-heading h4 {
   margin: 0;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--lightink-muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lightink-library-smart-type-heading::after {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  opacity: 0.4;
+  content: '';
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M9 6l6 6-6 6'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M9 6l6 6-6 6'/></svg>") center / contain no-repeat;
+  transform: rotate(0deg);
+  transition: transform 200ms ease;
+}
+
+.lightink-library-smart-type-heading:not(.is-collapsed)::after {
+  transform: rotate(90deg);
 }
 
 .lightink-library-smart-type-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 0 0 2px 8px;
+  padding: 0 0 2px 22px;
 }
 
 /* Nav items: 管理 entry, shelf filters, custom groups, smart groups. */
@@ -757,17 +822,20 @@ html[data-touch-primary] .lightink-library-header {
   font-weight: 600;
 }
 
-/* Custom group tree: depth indent via --lightink-group-depth (set inline). */
+/* VS Code / Finder：缩进做在行内 padding，菜单列贴右；深度封顶避免窄侧栏把名称挤没。 */
 .lightink-library-custom-group {
   position: relative;
-  margin-left: calc(var(--lightink-group-depth, 0) * 14px);
+  margin-left: 0;
+  min-width: 0;
 }
 
 .lightink-library-custom-group-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 28px;
+  grid-template-columns: 16px minmax(0, 1fr) 22px;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  padding-left: calc(min(var(--lightink-group-depth, 0), 5) * 8px);
 }
 
 .lightink-library-custom-group-row .lightink-library-group-menu {
@@ -782,12 +850,17 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-group-toggle {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  min-height: 30px;
+  width: 16px;
+  min-width: 16px;
+  min-height: 26px;
   padding: 0 !important;
   border: none !important;
   background: transparent !important;
   color: var(--lightink-muted);
+}
+
+.lightink-library-custom-group-row .lightink-library-group {
+  min-width: 0;
 }
 
 .lightink-library-group-toggle .lightink-library-collapse-chevron {
@@ -886,24 +959,26 @@ html[data-touch-primary] .lightink-library-header {
   white-space: nowrap;
 }
 
-/* Utility area (管理): separated from collections, same pattern as Slack/Linear. */
+/* 管理跟在书源后面，不把空白撑到窗口底。 */
 .lightink-library-manage {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
 }
 
+/* Linear / Notion: panel icon at the sidebar header’s trailing edge, not a Back chevron by the wordmark. */
 .lightink-library-nav-collapse {
   flex: 0 0 auto;
-  align-self: flex-start;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  margin-top: auto;
+  align-self: center;
+  width: 26px;
+  min-width: 26px !important;
+  height: 26px;
+  min-height: 26px !important;
+  margin: 0 0 0 auto;
   border: none;
   box-shadow: none;
   color: var(--lightink-muted);
+  -webkit-app-region: no-drag;
 }
 
 .lightink-library-nav-collapse:focus-visible {
@@ -911,17 +986,12 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-nav-collapse .lightink-library-nav-icon {
-  width: 16px;
-  height: 16px;
-  transform: rotate(180deg);
+  width: 15px;
+  height: 15px;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-collapse {
-  align-self: center;
-}
-
-.lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-collapse .lightink-library-nav-icon {
-  transform: none;
+  margin-left: 0;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] {

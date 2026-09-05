@@ -43,6 +43,14 @@ pub struct SyncStatus {
     pub uploaded: u64,
     pub downloaded: u64,
     pub conflicts: u64,
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub current: u64,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub skipped: u64,
 }
 
 #[derive(Default)]
@@ -61,6 +69,10 @@ impl Default for SyncStatus {
             uploaded: 0,
             downloaded: 0,
             conflicts: 0,
+            phase: String::new(),
+            current: 0,
+            total: 0,
+            skipped: 0,
         }
     }
 }
@@ -88,19 +100,60 @@ fn start_task(state: &SyncTaskState) -> Result<(String, CancellationToken), Stri
         .status
         .lock()
         .map_err(|_| "同步状态不可用".to_string())?;
+    let previous_uploaded = status.uploaded;
+    let previous_downloaded = status.downloaded;
+    let previous_skipped = status.skipped;
     *status = SyncStatus {
         state: SyncRunState::Running,
         started_at: Some(library::now_ms()),
+        phase: "connect".into(),
+        uploaded: previous_uploaded,
+        downloaded: previous_downloaded,
+        skipped: previous_skipped,
         ..SyncStatus::default()
     };
     Ok((id, token))
 }
 
+fn report_running(
+    state: &SyncTaskState,
+    phase: &str,
+    current: u64,
+    total: u64,
+    uploaded: u64,
+    downloaded: u64,
+) {
+    if let Ok(mut status) = state.status.lock() {
+        if status.state != SyncRunState::Running {
+            return;
+        }
+        status.phase = phase.to_string();
+        status.current = current;
+        status.total = total;
+        status.uploaded = uploaded;
+        status.downloaded = downloaded;
+    }
+}
+
+fn report_skipped(state: &SyncTaskState, skipped: u64) {
+    if let Ok(mut status) = state.status.lock() {
+        if status.state == SyncRunState::Running {
+            status.skipped = skipped;
+        }
+    }
+}
+
 fn finish_task(state: &SyncTaskState, task_id: &str, result: &Result<SyncStatus, WebDavError>) {
-    if let Ok(mut task) = state.task.lock() {
+    let matches = state.task.lock().is_ok_and(|mut task| {
         if task.as_ref().is_some_and(|(id, _)| id == task_id) {
             *task = None;
+            true
+        } else {
+            false
         }
+    });
+    if !matches {
+        return;
     }
     if let Ok(mut status) = state.status.lock() {
         match result {
@@ -118,7 +171,64 @@ fn finish_task(state: &SyncTaskState, task_id: &str, result: &Result<SyncStatus,
     }
 }
 
+/// Window reload / dropped invoke must not leave status stuck on `running`.
+struct SyncRunGuard<'a> {
+    state: &'a SyncTaskState,
+    task_id: String,
+    completed: bool,
+}
+
+impl<'a> SyncRunGuard<'a> {
+    fn new(state: &'a SyncTaskState, task_id: String) -> Self {
+        Self {
+            state,
+            task_id,
+            completed: false,
+        }
+    }
+
+    fn finish(mut self, result: Result<SyncStatus, WebDavError>) -> Result<SyncStatus, String> {
+        self.completed = true;
+        finish_task(self.state, &self.task_id, &result);
+        result.map_err(|error| error.message)
+    }
+}
+
+impl Drop for SyncRunGuard<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        finish_task(
+            self.state,
+            &self.task_id,
+            &Err(WebDavError::new("SYNC_CANCELLED", "同步已取消")),
+        );
+    }
+}
+
+fn cancel_active_task(state: &SyncTaskState) -> Result<(), String> {
+    let (task_id, token) = {
+        let task = state
+            .task
+            .lock()
+            .map_err(|_| "同步任务状态不可用".to_string())?;
+        match task.as_ref() {
+            Some((id, token)) => (id.clone(), token.clone()),
+            None => return Ok(()),
+        }
+    };
+    token.cancel();
+    finish_task(
+        state,
+        &task_id,
+        &Err(WebDavError::new("SYNC_CANCELLED", "同步已取消")),
+    );
+    Ok(())
+}
+
 const DEVICE_ID_KEY: &str = "sync.device_id";
+const SNAPSHOT_HASH_KEY: &str = "sync.uploaded_snapshot_hash";
 const GROUP_OBJECT_PREFIX: &str = "library-group:";
 const GROUP_STATE_FIELD: &str = "state";
 const MEMBERSHIP_OBJECT_PREFIX: &str = "library-membership:";
@@ -1289,6 +1399,78 @@ fn snapshot_blob_hashes(snapshot: &SyncSnapshot, hashes: &mut BTreeSet<String>) 
     hashes.extend(snapshot.drafts.iter().map(|draft| draft.blob_hash.clone()));
 }
 
+fn blob_already_on_remote(hash: &str, remote: &BTreeSet<String>) -> bool {
+    remote.contains(hash)
+}
+
+fn sync_meta_get(connection: &Connection, key: &str) -> Result<Option<String>, WebDavError> {
+    connection
+        .query_row(
+            "SELECT value FROM sync_meta WHERE key=?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| {
+            WebDavError::new("SYNC_STORAGE_ERROR", format!("无法读取同步元数据: {error}"))
+        })
+}
+
+fn sync_meta_set(connection: &Connection, key: &str, value: &str) -> Result<(), WebDavError> {
+    connection
+        .execute(
+            "INSERT INTO sync_meta(key,value) VALUES (?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )
+        .map_err(|error| {
+            WebDavError::new("SYNC_STORAGE_ERROR", format!("无法写入同步元数据: {error}"))
+        })?;
+    Ok(())
+}
+
+async fn list_remote_blob_hashes(
+    client: &webdav::WebDavClient,
+    token: &CancellationToken,
+) -> Result<BTreeSet<String>, WebDavError> {
+    let prefixes = match client.list_hrefs("LightInk/v1/blobs/sha256").await {
+        Ok(hrefs) => hrefs,
+        Err(error) if error.status == Some(404) => return Ok(BTreeSet::new()),
+        Err(error) => return Err(error),
+    };
+    let mut hashes = BTreeSet::new();
+    for href in prefixes {
+        if token.is_cancelled() {
+            return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+        }
+        let Some(prefix) = href_last_path_component(&href) else {
+            continue;
+        };
+        if prefix.len() != 2
+            || !prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            continue;
+        }
+        let directory = format!("LightInk/v1/blobs/sha256/{prefix}");
+        let listed = match client.list_hrefs(&directory).await {
+            Ok(items) => items,
+            Err(error) if error.status == Some(404) => continue,
+            Err(error) => return Err(error),
+        };
+        for item in listed {
+            let Some(hash) = href_last_path_component(&item) else {
+                continue;
+            };
+            if is_sha256(&hash) && hash.starts_with(&prefix) {
+                hashes.insert(hash);
+            }
+        }
+    }
+    Ok(hashes)
+}
+
 fn href_last_path_component(href: &str) -> Option<String> {
     let path = Url::parse(href)
         .ok()
@@ -2382,7 +2564,9 @@ async fn upload_local_blobs(
     app_data_dir: &std::path::Path,
     client: &webdav::WebDavClient,
     token: &CancellationToken,
-) -> Result<u64, WebDavError> {
+    progress: &SyncTaskState,
+    remote_hashes: &mut BTreeSet<String>,
+) -> Result<(u64, u64), WebDavError> {
     let rows = {
         let mut statement = connection
             .prepare("SELECT hash,size FROM managed_blobs ORDER BY hash")
@@ -2401,10 +2585,18 @@ async fn upload_local_blobs(
             .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error.to_string()))?
     };
     let mut uploaded = 0_u64;
+    let mut skipped = 0_u64;
     let mut prefixes = BTreeSet::new();
-    for (hash, size) in rows {
+    let total = rows.len() as u64;
+    for (index, (hash, size)) in rows.into_iter().enumerate() {
+        report_running(progress, "upload-books", index as u64, total, uploaded, 0);
+        report_skipped(progress, skipped);
         if token.is_cancelled() {
             return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+        }
+        if blob_already_on_remote(&hash, remote_hashes) {
+            skipped = skipped.saturating_add(1);
+            continue;
         }
         if size < 0 || size as u64 > webdav::MAX_SYNC_BLOB_BYTES {
             return Err(WebDavError::new(
@@ -2436,9 +2628,12 @@ async fn upload_local_blobs(
         ensure_blob_prefix(client, &hash, &mut prefixes).await?;
         let remote_path = webdav::remote_blob_path(&hash)?;
         client.put_bytes(&remote_path, &bytes, true).await?;
+        remote_hashes.insert(hash);
         uploaded = uploaded.saturating_add(1);
     }
-    Ok(uploaded)
+    report_running(progress, "upload-books", total, total, uploaded, 0);
+    report_skipped(progress, skipped);
+    Ok((uploaded, skipped))
 }
 
 async fn upload_document_blobs(
@@ -2446,7 +2641,10 @@ async fn upload_document_blobs(
     app_data_dir: &std::path::Path,
     client: &webdav::WebDavClient,
     token: &CancellationToken,
-) -> Result<u64, WebDavError> {
+    progress: &SyncTaskState,
+    uploaded_books: u64,
+    remote_hashes: &mut BTreeSet<String>,
+) -> Result<(u64, u64), WebDavError> {
     let mut candidates: BTreeMap<String, PathBuf> = BTreeMap::new();
     let document_hashes = {
         let mut statement = connection
@@ -2517,10 +2715,25 @@ async fn upload_document_blobs(
         }
     }
     let mut uploaded = 0_u64;
+    let mut skipped = 0_u64;
     let mut prefixes = BTreeSet::new();
-    for (hash, path) in candidates {
+    let total = candidates.len() as u64;
+    for (index, (hash, path)) in candidates.into_iter().enumerate() {
+        report_running(
+            progress,
+            "upload-docs",
+            index as u64,
+            total,
+            uploaded_books.saturating_add(uploaded),
+            0,
+        );
+        report_skipped(progress, skipped);
         if token.is_cancelled() {
             return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
+        }
+        if blob_already_on_remote(&hash, remote_hashes) {
+            skipped = skipped.saturating_add(1);
+            continue;
         }
         if !is_sha256(&hash) || !path.is_file() {
             continue;
@@ -2548,9 +2761,19 @@ async fn upload_document_blobs(
         client
             .put_bytes(&webdav::remote_blob_path(&hash)?, &bytes, true)
             .await?;
+        remote_hashes.insert(hash);
         uploaded = uploaded.saturating_add(1);
     }
-    Ok(uploaded)
+    report_running(
+        progress,
+        "upload-docs",
+        total,
+        total,
+        uploaded_books.saturating_add(uploaded),
+        0,
+    );
+    report_skipped(progress, skipped);
+    Ok((uploaded, skipped))
 }
 
 /// Materialize pinned managed books after metadata from every device has been
@@ -2561,6 +2784,8 @@ async fn download_pinned_books(
     app_data_dir: &std::path::Path,
     client: &webdav::WebDavClient,
     token: &CancellationToken,
+    progress: &SyncTaskState,
+    uploaded: u64,
 ) -> Result<u64, WebDavError> {
     let rows = {
         let mut statement = connection
@@ -2587,7 +2812,16 @@ async fn download_pinned_books(
     };
 
     let mut downloaded = 0_u64;
-    for (item_id, hash, size, extension) in rows {
+    let total = rows.len() as u64;
+    for (index, (item_id, hash, size, extension)) in rows.into_iter().enumerate() {
+        report_running(
+            progress,
+            "download",
+            index as u64,
+            total,
+            uploaded,
+            downloaded,
+        );
         if token.is_cancelled() {
             return Err(WebDavError::new("SYNC_CANCELLED", "同步已取消"));
         }
@@ -2643,6 +2877,7 @@ async fn download_pinned_books(
             )
             .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error.to_string()))?;
     }
+    report_running(progress, "download", total, total, uploaded, downloaded);
     Ok(downloaded)
 }
 
@@ -2722,10 +2957,25 @@ async fn download_document_assets(
 async fn sync_once(
     app: &AppHandle,
     webdav_state: &WebDavState,
+    state: &SyncTaskState,
     token: &CancellationToken,
 ) -> Result<SyncStatus, WebDavError> {
+    let (retained_uploaded, retained_downloaded) = state
+        .status
+        .lock()
+        .map(|status| (status.uploaded, status.downloaded))
+        .unwrap_or((0, 0));
+    report_running(
+        state,
+        "connect",
+        0,
+        0,
+        retained_uploaded,
+        retained_downloaded,
+    );
     let (profile, client) = webdav::active_profile_client(app, webdav_state)?;
     ensure_sync_capabilities(&client).await?;
+    report_running(state, "layout", 0, 0, 0, 0);
     ensure_remote_layout(&client).await?;
     upload_profile_descriptor(&profile, &client, token).await?;
     let app_data = library::app_data_dir(app)
@@ -2734,12 +2984,36 @@ async fn sync_once(
         .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error))?;
     let device =
         device_id(&connection).map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error))?;
-    let uploaded_books = upload_local_blobs(&mut connection, &app_data, &client, token).await?;
-    let uploaded_documents =
-        upload_document_blobs(&mut connection, &app_data, &client, token).await?;
+    report_running(state, "compare", 0, 0, 0, 0);
+    let mut remote_hashes = list_remote_blob_hashes(&client, token).await?;
+    let (uploaded_books, skipped_books) = upload_local_blobs(
+        &mut connection,
+        &app_data,
+        &client,
+        token,
+        state,
+        &mut remote_hashes,
+    )
+    .await?;
+    let (uploaded_documents, skipped_docs) = upload_document_blobs(
+        &mut connection,
+        &app_data,
+        &client,
+        token,
+        state,
+        uploaded_books,
+        &mut remote_hashes,
+    )
+    .await?;
+    let uploaded = uploaded_books.saturating_add(uploaded_documents);
+    let skipped = skipped_books.saturating_add(skipped_docs);
+    report_skipped(state, skipped);
+    report_running(state, "merge", 0, 0, uploaded, 0);
     let remote = read_remote_snapshots(&client, &device, token).await?;
     let mut conflicts = 0_u64;
-    for snapshot in &remote {
+    let snapshot_total = remote.len() as u64;
+    for (index, snapshot) in remote.iter().enumerate() {
+        report_running(state, "merge", index as u64, snapshot_total, uploaded, 0);
         conflicts = conflicts.saturating_add(
             apply_remote_snapshot(&mut connection, &app_data, snapshot)
                 .map_err(|error| WebDavError::new("SYNC_MERGE_ERROR", error))?,
@@ -2748,10 +3022,10 @@ async fn sync_once(
     backfill_group_records(&connection)
         .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error))?;
     let downloaded_books =
-        download_pinned_books(&mut connection, &app_data, &client, token).await?;
+        download_pinned_books(&mut connection, &app_data, &client, token, state, uploaded).await?;
+    report_running(state, "snapshot", 0, 1, uploaded, downloaded_books);
     let snapshot = local_snapshot(&connection, device.clone())
         .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error))?;
-    let _ = cleanup_unreferenced_blobs(&mut connection, &client, &snapshot, &remote, token).await?;
     let body = serde_json::to_vec(&snapshot).map_err(|error| {
         WebDavError::new(
             "SYNC_SNAPSHOT_INVALID",
@@ -2759,15 +3033,49 @@ async fn sync_once(
         )
     })?;
     let path = webdav::remote_state_path(&format!("{device}.json"))?;
-    client.put_atomic(&path, &body, Some(token)).await?;
+    let digest = format!("{:x}", Sha256::digest(&body));
+    let previous = sync_meta_get(&connection, SNAPSHOT_HASH_KEY)?;
+    let remote_snapshot_missing = match client.propfind(&path, "0").await {
+        Ok(_) => false,
+        Err(error) if error.status == Some(404) => true,
+        Err(error) => return Err(error),
+    };
+    let snapshot_changed = remote_snapshot_missing || previous.as_deref() != Some(digest.as_str());
+    if snapshot_changed {
+        report_running(state, "snapshot", 1, 1, uploaded, downloaded_books);
+        client.put_atomic(&path, &body, Some(token)).await?;
+        sync_meta_set(&connection, SNAPSHOT_HASH_KEY, &digest)?;
+    }
+    if uploaded > 0 {
+        report_running(state, "cleanup", 0, 0, uploaded, downloaded_books);
+        let _ =
+            cleanup_unreferenced_blobs(&mut connection, &client, &snapshot, &remote, token).await?;
+    }
+    let started_at = state
+        .status
+        .lock()
+        .ok()
+        .and_then(|status| status.started_at);
     Ok(SyncStatus {
         state: SyncRunState::Success,
-        started_at: None,
+        started_at,
         finished_at: Some(library::now_ms()),
         last_error: None,
-        uploaded: uploaded_books.saturating_add(uploaded_documents),
-        downloaded: downloaded_books,
+        uploaded: if uploaded > 0 {
+            uploaded
+        } else {
+            retained_uploaded
+        },
+        downloaded: if downloaded_books > 0 {
+            downloaded_books
+        } else {
+            retained_downloaded
+        },
         conflicts,
+        phase: "done".into(),
+        current: 1,
+        total: 1,
+        skipped,
     })
 }
 
@@ -2783,29 +3091,14 @@ pub async fn sync_run(
     state: State<'_, SyncTaskState>,
 ) -> Result<SyncStatus, String> {
     let (task_id, token) = start_task(state.inner())?;
-    let result = sync_once(&app, webdav_state.inner(), &token).await;
-    match result {
-        Ok(status) => {
-            finish_task(state.inner(), &task_id, &Ok(status.clone()));
-            Ok(status)
-        }
-        Err(error) => {
-            finish_task(state.inner(), &task_id, &Err(error.clone()));
-            Err(error.message)
-        }
-    }
+    let guard = SyncRunGuard::new(state.inner(), task_id);
+    let result = sync_once(&app, webdav_state.inner(), state.inner(), &token).await;
+    guard.finish(result)
 }
 
 #[tauri::command]
 pub fn sync_cancel(state: State<'_, SyncTaskState>) -> Result<(), String> {
-    let task = state
-        .task
-        .lock()
-        .map_err(|_| "同步任务状态不可用".to_string())?;
-    if let Some((_, token)) = task.as_ref() {
-        token.cancel();
-    }
-    Ok(())
+    cancel_active_task(state.inner())
 }
 
 #[tauri::command]
@@ -3633,5 +3926,95 @@ mod tests {
         ]);
         assert_eq!(resolved[0].parent_id, None);
         assert_eq!(resolved[1].parent_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn dropped_sync_guard_clears_running_status() {
+        let state = SyncTaskState::default();
+        {
+            let (task_id, _token) = start_task(&state).unwrap();
+            let _guard = SyncRunGuard::new(&state, task_id);
+            assert_eq!(
+                status_snapshot(&state).unwrap().state,
+                SyncRunState::Running
+            );
+        }
+        let status = status_snapshot(&state).unwrap();
+        assert_eq!(status.state, SyncRunState::Cancelled);
+        assert!(state.task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn cancel_clears_stale_running_status() {
+        let state = SyncTaskState::default();
+        let (_id, token) = start_task(&state).unwrap();
+        assert_eq!(
+            status_snapshot(&state).unwrap().state,
+            SyncRunState::Running
+        );
+        cancel_active_task(&state).unwrap();
+        assert!(token.is_cancelled());
+        assert_eq!(
+            status_snapshot(&state).unwrap().state,
+            SyncRunState::Cancelled
+        );
+        assert!(state.task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn finish_after_cancel_does_not_overwrite_a_new_run() {
+        let state = SyncTaskState::default();
+        let (old_id, _) = start_task(&state).unwrap();
+        cancel_active_task(&state).unwrap();
+        let (new_id, _) = start_task(&state).unwrap();
+        finish_task(
+            &state,
+            &old_id,
+            &Ok(SyncStatus {
+                state: SyncRunState::Success,
+                started_at: None,
+                finished_at: Some(1),
+                last_error: None,
+                uploaded: 3,
+                downloaded: 0,
+                conflicts: 0,
+                ..SyncStatus::default()
+            }),
+        );
+        assert_eq!(
+            status_snapshot(&state).unwrap().state,
+            SyncRunState::Running
+        );
+        assert_eq!(
+            state
+                .task
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(id, _)| id.as_str()),
+            Some(new_id.as_str())
+        );
+    }
+
+    #[test]
+    fn blobs_already_on_the_remote_are_not_uploaded_again() {
+        let hash = "a".repeat(64);
+        let remote = BTreeSet::from([hash.clone()]);
+        assert!(blob_already_on_remote(&hash, &remote));
+        assert!(!blob_already_on_remote(&"b".repeat(64), &remote));
+    }
+
+    #[test]
+    fn blob_hrefs_keep_the_sha256_object_name() {
+        let hash = format!("ab{}", "c".repeat(62));
+        let href = format!("https://dav.example/dav/LightInk/v1/blobs/sha256/ab/{hash}");
+        assert_eq!(
+            href_last_path_component(&href).as_deref(),
+            Some(hash.as_str())
+        );
+        assert_eq!(
+            href_last_path_component("LightInk/v1/blobs/sha256/ab/"),
+            Some("ab".into())
+        );
     }
 }

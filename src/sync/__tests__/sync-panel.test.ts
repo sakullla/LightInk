@@ -70,6 +70,30 @@ describe('sync panel', () => {
     expect(document.querySelector('.lightink-sync-dialog')).toBeNull();
   });
 
+  it('counts skipped remote files in the ↑ total so a no-op sync does not show ↑0', async () => {
+    const panelDeps = createDeps();
+    const done: SyncStatus = {
+      state: 'success',
+      uploaded: 0,
+      downloaded: 0,
+      conflicts: 0,
+      skipped: 16,
+      finishedAt: Date.parse('2026-09-05T23:43:17'),
+    };
+    panelDeps.sync.status = vi.fn(async () => done);
+    panelDeps.sync.run = vi.fn(async () => done);
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    expect(dialog.textContent).toContain('↑16');
+    expect(dialog.textContent).toContain('↷16');
+    button(dialog, '立即同步').click();
+    await settle();
+    expect(document.querySelector('.lightink-sync-status')?.textContent).toContain('↑16');
+    button(dialog, '关闭').click();
+    expect(document.querySelector('.lightink-sync-dialog')).toBeNull();
+  });
+
   it('renders migration candidates and applies selected entries', async () => {
     const panelDeps = createDeps();
     const apply = vi.fn(async (): Promise<ManagedMigrationResult> => ({
@@ -236,6 +260,113 @@ describe('sync panel', () => {
     expect(overlay!.dataset.libraryTheme).toBe('walnut');
     expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#241c17');
     expect(overlay!.style.getPropertyValue('--lightink-fg')).toBe('#eadcc8');
+  });
+
+  it('shows a progress dialog for an in-flight sync and cancels from the dialog', async () => {
+    const panelDeps = createDeps();
+    const status = vi.fn(async (): Promise<SyncStatus> => ({
+      state: 'running',
+      uploaded: 4,
+      downloaded: 0,
+      conflicts: 0,
+      phase: 'upload-books',
+      current: 4,
+      total: 12,
+    }));
+    const cancel = vi.fn(async () => {
+      status.mockResolvedValue({
+        state: 'cancelled',
+        uploaded: 4,
+        downloaded: 0,
+        conflicts: 0,
+      });
+    });
+    panelDeps.sync.status = status;
+    panelDeps.sync.cancel = cancel;
+    showSyncPanel(panelDeps);
+    await settle();
+
+    const progress = document.querySelector<HTMLElement>('.lightink-sync-progress');
+    expect(progress?.hidden).toBe(false);
+    expect(progress?.textContent).toContain('正在同步');
+    expect(progress?.textContent).toContain('上传书籍');
+    expect(progress?.textContent).toContain('4 / 12');
+    expect(progress?.textContent).toContain('↑4');
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
+    expect(css).toMatch(/\.lightink-sync-progress\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+    expect(css).toMatch(/\.lightink-sync-progress\s*\{[^}]*position:\s*absolute/);
+    const cancelButton = Array.from(progress!.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent === '取消同步',
+    );
+    expect(cancelButton).toBeTruthy();
+    cancelButton!.click();
+    await settle();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(document.querySelector<HTMLElement>('.lightink-sync-progress')?.hidden).toBe(true);
+    expect(document.querySelector('.lightink-sync-status-state')?.textContent).toBe('已取消');
+    button(document.querySelector('.lightink-sync-dialog')!, '关闭').click();
+  });
+
+  it('opens the progress dialog as soon as 立即同步 is clicked', async () => {
+    const panelDeps = createDeps();
+    let current: SyncStatus = idle;
+    panelDeps.sync.status = vi.fn(async () => current);
+    panelDeps.sync.run = vi.fn(async () => {
+      current = {
+        state: 'running',
+        uploaded: 0,
+        downloaded: 0,
+        conflicts: 0,
+        phase: 'connect',
+      };
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      current = { ...idle, state: 'success', uploaded: 2, finishedAt: 1 };
+      return current;
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    expect(document.querySelector<HTMLElement>('.lightink-sync-progress')?.hidden).toBe(true);
+    button(document.querySelector('.lightink-sync-dialog')!, '立即同步').click();
+    await settle();
+    expect(document.querySelector<HTMLElement>('.lightink-sync-progress')?.hidden).toBe(false);
+    expect(document.querySelector('.lightink-sync-progress')?.textContent).toContain('连接服务器');
+    await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    expect(document.querySelector<HTMLElement>('.lightink-sync-progress')?.hidden).toBe(true);
+    expect(document.querySelector('.lightink-sync-status-state')?.textContent).toContain('已同步');
+    button(document.querySelector('.lightink-sync-dialog')!, '关闭').click();
+  });
+
+  it('shows a stuck running status and lets cancel clear it', async () => {
+    const panelDeps = createDeps();
+    const status = vi.fn(async (): Promise<SyncStatus> => ({
+      state: 'running',
+      uploaded: 0,
+      downloaded: 0,
+      conflicts: 0,
+    }));
+    const cancel = vi.fn(async () => {
+      status.mockResolvedValue({
+        state: 'cancelled',
+        uploaded: 0,
+        downloaded: 0,
+        conflicts: 0,
+      });
+    });
+    panelDeps.sync.status = status;
+    panelDeps.sync.cancel = cancel;
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    expect(dialog.querySelector('.lightink-sync-status-state')?.textContent).toBe('同步中…');
+    expect(button(dialog, '立即同步').disabled).toBe(true);
+    const cancelButton = button(dialog, '取消同步');
+    expect(cancelButton.hidden).toBe(false);
+    cancelButton.click();
+    await settle();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(dialog.querySelector('.lightink-sync-status-state')?.textContent).toBe('已取消');
+    expect(button(dialog, '立即同步').disabled).toBe(false);
+    button(dialog, '关闭').click();
   });
 
   it('closes on Escape so the Android back chain returns to the manage page', async () => {

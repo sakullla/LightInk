@@ -1068,6 +1068,10 @@ const NAV_ICON_PATHS = {
   search: ['M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z', 'M21 21l-4.35-4.35'],
   chevron: ['M9 18l6-6-6-6'],
   chevronLeft: ['M15 18l-6-6 6-6'],
+  sidebar: [
+    'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z',
+    'M9 3v18',
+  ],
   folder: [
     'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
   ],
@@ -1153,6 +1157,9 @@ export function createLibraryView(
   const brand = doc.createElement('div');
   brand.className = 'lightink-library-brand';
   brand.setAttribute('data-tauri-drag-region', '');
+  const brandLabel = doc.createElement('span');
+  brandLabel.className = 'lightink-library-brand-label';
+  brandLabel.setAttribute('data-tauri-drag-region', '');
   const heading = doc.createElement('h1');
   const searchForm = doc.createElement('form');
   searchForm.className = 'lightink-library-search';
@@ -1371,7 +1378,7 @@ export function createLibraryView(
     '',
     'lightink-library-icon-button lightink-library-nav-collapse',
   );
-  navCollapse.appendChild(createNavIcon(doc, NAV_ICON_PATHS.chevron));
+  navCollapse.appendChild(createNavIcon(doc, NAV_ICON_PATHS.sidebar));
   navCollapse.setAttribute('aria-controls', navPane.id);
   navPane.style.position = 'relative';
   const navResize = doc.createElement('div');
@@ -1386,7 +1393,8 @@ export function createLibraryView(
   navResize.style.cursor = 'col-resize';
   navResize.style.touchAction = 'none';
   navResize.style.zIndex = '2';
-  navPane.append(groupPane, sourcePane, catalogPane, managePane, navCollapse, navResize);
+  brand.append(brandLabel, navCollapse);
+  navPane.append(groupPane, sourcePane, catalogPane, managePane, navResize);
   const sourceOverlay = doc.createElement('div');
   sourceOverlay.className = 'lightink-modal-overlay lightink-library-source-modal';
   sourceOverlay.hidden = true;
@@ -1645,18 +1653,21 @@ export function createLibraryView(
   });
   const activeOperations = new Set<AbortController>();
   const trail: Array<{ title: string; url?: string }> = [];
-  let groupListCollapsed = false;
-  let smartGroupListCollapsed = false;
+  let groupListCollapsed = true;
+  let smartGroupListCollapsed = true;
   const smartTypeCollapsed: Record<SmartGroupTypeId, boolean> = {
-    fixed: true,
+    fixed: false,
     format: true,
     author: true,
     series: true,
   };
-  let sourceListCollapsed = false;
+  let sourceListCollapsed = true;
   let groupFilterQuery = '';
   let smartGroupFilterQuery = '';
   let sourceFilterQuery = '';
+
+  const desktopOnlyCollapsed = (collapsed: boolean): boolean =>
+    !isMobileLibraryChrome() && collapsed;
 
   function setNavSectionCollapsed(
     toggle: HTMLButtonElement,
@@ -2224,7 +2235,7 @@ export function createLibraryView(
   }
 
   function syncPageChrome(): void {
-    brand.textContent = labels().brand;
+    brandLabel.textContent = labels().brand;
     const inCatalog = catalogActive();
     root.dataset.libraryNav =
       activeSection === 'sources' ? (inCatalog ? 'catalog' : 'sources') : activeSection;
@@ -2385,7 +2396,6 @@ export function createLibraryView(
 
   async function reloadGroups(): Promise<void> {
     groups = (await deps.library.listGroups?.()) ?? [];
-    for (const group of groups) expandedGroupIds.add(group.id);
     forgetMissingCustomGroup();
     renderGroups();
     renderContinueBar();
@@ -2966,11 +2976,16 @@ export function createLibraryView(
     groupPane.setAttribute('aria-label', labels().groups);
     addGroupButton.title = labels().newGroup;
     addGroupButton.setAttribute('aria-label', labels().newGroup);
-    setNavSectionCollapsed(groupToggle, groupBody, groupListCollapsed, labels().groups);
+    setNavSectionCollapsed(
+      groupToggle,
+      groupBody,
+      desktopOnlyCollapsed(groupListCollapsed),
+      labels().groups,
+    );
     setNavSectionCollapsed(
       smartGroupToggle,
       smartGroupBody,
-      smartGroupListCollapsed,
+      desktopOnlyCollapsed(smartGroupListCollapsed),
       labels().smartGroups,
     );
     syncSectionFilterLabels(groupFilter, labels().filterGroups);
@@ -3002,6 +3017,16 @@ export function createLibraryView(
       empty.textContent = labels().noMatch;
       groupList.appendChild(empty);
     }
+    const emptyCustom =
+      groupList.querySelector('.lightink-library-custom-group') === null &&
+      groupFilterQuery.trim() === '';
+    setNavSectionCollapsed(
+      groupToggle,
+      groupBody,
+      desktopOnlyCollapsed(groupListCollapsed),
+      labels().groups,
+    );
+    if (emptyCustom) groupBody.hidden = true;
     renderSmartGroups();
     renderGroupEditor();
     renderGroupsSheet();
@@ -3029,14 +3054,33 @@ export function createLibraryView(
     // 一个智能分组都没有（全部为空组被隐藏）时整个分区不占位
     const sectionEmpty = smartGroups.length === 0;
     smartGroupHeader.hidden = sectionEmpty;
-    smartGroupBody.hidden = sectionEmpty || smartGroupListCollapsed;
+    smartGroupBody.hidden = sectionEmpty || desktopOnlyCollapsed(smartGroupListCollapsed);
     const query = smartGroupFilterQuery.trim().toLowerCase();
     const visible = smartGroups.filter(
       (group) => query === '' || smartGroupName(group).toLowerCase().includes(query),
     );
+    const appendSmartItem = (group: SmartGroupDefinition, parent: HTMLElement): void => {
+      const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
+      item.prepend(createNavIcon(doc, NAV_ICON_PATHS.hash));
+      item.dataset.smartGroupId = group.id;
+      const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
+      item.classList.toggle('is-active', active);
+      if (active) item.setAttribute('aria-current', 'true');
+      item.addEventListener('click', () => {
+        selectedSmartGroupId = group.id;
+        selectedCustomGroupId = null;
+        void activateShelf();
+      });
+      parent.appendChild(item);
+    };
     for (const typeId of SMART_GROUP_TYPE_ORDER) {
       const typeGroups = visible.filter((group) => smartGroupTypeId(group) === typeId);
       if (typeGroups.length === 0) continue;
+      // 受管/远程是常用目的地，和筛选一样直接列出，不再套「固定」一层。
+      if (typeId === 'fixed') {
+        for (const group of typeGroups) appendSmartItem(group, smartGroupList);
+        continue;
+      }
       const typeLabel = smartTypeLabel(typeId);
       const typeBlock = doc.createElement('div');
       typeBlock.className = 'lightink-library-smart-type';
@@ -3059,20 +3103,7 @@ export function createLibraryView(
         if (event.target instanceof Element && event.target.closest('button') !== null) return;
         toggle.click();
       });
-      for (const group of typeGroups) {
-        const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
-        item.prepend(createNavIcon(doc, NAV_ICON_PATHS.hash));
-        item.dataset.smartGroupId = group.id;
-        const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
-        item.classList.toggle('is-active', active);
-        if (active) item.setAttribute('aria-current', 'true');
-        item.addEventListener('click', () => {
-          selectedSmartGroupId = group.id;
-          selectedCustomGroupId = null;
-          void activateShelf();
-        });
-        list.appendChild(item);
-      }
+      for (const group of typeGroups) appendSmartItem(group, list);
       typeBlock.append(heading, list);
       smartGroupList.appendChild(typeBlock);
     }
@@ -3086,7 +3117,12 @@ export function createLibraryView(
 
   function renderSources(): void {
     sourceList.replaceChildren();
-    setNavSectionCollapsed(sourceToggle, sourceBody, sourceListCollapsed, labels().sources);
+    setNavSectionCollapsed(
+      sourceToggle,
+      sourceBody,
+      desktopOnlyCollapsed(sourceListCollapsed),
+      labels().sources,
+    );
     syncSectionFilterLabels(sourceFilter, labels().filterSources);
     const query = sourceFilterQuery.trim().toLowerCase();
     const matches = (text: string): boolean => query === '' || text.toLowerCase().includes(query);
@@ -4348,7 +4384,6 @@ export function createLibraryView(
       memberships = loadedMemberships;
       forgetMissingCustomGroup();
       refreshSmartGroups();
-      for (const group of groups) expandedGroupIds.add(group.id);
       selected = null;
       feed = null;
       currentUrl = undefined;
@@ -5087,22 +5122,32 @@ export function createLibraryView(
   });
   groupToggle.addEventListener('click', () => {
     groupListCollapsed = !groupListCollapsed;
-    setNavSectionCollapsed(groupToggle, groupBody, groupListCollapsed, labels().groups);
+    setNavSectionCollapsed(
+      groupToggle,
+      groupBody,
+      desktopOnlyCollapsed(groupListCollapsed),
+      labels().groups,
+    );
   });
   smartGroupToggle.addEventListener('click', () => {
     smartGroupListCollapsed = !smartGroupListCollapsed;
     setNavSectionCollapsed(
       smartGroupToggle,
       smartGroupBody,
-      smartGroupListCollapsed,
+      desktopOnlyCollapsed(smartGroupListCollapsed),
       labels().smartGroups,
     );
   });
   sourceToggle.addEventListener('click', () => {
     sourceListCollapsed = !sourceListCollapsed;
-    setNavSectionCollapsed(sourceToggle, sourceBody, sourceListCollapsed, labels().sources);
+    setNavSectionCollapsed(
+      sourceToggle,
+      sourceBody,
+      desktopOnlyCollapsed(sourceListCollapsed),
+      labels().sources,
+    );
   });
-  // 整行可点（最佳实践）：点击分区标题行任意位置折叠/展开，+ 添加按钮除外。
+  // 点「智能分组」「书库源」整行折叠/展开；+ 与筛选按钮除外。
   for (const [heading, toggle] of [
     [groupHeader, groupToggle],
     [smartGroupHeader, smartGroupToggle],
@@ -5222,6 +5267,7 @@ export function createLibraryView(
           return;
         }
         const created = await deps.library.createGroup(name, parentId);
+        groupListCollapsed = false;
         if (created.parentId !== undefined) expandedGroupIds.add(created.parentId);
         if (pendingAddItemId !== null) {
           const itemId = pendingAddItemId;

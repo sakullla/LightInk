@@ -3362,6 +3362,31 @@ html[data-reading-layout='scroll']:has(
   border-top: 1px solid var(--lightink-border);
 }
 
+.lightink-sync-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--lightink-bg) 62%, transparent);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.lightink-sync-progress[hidden] {
+  display: none !important;
+}
+
+.lightink-sync-progress-dialog {
+  min-width: min(320px, calc(100vw - 48px));
+  max-width: min(360px, calc(100% - 32px));
+}
+
+.lightink-sync-progress-label {
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .lightink-sync-form,
   .lightink-sync-credentials {

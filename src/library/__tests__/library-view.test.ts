@@ -345,6 +345,7 @@ function groupButton(host: ParentNode, label: string): HTMLButtonElement {
 }
 
 function collectionButton(host: ParentNode, name: string): HTMLButtonElement {
+  expandNavSectionIfPresent(host, 'groups');
   const groups = host.querySelector('.lightink-library-groups') ?? host;
   const candidate = Array.from(
     groups.querySelectorAll<HTMLButtonElement>('[data-library-group-id], [data-group-id]'),
@@ -700,7 +701,7 @@ async function openMyBooks(host: HTMLElement): Promise<void> {
 }
 
 async function openSources(host: HTMLElement): Promise<void> {
-  // 源列表可能常驻导航（无需点击），也可能需要先选中「书源」导航项
+  expandNavSection(host, 'sources');
   const entry = Array.from(host.querySelectorAll('button')).find(
     (button) =>
       (button.textContent?.trim() === '书源' || button.textContent?.trim() === '书库源') &&
@@ -2196,7 +2197,8 @@ describe('LibraryView sources, manage, and catalog', () => {
         (node.getAttribute('data-smart-group-id') ?? '').startsWith('smart:source:'),
       ),
     ).toBe(false);
-    expect(host.querySelector('[data-smart-type="fixed"]')?.textContent).toContain('固定');
+    expect(host.querySelector('[data-smart-type="fixed"]')).toBeNull();
+    expect(smartGroupButton(host, '远程书籍')).toBeTruthy();
 
     smartGroupButton(host, '远程书籍').click();
     await settle();
@@ -3825,8 +3827,8 @@ describe('LibraryView shelf collections', () => {
     expect(sourceHeading?.querySelector('.lightink-library-section-icon')).toBeTruthy();
     expect(host.querySelector('[data-shelf-group="all"] .lightink-library-nav-icon')).toBeTruthy();
     expect(host.querySelector('.lightink-library-manage-entry .lightink-library-nav-icon')).toBeTruthy();
-    expect(groupHeading?.classList.contains('is-collapsed')).toBe(false);
-    expect(sourceHeading?.classList.contains('is-collapsed')).toBe(false);
+    expect(groupHeading?.classList.contains('is-collapsed')).toBe(true);
+    expect(sourceHeading?.classList.contains('is-collapsed')).toBe(true);
     view.destroy();
   });
 
@@ -3845,6 +3847,10 @@ describe('LibraryView shelf collections', () => {
 
     const root = libraryRoot(host);
     const toggle = host.querySelector<HTMLButtonElement>('.lightink-library-nav-collapse')!;
+    expect(toggle.closest('.lightink-library-brand')).toBeTruthy();
+    expect(toggle.closest('.lightink-library-header-main')).toBeNull();
+    expect(host.querySelector('.lightink-library-brand-label')?.textContent).toBe('轻墨');
+    expect(toggle.querySelector('path')?.getAttribute('d') ?? '').toContain('M19 3H5');
     expect(root.dataset.libraryNavCollapsed).toBe('false');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(toggle.getAttribute('aria-controls')).toBe('lightink-library-nav');
@@ -3889,7 +3895,7 @@ describe('LibraryView shelf collections', () => {
     view.destroy();
   });
 
-  it('collapses and expands nav sections, with smart groups open and types collapsed', async () => {
+  it('collapses and expands nav sections, with groups, smart groups and sources collapsed by default', async () => {
     const novel = seriesNovel();
     const { deps } = collectionDependencies({
       items: [novel],
@@ -3903,23 +3909,32 @@ describe('LibraryView shelf collections', () => {
     const smartBody = host.querySelector('.lightink-library-smart-group-body');
     const groupBodyEl = host.querySelector('.lightink-library-group-body');
     const sourceBodyEl = host.querySelector('.lightink-library-source-body');
+    expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
+    expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(true);
+    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(true);
+    expect(navSectionToggle(host, 'groups').getAttribute('aria-expanded')).toBe('false');
+    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
+    expect(navSectionToggle(host, 'sources').getAttribute('aria-expanded')).toBe('false');
+
+    host.querySelector('.lightink-library-smart-group-body')?.previousElementSibling?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
     expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(false);
-    expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(false);
-    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(false);
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
     expect(host.querySelector('[data-smart-type="format"]')?.textContent).toContain('格式');
     expect(navSectionToggle(host, 'smart-type-format').getAttribute('aria-expanded')).toBe('false');
     expect(() => smartGroupButton(host, 'EPUB')).toThrow(/smart group nav item not found/);
     expandNavSection(host, 'smart-type-format');
     expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
-    navSectionToggle(host, 'smart-groups').click();
+    host.querySelector('.lightink-library-smart-group-body')?.previousElementSibling?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
     expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
 
-    // 分组与书库源分区同样可折叠
-    navSectionToggle(host, 'groups').click();
-    expect(groupBodyEl instanceof HTMLElement && groupBodyEl.hidden).toBe(true);
-    navSectionToggle(host, 'sources').click();
-    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(true);
+    host.querySelector('.lightink-library-sources .lightink-library-pane-heading')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(false);
     view.destroy();
   });
 
@@ -3997,9 +4012,6 @@ describe('LibraryView shelf collections', () => {
     const filterWrap = host.querySelector<HTMLElement>(
       '.lightink-library-smart-group-body .lightink-library-section-filter-wrap',
     )!;
-    expect(smartBody.hidden).toBe(false);
-    expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
-    navSectionToggle(host, 'smart-groups').click();
     expect(smartBody.hidden).toBe(true);
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
 
