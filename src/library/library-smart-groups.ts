@@ -1,6 +1,5 @@
 import { classifyLibraryKind, type LibraryBookKind } from './library-kind.js';
 import type { LibraryGroup, LibraryItem } from './library-client.js';
-import type { OpdsSource } from './opds-client.js';
 import type { LibraryProgress } from './library-progress.js';
 
 export type SmartGroupRule =
@@ -15,6 +14,37 @@ export interface SmartGroupDefinition {
   readonly nameKey: string;
   readonly rule: SmartGroupRule;
   readonly sortOrder: number;
+}
+
+export type SmartGroupTypeId = 'fixed' | 'format' | 'author' | 'series';
+
+export const SMART_GROUP_TYPE_ORDER: readonly SmartGroupTypeId[] = [
+  'fixed',
+  'format',
+  'author',
+  'series',
+];
+
+export function isPerSourceSmartGroup(
+  group: Pick<SmartGroupDefinition, 'id' | 'rule'>,
+): boolean {
+  return (
+    group.id.startsWith('smart:source:') ||
+    (group.rule.type === 'source' && group.rule.value.startsWith('id:'))
+  );
+}
+
+export function smartGroupTypeId(group: SmartGroupDefinition): SmartGroupTypeId {
+  switch (group.rule.type) {
+    case 'format':
+      return 'format';
+    case 'author':
+      return 'author';
+    case 'series':
+      return 'series';
+    default:
+      return 'fixed';
+  }
 }
 
 export const SMART_GROUP_DEFINITIONS: readonly SmartGroupDefinition[] = [
@@ -70,24 +100,10 @@ export function smartGroupMatches(
   }
 }
 
-export function dynamicSourceAndFormatGroups(
-  items: readonly LibraryItem[],
-  sources: readonly OpdsSource[],
-): SmartGroupDefinition[] {
+export function dynamicSourceAndFormatGroups(items: readonly LibraryItem[]): SmartGroupDefinition[] {
   const result: SmartGroupDefinition[] = [];
-  const seenSources = new Set<string>();
   const seenFormats = new Set<string>();
   for (const item of items) {
-    if (item.sourceId != null && item.sourceId !== '' && !seenSources.has(item.sourceId)) {
-      seenSources.add(item.sourceId);
-      const source = sources.find((candidate) => candidate.id === item.sourceId);
-      result.push({
-        id: `smart:source:${item.sourceId}`,
-        nameKey: source?.title ?? item.sourceId,
-        rule: { type: 'source', value: `id:${item.sourceId}` },
-        sortOrder: 20,
-      });
-    }
     const format = clean(item.extension).toLowerCase().replace(/^\./, '');
     if (format !== '' && !seenFormats.has(format)) {
       seenFormats.add(format);
@@ -149,10 +165,12 @@ export function smartGroupFromRecord(group: LibraryGroup): SmartGroupDefinition 
   ) {
     return null;
   }
-  return {
+  const definition: SmartGroupDefinition = {
     id: group.id,
     nameKey: rule.type === 'author' || rule.type === 'series' ? rule.type : group.name,
     rule: rule as SmartGroupRule,
     sortOrder: group.sortOrder,
   };
+  if (isPerSourceSmartGroup(definition)) return null;
+  return definition;
 }

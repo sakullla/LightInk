@@ -654,11 +654,45 @@ html[data-touch-primary] .lightink-library-header {
   gap: 2px;
 }
 
-/* 展开的智能分组列表可能很长（作者/系列），给独立滚动上限；其余列表随导航整体滚动。 */
-.lightink-library-smart-group-list {
-  max-height: 38vh;
-  overflow-x: hidden;
-  overflow-y: auto;
+.lightink-library-smart-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lightink-library-smart-type-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lightink-library-smart-type-heading:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-library-smart-type-heading h4 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-smart-type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 2px 8px;
 }
 
 /* Nav items: 管理 entry, shelf filters, custom groups, smart groups. */
@@ -903,6 +937,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-collapse-toggle,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading h2,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-heading h3,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-smart-type-heading h4,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-actions,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-group-body,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-smart-group-body,
@@ -3031,7 +3066,11 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav-collapsed='true']
     .lightink-library-pane-heading
-    h3 {
+    h3,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav-collapsed='true']
+    .lightink-library-smart-type-heading
+    h4 {
     display: block;
   }
 

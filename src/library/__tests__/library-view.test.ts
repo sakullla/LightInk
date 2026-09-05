@@ -296,6 +296,19 @@ function expandNavSection(host: ParentNode, section: string): void {
   if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
 }
 
+function expandNavSectionIfPresent(host: ParentNode, section: string): void {
+  const toggle = host.querySelector(`[data-nav-toggle="${section}"]`);
+  if (!(toggle instanceof HTMLButtonElement)) return;
+  if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+}
+
+function expandSmartGroupTypes(host: ParentNode): void {
+  expandNavSection(host, 'smart-groups');
+  for (const section of ['fixed', 'format', 'author', 'series']) {
+    expandNavSectionIfPresent(host, `smart-type-${section}`);
+  }
+}
+
 
 function isShown(el: Element | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -1465,7 +1478,7 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
 
-    expandNavSection(host, 'smart-groups');
+    expandSmartGroupTypes(host);
     smartGroupButton(host, 'EPUB').click();
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
@@ -2131,10 +2144,76 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(submit === null || submit.type === 'submit').toBe(true);
 
     await openSources(host);
-    expect(host.querySelector('.lightink-library-source-row')?.textContent).toContain('测试书库');
-    expect(host.querySelector('.lightink-library-source-url')?.textContent).toContain(
+    const sourceRow = host.querySelector('.lightink-library-source-row');
+    const sourceChoose = host.querySelector<HTMLButtonElement>('.lightink-library-source');
+    expect(sourceRow?.textContent).toContain('测试书库');
+    expect(sourceRow?.textContent).not.toContain('https://books.example/opds');
+    expect(host.querySelector('.lightink-library-source-url')).toBeNull();
+    expect(sourceChoose?.title).toBe('https://books.example/opds');
+    sourceChoose?.click();
+    await settle();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('catalog');
+    view.destroy();
+  });
+
+  it('does not render per-source smart groups and shows remote books from 远程', async () => {
+    const local = localItem();
+    const remote: LibraryItem = {
+      id: 'opds:source-1:book-12',
+      sourceId: 'source-1',
+      sourceKind: 'opds',
+      title: '远程小说',
+      authors: [],
+      extension: 'epub',
+      availability: 'remote',
+      updatedAt: 1,
+    };
+    const persistedSourceGroup: LibraryGroup = {
+      id: 'smart:source:source-1',
+      name: '测试书库',
+      kind: 'smart',
+      rule: { type: 'source', value: 'id:source-1' },
+      sortOrder: 20,
+    };
+    const base = dependencies();
+    const deps = dependencies({
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => [local, remote]),
+        listGroups: vi.fn(async () => [persistedSourceGroup]),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expandSmartGroupTypes(host);
+    const nav = libraryNav(host);
+    expect(nav.querySelector('[data-smart-group-id="smart:source:source-1"]')).toBeNull();
+    expect(
+      [...nav.querySelectorAll('[data-smart-group-id]')].some((node) =>
+        (node.getAttribute('data-smart-group-id') ?? '').startsWith('smart:source:'),
+      ),
+    ).toBe(false);
+    expect(host.querySelector('[data-smart-type="fixed"]')?.textContent).toContain('固定');
+
+    smartGroupButton(host, '远程书籍').click();
+    await settle();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('shelf');
+    expect(itemRow(host, remote.id).textContent).toContain('远程小说');
+    expect(host.querySelector(`[data-item-id="${local.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+
+    const choose = host.querySelector<HTMLButtonElement>('.lightink-library-source')!;
+    expect(choose.textContent).toContain('测试书库');
+    expect(choose.title).toBe('https://books.example/opds');
+    expect(choose.closest('.lightink-library-source-row')?.textContent).not.toContain(
       'https://books.example/opds',
     );
+    choose.click();
+    await settle();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('catalog');
     view.destroy();
   });
 
@@ -3666,7 +3745,7 @@ describe('LibraryView shelf collections', () => {
     await view.show();
 
     // 智能分组默认折叠，展开后作为只读导航项呈现，选中即过滤右侧内容区
-    expandNavSection(host, 'smart-groups');
+    expandSmartGroupTypes(host);
     smartGroupButton(host, 'EPUB').click();
     await settle();
     expect(itemRow(host, novel.id)).toBeTruthy();
@@ -3703,7 +3782,7 @@ describe('LibraryView shelf collections', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    expandNavSection(host, 'smart-groups');
+    expandSmartGroupTypes(host);
 
     const smartItems = Array.from(
       host.querySelectorAll<HTMLButtonElement>('.lightink-library-smart-group'),
@@ -3829,10 +3908,13 @@ describe('LibraryView shelf collections', () => {
     expect(sourceBodyEl instanceof HTMLElement && sourceBodyEl.hidden).toBe(false);
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('false');
 
-    // 展开智能分组后内容可见；再次点击折叠
+    // 展开智能分组后类型段默认收起；展开格式后条目可见，再次点击折叠整段
     navSectionToggle(host, 'smart-groups').click();
     expect(navSectionToggle(host, 'smart-groups').getAttribute('aria-expanded')).toBe('true');
     expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(false);
+    expect(navSectionToggle(host, 'smart-type-format').getAttribute('aria-expanded')).toBe('false');
+    expect(() => smartGroupButton(host, 'EPUB')).toThrow(/smart group nav item not found/);
+    expandNavSection(host, 'smart-type-format');
     expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
     navSectionToggle(host, 'smart-groups').click();
     expect(smartBody instanceof HTMLElement && smartBody.hidden).toBe(true);
@@ -3944,7 +4026,7 @@ describe('LibraryView shelf collections', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    expandNavSection(host, 'smart-groups');
+    expandSmartGroupTypes(host);
     expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
     expect(smartGroupButton(host, 'CBZ')).toBeTruthy();
 
@@ -3967,6 +4049,58 @@ describe('LibraryView shelf collections', () => {
     await settle();
     expect(smartGroupButton(host, 'CBZ')).toBeTruthy();
     view.destroy();
+  });
+
+  it('folds remaining smart groups into collapsed type sections', async () => {
+    const first = localItem({
+      id: 'local:/books/a.epub',
+      title: 'A',
+      authors: ['Alice'],
+      series: 'Saga',
+      localPath: '/books/a.epub',
+    });
+    const second = localItem({
+      id: 'local:/books/b.epub',
+      title: 'B',
+      authors: ['Alice'],
+      series: 'Saga',
+      localPath: '/books/b.epub',
+    });
+    const { deps } = collectionDependencies({ items: [first, second] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expandNavSection(host, 'smart-groups');
+    expect(host.querySelector('[data-smart-type="format"]')?.textContent).toContain('格式');
+    expect(host.querySelector('[data-smart-type="author"]')?.textContent).toContain('作者');
+    expect(host.querySelector('[data-smart-type="series"]')?.textContent).toContain('系列');
+    expect(navSectionToggle(host, 'smart-type-format').getAttribute('aria-expanded')).toBe('false');
+    expect(navSectionToggle(host, 'smart-type-author').getAttribute('aria-expanded')).toBe('false');
+    expect(navSectionToggle(host, 'smart-type-series').getAttribute('aria-expanded')).toBe('false');
+    expect(() => smartGroupButton(host, 'EPUB')).toThrow(/smart group nav item not found/);
+    expect(() => smartGroupButton(host, '作者：Alice')).toThrow(/smart group nav item not found/);
+    expect(() => smartGroupButton(host, '系列：Saga')).toThrow(/smart group nav item not found/);
+
+    expandNavSection(host, 'smart-type-format');
+    expect(smartGroupButton(host, 'EPUB')).toBeTruthy();
+    expandNavSection(host, 'smart-type-author');
+    expect(smartGroupButton(host, '作者：Alice')).toBeTruthy();
+    expandNavSection(host, 'smart-type-series');
+    expect(smartGroupButton(host, '系列：Saga')).toBeTruthy();
+    view.destroy();
+  });
+
+  it('does not give the smart-group list its own inner scroller', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).not.toMatch(
+      /\.lightink-library-smart-group-list[^{]*\{[^}]*max-height:\s*38vh/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-library-smart-group-list[^{]*\{[^}]*overflow-y:\s*auto/,
+    );
+    expect(css).toMatch(/\.lightink-library-nav\s*\{[^}]*overflow-y:\s*auto/);
   });
 
   it('can rename a user collection', async () => {

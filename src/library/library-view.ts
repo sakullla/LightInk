@@ -16,10 +16,14 @@ import {
 import {
   dynamicAuthorAndSeriesGroups,
   dynamicSourceAndFormatGroups,
+  isPerSourceSmartGroup,
   SMART_GROUP_DEFINITIONS,
-  smartGroupMatches,
+  SMART_GROUP_TYPE_ORDER,
   smartGroupFromRecord,
+  smartGroupMatches,
+  smartGroupTypeId,
   type SmartGroupDefinition,
+  type SmartGroupTypeId,
 } from './library-smart-groups.js';
 import { classifyLibraryKind } from './library-kind.js';
 import {
@@ -197,6 +201,10 @@ interface Labels {
   noCustomGroups: string;
   invalidGroupMove: string;
   smartGroups: string;
+  smartTypeFixed: string;
+  smartTypeFormat: string;
+  smartTypeAuthor: string;
+  smartTypeSeries: string;
   collapse: string;
   expand: string;
   filterGroups: string;
@@ -357,6 +365,10 @@ const LABELS: Record<Locale, Labels> = {
     noCustomGroups: 'Create a custom group first.',
     invalidGroupMove: 'Groups cannot form a cycle or exceed 8 levels.',
     smartGroups: 'Smart groups',
+    smartTypeFixed: 'Fixed',
+    smartTypeFormat: 'Format',
+    smartTypeAuthor: 'Author',
+    smartTypeSeries: 'Series',
     managedBooks: 'Managed books',
     remoteBooks: 'Remote books',
     epubBooks: 'EPUB books',
@@ -515,6 +527,10 @@ const LABELS: Record<Locale, Labels> = {
     noCustomGroups: '请先创建自定义分组。',
     invalidGroupMove: '分组不能形成循环或超过 8 层。',
     smartGroups: '智能分组',
+    smartTypeFixed: '固定',
+    smartTypeFormat: '格式',
+    smartTypeAuthor: '作者',
+    smartTypeSeries: '系列',
     managedBooks: '受管书籍',
     remoteBooks: '远程书籍',
     epubBooks: 'EPUB',
@@ -1631,6 +1647,12 @@ export function createLibraryView(
   const trail: Array<{ title: string; url?: string }> = [];
   let groupListCollapsed = false;
   let smartGroupListCollapsed = true;
+  const smartTypeCollapsed: Record<SmartGroupTypeId, boolean> = {
+    fixed: true,
+    format: true,
+    author: true,
+    series: true,
+  };
   let sourceListCollapsed = false;
   let groupFilterQuery = '';
   let smartGroupFilterQuery = '';
@@ -1644,7 +1666,9 @@ export function createLibraryView(
   ): void {
     list.hidden = collapsed;
     toggle.setAttribute('aria-expanded', String(!collapsed));
-    toggle.closest('.lightink-library-pane-heading')?.classList.toggle('is-collapsed', collapsed);
+    toggle
+      .closest('.lightink-library-pane-heading, .lightink-library-smart-type-heading')
+      ?.classList.toggle('is-collapsed', collapsed);
     const action = collapsed ? labels().expand : labels().collapse;
     toggle.title = `${action}: ${sectionLabel}`;
     toggle.setAttribute('aria-label', `${action}: ${sectionLabel}`);
@@ -1929,10 +1953,11 @@ export function createLibraryView(
     const definitions = [
       ...SMART_GROUP_DEFINITIONS,
       ...dynamicAuthorAndSeriesGroups(items.map((display) => display.item)),
-      ...dynamicSourceAndFormatGroups(items.map((display) => display.item), sources),
+      ...dynamicSourceAndFormatGroups(items.map((display) => display.item)),
     ];
     const seen = new Set<string>();
     smartGroups = [...definitions, ...persisted].filter((group) => {
+      if (isPerSourceSmartGroup(group)) return false;
       if (seen.has(group.id)) return false;
       seen.add(group.id);
       return true;
@@ -2984,6 +3009,20 @@ export function createLibraryView(
     syncMobileGroupsChrome();
   }
 
+  function smartTypeLabel(typeId: SmartGroupTypeId): string {
+    const l = labels();
+    switch (typeId) {
+      case 'fixed':
+        return l.smartTypeFixed;
+      case 'format':
+        return l.smartTypeFormat;
+      case 'author':
+        return l.smartTypeAuthor;
+      case 'series':
+        return l.smartTypeSeries;
+    }
+  }
+
   function renderSmartGroups(): void {
     smartGroupList.replaceChildren();
     smartGroupTitle.textContent = labels().smartGroups;
@@ -2993,20 +3032,50 @@ export function createLibraryView(
     smartGroupHeader.hidden = sectionEmpty;
     smartGroupBody.hidden = sectionEmpty || smartGroupListCollapsed;
     const query = smartGroupFilterQuery.trim().toLowerCase();
-    for (const group of smartGroups) {
-      if (query !== '' && !smartGroupName(group).toLowerCase().includes(query)) continue;
-      const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
-      item.prepend(createNavIcon(doc, NAV_ICON_PATHS.hash));
-      item.dataset.smartGroupId = group.id;
-      const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
-      item.classList.toggle('is-active', active);
-      if (active) item.setAttribute('aria-current', 'true');
-      item.addEventListener('click', () => {
-        selectedSmartGroupId = group.id;
-        selectedCustomGroupId = null;
-        void activateShelf();
+    const visible = smartGroups.filter(
+      (group) => query === '' || smartGroupName(group).toLowerCase().includes(query),
+    );
+    for (const typeId of SMART_GROUP_TYPE_ORDER) {
+      const typeGroups = visible.filter((group) => smartGroupTypeId(group) === typeId);
+      if (typeGroups.length === 0) continue;
+      const typeLabel = smartTypeLabel(typeId);
+      const typeBlock = doc.createElement('div');
+      typeBlock.className = 'lightink-library-smart-type';
+      typeBlock.dataset.smartType = typeId;
+      const heading = doc.createElement('div');
+      heading.className = 'lightink-library-smart-type-heading';
+      const toggle = createSectionToggle(`smart-type-${typeId}`);
+      const title = doc.createElement('h4');
+      title.textContent = typeLabel;
+      heading.append(toggle, title);
+      const list = doc.createElement('div');
+      list.className = 'lightink-library-smart-type-list';
+      setNavSectionCollapsed(toggle, list, smartTypeCollapsed[typeId], typeLabel);
+      toggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        smartTypeCollapsed[typeId] = !smartTypeCollapsed[typeId];
+        setNavSectionCollapsed(toggle, list, smartTypeCollapsed[typeId], typeLabel);
       });
-      smartGroupList.appendChild(item);
+      heading.addEventListener('click', (event) => {
+        if (event.target instanceof Element && event.target.closest('button') !== null) return;
+        toggle.click();
+      });
+      for (const group of typeGroups) {
+        const item = button(doc, smartGroupName(group), 'lightink-library-smart-group');
+        item.prepend(createNavIcon(doc, NAV_ICON_PATHS.hash));
+        item.dataset.smartGroupId = group.id;
+        const active = activeSection === 'shelf' && selectedSmartGroupId === group.id;
+        item.classList.toggle('is-active', active);
+        if (active) item.setAttribute('aria-current', 'true');
+        item.addEventListener('click', () => {
+          selectedSmartGroupId = group.id;
+          selectedCustomGroupId = null;
+          void activateShelf();
+        });
+        list.appendChild(item);
+      }
+      typeBlock.append(heading, list);
+      smartGroupList.appendChild(typeBlock);
     }
     if (!sectionEmpty && smartGroupList.childElementCount === 0) {
       const empty = doc.createElement('p');
@@ -3036,8 +3105,6 @@ export function createLibraryView(
       const row = doc.createElement('div');
       row.className = 'lightink-library-source-row';
       row.dataset.sourceKind = source.kind;
-      const stack = doc.createElement('div');
-      stack.className = 'lightink-library-source-stack';
       const choose = button(doc, source.title, 'lightink-library-source');
       choose.prepend(createNavIcon(doc, NAV_ICON_PATHS.source));
       choose.dataset.sourceId = source.id;
@@ -3047,10 +3114,6 @@ export function createLibraryView(
         choose.setAttribute('aria-current', 'page');
       }
       choose.addEventListener('click', () => void openCatalog(source.id));
-      const url = doc.createElement('span');
-      url.className = 'lightink-library-source-url';
-      url.textContent = source.url;
-      stack.append(choose, url);
       const editLabel = source.kind === 'webdav' ? labels().editWebDav : labels().editSource;
       const edit = button(doc, '', 'lightink-library-icon-button lightink-library-source-edit');
       edit.title = editLabel;
@@ -3060,7 +3123,7 @@ export function createLibraryView(
       remove.title = labels().deleteSource;
       remove.setAttribute('aria-label', `${labels().deleteSource}: ${source.title}`);
       remove.addEventListener('click', () => void removeSource(source));
-      row.append(stack, edit, remove);
+      row.append(choose, edit, remove);
       sourceList.appendChild(row);
     }
   }
