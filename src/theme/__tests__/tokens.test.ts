@@ -5,6 +5,7 @@
  *   - 四个主题都定义了主要语法令牌（keyword/comment/string/number/
  *     function/title/attr/builtin/literal/punctuation）；
  *   - number 与 literal 在每套主题里必须是不同 hex；
+ *   - :root / warm-light 定义嵌套 chrome 半径令牌，且 control < panel < dialog；
  *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源），
  *     含 .hljs-punctuation 与 .hljs-meta。
  *
@@ -146,6 +147,18 @@ describe('tokens.css 内置主题', () => {
       expect(literal).toMatch(/^#[0-9a-f]{3,8}$/i);
     },
   );
+
+  it('定义嵌套 chrome 半径令牌且 control < panel < dialog', () => {
+    const block = themeBlock('warm-light');
+    const control = tokenValue(block, '--lightink-radius-control');
+    const panel = tokenValue(block, '--lightink-radius-panel');
+    const dialog = tokenValue(block, '--lightink-radius-dialog');
+    expect(control).toBe('6px');
+    expect(panel).toBe('10px');
+    expect(dialog).toBe('12px');
+    expect(parseFloat(control)).toBeLessThan(parseFloat(panel));
+    expect(parseFloat(panel)).toBeLessThan(parseFloat(dialog));
+  });
 });
 
 describe('tokens.css hljs 类映射', () => {

@@ -138,7 +138,7 @@ html[data-touch-primary] {
   min-height: 0;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: var(--lightink-muted);
   cursor: default;

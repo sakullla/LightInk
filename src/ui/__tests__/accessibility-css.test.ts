@@ -335,6 +335,9 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-confirm-dialog\s*\{[^}]*border-radius:\s*16px/,
     );
     expect(archiveDialogSource).toContain("borderRadius = '16px'");
+    expect(themeCss).toMatch(
+      /\.lightink-modal-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
     // 桌面居中卡片基线不变（无触屏旗标时不命中任何新规则）。
     const sourceDialog = libraryCss.match(
       /\.lightink-library-source-modal \.lightink-modal-dialog\s*\{[^}]*\}/,

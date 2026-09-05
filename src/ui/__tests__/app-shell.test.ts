@@ -5,6 +5,8 @@
  * 并覆盖菜单/标签 chrome 默认折叠与 class 同步（node + minimal fake document）。
  */
 
+import { readFileSync } from 'node:fs';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { InsertElementId } from '../../editor/insert-commands.js';
@@ -1277,5 +1279,63 @@ describe('buildRecentsMenuItems（R12 最近打开子菜单）', () => {
     items[3].action();
     expect(opened).toEqual(['C:\\docs\\a.md']);
     expect(cleared).toBe(1);
+  });
+});
+
+describe('nested chrome radii in editor shell CSS', () => {
+  const themeCss = readFileSync(new URL('../theme.css', import.meta.url), 'utf-8');
+  const titlebarCss = readFileSync(new URL('../window-titlebar.css', import.meta.url), 'utf-8');
+
+  function cssBlock(css: string, selector: string): string {
+    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(stripped))) {
+      if (match[1].replace(/\s+/g, ' ').trim() === selector) {
+        return match[2];
+      }
+    }
+    throw new Error(`missing CSS block ${selector}`);
+  }
+
+  it('keeps toolbar, tabbar track, and status bar outer edges square', () => {
+    expect(cssBlock(themeCss, '#lightink-toolbar')).toMatch(/border-radius:\s*0/);
+    expect(cssBlock(themeCss, '#lightink-tabbar')).toMatch(/border-radius:\s*0/);
+    expect(cssBlock(themeCss, '.lightink-status-bar')).toMatch(/border-radius:\s*0/);
+  });
+
+  it('renders tabs as slightly rounded document chips, not pills', () => {
+    const tab = cssBlock(themeCss, '.lightink-tab');
+    expect(tab).toMatch(/border-radius:\s*var\(--lightink-radius-control\)/);
+    expect(tab).not.toMatch(/999px/);
+    expect(tab).toMatch(/max-width:\s*14rem/);
+    const close = cssBlock(themeCss, '.lightink-tab-close');
+    expect(close).toMatch(/width:\s*24px/);
+    expect(close).toMatch(/height:\s*24px/);
+    expect(cssBlock(themeCss, '#lightink-tabbar')).toMatch(/overflow-x:\s*auto/);
+    expect(themeCss).toMatch(
+      /#app\.is-workspace-editor #lightink-toolbar,\s*#app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*calc\(var\(--lightink-titlebar-caption/,
+    );
+  });
+
+  it('consumes nested radius tokens for menus, dialogs, buttons, inputs, and caption chips', () => {
+    expect(cssBlock(themeCss, '.lightink-menu-panel')).toMatch(
+      /border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(cssBlock(themeCss, '.lightink-context-menu')).toMatch(
+      /border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(cssBlock(themeCss, '.lightink-modal-dialog')).toMatch(
+      /border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
+    expect(cssBlock(themeCss, '.lightink-modal-btn')).toMatch(
+      /border-radius:\s*var\(--lightink-radius-control\)/,
+    );
+    expect(cssBlock(themeCss, '.lightink-outline-search')).toMatch(
+      /border-radius:\s*var\(--lightink-radius-control\)/,
+    );
+    expect(titlebarCss).toMatch(
+      /\.lightink-window-caption\s*\{[^}]*border-radius:\s*var\(--lightink-radius-control\)/,
+    );
   });
 });

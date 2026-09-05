@@ -170,6 +170,18 @@ describe('touch press feedback baseline (T1)', () => {
     }
   });
 
+  it('does not flatten touch confirm/library overlay radii with desktop nested tokens', () => {
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-confirm-dialog\s*\{[^}]*border-radius:\s*16px/,
+    );
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-context-menu\s*\{[^}]*border-radius:\s*16px/,
+    );
+    expect(libraryCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*\.lightink-library-group-modal\s*\.lightink-modal-dialog,[\s\S]*?\.lightink-library-membership-dialog\s*\{[^}]*border-radius:\s*16px/,
+    );
+  });
+
   it('neutralizes sticky :hover states on touch so the base background returns after release', () => {
     expect(libraryCss).toMatch(
       new RegExp(

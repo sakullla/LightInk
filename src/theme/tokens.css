@@ -86,6 +86,11 @@
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
+  /* Nested chrome radii: control < panel < dialog. Window frame is native. */
+  --lightink-radius-control: 6px;
+  --lightink-radius-panel: 10px;
+  --lightink-radius-dialog: 12px;
+
   /*
    * Syntax on light code-bg: deeper hues for ≥~4.5:1 where practical
    * (GOV.UK / docs light-theme guidance: sacrifice neon for legibility).
