@@ -1061,6 +1061,7 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     view.destroy();
   });
 
@@ -1221,6 +1222,7 @@ describe('LibraryView my-books home', () => {
     expect(desktopFilterLabels).toEqual(['全部', '在读', '读完', '未读', '文字书', '漫画']);
     expect(desktopFilterLabels.join('')).not.toContain('…');
     expect(desktopFilterLabels).not.toContain('文字…');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
 
     groupButton(host, '在读').click();
     await settle();
@@ -1228,6 +1230,7 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '读完').click();
     await settle();
@@ -1235,6 +1238,7 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
     expect(itemRow(host, done.id).textContent).toContain('读完的书');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '未读').click();
     await settle();
@@ -1242,6 +1246,7 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '文字书').click();
     await settle();
@@ -1249,6 +1254,7 @@ describe('LibraryView my-books home', () => {
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, done.id).textContent).toContain('读完的书');
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '漫画').click();
     await settle();
@@ -1256,6 +1262,7 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '全部').click();
     await settle();
@@ -1263,6 +1270,7 @@ describe('LibraryView my-books home', () => {
     expect(itemRow(host, novel.id)).toBeTruthy();
     expect(itemRow(host, done.id)).toBeTruthy();
     expect(itemRow(host, comic.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     view.destroy();
   });
 
@@ -1409,6 +1417,91 @@ describe('LibraryView my-books home', () => {
       expect.objectContaining({ item: expect.objectContaining({ id: novel.id }) }),
       expect.anything(),
     );
+    view.destroy();
+  });
+
+  it('shows a full-width continue hero on 全部 and hides it for groups and search', async () => {
+    const novel = localItem({
+      id: 'local:/books/c.epub',
+      title: '续读小说',
+      localPath: '/books/c.epub',
+      coverUrl: 'https://covers.example/reading.jpg',
+    });
+    const comic = comicItem();
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === novel.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 3,
+            ratio: 0.4,
+            percent: 21,
+          }
+        : { status: 'not-started' as const },
+    );
+    const { deps, library } = collectionDependencies({
+      items: [novel, comic],
+      getProgress,
+    });
+    await library.createGroup!('夏日书单');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const continueBar = host.querySelector('.lightink-library-continue');
+    expect(isShown(continueBar)).toBe(true);
+    expect(continueBar?.textContent).toContain('续读小说');
+    expect(host.querySelector('.lightink-library-continue-cue')?.textContent).toBe('继续阅读');
+    expect(
+      host.querySelector('[data-library-sort], [data-library-density], [data-library-layout]'),
+    ).toBeNull();
+
+    collectionButton(host, '夏日书单').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    groupButton(host, '全部').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+
+    expandNavSection(host, 'smart-groups');
+    smartGroupButton(host, 'EPUB').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    groupButton(host, '全部').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河山';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    shownControl(host, '清除').click();
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    view.destroy();
+  });
+
+  it('does not reserve a continue slot when nothing is in progress', async () => {
+    const unread = localItem();
+    const deps = dependencies({
+      getProgress: () => ({ status: 'not-started' as const }),
+      library: { ...dependencies().library, listItems: vi.fn(async () => [unread]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const continueBar = host.querySelector('.lightink-library-continue');
+    expect(continueBar instanceof HTMLElement && continueBar.hidden).toBe(true);
+    expect(isShown(continueBar)).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(host, unread.id)).toBeTruthy();
     view.destroy();
   });
 
@@ -1621,6 +1714,8 @@ describe('LibraryView reading management (R4)', () => {
       host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
     );
     expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([justRead.id, older.id]);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('刚读的书');
     view.destroy();
   });
 
@@ -4396,8 +4491,19 @@ describe('LibraryView mobile shelf', () => {
     expect(desktopWall).toMatch(/padding:\s*8px var\(--lightink-library-pad-x\) 56px/);
     const desktopItem = cssRuleBodies(css, /\.lightink-library-item(?![\w-])/)[0];
     expect(cssLengthPx(cssDeclaration(desktopItem, 'gap'))[0]).toBe(10);
-    const desktopContinue = cssRuleBodies(css, /\.lightink-library-continue/)[0];
-    expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBe(6);
+    const desktopContinue = cssRuleBodies(css, /\.lightink-library-continue(?![\w-\[])/)[0];
+    expect(desktopContinue).toMatch(/max-width:\s*none/);
+    expect(desktopContinue).not.toMatch(/max-width:\s*560px/);
+    expect(cssLengthPx(cssDeclaration(desktopContinue, 'padding'))[0]).toBeGreaterThanOrEqual(8);
+    const desktopContinueCover =
+      cssRuleBodies(css, /\.lightink-library-continue \.lightink-library-cover(?![\w-])/)[0] ?? '';
+    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'width'))[0]).toBe(96);
+    expect(cssLengthPx(cssDeclaration(desktopContinueCover, 'height'))[0]).toBe(144);
+    expect(desktopContinueCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
+    expect(desktopContinueCover).toMatch(/border-radius:\s*3px 6px 6px 3px/);
+    expect(desktopContinueCover).not.toMatch(/--lightink-radius-(?:control|panel|dialog)/);
+    expect(desktopContinueCover).not.toMatch(/(?:^|[;\s])width:\s*36px/);
+    expect(desktopContinueCover).not.toMatch(/height:\s*52px/);
 
     const groupsEntryBlocks = cssRuleBodies(
       css,
@@ -4444,6 +4550,20 @@ describe('LibraryView mobile shelf', () => {
     expect(continueBlock).not.toMatch(/--lightink-bg-elevated/);
     expect(continueBlock).toMatch(/background:\s*transparent/);
     expect(continueBlock).toMatch(/box-shadow:\s*none/);
+
+    const touchContinueCoverBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]{0,80}?\.lightink-library-continue[\s\S]{0,40}?\.lightink-library-cover(?![\w-])/,
+    );
+    const touchContinueCover = touchContinueCoverBlocks[touchContinueCoverBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'width'))[0]).toBe(36);
+    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'height'))[0]).toBe(48);
+    const touchContinueOpenBlocks = cssRuleBodies(
+      css,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-continue-open/,
+    );
+    const touchContinueOpen = touchContinueOpenBlocks[touchContinueOpenBlocks.length - 1] ?? '';
+    expect(cssLengthPx(cssDeclaration(touchContinueOpen, 'min-height'))[0]).toBe(48);
 
     const dismissBlocks = cssRuleBodies(
       css,
