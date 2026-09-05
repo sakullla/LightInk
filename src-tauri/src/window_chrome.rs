@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(windows_corner_preference(true), DWMWCP_ROUND);
         assert_eq!(windows_corner_preference(false), DWMWCP_DONOTROUND);
         let restored = macos_content_corner_radius_pt(true);
-        assert!(restored >= 10.0 && restored <= 12.0);
+        assert!((10.0..=12.0).contains(&restored));
         assert_eq!(macos_content_corner_radius_pt(false), 0.0);
         assert!(!macos_window_opaque(true));
         assert!(macos_window_opaque(false));
