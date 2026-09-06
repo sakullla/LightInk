@@ -23,7 +23,6 @@ export const LOOKUP_MAX_TOKENS = 4;
 export const TRANSLATE_MAX_CODE_UNITS = 5000;
 
 export const READER_DEEPL_CONFIGURED_EVENT = 'lightink:reader-deepl-configured';
-export const READER_SPEAK_EVENT = 'lightink:reader-speak';
 
 export interface LookupEntry {
   readonly partOfSpeech?: string;
@@ -85,7 +84,8 @@ const AID_ERROR_KEYS = {
   invalid_key: 'reader.lookup.error.invalidKey',
   quota: 'reader.lookup.error.quota',
   unconfigured: 'reader.lookup.error.unconfigured',
-  too_long: 'reader.lookup.translateTooLong',
+  too_long: 'reader.lookup.tooLong',
+  translate_too_long: 'reader.lookup.translateTooLong',
   empty: 'reader.lookup.empty',
   failed: 'reader.lookup.error.failed',
 } as const satisfies Record<string, MessageKey>;
@@ -232,33 +232,74 @@ export function dispatchDeeplConfigured(configured: boolean, target: Document | 
 }
 
 function aidErrorCode(error: unknown): keyof typeof AID_ERROR_KEYS {
-  const raw =
-    typeof error === 'string'
-      ? error
-      : error !== null && typeof error === 'object'
-        ? String(
-            (error as { code?: unknown; error?: unknown; message?: unknown }).code ??
-              (error as { error?: unknown }).error ??
-              (error as { message?: unknown }).message ??
-              '',
-          )
-        : '';
+  const raw = aidErrorRaw(error);
   const lowered = raw.toLowerCase();
-  if (lowered.includes('network')) return 'network';
-  if (lowered.includes('timeout')) return 'timeout';
-  if (lowered.includes('too_large') || lowered.includes('too large') || lowered.includes('payload')) {
+  if (lowered.includes('reader_network') || lowered.includes('network')) return 'network';
+  if (lowered.includes('reader_timeout') || lowered.includes('timeout')) return 'timeout';
+  if (
+    lowered.includes('too_large') ||
+    lowered.includes('too large') ||
+    lowered.includes('payload')
+  ) {
     return 'too_large';
   }
-  if (lowered.includes('not_found') || lowered.includes('not found')) return 'not_found';
-  if (lowered.includes('invalid_key') || lowered.includes('invalid key') || lowered.includes('forbidden')) {
+  if (lowered.includes('not_found') || lowered.includes('not found') || lowered.includes('未找到')) {
+    return 'not_found';
+  }
+  if (
+    lowered.includes('invalid_key') ||
+    lowered.includes('invalid key') ||
+    lowered.includes('forbidden') ||
+    lowered.includes('reader_key_invalid')
+  ) {
     return 'invalid_key';
   }
-  if (lowered.includes('quota') || lowered.includes('limit')) return 'quota';
-  if (lowered.includes('unconfigured') || lowered.includes('no key')) return 'unconfigured';
-  if (lowered.includes('too_long') || lowered.includes('too long')) return 'too_long';
-  if (lowered.includes('empty')) return 'empty';
+  if (lowered.includes('quota') || lowered.includes('reader_quota')) return 'quota';
+  if (
+    lowered.includes('unconfigured') ||
+    lowered.includes('no key') ||
+    lowered.includes('reader_key_missing')
+  ) {
+    return 'unconfigured';
+  }
+  if (lowered.includes('reader_text_too_long') || lowered.includes('5000')) {
+    return 'translate_too_long';
+  }
+  if (lowered.includes('too_long') || lowered.includes('too long') || lowered.includes('过长')) {
+    return 'too_long';
+  }
+  if (lowered.includes('empty') || lowered.includes('reader_term_empty')) return 'empty';
   const known = Object.keys(AID_ERROR_KEYS).find((code) => lowered === code);
   return (known as keyof typeof AID_ERROR_KEYS | undefined) ?? 'failed';
+}
+
+function aidErrorRaw(error: unknown): string {
+  if (typeof error === 'string') {
+    return unwrapAidErrorText(error);
+  }
+  if (error === null || typeof error !== 'object') {
+    return '';
+  }
+  const obj = error as { code?: unknown; error?: unknown; message?: unknown };
+  const parts = [obj.code, obj.error, obj.message]
+    .filter((value) => typeof value === 'string' && value !== '')
+    .map((value) => unwrapAidErrorText(value as string));
+  return parts.join(' ');
+}
+
+function unwrapAidErrorText(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { code?: unknown; message?: unknown };
+      const code = typeof parsed.code === 'string' ? parsed.code : '';
+      const message = typeof parsed.message === 'string' ? parsed.message : '';
+      return `${code} ${message}`.trim();
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
 }
 
 function positionLookupPanel(panel: HTMLElement, host: HTMLElement): void {
@@ -303,6 +344,13 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
   body.className = 'lightink-reader-lookup-body';
   body.setAttribute('aria-live', 'polite');
   root.append(head, body);
+  root.addEventListener(
+    'wheel',
+    (event) => {
+      event.stopPropagation();
+    },
+    { passive: true },
+  );
 
   const hide = (): void => {
     if (readerChromeTouchMode()) {

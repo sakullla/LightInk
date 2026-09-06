@@ -1,7 +1,7 @@
 /**
  * `selection-toolbar` — 划选工具栏（R3）。
  *
- * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/复制/查词/翻译/朗读）。纯 DOM 装配 +
+ * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/复制/查词/翻译）。纯 DOM 装配 +
  * 回调派发；选区包围盒由调用方换算为外层 client 坐标后传入 `showAt`（flow/txt 的
  * iframe 内选区坐标需叠加 frame 偏移，PDF 文本层选区直接可用）。点击工具栏外部或
  * 再次 `hide()` 隐藏；Escape 由 reader-view 统一处理。
@@ -17,8 +17,7 @@ export type SelectionToolbarAction =
   | 'copy'
   | 'removeHighlight'
   | 'lookup'
-  | 'translate'
-  | 'speak';
+  | 'translate';
 
 export interface SelectionToolbarActionDetail {
   color?: AnnotationColor;
@@ -153,7 +152,6 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   const copyButton = makeButton('copy', 'annotation.copy');
   const lookupButton = makeButton('lookup', 'reader.lookup.action');
   const translateButton = makeButton('translate', 'reader.lookup.translate');
-  const speakButton = makeButton('speak', 'reader.lookup.speak');
   const removeButton = makeButton('removeHighlight', 'annotation.removeHighlight');
   root.append(
     colors,
@@ -162,16 +160,14 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     copyButton,
     lookupButton,
     translateButton,
-    speakButton,
     removeButton,
   );
 
   const applyTranslateEnabled = (enabled: boolean): void => {
+    translateButton.hidden = !enabled;
     translateButton.disabled = !enabled;
     translateButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-    translateButton.title = enabled
-      ? deps.t('reader.lookup.translate')
-      : deps.t('reader.lookup.translateDisabled');
+    translateButton.title = enabled ? deps.t('reader.lookup.translate') : '';
   };
   applyTranslateEnabled(false);
 

@@ -135,6 +135,14 @@ describe('wheelPagingShouldIgnoreTarget', () => {
     expect(wheelPagingShouldIgnoreTarget(null)).toBe(false);
     const toc = { classList: { contains: (name: string) => name === 'lightink-reader-chrome-panel' } };
     expect(wheelPagingShouldIgnoreTarget({ parentElement: toc })).toBe(true);
+    const lookup = {
+      classList: { contains: (name: string) => name === 'lightink-reader-lookup-panel' },
+    };
+    expect(wheelPagingShouldIgnoreTarget({ parentElement: lookup })).toBe(true);
+    const popover = {
+      classList: { contains: (name: string) => name === 'lightink-reader-chrome-popover' },
+    };
+    expect(wheelPagingShouldIgnoreTarget(popover)).toBe(true);
   });
 });
 

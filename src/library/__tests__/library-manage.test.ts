@@ -32,9 +32,10 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: 'Reading preferences',
     readerPrefsHint: 'Applies while reading.',
     showProgressBar: 'Show progress bar',
+    translateGroup: 'Translation',
     deeplKey: 'DeepL API key',
     deeplHint:
-      'Lookup sends the current selection to Wiktionary. Translate sends it to DeepL. Nothing is sent until you tap Lookup or Translate.',
+      'Add a DeepL API key to show Translate on the selection toolbar. The key stays on this device.',
     deeplSave: 'Save key',
     deeplClear: 'Clear key',
     deeplConfigured: 'DeepL key saved on this device.',
@@ -59,9 +60,9 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: '阅读偏好',
     readerPrefsHint: '只影响阅读界面。关闭后阅读区底部不再显示进度条。',
     showProgressBar: '显示进度条',
+    translateGroup: '翻译',
     deeplKey: 'DeepL API key',
-    deeplHint:
-      '查词会把当前选区发往 Wiktionary；翻译会发往 DeepL。只有点击对应按钮时才发送这一次选区。',
+    deeplHint: '填写 DeepL 密钥后，划选工具栏才会出现翻译。密钥只保存在本机。',
     deeplSave: '保存密钥',
     deeplClear: '清除密钥',
     deeplConfigured: '已在本机保存 DeepL 密钥。',
@@ -139,6 +140,7 @@ describe('createLibraryManage grouped settings page', () => {
     expect(groupTitles(manage.element)).toEqual([
       'appearance',
       'reading',
+      'translate',
       'storage',
       'sync',
       'other',
@@ -169,7 +171,9 @@ describe('createLibraryManage grouped settings page', () => {
     expect(manage.element.textContent).toContain(zh.webdavSync);
     expect(manage.element.textContent).toContain(zh.importLocal);
     expect(manage.element.textContent).toContain(zh.markdownEditor);
-    expect(manage.element.textContent).toContain('Wiktionary');
+    expect(manage.element.querySelector('[data-manage-group="translate"] h2')?.textContent).toBe(
+      zh.translateGroup,
+    );
     expect(manage.element.textContent).toContain('DeepL');
     expect(
       manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')?.type,
@@ -206,7 +210,13 @@ describe('createLibraryManage grouped settings page', () => {
     const manage = createLibraryManage(document, options);
     document.body.appendChild(manage.element);
 
-    expect(groupTitles(manage.element)).toEqual(['appearance', 'reading', 'storage', 'other']);
+    expect(groupTitles(manage.element)).toEqual([
+      'appearance',
+      'reading',
+      'translate',
+      'storage',
+      'other',
+    ]);
     expect(manage.element.querySelector('.lightink-library-sync-entry')).toBeNull();
     expect(manage.element.querySelector('.lightink-library-editor-entry')).toBeNull();
     manage.destroy();
@@ -371,11 +381,11 @@ describe('createLibraryManage grouped settings page', () => {
 
     const input = manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')!;
     expect(manage.element.querySelector('.lightink-library-deepl-hint')?.textContent).toContain(
-      'Wiktionary',
-    );
-    expect(manage.element.querySelector('.lightink-library-deepl-hint')?.textContent).toContain(
       'DeepL',
     );
+    expect(
+      manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-clear')?.hidden,
+    ).toBe(true);
     expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
       LABELS['zh-CN'].deeplUnconfigured,
     );

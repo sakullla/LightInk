@@ -13,19 +13,23 @@ import {
   createReaderChrome,
   type ReaderChromeLabels,
 } from '../reader-chrome.js';
-import { resolveTextQuoteRange } from '../annotation-locator.js';
-import { READER_SPEAK_EVENT, readerAidLocale } from '../lookup-panel.js';
+import { readerAidLocale } from '../lookup-panel.js';
 import { sessionCapabilitiesForExtension } from '../session/adapters.js';
+import { readerPagedScroller, revealPagedElement } from '../flow-renderer.js';
+import { pagedFrameStep } from '../../ui/reading-layout.js';
 import {
-  findQuoteOffsets,
-  sentenceSpansFromRange,
+  concatenatedText,
+  firstOffsetInViewport,
   sentenceSpansFromRoot,
-  splitSentenceSpans,
+  sentenceStartOffset,
+  visibleStartOffset,
   type SentenceSpan,
 } from '../sentence-ranges.js';
 import {
+  chapterIndexFromSpeakRoot,
   clearFollowAlong,
   createTtsController,
+  followAlongMark,
   freezeFollowAlong,
   type TtsFailure,
 } from '../tts.js';
@@ -274,6 +278,8 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     );
   };
 
+  let speakContinueToken = 0;
+
   const ensureTtsDock = (): TtsDock => {
     if (ttsDock === null) {
       ttsDock = createTtsDock({
@@ -281,6 +287,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         onPause: () => tts.pause(),
         onResume: () => tts.resume(),
         onStop: () => {
+          speakContinueToken += 1;
           tts.stop();
           freezeFollowAlong();
           ttsDock?.hide();
@@ -292,6 +299,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   };
 
   const stopSpeakSession = (): void => {
+    speakContinueToken += 1;
     tts.stop();
     ttsDock?.hide();
   };
@@ -300,13 +308,46 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     ensureTtsDock().showError(ctx.root, ttsFailureCopy(ctx.t, reason));
   };
 
+  const revealSpokenSentence = (root: Node | null): void => {
+    const mark = followAlongMark(root);
+    if (mark === null) {
+      return;
+    }
+    if (ctx.pdfHandle !== null || !ctx.flowIsPaginated()) {
+      mark.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return;
+    }
+    const frameElement = mark.ownerDocument.defaultView?.frameElement;
+    const frame = frameElement instanceof HTMLIFrameElement ? frameElement : null;
+    if (frame === null) {
+      mark.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return;
+    }
+    const laidOut = pagedFrameStep(readerPagedScroller(mark.ownerDocument)) > 0;
+    revealPagedElement(frame, mark.ownerDocument, mark, (nextFrame, nextDocument, options) => {
+      if (laidOut) {
+        return;
+      }
+      ctx.flow.applyPaginatedDocument(nextFrame, nextDocument, options);
+    });
+    ctx.flow.syncFlowState();
+    syncChromeProgress();
+  };
+
   const beginSpeak = (sentences: readonly SentenceSpan[], root: Node | null): void => {
     const dock = ensureTtsDock();
     const result = tts.start({
       sentences,
       root,
+      rate: tts.currentRate(),
       lang: readerAidLocale(ctx.t),
+      onSentence: () => {
+        revealSpokenSentence(root);
+      },
       onEnd: () => {
+        if (continueSpeakAfterChapter(root)) {
+          return;
+        }
         freezeFollowAlong();
         dock.hide();
       },
@@ -331,6 +372,105 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     );
   };
 
+  const openFlowChapterStart = (index: number): HTMLElement | null => {
+    ctx.flow.setActiveChapter(index);
+    const body = flowChapterBody(index);
+    if (body === null) {
+      return null;
+    }
+    const doc = body.ownerDocument;
+    const frameElement = doc?.defaultView?.frameElement;
+    const frame = frameElement instanceof HTMLIFrameElement ? frameElement : null;
+    if (ctx.flowIsPaginated() && frame !== null && doc !== null) {
+      ctx.flow.applyPaginatedDocument(frame, doc, { restoreRatio: 0 });
+    } else {
+      const article = frame?.closest<HTMLElement>('.lightink-reader-chapter');
+      article?.scrollIntoView({ block: 'start' });
+    }
+    ctx.flow.syncFlowState();
+    syncChromeProgress();
+    return body;
+  };
+
+  const continueSpeakAfterChapter = (root: Node | null): boolean => {
+    if (ctx.pdfHandle !== null) {
+      const handle = ctx.pdfHandle;
+      const page = handle.controller.page;
+      const total = handle.controller.totalPages;
+      if (!(page < total)) {
+        return false;
+      }
+      const token = ++speakContinueToken;
+      handle.scrollToPage(page + 1);
+      ctx.paged.syncPageState();
+      const tryPdf = (tries: number): void => {
+        if (token !== speakContinueToken) {
+          return;
+        }
+        const layer = ctx.pageHost.querySelector<HTMLElement>(
+          `.pdfViewer .page[data-page-number="${handle.controller.page}"] .textLayer`,
+        );
+        const sentences =
+          layer === null ? [] : sentenceSpansFromRoot(layer, 0);
+        if (sentences.length > 0 && layer !== null) {
+          beginSpeak(sentences, layer);
+          return;
+        }
+        if (tries >= 24) {
+          freezeFollowAlong();
+          ttsDock?.hide();
+          return;
+        }
+        requestAnimationFrame(() => tryPdf(tries + 1));
+      };
+      requestAnimationFrame(() => tryPdf(0));
+      return true;
+    }
+    const chapter = chapterIndexFromSpeakRoot(root);
+    if (chapter === null || chapter + 1 >= ctx.flowChapterCount) {
+      return false;
+    }
+    const token = ++speakContinueToken;
+    const tryChapter = (index: number, tries: number): void => {
+      if (token !== speakContinueToken) {
+        return;
+      }
+      if (index >= ctx.flowChapterCount) {
+        freezeFollowAlong();
+        ttsDock?.hide();
+        return;
+      }
+      const body = openFlowChapterStart(index);
+      const sentences = body === null ? [] : sentenceSpansFromRoot(body, 0);
+      if (sentences.length > 0 && body !== null) {
+        beginSpeak(sentences, body);
+        return;
+      }
+      if (tries === 0) {
+        const frame = ctx.scrollHost.querySelector<HTMLIFrameElement>(
+          `.lightink-reader-chapter[data-chapter-index="${index}"] .lightink-reader-chapter-frame`,
+        );
+        frame?.addEventListener(
+          'load',
+          () => {
+            if (token !== speakContinueToken) {
+              return;
+            }
+            tryChapter(index, tries + 1);
+          },
+          { once: true },
+        );
+      }
+      if (tries < 24) {
+        requestAnimationFrame(() => tryChapter(index, tries + 1));
+        return;
+      }
+      tryChapter(index + 1, 0);
+    };
+    requestAnimationFrame(() => tryChapter(chapter + 1, 0));
+    return true;
+  };
+
   const currentSpeakRoot = (): { root: HTMLElement; fromOffset: number } | null => {
     if (ctx.cbzHandle !== null) {
       return null;
@@ -345,61 +485,33 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       }
       return { root: layer, fromOffset: 0 };
     }
-    const locator = ctx.annotation.currentPositionLocator();
-    const chapter =
-      'chapter' in locator && typeof locator.chapter === 'number'
-        ? locator.chapter
-        : ctx.dom.firstVisibleChapter();
+    const chapter = ctx.dom.firstVisibleChapter();
     const body = flowChapterBody(chapter);
     if (body === null) {
       return null;
     }
-    const fromOffset =
-      'start' in locator && typeof locator.start === 'number' ? locator.start : 0;
+    const text = concatenatedText(body);
+    let caret = 0;
+    let snapToSentence = true;
+    try {
+      if (ctx.flowIsPaginated()) {
+        const doc = body.ownerDocument;
+        if (doc !== null) {
+          const view = readerPagedScroller(doc).getBoundingClientRect();
+          const visible = firstOffsetInViewport(body, { left: view.left, width: view.width });
+          if (visible !== null) {
+            caret = visible;
+            snapToSentence = false;
+          }
+        }
+      } else {
+        caret = visibleStartOffset(body, ctx.scrollHost.getBoundingClientRect());
+      }
+    } catch {
+      caret = 0;
+    }
+    const fromOffset = snapToSentence ? sentenceStartOffset(text, caret) : caret;
     return { root: body, fromOffset };
-  };
-
-  const allSpeakRoots = (): HTMLElement[] => {
-    if (ctx.pdfHandle !== null) {
-      return [...ctx.pageHost.querySelectorAll<HTMLElement>('.pdfViewer .textLayer')];
-    }
-    const bodies: HTMLElement[] = [];
-    for (const frame of ctx.scrollHost.querySelectorAll<HTMLIFrameElement>(
-      '.lightink-reader-chapter-frame',
-    )) {
-      const body = frame.contentDocument?.body;
-      if (body !== null && body !== undefined) {
-        bodies.push(body);
-      }
-    }
-    return bodies;
-  };
-
-  const speakSelection = (quote: string): void => {
-    const trimmed = quote.trim();
-    if (trimmed === '') {
-      showTtsFailure('empty');
-      return;
-    }
-    for (const root of allSpeakRoots()) {
-      const resolved = resolveTextQuoteRange(root, {
-        start: 0,
-        end: trimmed.length,
-        quote: trimmed,
-        prefix: '',
-        suffix: '',
-      });
-      if (resolved !== null) {
-        beginSpeak(sentenceSpansFromRange(root, resolved), root);
-        return;
-      }
-      const offsets = findQuoteOffsets(root, trimmed);
-      if (offsets !== null) {
-        beginSpeak(sentenceSpansFromRoot(root, offsets.start, offsets.end), root);
-        return;
-      }
-    }
-    beginSpeak(splitSentenceSpans(trimmed), null);
   };
 
   const speakFromPosition = (): void => {
@@ -409,11 +521,6 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       return;
     }
     beginSpeak(sentenceSpansFromRoot(current.root, current.fromOffset), current.root);
-  };
-
-  const onSpeakEvent = (event: Event): void => {
-    const quote = (event as CustomEvent<{ quote?: string }>).detail?.quote ?? '';
-    speakSelection(quote);
   };
 
   // 本函数是 chromeRevealObserver/pageChromeObserver 的回调；这里的每次 DOM
@@ -817,7 +924,6 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       speakAvailable,
       onSpeak: speakFromPosition,
       onDestroy: () => {
-        ctx.root.removeEventListener(READER_SPEAK_EVENT, onSpeakEvent);
         stopSpeakSession();
         clearFollowAlong();
         ttsDock?.destroy();
@@ -858,7 +964,6 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         ctx.pageHost.dataset.comicReader === 'true' || ctx.root.dataset.comicReader === 'true',
       onSeekProgress: goToProgress,
     });
-    ctx.root.addEventListener(READER_SPEAK_EVENT, onSpeakEvent);
     syncChromeProgress();
     pinChromeDocks();
     ctx.root.append(ctx.tocPanel, ctx.typePanel);

@@ -43,6 +43,7 @@ export interface LibraryManageLabels {
   readonly readingGroup: string;
   readonly readerPrefsHint: string;
   readonly showProgressBar: string;
+  readonly translateGroup: string;
   readonly deeplKey: string;
   readonly deeplHint: string;
   readonly deeplSave: string;
@@ -194,15 +195,14 @@ export function createLibraryManage(
   const deeplSave = button(doc, '', 'lightink-library-primary lightink-library-deepl-save');
   const deeplClear = button(doc, '', 'lightink-library-deepl-clear');
   deeplActions.append(deeplSave, deeplClear);
-  readerPrefs.append(
-    readerPrefsTitle,
-    readerPrefsHint,
-    progressBarLabel,
-    deeplHint,
-    deeplField,
-    deeplStatus,
-    deeplActions,
-  );
+  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel);
+
+  const translatePrefs = doc.createElement('section');
+  translatePrefs.className = 'lightink-library-manage-group lightink-library-translate';
+  translatePrefs.dataset.manageGroup = 'translate';
+  const translateTitle = doc.createElement('h2');
+  translateTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
+  translatePrefs.append(translateTitle, deeplHint, deeplField, deeplActions, deeplStatus);
 
   let deeplConfigured = false;
   let deeplConfiguredEpoch = 0;
@@ -210,6 +210,7 @@ export function createLibraryManage(
     const l = labels();
     deeplStatus.textContent = deeplConfigured ? l.deeplConfigured : l.deeplUnconfigured;
     deeplStatus.dataset.deeplConfigured = deeplConfigured ? 'true' : 'false';
+    deeplClear.hidden = !deeplConfigured;
     deeplClear.disabled = !deeplConfigured;
   };
   const refreshDeeplConfigured = async (): Promise<void> => {
@@ -269,7 +270,14 @@ export function createLibraryManage(
     other.append(editorButton);
   }
 
-  home.append(appearance, readerPrefs, storage, ...(sync === null ? [] : [sync]), other);
+  home.append(
+    appearance,
+    readerPrefs,
+    translatePrefs,
+    storage,
+    ...(sync === null ? [] : [sync]),
+    other,
+  );
   element.append(home);
 
   const cacheLimitOverlay = doc.createElement('div');
@@ -471,8 +479,10 @@ export function createLibraryManage(
     readerPrefsHint.textContent = l.readerPrefsHint;
     progressBarText.textContent = l.showProgressBar;
     progressBarLabel.title = l.showProgressBar;
+    translateTitle.textContent = l.translateGroup;
     deeplHint.textContent = l.deeplHint;
     deeplLabelText.textContent = l.deeplKey;
+    deeplInput.placeholder = l.deeplKey;
     deeplSave.textContent = l.deeplSave;
     deeplClear.textContent = l.deeplClear;
     syncDeeplStatus();

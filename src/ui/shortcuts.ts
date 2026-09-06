@@ -181,7 +181,10 @@ export function isModalTarget(target: unknown): boolean {
     if (current.getAttribute?.('aria-modal') === 'true') return true;
     if (
       current.classList?.contains?.('lightink-reader-chrome-panel') === true ||
-      current.classList?.contains?.('lightink-reader-sidebar') === true
+      current.classList?.contains?.('lightink-reader-chrome-popover') === true ||
+      current.classList?.contains?.('lightink-reader-sidebar') === true ||
+      current.classList?.contains?.('lightink-reader-lookup-panel') === true ||
+      current.classList?.contains?.('lightink-reader-tts-dock') === true
     ) {
       return true;
     }

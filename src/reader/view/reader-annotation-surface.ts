@@ -44,7 +44,6 @@ import {
   readerAidErrorMessage,
   readerAidLocale,
   READER_DEEPL_CONFIGURED_EVENT,
-  READER_SPEAK_EVENT,
   translateQuoteTooLong,
   type LookupPanel,
 } from '../lookup-panel.js';
@@ -440,12 +439,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         };
         if (action === 'lookup' || action === 'translate') {
           runLookupOrTranslate(action, pending.quote, ctx.sessionLoad.generation());
-          return;
-        }
-        if (action === 'speak') {
-          ctx.root.dispatchEvent(
-            new CustomEvent(READER_SPEAK_EVENT, { detail: { quote: pending.quote } }),
-          );
           return;
         }
         if (action === 'removeHighlight') {

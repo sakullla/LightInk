@@ -6,6 +6,8 @@
  * Ranges, not Annotation locators, and must not be persisted.
  */
 
+import { pagedGlyphInView, realPagedFragmentBox } from '../ui/reading-layout.js';
+
 /** Same kind as `SNIPPET_SENTENCE_BREAK`, plus ASCII `.` for English sentences. */
 export const SENTENCE_BREAK = /[。！？!?.;；;\n]/;
 
@@ -130,6 +132,162 @@ export function rangeOffsets(root: Node, range: Range): { start: number; end: nu
   const start = pointOffset(spans, range.startContainer, range.startOffset);
   const end = pointOffset(spans, range.endContainer, range.endOffset);
   return start <= end ? { start, end } : { start: end, end: start };
+}
+
+export interface ViewportClip {
+  readonly left: number;
+  readonly top: number;
+}
+
+function caretRangeAt(doc: Document, x: number, y: number): Range | null {
+  const withCaret = doc as Document & {
+    caretRangeFromPoint?: (clientX: number, clientY: number) => Range | null;
+    caretPositionFromPoint?: (
+      clientX: number,
+      clientY: number,
+    ) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof withCaret.caretRangeFromPoint === 'function') {
+    return withCaret.caretRangeFromPoint(x, y);
+  }
+  const position = withCaret.caretPositionFromPoint?.(x, y);
+  if (position === null || position === undefined) {
+    return null;
+  }
+  const range = doc.createRange();
+  range.setStart(position.offsetNode, position.offset);
+  range.collapse(true);
+  return range;
+}
+
+/**
+ * Text offset at the top-left of the visible reading surface.
+ * Paginated columns live in the iframe viewport; scroll mode clips the iframe
+ * inside the outer host — `clip` is that host's getBoundingClientRect().
+ */
+export function visibleStartOffset(root: Node, clip?: ViewportClip): number {
+  const doc = documentOf(root);
+  const view = doc.defaultView;
+  let x = 8;
+  let y = 8;
+  const frame = view?.frameElement;
+  if (clip !== undefined && frame instanceof Element) {
+    const frameRect = frame.getBoundingClientRect();
+    x = Math.max(4, clip.left - frameRect.left + 8);
+    y = Math.max(4, clip.top - frameRect.top + 8);
+  }
+  const caret = caretRangeAt(doc, x, y);
+  if (caret === null) {
+    return 0;
+  }
+  const container = caret.startContainer;
+  if (container !== root && !root.contains(container)) {
+    return 0;
+  }
+  return rangeOffsets(root, caret).start;
+}
+
+export interface ViewportBox {
+  readonly left: number;
+  readonly width: number;
+}
+
+/**
+ * Map a paged scroller's scrollLeft onto concatenated text without layout.
+ * `scrollLeft / scrollWidth` is the left edge of the current spread — not
+ * `scrollLeft / max`, which is 1 on the last page and would start at EOF.
+ */
+export function offsetAtPagedProgress(
+  textLength: number,
+  scroller: { scrollLeft: number; scrollWidth: number },
+): number {
+  if (!(textLength > 0) || !(scroller.scrollWidth > 0)) {
+    return 0;
+  }
+  const raw = (textLength * Math.max(0, scroller.scrollLeft)) / scroller.scrollWidth;
+  return Math.min(textLength, Math.max(0, Math.floor(raw)));
+}
+
+/**
+ * First concatenated offset whose real glyph box sits in `view`.
+ * Uses getClientRects + the paged fragment filter so CSS columns don't
+ * report the previous spread's right column as the start of the page.
+ */
+function glyphBoxes(range: Range): Array<{ left: number; width: number; height: number }> {
+  try {
+    return Array.from(range.getClientRects()).map((rect) => ({
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function offsetGlyphLeft(
+  spans: readonly TextSpan[],
+  offset: number,
+  lineHeight: number,
+): number | null {
+  const point = boundaryAt(spans, offset, true);
+  if (point === null) {
+    return null;
+  }
+  const doc = documentOf(point.node);
+  const range = doc.createRange();
+  const length = point.node.nodeValue?.length ?? 0;
+  range.setStart(point.node, point.offset);
+  range.setEnd(point.node, Math.min(length, point.offset + 1));
+  const box = realPagedFragmentBox(glyphBoxes(range), lineHeight);
+  return box?.left ?? null;
+}
+
+export function firstOffsetInViewport(root: Node, view: ViewportBox): number | null {
+  if (!(view.width > 1)) {
+    return null;
+  }
+  const { text, spans } = textSpans(root);
+  if (text.length === 0 || spans.length === 0) {
+    return null;
+  }
+  const parent = spans[0]?.node.parentElement;
+  const lineHeight = Number.parseFloat(
+    parent === null
+      ? ''
+      : (documentOf(root).defaultView?.getComputedStyle(parent).lineHeight ?? ''),
+  );
+  const viewRight = view.left + view.width;
+  let low = 0;
+  let high = text.length;
+  let hit: number | null = null;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    const left = offsetGlyphLeft(spans, mid, lineHeight);
+    if (left !== null && pagedGlyphInView(left, view.left, view.width)) {
+      hit = mid;
+      high = mid;
+      continue;
+    }
+    if (left !== null && left >= viewRight) {
+      high = mid;
+      continue;
+    }
+    low = mid + 1;
+  }
+  return hit;
+}
+
+/** Snap a mid-sentence offset back to that sentence's start. */
+export function sentenceStartOffset(text: string, offset: number): number {
+  const clamped = Math.max(0, Math.min(offset, text.length));
+  const spans = splitSentenceSpans(text);
+  for (const span of spans) {
+    if (clamped < span.end) {
+      return span.start;
+    }
+  }
+  return spans[spans.length - 1]?.start ?? 0;
 }
 
 export function splitSentenceSpans(

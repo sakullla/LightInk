@@ -68,8 +68,8 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(buttonByAction(toolbar, 'copy')!.textContent).toBe('annotation.copy');
     expect(buttonByAction(toolbar, 'lookup')!.textContent).toBe('reader.lookup.action');
     expect(buttonByAction(toolbar, 'translate')!.textContent).toBe('reader.lookup.translate');
-    expect(buttonByAction(toolbar, 'speak')!.textContent).toBe('reader.lookup.speak');
-    expect(buttonByAction(toolbar, 'translate')!.disabled).toBe(true);
+    expect(buttonByAction(toolbar, 'speak')).toBeNull();
+    expect(buttonByAction(toolbar, 'translate')!.hidden).toBe(true);
     expect(buttonByAction(toolbar, 'removeHighlight')!.hidden).toBe(true);
 
     toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: true });
@@ -84,11 +84,13 @@ describe('划选工具栏（selection-toolbar）', () => {
     document.body.appendChild(toolbar.element);
     toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
     const translate = buttonByAction(toolbar, 'translate')!;
+    expect(translate.hidden).toBe(true);
     expect(translate.disabled).toBe(true);
     translate.click();
     expect(actions).toEqual([]);
 
     toolbar.setTranslateEnabled(true);
+    expect(translate.hidden).toBe(false);
     expect(translate.disabled).toBe(false);
     toolbar.showAt(
       { left: 100, top: 100, width: 80, height: 20 },
@@ -99,7 +101,7 @@ describe('划选工具栏（selection-toolbar）', () => {
     toolbar.destroy();
   });
 
-  it('dispatches lookup, translate, and speak beside highlight/note/copy', () => {
+  it('dispatches lookup beside highlight/note/copy and has no speak action', () => {
     const actions: string[] = [];
     const toolbar = createSelectionToolbar({ t: (key) => key, onAction: (a) => actions.push(a) });
     document.body.appendChild(toolbar.element);
@@ -108,12 +110,8 @@ describe('划选工具栏（selection-toolbar）', () => {
       { canRemoveHighlight: false, translateEnabled: true },
     );
     buttonByAction(toolbar, 'lookup')!.click();
-    toolbar.showAt(
-      { left: 100, top: 100, width: 80, height: 20 },
-      { canRemoveHighlight: false, translateEnabled: true },
-    );
-    buttonByAction(toolbar, 'speak')!.click();
-    expect(actions).toEqual(['lookup', 'speak']);
+    expect(actions).toEqual(['lookup']);
+    expect(buttonByAction(toolbar, 'speak')).toBeNull();
     toolbar.destroy();
   });
 
@@ -2057,10 +2055,10 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     expect(toolbar!.querySelector('.lightink-reader-selection-action--copy')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
-    expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).toBeNull();
     expect(
       toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--translate')
-        ?.disabled,
+        ?.hidden,
     ).toBe(true);
 
     const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
@@ -2511,7 +2509,7 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     await view.destroy();
   });
 
-  it('shows lookup, translate, and speak on a PDF text-layer selection', async () => {
+  it('shows lookup and translate on a PDF text-layer selection', async () => {
     vi.useFakeTimers();
     pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
       const viewer = document.createElement('div');
@@ -2591,7 +2589,7 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
       expect(toolbar).not.toBeNull();
       expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
       expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
-      expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).not.toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).toBeNull();
     } finally {
       if (originalRect === undefined) {
         delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;

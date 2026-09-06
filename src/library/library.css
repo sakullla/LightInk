@@ -2039,13 +2039,18 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-deepl-actions button {
-  min-height: 44px;
-  padding: 8px 14px;
+  min-height: 36px;
+  padding: 6px 12px;
   border-radius: 10px;
 }
 
+.lightink-library-deepl-field {
+  width: 100%;
+}
+
 .lightink-library-appearance,
-.lightink-library-reader-prefs {
+.lightink-library-reader-prefs,
+.lightink-library-translate {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2236,7 +2241,8 @@ html[data-touch-primary] .lightink-library-header {
   }
 
   .lightink-library-appearance,
-  .lightink-library-reader-prefs {
+  .lightink-library-reader-prefs,
+  .lightink-library-translate {
     grid-column: 1 / -1;
     max-width: none;
   }

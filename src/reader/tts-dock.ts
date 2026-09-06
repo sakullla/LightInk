@@ -18,6 +18,18 @@ import { readerChromeTouchMode } from './view/reader-dom.js';
 export const TTS_RATES = [0.75, 1, 1.25, 1.5, 2] as const;
 const TTS_DOCK_STYLE_ID = 'lightink-reader-tts-dock-style';
 
+export function nextTtsRate(
+  current: number,
+): (typeof TTS_RATES)[number] {
+  const index = TTS_RATES.findIndex((rate) => rate === current);
+  const at = index < 0 ? 0 : (index + 1) % TTS_RATES.length;
+  return TTS_RATES[at]!;
+}
+
+function formatTtsRate(value: number): string {
+  return `${value}×`;
+}
+
 export interface TtsDockDeps {
   t: (key: MessageKey) => string;
   onPause: () => void;
@@ -37,21 +49,24 @@ export interface TtsDock {
 }
 
 function ensureDockStyle(doc: Document): void {
-  if (doc.getElementById(TTS_DOCK_STYLE_ID) !== null) {
-    return;
+  let style = doc.getElementById(TTS_DOCK_STYLE_ID) as HTMLStyleElement | null;
+  if (style === null) {
+    style = doc.createElement('style');
+    style.id = TTS_DOCK_STYLE_ID;
+    (doc.head ?? doc.documentElement).appendChild(style);
   }
-  const style = doc.createElement('style');
-  style.id = TTS_DOCK_STYLE_ID;
   style.textContent = `
 .lightink-reader-tts-dock {
   position: fixed;
   z-index: 28;
   box-sizing: border-box;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.45rem 0.6rem;
-  padding: 0.45rem 0.7rem;
+  gap: 0.35rem;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 0.35rem 0.4rem;
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
@@ -63,11 +78,17 @@ function ensureDockStyle(doc: Document): void {
   font-size: 0.82rem;
   pointer-events: auto;
 }
+.lightink-reader-tts-dock.lightink-reader-chrome-popover::before {
+  display: none;
+}
 .lightink-reader-tts-dock[hidden] { display: none; }
 .lightink-reader-tts-dock-title {
-  margin: 0;
-  font-size: 0.82rem;
-  font-weight: 650;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 .lightink-reader-tts-dock-error {
   margin: 0;
@@ -88,22 +109,15 @@ function ensureDockStyle(doc: Document): void {
   font: inherit;
   cursor: pointer;
 }
-.lightink-reader-tts-rate {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-.lightink-reader-tts-rate select {
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
-  border-radius: 6px;
-  padding: 0.15rem 0.3rem;
+.lightink-reader-tts-dock .lightink-reader-tts-rate {
+  min-width: 3.1em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
 }
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-tts-dock.is-touch-sheet {
   width: auto;
   max-width: none;
+  justify-content: center;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   transition: transform 220ms ease-out, opacity 220ms ease-out;
@@ -118,26 +132,27 @@ function ensureDockStyle(doc: Document): void {
   min-width: 48px;
 }
 `;
-  (doc.head ?? doc.documentElement).appendChild(style);
 }
 
 function positionDock(panel: HTMLElement, host: HTMLElement): void {
   if (readerChromeTouchMode()) {
+    panel.style.removeProperty('transform');
+    panel.style.removeProperty('max-width');
     pinFixedOverlay(panel, host);
     return;
   }
   unpinFixedOverlay(panel);
   panel.classList.remove('is-touch-sheet');
   const box = host.getBoundingClientRect();
-  const width = Math.min(420, Math.max(240, box.width - 24));
-  const left = Math.max(8, box.left + (box.width - width) / 2);
   const inset = readerChromeFooterInset(host.ownerDocument);
   panel.style.position = 'fixed';
-  panel.style.left = `${left}px`;
-  panel.style.width = `${width}px`;
+  panel.style.left = `${box.left + box.width / 2}px`;
+  panel.style.width = 'max-content';
+  panel.style.maxWidth = `${Math.max(160, box.width - 24)}px`;
   panel.style.right = 'auto';
   panel.style.top = 'auto';
   panel.style.bottom = `${Math.max(12, inset + 12)}px`;
+  panel.style.transform = 'translateX(-50%)';
 }
 
 export function createTtsDock(deps: TtsDockDeps): TtsDock {
@@ -163,22 +178,19 @@ export function createTtsDock(deps: TtsDockDeps): TtsDock {
   stop.type = 'button';
   stop.dataset.ttsAction = 'stop';
 
-  const rateWrap = document.createElement('label');
-  rateWrap.className = 'lightink-reader-tts-rate';
-  const rateText = document.createElement('span');
-  const rateSelect = document.createElement('select');
-  rateSelect.setAttribute('aria-label', deps.t('reader.tts.rate'));
-  for (const value of TTS_RATES) {
-    const option = document.createElement('option');
-    option.value = String(value);
-    option.textContent = `${value}×`;
-    if (value === 1) {
-      option.selected = true;
-    }
-    rateSelect.appendChild(option);
-  }
-  rateWrap.append(rateText, rateSelect);
-  root.append(title, error, pause, resume, stop, rateWrap);
+  const rate = document.createElement('button');
+  rate.type = 'button';
+  rate.className = 'lightink-reader-tts-rate';
+  rate.dataset.ttsAction = 'rate';
+  let currentRate: (typeof TTS_RATES)[number] = 1;
+  const syncRate = (): void => {
+    rate.textContent = formatTtsRate(currentRate);
+    rate.dataset.rate = String(currentRate);
+    const rateName = deps.t('reader.tts.rate');
+    rate.setAttribute('aria-label', `${rateName} ${formatTtsRate(currentRate)}`);
+    rate.title = rateName;
+  };
+  root.append(title, error, pause, resume, stop, rate);
 
   const syncCopy = (): void => {
     title.textContent = deps.t('reader.tts.dock');
@@ -189,8 +201,7 @@ export function createTtsDock(deps: TtsDockDeps): TtsDock {
     resume.setAttribute('aria-label', deps.t('reader.tts.resume'));
     stop.textContent = deps.t('reader.tts.stop');
     stop.setAttribute('aria-label', deps.t('reader.tts.stop'));
-    rateText.textContent = deps.t('reader.tts.rate');
-    rateSelect.setAttribute('aria-label', deps.t('reader.tts.rate'));
+    syncRate();
   };
   syncCopy();
 
@@ -222,7 +233,7 @@ export function createTtsDock(deps: TtsDockDeps): TtsDock {
     error.textContent = message;
     pause.hidden = status === 'error';
     resume.hidden = true;
-    rateWrap.hidden = status === 'error';
+    rate.hidden = status === 'error';
     root.hidden = false;
     mountReaderOverlay(root, host);
     adoptReaderOverlayTheme(root, host);
@@ -248,11 +259,13 @@ export function createTtsDock(deps: TtsDockDeps): TtsDock {
     deps.onStop();
     hide();
   });
-  rateSelect.addEventListener('change', () => {
-    const next = Number.parseFloat(rateSelect.value);
-    deps.onRate(Number.isFinite(next) ? next : 1);
+  rate.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    currentRate = nextTtsRate(currentRate);
+    syncRate();
+    deps.onRate(currentRate);
   });
-
   return {
     element: root,
     show(host) {

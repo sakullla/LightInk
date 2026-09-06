@@ -112,7 +112,12 @@ pub async fn reader_wiktionary_lookup(
         .await
         .map_err(network_error)?;
     let value = read_json_response(ReaderService::Wiktionary, response).await?;
-    parse_wiktionary_definitions(term.trim(), url.host_str().unwrap_or_default(), &value)
+    let host = url.host_str().unwrap_or_default();
+    if host == "zh.wiktionary.org" {
+        parse_wiktionary_extracts(term.trim(), host, &value)
+    } else {
+        parse_wiktionary_definitions(term.trim(), host, &value)
+    }
 }
 
 #[tauri::command]
@@ -201,12 +206,31 @@ fn missing_key_error() -> ReaderAidError {
 fn prepare_wiktionary_url(term: &str, locale: &str) -> Result<Url, ReaderAidError> {
     let term = normalize_lookup_term(term)?;
     let host = wiktionary_host(locale)?;
-    let mut url = Url::parse(&format!("https://{host}/api/rest_v1/page/definition/"))
-        .expect("static Wiktionary URL");
-    url.path_segments_mut()
-        .expect("Wiktionary URL cannot be a base")
-        .pop_if_empty()
-        .push(term);
+    let url = if host == "zh.wiktionary.org" {
+        // zh.wiktionary.org does not implement REST /page/definition (HTTP 501).
+        let mut url =
+            Url::parse("https://zh.wiktionary.org/w/api.php").expect("static Wiktionary URL");
+        url.query_pairs_mut()
+            .append_pair("action", "query")
+            .append_pair("format", "json")
+            .append_pair("formatversion", "2")
+            .append_pair("redirects", "1")
+            .append_pair("prop", "extracts")
+            .append_pair("explaintext", "1")
+            .append_pair("exchars", "1200")
+            .append_pair("uselang", "zh-cn")
+            .append_pair("variant", "zh-cn")
+            .append_pair("titles", term);
+        url
+    } else {
+        let mut url = Url::parse(&format!("https://{host}/api/rest_v1/page/definition/"))
+            .expect("static Wiktionary URL");
+        url.path_segments_mut()
+            .expect("Wiktionary URL cannot be a base")
+            .pop_if_empty()
+            .push(term);
+        url
+    };
     validate_reader_url(&url)
 }
 
@@ -496,6 +520,127 @@ fn network_error(error: reqwest::Error) -> ReaderAidError {
     }
 }
 
+fn parse_wiktionary_extracts(
+    term: &str,
+    host: &str,
+    value: &Value,
+) -> Result<WiktionaryLookupResult, ReaderAidError> {
+    let Some(pages) = value.pointer("/query/pages") else {
+        return Err(ReaderAidError::new(
+            "READER_RESPONSE_INVALID",
+            "维基词典响应缺少词条",
+        ));
+    };
+    let mut entries = Vec::new();
+    match pages {
+        Value::Array(items) => {
+            for page in items {
+                if let Some(entry) = extract_entry_from_page(page) {
+                    entries.push(entry);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for page in map.values() {
+                if let Some(entry) = extract_entry_from_page(page) {
+                    entries.push(entry);
+                }
+            }
+        }
+        _ => {}
+    }
+    if entries.is_empty() {
+        return Err(ReaderAidError::new("READER_NOT_FOUND", "未找到该词条"));
+    }
+    Ok(WiktionaryLookupResult {
+        term: term.to_string(),
+        host: host.to_string(),
+        entries,
+    })
+}
+
+fn extract_entry_from_page(page: &Value) -> Option<WiktionaryEntry> {
+    if page_is_missing(page) {
+        return None;
+    }
+    let title = page
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(crate::zh_t2s::to_simplified);
+    let extract =
+        crate::zh_t2s::to_simplified(page.get("extract").and_then(Value::as_str).unwrap_or(""));
+    let mut part_of_speech = None;
+    let mut definitions = Vec::new();
+    for line in extract.lines() {
+        let line = strip_markup(line.trim());
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(heading) = wiki_heading_title(&line) {
+            if part_of_speech.is_none() {
+                if let Some(pos) = lexical_heading(heading) {
+                    part_of_speech = Some(pos.to_string());
+                }
+            }
+            continue;
+        }
+        if title.as_deref().is_some_and(|value| line == value) {
+            continue;
+        }
+        definitions.push(WiktionaryDefinition {
+            definition: line,
+            examples: Vec::new(),
+        });
+        if definitions.len() == 12 {
+            break;
+        }
+    }
+    if definitions.is_empty() {
+        return None;
+    }
+    Some(WiktionaryEntry {
+        language: "中文".to_string(),
+        part_of_speech,
+        definitions,
+    })
+}
+
+fn wiki_heading_title(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('=') || !trimmed.ends_with('=') {
+        return None;
+    }
+    let title = trimmed.trim_matches('=').trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+fn lexical_heading(heading: &str) -> Option<&str> {
+    match heading {
+        "名词" | "名詞" => Some("名词"),
+        "动词" | "動詞" => Some("动词"),
+        "形容词" | "形容詞" => Some("形容词"),
+        "副词" | "副詞" => Some("副词"),
+        "量词" | "量詞" => Some("量词"),
+        "代词" | "代詞" => Some("代词"),
+        "介词" | "介詞" => Some("介词"),
+        "连词" | "連詞" => Some("连词"),
+        "助词" | "助詞" => Some("助词"),
+        "叹词" | "嘆詞" | "感叹词" | "感嘆詞" => Some("叹词"),
+        "数词" | "數詞" => Some("数词"),
+        _ => None,
+    }
+}
+
+fn page_is_missing(page: &Value) -> bool {
+    page.get("missing").is_some()
+}
+
 fn parse_wiktionary_definitions(
     term: &str,
     host: &str,
@@ -649,9 +794,14 @@ mod tests {
         let zh = prepare_wiktionary_url("词典", "zh-CN").unwrap();
         assert_eq!(zh.scheme(), "https");
         assert_eq!(zh.host_str(), Some("zh.wiktionary.org"));
-        assert!(zh.path().ends_with("/%E8%AF%8D%E5%85%B8"));
+        assert_eq!(zh.path(), "/w/api.php");
+        let query: std::collections::HashMap<_, _> = zh.query_pairs().into_owned().collect();
+        assert_eq!(query.get("action").map(String::as_str), Some("query"));
+        assert_eq!(query.get("variant").map(String::as_str), Some("zh-cn"));
+        assert_eq!(query.get("titles").map(String::as_str), Some("词典"));
         let en = prepare_wiktionary_url("hello", "en").unwrap();
         assert_eq!(en.host_str(), Some("en.wiktionary.org"));
+        assert!(en.path().contains("/api/rest_v1/page/definition/"));
         assert!(en.username().is_empty());
         assert!(en.password().is_none());
     }
@@ -826,6 +976,71 @@ mod tests {
             parse_wiktionary_definitions("hello", "en.wiktionary.org", &json!({ "en": [] }))
                 .unwrap_err()
                 .code,
+            "READER_NOT_FOUND"
+        );
+    }
+
+    #[test]
+    fn zh_extracts_json_becomes_definitions_or_not_found() {
+        let value = json!({
+            "query": {
+                "pages": [{
+                    "pageid": 1,
+                    "title": "词典",
+                    "extract": "词典是收集词语的工具书。\n\n亦作辞典。"
+                }]
+            }
+        });
+        let result = parse_wiktionary_extracts("词典", "zh.wiktionary.org", &value).unwrap();
+        assert_eq!(result.entries[0].language, "中文");
+        assert_eq!(
+            result.entries[0].definitions[0].definition,
+            "词典是收集词语的工具书。"
+        );
+        assert_eq!(result.entries[0].definitions[1].definition, "亦作辞典。");
+        let traditional = parse_wiktionary_extracts(
+            "外骨骼",
+            "zh.wiktionary.org",
+            &json!({
+                "query": {
+                    "pages": [{
+                        "pageid": 3,
+                        "title": "外骨骼",
+                        "extract": "基於動物身體最外層硬化而形成的骨骼系統"
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            traditional.entries[0].definitions[0].definition,
+            "基于动物身体最外层硬化而形成的骨骼系统"
+        );
+
+        let headed = json!({
+            "query": {
+                "pages": [{
+                    "pageid": 2,
+                    "title": "牙齿",
+                    "extract": "== 漢語 ==\n=== 發音 ===\n=== 名詞 ===\n牙齿\n(解剖学) 用于咀嚼食物的钙化组织。(量词：颗)\n==== 同義詞 ====\n==== 翻譯 ===="
+                }]
+            }
+        });
+        let cleaned = parse_wiktionary_extracts("牙齿", "zh.wiktionary.org", &headed).unwrap();
+        assert_eq!(cleaned.entries[0].part_of_speech.as_deref(), Some("名词"));
+        assert_eq!(
+            cleaned.entries[0].definitions[0].definition,
+            "(解剖学) 用于咀嚼食物的钙化组织。(量词：颗)"
+        );
+        assert_eq!(cleaned.entries[0].definitions.len(), 1);
+        assert_eq!(
+            parse_wiktionary_extracts(
+                "无此词",
+                "zh.wiktionary.org",
+                &json!({ "query": { "pages": [{ "title": "无此词", "missing": true }] } })
+            )
+            .unwrap_err()
+            .code,
             "READER_NOT_FOUND"
         );
     }

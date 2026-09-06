@@ -37,6 +37,7 @@ import {
   pagedGlyphInView,
   pagedProgressRatio,
   pagedScrollLeftForClientX,
+  realPagedFragmentBox,
   type PagedScrollMotion,
   readingNavDirection,
   settlePagedRelease,
@@ -607,6 +608,26 @@ export function readerPagedScroller(frameDocument: Document): HTMLElement {
   );
 }
 
+function pagedElementGlyphLeft(element: HTMLElement): number {
+  try {
+    const lineHeight = Number.parseFloat(
+      element.ownerDocument.defaultView?.getComputedStyle(element).lineHeight ?? '',
+    );
+    const boxes = Array.from(element.getClientRects()).map((rect) => ({
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+    }));
+    const real = realPagedFragmentBox(boxes, lineHeight);
+    if (real !== null) {
+      return real.left;
+    }
+  } catch {
+    /* fall through */
+  }
+  return element.getBoundingClientRect().left;
+}
+
 /**
  * Align a paginated chapter iframe so `element` sits in the visible spread.
  * `scrollIntoView` only moves the vertical axis; CSS columns need scrollLeft.
@@ -628,19 +649,23 @@ export function revealPagedElement(
   if (!(step > 0)) {
     return false;
   }
-  const box = element.getBoundingClientRect();
+  const scrollerBox = scroller.getBoundingClientRect();
+  const left = pagedElementGlyphLeft(element);
+  if (pagedGlyphInView(left, scrollerBox.left, scroller.clientWidth)) {
+    return true;
+  }
   const target = pagedScrollLeftForClientX(
-    box.left,
-    scroller.getBoundingClientRect().left,
+    left,
+    scrollerBox.left,
     scroller.scrollLeft,
     step,
   );
   cancelPagedTouchSlide(scroller);
   scroller.scrollLeft = target;
   snapPagedScroller(scroller, step);
-  const after = element.getBoundingClientRect();
+  const after = pagedElementGlyphLeft(element);
   return pagedGlyphInView(
-    after.left,
+    after,
     scroller.getBoundingClientRect().left,
     scroller.clientWidth,
   );

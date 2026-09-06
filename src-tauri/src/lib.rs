@@ -25,6 +25,7 @@ mod sync;
 mod webdav;
 mod webdav_source;
 mod window_chrome;
+mod zh_t2s;
 
 use tauri_plugin_opener::OpenerExt;
 

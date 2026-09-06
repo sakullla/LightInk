@@ -331,7 +331,7 @@ const en = {
   'reader.lookup.loading': 'Looking up…',
   'reader.lookup.translateLoading': 'Translating…',
   'reader.lookup.translateDisabled':
-    'Add a DeepL API key under Manage → Reading preferences to translate.',
+    'Add a DeepL API key under Manage → Translation to translate.',
   'reader.lookup.translateTooLong': 'This selection is too long to translate.',
   'reader.lookup.error.network': 'Could not reach the dictionary or translator. Check your network.',
   'reader.lookup.error.timeout': 'The request timed out.',
@@ -340,11 +340,14 @@ const en = {
   'reader.lookup.error.invalidKey': 'The DeepL API key is invalid.',
   'reader.lookup.error.quota': 'The DeepL quota has been used up.',
   'reader.lookup.error.unconfigured':
-    'Add a DeepL API key under Manage → Reading preferences to translate.',
+    'Add a DeepL API key under Manage → Translation to translate.',
   'reader.lookup.error.failed': 'The request failed.',
   'reader.lookup.close': 'Close',
   'reader.lookup.settingsHint':
     'Lookup sends the current selection to Wiktionary. Translate sends it to DeepL. Nothing is sent until you tap Lookup or Translate.',
+  'reader.lookup.translateGroup': 'Translation',
+  'reader.lookup.deeplHint':
+    'Add a DeepL API key to show Translate on the selection toolbar. The key stays on this device.',
   'reader.lookup.deeplKey': 'DeepL API key',
   'reader.lookup.deeplSave': 'Save key',
   'reader.lookup.deeplClear': 'Clear key',
@@ -806,7 +809,7 @@ const zhCN = {
   'reader.lookup.empty': '没有找到这个词条。',
   'reader.lookup.loading': '正在查词…',
   'reader.lookup.translateLoading': '正在翻译…',
-  'reader.lookup.translateDisabled': '请在管理页的阅读偏好中填写 DeepL API key 后再翻译。',
+  'reader.lookup.translateDisabled': '请在管理页的翻译中填写 DeepL API key 后再翻译。',
   'reader.lookup.translateTooLong': '选区过长，无法翻译。',
   'reader.lookup.error.network': '无法连接词典或翻译服务，请检查网络。',
   'reader.lookup.error.timeout': '请求超时。',
@@ -814,11 +817,13 @@ const zhCN = {
   'reader.lookup.error.notFound': '没有找到这个词条。',
   'reader.lookup.error.invalidKey': 'DeepL API key 无效。',
   'reader.lookup.error.quota': 'DeepL 额度已用尽。',
-  'reader.lookup.error.unconfigured': '请在管理页的阅读偏好中填写 DeepL API key 后再翻译。',
+  'reader.lookup.error.unconfigured': '请在管理页的翻译中填写 DeepL API key 后再翻译。',
   'reader.lookup.error.failed': '请求失败。',
   'reader.lookup.close': '关闭',
   'reader.lookup.settingsHint':
     '查词会把当前选区发往 Wiktionary；翻译会发往 DeepL。只有点击对应按钮时才发送这一次选区。',
+  'reader.lookup.translateGroup': '翻译',
+  'reader.lookup.deeplHint': '填写 DeepL 密钥后，划选工具栏才会出现翻译。密钥只保存在本机。',
   'reader.lookup.deeplKey': 'DeepL API key',
   'reader.lookup.deeplSave': '保存密钥',
   'reader.lookup.deeplClear': '清除密钥',

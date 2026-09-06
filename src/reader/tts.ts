@@ -36,6 +36,7 @@ export interface TtsController {
   isPlaying(): boolean;
   isPaused(): boolean;
   currentIndex(): number;
+  currentRate(): number;
 }
 
 export interface TtsEnvironment {
@@ -82,6 +83,48 @@ export function applyFollowAlong(root: Node, start: number, end: number): void {
   followRoot = parent;
 }
 
+export function chapterIndexFromSpeakRoot(root: Node | null): number | null {
+  if (root === null) {
+    return null;
+  }
+  const doc =
+    root.nodeType === Node.DOCUMENT_NODE ? (root as Document) : root.ownerDocument;
+  const frame = doc?.defaultView?.frameElement;
+  if (!(frame instanceof Element)) {
+    return null;
+  }
+  const article = frame.closest('[data-chapter-index]');
+  if (!(article instanceof HTMLElement)) {
+    return null;
+  }
+  const index = Number(article.dataset.chapterIndex);
+  return Number.isSafeInteger(index) ? index : null;
+}
+
+/** First later chapter that already has speakable text, or null at end of book. */
+export function nextSpeakableFlowChapter(
+  fromChapter: number,
+  total: number,
+  bodyOf: (index: number) => HTMLElement | null,
+): number | null {
+  for (let index = fromChapter + 1; index < total; index += 1) {
+    const body = bodyOf(index);
+    if (body !== null && (body.textContent ?? '').trim() !== '') {
+      return index;
+    }
+  }
+  return null;
+}
+
+/** First follow-along mark in `root` (or the last highlighted root). */
+export function followAlongMark(root?: Node | null): HTMLElement | null {
+  const parent = (root as ParentNode | null) ?? followRoot;
+  if (parent === null || typeof parent.querySelector !== 'function') {
+    return null;
+  }
+  return parent.querySelector(`.${TTS_MARK_CLASS}`);
+}
+
 /** Leave the current-sentence mark in place; do not persist it. */
 export function freezeFollowAlong(): void {
   /* Marks stay on the last spoken sentence and are not Annotation records. */
@@ -98,15 +141,12 @@ export function probeSpeech(speech: SpeechSynthesis | null | undefined): TtsFail
   if (speech == null || typeof speech.speak !== 'function') {
     return 'unavailable';
   }
-  if (typeof speech.getVoices !== 'function') {
-    return 'noVoices';
-  }
-  try {
-    if (speech.getVoices().length === 0) {
-      return 'noVoices';
+  if (typeof speech.getVoices === 'function') {
+    try {
+      speech.getVoices();
+    } catch {
+      /* Chromium often returns [] until voiceschanged; still allow speak(). */
     }
-  } catch {
-    return 'noVoices';
   }
   return 'ok';
 }
@@ -141,6 +181,21 @@ function clampRate(rate: number | undefined): number {
 }
 
 export function createTtsController(env?: TtsEnvironment): TtsController {
+  const speech = resolveSpeech(env);
+  if (speech !== undefined && typeof speech.addEventListener === 'function') {
+    try {
+      speech.getVoices();
+      speech.addEventListener('voiceschanged', () => {
+        try {
+          speech.getVoices();
+        } catch {
+          /* ignore */
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
   let generation = 0;
   let sentences: readonly SentenceSpan[] = [];
   let root: Node | null = null;
@@ -209,8 +264,16 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
       }
       speakAt(at + 1);
     };
-    utterance.onerror = () => {
+    utterance.onerror = (event) => {
       if (token !== generation) {
+        return;
+      }
+      const code = (event as SpeechSynthesisErrorEvent).error;
+      if (code === 'canceled' || code === 'interrupted') {
+        return;
+      }
+      if (code === 'synthesis-unavailable' || code === 'voice-unavailable') {
+        fail('noVoices');
         return;
       }
       fail('failed');
@@ -249,8 +312,10 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
       }
       sentences = next;
       root = input.root ?? null;
-      rate = clampRate(input.rate);
-      lang = input.lang ?? '';
+      if (input.rate !== undefined) {
+        rate = clampRate(input.rate);
+      }
+      lang = input.lang ?? lang;
       onSentence = input.onSentence;
       onEnd = input.onEnd;
       onFailure = input.onFailure;
@@ -314,5 +379,6 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
     isPlaying: () => playing && !paused,
     isPaused: () => paused,
     currentIndex: () => index,
+    currentRate: () => rate,
   };
 }
