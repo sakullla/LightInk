@@ -34,6 +34,8 @@ class ControlledIntersectionObserver {
 const originalIntersectionObserver = globalThis.IntersectionObserver;
 const createObjectUrl = vi.fn<(blob: Blob) => string>();
 const revokeObjectUrl = vi.fn<(url: string) => void>();
+/** 书签列表入口回调（onOpenBookmarks 注入面，B 键与顶栏按钮同机械）。 */
+const onOpenBookmarksCallback = vi.fn();
 
 beforeEach(() => {
   let nextUrl = 0;
@@ -57,6 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   createObjectUrl.mockReset();
   revokeObjectUrl.mockReset();
+  onOpenBookmarksCallback.mockReset();
   invokeMock.mockReset();
   invokeMock.mockResolvedValue(undefined);
   globalThis.IntersectionObserver = originalIntersectionObserver;
@@ -88,6 +91,7 @@ interface ComicBookmarkHarness {
   container: HTMLElement;
   handle: CbzRenderHandle;
   button: HTMLButtonElement;
+  bookmarksButton: HTMLButtonElement;
   bookmarked: Set<number>;
 }
 
@@ -112,13 +116,18 @@ async function renderWithBookmark(pageCount: number): Promise<ComicBookmarkHarne
       else bookmarked.add(page);
     },
     isPageBookmarked: (page) => bookmarked.has(page),
+    onOpenBookmarks: onOpenBookmarksCallback,
   };
   const container = document.createElement('div');
   document.body.appendChild(container);
   const handle = await renderCbzInto(await buildCbz(pageCount), container, undefined, options);
   const button = container.querySelector<HTMLButtonElement>('.lightink-reader-comic-bookmark')!;
   expect(button).not.toBeNull();
-  return { container, handle, button, bookmarked };
+  const bookmarksButton = container.querySelector<HTMLButtonElement>(
+    '.lightink-reader-comic-bookmarks',
+  )!;
+  expect(bookmarksButton).not.toBeNull();
+  return { container, handle, button, bookmarksButton, bookmarked };
 }
 
 function jumpOverlay(): HTMLElement | null {
@@ -204,6 +213,54 @@ describe('comic chrome bookmark switch', () => {
     expect(button.getAttribute('aria-pressed')).toBe('false');
     handle.scrollToPage(2);
     expect(button.getAttribute('aria-pressed')).toBe('false');
+    await handle.destroy();
+  });
+});
+
+describe('comic chrome bookmarks list entry', () => {
+  it('renders in the topbar after the bookmark switch with localized labels', async () => {
+    const { container, handle, button, bookmarksButton } = await renderWithBookmark(4);
+    const topbar = container.querySelector('.lightink-reader-comic-topbar')!;
+    expect(topbar.contains(bookmarksButton)).toBe(true);
+    // 位于书签开关之后（列表入口紧邻开关）；toolbarButton 惯例与本地化。
+    expect(bookmarksButton.previousElementSibling).toBe(button);
+    expect(bookmarksButton.className).toContain('lightink-reader-comic-tool');
+    expect(bookmarksButton.getAttribute('aria-label')).toBe('Bookmarks');
+    expect(bookmarksButton.title).toBe('Bookmarks');
+    await handle.destroy();
+
+    document.documentElement.lang = 'zh-CN';
+    const zh = await renderWithBookmark(4);
+    expect(zh.bookmarksButton.getAttribute('aria-label')).toBe('书签列表');
+    await zh.handle.destroy();
+  });
+
+  it('opens the bookmarks panel via the injected callback and the B-key handle entry', async () => {
+    const { container, handle, bookmarksButton } = await renderWithBookmark(6);
+    bookmarksButton.click();
+    expect(onOpenBookmarksCallback).toHaveBeenCalledTimes(1);
+
+    container.dataset.comicChrome = 'hidden';
+    handle.openBookmarks?.(); // B 键同机械：先显 chrome 再回调。
+    expect(onOpenBookmarksCallback).toHaveBeenCalledTimes(2);
+    expect(container.dataset.comicChrome).toBe('visible');
+    await handle.destroy();
+  });
+
+  it('is a no-op when no panel wiring is injected', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+      preferenceStorage: storageFor({ mode: 'paged', direction: 'ltr', spread: 'single', fit: 'screen' }),
+      cacheBudgetBytes: 4,
+    });
+    const bookmarksButton = container.querySelector<HTMLButtonElement>(
+      '.lightink-reader-comic-bookmarks',
+    )!;
+    bookmarksButton.click(); // 未注入：无操作不抛错
+    expect(onOpenBookmarksCallback).not.toHaveBeenCalled();
+    handle.openBookmarks?.();
+    expect(onOpenBookmarksCallback).not.toHaveBeenCalled();
     await handle.destroy();
   });
 });

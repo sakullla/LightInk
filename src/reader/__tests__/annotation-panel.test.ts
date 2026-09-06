@@ -115,6 +115,22 @@ afterEach(() => {
 });
 
 describe('annotation-panel 标注列表', () => {
+  it('setKindFilter 程序化定位分类：chip 激活且列表收窄（书签列表入口消费）', () => {
+    const { panel, jumps } = mount();
+    const bookmarkChip = scopeOption(panel.element, 'bookmark');
+    expect(bookmarkChip.getAttribute('aria-pressed')).toBe('false');
+
+    panel.setKindFilter('bookmark');
+    expect(bookmarkChip.getAttribute('aria-pressed')).toBe('true');
+    const items = panel.element.querySelectorAll('.lightink-reader-sidebar-item');
+    expect(Array.from(items).map((el) => (el as HTMLElement).dataset.annotationId)).toEqual(['b1']);
+
+    // 条目跳转仍可用（外部入口定位分类后点击条目即跳转）。
+    (items[0] as HTMLElement).click();
+    expect(jumps).toEqual(['b1']);
+    panel.destroy();
+  });
+
   it('列出全部标注并按文档位置排序；笔记优先显示备注；显示定位', () => {
     const { panel } = mount();
     // 打乱输入顺序（页 5 的高亮先入集合）：列表仍按位置输出。

@@ -338,6 +338,7 @@ export function setupReaderPagedStage(ctx: ReaderViewContext): ReaderPagedStageS
         margins: ctx.t('reader.comic.margins'),
         pageSlider: ctx.t('reader.comic.pageSlider'),
         bookmark: ctx.t('reader.chrome.bookmark'),
+        bookmarks: ctx.t('reader.chrome.bookmarks'),
         toggleChrome: ctx.t('reader.comic.toggleChrome'),
         imageDecodeFailed: ctx.t('reader.comic.imageDecodeFailed'),
         retry: ctx.t('reader.comic.retry'),
@@ -346,6 +347,14 @@ export function setupReaderPagedStage(ctx: ReaderViewContext): ReaderPagedStageS
       // T4（ADR-5）：书签开关/两态事实源接线标注系统既有能力（toggle 走
       // reader-bookmarks 的 tombstone/添加路径，持久化随标注写队列落盘）。
       onToggleBookmark: () => ctx.bookmarks.toggleBookmarkAtCurrentPosition(),
+      // 书签列表入口（T4 followup）：打开统一标注面板并定位「书签」分类——
+      // 面板条目自带跳转（onJump→cbz 页定位），列表按文档位置有序。
+      onOpenBookmarks: () => {
+        ctx.annotation.setSidebarVisible(true);
+        ctx.sidebar?.setKindFilter('bookmark');
+        ctx.sidebar?.render(ctx.annotations);
+        ctx.annotation.pinSidebarOverlay();
+      },
       isPageBookmarked: (page) =>
         ctx.bookmarks.bookmarkAtStatePosition({
           ...ctx.readerState,

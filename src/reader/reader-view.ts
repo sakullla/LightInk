@@ -371,6 +371,10 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     } else if (event.key === 'g' || event.key === 'G') {
       event.preventDefault();
       comic.openPageJump?.();
+    } else if (event.key === 'b' || event.key === 'B') {
+      // B 打开书签列表（与顶栏书签列表按钮同机械；G 跳页同族约定）。
+      event.preventDefault();
+      comic.openBookmarks?.();
     }
   });
 

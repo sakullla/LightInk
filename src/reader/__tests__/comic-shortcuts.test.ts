@@ -36,6 +36,7 @@ const comicHandle = () => ({
   adjustZoom: vi.fn(),
   openPageJump: vi.fn(),
   refreshBookmarkState: vi.fn(),
+  openBookmarks: vi.fn(),
   destroy: vi.fn(async () => undefined),
 });
 
@@ -151,6 +152,22 @@ describe('reader root keydown: comic bare keys (T4/ADR-6)', () => {
     await view.destroy();
   });
 
+  it('B/b opens the bookmarks list entry and ignores modified chords', async () => {
+    const { view, root, handle } = await openComic();
+    expect(keyDown(root, 'b')).toBe(false);
+    expect(keyDown(root, 'B')).toBe(false);
+    expect(handle.openBookmarks).toHaveBeenCalledTimes(2);
+    // 修饰组合放行；输入框内不劫持（避免吞掉正文输入）。
+    expect(keyDown(root, 'b', { ctrlKey: true })).toBe(true);
+    expect(keyDown(root, 'B', { metaKey: true })).toBe(true);
+    expect(handle.openBookmarks).toHaveBeenCalledTimes(2);
+    const input = document.createElement('input');
+    root.appendChild(input);
+    expect(keyDown(input, 'b')).toBe(true);
+    expect(handle.openBookmarks).toHaveBeenCalledTimes(2);
+    await view.destroy();
+  });
+
   it('ignores modified zoom chords (Ctrl+=/-/0 stay on the shortcuts.ts chain)', async () => {
     const { view, root, handle } = await openComic();
     expect(keyDown(root, '=', { ctrlKey: true })).toBe(true);
@@ -201,6 +218,8 @@ describe('reader root keydown: no conflicts with existing registries', () => {
     expect(isReadingNavKey('0')).toBe(false);
     expect(isReadingNavKey('g')).toBe(false);
     expect(isReadingNavKey('G')).toBe(false);
+    expect(isReadingNavKey('b')).toBe(false);
+    expect(isReadingNavKey('B')).toBe(false);
     // 翻页键集本身未被改动。
     expect(isReadingNavKey('ArrowLeft')).toBe(true);
     expect(isReadingNavKey('PageUp')).toBe(true);

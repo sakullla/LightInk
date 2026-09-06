@@ -106,6 +106,11 @@ export interface AnnotationPanel {
   setSearchQuery(query: string): void;
   getSearchQuery(): string;
   focusSearch(): void;
+  /**
+   * 程序化切换分类筛选（如外部「书签列表」入口定位到书签分类）。
+   * 与点击分类 chip 同机械：更新筛选态并重渲染列表，不触发正文检索。
+   */
+  setKindFilter(filter: AnnotationFilter): void;
   destroy(): void;
 }
 
@@ -915,6 +920,9 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     focusSearch() {
       noteSearchInput.focus({ preventScroll: true });
       noteSearchInput.select();
+    },
+    setKindFilter(filter: AnnotationFilter) {
+      setFilter(filter);
     },
     destroy() {
       moreRelease?.();

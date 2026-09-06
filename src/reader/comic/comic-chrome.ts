@@ -93,6 +93,8 @@ export interface ComicChromeDom {
   readonly pageButton: HTMLButtonElement;
   /** T4（ADR-5）：顶栏书签开关（当前页添加/移除书签，走标注系统）。 */
   readonly bookmarkButton: HTMLButtonElement;
+  /** 顶栏书签列表入口（打开统一标注面板并定位书签分类，B 键同机械）。 */
+  readonly bookmarksButton: HTMLButtonElement;
   readonly pagesRoot: HTMLElement;
   readonly previousButton: HTMLButtonElement;
   readonly nextButton: HTMLButtonElement;
@@ -173,6 +175,14 @@ export function buildComicChrome(
     'lightink-reader-comic-bookmark',
   );
   bookmarkButton.setAttribute('aria-pressed', 'false');
+  // 书签列表入口（T4 followup）：打开统一标注面板并定位书签分类。通用底栏的
+  // 书签刻度在漫画模式被 suppressProgressDock 隐藏，漫画 chrome 需自带列表
+  // 出口；点击行为经 CbzRenderOptions.onOpenBookmarks 注入（B 键同机械）。
+  const bookmarksButton = toolbarButton(
+    '',
+    labels.bookmarks ?? labels.bookmark ?? labels.pageSlider,
+    'lightink-reader-comic-bookmarks',
+  );
   const bottombar = document.createElement('div');
   bottombar.className = 'lightink-reader-comic-bottombar';
   bottombar.setAttribute('role', 'toolbar');
@@ -189,7 +199,7 @@ export function buildComicChrome(
   backButton.textContent = labels.backToShelf;
   backButton.setAttribute('aria-label', labels.backToShelf);
   backButton.addEventListener('click', () => options.onReturnToShelf?.());
-  topbar.append(backButton, title, pageButton, bookmarkButton);
+  topbar.append(backButton, title, pageButton, bookmarkButton, bookmarksButton);
   bottombar.append(scrub, modes);
   chrome.append(topbar, bottombar);
   container.append(chrome, pagesRoot);
@@ -245,6 +255,7 @@ export function buildComicChrome(
     topbar,
     pageButton,
     bookmarkButton,
+    bookmarksButton,
     pagesRoot,
     previousButton,
     nextButton,

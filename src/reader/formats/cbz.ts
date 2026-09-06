@@ -127,6 +127,8 @@ export interface ComicToolbarLabels {
   readonly jumpToPageInvalid?: string;
   /** T4（ADR-5）：顶栏书签开关（当前页添加/移除书签）。 */
   readonly bookmark?: string;
+  /** 顶栏书签列表入口（打开统一标注面板并定位书签分类）。 */
+  readonly bookmarks?: string;
   readonly toggleChrome: string;
   readonly imageDecodeFailed: string;
   readonly nestedArchive: string;
@@ -163,6 +165,11 @@ export interface CbzRenderHandle {
    * reader-bookmarks 调用）。可选扩展，语义同上。
    */
   refreshBookmarkState?(): void;
+  /**
+   * 顶栏书签列表入口（B 键同机械）：打开统一标注面板并定位书签分类。
+   * 可选扩展：缺省（旧 fake 句柄）时调用方跳过。
+   */
+  openBookmarks?(): void;
   destroy(): Promise<void>;
 }
 
@@ -185,6 +192,11 @@ export interface CbzRenderOptions {
   readonly onToggleBookmark?: () => void;
   /** 页（1 基）是否已有活书签（顶栏书签按钮 aria-pressed 的事实源）。 */
   readonly isPageBookmarked?: (page: number) => boolean;
+  /**
+   * 书签列表入口（T4 followup）：打开统一标注面板并定位书签分类（通用底栏
+   * 书签刻度在漫画模式被 suppressProgressDock 隐藏）。未注入时按钮为无操作。
+   */
+  readonly onOpenBookmarks?: () => void;
   /**
    * Android 系统栏成对显隐。未注入时走 MainActivity 桥 / Tauri invoke；
    * 失败忽略。桌面默认不调用。
@@ -373,6 +385,7 @@ function defaultLabels(): ComicToolbarLabels {
         jumpToPageConfirm: '跳转',
         jumpToPageInvalid: '请输入 1 到 {total} 之间的页码',
         bookmark: '书签',
+        bookmarks: '书签列表',
         toggleChrome: '显示或隐藏阅读控件',
         imageDecodeFailed: '无法解码此图片',
         nestedArchive: '内层归档',
@@ -405,6 +418,7 @@ function defaultLabels(): ComicToolbarLabels {
         jumpToPageConfirm: 'Go',
         jumpToPageInvalid: 'Enter a page number between 1 and {total}',
         bookmark: 'Bookmark',
+        bookmarks: 'Bookmarks',
         toggleChrome: 'Show or hide reader controls',
         imageDecodeFailed: 'This image could not be decoded',
         nestedArchive: 'Nested archive',
@@ -493,6 +507,7 @@ export async function renderCbzInto(
       topbar: dom.topbar,
       pageButton: dom.pageButton,
       bookmarkButton: dom.bookmarkButton,
+      bookmarksButton: dom.bookmarksButton,
       pagesRoot: dom.pagesRoot,
       scroller: dom.pagesRoot,
       previousButton: dom.previousButton,
@@ -648,6 +663,12 @@ export async function renderCbzInto(
       session.options.onToggleBookmark?.();
       syncComicBookmarkButton(session);
     });
+    /** 书签列表入口（B 键同机械）：与顶栏按钮同路径，经装配注入面板打开。 */
+    const openBookmarks = (): void => {
+      setChromeVisible(session, true);
+      session.options.onOpenBookmarks?.();
+    };
+    session.bookmarksButton.addEventListener('click', openBookmarks);
     wireComicScrubNavigation(session, scrollToIndex);
     const pageJump = wireComicPageJump(session, scrollToIndex);
     /** G 键等价入口（CbzRenderHandle.openPageJump）：与 pageButton 点击同机械。 */
@@ -817,6 +838,7 @@ export async function renderCbzInto(
       },
       openPageJump,
       refreshBookmarkState: () => syncComicBookmarkButton(session),
+      openBookmarks,
       destroy: async () => {
         signal?.removeEventListener('abort', onAbort);
         await destroy();

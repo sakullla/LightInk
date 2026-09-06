@@ -99,6 +99,8 @@ export interface ComicSession {
   readonly pageButton: HTMLButtonElement;
   /** T4（ADR-5）：顶栏书签开关（状态同步在 comic-chrome）。 */
   readonly bookmarkButton: HTMLButtonElement;
+  /** 顶栏书签列表入口（打开统一标注面板的书签分类）。 */
+  readonly bookmarksButton: HTMLButtonElement;
   readonly pagesRoot: HTMLElement;
   readonly scroller: HTMLElement;
   readonly previousButton: HTMLButtonElement;
