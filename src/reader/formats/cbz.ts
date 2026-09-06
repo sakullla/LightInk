@@ -110,6 +110,8 @@ export interface ComicToolbarLabels {
   readonly singlePage: string;
   readonly doublePage: string;
   readonly autoPage?: string;
+  /** 双页配对偏移开关（封面不独占）；仅双页模式可用。 */
+  readonly spreadOffset?: string;
   readonly fitWidth: string;
   readonly fitScreen?: string;
   readonly fitHeight?: string;
@@ -220,6 +222,10 @@ function mergeComicPreferences(
       patch.cropMargins === true || patch.cropMargins === false
         ? patch.cropMargins
         : current.cropMargins,
+    spreadOffset:
+      patch.spreadOffset === true || patch.spreadOffset === false
+        ? patch.spreadOffset
+        : current.spreadOffset,
   };
 }
 
@@ -334,6 +340,7 @@ function defaultLabels(): ComicToolbarLabels {
         singlePage: '单页',
         doublePage: '双页',
         autoPage: '自动',
+        spreadOffset: '双页偏移一页',
         fitWidth: '适合宽度',
         fitScreen: '适合屏幕',
         fitHeight: '适合高度',
@@ -364,6 +371,7 @@ function defaultLabels(): ComicToolbarLabels {
         singlePage: 'Single page',
         doublePage: 'Double page',
         autoPage: 'Auto',
+        spreadOffset: 'Offset double-page spreads',
         fitWidth: 'Fit width',
         fitScreen: 'Fit screen',
         fitHeight: 'Fit height',
@@ -474,6 +482,7 @@ export async function renderCbzInto(
       singleButton: dom.singleButton,
       doubleButton: dom.doubleButton,
       autoButton: dom.autoButton,
+      offsetButton: dom.offsetButton,
       fitButton: dom.fitButton,
       cropButton: dom.cropButton,
       spreadGroup: dom.spreadGroup,
@@ -601,6 +610,9 @@ export async function renderCbzInto(
     session.singleButton.addEventListener('click', () => setPreferences({ spread: 'single' }));
     session.doubleButton.addEventListener('click', () => setPreferences({ spread: 'double' }));
     session.autoButton.addEventListener('click', () => setPreferences({ spread: 'auto' }));
+    session.offsetButton.addEventListener('click', () =>
+      setPreferences({ spreadOffset: !session.preferences.spreadOffset }),
+    );
     session.fitButton.addEventListener('click', () =>
       setPreferences({ fit: nextComicFit(session.preferences.fit) }),
     );

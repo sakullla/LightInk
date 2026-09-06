@@ -1109,6 +1109,89 @@ describe('CBZ page materialization', () => {
     await handle.destroy();
   });
 
+  it('toggles the double-page spread offset from chrome and persists it per book', async () => {
+    document.documentElement.lang = 'en';
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: storage,
+      progressId: 'book-offset',
+    });
+
+    const offsetButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Offset double-page spreads"]',
+    )!;
+    expect(offsetButton).not.toBeNull();
+    expect(offsetButton.disabled).toBe(false);
+    expect(offsetButton.getAttribute('aria-pressed')).toBe('false');
+    // 默认封面独占：首页单独成跨页。
+    expect(handle.preferences.spreadOffset).toBe(false);
+    expect(visiblePageIndices(container)).toEqual(['0']);
+
+    offsetButton.click();
+    expect(handle.preferences.spreadOffset).toBe(true);
+    expect(offsetButton.getAttribute('aria-pressed')).toBe('true');
+    // 偏移后配对平移一页：封面与第二页同屏。
+    expect(visiblePageIndices(container)).toEqual(['0', '1']);
+    const bookKey = 'lightink.reader.comic.book.book-offset';
+    expect(JSON.parse(values.get(bookKey) ?? '{}').spreadOffset).toBe(true);
+
+    offsetButton.click();
+    expect(handle.preferences.spreadOffset).toBe(false);
+    expect(offsetButton.getAttribute('aria-pressed')).toBe('false');
+    expect(visiblePageIndices(container)).toEqual(['0']);
+    expect(JSON.parse(values.get(bookKey) ?? '{}').spreadOffset).toBe(false);
+
+    // 仅解析后双页可用：切单页后禁用并视为未按下，切回双页恢复。
+    container.querySelector<HTMLButtonElement>('[aria-label="Single page"]')!.click();
+    expect(offsetButton.disabled).toBe(true);
+    expect(offsetButton.getAttribute('aria-pressed')).toBe('false');
+    container.querySelector<HTMLButtonElement>('[aria-label="Double page"]')!.click();
+    expect(offsetButton.disabled).toBe(false);
+    await handle.destroy();
+  });
+
+  it('restores the persisted spread offset when reopening the book', async () => {
+    document.documentElement.lang = 'en';
+    const values = new Map<string, string>([
+      [
+        'lightink.reader.comic.book.book-offset',
+        JSON.stringify({
+          mode: 'paged',
+          direction: 'ltr',
+          spread: 'double',
+          fit: 'screen',
+          cropMargins: false,
+          spreadOffset: true,
+        }),
+      ],
+    ]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(4), container, undefined, {
+      preferenceStorage: storage,
+      progressId: 'book-offset',
+    });
+
+    expect(handle.preferences.spreadOffset).toBe(true);
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Offset double-page spreads"]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(visiblePageIndices(container)).toEqual(['0', '1']);
+    await handle.destroy();
+  });
+
   it('does not treat a scale-1 strip swipe as a page turn', async () => {
     const container = document.createElement('div');
     sizeCanvas(container);

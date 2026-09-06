@@ -13,6 +13,8 @@ export interface ComicPreferences {
   readonly spread: ComicSpread;
   readonly fit: ComicFit;
   readonly cropMargins: boolean;
+  /** 双页配对偏移一页（封面不独占）；缺省 false = 封面独占（现状默认）。 */
+  readonly spreadOffset: boolean;
 }
 
 export type ComicSpreadPreferences = Pick<ComicPreferences, 'mode' | 'spread'> & {
@@ -47,6 +49,7 @@ export function defaultComicPreferences(
     spread: isTouchPrimaryDocument() ? 'auto' : 'double',
     fit: 'screen',
     cropMargins: false,
+    spreadOffset: false,
   };
 }
 
@@ -74,6 +77,7 @@ export function parseComicPreferences(
     spread: parseSpread(value.spread),
     fit: parseFit(value),
     cropMargins: value.cropMargins === true,
+    spreadOffset: value.spreadOffset === true,
   };
 }
 
@@ -297,6 +301,7 @@ function normalizeComicPreferences(preferences: ComicPreferences): ComicPreferen
         : 'double',
     fit: parseFit({ fit: preferences.fit }),
     cropMargins: preferences.cropMargins === true,
+    spreadOffset: preferences.spreadOffset === true,
   };
 }
 

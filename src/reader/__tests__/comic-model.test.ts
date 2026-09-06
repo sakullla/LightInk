@@ -26,6 +26,7 @@ import {
   COMIC_PREFERENCES_STORAGE_KEY,
   advanceComicPage,
   clampComicViewOffset,
+  comicBookPreferencesKey,
   comicPageFromProgress,
   comicSpreadIndex,
   comicTurnPrefetchCenters,
@@ -37,6 +38,7 @@ import {
   saveComicPreferences,
   type ComicPreferences,
 } from '../comic-preferences.js';
+import { comicLayoutSpreadPrefs, type ComicSession } from '../comic/comic-session.js';
 
 function page(id: string, filename: string): ComicPageCandidate {
   return {
@@ -65,8 +67,9 @@ function comicPrefs(value: {
   spread: 'single' | 'double' | 'auto';
   fit: 'screen' | 'width' | 'height' | 'original';
   cropMargins?: boolean;
+  spreadOffset?: boolean;
 }): ComicPreferences {
-  return { cropMargins: false, ...value };
+  return { cropMargins: false, spreadOffset: false, ...value };
 }
 
 describe('comic page model', () => {
@@ -439,6 +442,67 @@ describe('comic preferences', () => {
     expect(comicVisiblePages(4, 5, flush)).toEqual([4]);
     expect(advanceComicPage(0, 5, 1, flush)).toBe(2);
     expect(advanceComicPage(2, 5, -1, flush)).toBe(0);
+  });
+
+  it('derives coverAlone from the persisted spreadOffset along the layout chain', () => {
+    const sessionFor = (spreadOffset: boolean): ComicSession =>
+      ({
+        preferences: comicPrefs({
+          mode: 'paged',
+          direction: 'ltr',
+          spread: 'double',
+          fit: 'screen',
+          spreadOffset,
+        }),
+        container: document.createElement('div'),
+      }) as unknown as ComicSession;
+    const flush = comicLayoutSpreadPrefs(sessionFor(true));
+    expect(flush.coverAlone).toBe(false);
+    expect(comicVisiblePages(0, 5, flush)).toEqual([0, 1]);
+    expect(comicVisiblePages(2, 5, flush)).toEqual([2, 3]);
+    const coverFirst = comicLayoutSpreadPrefs(sessionFor(false));
+    expect(coverFirst.coverAlone).toBe(true);
+    expect(comicVisiblePages(0, 5, coverFirst)).toEqual([0]);
+    expect(comicVisiblePages(1, 5, coverFirst)).toEqual([1, 2]);
+  });
+
+  it('persists the spread offset per book and reads legacy data without offset', () => {
+    const storage = memoryStorage();
+    const book = '0123456789abcdef';
+    const offsetPrefs = comicPrefs({
+      mode: 'paged',
+      direction: 'ltr',
+      spread: 'double',
+      fit: 'screen',
+      spreadOffset: true,
+    });
+    saveComicPreferences(storage, offsetPrefs, book);
+    expect(loadComicPreferences(storage, 'ltr', book)).toEqual(offsetPrefs);
+    const raw = storage.values.get(comicBookPreferencesKey(book));
+    expect(JSON.parse(raw ?? '{}').spreadOffset).toBe(true);
+    // 旧存储数据无 spreadOffset 字段：读出保持封面独占，行为不变。
+    storage.setItem(
+      comicBookPreferencesKey(book),
+      JSON.stringify({
+        mode: 'paged',
+        direction: 'rtl',
+        spread: 'double',
+        fit: 'height',
+        cropMargins: true,
+      }),
+    );
+    expect(loadComicPreferences(storage, 'ltr', book)).toEqual(
+      comicPrefs({
+        mode: 'paged',
+        direction: 'rtl',
+        spread: 'double',
+        fit: 'height',
+        cropMargins: true,
+      }),
+    );
+    expect(parseComicPreferences('{}').spreadOffset).toBe(false);
+    expect(parseComicPreferences(JSON.stringify({ spreadOffset: true })).spreadOffset).toBe(true);
+    expect(parseComicPreferences(JSON.stringify({ spreadOffset: 'yes' })).spreadOffset).toBe(false);
   });
 
   it('keeps a landscape bitmap alone so it does not split an artist spread', () => {

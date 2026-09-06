@@ -103,6 +103,7 @@ export interface ComicChromeDom {
   readonly singleButton: HTMLButtonElement;
   readonly doubleButton: HTMLButtonElement;
   readonly autoButton: HTMLButtonElement;
+  readonly offsetButton: HTMLButtonElement;
   readonly fitButton: HTMLButtonElement;
   readonly cropButton: HTMLButtonElement;
   readonly spreadGroup: HTMLElement;
@@ -205,6 +206,10 @@ export function buildComicChrome(
   const singleButton = chip(chineseChrome ? '单页' : '1', labels.singlePage);
   const doubleButton = chip(chineseChrome ? '双页' : '2', labels.doublePage);
   const autoButton = chip(chineseChrome ? '自动' : 'Auto', labels.autoPage ?? labels.doublePage);
+  const offsetButton = chip(
+    chineseChrome ? '偏移' : 'Offset',
+    labels.spreadOffset ?? labels.doublePage,
+  );
   const fitButton = chip(fitChipFor(labels, preferences.fit), fitLabelFor(labels, preferences.fit));
   const cropButton = chip(chineseChrome ? '裁边' : 'Crop', labels.cropMargins);
   const group = (...buttons: HTMLButtonElement[]): HTMLDivElement => {
@@ -214,7 +219,7 @@ export function buildComicChrome(
     element.append(...buttons);
     return element;
   };
-  const spreadGroup = group(singleButton, doubleButton, autoButton);
+  const spreadGroup = group(singleButton, doubleButton, autoButton, offsetButton);
   scrub.append(previousButton, sliderWrap, nextButton);
   modes.append(
     group(pagedButton, verticalButton),
@@ -240,6 +245,7 @@ export function buildComicChrome(
     singleButton,
     doubleButton,
     autoButton,
+    offsetButton,
     fitButton,
     cropButton,
     spreadGroup,
@@ -263,6 +269,13 @@ export function updateToolbar(session: ComicSession): void {
   session.cropButton.setAttribute('aria-pressed', String(preferences.cropMargins));
   session.spreadGroup.hidden = preferences.mode === 'strip';
   const spreadPrefs = comicLayoutSpreadPrefs(session);
+  // 偏移开关仅解析后双页可用；单页/条带下禁用并视为未按下。
+  const offsetEnabled = preferences.mode === 'paged' && spreadPrefs.spread === 'double';
+  session.offsetButton.disabled = !offsetEnabled;
+  session.offsetButton.setAttribute(
+    'aria-pressed',
+    String(offsetEnabled && preferences.spreadOffset),
+  );
   session.previousButton.disabled = session.currentPage <= 1;
   session.nextButton.disabled =
     advanceComicPage(

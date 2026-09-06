@@ -109,6 +109,7 @@ export interface ComicSession {
   readonly singleButton: HTMLButtonElement;
   readonly doubleButton: HTMLButtonElement;
   readonly autoButton: HTMLButtonElement;
+  readonly offsetButton: HTMLButtonElement;
   readonly fitButton: HTMLButtonElement;
   readonly cropButton: HTMLButtonElement;
   readonly spreadGroup: HTMLElement;
@@ -227,6 +228,8 @@ export function comicLayoutSpreadPrefs(session: ComicSession): ComicSpreadPrefer
   return {
     mode: session.preferences.mode,
     spread: resolveComicSpread(session.preferences.spread, comicViewportSize(session)),
+    // 偏移开启 = 封面不独占，双页配对从第一页起平移一页。
+    coverAlone: session.preferences.spreadOffset !== true,
   };
 }
 
