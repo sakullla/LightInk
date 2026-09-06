@@ -20,3 +20,4 @@ docs/requirements/*
 !docs/requirements/webdav-sync-groups-opds2.md
 !docs/requirements/2026-09-03-markdown-排版渲染优化.md
 /.idea/
+.claude/worktrees
