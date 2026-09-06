@@ -380,6 +380,16 @@ describe('createLibraryManage grouped settings page', () => {
       LABELS['zh-CN'].deeplUnconfigured,
     );
 
+    const configuredEvents: boolean[] = [];
+    const onDeeplConfigured = (event: Event): void => {
+      configuredEvents.push(
+        (event as CustomEvent<{ configured?: boolean }>).detail?.configured === true,
+      );
+    };
+    const onWindowDeeplConfigured = vi.fn();
+    document.addEventListener('lightink:reader-deepl-configured', onDeeplConfigured);
+    window.addEventListener('lightink:reader-deepl-configured', onWindowDeeplConfigured);
+
     input.value = 'secret-fx-key';
     manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-save')!.click();
     await Promise.resolve();
@@ -392,6 +402,8 @@ describe('createLibraryManage grouped settings page', () => {
     expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
       LABELS['zh-CN'].deeplConfigured,
     );
+    expect(configuredEvents).toEqual([true]);
+    expect(onWindowDeeplConfigured).not.toHaveBeenCalled();
 
     invokeMock.mockClear();
     invokeMock.mockImplementation(async (command: string) => {
@@ -407,6 +419,10 @@ describe('createLibraryManage grouped settings page', () => {
     expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
       LABELS['zh-CN'].deeplUnconfigured,
     );
+    expect(configuredEvents).toEqual([true, false]);
+    expect(onWindowDeeplConfigured).not.toHaveBeenCalled();
+    document.removeEventListener('lightink:reader-deepl-configured', onDeeplConfigured);
+    window.removeEventListener('lightink:reader-deepl-configured', onWindowDeeplConfigured);
     manage.destroy();
   });
 });

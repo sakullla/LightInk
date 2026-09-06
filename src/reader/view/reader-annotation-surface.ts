@@ -250,6 +250,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   };
 
   let lookupPanel: LookupPanel | null = null;
+  let lookupEpoch = 0;
   let deeplConfigured = false;
   let deeplConfiguredEpoch = 0;
 
@@ -283,10 +284,12 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   void refreshDeeplConfigured();
 
   const hideLookupPanel = (): void => {
+    lookupEpoch += 1;
     lookupPanel?.hide();
   };
 
   const destroyLookupPanel = (): void => {
+    lookupEpoch += 1;
     if (typeof document !== 'undefined') {
       document.removeEventListener(READER_DEEPL_CONFIGURED_EVENT, onDeeplConfigured);
     }
@@ -305,11 +308,15 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     return lookupPanel;
   };
 
+  const lookupRequestStale = (epoch: number, generation: number): boolean =>
+    ctx.destroyed || generation !== ctx.sessionLoad.generation() || epoch !== lookupEpoch;
+
   const runLookupOrTranslate = (
     kind: 'lookup' | 'translate',
     quote: string,
     generation: number,
   ): void => {
+    const epoch = ++lookupEpoch;
     const panel = ensureLookupPanel();
     const locale = readerAidLocale(ctx.t);
     const trimmed = quote.trim();
@@ -364,7 +371,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       try {
         if (kind === 'lookup') {
           const entries = await invokeWiktionaryLookup(trimmed, locale);
-          if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+          if (lookupRequestStale(epoch, generation)) {
             return;
           }
           const lines = formatLookupEntries(entries);
@@ -379,7 +386,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           return;
         }
         const text = await invokeDeepLTranslate(trimmed, locale);
-        if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+        if (lookupRequestStale(epoch, generation)) {
           return;
         }
         if (text === '') {
@@ -391,7 +398,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         }
         panel.show({ kind, quote: trimmed, status: 'ready', lines: [text] }, ctx.root);
       } catch (error) {
-        if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+        if (lookupRequestStale(epoch, generation)) {
           return;
         }
         panel.show(

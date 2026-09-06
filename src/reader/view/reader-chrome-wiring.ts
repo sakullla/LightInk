@@ -351,6 +351,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
 
   const returnToShelf = (): void => {
     ctx.sessionProgress.persistNow();
+    ctx.annotation.hideLookupPanel();
     closeChromePanel();
     ctx.readerChrome?.dismiss();
     syncChromeRevealAttr();

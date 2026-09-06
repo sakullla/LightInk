@@ -395,7 +395,7 @@ export function createLibraryManage(
         deeplConfiguredEpoch += 1;
         deeplConfigured = true;
         syncDeeplStatus();
-        dispatchDeeplConfigured(true, doc.defaultView ?? doc);
+        dispatchDeeplConfigured(true, doc);
       } catch (error) {
         options.notify(options.formatError(error), 'error');
       }
@@ -409,7 +409,7 @@ export function createLibraryManage(
         deeplConfiguredEpoch += 1;
         deeplConfigured = false;
         syncDeeplStatus();
-        dispatchDeeplConfigured(false, doc.defaultView ?? doc);
+        dispatchDeeplConfigured(false, doc);
       } catch (error) {
         options.notify(options.formatError(error), 'error');
       }

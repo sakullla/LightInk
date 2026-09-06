@@ -426,6 +426,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       beginOpen: () => {
         ctx.sessionAnnotation.invalidateWrites();
         ctx.annotation.hideSelectionToolbar();
+        ctx.annotation.hideLookupPanel();
         ctx.sessionProgress.beginSession();
         ctx.readerOutline = [];
         ctx.exportChapters = [];

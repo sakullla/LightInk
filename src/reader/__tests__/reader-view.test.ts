@@ -2651,6 +2651,107 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     ).toBeNull();
     await view.destroy();
   });
+
+  it('hides an in-page lookup result when load() begins a new book', async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'reader_wiktionary_lookup') {
+        return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
+      }
+      return undefined;
+    });
+    const { view, frames } = await loadAidBook();
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    visibleSelectionToolbar()!
+      .querySelector<HTMLButtonElement>('.lightink-reader-selection-action--lookup')!
+      .click();
+    await flushAid();
+    const panel = document.querySelector<HTMLElement>('.lightink-reader-lookup-panel');
+    expect(panel?.hidden).toBe(false);
+
+    await view.load('other.epub');
+    expect(document.querySelector<HTMLElement>('.lightink-reader-lookup-panel')?.hidden).toBe(true);
+    await view.destroy();
+  });
+
+  it('ignores a lookup completion after the panel is hidden', async () => {
+    vi.useFakeTimers();
+    let finishLookup: ((value: unknown) => void) | undefined;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'reader_wiktionary_lookup') {
+        return new Promise((resolve) => {
+          finishLookup = resolve;
+        });
+      }
+      return undefined;
+    });
+    const { view, frames } = await loadAidBook();
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    visibleSelectionToolbar()!
+      .querySelector<HTMLButtonElement>('.lightink-reader-selection-action--lookup')!
+      .click();
+    await flushAid();
+    const panel = document.querySelector<HTMLElement>('.lightink-reader-lookup-panel');
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.dataset.lookupStatus).toBe('loading');
+
+    panel!.querySelector<HTMLButtonElement>('.lightink-reader-lookup-close')!.click();
+    expect(panel!.hidden).toBe(true);
+    expect(finishLookup).toBeTypeOf('function');
+    finishLookup!({ entries: [{ partOfSpeech: 'noun', definitions: ['late gloss'] }] });
+    await flushAid();
+    expect(panel.hidden).toBe(true);
+    expect(panel.textContent).not.toContain('late gloss');
+    await view.destroy();
+  });
+
+  it('hides the lookup panel when returning to the shelf', async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'reader_wiktionary_lookup') {
+        return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
+      }
+      return undefined;
+    });
+    const onReturnToShelf = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [{ title: 'Chapter 1', html: '<p>chapter 1 selectable body</p>' }],
+      }),
+      onReturnToShelf,
+    });
+    await view.load('book.epub');
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 400 });
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    visibleSelectionToolbar()!
+      .querySelector<HTMLButtonElement>('.lightink-reader-selection-action--lookup')!
+      .click();
+    await flushAid();
+    const panel = document.querySelector<HTMLElement>('.lightink-reader-lookup-panel');
+    expect(panel?.hidden).toBe(false);
+
+    host.querySelector<HTMLButtonElement>('[data-reader-chrome-action="backToShelf"]')!.click();
+    expect(onReturnToShelf).toHaveBeenCalledTimes(1);
+    expect(panel?.hidden).toBe(true);
+    expect(view.state.phase).toBe('ready');
+    await view.destroy();
+  });
 });
 
 describe('搜索会话接线（session-search 收口：世代失效/无命中空态）', () => {
