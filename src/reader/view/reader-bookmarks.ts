@@ -54,6 +54,8 @@ export function setupReaderBookmarks(ctx: ReaderViewContext): ReaderBookmarksSur
   /** chrome 书签按钮两态 + 进度轨书签刻度随位置/集合刷新（setProgress 幂等）。 */
   const syncChromeBookmarkState = (): void => {
     ctx.readerChrome?.setBookmarked(bookmarkAtStatePosition(ctx.readerState) !== null);
+    // T4：漫画自有 chrome 的顶栏书签开关同源刷新（应用菜单 toggle 后保持两态一致）。
+    ctx.cbzHandle?.refreshBookmarkState?.();
     ctx.chrome.syncChromeProgress();
   };
 

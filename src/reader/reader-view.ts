@@ -43,6 +43,7 @@ import type {
 } from './types.js';
 import { extOfPath } from '../file/path-ext.js';
 import { advanceScrolledScroller } from '../ui/reading-layout.js';
+import { pagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import { playReaderPageTurn } from './reader-progress-ui.js';
 import { createFlowRenderer, readerPagedScroller } from './flow-renderer.js';
 import { createReaderSessionLoad } from './session/session-load.js';
@@ -311,7 +312,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     }
   }
 
-  // PDF 连续滚动：←/→ 滚到上/下一页，+/- 缩放，0 还原。
+  // PDF 连续滚动：←/→ 滚到上/下一页，+/- 缩放，0 还原。T4（ADR-6）漫画获得
+  // 同组无修饰缩放键（经 cbzHandle.adjustZoom）与 G 跳页（openPageJump）。
   ctx.root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && ctx.chrome.dismissReaderOverlayStep()) {
       event.preventDefault();
@@ -320,27 +322,55 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     // 方向键/空格/PageUp/Down 由窗口级 main.ts 统一翻页（R1：大纲/chrome/空白区
     // 同样生效）。这里只保留 PDF 缩放键；流式章节 iframe 内翻页仍由 flow-renderer 转发。
     const handle = ctx.pdfHandle;
-    if (handle === null) {
+    if (handle !== null) {
+      if (event.key === '+' || event.key === '=') {
+        if (handle.controller.zoomIn()) {
+          event.preventDefault();
+          ctx.paged.syncPageState();
+          void handle.rerender();
+        }
+      } else if (event.key === '-' || event.key === '_') {
+        if (handle.controller.zoomOut()) {
+          event.preventDefault();
+          ctx.paged.syncPageState();
+          void handle.rerender();
+        }
+      } else if (event.key === '0') {
+        if (handle.controller.resetScale()) {
+          event.preventDefault();
+          ctx.paged.syncPageState();
+          void handle.rerender();
+        }
+      }
+      return;
+    }
+    // 漫画裸键（T4，ADR-6）：无修饰才生效（Ctrl+=/-/0 走 shortcuts.ts 既有链
+    // 经 adjustDisplayScale→adjustZoom，不在此重复处理）；焦点在输入框/打开
+    // 模态（页码跳转对话框、TOC 搜索等）时不劫持，避免吞掉页码与搜索输入。
+    const comic = ctx.cbzHandle;
+    if (comic === null) {
+      return;
+    }
+    if (
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      pagingShouldIgnoreTarget(event.target)
+    ) {
       return;
     }
     if (event.key === '+' || event.key === '=') {
-      if (handle.controller.zoomIn()) {
-        event.preventDefault();
-        ctx.paged.syncPageState();
-        void handle.rerender();
-      }
+      event.preventDefault();
+      comic.adjustZoom('in');
     } else if (event.key === '-' || event.key === '_') {
-      if (handle.controller.zoomOut()) {
-        event.preventDefault();
-        ctx.paged.syncPageState();
-        void handle.rerender();
-      }
+      event.preventDefault();
+      comic.adjustZoom('out');
     } else if (event.key === '0') {
-      if (handle.controller.resetScale()) {
-        event.preventDefault();
-        ctx.paged.syncPageState();
-        void handle.rerender();
-      }
+      event.preventDefault();
+      comic.adjustZoom('reset');
+    } else if (event.key === 'g' || event.key === 'G') {
+      event.preventDefault();
+      comic.openPageJump?.();
     }
   });
 

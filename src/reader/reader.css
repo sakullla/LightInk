@@ -1746,6 +1746,35 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   white-space: nowrap;
 }
 
+/* T4（R2 书签）：顶栏书签开关——丝带图标两态，未书签线框、已书签填实并着
+ * 主题色（与 aria-pressed 同步，口径同通用 chrome 的书签开关）。 */
+.lightink-reader-comic-bookmark {
+  width: 34px;
+  padding: 0;
+}
+
+.lightink-reader-comic-bookmark::before {
+  content: '';
+  width: 1.05rem;
+  height: 1.05rem;
+  background: currentColor;
+  opacity: 0.78;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
+}
+
+.lightink-reader-comic-bookmark[aria-pressed='true'] {
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-comic-bookmark[aria-pressed='true']::before {
+  opacity: 1;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
+}
+
 .lightink-reader-comic-tool:focus-visible,
 .lightink-reader-comic-tool[aria-pressed='true'] {
   position: relative;

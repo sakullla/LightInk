@@ -67,6 +67,7 @@ import {
   revealChrome,
   scheduleChromeHide,
   setChromeVisible,
+  syncComicBookmarkButton,
   updateToolbar,
 } from '../comic/comic-chrome.js';
 import { createComicSlot, loadPage, releasePage } from '../comic/comic-pages.js';
@@ -124,6 +125,8 @@ export interface ComicToolbarLabels {
   readonly jumpToPageConfirm?: string;
   /** 越界/非数字页码反馈；`{total}` 替换为总页数。 */
   readonly jumpToPageInvalid?: string;
+  /** T4（ADR-5）：顶栏书签开关（当前页添加/移除书签）。 */
+  readonly bookmark?: string;
   readonly toggleChrome: string;
   readonly imageDecodeFailed: string;
   readonly nestedArchive: string;
@@ -150,6 +153,16 @@ export interface CbzRenderHandle {
   setPreferences(patch: ComicPreferencesPatch): void;
   hideChrome(): boolean;
   adjustZoom(action: 'in' | 'out' | 'reset'): void;
+  /**
+   * T4（ADR-6）：打开页码跳转对话框（与顶栏 pageButton 同入口，G 键消费）。
+   * 可选扩展：既有方法语义不变，缺省（旧 fake 句柄）时调用方跳过。
+   */
+  openPageJump?(): void;
+  /**
+   * T4（ADR-5）：按注入事实源重同步书签按钮两态（外部菜单 toggle 后由
+   * reader-bookmarks 调用）。可选扩展，语义同上。
+   */
+  refreshBookmarkState?(): void;
   destroy(): Promise<void>;
 }
 
@@ -165,6 +178,13 @@ export interface CbzRenderOptions {
   readonly progressId?: string | null;
   readonly labels?: Partial<ComicToolbarLabels>;
   readonly onReturnToShelf?: () => void;
+  /**
+   * T4（ADR-5）：当前页书签开关。装配方接线标注系统既有 toggle 路径
+   * （重开可跳回），本模块不新建存储；未注入时按钮为无操作。
+   */
+  readonly onToggleBookmark?: () => void;
+  /** 页（1 基）是否已有活书签（顶栏书签按钮 aria-pressed 的事实源）。 */
+  readonly isPageBookmarked?: (page: number) => boolean;
   /**
    * Android 系统栏成对显隐。未注入时走 MainActivity 桥 / Tauri invoke；
    * 失败忽略。桌面默认不调用。
@@ -352,6 +372,7 @@ function defaultLabels(): ComicToolbarLabels {
         jumpToPage: '跳转到页',
         jumpToPageConfirm: '跳转',
         jumpToPageInvalid: '请输入 1 到 {total} 之间的页码',
+        bookmark: '书签',
         toggleChrome: '显示或隐藏阅读控件',
         imageDecodeFailed: '无法解码此图片',
         nestedArchive: '内层归档',
@@ -383,6 +404,7 @@ function defaultLabels(): ComicToolbarLabels {
         jumpToPage: 'Go to page',
         jumpToPageConfirm: 'Go',
         jumpToPageInvalid: 'Enter a page number between 1 and {total}',
+        bookmark: 'Bookmark',
         toggleChrome: 'Show or hide reader controls',
         imageDecodeFailed: 'This image could not be decoded',
         nestedArchive: 'Nested archive',
@@ -470,6 +492,7 @@ export async function renderCbzInto(
       chrome: dom.chrome,
       topbar: dom.topbar,
       pageButton: dom.pageButton,
+      bookmarkButton: dom.bookmarkButton,
       pagesRoot: dom.pagesRoot,
       scroller: dom.pagesRoot,
       previousButton: dom.previousButton,
@@ -619,8 +642,19 @@ export async function renderCbzInto(
     session.cropButton.addEventListener('click', () =>
       setPreferences({ cropMargins: !session.preferences.cropMargins }),
     );
+    // T4（ADR-5）：书签开关走注入的标注系统 toggle 路径；toggle 同步更新
+    // 标注集合，回调返回后立即按事实源刷新按钮两态。
+    session.bookmarkButton.addEventListener('click', () => {
+      session.options.onToggleBookmark?.();
+      syncComicBookmarkButton(session);
+    });
     wireComicScrubNavigation(session, scrollToIndex);
     const pageJump = wireComicPageJump(session, scrollToIndex);
+    /** G 键等价入口（CbzRenderHandle.openPageJump）：与 pageButton 点击同机械。 */
+    const openPageJump = (): void => {
+      setChromeVisible(session, true);
+      pageJump.open();
+    };
 
     const handlers = createComicGestureHandlers(session);
     const onChromePointerEnter = (): void => revealChrome(session);
@@ -781,6 +815,8 @@ export async function renderCbzInto(
         );
         scheduleZoomRasterCommit(session); // 键盘连发放大同样在停顿后提交重栅格
       },
+      openPageJump,
+      refreshBookmarkState: () => syncComicBookmarkButton(session),
       destroy: async () => {
         signal?.removeEventListener('abort', onAbort);
         await destroy();

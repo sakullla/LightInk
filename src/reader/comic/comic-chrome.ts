@@ -91,6 +91,8 @@ export interface ComicChromeDom {
   readonly chrome: HTMLElement;
   readonly topbar: HTMLElement;
   readonly pageButton: HTMLButtonElement;
+  /** T4（ADR-5）：顶栏书签开关（当前页添加/移除书签，走标注系统）。 */
+  readonly bookmarkButton: HTMLButtonElement;
   readonly pagesRoot: HTMLElement;
   readonly previousButton: HTMLButtonElement;
   readonly nextButton: HTMLButtonElement;
@@ -162,6 +164,15 @@ export function buildComicChrome(
   pageButton.type = 'button';
   pageButton.className = 'lightink-reader-comic-page';
   pageButton.title = labels.jumpToPage ?? labels.pageSlider;
+  // T4（ADR-5）：顶栏书签开关（toolbarButton 惯例，pageButton 旁）。图标经
+  // reader.css 丝带 mask 呈现，两态由 aria-pressed 承载；事实源与点击行为
+  // 由装配经 CbzRenderOptions 注入（标注系统既有 toggle/查询能力）。
+  const bookmarkButton = toolbarButton(
+    '',
+    labels.bookmark ?? labels.pageSlider,
+    'lightink-reader-comic-bookmark',
+  );
+  bookmarkButton.setAttribute('aria-pressed', 'false');
   const bottombar = document.createElement('div');
   bottombar.className = 'lightink-reader-comic-bottombar';
   bottombar.setAttribute('role', 'toolbar');
@@ -178,7 +189,7 @@ export function buildComicChrome(
   backButton.textContent = labels.backToShelf;
   backButton.setAttribute('aria-label', labels.backToShelf);
   backButton.addEventListener('click', () => options.onReturnToShelf?.());
-  topbar.append(backButton, title, pageButton);
+  topbar.append(backButton, title, pageButton, bookmarkButton);
   bottombar.append(scrub, modes);
   chrome.append(topbar, bottombar);
   container.append(chrome, pagesRoot);
@@ -233,6 +244,7 @@ export function buildComicChrome(
     chrome,
     topbar,
     pageButton,
+    bookmarkButton,
     pagesRoot,
     previousButton,
     nextButton,
@@ -255,6 +267,7 @@ export function buildComicChrome(
 export function updateToolbar(session: ComicSession): void {
   const { labels, preferences } = session;
   const progress = `${session.currentPage} / ${session.images.length}`;
+  syncComicBookmarkButton(session); // 翻页/重排版后按当前页刷新书签两态
   session.verticalButton.setAttribute('aria-pressed', String(preferences.mode === 'strip'));
   session.pagedButton.setAttribute('aria-pressed', String(preferences.mode === 'paged'));
   session.ltrButton.setAttribute('aria-pressed', String(preferences.direction === 'ltr'));
@@ -306,6 +319,17 @@ export function updateToolbar(session: ComicSession): void {
   session.pageSlider.value = String(sliderValue);
   session.pageButton.textContent = progress;
   session.pageButton.setAttribute('aria-label', `${labels.pageSlider}: ${progress}`);
+}
+
+/**
+ * 书签按钮两态同步（T4，ADR-5）：aria-pressed 由装配注入的
+ * `options.isPageBookmarked` 事实源按当前页（1 基）裁决；未注入时恒为
+ * 未书签。翻页/重排版经 updateToolbar、点击 toggle 与外部（菜单）toggle
+ * 经 cbz 装配的 refreshBookmarkState 入口复用同一同步。
+ */
+export function syncComicBookmarkButton(session: ComicSession): void {
+  const bookmarked = session.options.isPageBookmarked?.(session.currentPage) ?? false;
+  session.bookmarkButton.setAttribute('aria-pressed', String(bookmarked));
 }
 
 /** 成对显隐系统栏：优先注入桥，缺省走 MainActivity 桥 / Tauri invoke。 */
