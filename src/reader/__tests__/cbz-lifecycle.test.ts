@@ -1192,6 +1192,49 @@ describe('CBZ page materialization', () => {
     await handle.destroy();
   });
 
+  it('lands progress jumps on offset spread starts when spreadOffset is on', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container);
+    const handle = await renderCbzInto(await buildCbz(5), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'double', spreadOffset: true }),
+    });
+
+    expect(handle.preferences.spreadOffset).toBe(true);
+    expect(visiblePageIndices(container)).toEqual(['0', '1']);
+    // 进度落点走偏移配对 [0,1][2,3][4]（reader-chrome-wiring goToProgress →
+    // scrollToProgress 与其余路径同口径）：终点落第 5 页；若按裸 preferences
+    // （coverAlone 未定义 = 封面独占）则是 [0][1,2][3,4]，终点落在第 4 页。
+    handle.scrollToProgress(0);
+    expect(handle.currentPage).toBe(1);
+    handle.scrollToProgress(0.5);
+    expect(handle.currentPage).toBe(3);
+    handle.scrollToProgress(1);
+    expect(handle.currentPage).toBe(5);
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['4']));
+    await handle.destroy();
+  });
+
+  it('resolves auto spread against the viewport before mapping progress to a page', async () => {
+    document.documentElement.lang = 'en';
+    const container = document.createElement('div');
+    sizeCanvas(container, 1200, 700); // 横屏视口 → 'auto' 解析为双页
+    const handle = await renderCbzInto(await buildCbz(5), container, undefined, {
+      preferenceStorage: pagedStorage({ spread: 'auto', spreadOffset: true }),
+    });
+
+    expect(container.dataset.comicSpread).toBe('double');
+    // 'auto' 先按视口解析再偏移配对 [0,1][2,3][4]：0.75 落第 3 页；0.85 落
+    // 第 5 页（未解析口径退化成全单页，0.85 会先算到第 4 页——即使随后被
+    // scrollToIndex 的 spreadStart 收敛也只到第 3 页，仍偏移整个跨页）。
+    handle.scrollToProgress(0.75);
+    expect(handle.currentPage).toBe(3);
+    handle.scrollToProgress(0.85);
+    expect(handle.currentPage).toBe(5);
+    await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['4']));
+    await handle.destroy();
+  });
+
   it('does not treat a scale-1 strip swipe as a page turn', async () => {
     const container = document.createElement('div');
     sizeCanvas(container);

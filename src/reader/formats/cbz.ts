@@ -750,7 +750,10 @@ export async function renderCbzInto(
           comicPageFromProgress(
             progress,
             session.images.length,
-            session.preferences,
+            // 与 applyLayout/scrollToIndex 等路径同口径：经 comicLayoutSpreadPrefs
+            // 派生 coverAlone（spreadOffset）并把 'auto' 按视口解析，否则滑杆
+            // 落点在开启偏移/横屏双页时会偏移整个跨页。
+            comicLayoutSpreadPrefs(session),
             session.landscapePages,
           ) - 1,
         );

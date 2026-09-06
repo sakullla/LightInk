@@ -22,6 +22,7 @@ const stubComicHandle = (): Record<string, unknown> => ({
     spread: 'single',
     fit: 'width',
     cropMargins: false,
+    spreadOffset: false,
   },
   scrollToPage: vi.fn(),
   scrollToProgress: vi.fn(),
