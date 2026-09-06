@@ -13,6 +13,23 @@ import {
   createReaderChrome,
   type ReaderChromeLabels,
 } from '../reader-chrome.js';
+import { resolveTextQuoteRange } from '../annotation-locator.js';
+import { READER_SPEAK_EVENT, readerAidLocale } from '../lookup-panel.js';
+import { sessionCapabilitiesForExtension } from '../session/adapters.js';
+import {
+  findQuoteOffsets,
+  sentenceSpansFromRange,
+  sentenceSpansFromRoot,
+  splitSentenceSpans,
+  type SentenceSpan,
+} from '../sentence-ranges.js';
+import {
+  clearFollowAlong,
+  createTtsController,
+  freezeFollowAlong,
+  type TtsFailure,
+} from '../tts.js';
+import { createTtsDock, type TtsDock } from '../tts-dock.js';
 import { syncReaderTitlebarReveal } from '../../ui/window-titlebar.js';
 import {
   activateReaderTocPanel,
@@ -78,6 +95,7 @@ function readerChromeCopy(
     ...take('reader.chrome.progress', 'progress'),
     ...take('reader.chrome.footer', 'footer'),
     ...take('reader.chrome.bookmarkTick', 'bookmarkTick'),
+    ...take('reader.lookup.speak', 'speak'),
   };
 }
 
@@ -116,6 +134,19 @@ export interface ReaderChromeWiringSurface {
   applyPaperTheme(theme: ReaderThemeId): void;
   onThemeChange(): void;
   mountReaderChrome(): void;
+}
+
+function ttsFailureCopy(
+  t: (key: MessageKey) => string,
+  reason: TtsFailure,
+): string {
+  if (reason === 'unavailable') {
+    return t('reader.tts.unavailable');
+  }
+  if (reason === 'noVoices') {
+    return t('reader.tts.noVoices');
+  }
+  return t('reader.tts.failed');
 }
 
 export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWiringSurface {
@@ -210,6 +241,180 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
 
   const comicChromeVisible = (): boolean =>
     ctx.pageHost.dataset.comicReader === 'true' && ctx.pageHost.dataset.comicChrome !== 'hidden';
+
+  const tts = createTtsController();
+  let ttsDock: TtsDock | null = null;
+
+  const pdfHasSpeakableText = (): boolean => {
+    const layers = ctx.pageHost.querySelectorAll('.pdfViewer .textLayer');
+    for (const layer of layers) {
+      if ((layer.textContent ?? '').trim() !== '') {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const speakAvailable = (): boolean => {
+    if (ctx.cbzHandle !== null) {
+      return false;
+    }
+    if (PAGE_EXTS.has(ctx.loadedExt) && ctx.loadedExt !== 'pdf') {
+      return false;
+    }
+    if (ctx.pdfHandle !== null || ctx.loadedExt === 'pdf') {
+      return pdfHasSpeakableText();
+    }
+    if (ctx.loadedExt === '') {
+      return false;
+    }
+    return (
+      sessionCapabilitiesForExtension(ctx.loadedExt)?.textSearch === 'flow-chapters' ||
+      ctx.flowChapterCount > 0
+    );
+  };
+
+  const ensureTtsDock = (): TtsDock => {
+    if (ttsDock === null) {
+      ttsDock = createTtsDock({
+        t: ctx.t,
+        onPause: () => tts.pause(),
+        onResume: () => tts.resume(),
+        onStop: () => {
+          tts.stop();
+          freezeFollowAlong();
+          ttsDock?.hide();
+        },
+        onRate: (rate) => tts.setRate(rate),
+      });
+    }
+    return ttsDock;
+  };
+
+  const stopSpeakSession = (): void => {
+    tts.stop();
+    ttsDock?.hide();
+  };
+
+  const showTtsFailure = (reason: TtsFailure): void => {
+    ensureTtsDock().showError(ctx.root, ttsFailureCopy(ctx.t, reason));
+  };
+
+  const beginSpeak = (sentences: readonly SentenceSpan[], root: Node | null): void => {
+    const dock = ensureTtsDock();
+    const result = tts.start({
+      sentences,
+      root,
+      lang: readerAidLocale(ctx.t),
+      onEnd: () => {
+        freezeFollowAlong();
+        dock.hide();
+      },
+      onFailure: (reason) => {
+        showTtsFailure(reason);
+      },
+    });
+    if (!result.ok) {
+      showTtsFailure(result.reason ?? 'failed');
+      return;
+    }
+    dock.show(ctx.root);
+  };
+
+  const flowChapterBody = (chapter: number): HTMLElement | null => {
+    const article = ctx.scrollHost.querySelector<HTMLElement>(
+      `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
+    );
+    return (
+      article?.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')?.contentDocument
+        ?.body ?? null
+    );
+  };
+
+  const currentSpeakRoot = (): { root: HTMLElement; fromOffset: number } | null => {
+    if (ctx.cbzHandle !== null) {
+      return null;
+    }
+    if (ctx.pdfHandle !== null) {
+      const page = ctx.pdfHandle.controller.page;
+      const layer = ctx.pageHost.querySelector<HTMLElement>(
+        `.pdfViewer .page[data-page-number="${page}"] .textLayer`,
+      );
+      if (layer === null || (layer.textContent ?? '').trim() === '') {
+        return null;
+      }
+      return { root: layer, fromOffset: 0 };
+    }
+    const locator = ctx.annotation.currentPositionLocator();
+    const chapter =
+      'chapter' in locator && typeof locator.chapter === 'number'
+        ? locator.chapter
+        : ctx.dom.firstVisibleChapter();
+    const body = flowChapterBody(chapter);
+    if (body === null) {
+      return null;
+    }
+    const fromOffset =
+      'start' in locator && typeof locator.start === 'number' ? locator.start : 0;
+    return { root: body, fromOffset };
+  };
+
+  const allSpeakRoots = (): HTMLElement[] => {
+    if (ctx.pdfHandle !== null) {
+      return [...ctx.pageHost.querySelectorAll<HTMLElement>('.pdfViewer .textLayer')];
+    }
+    const bodies: HTMLElement[] = [];
+    for (const frame of ctx.scrollHost.querySelectorAll<HTMLIFrameElement>(
+      '.lightink-reader-chapter-frame',
+    )) {
+      const body = frame.contentDocument?.body;
+      if (body !== null && body !== undefined) {
+        bodies.push(body);
+      }
+    }
+    return bodies;
+  };
+
+  const speakSelection = (quote: string): void => {
+    const trimmed = quote.trim();
+    if (trimmed === '') {
+      showTtsFailure('empty');
+      return;
+    }
+    for (const root of allSpeakRoots()) {
+      const resolved = resolveTextQuoteRange(root, {
+        start: 0,
+        end: trimmed.length,
+        quote: trimmed,
+        prefix: '',
+        suffix: '',
+      });
+      if (resolved !== null) {
+        beginSpeak(sentenceSpansFromRange(root, resolved), root);
+        return;
+      }
+      const offsets = findQuoteOffsets(root, trimmed);
+      if (offsets !== null) {
+        beginSpeak(sentenceSpansFromRoot(root, offsets.start, offsets.end), root);
+        return;
+      }
+    }
+    beginSpeak(splitSentenceSpans(trimmed), null);
+  };
+
+  const speakFromPosition = (): void => {
+    const current = currentSpeakRoot();
+    if (current === null) {
+      showTtsFailure('empty');
+      return;
+    }
+    beginSpeak(sentenceSpansFromRoot(current.root, current.fromOffset), current.root);
+  };
+
+  const onSpeakEvent = (event: Event): void => {
+    const quote = (event as CustomEvent<{ quote?: string }>).detail?.quote ?? '';
+    speakSelection(quote);
+  };
 
   // 本函数是 chromeRevealObserver/pageChromeObserver 的回调；这里的每次 DOM
   // 属性写都必须是"变化才写"，否则等值 setAttribute 触发新 mutation record，
@@ -331,6 +536,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       ctx.annotation.hideLookupPanel();
       ctx.annotation.hideSelectionToolbar();
       closeChromePanel();
+      stopSpeakSession();
       ctx.readerChrome?.dismiss();
       syncChromeRevealAttr();
       return;
@@ -353,6 +559,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     ctx.sessionProgress.persistNow();
     ctx.annotation.hideLookupPanel();
     closeChromePanel();
+    stopSpeakSession();
     ctx.readerChrome?.dismiss();
     syncChromeRevealAttr();
     ctx.deps.onReturnToShelf?.();
@@ -607,6 +814,15 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       touchMode: readerChromeTouchMode(),
       locale: ctx.t('reader.chrome.bookmark') === 'Bookmark' ? 'en' : 'zh-CN',
       labels: readerChromeCopy(ctx.t),
+      speakAvailable,
+      onSpeak: speakFromPosition,
+      onDestroy: () => {
+        ctx.root.removeEventListener(READER_SPEAK_EVENT, onSpeakEvent);
+        stopSpeakSession();
+        clearFollowAlong();
+        ttsDock?.destroy();
+        ttsDock = null;
+      },
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
@@ -642,6 +858,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         ctx.pageHost.dataset.comicReader === 'true' || ctx.root.dataset.comicReader === 'true',
       onSeekProgress: goToProgress,
     });
+    ctx.root.addEventListener(READER_SPEAK_EVENT, onSpeakEvent);
     syncChromeProgress();
     pinChromeDocks();
     ctx.root.append(ctx.tocPanel, ctx.typePanel);

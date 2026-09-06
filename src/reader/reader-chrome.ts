@@ -39,6 +39,8 @@ export interface ReaderChromeLabels {
   readonly footer: string;
   /** 书签刻度按钮的 aria-label（进度轨上的可点击书签刻度）。 */
   readonly bookmarkTick: string;
+  /** Footer speak control copy; not a chrome action. */
+  readonly speak: string;
 }
 
 export interface ReaderChromeProgress {
@@ -76,6 +78,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     progress: 'Reading progress',
     footer: 'Reading progress',
     bookmarkTick: 'Jump to bookmark',
+    speak: 'Speak',
   },
   'zh-CN': {
     backToShelf: '返回书架',
@@ -87,6 +90,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     progress: '阅读进度',
     footer: '阅读进度',
     bookmarkTick: '跳到书签',
+    speak: '朗读',
   },
 };
 
@@ -137,6 +141,13 @@ export interface ReaderChromeDeps {
   touchMode?: boolean;
   /** Drag the footer scrubber to a 0..1 book position. */
   onSeekProgress?: (progress: number) => void;
+  /**
+   * Optional footer speak control (ADR-4). Extra DOM only — never a
+   * `READER_CHROME_ACTIONS` member. Comics / textless PDFs pass false.
+   */
+  speakAvailable?: () => boolean;
+  onSpeak?: () => void;
+  onDestroy?: () => void;
 }
 
 export interface ReaderChrome {
@@ -367,6 +378,13 @@ export function createReaderChrome(
   const typographyButton = makeButton('typography', labels.typography);
   const bookmarkButton = makeButton('bookmark', labels.bookmark);
   const searchButton = makeButton('search', labels.search);
+  const speakButton = document.createElement('button');
+  speakButton.type = 'button';
+  speakButton.className = 'lightink-reader-chrome-action lightink-reader-chrome-speak';
+  speakButton.dataset.readerTtsSpeak = 'true';
+  speakButton.textContent = labels.speak;
+  speakButton.setAttribute('aria-label', labels.speak);
+  applyButtonLayout(speakButton, touchMode);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
@@ -507,6 +525,17 @@ export function createReaderChrome(
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
     for (const button of [backButton, tocButton, typographyButton, bookmarkButton, searchButton]) {
       button.hidden = !revealed;
+    }
+    const speakOn = deps.speakAvailable?.() === true;
+    speakButton.hidden = !revealed || !speakOn;
+    if (!speakOn) {
+      speakButton.remove();
+    } else if (touchMode) {
+      if (!tools.contains(speakButton)) {
+        tools.appendChild(speakButton);
+      }
+    } else if (speakButton.parentNode !== footer) {
+      footer.appendChild(speakButton);
     }
   };
 
@@ -745,6 +774,11 @@ export function createReaderChrome(
     deps.toggleBookmark?.();
     syncBookmarkState();
   });
+  speakButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deps.onSpeak?.();
+  });
 
   const onDockEnter = (): void => {
     pointerInsideBar = true;
@@ -931,10 +965,12 @@ export function createReaderChrome(
     destroy() {
       destroyed = true;
       clearHideTimer();
+      deps.onDestroy?.();
       detach();
       element.remove();
       footer.remove();
       whisper.remove();
+      speakButton.remove();
       revealed = false;
       syncDom();
     },

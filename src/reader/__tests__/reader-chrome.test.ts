@@ -1033,3 +1033,66 @@ describe('createReaderChrome footer and whisper', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 });
+
+describe('createReaderChrome speak control (ADR-4)', () => {
+  it('keeps READER_CHROME_ACTIONS as the original five', () => {
+    expect([...READER_CHROME_ACTIONS]).toEqual([
+      'backToShelf',
+      'toc',
+      'typography',
+      'bookmark',
+      'search',
+    ]);
+    expect(READER_CHROME_ACTIONS).not.toContain('speak');
+  });
+
+  it('adds a footer speak button outside the chrome action enum when available', () => {
+    const onSpeak = vi.fn();
+    const { host, chrome, deps } = mount({
+      speakAvailable: () => true,
+      onSpeak,
+    });
+    chrome.reveal();
+    const speak = host.querySelector<HTMLButtonElement>('[data-reader-tts-speak]');
+    expect(speak).not.toBeNull();
+    expect(speak!.hidden).toBe(false);
+    expect(speak!.hasAttribute('data-reader-chrome-action')).toBe(false);
+    expect(chrome.footer.contains(speak!)).toBe(true);
+    expect(chrome.bar.contains(speak!)).toBe(false);
+    expect(labeledButtons(host)).toHaveLength(5);
+    expect(
+      [...host.querySelectorAll('[data-reader-chrome-action]')].map(
+        (button) => (button as HTMLElement).dataset.readerChromeAction,
+      ),
+    ).toEqual([...READER_CHROME_ACTIONS]);
+    speak!.click();
+    expect(onSpeak).toHaveBeenCalledTimes(1);
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('does not gain a speak control for comics or textless PDFs', () => {
+    const { host, chrome } = mount({
+      speakAvailable: () => false,
+      suppressProgressDock: () => true,
+    });
+    chrome.reveal();
+    expect(host.querySelector('[data-reader-tts-speak]')).toBeNull();
+    expect(
+      [...host.querySelectorAll('[data-reader-chrome-action]')].map(
+        (button) => (button as HTMLElement).dataset.readerChromeAction,
+      ),
+    ).toEqual([...READER_CHROME_ACTIONS]);
+  });
+
+  it('places the speak control in the touch footer tools cluster without a chrome action token', () => {
+    const { host, chrome } = mount({
+      touchMode: true,
+      speakAvailable: () => true,
+    });
+    chrome.reveal();
+    const speak = host.querySelector<HTMLButtonElement>('[data-reader-tts-speak]');
+    expect(speak).not.toBeNull();
+    expect(footerThumbZone(chrome.footer).contains(speak!)).toBe(true);
+    expect(speak!.hasAttribute('data-reader-chrome-action')).toBe(false);
+  });
+});
