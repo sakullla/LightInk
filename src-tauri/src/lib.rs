@@ -17,6 +17,7 @@ mod identifiers;
 mod library;
 mod managed;
 mod opds;
+mod reader_aid;
 mod recents;
 mod remote;
 mod snapshot;
@@ -127,6 +128,11 @@ pub fn run() {
             remote::remote_cancel,
             remote::remote_store_credential,
             remote::remote_forget_credential,
+            reader_aid::reader_wiktionary_lookup,
+            reader_aid::reader_deepl_translate,
+            reader_aid::reader_deepl_configured,
+            reader_aid::reader_deepl_store_key,
+            reader_aid::reader_deepl_forget_key,
             webdav::sync_get_profile,
             webdav::sync_save_profile,
             webdav::sync_test_profile,
