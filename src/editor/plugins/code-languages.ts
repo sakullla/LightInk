@@ -11,22 +11,43 @@ type LanguageLoader = () => Promise<LanguageModule>;
 const LANGUAGE_LOADERS = {
   bash: () => import('highlight.js/lib/languages/bash'),
   c: () => import('highlight.js/lib/languages/c'),
+  clojure: () => import('highlight.js/lib/languages/clojure'),
+  cmake: () => import('highlight.js/lib/languages/cmake'),
   cpp: () => import('highlight.js/lib/languages/cpp'),
   csharp: () => import('highlight.js/lib/languages/csharp'),
   css: () => import('highlight.js/lib/languages/css'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  diff: () => import('highlight.js/lib/languages/diff'),
   dockerfile: () => import('highlight.js/lib/languages/dockerfile'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
   go: () => import('highlight.js/lib/languages/go'),
+  graphql: () => import('highlight.js/lib/languages/graphql'),
+  groovy: () => import('highlight.js/lib/languages/groovy'),
+  haskell: () => import('highlight.js/lib/languages/haskell'),
+  http: () => import('highlight.js/lib/languages/http'),
+  ini: () => import('highlight.js/lib/languages/ini'),
   java: () => import('highlight.js/lib/languages/java'),
   javascript: () => import('highlight.js/lib/languages/javascript'),
   json: () => import('highlight.js/lib/languages/json'),
+  julia: () => import('highlight.js/lib/languages/julia'),
   kotlin: () => import('highlight.js/lib/languages/kotlin'),
+  less: () => import('highlight.js/lib/languages/less'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  makefile: () => import('highlight.js/lib/languages/makefile'),
   markdown: () => import('highlight.js/lib/languages/markdown'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  nim: () => import('highlight.js/lib/languages/nim'),
+  objectivec: () => import('highlight.js/lib/languages/objectivec'),
+  perl: () => import('highlight.js/lib/languages/perl'),
   php: () => import('highlight.js/lib/languages/php'),
   powershell: () => import('highlight.js/lib/languages/powershell'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
   python: () => import('highlight.js/lib/languages/python'),
+  r: () => import('highlight.js/lib/languages/r'),
   ruby: () => import('highlight.js/lib/languages/ruby'),
   rust: () => import('highlight.js/lib/languages/rust'),
   scala: () => import('highlight.js/lib/languages/scala'),
+  scss: () => import('highlight.js/lib/languages/scss'),
   shell: () => import('highlight.js/lib/languages/shell'),
   sql: () => import('highlight.js/lib/languages/sql'),
   swift: () => import('highlight.js/lib/languages/swift'),
@@ -46,32 +67,55 @@ const LANGUAGE_ALIASES: Readonly<Record<string, HighlightLanguage>> = {
   'c#': 'csharp',
   'c++': 'cpp',
   cjs: 'javascript',
+  clj: 'clojure',
   console: 'shell',
   cs: 'csharp',
   cts: 'typescript',
   docker: 'dockerfile',
+  edn: 'clojure',
+  ex: 'elixir',
+  exs: 'elixir',
   golang: 'go',
+  gql: 'graphql',
   h: 'c',
   'h++': 'cpp',
   hh: 'cpp',
   hpp: 'cpp',
+  hs: 'haskell',
   htm: 'xml',
   html: 'xml',
+  https: 'http',
   hxx: 'cpp',
   ipython: 'python',
   irb: 'ruby',
+  jl: 'julia',
   js: 'javascript',
   jsonc: 'json',
   jsp: 'java',
   jsx: 'javascript',
   kt: 'kotlin',
   kts: 'kotlin',
+  mak: 'makefile',
+  make: 'makefile',
   md: 'markdown',
+  mk: 'makefile',
   mkd: 'markdown',
   mkdown: 'markdown',
   mjs: 'javascript',
+  mm: 'objectivec',
   mts: 'typescript',
+  nginxconf: 'nginx',
+  nimrod: 'nim',
+  'obj-c': 'objectivec',
+  'obj-c++': 'objectivec',
+  objc: 'objectivec',
+  'objective-c++': 'objectivec',
+  patch: 'diff',
+  pl: 'perl',
   plist: 'xml',
+  pluto: 'lua',
+  pm: 'perl',
+  proto: 'protobuf',
   ps: 'powershell',
   ps1: 'powershell',
   pwsh: 'powershell',
@@ -82,8 +126,11 @@ const LANGUAGE_ALIASES: Readonly<Record<string, HighlightLanguage>> = {
   sh: 'bash',
   shellsession: 'shell',
   svg: 'xml',
+  svelte: 'xml',
+  toml: 'ini',
   ts: 'typescript',
   tsx: 'typescript',
+  vue: 'xml',
   wsf: 'xml',
   xhtml: 'xml',
   xjb: 'xml',
@@ -96,6 +143,7 @@ const LANGUAGE_ALIASES: Readonly<Record<string, HighlightLanguage>> = {
 const LANGUAGE_DEPENDENCIES: Partial<
   Readonly<Record<HighlightLanguage, readonly HighlightLanguage[]>>
 > = {
+  dart: ['markdown'],
   dockerfile: ['bash'],
   markdown: ['xml'],
   shell: ['bash'],
@@ -110,6 +158,22 @@ export function resolveHighlightLanguage(tag: string): HighlightLanguage | null 
     return normalized as HighlightLanguage;
   }
   return LANGUAGE_ALIASES[normalized] ?? null;
+}
+
+/**
+ * True when the picker name or any alias that resolves to it contains `query`.
+ * `query` must already be trimmed and lowercased.
+ */
+export function languageMatchesQuery(name: string, query: string): boolean {
+  if (name.toLowerCase().includes(query)) {
+    return true;
+  }
+  for (const [alias, canonical] of Object.entries(LANGUAGE_ALIASES)) {
+    if (canonical === name && alias.includes(query)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isHighlightLanguageLoaded(language: HighlightLanguage): boolean {

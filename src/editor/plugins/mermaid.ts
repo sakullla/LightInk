@@ -12,10 +12,11 @@
  *     ```mermaid {config} are treated as mermaid too (documented leniency;
  *     mermaid's own directive syntax is `%%{init:…}%%` inside the source).
  *
- *   - Coexistence with code-highlight.ts: `mermaid` is NOT a registered
- *     hljs language, so `resolveLanguage('mermaid')` returns null and the
- *     highlight pass emits no decorations for mermaid blocks — no conflict.
- *     This plugin is the sole decorator of mermaid code_blocks.
+ *   - Coexistence with code-highlight.ts: `mermaid` is a special fence
+ *     (`resolveLanguage('mermaid') === 'mermaid'`), not an hljs grammar.
+ *     `tokenizeCode` finds no registered language, so the highlight pass
+ *     emits no decorations for mermaid blocks — no conflict. This plugin
+ *     is the sole decorator of mermaid code_blocks.
  *
  *   - mermaid (~500KB+) is loaded **lazily**: `createMermaidLoader` wraps a
  *     memoized dynamic `import('mermaid')`, invoked by the ProseMirror

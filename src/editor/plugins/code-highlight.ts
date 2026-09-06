@@ -20,6 +20,7 @@ import {
   ensureHighlightLanguage,
   highlightEngine as hljs,
   isHighlightLanguageLoaded,
+  languageMatchesQuery,
   resolveHighlightLanguage,
   SUPPORTED_HIGHLIGHT_LANGUAGES,
   type HighlightLanguage,
@@ -325,6 +326,7 @@ export function languageDisplayLabel(value: string): string {
 
 /**
  * Filter registered languages by query (case-insensitive substring).
+ * Matches canonical names and aliases (e.g. `toml` → ini, `vue` → xml).
  * Empty query returns the full list. 纯文本 is always prepended by callers.
  */
 export function filterLanguages(
@@ -335,7 +337,7 @@ export function filterLanguages(
   if (q === '') {
     return languages;
   }
-  return languages.filter((name) => name.toLowerCase().includes(q));
+  return languages.filter((name) => languageMatchesQuery(name, q));
 }
 
 /** Whether the plain-text option matches the current filter query. */

@@ -73,6 +73,32 @@ describe('resolveLanguage', () => {
       'dockerfile',
       'powershell',
       'markdown',
+      'ini',
+      'toml',
+      'graphql',
+      'scss',
+      'less',
+      'lua',
+      'dart',
+      'r',
+      'julia',
+      'haskell',
+      'elixir',
+      'clojure',
+      'perl',
+      'diff',
+      'makefile',
+      'cmake',
+      'protobuf',
+      'proto',
+      'nginx',
+      'http',
+      'objectivec',
+      'objc',
+      'groovy',
+      'nim',
+      'vue',
+      'svelte',
     ];
     for (const fence of fences) {
       expect(resolveLanguage(fence), `fence ${fence}`).not.toBeNull();
@@ -88,6 +114,11 @@ describe('resolveLanguage', () => {
     expect(resolveLanguage('cs')).toBe('csharp');
     expect(resolveLanguage('golang')).toBe('go');
     expect(resolveLanguage('html')).toBe('xml');
+    expect(resolveLanguage('toml')).toBe('ini');
+    expect(resolveLanguage('proto')).toBe('protobuf');
+    expect(resolveLanguage('objc')).toBe('objectivec');
+    expect(resolveLanguage('vue')).toBe('xml');
+    expect(resolveLanguage('svelte')).toBe('xml');
   });
 
   it('is case-insensitive and ignores trailing info-string attributes', () => {
@@ -101,8 +132,13 @@ describe('resolveLanguage', () => {
     expect(resolveLanguage(null)).toBeNull();
     expect(resolveLanguage(undefined)).toBeNull();
     expect(resolveLanguage('text')).toBeNull();
+    expect(resolveLanguage('plain')).toBeNull();
     expect(resolveLanguage('plaintext')).toBeNull();
     expect(resolveLanguage('foobar')).toBeNull();
+    expect(resolveLanguage('not-a-real-lang')).toBeNull();
+    expect(resolveLanguage('hcl')).toBeNull();
+    expect(resolveLanguage('zig')).toBeNull();
+    expect(resolveLanguage('tf')).toBeNull();
   });
 });
 
@@ -118,7 +154,21 @@ describe('listSupportedLanguages', () => {
     expect(langs).toContain('typescript');
     expect(langs).toContain('kotlin');
     expect(langs).toContain('dockerfile');
+    expect(langs).toContain('ini');
+    expect(langs).toContain('graphql');
+    expect(langs).toContain('scss');
+    expect(langs).toContain('protobuf');
+    expect(langs).toContain('objectivec');
+    expect(langs).toContain('mermaid');
+    expect(langs).toContain('math');
+    expect(langs).toContain('latex');
+    expect(langs).toContain('katex');
     expect(langs).not.toContain('plaintext');
+    expect(langs).not.toContain('vue');
+    expect(langs).not.toContain('svelte');
+    expect(langs).not.toContain('toml');
+    expect(langs).not.toContain('hcl');
+    expect(langs).not.toContain('zig');
     // Sorted for stable picker UI.
     expect(langs).toEqual([...langs].sort((a, b) => a.localeCompare(b)));
   });
@@ -149,6 +199,27 @@ describe('highlightCode', () => {
     { language: 'json', code: '{"a": 1}', marker: 'hljs-attr' },
     { language: 'yaml', code: 'key: value', marker: 'hljs-attr' },
     { language: 'kotlin', code: 'fun main() { val x = 1 }', marker: 'hljs-keyword' },
+    { language: 'ini', code: '[section]\nkey = value', marker: 'hljs-section' },
+    { language: 'graphql', code: 'type Query { foo: String }', marker: 'hljs-keyword' },
+    { language: 'scss', code: '$color: red; body { color: $color; }', marker: 'hljs-variable' },
+    { language: 'less', code: '@color: red; body { color: @color; }', marker: 'hljs-variable' },
+    { language: 'lua', code: 'local x = 1', marker: 'hljs-keyword' },
+    { language: 'dart', code: 'void main() {}', marker: 'hljs-keyword' },
+    { language: 'r', code: 'x <- function(y) { y }', marker: 'hljs-keyword' },
+    { language: 'julia', code: 'function f()\nend', marker: 'hljs-keyword' },
+    { language: 'haskell', code: 'foo :: Int -> Int', marker: 'hljs-title' },
+    { language: 'elixir', code: 'def foo do\nend', marker: 'hljs-keyword' },
+    { language: 'clojure', code: '(def x 1)', marker: 'hljs-keyword' },
+    { language: 'perl', code: 'my $x = 1;', marker: 'hljs-keyword' },
+    { language: 'diff', code: '--- a\n+++ b\n@@ -1 +1 @@\n-foo\n+bar', marker: 'hljs-addition' },
+    { language: 'makefile', code: 'all:\n\techo hi', marker: 'hljs-section' },
+    { language: 'cmake', code: 'project(Foo)', marker: 'hljs-keyword' },
+    { language: 'protobuf', code: 'message Foo { required string name = 1; }', marker: 'hljs-keyword' },
+    { language: 'nginx', code: 'server { listen 80; }', marker: 'hljs-attribute' },
+    { language: 'http', code: 'GET / HTTP/1.1\nHost: example.com\n', marker: 'hljs-attribute' },
+    { language: 'objectivec', code: '@interface Foo : NSObject\n@end', marker: 'hljs-keyword' },
+    { language: 'groovy', code: 'def x = 1', marker: 'hljs-keyword' },
+    { language: 'nim', code: 'var x = 1', marker: 'hljs-keyword' },
   ];
 
   it('falls back to plain text until a supported grammar finishes loading', async () => {
@@ -181,6 +252,28 @@ describe('highlightCode', () => {
   it('falls back to plain text for an unknown language name', () => {
     const code = 'whatever content';
     expect(highlightCode('foobar', code)).toBe(escapeHtml(code));
+    expect(highlightCode('not-a-real-lang', code)).toBe(escapeHtml(code));
+    expect(highlightCode('not-a-real-lang', code)).not.toContain('hljs-');
+  });
+
+  it('highlights vue and svelte fences via the xml grammar', async () => {
+    await expect(ensureHighlightLanguage('xml')).resolves.toBe(true);
+    const code = '<template><div class="a">hi</div></template>';
+    expect(resolveLanguage('vue')).toBe('xml');
+    expect(resolveLanguage('svelte')).toBe('xml');
+    const html = highlightCode('xml', code);
+    expect(html).toContain('hljs-tag');
+    expect(html).toContain('<span class="hljs-');
+    expect(html).not.toBe(escapeHtml(code));
+  });
+
+  it('highlights toml / proto / objc aliases via their canonical grammars', async () => {
+    await expect(ensureHighlightLanguage('ini')).resolves.toBe(true);
+    await expect(ensureHighlightLanguage('protobuf')).resolves.toBe(true);
+    await expect(ensureHighlightLanguage('objectivec')).resolves.toBe(true);
+    expect(highlightCode('ini', '[pkg]\nname = "a"')).toContain('hljs-');
+    expect(highlightCode('protobuf', 'message Foo {}')).toContain('hljs-');
+    expect(highlightCode('objectivec', '@interface Foo\n@end')).toContain('hljs-');
   });
 
   it('escapes HTML in code (no <script> injection) on both paths', async () => {
@@ -385,6 +478,16 @@ describe('language picker helpers', () => {
     expect(filterLanguages('zzz', langs)).toEqual([]);
   });
 
+  it('filterLanguages matches aliases as well as canonical names', () => {
+    expect(filterLanguages('toml')).toContain('ini');
+    expect(filterLanguages('vue')).toContain('xml');
+    expect(filterLanguages('svelte')).toContain('xml');
+    expect(filterLanguages('objc')).toContain('objectivec');
+    expect(filterLanguages('proto')).toContain('protobuf');
+    expect(filterLanguages('gql')).toContain('graphql');
+    expect(filterLanguages('ts')).toContain('typescript');
+  });
+
   it('plainLanguageMatches keeps Plain text visible for empty/partial queries', () => {
     expect(plainLanguageMatches('')).toBe(true);
     expect(plainLanguageMatches('plain')).toBe(true);
@@ -540,7 +643,9 @@ describe('codeHighlightPlugin (Milkdown wiring)', () => {
   it('produces no decorations for unlabeled or unknown-language blocks', () => {
     const doc = codeDoc(
       { language: '', code: 'const x = 1;' },
+      { language: 'plain', code: 'const x = 1;' },
       { language: 'foobar', code: 'const x = 1;' },
+      { language: 'not-a-real-lang', code: 'const x = 1;' },
     );
     expect(buildCodeDecorations(doc).find()).toHaveLength(0);
   });
