@@ -2024,6 +2024,26 @@ html[data-touch-primary] .lightink-library-header {
   height: 1rem;
 }
 
+.lightink-library-deepl-hint,
+.lightink-library-deepl-status {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lightink-library-deepl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lightink-library-deepl-actions button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 10px;
+}
+
 .lightink-library-appearance,
 .lightink-library-reader-prefs {
   display: flex;

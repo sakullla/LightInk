@@ -33,6 +33,21 @@ import {
   createSelectionToolbar,
   selectionClientRect,
 } from '../selection-toolbar.js';
+import {
+  createLookupPanel,
+  formatLookupEntries,
+  invokeDeepLConfigured,
+  invokeDeepLTranslate,
+  invokeWiktionaryLookup,
+  lookupQuoteTooLong,
+  lookupTooLongCopy,
+  readerAidErrorMessage,
+  readerAidLocale,
+  READER_DEEPL_CONFIGURED_EVENT,
+  READER_SPEAK_EVENT,
+  translateQuoteTooLong,
+  type LookupPanel,
+} from '../lookup-panel.js';
 import { showNoteDialog } from '../note-dialog.js';
 import { sessionCapabilitiesForExtension } from '../session/adapters.js';
 import type { SessionAnnotationHost } from '../session/session-annotation.js';
@@ -70,6 +85,9 @@ export interface ReaderAnnotationSurface {
   openNote(annotation: Annotation): void;
   annotationFromMark(target: EventTarget | null): Annotation | null;
   ensureSelectionToolbar(): void;
+  isLookupPanelVisible(): boolean;
+  hideLookupPanel(): void;
+  destroyLookupPanel(): void;
   currentPositionLocator(): Locator;
   appendAnnotation(
     kind: AnnotationKind,
@@ -231,9 +249,169 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     return ctx.annotations.find((item) => item.id === id) ?? null;
   };
 
+  let lookupPanel: LookupPanel | null = null;
+  let deeplConfigured = false;
+  let deeplConfiguredEpoch = 0;
+
+  const applyTranslateEnabled = (): void => {
+    ctx.selectionToolbar?.setTranslateEnabled(deeplConfigured);
+  };
+
+  const refreshDeeplConfigured = async (): Promise<void> => {
+    const epoch = ++deeplConfiguredEpoch;
+    const next = await invokeDeepLConfigured();
+    if (ctx.destroyed || epoch !== deeplConfiguredEpoch) {
+      return;
+    }
+    deeplConfigured = next;
+    applyTranslateEnabled();
+  };
+
+  const onDeeplConfigured = (event: Event): void => {
+    const configured = (event as CustomEvent<{ configured?: boolean }>).detail?.configured;
+    if (typeof configured === 'boolean') {
+      deeplConfiguredEpoch += 1;
+      deeplConfigured = configured;
+      applyTranslateEnabled();
+      return;
+    }
+    void refreshDeeplConfigured();
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener(READER_DEEPL_CONFIGURED_EVENT, onDeeplConfigured);
+  }
+  void refreshDeeplConfigured();
+
+  const hideLookupPanel = (): void => {
+    lookupPanel?.hide();
+  };
+
+  const destroyLookupPanel = (): void => {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener(READER_DEEPL_CONFIGURED_EVENT, onDeeplConfigured);
+    }
+    lookupPanel?.destroy();
+    lookupPanel = null;
+  };
+
+  const ensureLookupPanel = (): LookupPanel => {
+    if (lookupPanel !== null) {
+      return lookupPanel;
+    }
+    lookupPanel = createLookupPanel({
+      t: ctx.t,
+      onDismiss: () => hideLookupPanel(),
+    });
+    return lookupPanel;
+  };
+
+  const runLookupOrTranslate = (
+    kind: 'lookup' | 'translate',
+    quote: string,
+    generation: number,
+  ): void => {
+    const panel = ensureLookupPanel();
+    const locale = readerAidLocale(ctx.t);
+    const trimmed = quote.trim();
+    if (kind === 'lookup' && lookupQuoteTooLong(trimmed)) {
+      panel.show(
+        {
+          kind,
+          quote: trimmed,
+          status: 'error',
+          message: lookupTooLongCopy(ctx.t, deeplConfigured),
+        },
+        ctx.root,
+      );
+      return;
+    }
+    if (kind === 'translate') {
+      if (!deeplConfigured) {
+        panel.show(
+          {
+            kind,
+            quote: trimmed,
+            status: 'error',
+            message: ctx.t('reader.lookup.translateDisabled'),
+          },
+          ctx.root,
+        );
+        return;
+      }
+      if (trimmed === '' || translateQuoteTooLong(trimmed)) {
+        panel.show(
+          {
+            kind,
+            quote: trimmed,
+            status: 'error',
+            message: ctx.t('reader.lookup.translateTooLong'),
+          },
+          ctx.root,
+        );
+        return;
+      }
+    }
+    panel.show(
+      {
+        kind,
+        quote: trimmed,
+        status: 'loading',
+        message: ctx.t(kind === 'translate' ? 'reader.lookup.translateLoading' : 'reader.lookup.loading'),
+      },
+      ctx.root,
+    );
+    void (async () => {
+      try {
+        if (kind === 'lookup') {
+          const entries = await invokeWiktionaryLookup(trimmed, locale);
+          if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+            return;
+          }
+          const lines = formatLookupEntries(entries);
+          if (lines.length === 0) {
+            panel.show(
+              { kind, quote: trimmed, status: 'empty', message: ctx.t('reader.lookup.empty') },
+              ctx.root,
+            );
+            return;
+          }
+          panel.show({ kind, quote: trimmed, status: 'ready', lines }, ctx.root);
+          return;
+        }
+        const text = await invokeDeepLTranslate(trimmed, locale);
+        if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+          return;
+        }
+        if (text === '') {
+          panel.show(
+            { kind, quote: trimmed, status: 'error', message: ctx.t('reader.lookup.error.failed') },
+            ctx.root,
+          );
+          return;
+        }
+        panel.show({ kind, quote: trimmed, status: 'ready', lines: [text] }, ctx.root);
+      } catch (error) {
+        if (ctx.destroyed || generation !== ctx.sessionLoad.generation()) {
+          return;
+        }
+        panel.show(
+          {
+            kind,
+            quote: trimmed,
+            status: 'error',
+            message: readerAidErrorMessage(ctx.t, error),
+          },
+          ctx.root,
+        );
+      }
+    })();
+  };
+
   /** 工具栏动作派发（R3）：确认后才创建/移除标注；复制始终可用。 */
   const ensureSelectionToolbar = (): void => {
     if (ctx.selectionToolbar !== null) {
+      applyTranslateEnabled();
+      void refreshDeeplConfigured();
       return;
     }
     ctx.selectionToolbar = createSelectionToolbar({
@@ -253,6 +431,16 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
             window.getSelection()?.removeAllRanges();
           }
         };
+        if (action === 'lookup' || action === 'translate') {
+          runLookupOrTranslate(action, pending.quote, ctx.sessionLoad.generation());
+          return;
+        }
+        if (action === 'speak') {
+          ctx.root.dispatchEvent(
+            new CustomEvent(READER_SPEAK_EVENT, { detail: { quote: pending.quote } }),
+          );
+          return;
+        }
         if (action === 'removeHighlight') {
           clearSourceSelection();
           if (pending.existingHighlightId !== null) {
@@ -283,6 +471,8 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         appendAnnotation('highlight', pending.locator, pending.quote, undefined, detail?.color);
       },
     });
+    applyTranslateEnabled();
+    void refreshDeeplConfigured();
     mountReaderOverlay(ctx.selectionToolbar.element, ctx.root);
   };
 
@@ -729,7 +919,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     // 分栏里 bounding rect 会横跨左右页，改用最后一行盒子锚定工具栏。
     ctx.selectionToolbar.showAt(
       mapFrameClientRect(frame, selectionClientRect(selection.getRangeAt(0))),
-      { canRemoveHighlight: existingMark !== null },
+      { canRemoveHighlight: existingMark !== null, translateEnabled: deeplConfigured },
     );
     setSelectionToolbarOpen(true);
   };
@@ -772,6 +962,9 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     openNote,
     annotationFromMark,
     ensureSelectionToolbar,
+    isLookupPanelVisible: () => lookupPanel?.isVisible() === true,
+    hideLookupPanel,
+    destroyLookupPanel,
     currentPositionLocator,
     appendAnnotation,
     addAnnotation,

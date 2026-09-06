@@ -1,0 +1,109 @@
+/**
+ * In-page lookup / translate results: desktop popover, touch bottom sheet.
+ */
+
+.lightink-reader-lookup-panel {
+  position: fixed;
+  z-index: 32;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-height: min(60vh, 28rem);
+  overflow: hidden;
+  color: var(--lightink-fg);
+  background: var(--lightink-bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
+    0 4px 12px rgba(0, 0, 0, 0.08),
+    0 20px 48px rgba(0, 0, 0, 0.18);
+  font-family: var(--lightink-font-ui);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  pointer-events: auto;
+}
+
+.lightink-reader-lookup-panel[hidden] {
+  display: none;
+}
+
+.lightink-reader-lookup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem 0.35rem;
+}
+
+.lightink-reader-lookup-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.lightink-reader-lookup-close {
+  flex: 0 0 auto;
+  padding: 0.15rem 0.45rem;
+  font: inherit;
+  color: var(--lightink-muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.lightink-reader-lookup-close:hover,
+.lightink-reader-lookup-close:focus-visible {
+  color: var(--lightink-fg);
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-lookup-body {
+  min-height: 0;
+  padding: 0 0.75rem 0.75rem;
+  overflow: auto;
+}
+
+.lightink-reader-lookup-quote {
+  margin: 0 0 0.55rem;
+  color: var(--lightink-muted);
+  font-size: 0.78rem;
+}
+
+.lightink-reader-lookup-line {
+  margin: 0 0 0.4rem;
+}
+
+.lightink-reader-lookup-line:last-child {
+  margin-bottom: 0;
+}
+
+.lightink-reader-lookup-message {
+  margin: 0;
+}
+
+.lightink-reader-lookup-panel[data-lookup-status='error'] .lightink-reader-lookup-message,
+.lightink-reader-lookup-panel[data-lookup-status='empty'] .lightink-reader-lookup-message {
+  color: var(--lightink-fg);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-panel.is-touch-sheet {
+  width: auto;
+  max-width: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  transition: transform 220ms ease-out, opacity 220ms ease-out;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-lookup-panel.is-touch-sheet:not([data-open]) {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-close {
+  min-height: 44px;
+  min-width: 44px;
+}

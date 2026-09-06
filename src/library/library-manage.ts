@@ -12,6 +12,12 @@
 
 import type { LibraryClient } from './library-client.js';
 import {
+  dispatchDeeplConfigured,
+  invokeDeepLConfigured,
+  invokeDeepLForgetKey,
+  invokeDeepLStoreKey,
+} from '../reader/lookup-panel.js';
+import {
   applyLibraryTheme,
   LIBRARY_THEMES,
   loadLibraryTheme,
@@ -37,6 +43,12 @@ export interface LibraryManageLabels {
   readonly readingGroup: string;
   readonly readerPrefsHint: string;
   readonly showProgressBar: string;
+  readonly deeplKey: string;
+  readonly deeplHint: string;
+  readonly deeplSave: string;
+  readonly deeplClear: string;
+  readonly deeplConfigured: string;
+  readonly deeplUnconfigured: string;
   readonly storageGroup: string;
   readonly clearCache: string;
   readonly cacheUsage: string;
@@ -163,7 +175,52 @@ export function createLibraryManage(
   progressBarInput.name = 'showProgressBar';
   const progressBarText = doc.createElement('span');
   progressBarLabel.append(progressBarInput, progressBarText);
-  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel);
+  const deeplHint = doc.createElement('p');
+  deeplHint.className = 'lightink-library-appearance-hint lightink-library-deepl-hint';
+  const deeplField = doc.createElement('label');
+  deeplField.className = 'lightink-library-field lightink-library-deepl-field';
+  const deeplLabelText = doc.createElement('span');
+  const deeplInput = doc.createElement('input');
+  deeplInput.type = 'password';
+  deeplInput.name = 'deeplApiKey';
+  deeplInput.autocomplete = 'off';
+  deeplInput.spellcheck = false;
+  deeplField.append(deeplLabelText, deeplInput);
+  const deeplStatus = doc.createElement('p');
+  deeplStatus.className = 'lightink-library-deepl-status';
+  deeplStatus.setAttribute('aria-live', 'polite');
+  const deeplActions = doc.createElement('div');
+  deeplActions.className = 'lightink-library-deepl-actions';
+  const deeplSave = button(doc, '', 'lightink-library-primary lightink-library-deepl-save');
+  const deeplClear = button(doc, '', 'lightink-library-deepl-clear');
+  deeplActions.append(deeplSave, deeplClear);
+  readerPrefs.append(
+    readerPrefsTitle,
+    readerPrefsHint,
+    progressBarLabel,
+    deeplHint,
+    deeplField,
+    deeplStatus,
+    deeplActions,
+  );
+
+  let deeplConfigured = false;
+  let deeplConfiguredEpoch = 0;
+  const syncDeeplStatus = (): void => {
+    const l = labels();
+    deeplStatus.textContent = deeplConfigured ? l.deeplConfigured : l.deeplUnconfigured;
+    deeplStatus.dataset.deeplConfigured = deeplConfigured ? 'true' : 'false';
+    deeplClear.disabled = !deeplConfigured;
+  };
+  const refreshDeeplConfigured = async (): Promise<void> => {
+    const epoch = ++deeplConfiguredEpoch;
+    const next = await invokeDeepLConfigured();
+    if (epoch !== deeplConfiguredEpoch) {
+      return;
+    }
+    deeplConfigured = next;
+    syncDeeplStatus();
+  };
 
   // 存储与缓存：用量摘要 + 清理缓存 + 缓存上限（弹层入口）。
   const storage = doc.createElement('section');
@@ -326,6 +383,39 @@ export function createLibraryManage(
     doc.dispatchEvent(new CustomEvent('lightink:reader-prefs', { detail: currentReaderPrefs }));
   });
 
+  deeplSave.addEventListener('click', () => {
+    const key = deeplInput.value.trim();
+    if (key === '') {
+      return;
+    }
+    void (async () => {
+      try {
+        await invokeDeepLStoreKey(key);
+        deeplInput.value = '';
+        deeplConfiguredEpoch += 1;
+        deeplConfigured = true;
+        syncDeeplStatus();
+        dispatchDeeplConfigured(true, doc.defaultView ?? doc);
+      } catch (error) {
+        options.notify(options.formatError(error), 'error');
+      }
+    })();
+  });
+  deeplClear.addEventListener('click', () => {
+    void (async () => {
+      try {
+        await invokeDeepLForgetKey();
+        deeplInput.value = '';
+        deeplConfiguredEpoch += 1;
+        deeplConfigured = false;
+        syncDeeplStatus();
+        dispatchDeeplConfigured(false, doc.defaultView ?? doc);
+      } catch (error) {
+        options.notify(options.formatError(error), 'error');
+      }
+    })();
+  });
+
   importButton.addEventListener('click', () => {
     void options.onImport();
   });
@@ -381,6 +471,12 @@ export function createLibraryManage(
     readerPrefsHint.textContent = l.readerPrefsHint;
     progressBarText.textContent = l.showProgressBar;
     progressBarLabel.title = l.showProgressBar;
+    deeplHint.textContent = l.deeplHint;
+    deeplLabelText.textContent = l.deeplKey;
+    deeplSave.textContent = l.deeplSave;
+    deeplClear.textContent = l.deeplClear;
+    syncDeeplStatus();
+    void refreshDeeplConfigured();
     storageTitle.textContent = l.storageGroup;
     clearCacheButton.textContent = l.clearCache;
     cacheLimitButton.textContent = l.changeCacheLimit;

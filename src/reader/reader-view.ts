@@ -516,6 +516,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       ctx.selectionToolbar?.destroy();
       ctx.selectionToolbar = null;
       ctx.pendingSelection = null;
+      ctx.annotation.destroyLookupPanel();
       ctx.readerOutline = [];
       ctx.exportChapters = [];
       ctx.exportStylesheet = '';

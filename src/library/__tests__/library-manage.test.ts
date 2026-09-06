@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 
 import {
   bytesLabel,
@@ -8,6 +9,12 @@ import {
   type LibraryManageLabels,
   type LibraryManageOptions,
 } from '../library-manage.js';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+const invokeMock = vi.mocked(invoke);
 import {
   createLibraryTabbar,
   type LibraryTabbarLabels,
@@ -25,6 +32,13 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: 'Reading preferences',
     readerPrefsHint: 'Applies while reading.',
     showProgressBar: 'Show progress bar',
+    deeplKey: 'DeepL API key',
+    deeplHint:
+      'Lookup sends the current selection to Wiktionary. Translate sends it to DeepL. Nothing is sent until you tap Lookup or Translate.',
+    deeplSave: 'Save key',
+    deeplClear: 'Clear key',
+    deeplConfigured: 'DeepL key saved on this device.',
+    deeplUnconfigured: 'No DeepL key saved.',
     storageGroup: 'Storage & cache',
     clearCache: 'Clear cache',
     cacheUsage: '{used} of {limit}',
@@ -45,6 +59,13 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: '阅读偏好',
     readerPrefsHint: '只影响阅读界面。关闭后阅读区底部不再显示进度条。',
     showProgressBar: '显示进度条',
+    deeplKey: 'DeepL API key',
+    deeplHint:
+      '查词会把当前选区发往 Wiktionary；翻译会发往 DeepL。只有点击对应按钮时才发送这一次选区。',
+    deeplSave: '保存密钥',
+    deeplClear: '清除密钥',
+    deeplConfigured: '已在本机保存 DeepL 密钥。',
+    deeplUnconfigured: '尚未保存 DeepL 密钥。',
     storageGroup: '存储与缓存',
     clearCache: '清理缓存',
     cacheUsage: '已用 {used} / {limit}',
@@ -105,6 +126,8 @@ function groupTitles(panel: ParentNode): string[] {
 afterEach(() => {
   document.body.replaceChildren();
   delete document.documentElement.dataset.readerProgressBar;
+  invokeMock.mockReset();
+  invokeMock.mockResolvedValue({ configured: false });
 });
 
 describe('createLibraryManage grouped settings page', () => {
@@ -146,6 +169,11 @@ describe('createLibraryManage grouped settings page', () => {
     expect(manage.element.textContent).toContain(zh.webdavSync);
     expect(manage.element.textContent).toContain(zh.importLocal);
     expect(manage.element.textContent).toContain(zh.markdownEditor);
+    expect(manage.element.textContent).toContain('Wiktionary');
+    expect(manage.element.textContent).toContain('DeepL');
+    expect(
+      manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')?.type,
+    ).toBe('password');
     manage.destroy();
   });
 
@@ -328,6 +356,58 @@ describe('createLibraryManage grouped settings page', () => {
       }),
     );
     expect(document.documentElement.dataset.readerProgressBar).toBe('on');
+  });
+
+  it('stores and clears a DeepL key without writing it to reader prefs', async () => {
+    const readerPrefsStorage = memoryStorage();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      return undefined;
+    });
+    const { options } = manageOptions({ readerPrefsStorage });
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await Promise.resolve();
+
+    const input = manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')!;
+    expect(manage.element.querySelector('.lightink-library-deepl-hint')?.textContent).toContain(
+      'Wiktionary',
+    );
+    expect(manage.element.querySelector('.lightink-library-deepl-hint')?.textContent).toContain(
+      'DeepL',
+    );
+    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
+      LABELS['zh-CN'].deeplUnconfigured,
+    );
+
+    input.value = 'secret-fx-key';
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-save')!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(invokeMock).toHaveBeenCalledWith('reader_deepl_store_key', { key: 'secret-fx-key' });
+    expect(readerPrefsStorage.store['lightink.reader.prefs']).toBeUndefined();
+    expect(JSON.stringify(readerPrefsStorage.store)).not.toContain('secret-fx-key');
+    expect(input.value).toBe('');
+    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
+      LABELS['zh-CN'].deeplConfigured,
+    );
+
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: true };
+      return undefined;
+    });
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-clear')!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(invokeMock).toHaveBeenCalledWith('reader_deepl_forget_key');
+    expect(JSON.stringify(readerPrefsStorage.store)).not.toContain('secret-fx-key');
+    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
+      LABELS['zh-CN'].deeplUnconfigured,
+    );
+    manage.destroy();
   });
 });
 

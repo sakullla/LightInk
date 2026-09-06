@@ -1062,17 +1062,17 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   position: fixed;
   z-index: 30;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
   padding: 0.3rem 0.35rem;
+  max-width: calc(100vw - 8px);
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid var(--lightink-border);
   border-radius: 8px;
   box-shadow: var(--lightink-shadow);
   pointer-events: auto;
-  white-space: nowrap;
 }
 
 .lightink-reader-selection-colors {
@@ -1115,8 +1115,13 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   cursor: pointer;
 }
 
-.lightink-reader-selection-action:hover {
+.lightink-reader-selection-action:hover:not(:disabled) {
   background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-selection-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* 触屏划选工具条按压反馈：action 洗色 + 颜色圆点轻微缩放（几何两态一致）。 */

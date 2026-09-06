@@ -43,6 +43,7 @@ import {
   createLibraryManage,
   type LibraryManageLabels,
 } from './library-manage.js';
+import { translate } from '../i18n/messages.js';
 import {
   coverProgressFillPercent,
   formatLibraryReadingDuration,
@@ -1760,6 +1761,7 @@ export function createLibraryView(
   // deps 适配（导入后回书架）与挂载点（syncPageChrome 的 manage 分支）。
   const manageLabels = (): LibraryManageLabels => {
     const l = labels();
+    const locale = deps.getLocale();
     return {
       appearance: l.appearance,
       libraryTheme: l.libraryTheme,
@@ -1767,6 +1769,12 @@ export function createLibraryView(
       readingGroup: l.readingGroup,
       readerPrefsHint: l.readerPrefsHint,
       showProgressBar: l.showProgressBar,
+      deeplKey: translate(locale, 'reader.lookup.deeplKey'),
+      deeplHint: translate(locale, 'reader.lookup.settingsHint'),
+      deeplSave: translate(locale, 'reader.lookup.deeplSave'),
+      deeplClear: translate(locale, 'reader.lookup.deeplClear'),
+      deeplConfigured: translate(locale, 'reader.lookup.deeplConfigured'),
+      deeplUnconfigured: translate(locale, 'reader.lookup.deeplUnconfigured'),
       storageGroup: l.storageGroup,
       clearCache: l.clearCache,
       cacheUsage: l.cacheUsage,

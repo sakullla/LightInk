@@ -285,6 +285,10 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     if (ctx.cbzHandle?.hideChrome() === true) {
       return true;
     }
+    if (ctx.annotation.isLookupPanelVisible()) {
+      ctx.annotation.hideLookupPanel();
+      return true;
+    }
     if (ctx.selectionToolbar?.isVisible() === true) {
       ctx.annotation.hideSelectionToolbar();
       return true;
@@ -324,6 +328,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       return;
     }
     if (!active) {
+      ctx.annotation.hideLookupPanel();
       ctx.annotation.hideSelectionToolbar();
       closeChromePanel();
       ctx.readerChrome?.dismiss();

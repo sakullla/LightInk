@@ -1,7 +1,7 @@
 /**
  * `selection-toolbar` — 划选工具栏（R3）。
  *
- * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/取消高亮）。纯 DOM 装配 +
+ * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/复制/查词/翻译/朗读）。纯 DOM 装配 +
  * 回调派发；选区包围盒由调用方换算为外层 client 坐标后传入 `showAt`（flow/txt 的
  * iframe 内选区坐标需叠加 frame 偏移，PDF 文本层选区直接可用）。点击工具栏外部或
  * 再次 `hide()` 隐藏；Escape 由 reader-view 统一处理。
@@ -11,7 +11,14 @@ import type { MessageKey } from '../i18n/messages.js';
 import { ANNOTATION_COLORS, type AnnotationColor } from './annotations.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 
-export type SelectionToolbarAction = 'highlight' | 'note' | 'copy' | 'removeHighlight';
+export type SelectionToolbarAction =
+  | 'highlight'
+  | 'note'
+  | 'copy'
+  | 'removeHighlight'
+  | 'lookup'
+  | 'translate'
+  | 'speak';
 
 export interface SelectionToolbarActionDetail {
   color?: AnnotationColor;
@@ -34,7 +41,11 @@ export interface SelectionToolbarDeps {
 export interface SelectionToolbar {
   readonly element: HTMLElement;
   /** 在选区包围盒附近显示；canRemoveHighlight 时含"取消高亮"按钮。 */
-  showAt(rect: SelectionToolbarRect, options: { canRemoveHighlight: boolean }): void;
+  showAt(
+    rect: SelectionToolbarRect,
+    options: { canRemoveHighlight: boolean; translateEnabled?: boolean },
+  ): void;
+  setTranslateEnabled(enabled: boolean): void;
   hide(): void;
   isVisible(): boolean;
   destroy(): void;
@@ -140,8 +151,29 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   const highlightButton = makeButton('highlight', 'annotation.highlight');
   const noteButton = makeButton('note', 'annotation.note');
   const copyButton = makeButton('copy', 'annotation.copy');
+  const lookupButton = makeButton('lookup', 'reader.lookup.action');
+  const translateButton = makeButton('translate', 'reader.lookup.translate');
+  const speakButton = makeButton('speak', 'reader.lookup.speak');
   const removeButton = makeButton('removeHighlight', 'annotation.removeHighlight');
-  root.append(colors, highlightButton, noteButton, copyButton, removeButton);
+  root.append(
+    colors,
+    highlightButton,
+    noteButton,
+    copyButton,
+    lookupButton,
+    translateButton,
+    speakButton,
+    removeButton,
+  );
+
+  const applyTranslateEnabled = (enabled: boolean): void => {
+    translateButton.disabled = !enabled;
+    translateButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    translateButton.title = enabled
+      ? deps.t('reader.lookup.translate')
+      : deps.t('reader.lookup.translateDisabled');
+  };
+  applyTranslateEnabled(false);
 
   root.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
@@ -202,6 +234,9 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     element: root,
     showAt(rect, options) {
       removeButton.hidden = !options.canRemoveHighlight;
+      if (options.translateEnabled !== undefined) {
+        applyTranslateEnabled(options.translateEnabled);
+      }
       root.hidden = false;
       dismiss.hidden = false;
       mountDismiss();
@@ -226,6 +261,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       // 桌面选择器不命中，class 无视觉效果）。
       revealSheet(root);
     },
+    setTranslateEnabled: applyTranslateEnabled,
     hide,
     isVisible() {
       return !root.hidden;

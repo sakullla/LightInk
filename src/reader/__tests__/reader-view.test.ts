@@ -3,7 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 
 import { createReaderView } from '../reader-view.js';
 import {
@@ -29,6 +30,22 @@ import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 
 const cbzMock = vi.hoisted(() => ({ renderCbzInto: vi.fn() }));
 vi.mock('../formats/cbz.js', () => ({ renderCbzInto: cbzMock.renderCbzInto }));
+const pdfMock = vi.hoisted(() => ({ renderPdfInto: vi.fn() }));
+vi.mock('../formats/pdf.js', () => ({ renderPdfInto: pdfMock.renderPdfInto }));
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+const invokeMock = vi.mocked(invoke);
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command === 'reader_deepl_configured') {
+      return { configured: false };
+    }
+    return undefined;
+  });
+});
 
 describe('划选工具栏（selection-toolbar）', () => {
   const buttonByAction = (toolbar: ReturnType<typeof createSelectionToolbar>, action: string) =>
@@ -49,12 +66,55 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(buttonByAction(toolbar, 'highlight')!.textContent).toBe('annotation.highlight');
     expect(buttonByAction(toolbar, 'note')!.textContent).toBe('annotation.note');
     expect(buttonByAction(toolbar, 'copy')!.textContent).toBe('annotation.copy');
+    expect(buttonByAction(toolbar, 'lookup')!.textContent).toBe('reader.lookup.action');
+    expect(buttonByAction(toolbar, 'translate')!.textContent).toBe('reader.lookup.translate');
+    expect(buttonByAction(toolbar, 'speak')!.textContent).toBe('reader.lookup.speak');
+    expect(buttonByAction(toolbar, 'translate')!.disabled).toBe(true);
     expect(buttonByAction(toolbar, 'removeHighlight')!.hidden).toBe(true);
 
     toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: true });
     expect(buttonByAction(toolbar, 'removeHighlight')!.hidden).toBe(false);
     toolbar.hide();
     expect(toolbar.isVisible()).toBe(false);
+  });
+
+  it('enables translate only when a DeepL key is configured', () => {
+    const actions: string[] = [];
+    const toolbar = createSelectionToolbar({ t: (key) => key, onAction: (a) => actions.push(a) });
+    document.body.appendChild(toolbar.element);
+    toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
+    const translate = buttonByAction(toolbar, 'translate')!;
+    expect(translate.disabled).toBe(true);
+    translate.click();
+    expect(actions).toEqual([]);
+
+    toolbar.setTranslateEnabled(true);
+    expect(translate.disabled).toBe(false);
+    toolbar.showAt(
+      { left: 100, top: 100, width: 80, height: 20 },
+      { canRemoveHighlight: false, translateEnabled: true },
+    );
+    translate.click();
+    expect(actions).toEqual(['translate']);
+    toolbar.destroy();
+  });
+
+  it('dispatches lookup, translate, and speak beside highlight/note/copy', () => {
+    const actions: string[] = [];
+    const toolbar = createSelectionToolbar({ t: (key) => key, onAction: (a) => actions.push(a) });
+    document.body.appendChild(toolbar.element);
+    toolbar.showAt(
+      { left: 100, top: 100, width: 80, height: 20 },
+      { canRemoveHighlight: false, translateEnabled: true },
+    );
+    buttonByAction(toolbar, 'lookup')!.click();
+    toolbar.showAt(
+      { left: 100, top: 100, width: 80, height: 20 },
+      { canRemoveHighlight: false, translateEnabled: true },
+    );
+    buttonByAction(toolbar, 'speak')!.click();
+    expect(actions).toEqual(['lookup', 'speak']);
+    toolbar.destroy();
   });
 
   it('点击动作派发回调并隐藏工具栏', () => {
@@ -1995,6 +2055,13 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     expect(toolbar!.querySelector('.lightink-reader-selection-action--highlight')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--note')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--copy')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).not.toBeNull();
+    expect(
+      toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--translate')
+        ?.disabled,
+    ).toBe(true);
 
     const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     frameDocument.dispatchEvent(menu);
@@ -2270,6 +2337,318 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     expect(
       document.querySelector<HTMLElement>('.lightink-reader-chapter.is-active')?.dataset.chapterIndex,
     ).toBe('0');
+    await view.destroy();
+  });
+});
+
+describe('划选查词与翻译（lookup-translate-ui）', () => {
+  const visibleSelectionToolbar = (): HTMLElement | null => {
+    const toolbar = document.querySelector<HTMLElement>('.lightink-reader-selection-toolbar');
+    if (toolbar === null || toolbar.hidden) {
+      return null;
+    }
+    return toolbar;
+  };
+
+  const aidCommands = (calls: unknown[][]): string[] =>
+    calls.map((call) => String(call[0] ?? ''));
+
+  const flushAid = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  const loadAidBook = async (
+    html = '<p>chapter 1 selectable body</p>',
+  ): Promise<{
+    host: HTMLDivElement;
+    view: ReturnType<typeof createReaderView>;
+    frames: HTMLIFrameElement[];
+  }> => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array(),
+      parseContent: async () => ({
+        chapters: [{ title: 'Chapter 1', html }],
+      }),
+    });
+    await view.load('book.epub');
+    const frames = Array.from(
+      host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame'),
+    );
+    for (const frame of frames) {
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 400 });
+      frame.dispatchEvent(new Event('load'));
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    return { host, view, frames };
+  };
+
+  const selectQuote = (frame: HTMLIFrameElement, quote: string): void => {
+    const doc = frame.contentDocument!;
+    const proto = doc.defaultView?.Range?.prototype;
+    if (proto !== undefined && typeof proto.getBoundingClientRect !== 'function') {
+      proto.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+        return {
+          x: 20,
+          y: 40,
+          left: 20,
+          top: 40,
+          width: 80,
+          height: 16,
+          right: 100,
+          bottom: 56,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+    }
+    let paragraph = doc.querySelector('p');
+    if (paragraph === null) {
+      paragraph = doc.createElement('p');
+      paragraph.textContent = quote;
+      doc.body.appendChild(paragraph);
+    }
+    const node = paragraph.firstChild as Text;
+    const start = (node.textContent ?? '').indexOf(quote);
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + quote.length);
+    const selection = doc.defaultView!.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    pdfMock.renderPdfInto.mockReset();
+    cbzMock.renderCbzInto.mockReset();
+    document.body.replaceChildren();
+  });
+
+  it('does not invoke lookup or translate on select without a click', async () => {
+    vi.useFakeTimers();
+    const { view, frames } = await loadAidBook();
+    invokeMock.mockClear();
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await flushAid();
+    expect(aidCommands(invokeMock.mock.calls)).not.toContain('reader_wiktionary_lookup');
+    expect(aidCommands(invokeMock.mock.calls)).not.toContain('reader_deepl_translate');
+    await view.destroy();
+  });
+
+  it('looks up the current quote only after a click', async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'reader_wiktionary_lookup') {
+        return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
+      }
+      return undefined;
+    });
+    const { view, frames } = await loadAidBook();
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    invokeMock.mockClear();
+    visibleSelectionToolbar()!
+      .querySelector<HTMLButtonElement>('.lightink-reader-selection-action--lookup')!
+      .click();
+    await flushAid();
+    expect(invokeMock).toHaveBeenCalledWith('reader_wiktionary_lookup', {
+      term: 'selectable',
+      locale: 'en',
+    });
+    const panel = document.querySelector<HTMLElement>('.lightink-reader-lookup-panel');
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.textContent).toContain('a gloss');
+    expect(panel?.textContent).toContain('selectable');
+    await view.destroy();
+  });
+
+  it('does not send a too-long lookup quote and shows the too-long copy', async () => {
+    vi.useFakeTimers();
+    const longQuote = 'alpha beta gamma delta epsilon';
+    const { view, frames } = await loadAidBook(`<p>${longQuote}</p>`);
+    selectQuote(frames[0]!, longQuote);
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    invokeMock.mockClear();
+    visibleSelectionToolbar()!
+      .querySelector<HTMLButtonElement>('.lightink-reader-selection-action--lookup')!
+      .click();
+    await flushAid();
+    expect(aidCommands(invokeMock.mock.calls)).not.toContain('reader_wiktionary_lookup');
+    expect(document.querySelector('.lightink-reader-lookup-panel')?.textContent).toContain(
+      'reader.lookup.tooLong',
+    );
+    await view.destroy();
+  });
+
+  it('keeps translate disabled until a DeepL key is configured, then sends only the quote', async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: true };
+      if (command === 'reader_deepl_translate') return { text: '译文' };
+      return undefined;
+    });
+    const { view, frames } = await loadAidBook();
+    await flushAid();
+    selectQuote(frames[0]!, 'selectable');
+    frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    const translate = visibleSelectionToolbar()!.querySelector<HTMLButtonElement>(
+      '.lightink-reader-selection-action--translate',
+    )!;
+    expect(translate.disabled).toBe(false);
+    invokeMock.mockClear();
+    translate.click();
+    await flushAid();
+    expect(invokeMock).toHaveBeenCalledWith(
+      'reader_deepl_translate',
+      expect.objectContaining({ text: 'selectable' }),
+    );
+    expect(document.querySelector('.lightink-reader-lookup-panel')?.textContent).toContain('译文');
+    await view.destroy();
+  });
+
+  it('shows lookup, translate, and speak on a PDF text-layer selection', async () => {
+    vi.useFakeTimers();
+    pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
+      const viewer = document.createElement('div');
+      viewer.className = 'pdfViewer';
+      const page = document.createElement('div');
+      page.className = 'page';
+      page.dataset.pageNumber = '1';
+      const layer = document.createElement('div');
+      layer.className = 'textLayer';
+      const span = document.createElement('span');
+      span.textContent = 'selectable pdf quote';
+      layer.appendChild(span);
+      const end = document.createElement('div');
+      end.className = 'endOfContent';
+      layer.appendChild(end);
+      page.appendChild(layer);
+      viewer.appendChild(page);
+      stagedHost.appendChild(viewer);
+      return {
+        controller: {
+          totalPages: 1,
+          page: 1,
+          scale: 1,
+          canPrev: false,
+          canNext: false,
+          next: () => false,
+          prev: () => false,
+          setPage: () => true,
+          zoomIn: () => true,
+          zoomOut: () => true,
+          resetScale: () => true,
+        },
+        rerender: async () => undefined,
+        scrollToPage: () => undefined,
+        search: async () => [],
+        outline: async () => [],
+        destroy: vi.fn(async () => undefined),
+      };
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([0x25, 0x50]),
+    });
+    await view.load('book.pdf');
+    const pageHost = host.querySelector<HTMLElement>('.lightink-reader-pages')!;
+    const span = pageHost.querySelector('span')!;
+    const box = {
+      x: 20,
+      y: 40,
+      left: 20,
+      top: 40,
+      width: 80,
+      height: 16,
+      right: 100,
+      bottom: 56,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const originalRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect');
+    const originalRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => box,
+    });
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [box],
+    });
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      pageHost.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      const toolbar = visibleSelectionToolbar();
+      expect(toolbar).not.toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).not.toBeNull();
+    } finally {
+      if (originalRect === undefined) {
+        delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+      } else {
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', originalRect);
+      }
+      if (originalRects === undefined) {
+        delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      } else {
+        Object.defineProperty(Range.prototype, 'getClientRects', originalRects);
+      }
+      await view.destroy();
+    }
+  });
+
+  it('does not show a text selection toolbar on comics', async () => {
+    vi.useFakeTimers();
+    cbzMock.renderCbzInto.mockResolvedValue({
+      totalPages: 2,
+      currentPage: 1,
+      metadata: { pages: [] },
+      preferences: {
+        mode: 'paged',
+        direction: 'ltr',
+        spread: 'single',
+        fit: 'width',
+        cropMargins: false,
+        spreadOffset: false,
+      },
+      scrollToPage: vi.fn(),
+      scrollToProgress: vi.fn(),
+      nextPage: vi.fn(() => true),
+      previousPage: vi.fn(() => true),
+      setPreferences: vi.fn(),
+      hideChrome: vi.fn(() => false),
+      adjustZoom: vi.fn(),
+      destroy: vi.fn(async () => undefined),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => new Uint8Array([0x50, 0x4b]),
+    });
+    await view.load('book.cbz');
+    const pageHost = host.querySelector<HTMLElement>('.lightink-reader-pages')!;
+    const span = document.createElement('span');
+    span.textContent = 'not selectable comic text';
+    pageHost.appendChild(span);
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    pageHost.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(visibleSelectionToolbar()).toBeNull();
+    expect(
+      document.querySelector('.lightink-reader-selection-action--lookup'),
+    ).toBeNull();
     await view.destroy();
   });
 });

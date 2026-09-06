@@ -18,6 +18,28 @@ describe('translate', () => {
     expect(translate('en', 'reader.chrome.search')).toBe('Search');
     expect(translate('zh-CN', 'reader.chrome.search')).toBe('搜索');
     expect(translate('en', 'dialog.closeTab.message', { title: 'a.md' })).toContain('a.md');
+    expect(translate('en', 'reader.lookup.action')).toBe('Lookup');
+    expect(translate('zh-CN', 'reader.lookup.action')).toBe('查词');
+    expect(translate('en', 'reader.lookup.translate')).toBe('Translate');
+    expect(translate('zh-CN', 'reader.lookup.translate')).toBe('翻译');
+    expect(translate('en', 'reader.lookup.speak')).toBe('Speak');
+    expect(translate('zh-CN', 'reader.lookup.speak')).toBe('朗读');
+    expect(translate('en', 'reader.lookup.settingsHint')).toContain('Wiktionary');
+    expect(translate('en', 'reader.lookup.settingsHint')).toContain('DeepL');
+    expect(translate('zh-CN', 'reader.lookup.settingsHint')).toContain('Wiktionary');
+    expect(translate('zh-CN', 'reader.lookup.settingsHint')).toContain('DeepL');
+    expect(translate('en', 'reader.lookup.deeplKey')).toContain('DeepL');
+    expect(translate('zh-CN', 'reader.lookup.deeplKey')).toContain('DeepL');
+    expect(translate('en', 'reader.tts.dock')).toBe('Reading aloud');
+    expect(translate('zh-CN', 'reader.tts.dock')).toBe('正在朗读');
+    expect(translate('en', 'reader.tts.pause')).toBe('Pause');
+    expect(translate('zh-CN', 'reader.tts.pause')).toBe('暂停');
+    expect(translate('en', 'reader.tts.resume')).toBe('Resume');
+    expect(translate('zh-CN', 'reader.tts.resume')).toBe('继续');
+    expect(translate('en', 'reader.tts.stop')).toBe('Stop');
+    expect(translate('zh-CN', 'reader.tts.stop')).toBe('停止');
+    expect(translate('en', 'reader.tts.rate')).toBe('Speed');
+    expect(translate('zh-CN', 'reader.tts.rate')).toBe('语速');
   });
 });
 
