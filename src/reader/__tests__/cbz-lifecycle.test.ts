@@ -4,12 +4,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { renderCbzInto } from '../formats/cbz.js';
 import {
-  renderCbzInto,
   SET_SYSTEM_BARS_VISIBLE_COMMAND,
   syncComicSystemBarsVisible,
   type ComicSystemBarsHost,
-} from '../formats/cbz.js';
+} from '../comic/comic-chrome.js';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
