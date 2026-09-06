@@ -21,6 +21,7 @@
  *
  * 自定义主题 = 用户 CSS 文件，由 ThemeService 注入 <style> 覆盖下列令牌
  * （:root 上的 warm-light 令牌作为自定义主题未定义项的回退）。
+ * 未写出的 --lightink-syntax-* 同样回退纸墨浅色，而不是午夜/深空。
  */
 
 :root,
@@ -92,15 +93,16 @@
   --lightink-radius-dialog: 12px;
 
   /*
-   * Syntax on light code-bg: deeper hues for ≥~4.5:1 where practical
-   * (GOV.UK / docs light-theme guidance: sacrifice neon for legibility).
+   * Syntax on light code-bg: deeper hues for ≥4.5:1 where practical
+   * (sacrifice neon for legibility). function ≠ title; variable ≠ attr.
    */
   --lightink-syntax-keyword: #8b3354;
   --lightink-syntax-comment: #6a6354; /* critical: muted comments must stay readable */
   --lightink-syntax-string: #3f6b28;
   --lightink-syntax-number: #9a4f1c; /* terracotta numerals */
-  --lightink-syntax-function: #24527a;
-  --lightink-syntax-title: #24527a;
+  --lightink-syntax-function: #24527a; /* ink-blue verbs */
+  --lightink-syntax-title: #3d456e; /* dusk indigo types — not function */
+  --lightink-syntax-variable: #3d5a48; /* pine-ink identifiers — not attr olive */
   --lightink-syntax-attr: #6b5424;
   --lightink-syntax-builtin: #53428c;
   --lightink-syntax-literal: #3d5f6a; /* slate-ink true/false/null — not number rust */
@@ -147,8 +149,9 @@
   --lightink-syntax-comment: #5c6572;
   --lightink-syntax-string: #216a4a;
   --lightink-syntax-number: #9a4e1c;
-  --lightink-syntax-function: #1f4f8f;
-  --lightink-syntax-title: #1f4f8f;
+  --lightink-syntax-function: #1f4f8f; /* cobalt verbs */
+  --lightink-syntax-title: #32367a; /* indigo types — not function */
+  --lightink-syntax-variable: #215a68; /* sea-slate identifiers */
   --lightink-syntax-attr: #63501f;
   --lightink-syntax-builtin: #463f96;
   --lightink-syntax-literal: #2c5d6e;
@@ -192,11 +195,12 @@
   --lightink-outline-width: 220px;
 
   --lightink-syntax-keyword: #e09ab0;
-  --lightink-syntax-comment: #8f8778;
+  --lightink-syntax-comment: #9c9484; /* lifted to ≥4.5:1 on warm charcoal code-bg */
   --lightink-syntax-string: #b3c77a;
   --lightink-syntax-number: #e0ae72; /* honey numerals */
-  --lightink-syntax-function: #93b8dc;
-  --lightink-syntax-title: #93b8dc;
+  --lightink-syntax-function: #93b8dc; /* dusty sky verbs */
+  --lightink-syntax-title: #6aa8b0; /* sea-glass types — not function */
+  --lightink-syntax-variable: #d4a48c; /* clay identifiers — not honey numbers */
   --lightink-syntax-attr: #d0b870;
   --lightink-syntax-builtin: #c0a8e4;
   --lightink-syntax-literal: #8eb8a8; /* dusty celadon — distinct from honey numbers */
@@ -240,11 +244,12 @@
   --lightink-outline-width: 220px;
 
   --lightink-syntax-keyword: #e0a0b8;
-  --lightink-syntax-comment: #7a8494;
+  --lightink-syntax-comment: #84909e; /* lifted to ≥4.5:1 on night-sky code-bg */
   --lightink-syntax-string: #a8cf84;
   --lightink-syntax-number: #e2ae70;
-  --lightink-syntax-function: #93c0ea;
-  --lightink-syntax-title: #93c0ea;
+  --lightink-syntax-function: #93c0ea; /* star-blue verbs */
+  --lightink-syntax-title: #6aacc0; /* ice-teal types — not function */
+  --lightink-syntax-variable: #c4b49c; /* star-dust identifiers — not sand numbers */
   --lightink-syntax-attr: #d4c074;
   --lightink-syntax-builtin: #bca8e4;
   --lightink-syntax-literal: #8ab4b0;
@@ -300,10 +305,12 @@
   color: var(--lightink-syntax-title);
 }
 .hljs-attr,
-.hljs-attribute,
+.hljs-attribute {
+  color: var(--lightink-syntax-attr);
+}
 .hljs-variable,
 .hljs-template-variable {
-  color: var(--lightink-syntax-attr);
+  color: var(--lightink-syntax-variable);
 }
 .hljs-built_in,
 .hljs-builtin-name {

@@ -3,13 +3,16 @@
  *   - warm-light / dark 两个内置主题块均存在；
  *   - warm-light 背景为暖色护眼、非纯白；
  *   - 四个主题都定义了主要语法令牌（keyword/comment/string/number/
- *     function/title/attr/builtin/literal/punctuation）；
- *   - number 与 literal 在每套主题里必须是不同 hex；
+ *     function/title/variable/attr/builtin/literal/punctuation）；
+ *   - function 与 title、number 与 literal 在每套主题里必须是不同 hex；
+ *   - comment/keyword/string/function/variable/number 两两 hex 不同；
+ *   - 注释相对该主题 --lightink-code-bg 的 WCAG 对比度 ≥ 4.5:1；
  *   - :root / warm-light 定义嵌套 chrome 半径令牌，且 control < panel < dialog；
  *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源），
- *     含 .hljs-punctuation 与 .hljs-meta。
+ *     含 .hljs-punctuation、.hljs-meta、.hljs-variable；
+ *     .hljs-attr / .hljs-attribute 留在 attr，不与 variable 共用。
  *
- * 说明：视觉效果无法 headless 验证，这里只断言结构约束。
+ * 说明：不锁死具体艺术 hex，只锁不变量。视觉气质无法 headless 验证。
  * 注：项目未装 @types/node 且 vitest 会把 CSS 的 `?raw` 导入存根为空，
  * 故用最小 ambient 声明 + fs 读取原始文件文本。
  */
@@ -19,6 +22,17 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(new URL('../tokens.css', import.meta.url), 'utf-8');
+
+const BUILTIN_THEMES = ['warm-light', 'cool-light', 'dark', 'midnight'] as const;
+
+const SYNTAX_ROLES = [
+  'comment',
+  'keyword',
+  'string',
+  'function',
+  'variable',
+  'number',
+] as const;
 
 /** 提取 `[data-theme="<id>"] { ... }` 块的内容（允许组合选择器如 `:root,`）。 */
 function themeBlock(id: string): string {
@@ -38,6 +52,33 @@ function tokenValue(block: string, name: string): string {
     throw new Error(`主题块缺少令牌 ${name}`);
   }
   return match[1].trim();
+}
+
+function parseHex(value: string): [number, number, number] {
+  const hex = /^#([0-9a-f]{6})$/i.exec(value);
+  if (hex === null) {
+    throw new Error(`期望 #rrggbb，实际 ${value}`);
+  }
+  const n = hex[1];
+  return [1, 3, 5].map((i) => parseInt(n.slice(i - 1, i + 1), 16)) as [number, number, number];
+}
+
+function channelLuminance(channel: number): number {
+  const c = channel / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(value: string): number {
+  const [r, g, b] = parseHex(value);
+  return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b);
+}
+
+/** WCAG 2 相对亮度对比度；(L1 + 0.05) / (L2 + 0.05)。 */
+function contrastRatio(foreground: string, background: string): number {
+  const l1 = relativeLuminance(foreground);
+  const l2 = relativeLuminance(background);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 describe('tokens.css 内置主题', () => {
@@ -106,7 +147,7 @@ describe('tokens.css 内置主题', () => {
     expect((r + g + b) / 3).toBeGreaterThan(0x50);
   });
 
-  it.each(['warm-light', 'cool-light', 'dark', 'midnight'])('%s 定义全部主要语法令牌', (id) => {
+  it.each(BUILTIN_THEMES)('%s 定义全部主要语法令牌', (id) => {
     const block = themeBlock(id);
     for (const token of [
       '--lightink-syntax-keyword',
@@ -115,6 +156,7 @@ describe('tokens.css 内置主题', () => {
       '--lightink-syntax-number',
       '--lightink-syntax-function',
       '--lightink-syntax-title',
+      '--lightink-syntax-variable',
       '--lightink-syntax-attr',
       '--lightink-syntax-builtin',
       '--lightink-syntax-literal',
@@ -136,17 +178,54 @@ describe('tokens.css 内置主题', () => {
     }
   });
 
-  it.each(['warm-light', 'cool-light', 'dark', 'midnight'])(
-    '%s number 与 literal 令牌颜色不同',
-    (id) => {
-      const block = themeBlock(id);
-      const number = tokenValue(block, '--lightink-syntax-number').toLowerCase();
-      const literal = tokenValue(block, '--lightink-syntax-literal').toLowerCase();
-      expect(number, `${id} number 与 literal 不得同色`).not.toBe(literal);
-      expect(number).toMatch(/^#[0-9a-f]{3,8}$/i);
-      expect(literal).toMatch(/^#[0-9a-f]{3,8}$/i);
-    },
-  );
+  it.each(BUILTIN_THEMES)('%s number 与 literal 令牌颜色不同', (id) => {
+    const block = themeBlock(id);
+    const number = tokenValue(block, '--lightink-syntax-number').toLowerCase();
+    const literal = tokenValue(block, '--lightink-syntax-literal').toLowerCase();
+    expect(number, `${id} number 与 literal 不得同色`).not.toBe(literal);
+    expect(number).toMatch(/^#[0-9a-f]{3,8}$/i);
+    expect(literal).toMatch(/^#[0-9a-f]{3,8}$/i);
+  });
+
+  it.each(BUILTIN_THEMES)('%s function 与 title 令牌颜色不同', (id) => {
+    const block = themeBlock(id);
+    const fn = tokenValue(block, '--lightink-syntax-function').toLowerCase();
+    const title = tokenValue(block, '--lightink-syntax-title').toLowerCase();
+    expect(fn, `${id} function 与 title 不得同色`).not.toBe(title);
+    expect(fn).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(title).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  it.each(BUILTIN_THEMES)('%s 六类语法角色两两 hex 不同', (id) => {
+    const block = themeBlock(id);
+    const roles = SYNTAX_ROLES.map((role) => ({
+      role,
+      value: tokenValue(block, `--lightink-syntax-${role}`).toLowerCase(),
+    }));
+    for (const { role, value } of roles) {
+      expect(value, `${id} ${role} 应为 #rrggbb`).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+    for (let i = 0; i < roles.length; i++) {
+      for (let j = i + 1; j < roles.length; j++) {
+        expect(
+          roles[i].value,
+          `${id} ${roles[i].role} 与 ${roles[j].role} 不得同色`,
+        ).not.toBe(roles[j].value);
+      }
+    }
+  });
+
+  it.each(BUILTIN_THEMES)('%s 注释相对 code-bg 对比度 ≥ 4.5:1', (id) => {
+    const block = themeBlock(id);
+    const comment = tokenValue(block, '--lightink-syntax-comment');
+    const codeBg = tokenValue(block, '--lightink-code-bg');
+    expect(comment).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(codeBg).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(
+      contrastRatio(comment, codeBg),
+      `${id} 注释 ${comment} vs code-bg ${codeBg}`,
+    ).toBeGreaterThanOrEqual(4.5);
+  });
 
   it('定义嵌套 chrome 半径令牌且 control < panel < dialog', () => {
     const block = themeBlock('warm-light');
@@ -171,6 +250,9 @@ describe('tokens.css hljs 类映射', () => {
       '.hljs-function',
       '.hljs-title',
       '.hljs-attr',
+      '.hljs-attribute',
+      '.hljs-variable',
+      '.hljs-template-variable',
       '.hljs-built_in',
       '.hljs-literal',
       '.hljs-punctuation',
@@ -183,6 +265,12 @@ describe('tokens.css hljs 类映射', () => {
     expect(css).toMatch(/\.hljs-comment[^{]*\{[^}]*var\(--lightink-syntax-comment\)/);
     expect(css).toMatch(/\.hljs-string[^{]*\{[^}]*var\(--lightink-syntax-string\)/);
     expect(css).toMatch(/\.hljs-number[^{]*\{[^}]*var\(--lightink-syntax-number\)/);
+    expect(css).toMatch(/\.hljs-title\.function_[^{]*\{[^}]*var\(--lightink-syntax-function\)/);
+    expect(css).toMatch(/\.hljs-title\.class_[^{]*\{[^}]*var\(--lightink-syntax-title\)/);
+    expect(css).toMatch(/\.hljs-attr[^{]*\{[^}]*var\(--lightink-syntax-attr\)/);
+    expect(css).toMatch(/\.hljs-attribute[^{]*\{[^}]*var\(--lightink-syntax-attr\)/);
+    expect(css).toMatch(/\.hljs-variable[^{]*\{[^}]*var\(--lightink-syntax-variable\)/);
+    expect(css).toMatch(/\.hljs-template-variable[^{]*\{[^}]*var\(--lightink-syntax-variable\)/);
     expect(css).toMatch(/\.hljs-built_in[^{]*\{[^}]*var\(--lightink-syntax-builtin\)/);
     expect(css).toMatch(/\.hljs-punctuation[^{]*\{[^}]*var\(--lightink-syntax-punctuation\)/);
     expect(css).toMatch(/\.hljs-meta\s*\{[^}]*var\(--lightink-syntax-comment\)/);
