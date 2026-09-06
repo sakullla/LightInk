@@ -95,6 +95,7 @@ export interface ComicChromeDom {
   readonly previousButton: HTMLButtonElement;
   readonly nextButton: HTMLButtonElement;
   readonly pageSlider: HTMLInputElement;
+  readonly sliderWrap: HTMLElement;
   readonly verticalButton: HTMLButtonElement;
   readonly pagedButton: HTMLButtonElement;
   readonly ltrButton: HTMLButtonElement;
@@ -159,7 +160,7 @@ export function buildComicChrome(
   const pageButton = document.createElement('button');
   pageButton.type = 'button';
   pageButton.className = 'lightink-reader-comic-page';
-  pageButton.title = labels.pageSlider;
+  pageButton.title = labels.jumpToPage ?? labels.pageSlider;
   const bottombar = document.createElement('div');
   bottombar.className = 'lightink-reader-comic-bottombar';
   bottombar.setAttribute('role', 'toolbar');
@@ -189,6 +190,10 @@ export function buildComicChrome(
   pageSlider.min = '1';
   pageSlider.step = '1';
   pageSlider.setAttribute('aria-label', labels.pageSlider);
+  // 滑杆轨道包裹层：拖动页码气泡（comic-navigation）相对它定位跟随 thumb。
+  const sliderWrap = document.createElement('div');
+  sliderWrap.className = 'lightink-reader-comic-slider-wrap';
+  sliderWrap.appendChild(pageSlider);
   const chip = (visible: string, label: string): HTMLButtonElement =>
     toolbarButton(visible, label, 'lightink-reader-comic-chip');
   const chineseChrome = labels.paged === '横向翻页';
@@ -210,7 +215,7 @@ export function buildComicChrome(
     return element;
   };
   const spreadGroup = group(singleButton, doubleButton, autoButton);
-  scrub.append(previousButton, pageSlider, nextButton);
+  scrub.append(previousButton, sliderWrap, nextButton);
   modes.append(
     group(pagedButton, verticalButton),
     group(ltrButton, rtlButton),
@@ -227,6 +232,7 @@ export function buildComicChrome(
     previousButton,
     nextButton,
     pageSlider,
+    sliderWrap,
     verticalButton,
     pagedButton,
     ltrButton,

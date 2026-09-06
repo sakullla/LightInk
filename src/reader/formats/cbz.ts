@@ -39,7 +39,6 @@ import {
 import {
   advanceComicPage,
   comicPageFromProgress,
-  comicSpreadList,
   comicSpreadStart,
   comicVisiblePages,
   loadComicPreferences,
@@ -72,6 +71,10 @@ import {
 } from '../comic/comic-chrome.js';
 import { createComicSlot, loadPage, releasePage } from '../comic/comic-pages.js';
 import { applyLayout } from '../comic/comic-layout.js';
+import {
+  wireComicPageJump,
+  wireComicScrubNavigation,
+} from '../comic/comic-navigation.js';
 import {
   cancelZoomRasterCommit,
   resetViewTransform,
@@ -115,6 +118,10 @@ export interface ComicToolbarLabels {
   readonly keepMargins?: string;
   readonly margins?: string;
   readonly pageSlider: string;
+  readonly jumpToPage?: string;
+  readonly jumpToPageConfirm?: string;
+  /** 越界/非数字页码反馈；`{total}` 替换为总页数。 */
+  readonly jumpToPageInvalid?: string;
   readonly toggleChrome: string;
   readonly imageDecodeFailed: string;
   readonly nestedArchive: string;
@@ -335,6 +342,9 @@ function defaultLabels(): ComicToolbarLabels {
         keepMargins: '保留边距',
         margins: '边距',
         pageSlider: '页码',
+        jumpToPage: '跳转到页',
+        jumpToPageConfirm: '跳转',
+        jumpToPageInvalid: '请输入 1 到 {total} 之间的页码',
         toggleChrome: '显示或隐藏阅读控件',
         imageDecodeFailed: '无法解码此图片',
         nestedArchive: '内层归档',
@@ -362,6 +372,9 @@ function defaultLabels(): ComicToolbarLabels {
         keepMargins: 'Keep margins',
         margins: 'Margins',
         pageSlider: 'Page',
+        jumpToPage: 'Go to page',
+        jumpToPageConfirm: 'Go',
+        jumpToPageInvalid: 'Enter a page number between 1 and {total}',
         toggleChrome: 'Show or hide reader controls',
         imageDecodeFailed: 'This image could not be decoded',
         nestedArchive: 'Nested archive',
@@ -594,26 +607,8 @@ export async function renderCbzInto(
     session.cropButton.addEventListener('click', () =>
       setPreferences({ cropMargins: !session.preferences.cropMargins }),
     );
-    session.pageSlider.addEventListener('input', () => {
-      const next = Number.parseInt(session.pageSlider.value, 10);
-      if (!Number.isSafeInteger(next)) return;
-      const spreadPrefs = comicLayoutSpreadPrefs(session);
-      if (session.preferences.mode === 'paged' && spreadPrefs.spread === 'double') {
-        const spreads = comicSpreadList(
-          session.images.length,
-          spreadPrefs,
-          session.landscapePages,
-        );
-        const page = spreads[Math.min(spreads.length, Math.max(1, next)) - 1]?.[0];
-        if (page !== undefined) scrollToIndex(page);
-        return;
-      }
-      scrollToIndex(next - 1);
-    });
-    session.pageButton.addEventListener('click', () => {
-      setChromeVisible(session, true);
-      session.pageSlider.focus();
-    });
+    wireComicScrubNavigation(session, scrollToIndex);
+    const pageJump = wireComicPageJump(session, scrollToIndex);
 
     const handlers = createComicGestureHandlers(session);
     const onChromePointerEnter = (): void => revealChrome(session);
@@ -662,6 +657,7 @@ export async function renderCbzInto(
       session.destroyed = true;
       session.cropGeneration += 1;
       session.cropQueue.length = 0;
+      pageJump.destroy(); // 跳转对话框挂在 document.body，随会话摘除
       clearTimeout(prefetchTimer);
       cancelZoomRasterCommit(session); // 停顿提交定时器随销毁取消
       unpinZoomRaster(session); // 钉住的内联几何对称摘除
