@@ -6,6 +6,7 @@ export default defineConfig({
     // 替代每文件 OS 线程，以降低 130 文件的 environment/import 墙钟。
     pool: 'vmThreads',
     maxWorkers: 8,
+    include: ['src/**/*.test.ts'],
     setupFiles: ['./vitest.setup.ts'],
     coverage: { enabled: false },
   },

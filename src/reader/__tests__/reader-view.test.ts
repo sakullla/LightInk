@@ -2704,8 +2704,8 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     expect(finishLookup).toBeTypeOf('function');
     finishLookup!({ entries: [{ partOfSpeech: 'noun', definitions: ['late gloss'] }] });
     await flushAid();
-    expect(panel.hidden).toBe(true);
-    expect(panel.textContent).not.toContain('late gloss');
+    expect(panel!.hidden).toBe(true);
+    expect(panel!.textContent).not.toContain('late gloss');
     await view.destroy();
   });
 
