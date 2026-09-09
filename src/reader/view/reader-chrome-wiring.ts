@@ -15,7 +15,10 @@ import {
   type ReaderChromeLabels,
 } from '../reader-chrome.js';
 import { readerAidLocale } from '../lookup-panel.js';
-import { sessionCapabilitiesForExtension } from '../session/adapters.js';
+import {
+  sessionCapabilitiesForExtension,
+  sessionMemberForExtension,
+} from '../session/adapters.js';
 import { readerPagedScroller, revealPagedElement } from '../flow-renderer.js';
 import { pagedFrameStep } from '../../ui/reading-layout.js';
 import {
@@ -108,6 +111,7 @@ function readerChromeCopy(
     ...take('reader.chrome.bookmarkTick', 'bookmarkTick'),
     ...take('reader.lookup.speak', 'speak'),
     ...take('reader.chrome.assistant', 'assistant'),
+    ...take('reader.chrome.translateBook', 'translateBook'),
   };
 }
 
@@ -1076,6 +1080,13 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       labels: readerChromeCopy(ctx.t),
       speakAvailable,
       onSpeak: speakFromPosition,
+      // 整本翻译入口（R4）：仅 flow 族格式显示（PDF/CBZ 不出现，R7 排除验证）。
+      translateBookAvailable: () => sessionMemberForExtension(ctx.loadedExt) === 'flow',
+      onTranslateBook: () => {
+        if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+          document.dispatchEvent(new CustomEvent('lightink:reader-translate-book'));
+        }
+      },
       onDestroy: () => {
         stopSpeakSession();
         clearFollowAlong();

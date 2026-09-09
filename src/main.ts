@@ -2795,6 +2795,75 @@ const syncedOpdsClient = {
 };
 
 /**
+ * 整本翻译编排器（R4，ADR-5）：书架详情与阅读器 chrome 入口共享的 app 级
+ * 单例。懒创建（动态 import，首屏 bundle 不含 zip.js 重组器）；对话框与
+ * 提示经应用壳注入，断点/网络全走 Rust book_translation_* 命令。
+ */
+type BookTranslationControllerInstance =
+  import('./library/book-translation/controller.js').BookTranslationController;
+
+let bookTranslationController: BookTranslationControllerInstance | undefined;
+let bookTranslationControllerPromise: Promise<BookTranslationControllerInstance> | undefined;
+
+function ensureBookTranslationController(): Promise<BookTranslationControllerInstance> {
+  if (bookTranslationControllerPromise === undefined) {
+    bookTranslationControllerPromise = (async () => {
+      const { createTauriBookTranslationDeps, createBookTranslationController } = await import(
+        './library/book-translation/index.js'
+      );
+      const controller = createBookTranslationController(
+        createTauriBookTranslationDeps({
+          getLocale: () => i18n.locale,
+          t: (key, vars) => i18n.t(key, vars),
+          confirmStart: async (estimate) => {
+            const choice = await showConfirmDialog(document, {
+              title: i18n.t('library.translate.confirmTitle'),
+              message: i18n.t('library.translate.confirmMessage', {
+                title: estimate.title,
+                lang: estimate.targetLang,
+                chars: estimate.sourceChars.toLocaleString(),
+                chunks: String(estimate.totalChunks),
+                pending: String(estimate.pendingChunks),
+                inputChars: estimate.estInputChars.toLocaleString(),
+                outputChars: estimate.estOutputChars.toLocaleString(),
+                requests: String(estimate.pendingChunks),
+              }),
+              buttons: [
+                {
+                  id: 'start',
+                  label: i18n.t('library.translate.start'),
+                  kind: 'primary',
+                },
+                { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
+              ],
+              cancelId: 'cancel',
+            });
+            return choice === 'start';
+          },
+          notify: (message) => {
+            void showAppAlert(message);
+          },
+          openManageAi: () => {
+            document.dispatchEvent(new CustomEvent('lightink:open-manage'));
+          },
+          onImported: () => {
+            // 译本入库（受管新条目）：刷新书架列表让其出现。
+            void libraryView?.refresh();
+          },
+        }),
+      );
+      bookTranslationController = controller;
+      return controller;
+    })();
+    bookTranslationControllerPromise.catch(() => {
+      // 创建失败不缓存失败态：下次入口重试。
+      bookTranslationControllerPromise = undefined;
+    });
+  }
+  return bookTranslationControllerPromise;
+}
+
+/**
  * 书架（封面墙）按需创建：首次进入 shelf 表面时才构建并挂到编辑区。
  * 以 Markdown 关联/CLI 启动、从未点「阅读/书架」的进程不会创建它；
  * 一旦创建即常驻，切编辑器只隐藏不销毁。
@@ -2848,6 +2917,15 @@ function ensureLibraryView(): LibraryView {
         cancelId: 'cancel',
       })) === 'delete',
     onVisibilityChange: onLibraryVisibilityChange,
+    // R4：整本翻译编排器（详情入口 + 进度区）。getter 保证懒装载完成后
+    // 下次渲染即可见；装载在书架创建时一并触发。
+    get bookTranslation() {
+      return bookTranslationController ?? undefined;
+    },
+  });
+  // 入口可用性依赖编排器；创建完成后刷新一次详情让入口出现。
+  void ensureBookTranslationController().then(() => {
+    libraryView?.retranslate();
   });
   return libraryView;
 }
@@ -2860,6 +2938,47 @@ document.addEventListener('lightink:open-manage', () => {
   view.element
     .querySelector<HTMLButtonElement>('.lightink-library-manage-entry')
     ?.click();
+});
+
+// R4：阅读器 chrome「整本翻译」入口（reader-chrome-wiring 派发）。本地/受管
+// flow 书发起；确认后返回书架（进度在详情面板）；远程书提示先缓存。
+document.addEventListener('lightink:reader-translate-book', () => {
+  void (async () => {
+    const tab = manager?.activeTab;
+    if (tab === null || tab === undefined || tab.kind !== 'reader') {
+      return;
+    }
+    const target = tab.target;
+    if (target.kind !== 'local') {
+      void showAppAlert(i18n.t('library.translate.remoteOnly'));
+      return;
+    }
+    const extension = target.extension || extOfPath(target.path);
+    const controller = await ensureBookTranslationController();
+    const result = await controller.launch(
+      {
+        path: target.path,
+        title: target.displayName || target.path,
+        extension,
+      },
+      {
+        onConfirmed: () => {
+          workspace.returnToShelf();
+          void showAppAlert(i18n.t('library.translate.readerStart'));
+        },
+      },
+    );
+    if (result === 'paused' || result === 'completed' || result === 'failed') {
+      const view = ensureLibraryView();
+      void view.refresh();
+    }
+  })().catch((error: unknown) => {
+    void showAppAlert(
+      i18n.t('library.translate.failed', {
+        reason: error instanceof Error ? error.message : String(error ?? ''),
+      }),
+    );
+  });
 });
 
 // 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。

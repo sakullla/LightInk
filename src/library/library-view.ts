@@ -43,7 +43,13 @@ import {
   createLibraryManage,
   type LibraryManageLabels,
 } from './library-manage.js';
-import { translate } from '../i18n/messages.js';
+import { translate, type MessageKey } from '../i18n/messages.js';
+import type { BookTranslationController } from './book-translation/controller.js';
+import type { BookTranslationStatus } from './book-translation/types.js';
+import {
+  bookTranslationPhaseIsRunning,
+  bookTranslationSupported,
+} from './book-translation/support.js';
 import {
   coverProgressFillPercent,
   formatLibraryReadingDuration,
@@ -665,6 +671,11 @@ export interface LibraryViewDependencies {
   readonly themeStorage?: LibraryThemeStorage | null;
   /** Persists reader chrome prefs such as the bottom progress bar. */
   readonly readerPrefsStorage?: ReaderPrefsStorage | null;
+  /**
+   * 整本翻译编排器（R4；main.ts 装配注入）。缺省时书架详情不显示整本翻译
+   * 入口（测试/降级环境安全缺省）。
+   */
+  readonly bookTranslation?: BookTranslationController;
 }
 
 export const CONTINUE_DISMISS_KEY = 'lightink.library.continueDismissed';
@@ -970,6 +981,84 @@ export function jacketHue(title: string): number {
   }
   // Spread neighbouring titles apart instead of clustering near one hue.
   return Math.abs(hash * 137) % 360;
+}
+
+/** 进度阶段文案键（模板串键无法通过 MessageKey 类型，显式映射）。 */
+const TRANSLATE_PHASE_KEYS: Readonly<Record<string, MessageKey>> = {
+  preparing: 'library.translate.progressPhase.preparing',
+  translating: 'library.translate.progressPhase.translating',
+  building: 'library.translate.progressPhase.building',
+  importing: 'library.translate.progressPhase.importing',
+};
+
+/**
+ * 整本翻译进度面板（R4）：阶段文案 + 章节级进度条 + 暂停按钮（暂停=取消
+ * 同义实现，缓存保留）；出错显示本地化原因。纯渲染，状态源为控制器。
+ */
+function renderTranslateProgress(
+  doc: Document,
+  controller: BookTranslationController,
+  status: BookTranslationStatus,
+  path: string,
+  locale: 'en' | 'zh-CN',
+): HTMLElement {
+  const panel = doc.createElement('div');
+  panel.className = 'lightink-library-translate-progress';
+  panel.dataset.translatePhase = status.phase;
+  const percent =
+    status.totalChunks > 0
+      ? Math.min(100, Math.round((status.doneChunks / status.totalChunks) * 100))
+      : 0;
+  const bar = doc.createElement('div');
+  bar.className = 'lightink-library-translate-progress-bar';
+  bar.setAttribute('role', 'progressbar');
+  bar.setAttribute('aria-valuemin', '0');
+  bar.setAttribute('aria-valuemax', '100');
+  bar.setAttribute('aria-valuenow', String(percent));
+  const fill = doc.createElement('div');
+  fill.className = 'lightink-library-translate-progress-fill';
+  fill.style.width = `${percent}%`;
+  bar.appendChild(fill);
+  const row = doc.createElement('div');
+  row.className = 'lightink-library-translate-progress-row';
+  const phaseLabel =
+    status.phase === 'paused'
+      ? translate(locale, 'library.translate.paused', {
+          doneChunks: String(status.doneChunks),
+          totalChunks: String(status.totalChunks),
+          done: String(status.doneChapters),
+          total: String(status.totalChapters),
+        })
+      : status.phase === 'error'
+        ? translate(locale, 'library.translate.failed', {
+            reason: status.error ?? translate(locale, 'reader.ai.error.failed'),
+          })
+        : `${translate(locale, TRANSLATE_PHASE_KEYS[status.phase] ?? 'library.translate.progressPhase.preparing')} · ${translate(
+            locale,
+            'library.translate.progress',
+            {
+              done: String(status.doneChapters),
+              total: String(status.totalChapters),
+              doneChunks: String(status.doneChunks),
+              totalChunks: String(status.totalChunks),
+            },
+          )}`;
+  const label = doc.createElement('span');
+  label.className = 'lightink-library-translate-progress-label';
+  if (status.phase === 'preparing') {
+    label.textContent = `${translate(locale, 'library.translate.parsing')}`;
+  } else {
+    label.textContent = phaseLabel;
+  }
+  row.appendChild(label);
+  if (bookTranslationPhaseIsRunning(status)) {
+    const pause = button(doc, translate(locale, 'library.translate.cancel'));
+    pause.className += ' lightink-library-translate-cancel';
+    pause.addEventListener('click', () => controller.cancel(path));
+    row.appendChild(pause);
+  }
+  panel.append(bar, row);
+  return panel;
 }
 
 function isLocalItem(item: LibraryItem): boolean {
@@ -1671,6 +1760,13 @@ export function createLibraryView(
     }
   });
   const activeOperations = new Set<AbortController>();
+  // 整本翻译进度订阅：状态变化重绘详情（进度条/入口续译态）。取消订阅挂在
+  // 视图销毁（与其它清理同一收口）。
+  const unsubscribeBookTranslation = deps.bookTranslation?.subscribe(() => {
+    if (selected !== null) {
+      renderDetail();
+    }
+  });
   const trail: Array<{ title: string; url?: string }> = [];
   let groupListCollapsed = true;
   let smartGroupListCollapsed = true;
@@ -4408,6 +4504,51 @@ export function createLibraryView(
       remove.addEventListener('click', () => void removeItem(selected!.item));
       actions.appendChild(remove);
     }
+    // 整本翻译入口与进度（R4）：本地/受管 + flow 族格式（PDF/CBZ 不出现）；
+    // 运行中/暂停/出错显示章节级进度与暂停（暂停=取消的同义实现，缓存保留）。
+    const translateController = deps.bookTranslation;
+    const translatePath = selected.item.localPath;
+    if (
+      translateController !== undefined &&
+      isLocalItem(selected.item) &&
+      translatePath != null &&
+      translatePath !== '' &&
+      bookTranslationSupported(selected.item.extension)
+    ) {
+      const locale = deps.getLocale();
+      const status = translateController.statusFor(translatePath);
+      const resumable = status?.phase === 'paused' || status?.phase === 'error';
+      if (!bookTranslationPhaseIsRunning(status)) {
+        const translateButton = button(
+          doc,
+          translate(
+            locale,
+            resumable ? 'library.translate.resume' : 'library.translate.entry',
+          ),
+          'lightink-library-translate',
+        );
+        const launch = (): void => {
+          void translateController.launch({
+            path: translatePath,
+            title: selected?.item.title ?? translatePath,
+            extension: selected?.item.extension ?? '',
+          });
+        };
+        translateButton.addEventListener('click', launch);
+        actions.appendChild(translateButton);
+      }
+      if (status !== null && status.phase !== 'done') {
+        detail.appendChild(
+          renderTranslateProgress(
+            doc,
+            translateController,
+            status,
+            translatePath,
+            locale,
+          ),
+        );
+      }
+    }
     detail.appendChild(actions);
   }
 
@@ -5600,6 +5741,7 @@ export function createLibraryView(
       catalogMoreRelease = null;
       for (const controller of activeOperations) controller.abort();
       activeOperations.clear();
+      unsubscribeBookTranslation?.();
       manage.destroy();
       unbindGroupOverlayReveal();
       unbindSourceOverlayReveal();

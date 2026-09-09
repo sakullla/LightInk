@@ -625,7 +625,7 @@ fn preview_at(connection: &Connection) -> Result<ManagedMigrationPreview, String
     Ok(ManagedMigrationPreview { entries })
 }
 
-fn import_managed_book_at(
+pub(crate) fn import_managed_book_at(
     connection: &mut Connection,
     app_data_dir: &Path,
     source: &Path,

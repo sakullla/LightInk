@@ -1994,6 +1994,50 @@ html[data-touch-primary] .lightink-library-header {
   margin-top: 14px;
 }
 
+/* 整本翻译入口与进度（R4）：详情动作区的进度条 + 暂停按钮。 */
+.lightink-library-translate-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-translate-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--lightink-accent-soft);
+  overflow: hidden;
+}
+
+.lightink-library-translate-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--lightink-accent);
+  transition: width 0.2s ease;
+}
+
+.lightink-library-translate-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lightink-library-translate-progress-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lightink-library-translate-progress[data-translate-phase='error'] .lightink-library-translate-progress-label {
+  color: var(--lightink-danger);
+}
+
+.lightink-library-translate-cancel {
+  flex: none;
+}
+
 .lightink-library-offline-toggle {
   display: inline-flex;
   align-items: center;

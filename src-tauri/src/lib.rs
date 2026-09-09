@@ -9,6 +9,7 @@ mod annotations;
 mod archive;
 mod asset;
 mod assistant;
+mod book_translation;
 mod cli;
 mod credential_store;
 mod documents;
@@ -147,6 +148,13 @@ pub fn run() {
             assistant::assistant_read_history,
             assistant::assistant_write_history,
             assistant::assistant_clear_history,
+            book_translation::book_translation_read_state,
+            book_translation::book_translation_write_state,
+            book_translation::book_translation_read_chunk,
+            book_translation::book_translation_write_chunk,
+            book_translation::book_translation_clear,
+            book_translation::book_translation_import_epub,
+            book_translation::book_translation_translate_chunk,
             webdav::sync_get_profile,
             webdav::sync_save_profile,
             webdav::sync_test_profile,

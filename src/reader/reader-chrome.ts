@@ -49,6 +49,8 @@ export interface ReaderChromeLabels {
   readonly bookmarkTick: string;
   /** Footer speak control copy; not a chrome action. */
   readonly speak: string;
+  /** 整本翻译入口文案（R4；不是 chrome action 成员，仅可用时渲染）。 */
+  readonly translateBook: string;
 }
 
 export interface ReaderChromeProgress {
@@ -89,6 +91,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     footer: 'Reading progress',
     bookmarkTick: 'Jump to bookmark',
     speak: 'Speak',
+    translateBook: 'Translate Book',
   },
   'zh-CN': {
     backToShelf: '返回书架',
@@ -102,6 +105,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     footer: '阅读进度',
     bookmarkTick: '跳到书签',
     speak: '朗读',
+    translateBook: '整本翻译',
   },
 };
 
@@ -160,6 +164,13 @@ export interface ReaderChromeDeps {
    */
   speakAvailable?: () => boolean;
   onSpeak?: () => void;
+  /**
+   * 整本翻译入口（R4）：flow 族格式且宿主支持时为真。与 speak 同型——
+   * 额外 DOM，非 `READER_CHROME_ACTIONS` 成员；不可用时自摘除。
+   */
+  translateBookAvailable?: () => boolean;
+  /** 点击整本翻译入口（宿主裁决发起/引导/能力提示）。 */
+  onTranslateBook?: () => void;
   onDestroy?: () => void;
 }
 
@@ -399,13 +410,20 @@ export function createReaderChrome(
   speakButton.textContent = labels.speak;
   speakButton.setAttribute('aria-label', labels.speak);
   applyButtonLayout(speakButton, touchMode);
+  const translateButton = document.createElement('button');
+  translateButton.type = 'button';
+  translateButton.className = 'lightink-reader-chrome-action lightink-reader-chrome-translate';
+  translateButton.dataset.readerTranslateBook = 'true';
+  translateButton.textContent = labels.translateBook;
+  translateButton.setAttribute('aria-label', labels.translateBook);
+  applyButtonLayout(translateButton, touchMode);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton);
+  tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton, translateButton);
   if (touchMode) {
     const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
     const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
@@ -557,6 +575,14 @@ export function createReaderChrome(
       }
     } else if (speakButton.parentNode !== footer) {
       footer.appendChild(speakButton);
+    }
+    // 整本翻译入口与 speak 同型（非 chrome action 成员）；不可用时自摘除。
+    const translateOn = deps.translateBookAvailable?.() === true;
+    translateButton.hidden = !revealed || !translateOn;
+    if (!translateOn) {
+      translateButton.remove();
+    } else if (!tools.contains(translateButton)) {
+      tools.appendChild(translateButton);
     }
   };
 
@@ -804,6 +830,11 @@ export function createReaderChrome(
     event.preventDefault();
     event.stopPropagation();
     deps.onSpeak?.();
+  });
+  translateButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deps.onTranslateBook?.();
   });
 
   const onDockEnter = (): void => {

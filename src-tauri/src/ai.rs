@@ -1251,6 +1251,111 @@ fn translate_prompt(text: &str, target_lang: &str) -> String {
     )
 }
 
+/// 术语表单侧长度上限(过长条目说明模型输出了句子而非术语,直接拒绝)。
+const MAX_GLOSSARY_TERM_CHARS: usize = 80;
+/// 术语表条目数上限(提示词体积有界,超出由前端停止收集,不放大请求)。
+const MAX_GLOSSARY_ENTRIES: usize = 300;
+
+/// 整本翻译单块译文提示词(ADR-5):与选区翻译同一网络栈,但携带按书术语表
+/// (人名/关键术语跨章一致),并要求模型在译文最末以 `<glossary>` 行回报
+/// 新增术语(前端解析剥离后再落盘)。密钥与译文无关,永不进入提示词。
+fn book_chunk_prompt(text: &str, target_lang: &str, glossary: &[(String, String)]) -> String {
+    let mut prompt = String::from(
+        "你是整本书的翻译引擎,正在逐段翻译同一本书,不同段落将由不同请求翻译,必须保持人名与术语一致。\n\
+         把 <text> 中的内容翻译成 ",
+    );
+    prompt.push_str(target_lang);
+    prompt.push_str(
+        ",只输出译文本身,不要解释、不要添加任何前后缀。\n\
+         保持段落划分(逐段换行),不要合并、拆分或遗漏段落。\n\
+         若正文中出现术语表之外的重要人名、地名或术语,在译文最末另起一行输出 `<glossary>原文=译文;原文=译文</glossary>`;没有新增术语时不要输出该行。\n",
+    );
+    if !glossary.is_empty() {
+        prompt.push_str("术语表(等号左侧原文的译法必须严格遵循):\n");
+        for (source, target) in glossary {
+            prompt.push_str(source);
+            prompt.push('=');
+            prompt.push_str(target);
+            prompt.push('\n');
+        }
+    }
+    prompt.push_str("<text>\n");
+    prompt.push_str(text);
+    prompt.push_str("\n</text>");
+    prompt
+}
+
+/// 校验整本翻译块输入(空文本/控制字符/超长/术语表无效)。返回 trim 后长度。
+fn validate_book_chunk_input(text: &str, glossary: &[(String, String)]) -> Result<String, AiError> {
+    if contains_forbidden_control(text) {
+        return Err(AiError::new("AI_TEXT_INVALID", "翻译文本包含控制字符"));
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(AiError::new("AI_TEXT_EMPTY", "翻译文本为空"));
+    }
+    // 块由前端预切;这里直接拒绝而非截断——静默截断会丢正文(与选区翻译的
+    // 截断语义不同:选区是用户可见文本,块是机器切分,必须显式失败)。
+    if text.chars().count() > MAX_TRANSLATE_CHARS {
+        return Err(AiError::new(
+            "AI_TEXT_TOO_LONG",
+            format!("翻译块超过 {MAX_TRANSLATE_CHARS} 字符上限"),
+        ));
+    }
+    if glossary.len() > MAX_GLOSSARY_ENTRIES {
+        return Err(AiError::new(
+            "AI_GLOSSARY_INVALID",
+            format!("术语表超过 {MAX_GLOSSARY_ENTRIES} 条上限"),
+        ));
+    }
+    for (source, target) in glossary {
+        let invalid = source.trim().is_empty()
+            || target.trim().is_empty()
+            || source.chars().count() > MAX_GLOSSARY_TERM_CHARS
+            || target.chars().count() > MAX_GLOSSARY_TERM_CHARS
+            || contains_forbidden_control(source)
+            || contains_forbidden_control(target);
+        if invalid {
+            return Err(AiError::new("AI_GLOSSARY_INVALID", "术语表条目无效"));
+        }
+    }
+    Ok(text)
+}
+
+/// 整本翻译单块翻译(ADR-5/R4,由 `book_translation::book_translation_translate_chunk`
+/// 调用):与 `ai_translate_selection` 同一三端点请求/解析路径(Translate 用途
+/// 的 max_tokens),输入超过 5000 字符直接拒绝(块由前端预切)。
+pub(crate) async fn translate_book_chunk(
+    app: &AppHandle,
+    text: &str,
+    target_lang: &str,
+    glossary: &[(String, String)],
+) -> Result<AiTranslationResult, AiError> {
+    let (config, provider) = resolve_provider(app)?;
+    let text = validate_book_chunk_input(text, glossary)?;
+    let lang = resolve_target_lang(Some(target_lang.to_string()), config.target_lang.clone())?;
+    let prompt = book_chunk_prompt(&text, &lang, glossary);
+    let message = AiChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    };
+    let body = build_chat_body(
+        provider.kind,
+        &provider.model,
+        std::slice::from_ref(&message),
+        max_tokens_for(provider.kind, AiPurpose::Translate),
+        false,
+    )?;
+    let response = post_chat(&provider, &body).await?;
+    let value = read_success_json(response, &provider.key).await?;
+    let translated = extract_reply_text(provider.kind, &value)?;
+    Ok(AiTranslationResult {
+        text: translated,
+        target_lang: lang,
+        truncated: false,
+    })
+}
+
 /// 流式多轮对话:经 IPC `Channel` 增量推送 `{type:\"delta\",text}`,
 /// 终态由返回值承载(完成含 finish 与累计字数)或以 `AiError` 错误码失败。
 /// 流式累计 2MB 上限;相邻 chunk 读取间隔超 60s 判超时。
@@ -1855,6 +1960,74 @@ mod tests {
         assert_eq!(kept.chars().count(), MAX_TRANSLATE_CHARS);
         assert!(kept.ends_with('汉'));
         assert!(!kept.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn book_chunk_prompt_carries_glossary_and_tail_contract() {
+        let glossary = vec![
+            ("Harry".to_string(), "哈利".to_string()),
+            ("Hogwarts".to_string(), "霍格沃茨".to_string()),
+        ];
+        let prompt = book_chunk_prompt("Harry walked.", "简体中文", &glossary);
+        // 术语表逐条嵌入(原文在前,译法在后)。
+        assert!(prompt.contains("术语表"));
+        assert!(prompt.contains("Harry=哈利\n"));
+        assert!(prompt.contains("Hogwarts=霍格沃茨\n"));
+        // 新增术语回报契约与正文包裹标签。
+        assert!(prompt.contains("<glossary>"));
+        assert!(prompt.contains("<text>\nHarry walked.\n</text>"));
+        assert!(prompt.contains("逐段翻译同一本书"));
+        // 空术语表时不出现术语表段（指令行仍会提及术语表机制本身）。
+        let bare = book_chunk_prompt("Hello", "English", &[]);
+        assert!(!bare.contains("术语表(等号左侧"));
+        assert!(!bare.contains("Harry="));
+        assert!(bare.contains("<text>"));
+    }
+
+    #[test]
+    fn book_chunk_input_rejects_blank_oversized_and_bad_glossary() {
+        let glossary = vec![("Harry".to_string(), "哈利".to_string())];
+        assert!(validate_book_chunk_input("  甲 乙 ", &glossary).is_ok());
+        // 超过选区翻译同一上限直接拒绝(块必须由前端预切,不静默截断)。
+        let oversized = "汉".repeat(MAX_TRANSLATE_CHARS + 1);
+        assert_eq!(
+            validate_book_chunk_input(&oversized, &glossary)
+                .unwrap_err()
+                .code,
+            "AI_TEXT_TOO_LONG"
+        );
+        assert_eq!(
+            validate_book_chunk_input("   ", &glossary)
+                .unwrap_err()
+                .code,
+            "AI_TEXT_EMPTY"
+        );
+        assert_eq!(
+            validate_book_chunk_input("甲\u{0007}", &glossary)
+                .unwrap_err()
+                .code,
+            "AI_TEXT_INVALID"
+        );
+        for bad in [
+            vec![("".to_string(), "甲".to_string())],
+            vec![("甲".to_string(), "  ".to_string())],
+            vec![("甲".to_string(), "\u{0007}".to_string())],
+            vec![("a".repeat(MAX_GLOSSARY_TERM_CHARS + 1), "甲".to_string())],
+        ] {
+            assert_eq!(
+                validate_book_chunk_input("正文", &bad).unwrap_err().code,
+                "AI_GLOSSARY_INVALID"
+            );
+        }
+        let too_many = (0..MAX_GLOSSARY_ENTRIES + 1)
+            .map(|index| (format!("s{index}"), format!("t{index}")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_book_chunk_input("正文", &too_many)
+                .unwrap_err()
+                .code,
+            "AI_GLOSSARY_INVALID"
+        );
     }
 
     #[test]
