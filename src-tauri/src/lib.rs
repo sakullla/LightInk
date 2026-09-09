@@ -4,6 +4,7 @@
 #[link(name = "lightink_windows_test_manifest", kind = "static")]
 extern "C" {}
 
+mod ai;
 mod annotations;
 mod archive;
 mod asset;
@@ -134,6 +135,14 @@ pub fn run() {
             reader_aid::reader_deepl_configured,
             reader_aid::reader_deepl_store_key,
             reader_aid::reader_deepl_forget_key,
+            ai::ai_get_config,
+            ai::ai_save_config,
+            ai::ai_store_key,
+            ai::ai_forget_key,
+            ai::ai_configured,
+            ai::ai_test_connection,
+            ai::ai_translate_selection,
+            ai::ai_chat_stream,
             webdav::sync_get_profile,
             webdav::sync_save_profile,
             webdav::sync_test_profile,

@@ -1,0 +1,2045 @@
+//! AI 提供商网络层(ADR-2/ADR-3,R2)。
+//!
+//! - 配置:`app_data_dir/ai-provider.json` 原子读写(SyncProfile 模式);
+//!   API Key 仅存 `credential_store`(`lightink.ai` / `provider`),配置文件、
+//!   响应体、错误消息与日志均不出现密钥明文(测试断言把关;本模块不写日志)。
+//! - URL:默认仅 HTTPS,`allow_http` 显式勾选后放行 HTTP;拒绝 userinfo/
+//!   query/fragment;任意主机(R2 自定义地址)。与 reader_aid 的 DeepL 主机
+//!   白名单不同,安全边界由「密钥仅 Rust 侧持有 + 超时/大小上限」承担。
+//! - 端点:OpenAI Responses / OpenAI Chat Completions / Claude Messages
+//!   三种格式各自构造请求并解析文本。
+//! - 网络:连接 15s;非流式总超时 60s、响应上限 256KB;流式无总超时、逐块
+//!   读取超时 60s、累计 2MB 上限,经 Tauri IPC `Channel` 增量推送 delta,
+//!   终态(完成或错误码)由命令返回值承载。服务器忽略 stream:true 返回整体
+//!   JSON 时退化为单次解析(ADR-3 降级路径,功能不丢)。
+
+use crate::credential_store::{delete_credential, get_credential, set_credential};
+use futures_util::StreamExt;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::{Client, Response, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager};
+use url::Url;
+
+const CONFIG_FILE: &str = "ai-provider.json";
+const KEYRING_SERVICE: &str = "lightink.ai";
+const KEYRING_REFERENCE: &str = "provider";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_STREAM_BYTES: usize = 2 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = 512 * 1024;
+const MAX_ERROR_BODY_BYTES: usize = 4 * 1024;
+const MAX_TRANSLATE_CHARS: usize = 5000;
+const MAX_MESSAGES: usize = 200;
+const MAX_MODEL_CHARS: usize = 200;
+const TEST_MAX_TOKENS: u32 = 16;
+const TRANSLATE_MAX_TOKENS: u32 = 8192;
+const CHAT_MAX_TOKENS: u32 = 4096;
+
+// ── 错误模型(与 ReaderAidError 同型:{code,message,status}) ──────────
+
+/// AI 命令统一错误。密钥永远不会出现在 `message` 中(见 `redact_secret`)。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiError {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+}
+
+impl AiError {
+    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            status: None,
+        }
+    }
+}
+
+// ── 端点格式 ─────────────────────────────────────────────────────────
+
+/// 端点格式三选一(R2):serde kebab-case 恰好得到
+/// `openai-responses` / `openai-chat` / `claude-messages`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiEndpointKind {
+    OpenaiResponses,
+    OpenaiChat,
+    ClaudeMessages,
+}
+
+impl AiEndpointKind {
+    /// Manage 页端点格式切换时联动预填的官方 base URL(ADR-2),可改。
+    fn default_base_url(self) -> &'static str {
+        match self {
+            Self::OpenaiResponses | Self::OpenaiChat => "https://api.openai.com/v1",
+            Self::ClaudeMessages => "https://api.anthropic.com/v1",
+        }
+    }
+
+    fn endpoint_path(self) -> &'static str {
+        match self {
+            Self::OpenaiResponses => "/responses",
+            Self::OpenaiChat => "/chat/completions",
+            Self::ClaudeMessages => "/messages",
+        }
+    }
+
+    /// OpenAI 两式用 `Authorization: Bearer`;Claude 用 `x-api-key`。
+    fn uses_bearer(self) -> bool {
+        matches!(self, Self::OpenaiResponses | Self::OpenaiChat)
+    }
+}
+
+// ── 配置模型与持久化 ─────────────────────────────────────────────────
+
+/// `ai-provider.json` 内容。`has_key` 只是钥匙串有无的快照(与 SyncProfile
+/// 的 `needs_credential` 同语义),文件不存任何密钥材料(ADR-2)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderConfig {
+    pub endpoint_kind: AiEndpointKind,
+    pub base_url: String,
+    pub model: String,
+    pub allow_http: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_lang: Option<String>,
+    pub has_key: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigInput {
+    pub endpoint_kind: AiEndpointKind,
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub allow_http: Option<bool>,
+    #[serde(default)]
+    pub target_lang: Option<String>,
+}
+
+/// `ai_get_config` / `ai_save_config` 的返回:现值 + 完备判定 + 各格式默认
+/// base URL(UI 联动预填用),不含任何密钥材料。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigStatus {
+    pub endpoint_kind: AiEndpointKind,
+    pub base_url: String,
+    pub model: String,
+    pub allow_http: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    pub has_key: bool,
+    pub configured: bool,
+    pub missing: Vec<String>,
+    pub defaults: Vec<AiEndpointDefault>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiEndpointDefault {
+    pub endpoint_kind: AiEndpointKind,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigured {
+    pub configured: bool,
+    pub missing: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTestResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub reply: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTranslationResult {
+    pub text: String,
+    pub target_lang: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// `ai_chat_stream` 的终态:`finish` 为 stop/done/incomplete/closed 之一。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStreamDone {
+    pub finish: String,
+    pub total_chars: usize,
+}
+
+/// 经 IPC Channel 增量推送的事件:`{"type":"delta","text":"..."}`。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AiStreamEvent {
+    Delta { text: String },
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn config_path(app: &AppHandle) -> Result<PathBuf, AiError> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(CONFIG_FILE))
+        .map_err(|error| AiError::new("AI_STORAGE_ERROR", format!("无法定位应用数据目录: {error}")))
+}
+
+fn load_config_at(path: &Path) -> Result<Option<AiProviderConfig>, AiError> {
+    match fs::read_to_string(path) {
+        Ok(value) => serde_json::from_str(&value)
+            .map(Some)
+            .map_err(|error| AiError::new("AI_CONFIG_INVALID", format!("AI 配置损坏: {error}"))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AiError::new(
+            "AI_STORAGE_ERROR",
+            format!("无法读取 AI 配置: {error}"),
+        )),
+    }
+}
+
+/// 原子写:同目录临时文件 + fsync + rename(SyncProfile 模式)。
+fn persist_config_at(path: &Path, config: &AiProviderConfig) -> Result<(), AiError> {
+    let Some(directory) = path.parent() else {
+        return Err(AiError::new("AI_STORAGE_ERROR", "AI 配置路径无效"));
+    };
+    fs::create_dir_all(directory).map_err(|error| {
+        AiError::new("AI_STORAGE_ERROR", format!("无法创建应用数据目录: {error}"))
+    })?;
+    let body = serde_json::to_vec_pretty(config).map_err(|error| {
+        AiError::new("AI_STORAGE_ERROR", format!("无法序列化 AI 配置: {error}"))
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(|error| {
+        AiError::new("AI_STORAGE_ERROR", format!("无法创建配置临时文件: {error}"))
+    })?;
+    temporary
+        .write_all(&body)
+        .map_err(|error| AiError::new("AI_STORAGE_ERROR", format!("无法写入 AI 配置: {error}")))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| AiError::new("AI_STORAGE_ERROR", format!("无法同步 AI 配置: {error}")))?;
+    temporary.persist(path).map_err(|error| {
+        AiError::new(
+            "AI_STORAGE_ERROR",
+            format!("无法提交 AI 配置: {}", error.error),
+        )
+    })?;
+    Ok(())
+}
+
+// ── 密钥边界 ─────────────────────────────────────────────────────────
+
+fn load_ai_key() -> Option<String> {
+    get_credential(KEYRING_SERVICE, KEYRING_REFERENCE)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_ai_key(raw: &str) -> Result<String, AiError> {
+    if raw.chars().any(char::is_control) {
+        return Err(AiError::new("AI_KEY_INVALID", "API Key 包含控制字符"));
+    }
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err(AiError::new("AI_KEY_INVALID", "API Key 不能为空"));
+    }
+    Ok(key.to_string())
+}
+
+fn contains_forbidden_control(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r'))
+}
+
+/// 任何来自服务商的错误文本进入 `AiError.message` 前先剥掉密钥出现。
+fn redact_secret(message: &str, secret: &str) -> String {
+    let secret = secret.trim();
+    if secret.chars().count() < 8 {
+        return message.to_string();
+    }
+    message.replace(secret, "***")
+}
+
+fn clip_detail(detail: &str) -> String {
+    if detail.chars().count() <= 300 {
+        detail.to_string()
+    } else {
+        detail.chars().take(300).collect()
+    }
+}
+
+// ── 完备判定(四要素) ───────────────────────────────────────────────
+
+/// 四要素 = endpoint_kind + base_url + model(文件)+ API Key(钥匙串)。
+/// 缺口用字段名回报,前端据此提示(R2 失败边界)。
+fn config_gaps(config: Option<&AiProviderConfig>, has_key: bool) -> Vec<String> {
+    let mut missing = Vec::new();
+    match config {
+        None => {
+            missing.push("endpoint_kind".to_string());
+            missing.push("base_url".to_string());
+            missing.push("model".to_string());
+        }
+        Some(config) => {
+            if config.base_url.trim().is_empty() {
+                missing.push("base_url".to_string());
+            }
+            if config.model.trim().is_empty() {
+                missing.push("model".to_string());
+            }
+        }
+    }
+    if !has_key {
+        missing.push("api_key".to_string());
+    }
+    missing
+}
+
+fn not_configured_error(gaps: &[String]) -> AiError {
+    AiError::new(
+        "AI_NOT_CONFIGURED",
+        format!("AI 尚未完成配置,缺少: {}", gaps.join("、")),
+    )
+}
+
+// ── URL 验证(HTTPS 默认 / HTTP 显式允许 / 无主机白名单) ─────────────
+
+fn validate_ai_url(raw: &str, allow_http: bool) -> Result<Url, AiError> {
+    if raw.chars().any(char::is_control) || raw.trim().is_empty() {
+        return Err(AiError::new("AI_URL_INVALID", "AI 地址为空或包含控制字符"));
+    }
+    let url =
+        Url::parse(raw.trim()).map_err(|_| AiError::new("AI_URL_INVALID", "AI 地址格式无效"))?;
+    if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        return Err(AiError::new(
+            "AI_URL_INVALID",
+            "AI 地址缺少主机名或包含用户名、密码",
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(AiError::new(
+            "AI_URL_INVALID",
+            "AI 地址不能包含查询参数或片段",
+        ));
+    }
+    match url.scheme() {
+        "https" => {}
+        "http" if allow_http => {}
+        "http" => {
+            return Err(AiError::new(
+                "AI_HTTP_NOT_ALLOWED",
+                "HTTP 地址必须显式勾选允许",
+            ))
+        }
+        _ => return Err(AiError::new("AI_URL_INVALID", "仅支持 HTTP(S) 地址")),
+    }
+    Ok(url)
+}
+
+fn join_endpoint(base: &Url, kind: AiEndpointKind) -> Result<Url, AiError> {
+    let mut url = base.clone();
+    let prefix = url.path().trim_end_matches('/');
+    url.set_path(&format!("{prefix}{}", kind.endpoint_path()));
+    Ok(url)
+}
+
+fn redirect_target_allowed(first: &Url, target: &Url, allow_http: bool) -> bool {
+    let same_origin = first.scheme() == target.scheme()
+        && first.host_str() == target.host_str()
+        && first.port_or_known_default() == target.port_or_known_default();
+    same_origin
+        && target.username().is_empty()
+        && target.password().is_none()
+        && validate_ai_url(&target.to_string(), allow_http).is_ok()
+}
+
+// ── Provider 解析与请求构造 ──────────────────────────────────────────
+
+#[derive(Debug)]
+pub(crate) struct AiProvider {
+    pub(crate) kind: AiEndpointKind,
+    pub(crate) url: Url,
+    pub(crate) model: String,
+    pub(crate) key: String,
+    pub(crate) allow_http: bool,
+}
+
+/// 读配置 + 钥匙串,四要素齐备才产出可请求的 provider,否则返回指明缺口的
+/// `AI_NOT_CONFIGURED`。
+pub(crate) fn resolve_provider(app: &AppHandle) -> Result<(AiProviderConfig, AiProvider), AiError> {
+    let key = load_ai_key();
+    let Some(config) = load_config_at(&config_path(app)?)? else {
+        return Err(not_configured_error(&config_gaps(None, key.is_some())));
+    };
+    let provider = complete_provider(&config, key)?;
+    Ok((config, provider))
+}
+
+fn complete_provider(
+    config: &AiProviderConfig,
+    key: Option<String>,
+) -> Result<AiProvider, AiError> {
+    let gaps = config_gaps(Some(config), key.is_some());
+    if !gaps.is_empty() {
+        return Err(not_configured_error(&gaps));
+    }
+    let base = validate_ai_url(&config.base_url, config.allow_http)?;
+    let url = join_endpoint(&base, config.endpoint_kind)?;
+    Ok(AiProvider {
+        kind: config.endpoint_kind,
+        url,
+        model: config.model.trim().to_owned(),
+        key: key.unwrap_or_default(),
+        allow_http: config.allow_http,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiPurpose {
+    Test,
+    Translate,
+    Chat,
+}
+
+/// Claude Messages 的 `max_tokens` 必填;OpenAI 两式仅测试连接时收紧
+/// (翻译/对话省略,由服务端取模型上限,避免请求值超过模型上限被 400)。
+fn max_tokens_for(kind: AiEndpointKind, purpose: AiPurpose) -> Option<u32> {
+    match (kind, purpose) {
+        (_, AiPurpose::Test) => Some(TEST_MAX_TOKENS),
+        (AiEndpointKind::ClaudeMessages, AiPurpose::Translate) => Some(TRANSLATE_MAX_TOKENS),
+        (AiEndpointKind::ClaudeMessages, AiPurpose::Chat) => Some(CHAT_MAX_TOKENS),
+        _ => None,
+    }
+}
+
+fn validate_chat_messages(kind: AiEndpointKind, messages: &[AiChatMessage]) -> Result<(), AiError> {
+    if messages.is_empty() {
+        return Err(AiError::new("AI_MESSAGE_INVALID", "对话消息不能为空"));
+    }
+    if messages.len() > MAX_MESSAGES {
+        return Err(AiError::new(
+            "AI_MESSAGE_INVALID",
+            format!("对话消息超过 {MAX_MESSAGES} 条上限"),
+        ));
+    }
+    let mut has_turn = false;
+    for message in messages {
+        match message.role.as_str() {
+            "system" => {}
+            "user" | "assistant" => has_turn = true,
+            other => {
+                return Err(AiError::new(
+                    "AI_MESSAGE_INVALID",
+                    format!("不支持的消息角色: {other}"),
+                ))
+            }
+        }
+        if message.content.trim().is_empty() {
+            return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容不能为空"));
+        }
+        if contains_forbidden_control(&message.content) {
+            return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容包含控制字符"));
+        }
+    }
+    if kind == AiEndpointKind::ClaudeMessages && !has_turn {
+        return Err(AiError::new("AI_MESSAGE_INVALID", "对话缺少用户或助手消息"));
+    }
+    Ok(())
+}
+
+fn message_value(message: &AiChatMessage) -> Value {
+    json!({ "role": message.role, "content": message.content })
+}
+
+/// 三种端点格式各构造请求体;密钥只进请求头,永远不进请求体。
+pub(crate) fn build_chat_body(
+    kind: AiEndpointKind,
+    model: &str,
+    messages: &[AiChatMessage],
+    max_tokens: Option<u32>,
+    stream: bool,
+) -> Result<Value, AiError> {
+    validate_chat_messages(kind, messages)?;
+    let mut body = serde_json::Map::new();
+    body.insert("model".to_string(), json!(model));
+    match kind {
+        AiEndpointKind::OpenaiResponses => {
+            body.insert(
+                "input".to_string(),
+                Value::Array(messages.iter().map(message_value).collect()),
+            );
+            if let Some(max) = max_tokens {
+                body.insert("max_output_tokens".to_string(), json!(max));
+            }
+        }
+        AiEndpointKind::OpenaiChat => {
+            body.insert(
+                "messages".to_string(),
+                Value::Array(messages.iter().map(message_value).collect()),
+            );
+            if let Some(max) = max_tokens {
+                body.insert("max_tokens".to_string(), json!(max));
+            }
+        }
+        AiEndpointKind::ClaudeMessages => {
+            // Claude Messages 不接受 messages 内的 system 角色,提升为顶层。
+            let system: Vec<&str> = messages
+                .iter()
+                .filter(|message| message.role == "system")
+                .map(|message| message.content.as_str())
+                .collect();
+            if !system.is_empty() {
+                body.insert("system".to_string(), json!(system.join("\n\n")));
+            }
+            body.insert(
+                "messages".to_string(),
+                Value::Array(
+                    messages
+                        .iter()
+                        .filter(|message| message.role != "system")
+                        .map(message_value)
+                        .collect(),
+                ),
+            );
+            body.insert(
+                "max_tokens".to_string(),
+                json!(max_tokens.unwrap_or(CHAT_MAX_TOKENS)),
+            );
+        }
+    }
+    if stream {
+        body.insert("stream".to_string(), json!(true));
+    }
+    Ok(Value::Object(body))
+}
+
+fn serialize_body(body: &Value) -> Result<Vec<u8>, AiError> {
+    let payload = serde_json::to_vec(body)
+        .map_err(|_| AiError::new("AI_REQUEST_INVALID", "无法构造 AI 请求"))?;
+    if payload.len() > MAX_REQUEST_BYTES {
+        return Err(AiError::new(
+            "AI_REQUEST_TOO_LARGE",
+            format!("请求超过 {} 字节上限", MAX_REQUEST_BYTES),
+        ));
+    }
+    Ok(payload)
+}
+
+fn auth_headers(kind: AiEndpointKind, key: &str) -> Result<HeaderMap, AiError> {
+    let mut headers = HeaderMap::new();
+    if kind.uses_bearer() {
+        let value = HeaderValue::from_str(&format!("Bearer {key}"))
+            .map_err(|_| AiError::new("AI_KEY_INVALID", "API Key 包含请求头不允许的字符"))?;
+        headers.insert(AUTHORIZATION, value);
+    } else {
+        let value = HeaderValue::from_str(key)
+            .map_err(|_| AiError::new("AI_KEY_INVALID", "API Key 包含请求头不允许的字符"))?;
+        headers.insert(HeaderName::from_static("x-api-key"), value);
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
+    }
+    Ok(headers)
+}
+
+// ── HTTP 客户端与响应读取 ────────────────────────────────────────────
+
+fn build_client(initial: &Url, allow_http: bool, streaming: bool) -> Result<Client, AiError> {
+    let first = initial.clone();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("redirect limit exceeded");
+        }
+        // 密钥在请求头上随每跳重放:只允许同源跳转(同 scheme/host/port)。
+        if !redirect_target_allowed(&first, attempt.url(), allow_http) {
+            return attempt.error("unsafe redirect refused");
+        }
+        attempt.follow()
+    });
+    let builder = Client::builder()
+        .redirect(policy)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .referer(false)
+        .user_agent(concat!("LightInk/", env!("CARGO_PKG_VERSION")));
+    // 流式无总超时(回答可能持续推送很久),只要求相邻 chunk 间隔有界,
+    // 累计大小由调用方按 2MB 截断;非流式维持 60s 总超时。
+    let builder = if streaming {
+        builder.read_timeout(STREAM_READ_TIMEOUT)
+    } else {
+        builder.timeout(REQUEST_TIMEOUT)
+    };
+    builder
+        .build()
+        .map_err(|error| AiError::new("AI_CLIENT_ERROR", format!("无法创建网络客户端: {error}")))
+}
+
+pub(crate) async fn post_chat(provider: &AiProvider, body: &Value) -> Result<Response, AiError> {
+    let client = build_client(&provider.url, provider.allow_http, false)?;
+    let payload = serialize_body(body)?;
+    let request = client
+        .post(provider.url.clone())
+        .header(CONTENT_TYPE, "application/json")
+        .headers(auth_headers(provider.kind, &provider.key)?)
+        .body(payload);
+    request.send().await.map_err(network_error)
+}
+
+pub(crate) async fn read_success_json(response: Response, key: &str) -> Result<Value, AiError> {
+    let status = response.status();
+    if !status.is_success() {
+        let detail = error_body_message(response).await;
+        return Err(compose_http_error(key, status, detail));
+    }
+    reject_content_length(response.content_length())?;
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(network_error)?;
+        append_bounded(&mut bytes, &chunk)?;
+    }
+    parse_json_bytes(&bytes)
+}
+
+/// 失败响应体里提取服务商错误消息(有界 4KB;不含密钥,但入口处仍统一 redact)。
+async fn error_body_message(response: Response) -> Option<String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_ERROR_BODY_BYTES as u64)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.ok()?;
+        if bytes.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    for pointer in ["/error/message", "/message", "/error"] {
+        if let Some(message) = value.pointer(pointer).and_then(Value::as_str) {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 测试连接需要可区分失败:401/403 密钥、404/模型文案 模型、429 额度、
+/// 其余 HTTP 通用;带状态码与服务商详情(剥密钥、截 300 字)。
+fn compose_http_error(key: &str, status: StatusCode, detail: Option<String>) -> AiError {
+    let code = refine_status_code(classify_status(status), detail.as_deref()).to_string();
+    let summary = match code.as_str() {
+        "AI_KEY_INVALID" => "AI 服务商拒绝了 API Key",
+        "AI_MODEL_NOT_FOUND" => "模型不存在或不可用",
+        "AI_QUOTA_EXCEEDED" => "请求过于频繁或额度不足",
+        _ => "AI 服务商返回错误",
+    };
+    let message = match detail.map(|value| clip_detail(&redact_secret(&value, key))) {
+        Some(detail) if !detail.is_empty() => {
+            format!("{summary} (HTTP {}): {detail}", status.as_u16())
+        }
+        _ => format!("{summary} (HTTP {})", status.as_u16()),
+    };
+    AiError {
+        code,
+        message,
+        status: Some(status.as_u16()),
+    }
+}
+
+fn classify_status(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        401 | 403 => "AI_KEY_INVALID",
+        404 => "AI_MODEL_NOT_FOUND",
+        429 => "AI_QUOTA_EXCEEDED",
+        _ => "AI_HTTP_ERROR",
+    }
+}
+
+/// 兼容 OpenAI 网关把「模型不存在」报成 400 的形态。
+fn refine_status_code(code: &'static str, detail: Option<&str>) -> &'static str {
+    if code != "AI_HTTP_ERROR" {
+        return code;
+    }
+    let Some(detail) = detail else {
+        return code;
+    };
+    let lower = detail.to_lowercase();
+    if [
+        "model_not_found",
+        "model not found",
+        "does not exist",
+        "unknown model",
+        "no such model",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        return "AI_MODEL_NOT_FOUND";
+    }
+    code
+}
+
+fn reject_content_length(length: Option<u64>) -> Result<(), AiError> {
+    if length.is_some_and(|value| value > MAX_RESPONSE_BYTES as u64) {
+        return Err(AiError::new(
+            "AI_RESPONSE_TOO_LARGE",
+            "AI 响应超过 256 KiB 上限",
+        ));
+    }
+    Ok(())
+}
+
+fn append_bounded(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<(), AiError> {
+    if buffer.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+        return Err(AiError::new(
+            "AI_RESPONSE_TOO_LARGE",
+            "AI 响应超过 256 KiB 上限",
+        ));
+    }
+    buffer.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn parse_json_bytes(bytes: &[u8]) -> Result<Value, AiError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| AiError::new("AI_RESPONSE_INVALID", "AI 响应不是有效 UTF-8"))?;
+    serde_json::from_str(text).map_err(|_| AiError::new("AI_RESPONSE_INVALID", "AI 响应不是 JSON"))
+}
+
+fn network_error(error: reqwest::Error) -> AiError {
+    if error.is_timeout() {
+        AiError::new("AI_TIMEOUT", "请求超时")
+    } else {
+        AiError::new("AI_NETWORK_ERROR", format!("无法连接 AI 服务: {error}"))
+    }
+}
+
+// ── 三端点回复文本解析 ──────────────────────────────────────────────
+
+pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<String, AiError> {
+    let text = match kind {
+        AiEndpointKind::OpenaiResponses => {
+            // 标准 Responses JSON 没有 SDK 的顶层 output_text 便利字段;
+            // 兼容网关直接给 output_text 的形态。
+            if let Some(text) = value.get("output_text").and_then(Value::as_str) {
+                text.to_string()
+            } else {
+                let mut parts: Vec<&str> = Vec::new();
+                if let Some(items) = value.get("output").and_then(Value::as_array) {
+                    for item in items {
+                        if let Some(contents) = item.get("content").and_then(Value::as_array) {
+                            for content in contents {
+                                if content.get("type").and_then(Value::as_str)
+                                    == Some("output_text")
+                                {
+                                    if let Some(text) = content.get("text").and_then(Value::as_str)
+                                    {
+                                        parts.push(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                parts.join("")
+            }
+        }
+        AiEndpointKind::OpenaiChat => match value.pointer("/choices/0/message/content") {
+            Some(Value::String(text)) => text.clone(),
+            // 兼容多模态分段 content:[{type:"text",text}]。
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(""),
+            _ => String::new(),
+        },
+        AiEndpointKind::ClaudeMessages => value
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|item| item.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default(),
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AiError::new("AI_RESPONSE_INVALID", "AI 未返回文本"));
+    }
+    Ok(text.to_string())
+}
+
+// ── SSE 流式解析 ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SseData {
+    Skip,
+    Delta(String),
+    Done(String),
+    Failed(Option<String>),
+}
+
+/// 按字节缓冲、只在换行到达后切行,保证跨 chunk 拆开的多字节字符在完整
+/// 行内重新拼好;`raw` 保留全部原始字节供整体 JSON 降级解析。
+#[derive(Default)]
+struct SseLines {
+    pending: Vec<u8>,
+    raw: Vec<u8>,
+}
+
+impl SseLines {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.raw.extend_from_slice(chunk);
+        self.pending.extend_from_slice(chunk);
+        let mut lines = Vec::new();
+        while let Some(index) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.pending[..index].to_vec();
+            self.pending.drain(..=index);
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            lines.push(String::from_utf8_lossy(&line).into_owned());
+        }
+        lines
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&self.pending).into_owned())
+        }
+    }
+
+    fn raw(&self) -> &[u8] {
+        &self.raw
+    }
+}
+
+fn classify_data_line(kind: AiEndpointKind, line: &str) -> SseData {
+    let Some(payload) = line.strip_prefix("data:") else {
+        return SseData::Skip;
+    };
+    let payload = payload.trim();
+    if payload.is_empty() || payload == ": keep-alive" {
+        return SseData::Skip;
+    }
+    if payload == "[DONE]" {
+        return SseData::Done("done".to_string());
+    }
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return SseData::Skip;
+    };
+    classify_sse_event(kind, &value)
+}
+
+fn classify_sse_event(kind: AiEndpointKind, value: &Value) -> SseData {
+    match kind {
+        AiEndpointKind::OpenaiResponses => match value.get("type").and_then(Value::as_str) {
+            Some("response.output_text.delta") => value
+                .get("delta")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| SseData::Delta(text.to_string()))
+                .unwrap_or(SseData::Skip),
+            Some("response.completed") => SseData::Done("stop".to_string()),
+            Some("response.incomplete") => SseData::Done("incomplete".to_string()),
+            Some("response.failed") => SseData::Failed(
+                value
+                    .pointer("/response/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned),
+            ),
+            Some("error") => SseData::Failed(
+                value
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned),
+            ),
+            _ => SseData::Skip,
+        },
+        AiEndpointKind::OpenaiChat => {
+            if let Some(text) = value
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+            {
+                if !text.is_empty() {
+                    return SseData::Delta(text.to_string());
+                }
+            }
+            if let Some(finish) = value
+                .pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str)
+            {
+                if !finish.is_empty() {
+                    return SseData::Done(finish.to_string());
+                }
+            }
+            if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+                return SseData::Failed(Some(message.trim().to_string()));
+            }
+            SseData::Skip
+        }
+        AiEndpointKind::ClaudeMessages => match value.get("type").and_then(Value::as_str) {
+            Some("content_block_delta")
+                if value.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") =>
+            {
+                value
+                    .pointer("/delta/text")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .map(|text| SseData::Delta(text.to_string()))
+                    .unwrap_or(SseData::Skip)
+            }
+            Some("message_stop") => SseData::Done("stop".to_string()),
+            Some("error") => SseData::Failed(
+                value
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned),
+            ),
+            _ => SseData::Skip,
+        },
+    }
+}
+
+fn advance_stream_budget(received: usize, chunk: usize) -> Result<usize, AiError> {
+    let total = received.saturating_add(chunk);
+    if total > MAX_STREAM_BYTES {
+        return Err(AiError::new(
+            "AI_RESPONSE_TOO_LARGE",
+            "流式输出超过 2 MiB 上限",
+        ));
+    }
+    Ok(total)
+}
+
+fn stream_failure(key: &str, detail: Option<String>) -> AiError {
+    let message = match detail.map(|value| clip_detail(&redact_secret(&value, key))) {
+        Some(detail) if !detail.is_empty() => format!("AI 流式输出失败: {detail}"),
+        _ => "AI 流式输出失败".to_string(),
+    };
+    AiError::new("AI_STREAM_FAILED", message)
+}
+
+fn stream_step(
+    kind: AiEndpointKind,
+    key: &str,
+    line: &str,
+    on_event: &Channel<AiStreamEvent>,
+    total_chars: &mut usize,
+) -> Result<Option<AiStreamDone>, AiError> {
+    match classify_data_line(kind, line) {
+        SseData::Skip => Ok(None),
+        SseData::Done(finish) => Ok(Some(AiStreamDone {
+            finish,
+            total_chars: *total_chars,
+        })),
+        SseData::Delta(text) => {
+            *total_chars += text.chars().count();
+            if on_event.send(AiStreamEvent::Delta { text }).is_err() {
+                return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
+            }
+            Ok(None)
+        }
+        SseData::Failed(detail) => Err(stream_failure(key, detail)),
+    }
+}
+
+/// 服务器忽略 stream:true 返回整体 JSON 时的降级解析(ADR-3:功能不丢)。
+fn fallback_stream_text(kind: AiEndpointKind, raw: &[u8]) -> Result<String, AiError> {
+    let value = parse_json_bytes(raw)?;
+    extract_reply_text(kind, &value)
+}
+
+// ── 状态视图 ─────────────────────────────────────────────────────────
+
+fn endpoint_defaults() -> Vec<AiEndpointDefault> {
+    [
+        AiEndpointKind::OpenaiResponses,
+        AiEndpointKind::OpenaiChat,
+        AiEndpointKind::ClaudeMessages,
+    ]
+    .iter()
+    .map(|&kind| AiEndpointDefault {
+        endpoint_kind: kind,
+        base_url: kind.default_base_url().to_string(),
+    })
+    .collect()
+}
+
+fn status_from(config: Option<AiProviderConfig>, has_key: bool) -> AiConfigStatus {
+    let missing = config_gaps(config.as_ref(), has_key);
+    // 从未保存过时给出可预填的默认形态(端点默认取兼容面最广的 openai-chat)。
+    let (endpoint_kind, base_url, model, allow_http, target_lang, updated_at) = match config {
+        Some(config) => (
+            config.endpoint_kind,
+            config.base_url,
+            config.model,
+            config.allow_http,
+            config.target_lang,
+            Some(config.updated_at),
+        ),
+        None => (
+            AiEndpointKind::OpenaiChat,
+            AiEndpointKind::OpenaiChat.default_base_url().to_string(),
+            String::new(),
+            false,
+            None,
+            None,
+        ),
+    };
+    AiConfigStatus {
+        endpoint_kind,
+        base_url,
+        model,
+        allow_http,
+        target_lang,
+        updated_at,
+        has_key,
+        configured: missing.is_empty(),
+        missing,
+        defaults: endpoint_defaults(),
+    }
+}
+
+// ── 命令 ─────────────────────────────────────────────────────────────
+
+/// 读取 AI 分组配置:现值 + 钥匙串有无 + 完备判定,永不包含密钥。
+#[tauri::command]
+pub fn ai_get_config(app: AppHandle) -> Result<AiConfigStatus, AiError> {
+    let config = load_config_at(&config_path(&app)?)?;
+    Ok(status_from(config, load_ai_key().is_some()))
+}
+
+/// 保存非密钥配置(唯一活动配置,切换即覆盖,R8)。HTTP 地址未勾选
+/// `allow_http` 时校验拒绝;密钥另走 `ai_store_key`。
+#[tauri::command]
+pub fn ai_save_config(app: AppHandle, input: AiConfigInput) -> Result<AiConfigStatus, AiError> {
+    let model = input.model.trim();
+    if model.is_empty() {
+        return Err(AiError::new("AI_CONFIG_INVALID", "模型名不能为空"));
+    }
+    if model.chars().any(char::is_control) || model.chars().count() > MAX_MODEL_CHARS {
+        return Err(AiError::new("AI_CONFIG_INVALID", "模型名无效或过长"));
+    }
+    let allow_http = input.allow_http.unwrap_or(false);
+    let url = validate_ai_url(&input.base_url, allow_http)?;
+    let base_url = url.to_string().trim_end_matches('/').to_string();
+    let target_lang = normalize_target_lang_override(input.target_lang)?;
+    let has_key = load_ai_key().is_some();
+    let config = AiProviderConfig {
+        endpoint_kind: input.endpoint_kind,
+        base_url,
+        model: model.to_owned(),
+        allow_http,
+        target_lang,
+        has_key,
+        updated_at: now_ms(),
+    };
+    persist_config_at(&config_path(&app)?, &config)?;
+    Ok(status_from(Some(config), has_key))
+}
+
+fn normalize_target_lang_override(raw: Option<String>) -> Result<Option<String>, AiError> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if contains_forbidden_control(value) || value.chars().count() > 40 {
+        return Err(AiError::new("AI_CONFIG_INVALID", "翻译目标语言覆盖项无效"));
+    }
+    Ok(Some(value.to_string()))
+}
+
+/// API Key 只写入钥匙串(移动端退化凭据文件同 DeepL 先例),文件仅更新
+/// `has_key` 快照。返回的仍是全量状态,无密钥明文。
+#[tauri::command]
+pub fn ai_store_key(app: AppHandle, key: String) -> Result<AiConfigStatus, AiError> {
+    let key = normalize_ai_key(&key)?;
+    if !set_credential(KEYRING_SERVICE, KEYRING_REFERENCE, &key) {
+        return Err(AiError::new("AI_KEY_STORE_FAILED", "无法保存 API Key"));
+    }
+    let path = config_path(&app)?;
+    if let Some(mut config) = load_config_at(&path)? {
+        config.has_key = true;
+        config.updated_at = now_ms();
+        persist_config_at(&path, &config)?;
+    }
+    Ok(status_from(load_config_at(&path)?, true))
+}
+
+/// 清除钥匙串中的 API Key,配置其余字段保留(四要素从此不完备)。
+#[tauri::command]
+pub fn ai_forget_key(app: AppHandle) -> Result<AiConfigStatus, AiError> {
+    delete_credential(KEYRING_SERVICE, KEYRING_REFERENCE);
+    let path = config_path(&app)?;
+    if let Some(mut config) = load_config_at(&path)? {
+        config.has_key = false;
+        persist_config_at(&path, &config)?;
+    }
+    Ok(status_from(load_config_at(&path)?, false))
+}
+
+/// 四要素完备判定:下游功能(选区翻译/助手/整本翻译)的显隐与放行依据。
+#[tauri::command]
+pub fn ai_configured(app: AppHandle) -> Result<AiConfigured, AiError> {
+    let config = load_config_at(&config_path(&app)?)?;
+    let missing = config_gaps(config.as_ref(), load_ai_key().is_some());
+    Ok(AiConfigured {
+        configured: missing.is_empty(),
+        missing,
+    })
+}
+
+/// 测试连接:最小请求验证配置;正确配置返回成功,错误地址(网络)/密钥
+/// (401/403)/模型(404 或模型文案)返回可区分失败码。
+#[tauri::command]
+pub async fn ai_test_connection(app: AppHandle) -> Result<AiTestResult, AiError> {
+    let started = Instant::now();
+    let (_config, provider) = resolve_provider(&app)?;
+    let probe = [AiChatMessage {
+        role: "user".to_string(),
+        content: "ping".to_string(),
+    }];
+    let body = build_chat_body(
+        provider.kind,
+        &provider.model,
+        &probe,
+        max_tokens_for(provider.kind, AiPurpose::Test),
+        false,
+    )?;
+    let response = post_chat(&provider, &body).await?;
+    let value = read_success_json(response, &provider.key).await?;
+    let reply = extract_reply_text(provider.kind, &value)?;
+    Ok(AiTestResult {
+        ok: true,
+        latency_ms: started.elapsed().as_millis() as u64,
+        reply,
+    })
+}
+
+/// 选区 AI 翻译:超长输入截断至 5000 字符并置 `truncated` 标志(与 DeepL
+/// 的拒绝语义不同,R3 明示截断)。目标语言解析:显式参数 > AI 分组覆盖,
+/// 均无或为 auto 时报错,由前端按界面语言传入。
+#[tauri::command]
+pub async fn ai_translate_selection(
+    app: AppHandle,
+    text: String,
+    target_lang: Option<String>,
+) -> Result<AiTranslationResult, AiError> {
+    let (config, provider) = resolve_provider(&app)?;
+    if contains_forbidden_control(&text) {
+        return Err(AiError::new("AI_TEXT_INVALID", "翻译文本包含控制字符"));
+    }
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AiError::new("AI_TEXT_EMPTY", "翻译文本为空"));
+    }
+    let (text, truncated) = truncate_translate_input(text);
+    let lang = resolve_target_lang(target_lang, config.target_lang.clone())?;
+    let prompt = translate_prompt(&text, &lang);
+    let message = AiChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    };
+    let body = build_chat_body(
+        provider.kind,
+        &provider.model,
+        std::slice::from_ref(&message),
+        max_tokens_for(provider.kind, AiPurpose::Translate),
+        false,
+    )?;
+    let response = post_chat(&provider, &body).await?;
+    let value = read_success_json(response, &provider.key).await?;
+    let translated = extract_reply_text(provider.kind, &value)?;
+    Ok(AiTranslationResult {
+        text: translated,
+        target_lang: lang,
+        truncated,
+    })
+}
+
+fn truncate_translate_input(text: &str) -> (String, bool) {
+    if text.chars().count() <= MAX_TRANSLATE_CHARS {
+        (text.to_string(), false)
+    } else {
+        (text.chars().take(MAX_TRANSLATE_CHARS).collect(), true)
+    }
+}
+
+fn resolve_target_lang(
+    explicit: Option<String>,
+    config_override: Option<String>,
+) -> Result<String, AiError> {
+    let value = explicit.or(config_override).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+        return Err(AiError::new(
+            "AI_TARGET_LANG_INVALID",
+            "未指定翻译目标语言(界面语言或 AI 分组覆盖)",
+        ));
+    }
+    if contains_forbidden_control(value) || value.chars().count() > 40 {
+        return Err(AiError::new("AI_TARGET_LANG_INVALID", "翻译目标语言无效"));
+    }
+    Ok(value.to_string())
+}
+
+fn translate_prompt(text: &str, target_lang: &str) -> String {
+    format!(
+        "你是翻译引擎。把 <text> 中的内容翻译成 {target_lang},只输出译文本身,不要解释、不要添加任何前后缀。\n<text>\n{text}\n</text>"
+    )
+}
+
+/// 流式多轮对话:经 IPC `Channel` 增量推送 `{type:\"delta\",text}`,
+/// 终态由返回值承载(完成含 finish 与累计字数)或以 `AiError` 错误码失败。
+/// 流式累计 2MB 上限;相邻 chunk 读取间隔超 60s 判超时。
+#[tauri::command]
+pub async fn ai_chat_stream(
+    app: AppHandle,
+    messages: Vec<AiChatMessage>,
+    on_event: Channel<AiStreamEvent>,
+) -> Result<AiStreamDone, AiError> {
+    let (_config, provider) = resolve_provider(&app)?;
+    let body = build_chat_body(
+        provider.kind,
+        &provider.model,
+        &messages,
+        max_tokens_for(provider.kind, AiPurpose::Chat),
+        true,
+    )?;
+    let payload = serialize_body(&body)?;
+    let client = build_client(&provider.url, provider.allow_http, true)?;
+    let request = client
+        .post(provider.url.clone())
+        .header(CONTENT_TYPE, "application/json")
+        .headers(auth_headers(provider.kind, &provider.key)?)
+        .body(payload);
+    let response = request.send().await.map_err(network_error)?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = error_body_message(response).await;
+        return Err(compose_http_error(&provider.key, status, detail));
+    }
+    let mut stream = response.bytes_stream();
+    let mut lines = SseLines::new();
+    let mut received = 0usize;
+    let mut total_chars = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(network_error)?;
+        received = advance_stream_budget(received, chunk.len())?;
+        for line in lines.feed(&chunk) {
+            if let Some(done) = stream_step(
+                provider.kind,
+                &provider.key,
+                &line,
+                &on_event,
+                &mut total_chars,
+            )? {
+                return Ok(done);
+            }
+        }
+    }
+    if let Some(last) = lines.finish() {
+        if let Some(done) = stream_step(
+            provider.kind,
+            &provider.key,
+            &last,
+            &on_event,
+            &mut total_chars,
+        )? {
+            return Ok(done);
+        }
+    }
+    if total_chars == 0 {
+        // 服务器忽略 stream:true 返回整体 JSON:单次解析后一次性推送。
+        let text = fallback_stream_text(provider.kind, lines.raw())?;
+        total_chars = text.chars().count();
+        if on_event.send(AiStreamEvent::Delta { text }).is_err() {
+            return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
+        }
+    }
+    Ok(AiStreamDone {
+        finish: "closed".to_string(),
+        total_chars,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_config_path() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE);
+        (dir, path)
+    }
+
+    fn sample_config() -> AiProviderConfig {
+        AiProviderConfig {
+            endpoint_kind: AiEndpointKind::OpenaiChat,
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            allow_http: false,
+            target_lang: Some("zh-CN".to_string()),
+            has_key: true,
+            updated_at: 42,
+        }
+    }
+
+    #[test]
+    fn url_policy_enforces_https_default_and_rejects_metadata() {
+        // 任意主机放行(R2 自定义地址),含本地代理端口。
+        assert!(validate_ai_url("https://api.openai.com/v1", false).is_ok());
+        assert!(validate_ai_url("https://my-proxy.example:8443/openai", false).is_ok());
+        assert!(validate_ai_url("http://127.0.0.1:1234/v1", true).is_ok());
+        assert_eq!(
+            validate_ai_url("http://127.0.0.1:1234/v1", false)
+                .unwrap_err()
+                .code,
+            "AI_HTTP_NOT_ALLOWED"
+        );
+        for raw in [
+            "https://user@api.example/v1",
+            "https://user:pass@api.example/v1",
+            "https://api.example/v1?token=1",
+            "https://api.example/v1#frag",
+            "https://api.example/v1\n",
+            "ftp://api.example/v1",
+            "//api.example/v1",
+            "   ",
+        ] {
+            assert_eq!(
+                validate_ai_url(raw, true).unwrap_err().code,
+                "AI_URL_INVALID",
+                "accepted {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_paths_join_each_base() {
+        let chat = join_endpoint(
+            &Url::parse("https://api.openai.com/v1").unwrap(),
+            AiEndpointKind::OpenaiChat,
+        )
+        .unwrap();
+        assert_eq!(chat.as_str(), "https://api.openai.com/v1/chat/completions");
+        let responses = join_endpoint(
+            &Url::parse("https://api.openai.com/v1/").unwrap(),
+            AiEndpointKind::OpenaiResponses,
+        )
+        .unwrap();
+        assert_eq!(responses.as_str(), "https://api.openai.com/v1/responses");
+        let claude = join_endpoint(
+            &Url::parse("https://api.anthropic.com").unwrap(),
+            AiEndpointKind::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(claude.as_str(), "https://api.anthropic.com/messages");
+        assert_eq!(
+            AiEndpointKind::OpenaiChat.default_base_url(),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            AiEndpointKind::ClaudeMessages.default_base_url(),
+            "https://api.anthropic.com/v1"
+        );
+    }
+
+    #[test]
+    fn provider_config_round_trip_is_atomic_and_secret_free() {
+        let (_dir, path) = temp_config_path();
+        assert!(load_config_at(&path).unwrap().is_none());
+        let config = sample_config();
+        persist_config_at(&path, &config).unwrap();
+        assert_eq!(load_config_at(&path).unwrap().as_ref(), Some(&config));
+
+        let body = fs::read_to_string(&path).unwrap();
+        let value: Value = serde_json::from_str(&body).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "allowHttp",
+                "baseUrl",
+                "endpointKind",
+                "hasKey",
+                "model",
+                "targetLang",
+                "updatedAt"
+            ]
+        );
+        assert!(!body.contains("sk-"), "配置文件不得出现密钥材料");
+
+        // 原子写不得残留临时文件。
+        let entries: Vec<_> = fs::read_dir(path.parent().unwrap()).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+
+        fs::write(&path, "not-json").unwrap();
+        assert_eq!(load_config_at(&path).unwrap_err().code, "AI_CONFIG_INVALID");
+    }
+
+    #[test]
+    fn completeness_gaps_name_every_missing_factor() {
+        let key = Some("sk-live-secret-key".to_string());
+        assert_eq!(
+            config_gaps(None, true),
+            ["endpoint_kind", "base_url", "model"]
+        );
+        assert_eq!(
+            config_gaps(None, false),
+            ["endpoint_kind", "base_url", "model", "api_key"]
+        );
+        let mut config = sample_config();
+        config.model = "  ".to_string();
+        assert_eq!(config_gaps(Some(&config), false), ["model", "api_key"]);
+        assert_eq!(config_gaps(Some(&config), true), ["model"]);
+        let mut no_base = sample_config();
+        no_base.base_url = String::new();
+        assert_eq!(config_gaps(Some(&no_base), true), ["base_url"]);
+        assert!(config_gaps(Some(&sample_config()), true).is_empty());
+
+        let error = not_configured_error(&config_gaps(Some(&config), false));
+        assert_eq!(error.code, "AI_NOT_CONFIGURED");
+        assert!(error.message.contains("model"));
+        assert!(error.message.contains("api_key"));
+
+        assert!(complete_provider(&sample_config(), key.clone()).is_ok());
+        assert_eq!(
+            complete_provider(&sample_config(), None).unwrap_err().code,
+            "AI_NOT_CONFIGURED"
+        );
+        assert_eq!(
+            complete_provider(&no_base, key).unwrap_err().code,
+            "AI_NOT_CONFIGURED"
+        );
+    }
+
+    #[test]
+    fn auth_headers_pick_bearer_or_x_api_key_and_reject_bad_keys() {
+        let bearer = auth_headers(AiEndpointKind::OpenaiResponses, "sk-test-123456").unwrap();
+        assert_eq!(
+            bearer.get(AUTHORIZATION).unwrap().to_str().unwrap(),
+            "Bearer sk-test-123456"
+        );
+        assert!(bearer.get("x-api-key").is_none());
+
+        let claude = auth_headers(AiEndpointKind::ClaudeMessages, "sk-ant-test-123456").unwrap();
+        assert_eq!(
+            claude.get("x-api-key").unwrap().to_str().unwrap(),
+            "sk-ant-test-123456"
+        );
+        assert_eq!(
+            claude.get("anthropic-version").unwrap().to_str().unwrap(),
+            ANTHROPIC_VERSION
+        );
+        assert!(claude.get(AUTHORIZATION).is_none());
+
+        assert_eq!(
+            auth_headers(AiEndpointKind::OpenaiChat, "\u{7f}bad")
+                .unwrap_err()
+                .code,
+            "AI_KEY_INVALID"
+        );
+    }
+
+    #[test]
+    fn request_bodies_match_each_endpoint_kind() {
+        let messages = vec![
+            AiChatMessage {
+                role: "system".to_string(),
+                content: "你是翻译引擎".to_string(),
+            },
+            AiChatMessage {
+                role: "user".to_string(),
+                content: "你好".to_string(),
+            },
+        ];
+        let chat = build_chat_body(
+            AiEndpointKind::OpenaiChat,
+            "gpt-4o-mini",
+            &messages,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(chat["model"], json!("gpt-4o-mini"));
+        assert_eq!(chat["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(chat["messages"][0]["role"], json!("system"));
+        assert!(chat.get("max_tokens").is_none());
+        assert!(chat.get("stream").is_none());
+
+        let responses = build_chat_body(
+            AiEndpointKind::OpenaiResponses,
+            "gpt-4o-mini",
+            &messages,
+            Some(16),
+            false,
+        )
+        .unwrap();
+        assert_eq!(responses["input"].as_array().unwrap().len(), 2);
+        assert_eq!(responses["max_output_tokens"], json!(16));
+        assert!(responses.get("messages").is_none());
+
+        let claude = build_chat_body(
+            AiEndpointKind::ClaudeMessages,
+            "claude-3-5-sonnet",
+            &messages,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(claude["system"], json!("你是翻译引擎"));
+        assert_eq!(claude["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(claude["messages"][0]["role"], json!("user"));
+        assert_eq!(claude["max_tokens"], json!(CHAT_MAX_TOKENS));
+        assert_eq!(claude["stream"], json!(true));
+
+        for body in [&chat, &responses, &claude] {
+            let text = serde_json::to_string(body).unwrap();
+            assert!(!text.contains("sk-"), "请求体不得包含密钥");
+        }
+
+        assert_eq!(
+            max_tokens_for(AiEndpointKind::OpenaiChat, AiPurpose::Test),
+            Some(TEST_MAX_TOKENS)
+        );
+        assert_eq!(
+            max_tokens_for(AiEndpointKind::OpenaiChat, AiPurpose::Translate),
+            None
+        );
+        assert_eq!(
+            max_tokens_for(AiEndpointKind::ClaudeMessages, AiPurpose::Translate),
+            Some(TRANSLATE_MAX_TOKENS)
+        );
+        assert_eq!(
+            max_tokens_for(AiEndpointKind::ClaudeMessages, AiPurpose::Chat),
+            Some(CHAT_MAX_TOKENS)
+        );
+
+        assert_eq!(
+            build_chat_body(AiEndpointKind::OpenaiChat, "m", &[], None, false)
+                .unwrap_err()
+                .code,
+            "AI_MESSAGE_INVALID"
+        );
+        assert_eq!(
+            build_chat_body(
+                AiEndpointKind::OpenaiChat,
+                "m",
+                &[AiChatMessage {
+                    role: "tool".to_string(),
+                    content: "x".to_string(),
+                }],
+                None,
+                false
+            )
+            .unwrap_err()
+            .code,
+            "AI_MESSAGE_INVALID"
+        );
+        assert_eq!(
+            build_chat_body(
+                AiEndpointKind::ClaudeMessages,
+                "m",
+                &[AiChatMessage {
+                    role: "system".to_string(),
+                    content: "只系统".to_string(),
+                }],
+                None,
+                false
+            )
+            .unwrap_err()
+            .code,
+            "AI_MESSAGE_INVALID"
+        );
+    }
+
+    #[test]
+    fn reply_text_extraction_per_kind() {
+        let chat = json!({ "choices": [{ "message": { "role": "assistant", "content": "Hi" } }] });
+        assert_eq!(
+            extract_reply_text(AiEndpointKind::OpenaiChat, &chat).unwrap(),
+            "Hi"
+        );
+        let parts = json!({ "choices": [{ "message": { "content": [
+            { "type": "text", "text": "A" },
+            { "type": "text", "text": "B" }
+        ] } }] });
+        assert_eq!(
+            extract_reply_text(AiEndpointKind::OpenaiChat, &parts).unwrap(),
+            "AB"
+        );
+        let responses = json!({ "output": [
+            { "type": "message", "content": [{ "type": "output_text", "text": "Hey" }] }
+        ] });
+        assert_eq!(
+            extract_reply_text(AiEndpointKind::OpenaiResponses, &responses).unwrap(),
+            "Hey"
+        );
+        let convenience = json!({ "output_text": "Fast" });
+        assert_eq!(
+            extract_reply_text(AiEndpointKind::OpenaiResponses, &convenience).unwrap(),
+            "Fast"
+        );
+        let claude = json!({ "content": [{ "type": "text", "text": "Bon" }, { "type": "text", "text": "jour" }] });
+        assert_eq!(
+            extract_reply_text(AiEndpointKind::ClaudeMessages, &claude).unwrap(),
+            "Bonjour"
+        );
+        for (kind, value) in [
+            (
+                AiEndpointKind::OpenaiChat,
+                json!({ "choices": [{ "message": { "content": "  " } }] }),
+            ),
+            (AiEndpointKind::OpenaiResponses, json!({ "output": [] })),
+            (AiEndpointKind::ClaudeMessages, json!({ "content": [] })),
+        ] {
+            assert_eq!(
+                extract_reply_text(kind, &value).unwrap_err().code,
+                "AI_RESPONSE_INVALID"
+            );
+        }
+    }
+
+    fn feed_all(kind: AiEndpointKind, chunks: &[&[u8]]) -> Vec<SseData> {
+        let mut lines = SseLines::new();
+        let mut events = Vec::new();
+        for chunk in chunks {
+            for line in lines.feed(chunk) {
+                events.push(classify_data_line(kind, &line));
+            }
+        }
+        if let Some(last) = lines.finish() {
+            events.push(classify_data_line(kind, &last));
+        }
+        events
+    }
+
+    fn deltas(events: &[SseData]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SseData::Delta(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sse_chat_completions_stream_yields_deltas_then_done() {
+        let stream = b"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\
+                      \ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\
+                      \ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\
+                      \ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\
+                      \ndata: [DONE]\n\n";
+        let events = feed_all(AiEndpointKind::OpenaiChat, &[stream]);
+        assert_eq!(deltas(&events), ["Hel", "lo"]);
+        let done = events
+            .iter()
+            .find_map(|event| match event {
+                SseData::Done(reason) => Some(reason.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(done, "stop");
+    }
+
+    #[test]
+    fn sse_multibyte_delta_split_across_chunks_is_reassembled() {
+        // “你” 的 UTF-8 字节 (E4 BD A0) 拆到两个 chunk:行只在换行到达后产出,
+        // 不得出现替换字符。
+        let mut first = b"data: {\"choices\":[{\"delta\":{\"content\":\"".to_vec();
+        first.extend_from_slice(&"你".as_bytes()[..1]);
+        let mut second = "你".as_bytes()[1..].to_vec();
+        second.extend_from_slice(b"\"}}]}\n\n");
+        let events = feed_all(AiEndpointKind::OpenaiChat, &[&first, &second]);
+        assert_eq!(deltas(&events), ["你"]);
+    }
+
+    #[test]
+    fn sse_responses_and_claude_streams_yield_deltas_and_terminals() {
+        let responses = b"event: response.output_text.delta\n\
+                          data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}\n\n\
+                          event: response.completed\n\
+                          data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+        let events = feed_all(AiEndpointKind::OpenaiResponses, &[responses]);
+        assert_eq!(deltas(&events), ["Hello"]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, SseData::Done(reason) if reason == "stop")));
+
+        let claude = b"event: content_block_delta\n\
+                      data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Salut\"}}\n\n\
+                      data: {\"type\":\"ping\"}\n\n\
+                      data: {\"type\":\"message_stop\"}\n\n";
+        let events = feed_all(AiEndpointKind::ClaudeMessages, &[claude]);
+        assert_eq!(deltas(&events), ["Salut"]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, SseData::Done(reason) if reason == "stop")));
+    }
+
+    #[test]
+    fn sse_failure_events_surface_sanitized_detail() {
+        let key = "sk-secret-abcdef";
+        let failed = format!(
+            "data: {{\"type\":\"response.failed\",\"response\":{{\"error\":{{\"message\":\"model overloaded key {key}\"}}}}}}\n\n"
+        );
+        let events = feed_all(AiEndpointKind::OpenaiResponses, &[failed.as_bytes()]);
+        match events.first() {
+            Some(SseData::Failed(Some(detail))) => {
+                let error = stream_failure(key, Some(detail.clone()));
+                assert_eq!(error.code, "AI_STREAM_FAILED");
+                assert!(!error.message.contains(key), "错误消息不得包含密钥");
+                assert!(error.message.contains("***"));
+            }
+            other => panic!("expected failure detail, got {other:?}"),
+        }
+        let chat_error = format!("data: {{\"error\":{{\"message\":\"Invalid key {key}\"}}}}\n\n");
+        let events = feed_all(AiEndpointKind::OpenaiChat, &[chat_error.as_bytes()]);
+        assert!(matches!(events.first(), Some(SseData::Failed(Some(_)))));
+    }
+
+    #[test]
+    fn stream_budget_caps_at_two_mebibytes() {
+        assert_eq!(
+            advance_stream_budget(0, MAX_STREAM_BYTES).unwrap(),
+            MAX_STREAM_BYTES
+        );
+        assert_eq!(
+            advance_stream_budget(MAX_STREAM_BYTES - 1, 2)
+                .unwrap_err()
+                .code,
+            "AI_RESPONSE_TOO_LARGE"
+        );
+        let mut total = 0usize;
+        for _ in 0..(MAX_STREAM_BYTES / 1024) {
+            total = advance_stream_budget(total, 1024).unwrap();
+        }
+        assert_eq!(total, MAX_STREAM_BYTES);
+    }
+
+    #[test]
+    fn whole_json_stream_fallback_extracts_reply() {
+        let raw = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"整体回复\"}}]}";
+        assert_eq!(
+            fallback_stream_text(AiEndpointKind::OpenaiChat, raw.as_bytes()).unwrap(),
+            "整体回复"
+        );
+        assert_eq!(
+            fallback_stream_text(
+                AiEndpointKind::ClaudeMessages,
+                "{\"content\":[{\"type\":\"text\",\"text\":\"Réponse\"}]}".as_bytes()
+            )
+            .unwrap(),
+            "Réponse"
+        );
+        assert_eq!(
+            fallback_stream_text(AiEndpointKind::OpenaiChat, b"garbage")
+                .unwrap_err()
+                .code,
+            "AI_RESPONSE_INVALID"
+        );
+    }
+
+    #[test]
+    fn wire_formats_are_pinned_for_frontend() {
+        // 端点格式 kebab-case、Channel 事件 snake_case tag、配置输入 camelCase
+        // 是前端契约(Manage 分组 / 助手面板),钉死防漂移。
+        assert_eq!(
+            serde_json::to_value(AiEndpointKind::OpenaiResponses).unwrap(),
+            json!("openai-responses")
+        );
+        assert_eq!(
+            serde_json::to_value(AiEndpointKind::OpenaiChat).unwrap(),
+            json!("openai-chat")
+        );
+        assert_eq!(
+            serde_json::to_value(AiEndpointKind::ClaudeMessages).unwrap(),
+            json!("claude-messages")
+        );
+        assert_eq!(
+            serde_json::to_value(AiStreamEvent::Delta {
+                text: "你好".to_string()
+            })
+            .unwrap(),
+            json!({ "type": "delta", "text": "你好" })
+        );
+        let input: AiConfigInput = serde_json::from_str(
+            r#"{"endpointKind":"openai-chat","baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.endpoint_kind, AiEndpointKind::OpenaiChat);
+        assert!(input.allow_http.is_none());
+        assert!(input.target_lang.is_none());
+    }
+
+    #[test]
+    fn translate_input_truncates_at_char_boundary() {
+        let exact = "a".repeat(MAX_TRANSLATE_CHARS);
+        let (kept, truncated) = truncate_translate_input(&exact);
+        assert!(!truncated);
+        assert_eq!(kept.chars().count(), MAX_TRANSLATE_CHARS);
+
+        let over = format!("{}{}", "汉".repeat(MAX_TRANSLATE_CHARS), "𠮷尾");
+        let (kept, truncated) = truncate_translate_input(&over);
+        assert!(truncated);
+        assert_eq!(kept.chars().count(), MAX_TRANSLATE_CHARS);
+        assert!(kept.ends_with('汉'));
+        assert!(!kept.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn target_lang_prefers_explicit_over_config_override() {
+        assert_eq!(
+            resolve_target_lang(Some(" zh-CN ".to_string()), Some("en".to_string())).unwrap(),
+            "zh-CN"
+        );
+        assert_eq!(
+            resolve_target_lang(None, Some("en".to_string())).unwrap(),
+            "en"
+        );
+        for value in [None, Some("auto".to_string()), Some("  ".to_string())] {
+            assert_eq!(
+                resolve_target_lang(value, None).unwrap_err().code,
+                "AI_TARGET_LANG_INVALID"
+            );
+        }
+        assert_eq!(
+            resolve_target_lang(Some("x".repeat(41)), None)
+                .unwrap_err()
+                .code,
+            "AI_TARGET_LANG_INVALID"
+        );
+    }
+
+    #[test]
+    fn http_failures_are_distinguishable_and_secret_free() {
+        let key = "sk-secret-abcdef";
+        for (status, code) in [
+            (StatusCode::UNAUTHORIZED, "AI_KEY_INVALID"),
+            (StatusCode::FORBIDDEN, "AI_KEY_INVALID"),
+            (StatusCode::NOT_FOUND, "AI_MODEL_NOT_FOUND"),
+            (StatusCode::TOO_MANY_REQUESTS, "AI_QUOTA_EXCEEDED"),
+            (StatusCode::BAD_GATEWAY, "AI_HTTP_ERROR"),
+        ] {
+            let error = compose_http_error(key, status, None);
+            assert_eq!(error.code, code, "status {status}");
+            assert_eq!(error.status, Some(status.as_u16()));
+        }
+        let sniffed = compose_http_error(
+            key,
+            StatusCode::BAD_REQUEST,
+            Some("The model `gpt-x` does not exist".to_string()),
+        );
+        assert_eq!(sniffed.code, "AI_MODEL_NOT_FOUND");
+
+        let leaked = compose_http_error(
+            key,
+            StatusCode::UNAUTHORIZED,
+            Some(format!("Incorrect API key provided: {key}")),
+        );
+        assert!(!leaked.message.contains(key), "错误消息不得包含密钥");
+
+        let long = compose_http_error(key, StatusCode::BAD_GATEWAY, Some("x".repeat(1000)));
+        assert!(long.message.chars().count() < 400, "服务商详情须截断");
+
+        // 错误负载与 ReaderAidError 同型:{code,message,status}。
+        let value = serde_json::to_value(&leaked).unwrap();
+        assert!(value.get("code").is_some());
+        assert!(value.get("message").is_some());
+        assert!(value.get("status").is_some());
+    }
+
+    #[test]
+    fn non_stream_response_is_bounded_and_json_only() {
+        assert!(reject_content_length(Some(MAX_RESPONSE_BYTES as u64)).is_ok());
+        assert_eq!(
+            reject_content_length(Some(MAX_RESPONSE_BYTES as u64 + 1))
+                .unwrap_err()
+                .code,
+            "AI_RESPONSE_TOO_LARGE"
+        );
+        let mut buffer = vec![0u8; MAX_RESPONSE_BYTES];
+        assert_eq!(
+            append_bounded(&mut buffer, &[1]).unwrap_err().code,
+            "AI_RESPONSE_TOO_LARGE"
+        );
+        let mut fresh = Vec::new();
+        append_bounded(&mut fresh, b"{}").unwrap();
+        assert_eq!(
+            parse_json_bytes(b"{\"ok\":true}").unwrap(),
+            json!({ "ok": true })
+        );
+        assert_eq!(
+            parse_json_bytes(b"<html>").unwrap_err().code,
+            "AI_RESPONSE_INVALID"
+        );
+        assert_eq!(
+            parse_json_bytes(&[0xff, 0xfe]).unwrap_err().code,
+            "AI_RESPONSE_INVALID"
+        );
+    }
+
+    #[test]
+    fn config_status_carries_no_secret_material() {
+        let empty = status_from(None, true);
+        assert!(!empty.configured);
+        assert!(empty.missing.contains(&"model".to_string()));
+        assert_eq!(
+            empty.base_url,
+            AiEndpointKind::OpenaiChat.default_base_url()
+        );
+        assert_eq!(empty.defaults.len(), 3);
+
+        let complete = status_from(Some(sample_config()), true);
+        assert!(complete.configured);
+        assert!(complete.missing.is_empty());
+        assert_eq!(complete.updated_at, Some(42));
+
+        let keyless = status_from(Some(sample_config()), false);
+        assert!(!keyless.configured);
+        assert_eq!(keyless.missing, ["api_key"]);
+
+        for status in [empty, complete, keyless] {
+            let value = serde_json::to_value(&status).unwrap();
+            let text = value.to_string();
+            assert!(!text.to_lowercase().contains("sk-"), "状态不得含密钥");
+            assert!(value.get("apiKey").is_none());
+            assert!(value.get("key").is_none());
+        }
+    }
+
+    #[test]
+    fn key_normalization_rejects_control_and_blank() {
+        assert_eq!(normalize_ai_key("  sk-good  ").unwrap(), "sk-good");
+        assert_eq!(
+            normalize_ai_key("\u{1}bad").unwrap_err().code,
+            "AI_KEY_INVALID"
+        );
+        assert_eq!(normalize_ai_key("   ").unwrap_err().code, "AI_KEY_INVALID");
+    }
+
+    #[test]
+    fn redirects_stay_on_configured_origin() {
+        let first = Url::parse("https://api.openai.com/v1/chat/completions").unwrap();
+        assert!(redirect_target_allowed(
+            &first,
+            &Url::parse("https://api.openai.com/v2/chat/completions").unwrap(),
+            false
+        ));
+        assert!(!redirect_target_allowed(
+            &first,
+            &Url::parse("https://evil.example/v1").unwrap(),
+            false
+        ));
+        assert!(!redirect_target_allowed(
+            &first,
+            &Url::parse("http://api.openai.com/v1").unwrap(),
+            false
+        ));
+        assert!(!redirect_target_allowed(
+            &first,
+            &Url::parse("https://user@api.openai.com/v1").unwrap(),
+            false
+        ));
+        let http_first = Url::parse("http://127.0.0.1:1234/v1").unwrap();
+        assert!(redirect_target_allowed(
+            &http_first,
+            &Url::parse("http://127.0.0.1:1234/v2").unwrap(),
+            true
+        ));
+        assert!(!redirect_target_allowed(
+            &http_first,
+            &Url::parse("http://127.0.0.1:1235/v1").unwrap(),
+            true
+        ));
+    }
+
+    #[test]
+    fn target_lang_override_normalization() {
+        assert_eq!(
+            normalize_target_lang_override(Some("  zh  ".to_string())).unwrap(),
+            Some("zh".to_string())
+        );
+        assert_eq!(
+            normalize_target_lang_override(Some("   ".to_string())).unwrap(),
+            None
+        );
+        assert_eq!(normalize_target_lang_override(None).unwrap(), None);
+        assert_eq!(
+            normalize_target_lang_override(Some("x".repeat(41)))
+                .unwrap_err()
+                .code,
+            "AI_CONFIG_INVALID"
+        );
+    }
+}
