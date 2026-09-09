@@ -32,6 +32,12 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: 'Reading preferences',
     readerPrefsHint: 'Applies while reading.',
     showProgressBar: 'Show progress bar',
+    pageTurnStyle: 'Page-turn animation',
+    pageTurnStyleAuto: 'Auto (follow system)',
+    pageTurnStyleSlide: 'Slide',
+    pageTurnStyleFade: 'Fade',
+    pageTurnStyleCurl: 'Page curl',
+    pageTurnStyleNone: 'None',
     translateGroup: 'Translation',
     deeplKey: 'DeepL API key',
     deeplHint:
@@ -60,6 +66,12 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     readingGroup: '阅读偏好',
     readerPrefsHint: '只影响阅读界面。关闭后阅读区底部不再显示进度条。',
     showProgressBar: '显示进度条',
+    pageTurnStyle: '翻页动画',
+    pageTurnStyleAuto: '自动（跟随系统）',
+    pageTurnStyleSlide: '滑动',
+    pageTurnStyleFade: '淡入',
+    pageTurnStyleCurl: '仿真翻页',
+    pageTurnStyleNone: '无',
     translateGroup: '翻译',
     deeplKey: 'DeepL API key',
     deeplHint: '填写 DeepL 密钥后，划选工具栏才会出现翻译。密钥只保存在本机。',
@@ -127,6 +139,7 @@ function groupTitles(panel: ParentNode): string[] {
 afterEach(() => {
   document.body.replaceChildren();
   delete document.documentElement.dataset.readerProgressBar;
+  delete document.documentElement.dataset.readerPageTurn;
   invokeMock.mockReset();
   invokeMock.mockResolvedValue({ configured: false });
 });
@@ -366,6 +379,59 @@ describe('createLibraryManage grouped settings page', () => {
       }),
     );
     expect(document.documentElement.dataset.readerProgressBar).toBe('on');
+  });
+
+  it('persists the page-turn style, applies it immediately, and round-trips with the bar pref', () => {
+    const readerPrefsStorage = memoryStorage();
+    const { options } = manageOptions({ readerPrefsStorage });
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    const select = manage.element.querySelector<HTMLSelectElement>(
+      'select[name="pageTurnStyle"]',
+    )!;
+    // 默认 auto（未显式选择）；五个选项齐备且当前值生效。
+    expect(select.value).toBe('auto');
+    expect(
+      Array.from(select.options).map((option) => option.value),
+    ).toEqual(['auto', 'slide', 'fade', 'curl', 'none']);
+    expect(document.documentElement.dataset.readerPageTurn).toBe('auto');
+
+    const prefsEvents: Array<Record<string, unknown>> = [];
+    const onPrefs = (event: Event): void => {
+      prefsEvents.push((event as CustomEvent<Record<string, unknown>>).detail);
+    };
+    document.addEventListener('lightink:reader-prefs', onPrefs);
+
+    // 选择 slide：立即写入存储、盖章 dataset、派发事件（下一次翻页即生效）。
+    select.value = 'slide';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(readerPrefsStorage.store['lightink.reader.prefs']).toContain('"pageTurnStyle":"slide"');
+    expect(document.documentElement.dataset.readerPageTurn).toBe('slide');
+    expect(prefsEvents).toEqual([
+      expect.objectContaining({ showProgressBar: true, pageTurnStyle: 'slide' }),
+    ]);
+
+    // 切回进度条开关不重置已选样式（完整 ReaderPrefs 一起保存）。
+    const bar = manage.element.querySelector<HTMLInputElement>('input[name="showProgressBar"]')!;
+    bar.checked = false;
+    bar.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(readerPrefsStorage.store['lightink.reader.prefs']).toContain('"pageTurnStyle":"slide"');
+    expect(readerPrefsStorage.store['lightink.reader.prefs']).toContain('"showProgressBar":false');
+    document.removeEventListener('lightink:reader-prefs', onPrefs);
+
+    // 外部（同步/另一入口）变更样式回 fade 时 select 跟随。
+    readerPrefsStorage.store['lightink.reader.prefs'] = JSON.stringify({
+      showProgressBar: false,
+      pageTurnStyle: 'fade',
+    });
+    window.dispatchEvent(
+      new CustomEvent('lightink:syncable-storage-change', {
+        detail: { key: 'lightink.reader.prefs' },
+      }),
+    );
+    expect(select.value).toBe('fade');
+    manage.destroy();
   });
 
   it('stores and clears a DeepL key without writing it to reader prefs', async () => {

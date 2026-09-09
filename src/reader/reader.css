@@ -456,6 +456,12 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   flex: 1 1 auto;
 }
 
+/*
+ * R1 统一样式翻页动画（ADR-1）：播放收口 playReaderPageTurn 按生效样式在
+ * 阅读器根上设 data-page-anim="<slide|fade|curl>-<next|prev>"；本组选择器
+ * 按 token 分派四种样式（文字活动章容器与 PDF 页宿主共用同一 token）。
+ * 翻页本身同步瞬跳，动画纯装饰（不阻塞、不丢页）。
+ */
 @keyframes lightink-reader-page-next {
   from {
     transform: translateX(1.35rem);
@@ -478,42 +484,88 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   }
 }
 
-.lightink-reader[data-page-anim='next'] .lightink-reader-chapter.is-active,
-.lightink-reader[data-page-anim='next'] .lightink-reader-pages[data-reader-active='true'] {
+.lightink-reader[data-page-anim='slide-next'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim='slide-next'] .lightink-reader-pages[data-reader-active='true'] {
   animation: lightink-reader-page-next 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.lightink-reader[data-page-anim='prev'] .lightink-reader-chapter.is-active,
-.lightink-reader[data-page-anim='prev'] .lightink-reader-pages[data-reader-active='true'] {
+.lightink-reader[data-page-anim='slide-prev'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim='slide-prev'] .lightink-reader-pages[data-reader-active='true'] {
   animation: lightink-reader-page-prev 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* fade：新页淡入（翻页是同步瞬跳，无旧页快照，交叉退化为快速淡入）。 */
+@keyframes lightink-reader-page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lightink-reader[data-page-anim^='fade-'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim^='fade-'] .lightink-reader-pages[data-reader-active='true'] {
+  animation: lightink-reader-page-fade 240ms ease-out;
+}
+
+/* curl：perspective + rotateY 轻量仿真（纯 CSS，不引库）；方向决定书脊。 */
+@keyframes lightink-reader-page-curl-next {
+  from {
+    transform: perspective(1400px) rotateY(-18deg) translateX(1.1rem);
+    opacity: 0.35;
+  }
+  to {
+    transform: perspective(1400px) rotateY(0deg) translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes lightink-reader-page-curl-prev {
+  from {
+    transform: perspective(1400px) rotateY(18deg) translateX(-1.1rem);
+    opacity: 0.35;
+  }
+  to {
+    transform: perspective(1400px) rotateY(0deg) translateX(0);
+    opacity: 1;
+  }
+}
+
+.lightink-reader[data-page-anim='curl-next'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim='curl-next'] .lightink-reader-pages[data-reader-active='true'] {
+  transform-origin: left center;
+  animation: lightink-reader-page-curl-next 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lightink-reader[data-page-anim='curl-prev'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim='curl-prev'] .lightink-reader-pages[data-reader-active='true'] {
+  transform-origin: right center;
+  animation: lightink-reader-page-curl-prev 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/*
+ * prefers-reduced-motion 兜底：仅未显式选择（html[data-reader-page-turn='auto']，
+ * 由 applyReaderPrefs 盖章）时抑制。显式选择 slide/fade/curl 后按用户选择
+ * 执行（R1 覆盖通道）；'none' 时 JS 不设 token，无需兜底。
+ */
 @media (prefers-reduced-motion: reduce) {
-  .lightink-reader[data-page-anim='next'] .lightink-reader-chapter.is-active,
-  .lightink-reader[data-page-anim='next'] .lightink-reader-pages[data-reader-active='true'],
-  .lightink-reader[data-page-anim='prev'] .lightink-reader-chapter.is-active,
-  .lightink-reader[data-page-anim='prev'] .lightink-reader-pages[data-reader-active='true'] {
+  html[data-reader-page-turn='auto'] .lightink-reader[data-page-anim] .lightink-reader-chapter.is-active,
+  html[data-reader-page-turn='auto'] .lightink-reader[data-page-anim] .lightink-reader-pages[data-reader-active='true'] {
     animation: none;
   }
 }
 
 /*
- * T2 触屏翻页统一水平 slide：触屏分支的翻页动效由分栏 scroller 的
- * 200ms rAF 缓动承担（reading-layout.ts 写入层），抑制宿主
- * data-page-anim 防双动画；桌面 280ms 原样保留（上方选择器不动）。
+ * 触屏抑制块（改写自 T2 整体抑制）：触屏分栏翻页的 slide 动效由章内
+ * scroller 的 200ms rAF 缓动承担（reading-layout.ts 写入层，仅生效样式为
+ * slide 时运行），此处只抑制该组合的活动章 token 防双动画。滚动布局
+ * （:not([data-reading-layout='scroll']) 排除）与 PDF 页宿主无 scroller
+ * 缓动，fade/curl/slide token 照常播放。
  */
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader[data-page-anim='next']
-  .lightink-reader-chapter.is-active,
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader[data-page-anim='next']
-  .lightink-reader-pages[data-reader-active='true'],
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader[data-page-anim='prev']
-  .lightink-reader-chapter.is-active,
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader[data-page-anim='prev']
-  .lightink-reader-pages[data-reader-active='true'] {
+  .lightink-reader:not([data-reading-layout='scroll'])[data-page-anim^='slide-']
+  .lightink-reader-chapter.is-active {
   animation: none;
 }
 
@@ -2190,9 +2242,28 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   animation: lightink-comic-slot-slide-prev 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+ * R1 fade 映射：统一样式为 fade 时进入 slot 播放淡入变体（跨端——桌面
+ * 漫画 fade 不走 VT push 滑动转场）。加类与生效样式门控在 comic-turn.ts
+ * showPagedSpread；auto 未显式选择 + reduce 由 JS 解析为 none 不加类。
+ */
+@keyframes lightink-comic-slot-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lightink-reader-cbz-slot.lightink-comic-slot-fade {
+  animation: lightink-comic-slot-fade 240ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .lightink-reader-cbz-slot.lightink-comic-slot-slide-next,
-  .lightink-reader-cbz-slot.lightink-comic-slot-slide-prev {
+  html[data-reader-page-turn='auto'] .lightink-reader-cbz-slot.lightink-comic-slot-slide-next,
+  html[data-reader-page-turn='auto'] .lightink-reader-cbz-slot.lightink-comic-slot-slide-prev,
+  html[data-reader-page-turn='auto'] .lightink-reader-cbz-slot.lightink-comic-slot-fade {
     animation: none;
   }
 }
@@ -2260,8 +2331,10 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(lightink-comic-pages),
-  ::view-transition-new(lightink-comic-pages) {
+  /* 仅未显式选择时兜底抑制；显式 slide/curl 按用户选择执行（JS 已按
+     生效样式决定是否启动 VT，auto+reduce 本就不会启动）。 */
+  html[data-reader-page-turn='auto']::view-transition-old(lightink-comic-pages),
+  html[data-reader-page-turn='auto']::view-transition-new(lightink-comic-pages) {
     animation: none;
   }
 }

@@ -227,6 +227,12 @@ interface Labels {
   readingGroup: string;
   readerPrefsHint: string;
   showProgressBar: string;
+  pageTurnStyle: string;
+  pageTurnStyleAuto: string;
+  pageTurnStyleSlide: string;
+  pageTurnStyleFade: string;
+  pageTurnStyleCurl: string;
+  pageTurnStyleNone: string;
   storageGroup: string;
   syncGroup: string;
   otherGroup: string;
@@ -391,6 +397,12 @@ const LABELS: Record<Locale, Labels> = {
     readingGroup: 'Reading preferences',
     readerPrefsHint: 'Applies while reading. Turn the bottom progress bar off for a cleaner page.',
     showProgressBar: 'Show progress bar',
+    pageTurnStyle: 'Page-turn animation',
+    pageTurnStyleAuto: 'Auto (follow system)',
+    pageTurnStyleSlide: 'Slide',
+    pageTurnStyleFade: 'Fade',
+    pageTurnStyleCurl: 'Page curl',
+    pageTurnStyleNone: 'None',
     storageGroup: 'Storage & cache',
     syncGroup: 'Sync',
     otherGroup: 'Other',
@@ -553,6 +565,12 @@ const LABELS: Record<Locale, Labels> = {
     readingGroup: '阅读偏好',
     readerPrefsHint: '只影响阅读界面。关闭后阅读区底部不再显示进度条。',
     showProgressBar: '显示进度条',
+    pageTurnStyle: '翻页动画',
+    pageTurnStyleAuto: '自动（跟随系统）',
+    pageTurnStyleSlide: '滑动',
+    pageTurnStyleFade: '淡入',
+    pageTurnStyleCurl: '仿真翻页',
+    pageTurnStyleNone: '无',
     storageGroup: '存储与缓存',
     syncGroup: '同步',
     otherGroup: '其他',
@@ -1769,6 +1787,12 @@ export function createLibraryView(
       readingGroup: l.readingGroup,
       readerPrefsHint: l.readerPrefsHint,
       showProgressBar: l.showProgressBar,
+      pageTurnStyle: l.pageTurnStyle,
+      pageTurnStyleAuto: l.pageTurnStyleAuto,
+      pageTurnStyleSlide: l.pageTurnStyleSlide,
+      pageTurnStyleFade: l.pageTurnStyleFade,
+      pageTurnStyleCurl: l.pageTurnStyleCurl,
+      pageTurnStyleNone: l.pageTurnStyleNone,
       translateGroup: translate(locale, 'reader.lookup.translateGroup'),
       deeplKey: translate(locale, 'reader.lookup.deeplKey'),
       deeplHint: translate(locale, 'reader.lookup.deeplHint'),

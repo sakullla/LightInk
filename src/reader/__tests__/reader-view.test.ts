@@ -2866,7 +2866,8 @@ describe('窗口级翻页与大纲跳转接线（session-navigation 经 reader-v
 
     expect(view.advanceReading(1)).toBe(true);
     expect(scroll.scrollTop).toBe(400);
-    expect(reader.getAttribute('data-page-anim')).toBeNull();
+    // R1 统一样式引擎：滚动布局整屏跳转也播（默认 auto → slide token）。
+    expect(reader.getAttribute('data-page-anim')).toBe('slide-next');
     expect(view.advanceReading(1)).toBe(true);
     expect(scroll.scrollTop).toBe(800);
     // 末屏下翻：已在滚动末尾，返回 false 放行原生滚动（窗口级调用方不吞事件）。

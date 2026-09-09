@@ -8,12 +8,27 @@ import type { Annotation } from './annotations.js';
 import { isTouchPrimaryDocument } from './comic-preferences.js';
 import { isUsableEpubChapterTitle } from './chapter-title.js';
 import {
+  effectiveReaderPageTurnEffect,
+  resolveReaderPageTurnEffect,
+  type ReaderPageTurnEffect,
+  type ReaderPageTurnStyle,
+} from './reader-prefs.js';
+import {
   sanitizeReadingProgressTitle,
   type ReadingProgress,
 } from './reading-progress.js';
 import type { ReaderState } from './types.js';
 
+/** Slide 动画时长（桌面 data-page-anim keyframes 同源）。 */
 export const READER_PAGE_ANIM_MS = 280;
+
+/** 各生效样式的 token 保留窗口（keyframes 时长 + 清理余量在调用侧叠加）。 */
+const READER_PAGE_ANIM_MS_BY_EFFECT: Readonly<Record<ReaderPageTurnEffect, number>> = {
+  slide: 280,
+  fade: 240,
+  curl: 420,
+  none: 0,
+};
 
 /** Chapter-edge bounce duration (T2): ~200ms spring, touch only. */
 export const READER_PAGE_BOUNDARY_BOUNCE_MS = 200;
@@ -202,30 +217,42 @@ export function readerProgressTickFractions(
   return { chapters: unique, bookmarks: ticks.bookmarks };
 }
 
+/**
+ * 统一样式翻页动画唯一播放收口（R1/ADR-1）：按生效样式在阅读器根上设
+ * `data-page-anim="<style>-<next|prev>"` token，reader.css 按 token 分派
+ * slide/fade/curl keyframes（文字章容器与 PDF 页宿主共用）。
+ *
+ * - 生效样式由 `resolveReaderPageTurnEffect`（偏好 + prefers-reduced-motion）
+ *   唯一决定：`auto` 未显式选择时 reduce → none（不播）；显式选择后按
+ *   用户选择执行（含 reduce 下的显式动画）。触屏与滚动布局不再整体跳过
+ *   ——触屏分栏的 slide 由 scroller 缓动承担（CSS 仅抑制该组合防双动画），
+ *   fade/curl 与滚动布局整屏跳转都由本 token 播。
+ * - 翻页本身保持同步瞬跳，动画纯装饰（不阻塞、不丢页）。刚换章的帧还在
+ *   重分栏（data-paged-restore）时跳过：播在未完成的 layout 上会错位。
+ */
 export function playReaderPageTurn(
   root: HTMLElement,
   direction: 1 | -1,
   options?: {
     matchMedia?: (query: string) => { matches: boolean };
     schedule?: (fn: () => void, ms: number) => number;
+    /** 测试/注入覆盖；缺省读偏好内存缓存（applyReaderPrefs 刷新）。 */
+    pageTurnStyle?: ReaderPageTurnStyle;
   },
 ): void {
   const media =
     options?.matchMedia ??
     (typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined);
-  if (media?.('(prefers-reduced-motion: reduce)').matches === true) {
+  const effect = options?.pageTurnStyle
+    ? resolveReaderPageTurnEffect(
+        options.pageTurnStyle,
+        media?.('(prefers-reduced-motion: reduce)').matches === true,
+      )
+    : effectiveReaderPageTurnEffect(media);
+  if (effect === 'none') {
     return;
   }
-  // 触屏：CSS 已关掉 data-page-anim，再读 offsetWidth 只是整页强制重排。
-  if (isTouchPrimaryDocument(root.ownerDocument)) {
-    return;
-  }
-  // 连续滚动：视口步进已经是瞬跳。再给整章做 translate/opacity 会强制
-  // 重排并抢走合成层，换章后第一下手指滚动会明显卡一下。
-  if (root.dataset.readingLayout === 'scroll') {
-    return;
-  }
-  // 刚换章的帧还在重分栏（data-paged-restore），slide 会叠在未完成的
+  // 刚换章的帧还在重分栏（data-paged-restore），动画会叠在未完成的
   // layout 上；章界本身也没有可插值的 scrollLeft。
   if (
     root.querySelector(
@@ -234,21 +261,29 @@ export function playReaderPageTurn(
   ) {
     return;
   }
-  const token = direction > 0 ? 'next' : 'prev';
+  const token = `${effect}-${direction > 0 ? 'next' : 'prev'}`;
   root.removeAttribute('data-page-anim');
   void root.offsetWidth;
   root.setAttribute('data-page-anim', token);
   const schedule =
     options?.schedule ??
     ((fn, ms) => (typeof setTimeout === 'function' ? (setTimeout(fn, ms) as unknown as number) : 0));
+  const seq = (readerPageAnimSeq += 1);
   schedule(() => {
+    // 连击同方向：旧 timer 提前触发时新动画尚在播，不得摘除 token。
+    if (seq !== readerPageAnimSeq) {
+      return;
+    }
     if (root.getAttribute('data-page-anim') === token) {
       root.removeAttribute('data-page-anim');
     }
-  }, READER_PAGE_ANIM_MS + 40);
+  }, READER_PAGE_ANIM_MS_BY_EFFECT[effect] + 40);
 }
 
 /** 连击同方向时旧 timer 的清理回调序号：只有最新一次调用才允许移除属性。 */
+let readerPageAnimSeq = 0;
+
+/** 连击同方向时旧 timer 的清理回调序号（回弹）：同 playReaderPageTurn 先例。 */
 let readerBoundaryBounceSeq = 0;
 
 /**

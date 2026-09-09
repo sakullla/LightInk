@@ -26,6 +26,7 @@ import { outlineFromEntries } from '../outline.js';
 import {
   clampFlowRestoreIndex,
   flowBookProgress,
+  playReaderPageTurn,
   stampReadingProgressTitle,
 } from '../reader-progress-ui.js';
 import { FLOW_RESTORE_MAX_ATTEMPTS } from '../session/session-progress.js';
@@ -144,6 +145,9 @@ export function setupReaderFlowStage(ctx: ReaderViewContext): ReaderFlowStageSur
       }
       return false;
     },
+    // R1：帧内直调 advanceFlowPage 的翻页补播统一样式动画（与
+    // session-navigation 的 playPageTurn 同一 playReaderPageTurn 收口）。
+    playPageTurn: (direction) => playReaderPageTurn(ctx.root, direction),
     dismissSelectionToolbar: () => ctx.chrome.dismissReaderOverlayStep(),
     isSelectionToolbarVisible: () => ctx.selectionToolbar?.isVisible() === true,
     isLayoutSwitching: () => ctx.layoutSwitching,

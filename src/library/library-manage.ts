@@ -27,11 +27,13 @@ import {
   type LibraryThemeStorage,
 } from './library-theme.js';
 import {
+  READER_PAGE_TURN_STYLES,
   READER_PREFS_STORAGE_KEY,
   applyReaderPrefs,
   loadReaderPrefs,
   saveReaderPrefs,
   type ReaderPrefsStorage,
+  type ReaderPageTurnStyle,
 } from '../reader/reader-prefs.js';
 
 export type ManageSubpage = 'home' | 'cache-limit';
@@ -43,6 +45,12 @@ export interface LibraryManageLabels {
   readonly readingGroup: string;
   readonly readerPrefsHint: string;
   readonly showProgressBar: string;
+  readonly pageTurnStyle: string;
+  readonly pageTurnStyleAuto: string;
+  readonly pageTurnStyleSlide: string;
+  readonly pageTurnStyleFade: string;
+  readonly pageTurnStyleCurl: string;
+  readonly pageTurnStyleNone: string;
   readonly translateGroup: string;
   readonly deeplKey: string;
   readonly deeplHint: string;
@@ -176,6 +184,21 @@ export function createLibraryManage(
   progressBarInput.name = 'showProgressBar';
   const progressBarText = doc.createElement('span');
   progressBarLabel.append(progressBarInput, progressBarText);
+  // 阅读偏好：翻页动画样式（R1）——auto/slide/fade/curl/none，select 行。
+  const pageTurnField = doc.createElement('label');
+  pageTurnField.className = 'lightink-library-reader-pref lightink-library-page-turn-field';
+  const pageTurnSelect = doc.createElement('select');
+  pageTurnSelect.name = 'pageTurnStyle';
+  const pageTurnOptions = new Map<ReaderPageTurnStyle, HTMLOptionElement>();
+  for (const style of READER_PAGE_TURN_STYLES) {
+    const option = doc.createElement('option');
+    option.value = style;
+    pageTurnOptions.set(style, option);
+    pageTurnSelect.append(option);
+  }
+  pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
+  const pageTurnText = doc.createElement('span');
+  pageTurnField.append(pageTurnSelect, pageTurnText);
   const deeplHint = doc.createElement('p');
   deeplHint.className = 'lightink-library-appearance-hint lightink-library-deepl-hint';
   const deeplField = doc.createElement('label');
@@ -195,7 +218,7 @@ export function createLibraryManage(
   const deeplSave = button(doc, '', 'lightink-library-primary lightink-library-deepl-save');
   const deeplClear = button(doc, '', 'lightink-library-deepl-clear');
   deeplActions.append(deeplSave, deeplClear);
-  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel);
+  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel, pageTurnField);
 
   const translatePrefs = doc.createElement('section');
   translatePrefs.className = 'lightink-library-manage-group lightink-library-translate';
@@ -371,6 +394,18 @@ export function createLibraryManage(
     currentReaderPrefs = loadReaderPrefs(options.readerPrefsStorage);
     applyReaderPrefs(doc.documentElement, currentReaderPrefs);
     progressBarInput.checked = currentReaderPrefs.showProgressBar;
+    pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
+  };
+
+  // 保存任一偏好都携带完整 ReaderPrefs（缺省字段会被规范化回默认值）。
+  const commitReaderPrefs = (): void => {
+    currentReaderPrefs = saveReaderPrefs(options.readerPrefsStorage, {
+      showProgressBar: progressBarInput.checked,
+      pageTurnStyle: (pageTurnSelect.value as ReaderPageTurnStyle) ?? 'auto',
+    });
+    applyReaderPrefs(doc.documentElement, currentReaderPrefs);
+    pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
+    doc.dispatchEvent(new CustomEvent('lightink:reader-prefs', { detail: currentReaderPrefs }));
   };
 
   const onReaderPrefsStorage = (event: Event): void => {
@@ -384,11 +419,13 @@ export function createLibraryManage(
   prefsTarget.addEventListener('lightink:syncable-storage-change', onReaderPrefsStorage);
 
   progressBarInput.addEventListener('change', () => {
-    currentReaderPrefs = saveReaderPrefs(options.readerPrefsStorage, {
-      showProgressBar: progressBarInput.checked,
-    });
-    applyReaderPrefs(doc.documentElement, currentReaderPrefs);
-    doc.dispatchEvent(new CustomEvent('lightink:reader-prefs', { detail: currentReaderPrefs }));
+    commitReaderPrefs();
+  });
+
+  // 即时生效：播放函数每次翻页读偏好内存缓存（applyReaderPrefs 刷新），
+  // 切换样式后下一次翻页即按新样式播放，无需重开书。
+  pageTurnSelect.addEventListener('change', () => {
+    commitReaderPrefs();
   });
 
   deeplSave.addEventListener('click', () => {
@@ -479,6 +516,19 @@ export function createLibraryManage(
     readerPrefsHint.textContent = l.readerPrefsHint;
     progressBarText.textContent = l.showProgressBar;
     progressBarLabel.title = l.showProgressBar;
+    pageTurnText.textContent = l.pageTurnStyle;
+    pageTurnField.title = l.pageTurnStyle;
+    pageTurnSelect.setAttribute('aria-label', l.pageTurnStyle);
+    const optionLabels: Record<ReaderPageTurnStyle, string> = {
+      auto: l.pageTurnStyleAuto,
+      slide: l.pageTurnStyleSlide,
+      fade: l.pageTurnStyleFade,
+      curl: l.pageTurnStyleCurl,
+      none: l.pageTurnStyleNone,
+    };
+    for (const [style, option] of pageTurnOptions) {
+      option.textContent = optionLabels[style];
+    }
     translateTitle.textContent = l.translateGroup;
     deeplHint.textContent = l.deeplHint;
     deeplLabelText.textContent = l.deeplKey;

@@ -981,6 +981,56 @@ describe('Reader load lifecycle', () => {
     await view.destroy();
   });
 
+  it('plays the unified page-turn token for iframe-direct keyboard and wheel turns', async () => {
+    // R1：帧内键盘/滚轮直调 advanceFlowPage 不经 session-navigation；
+    // 移动成功后经 host hook 补播统一样式 token（默认 auto → slide）。
+    const preference: Record<string, string> = { 'lightink.reader.flow.layout': 'paginated' };
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createReaderView(host, {
+      readBytes: async () => bytes('unused'),
+      parseContent: async () => ({
+        chapters: [
+          { title: 'One', html: '<p>one</p>' },
+          { title: 'Two', html: '<p>two</p>' },
+        ],
+      }),
+      preferenceStorage: {
+        getItem: (key) => preference[key] ?? null,
+        setItem: (key, value) => {
+          preference[key] = value;
+        },
+      },
+    });
+    await view.load('iframe-turn.epub');
+    for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
+      frame.dispatchEvent(new Event('load'));
+    }
+    await nextFrame();
+    const frame = host.querySelector<HTMLIFrameElement>(
+      '.lightink-reader-chapter.is-active .lightink-reader-chapter-frame',
+    )!;
+    const scroller = readerPagedScroller(frame.contentDocument!);
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 600 });
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 1200 });
+    const reader = host.querySelector<HTMLElement>('.lightink-reader')!;
+
+    // 帧内键盘直调：章内步进成功 → 宿主 token 补播。
+    frame.contentDocument!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }),
+    );
+    expect(scroller.scrollLeft).toBe(600);
+    expect(reader.getAttribute('data-page-anim')).toBe('slide-next');
+
+    // 帧内滚轮直调（gatePagedWheel 包装同一补播入口）：反向步进 → prev token。
+    frame.contentDocument!.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }),
+    );
+    expect(scroller.scrollLeft).toBe(0);
+    expect(reader.getAttribute('data-page-anim')).toBe('slide-prev');
+    await view.destroy();
+  });
+
   it('does not apply the comic near-black overlay to EPUB, PDF, or the editor pane', async () => {
     stubComicObjectUrls();
     const archive = await buildTinyCbz();

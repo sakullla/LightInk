@@ -1,6 +1,8 @@
 /**
  * 漫画换屏：showPagedSpread（decode-gated swap + View Transition push 翻页，
- * Android/拖拽回退 slot 滑入）。行为逐字保留自拆分前 cbz.ts 的对应闭包。
+ * Android/拖拽回退 slot 滑入）。行为保留自拆分前 cbz.ts 的对应闭包；
+ * R1 起翻页动效改读统一样式偏好（slide/curl→VT push + slot 滑入回退、
+ * fade→slot 淡入、none→直切；auto 按 prefers-reduced-motion 解析）。
  */
 
 import {
@@ -8,6 +10,10 @@ import {
   comicVisiblePages,
   isTouchPrimaryDocument,
 } from '../comic-preferences.js';
+import {
+  effectiveReaderPageTurnEffect,
+  type ReaderPageTurnEffect,
+} from '../reader-prefs.js';
 import { comicLayoutSpreadPrefs, type ComicSession } from './comic-session.js';
 import { loadPage, syncComicPageLoading } from './comic-pages.js';
 import { refreshCacheWindow } from './comic-cache.js';
@@ -18,6 +24,9 @@ import { androidReaderRoot, updateToolbar } from './comic-chrome.js';
 
 /** T2：触屏 paged 翻页进入 slot 的滑入时长（与文字书 slide 同曲线族）。 */
 const COMIC_SLOT_SLIDE_MS = 200;
+
+/** R1 fade 映射：进入 slot 的淡入时长（与文字书 fade keyframes 同档）。 */
+const COMIC_SLOT_FADE_MS = 240;
 /**
  * 翻页防闪屏（decode-gated swap）：相邻翻页时新页图片未解码就绪就先不换屏，
  * 旧页保持显示，待 loadPage（读档 + img.decode 预热位图）完成后一次性交换；
@@ -49,6 +58,13 @@ function comicSlotSlideToken(session: ComicSession, forward: boolean): 'next' | 
 /** T2-A2（FB3）：per-slot 滑入清理 timer；同 slot 快速二次进入先清旧 timer。 */
 const comicSlotSlideTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
+/** 统一样式映射下 slot 动画类全集（换样式时先摘干净再重启）。 */
+const COMIC_SLOT_MOTION_CLASSES = [
+  'lightink-comic-slot-slide-next',
+  'lightink-comic-slot-slide-prev',
+  'lightink-comic-slot-fade',
+] as const;
+
 function slideEnteringComicSlots(
   session: ComicSession,
   entering: readonly number[],
@@ -63,7 +79,7 @@ function slideEnteringComicSlots(
     // 会被旧 timer 中途移除新动画的类。先清旧 timer 再重启。
     const staleTimer = comicSlotSlideTimers.get(slot);
     if (staleTimer !== undefined) clearTimeout(staleTimer);
-    slot.classList.remove('lightink-comic-slot-slide-next', 'lightink-comic-slot-slide-prev');
+    slot.classList.remove(...COMIC_SLOT_MOTION_CLASSES);
     void slot.offsetWidth; // 同向连翻时重启动画
     slot.classList.add(className);
     comicSlotSlideTimers.set(
@@ -72,6 +88,27 @@ function slideEnteringComicSlots(
         comicSlotSlideTimers.delete(slot);
         slot.classList.remove(className);
       }, COMIC_SLOT_SLIDE_MS + 60),
+    );
+  }
+}
+
+/** R1 fade 映射：进入 slot 播放淡入（跨端——VT push 是滑动语义，fade 不用它）。 */
+function fadeEnteringComicSlots(session: ComicSession, entering: readonly number[]): void {
+  const className = 'lightink-comic-slot-fade';
+  for (const index of entering) {
+    const slot = session.slots[index];
+    if (slot === undefined) continue;
+    const staleTimer = comicSlotSlideTimers.get(slot);
+    if (staleTimer !== undefined) clearTimeout(staleTimer);
+    slot.classList.remove(...COMIC_SLOT_MOTION_CLASSES);
+    void slot.offsetWidth; // 连翻时重启动画
+    slot.classList.add(className);
+    comicSlotSlideTimers.set(
+      slot,
+      setTimeout(() => {
+        comicSlotSlideTimers.delete(slot);
+        slot.classList.remove(className);
+      }, COMIC_SLOT_FADE_MS + 60),
     );
   }
 }
@@ -139,18 +176,22 @@ export function showPagedSpread(
     }
     const media =
       typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
-    const reduceMotion = media?.('(prefers-reduced-motion: reduce)').matches === true;
+    // R1 统一样式映射：slide/curl → 既有 VT push 转场 + slot 滑入回退
+    // （curl 不为漫画单独仿真，视觉按滑入呈现）；fade → slot 淡入变体
+    // （跨端）；none → 直切（VT 不启动等价 skipTransition）。auto 未显式
+    // 选择时 reduce-motion 解析为 none；显式选择覆盖系统设置。
+    const effect: ReaderPageTurnEffect = effectiveReaderPageTurnEffect(media ?? undefined);
     const doc = container.ownerDocument as ComicViewTransitionDocument;
     // Android WebView 的 View Transition 快照常带黑底，旧页滑开就是闪屏。
     // 手机跳过 VT，改走 slot 滑入（合成器 transform，不截 canvas）。
     const androidComic = androidReaderRoot(doc.documentElement) !== null;
     // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
-    // 中途不露底色。跳转（direction 0）、reduce-motion、Android 与拖动
+    // 中途不露底色。跳转（direction 0）、fade/none、Android 与拖动
     // 提交（跟手已有实时帧，快照重截旧帧反而跳变）直切。
     if (
       source !== 'drag' &&
       direction !== 0 &&
-      !reduceMotion &&
+      (effect === 'slide' || effect === 'curl') &&
       !androidComic &&
       typeof doc.startViewTransition === 'function'
     ) {
@@ -174,17 +215,15 @@ export function showPagedSpread(
       }
     }
     const entering = applySwap();
-    // T2 回退路径：触屏且非 reduce-motion 时，进入 slot 播放 200ms 滑入；
-    // Android 同样走这条（不走 VT）。strip、跳转（direction 0）与拖动
-    // 提交（跟手→缓动→落位已是一段连续运动）不 slide。
-    if (
-      entering.length > 0 &&
-      direction !== 0 &&
-      source !== 'drag' &&
-      !reduceMotion &&
-      isTouchPrimaryDocument(container.ownerDocument)
-    ) {
-      slideEnteringComicSlots(session, entering, direction);
+    // T2 回退路径：进入 slot 播放动画。fade 为跨端淡入；slide/curl 仅触屏
+    // 滑入（桌面由 VT push 承担）。strip、跳转（direction 0）、拖动提交
+    // （跟手→缓动→落位已是一段连续运动）与生效样式 none 不播。
+    if (entering.length > 0 && direction !== 0 && source !== 'drag' && effect !== 'none') {
+      if (effect === 'fade') {
+        fadeEnteringComicSlots(session, entering);
+      } else if (isTouchPrimaryDocument(container.ownerDocument)) {
+        slideEnteringComicSlots(session, entering, direction);
+      }
     }
   };
   // decode-gated swap：相邻翻页（±1）且新页图片未就绪时旧页保持在屏，

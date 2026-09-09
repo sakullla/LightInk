@@ -44,6 +44,7 @@ import {
   snapPagedScroller,
 } from '../ui/reading-layout.js';
 import { playReaderPageBoundaryBounce } from './reader-progress-ui.js';
+import { effectiveReaderPageTurnEffect } from './reader-prefs.js';
 import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import {
   bindClickPaging,
@@ -1004,6 +1005,12 @@ export interface FlowRendererHooks {
   onFrameSurfaceClick?(event: MouseEvent): void;
   /** 滚轮翻页导航（含 trackpad 门限；移动后由编排壳隐藏划选工具栏）。 */
   advancePagedWheel(direction: 1 | -1): boolean;
+  /**
+   * 统一样式翻页动画补播（R1）：帧内键盘/滚轮/触摸直调 advanceFlowPage
+   * 的翻页不经 session-navigation，移动成功后经此 hook 与会话路径共用
+   * 同一播放函数（编排壳接 playReaderPageTurn）。
+   */
+  playPageTurn?(direction: 1 | -1): void;
   /** User-initiated scroll in flow scroll mode (cancels a pending restore snap-back). */
   onUserScrollIntent?(): void;
   /** Escape 关闭可见的划选工具栏：返回是否可见并已隐藏。 */
@@ -1419,6 +1426,10 @@ export function createFlowRenderer(
    * is disabled (`touch-action: pan-y`); touchstart cancels an in-flight
    * slide so a new drag does not fight rAF. Chapter landings stay instant.
    * Bind matchMedia — a raw call throws Illegal invocation in the WebView.
+   *
+   * R1 统一样式：触屏 scroller 滑入只在生效样式为 slide 时承担翻页动效
+   * （fade/curl/none 由宿主 token 或无动画表达，scroller 瞬跳防双动画）；
+   * 显式选择 slide 时即使系统 reduce-motion 也按用户选择滑入。
    */
   const pagedTouchSlideMotion = (): PagedScrollMotion | undefined => {
     if (!hostHasTouchFlags(root)) {
@@ -1426,9 +1437,10 @@ export function createFlowRenderer(
     }
     const media =
       typeof matchMedia === 'function' ? matchMedia.bind(globalThis) : undefined;
+    const effect = effectiveReaderPageTurnEffect(media ?? undefined);
     return {
       touchPrimary: true,
-      reducedMotion: media?.('(prefers-reduced-motion: reduce)').matches === true,
+      reducedMotion: effect !== 'slide',
     };
   };
 
@@ -1459,11 +1471,19 @@ export function createFlowRenderer(
     }
     const step = resolveVisiblePageStep(frame, scroller);
     const motion = pagedTouchSlideMotion();
+    const pageBefore = step > 0 ? Math.round(startLeft / step) : 0;
     const settled = settlePagedRelease(scroller, startLeft, dx, step, motion);
     if (settled) {
       if (frame !== null) delete frame.dataset.pagedRestore;
       hooks.syncState();
       hooks.dismissSelectionToolbar();
+      // R1 触摸滑动翻页：落位页变化时补播统一样式 token。slide 下 scroller
+      // 在飞（scrollLeft 仍在起点附近）不误触发，动画由缓动承担；fade/curl
+      // 瞬跳落位、页号已变，由宿主 token 呈现所选过渡；none 内部短路。
+      const pageAfter = step > 0 ? Math.round(scroller.scrollLeft / step) : pageBefore;
+      if (pageAfter !== pageBefore) {
+        hooks.playPageTurn?.(pageAfter > pageBefore ? 1 : -1);
+      }
     }
     return settled;
   };
@@ -1561,6 +1581,20 @@ export function createFlowRenderer(
     hooks.syncState();
     hooks.dismissSelectionToolbar();
     return true;
+  };
+
+  /**
+   * R1：帧内键盘/滚轮/触摸/点按直调 advanceFlowPage 的翻页不经
+   * session-navigation；此包装在移动成功后经 host hook 补播统一样式
+   * 翻页动画（编排壳接 playReaderPageTurn，与会话路径同一收口）。
+   * 渲染器对外的 advancePage 保持不播——会话策略表自行补播，防双拍。
+   */
+  const advanceFlowPageWithTurn = (direction: 1 | -1): boolean => {
+    const moved = advanceFlowPage(direction);
+    if (moved) {
+      hooks.playPageTurn?.(direction);
+    }
+    return moved;
   };
 
   const applyPaginatedDocument = (
@@ -1950,7 +1984,7 @@ export function createFlowRenderer(
             paginated: isFlowPaginated(root),
           });
           if (action.kind === 'page') {
-            if (advanceFlowPage(action.direction)) {
+            if (advanceFlowPageWithTurn(action.direction)) {
               event.preventDefault();
               event.stopPropagation();
               return;
@@ -2071,7 +2105,7 @@ export function createFlowRenderer(
               return;
             }
             const moved = isFlowPaginated(root)
-              ? advanceFlowPage(direction)
+              ? advanceFlowPageWithTurn(direction)
               : hooks.advanceReading(direction);
             if (moved) {
               event.preventDefault();
@@ -2128,7 +2162,7 @@ export function createFlowRenderer(
             return;
           }
           event.preventDefault();
-          gatePagedWheel(delta > 0 ? 1 : -1, advanceFlowPage);
+          gatePagedWheel(delta > 0 ? 1 : -1, advanceFlowPageWithTurn);
         };
         const onPointerMove = (event: PointerEvent | MouseEvent): void => {
           hooks.onFramePointerMove?.({
@@ -2186,7 +2220,7 @@ export function createFlowRenderer(
             if (pagedGesture.consumed()) {
               return true;
             }
-            const moved = isFlowPaginated(root) && advanceFlowPage(direction);
+            const moved = isFlowPaginated(root) && advanceFlowPageWithTurn(direction);
             if (moved) {
               pagedGesture.take();
             }
@@ -2238,7 +2272,7 @@ export function createFlowRenderer(
             consumePointerTap();
             return true;
           }
-          const moved = isFlowPaginated(root) && advanceFlowPage(direction);
+          const moved = isFlowPaginated(root) && advanceFlowPageWithTurn(direction);
           if (moved) {
             consumePointerTap();
             collapseFrameSelection();

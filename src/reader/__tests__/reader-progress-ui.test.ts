@@ -7,6 +7,7 @@ import {
   isUsableEpubChapterTitle,
   markDuplicateChapterHeading,
 } from '../chapter-title.js';
+import { DEFAULT_READER_PREFS, applyReaderPrefs } from '../reader-prefs.js';
 import {
   clampFlowRestoreIndex,
   flowBookProgress,
@@ -157,53 +158,114 @@ describe('readerProgressTickFractions', () => {
 });
 
 describe('playReaderPageTurn', () => {
-  it('stamps a slide token and clears it after the motion window', () => {
+  it('stamps the effective style into the token and clears it after the motion window', () => {
     const root = document.createElement('div');
     let delayed: (() => void) | undefined;
     playReaderPageTurn(root, 1, {
       matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'auto',
       schedule: (fn) => {
         delayed = fn;
         return 1;
       },
     });
-    expect(root.getAttribute('data-page-anim')).toBe('next');
+    // auto 未显式选择且无 reduce → slide；token 携带生效样式。
+    expect(root.getAttribute('data-page-anim')).toBe('slide-next');
     delayed!();
     expect(root.getAttribute('data-page-anim')).toBeNull();
   });
 
-  it('skips motion when the user prefers reduced motion', () => {
+  it('dispatches every explicit style and direction into its own token', () => {
+    const root = document.createElement('div');
+    const cases: ReadonlyArray<[Parameters<typeof playReaderPageTurn>[2], string]> = [
+      [{ pageTurnStyle: 'slide' }, 'slide-prev'],
+      [{ pageTurnStyle: 'fade' }, 'fade-next'],
+      [{ pageTurnStyle: 'fade' }, 'fade-prev'],
+      [{ pageTurnStyle: 'curl' }, 'curl-next'],
+      [{ pageTurnStyle: 'curl' }, 'curl-prev'],
+    ];
+    for (const [options, expected] of cases) {
+      root.removeAttribute('data-page-anim');
+      playReaderPageTurn(root, expected.endsWith('next') ? 1 : -1, {
+        matchMedia: () => ({ matches: false }),
+        schedule: () => 0,
+        ...options,
+      });
+      expect(root.getAttribute('data-page-anim')).toBe(expected);
+    }
+  });
+
+  it('resolves auto to none under reduced motion and skips stamping entirely', () => {
     const root = document.createElement('div');
     playReaderPageTurn(root, 1, {
       matchMedia: () => ({ matches: true }),
+      pageTurnStyle: 'auto',
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: true }),
+      pageTurnStyle: 'none',
       schedule: () => 0,
     });
     expect(root.getAttribute('data-page-anim')).toBeNull();
   });
 
-  it('skips motion on a touch-primary document', () => {
+  it('honors an explicit choice over system reduced motion', () => {
+    const root = document.createElement('div');
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: true }),
+      pageTurnStyle: 'slide',
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBe('slide-next');
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: true }),
+      pageTurnStyle: 'curl',
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBe('curl-next');
+  });
+
+  it('stamps on touch-primary documents and in scroll layout (R1 entry coverage)', () => {
+    // 触屏/滚动布局不再整体跳过：slide 在触屏分栏由 CSS 抑制块与 scroller
+    // 缓动配合，滚动布局整屏跳转按 token 播放。
     document.documentElement.setAttribute('data-touch-primary', '');
     const root = document.createElement('div');
+    root.dataset.readingLayout = 'scroll';
     document.body.appendChild(root);
     try {
       playReaderPageTurn(root, 1, {
         matchMedia: () => ({ matches: false }),
+        pageTurnStyle: 'slide',
         schedule: () => 0,
       });
-      expect(root.getAttribute('data-page-anim')).toBeNull();
+      expect(root.getAttribute('data-page-anim')).toBe('slide-next');
+      playReaderPageTurn(root, -1, {
+        matchMedia: () => ({ matches: false }),
+        pageTurnStyle: 'fade',
+        schedule: () => 0,
+      });
+      expect(root.getAttribute('data-page-anim')).toBe('fade-prev');
     } finally {
       document.documentElement.removeAttribute('data-touch-primary');
+      root.remove();
     }
   });
 
-  it('skips motion in continuous-scroll layout', () => {
+  it('reads the applied preference cache when no override is passed', () => {
     const root = document.createElement('div');
-    root.dataset.readingLayout = 'scroll';
-    playReaderPageTurn(root, 1, {
-      matchMedia: () => ({ matches: false }),
-      schedule: () => 0,
-    });
-    expect(root.getAttribute('data-page-anim')).toBeNull();
+    const rootStub = { dataset: {} as DOMStringMap };
+    try {
+      applyReaderPrefs(rootStub, { showProgressBar: true, pageTurnStyle: 'curl' });
+      playReaderPageTurn(root, 1, {
+        matchMedia: () => ({ matches: false }),
+        schedule: () => 0,
+      });
+      expect(root.getAttribute('data-page-anim')).toBe('curl-next');
+    } finally {
+      applyReaderPrefs(rootStub, DEFAULT_READER_PREFS);
+    }
   });
 
   it('skips motion while a chapter frame is still restoring its page', () => {
@@ -218,9 +280,50 @@ describe('playReaderPageTurn', () => {
     root.appendChild(chapter);
     playReaderPageTurn(root, 1, {
       matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'slide',
       schedule: () => 0,
     });
     expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('keeps the token when a stale same-direction timer fires during a newer turn', () => {
+    // 连击同方向：旧 timer 提前触发时新动画尚在播，不得摘除 token（seq 守卫）。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'slide',
+      schedule,
+    });
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'slide',
+      schedule,
+    });
+    expect(root.getAttribute('data-page-anim')).toBe('slide-next');
+    timers[0]!(); // 第一次翻页的旧 timer 先到期：新动画仍在播，不得清理。
+    expect(root.getAttribute('data-page-anim')).toBe('slide-next');
+    timers[1]!(); // 最新一次的 timer 才允许移除。
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('replaces a stale opposite-direction token so direction changes restart cleanly', () => {
+    const root = document.createElement('div');
+    playReaderPageTurn(root, 1, {
+      matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'fade',
+      schedule: () => 0,
+    });
+    playReaderPageTurn(root, -1, {
+      matchMedia: () => ({ matches: false }),
+      pageTurnStyle: 'fade',
+      schedule: () => 0,
+    });
+    expect(root.getAttribute('data-page-anim')).toBe('fade-prev');
   });
 });
 
