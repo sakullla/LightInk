@@ -46,6 +46,52 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     deeplClear: 'Clear key',
     deeplConfigured: 'DeepL key saved on this device.',
     deeplUnconfigured: 'No DeepL key saved.',
+    aiGroup: 'AI',
+    aiHint:
+      'Configure the single AI provider. Saving a new configuration replaces the previous one.',
+    aiEndpointKind: 'Endpoint format',
+    aiEndpointOpenaiResponses: 'OpenAI Responses',
+    aiEndpointOpenaiChat: 'OpenAI Chat Completions',
+    aiEndpointClaudeMessages: 'Claude Messages',
+    aiBaseUrl: 'Base URL',
+    aiModel: 'Model',
+    aiKey: 'API key',
+    aiKeySave: 'Save key',
+    aiKeyClear: 'Clear key',
+    aiAllowHttp: 'Allow HTTP address (insecure)',
+    aiTargetLang: 'Translation target language',
+    aiTargetLangAuto: 'Auto (follow interface language)',
+    aiLangZhCN: '简体中文',
+    aiLangEn: 'English',
+    aiLangJa: '日本語',
+    aiLangKo: '한국어',
+    aiLangFr: 'Français',
+    aiLangDe: 'Deutsch',
+    aiLangEs: 'Español',
+    aiLangRu: 'Русский',
+    aiSave: 'Save configuration',
+    aiTest: 'Test connection',
+    aiTesting: 'Testing connection…',
+    aiTestOk: 'Connection succeeded ({ms} ms).',
+    aiConfigured: 'AI provider configured and ready.',
+    aiUnconfigured: 'AI provider is not fully configured yet.',
+    aiUnconfiguredGaps: 'AI provider is not fully configured (missing: {missing}).',
+    aiSaved: 'AI configuration saved.',
+    aiKeySaved: 'API key saved on this device.',
+    aiKeyCleared: 'API key cleared.',
+    aiErrorHttpNotAllowed: 'HTTP addresses are rejected unless Allow HTTP address is checked.',
+    aiErrorUrlInvalid:
+      'The base URL is invalid: use an http(s) address without user info, query, or fragment.',
+    aiErrorConfigInvalid: 'The configuration values are invalid or too long.',
+    aiErrorKeyInvalid: 'The provider rejected the API key.',
+    aiErrorModelNotFound: 'The model does not exist or is unavailable.',
+    aiErrorQuota: 'Requests are rate-limited or the quota is exhausted.',
+    aiErrorUnconfigured: 'Complete and save the configuration first (missing: {missing}).',
+    aiErrorTimeout: 'The request timed out.',
+    aiErrorNetwork: 'Could not reach the AI service; check the address and network.',
+    aiErrorKeyStore: 'Could not save the key to the device keychain.',
+    aiErrorTooLarge: 'The AI response exceeded the size limit.',
+    aiErrorFailed: 'The AI request failed.',
     storageGroup: 'Storage & cache',
     clearCache: 'Clear cache',
     cacheUsage: '{used} of {limit}',
@@ -79,6 +125,50 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     deeplClear: '清除密钥',
     deeplConfigured: '已在本机保存 DeepL 密钥。',
     deeplUnconfigured: '尚未保存 DeepL 密钥。',
+    aiGroup: 'AI',
+    aiHint: '为 AI 翻译与 AI 助手配置唯一 AI 提供商；保存新配置即覆盖原配置。',
+    aiEndpointKind: '端点格式',
+    aiEndpointOpenaiResponses: 'OpenAI Responses',
+    aiEndpointOpenaiChat: 'OpenAI Chat Completions',
+    aiEndpointClaudeMessages: 'Claude Messages',
+    aiBaseUrl: 'Base URL',
+    aiModel: '模型名',
+    aiKey: 'API 密钥',
+    aiKeySave: '保存密钥',
+    aiKeyClear: '清除密钥',
+    aiAllowHttp: '允许 HTTP 地址（不安全）',
+    aiTargetLang: '翻译目标语言',
+    aiTargetLangAuto: '自动（跟随界面语言）',
+    aiLangZhCN: '简体中文',
+    aiLangEn: 'English',
+    aiLangJa: '日本語',
+    aiLangKo: '한국어',
+    aiLangFr: 'Français',
+    aiLangDe: 'Deutsch',
+    aiLangEs: 'Español',
+    aiLangRu: 'Русский',
+    aiSave: '保存配置',
+    aiTest: '测试连接',
+    aiTesting: '正在测试连接…',
+    aiTestOk: '连接成功（{ms} ms）。',
+    aiConfigured: 'AI 提供商已配置完成。',
+    aiUnconfigured: 'AI 尚未完成配置。',
+    aiUnconfiguredGaps: 'AI 尚未完成配置（缺少：{missing}）。',
+    aiSaved: 'AI 配置已保存。',
+    aiKeySaved: '已在本机保存 API 密钥。',
+    aiKeyCleared: 'API 密钥已清除。',
+    aiErrorHttpNotAllowed: '未勾选「允许 HTTP 地址」时不能保存 HTTP 地址。',
+    aiErrorUrlInvalid: 'Base URL 无效：需要不带用户信息、查询参数或片段的 http(s) 地址。',
+    aiErrorConfigInvalid: '配置值无效或过长。',
+    aiErrorKeyInvalid: '服务商拒绝了 API 密钥。',
+    aiErrorModelNotFound: '模型不存在或不可用。',
+    aiErrorQuota: '请求过于频繁或额度不足。',
+    aiErrorUnconfigured: '请先完成并保存配置（缺少：{missing}）。',
+    aiErrorTimeout: '请求超时。',
+    aiErrorNetwork: '无法连接 AI 服务，请检查地址与网络。',
+    aiErrorKeyStore: '无法将密钥写入本机钥匙串。',
+    aiErrorTooLarge: 'AI 响应超过大小上限。',
+    aiErrorFailed: 'AI 请求失败。',
     storageGroup: '存储与缓存',
     clearCache: '清理缓存',
     cacheUsage: '已用 {used} / {limit}',
@@ -154,6 +244,7 @@ describe('createLibraryManage grouped settings page', () => {
       'appearance',
       'reading',
       'translate',
+      'ai',
       'storage',
       'sync',
       'other',
@@ -227,6 +318,7 @@ describe('createLibraryManage grouped settings page', () => {
       'appearance',
       'reading',
       'translate',
+      'ai',
       'storage',
       'other',
     ]);
@@ -499,6 +591,438 @@ describe('createLibraryManage grouped settings page', () => {
     expect(onWindowDeeplConfigured).not.toHaveBeenCalled();
     document.removeEventListener('lightink:reader-deepl-configured', onDeeplConfigured);
     window.removeEventListener('lightink:reader-deepl-configured', onWindowDeeplConfigured);
+    manage.destroy();
+  });
+});
+
+describe('createLibraryManage AI provider group (R2)', () => {
+  const AI_DEFAULTS = [
+    { endpointKind: 'openai-responses', baseUrl: 'https://api.openai.com/v1' },
+    { endpointKind: 'openai-chat', baseUrl: 'https://api.openai.com/v1' },
+    { endpointKind: 'claude-messages', baseUrl: 'https://api.anthropic.com/v1' },
+  ];
+
+  function aiStatus(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      endpointKind: 'openai-chat',
+      baseUrl: 'https://api.openai.com/v1',
+      model: '',
+      allowHttp: false,
+      hasKey: false,
+      configured: false,
+      missing: ['endpoint_kind', 'base_url', 'model', 'api_key'],
+      defaults: AI_DEFAULTS,
+      ...overrides,
+    };
+  }
+
+  function mockAiCommands(overrides: Record<string, unknown> = {}): void {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return overrides.getConfig ?? aiStatus();
+      if (command === 'ai_save_config') {
+        if (overrides.saveConfigError !== undefined) throw overrides.saveConfigError;
+        return overrides.saveConfig ?? aiStatus();
+      }
+      if (command === 'ai_store_key') {
+        if (overrides.storeKeyError !== undefined) throw overrides.storeKeyError;
+        return overrides.storeKey ?? aiStatus();
+      }
+      if (command === 'ai_forget_key') return overrides.forgetKey ?? aiStatus();
+      if (command === 'ai_test_connection') {
+        if (overrides.testError !== undefined) throw overrides.testError;
+        return overrides.testResult ?? { ok: true, latencyMs: 1234, reply: 'pong' };
+      }
+      return undefined;
+    });
+  }
+
+  function aiField(manage: { element: HTMLElement }, name: string): HTMLInputElement {
+    return manage.element.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+  }
+
+  function aiSelect(manage: { element: HTMLElement }, name: string): HTMLSelectElement {
+    return manage.element.querySelector<HTMLSelectElement>(`[name="${name}"]`)!;
+  }
+
+  function aiFeedbackOf(manage: { element: HTMLElement }): HTMLElement {
+    return manage.element.querySelector<HTMLElement>('.lightink-library-ai-feedback')!;
+  }
+
+  async function settle(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('renders endpoint select, inputs, allowHttp, target lang default auto, and gap status', async () => {
+    mockAiCommands();
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const zh = LABELS['zh-CN'];
+    expect(
+      manage.element.querySelector('[data-manage-group="ai"] h2')?.textContent,
+    ).toBe(zh.aiGroup);
+    const endpoint = aiSelect(manage, 'aiEndpointKind');
+    expect(Array.from(endpoint.options).map((option) => option.value)).toEqual([
+      'openai-responses',
+      'openai-chat',
+      'claude-messages',
+    ]);
+    expect(Array.from(endpoint.options).map((option) => option.textContent)).toEqual([
+      zh.aiEndpointOpenaiResponses,
+      zh.aiEndpointOpenaiChat,
+      zh.aiEndpointClaudeMessages,
+    ]);
+    // 未保存过:后端默认形态 openai-chat + 官方 base URL 预填。
+    expect(endpoint.value).toBe('openai-chat');
+    const baseUrl = aiField(manage, 'aiBaseUrl');
+    expect(baseUrl.type).toBe('url');
+    expect(baseUrl.value).toBe('https://api.openai.com/v1');
+    expect(aiField(manage, 'aiModel').type).toBe('text');
+    expect(aiField(manage, 'aiApiKey').type).toBe('password');
+    expect(aiField(manage, 'aiAllowHttp').checked).toBe(false);
+    const target = aiSelect(manage, 'aiTargetLang');
+    expect(target.value).toBe('auto');
+    expect(Array.from(target.options).map((option) => option.value)).toEqual([
+      'auto',
+      'zh-CN',
+      'en',
+      'ja',
+      'ko',
+      'fr',
+      'de',
+      'es',
+      'ru',
+    ]);
+    expect(Array.from(target.options)[0]?.textContent).toBe(zh.aiTargetLangAuto);
+    // 测试连接结果区:role=status,初始隐藏;状态行明示四要素缺口。
+    const feedback = aiFeedbackOf(manage);
+    expect(feedback.getAttribute('role')).toBe('status');
+    expect(feedback.hidden).toBe(true);
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.dataset.aiConfigured).toBe('false');
+    expect(status.textContent).toContain(zh.aiUnconfiguredGaps.split('{missing}')[0]);
+    expect(status.textContent).toContain(zh.aiModel);
+    expect(status.textContent).toContain(zh.aiKey);
+    expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
+      true,
+    );
+    manage.destroy();
+  });
+
+  it('prefills the official base URL on endpoint switch and keeps custom URLs', async () => {
+    mockAiCommands();
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const endpoint = aiSelect(manage, 'aiEndpointKind');
+    const baseUrl = aiField(manage, 'aiBaseUrl');
+
+    // 官方默认(未改动)→ 切换 Claude 联动预填 Anthropic 官方地址。
+    endpoint.value = 'claude-messages';
+    endpoint.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(baseUrl.value).toBe('https://api.anthropic.com/v1');
+
+    // 改成自定义地址后再切换:保留用户地址。
+    baseUrl.value = 'https://my-proxy.example:8443/openai';
+    endpoint.value = 'openai-responses';
+    endpoint.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(baseUrl.value).toBe('https://my-proxy.example:8443/openai');
+
+    // 清空后切换:预填新格式默认(空视为未改动)。
+    baseUrl.value = '';
+    endpoint.value = 'openai-chat';
+    endpoint.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(baseUrl.value).toBe('https://api.openai.com/v1');
+    manage.destroy();
+  });
+
+  it('saves the single active config with the full input and broadcasts the event', async () => {
+    const saved = aiStatus({
+      endpointKind: 'openai-chat',
+      model: 'gpt-4o-mini',
+      targetLang: 'ja',
+      hasKey: true,
+      configured: true,
+      missing: [],
+    });
+    mockAiCommands({ saveConfig: saved });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const events: Array<Record<string, unknown>> = [];
+    const onAi = (event: Event): void => {
+      events.push((event as CustomEvent<Record<string, unknown>>).detail);
+    };
+    const onWindowAi = vi.fn();
+    document.addEventListener('lightink:reader-ai-configured', onAi);
+    window.addEventListener('lightink:reader-ai-configured', onWindowAi);
+
+    aiField(manage, 'aiModel').value = 'gpt-4o-mini';
+    aiSelect(manage, 'aiTargetLang').value = 'ja';
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_save_config', {
+      input: {
+        endpointKind: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        allowHttp: false,
+        targetLang: 'ja',
+      },
+    });
+    const feedback = aiFeedbackOf(manage);
+    expect(feedback.hidden).toBe(false);
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiSaved);
+    expect(feedback.dataset.kind).toBe('success');
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.dataset.aiConfigured).toBe('true');
+    expect(status.textContent).toBe(LABELS['zh-CN'].aiConfigured);
+    // 保存返回 hasKey=true → 清除密钥可见。
+    expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
+      false,
+    );
+    expect(events).toEqual([{ configured: true, missing: [] }]);
+    expect(onWindowAi).not.toHaveBeenCalled();
+
+    // 切换端点再保存:唯一活动配置被完整覆盖(不叠加第二配置)。
+    invokeMock.mockClear();
+    const endpoint = aiSelect(manage, 'aiEndpointKind');
+    endpoint.value = 'claude-messages';
+    endpoint.dispatchEvent(new Event('change', { bubbles: true }));
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_save_config', {
+      input: {
+        endpointKind: 'claude-messages',
+        baseUrl: 'https://api.anthropic.com/v1',
+        model: 'gpt-4o-mini',
+        allowHttp: false,
+        targetLang: 'ja',
+      },
+    });
+    document.removeEventListener('lightink:reader-ai-configured', onAi);
+    window.removeEventListener('lightink:reader-ai-configured', onWindowAi);
+    manage.destroy();
+  });
+
+  it('rejects HTTP saves without allowHttp, then saves after checking the box', async () => {
+    const saved = aiStatus({
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      model: 'local-model',
+      allowHttp: true,
+      hasKey: true,
+      configured: true,
+      missing: [],
+    });
+    mockAiCommands({
+      saveConfigError: { code: 'AI_HTTP_NOT_ALLOWED', message: 'HTTP 地址必须显式勾选允许' },
+      saveConfig: saved,
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const events: unknown[] = [];
+    const onAi = (event: Event): void => {
+      events.push((event as CustomEvent).detail);
+    };
+    document.addEventListener('lightink:reader-ai-configured', onAi);
+
+    aiField(manage, 'aiBaseUrl').value = 'http://127.0.0.1:1234/v1';
+    aiField(manage, 'aiModel').value = 'local-model';
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+
+    // 未勾选允许:保存被拒绝,role=status 提示且不广播。
+    const feedback = aiFeedbackOf(manage);
+    expect(feedback.dataset.kind).toBe('error');
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiErrorHttpNotAllowed);
+    expect(events).toEqual([]);
+
+    // 勾选后可保存并广播 configured。
+    aiField(manage, 'aiAllowHttp').checked = true;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return aiStatus();
+      return saved;
+    });
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_save_config', {
+      input: {
+        endpointKind: 'openai-chat',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+        model: 'local-model',
+        allowHttp: true,
+        targetLang: undefined,
+      },
+    });
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiSaved);
+    expect(events).toEqual([{ configured: true, missing: [] }]);
+    document.removeEventListener('lightink:reader-ai-configured', onAi);
+    manage.destroy();
+  });
+
+  it('stores and clears the key, broadcasting configured with missing gaps', async () => {
+    const withKey = aiStatus({
+      model: 'gpt-4o-mini',
+      hasKey: true,
+      configured: true,
+      missing: [],
+    });
+    const noKey = aiStatus({
+      model: 'gpt-4o-mini',
+      hasKey: false,
+      configured: false,
+      missing: ['api_key'],
+    });
+    const readerPrefsStorage = memoryStorage();
+    mockAiCommands({
+      getConfig: aiStatus(),
+      storeKey: withKey,
+      forgetKey: noKey,
+    });
+    const { options } = manageOptions({ readerPrefsStorage });
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const events: Array<Record<string, unknown>> = [];
+    const onAi = (event: Event): void => {
+      events.push((event as CustomEvent<Record<string, unknown>>).detail);
+    };
+    document.addEventListener('lightink:reader-ai-configured', onAi);
+
+    const keyInput = aiField(manage, 'aiApiKey');
+    keyInput.value = 'sk-test-secret';
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-save')!.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_store_key', { key: 'sk-test-secret' });
+    expect(keyInput.value).toBe('');
+    const feedback = aiFeedbackOf(manage);
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiKeySaved);
+    expect(events).toEqual([{ configured: true, missing: [] }]);
+    expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
+      false,
+    );
+    // 密钥材料不进入任何本地存储。
+    expect(JSON.stringify(readerPrefsStorage.store)).not.toContain('sk-test-secret');
+
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_forget_key');
+    expect(events).toEqual([
+      { configured: true, missing: [] },
+      { configured: false, missing: ['api_key'] },
+    ]);
+    expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
+      true,
+    );
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.dataset.aiConfigured).toBe('false');
+    expect(status.textContent).toContain(LABELS['zh-CN'].aiKey);
+    document.removeEventListener('lightink:reader-ai-configured', onAi);
+    manage.destroy();
+  });
+
+  it('shows test connection success and distinguishable failures in role=status', async () => {
+    mockAiCommands({ testResult: { ok: true, latencyMs: 812, reply: 'pong' } });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const test = manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-test')!;
+    const feedback = aiFeedbackOf(manage);
+    test.click();
+    await settle();
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_test_connection');
+    expect(feedback.getAttribute('role')).toBe('status');
+    expect(feedback.dataset.kind).toBe('success');
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiTestOk.replace('{ms}', '812'));
+    expect(test.disabled).toBe(false);
+    expect(test.textContent).toBe(LABELS['zh-CN'].aiTest);
+
+    // 错误密钥:可区分失败(密钥被拒 + HTTP 状态)。
+    mockAiCommands({
+      testError: { code: 'AI_KEY_INVALID', message: 'AI 服务商拒绝了 API Key (HTTP 401)', status: 401 },
+    });
+    test.click();
+    await settle();
+    expect(feedback.dataset.kind).toBe('error');
+    expect(feedback.textContent).toBe(`${LABELS['zh-CN'].aiErrorKeyInvalid} (HTTP 401)`);
+
+    // 模型不可用:另一类失败文案。
+    mockAiCommands({
+      testError: { code: 'AI_MODEL_NOT_FOUND', message: 'model not found', status: 404 },
+    });
+    test.click();
+    await settle();
+    expect(feedback.textContent).toBe(`${LABELS['zh-CN'].aiErrorModelNotFound} (HTTP 404)`);
+
+    // 未完成配置:提示缺口而不是空白(重新加载配置使缺口为 model/api_key)。
+    mockAiCommands({
+      getConfig: aiStatus({ hasKey: true, missing: ['model', 'api_key'] }),
+      testError: {
+        code: 'AI_NOT_CONFIGURED',
+        message: 'AI 尚未完成配置,缺少: model、api_key',
+      },
+    });
+    manage.retranslate();
+    await settle();
+    test.click();
+    await settle();
+    expect(feedback.textContent).toBe(
+      LABELS['zh-CN'].aiErrorUnconfigured.replace('{missing}', '模型名, API 密钥'),
+    );
+    manage.destroy();
+  });
+
+  it('restores a previously saved configuration when the manage page reopens', async () => {
+    mockAiCommands({
+      getConfig: aiStatus({
+        endpointKind: 'claude-messages',
+        baseUrl: 'https://api.anthropic.com/v1',
+        model: 'claude-3-5-sonnet',
+        targetLang: 'en',
+        hasKey: true,
+        configured: true,
+        missing: [],
+      }),
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    // 重启(重新创建)后:ai_get_config 回填全部字段,配置仍在、密钥在钥匙串。
+    expect(aiSelect(manage, 'aiEndpointKind').value).toBe('claude-messages');
+    expect(aiField(manage, 'aiBaseUrl').value).toBe('https://api.anthropic.com/v1');
+    expect(aiField(manage, 'aiModel').value).toBe('claude-3-5-sonnet');
+    expect(aiField(manage, 'aiAllowHttp').checked).toBe(false);
+    expect(aiSelect(manage, 'aiTargetLang').value).toBe('en');
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.dataset.aiConfigured).toBe('true');
+    expect(status.textContent).toBe(LABELS['zh-CN'].aiConfigured);
+    expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
+      false,
+    );
     manage.destroy();
   });
 });

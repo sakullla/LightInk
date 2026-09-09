@@ -10,6 +10,7 @@
  * nothing is consumed and the press falls through.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import type { LibraryClient } from './library-client.js';
 import {
   dispatchDeeplConfigured,
@@ -58,6 +59,50 @@ export interface LibraryManageLabels {
   readonly deeplClear: string;
   readonly deeplConfigured: string;
   readonly deeplUnconfigured: string;
+  readonly aiGroup: string;
+  readonly aiHint: string;
+  readonly aiEndpointKind: string;
+  readonly aiEndpointOpenaiResponses: string;
+  readonly aiEndpointOpenaiChat: string;
+  readonly aiEndpointClaudeMessages: string;
+  readonly aiBaseUrl: string;
+  readonly aiModel: string;
+  readonly aiKey: string;
+  readonly aiKeySave: string;
+  readonly aiKeyClear: string;
+  readonly aiAllowHttp: string;
+  readonly aiTargetLang: string;
+  readonly aiTargetLangAuto: string;
+  readonly aiLangZhCN: string;
+  readonly aiLangEn: string;
+  readonly aiLangJa: string;
+  readonly aiLangKo: string;
+  readonly aiLangFr: string;
+  readonly aiLangDe: string;
+  readonly aiLangEs: string;
+  readonly aiLangRu: string;
+  readonly aiSave: string;
+  readonly aiTest: string;
+  readonly aiTesting: string;
+  readonly aiTestOk: string;
+  readonly aiConfigured: string;
+  readonly aiUnconfigured: string;
+  readonly aiUnconfiguredGaps: string;
+  readonly aiSaved: string;
+  readonly aiKeySaved: string;
+  readonly aiKeyCleared: string;
+  readonly aiErrorHttpNotAllowed: string;
+  readonly aiErrorUrlInvalid: string;
+  readonly aiErrorConfigInvalid: string;
+  readonly aiErrorKeyInvalid: string;
+  readonly aiErrorModelNotFound: string;
+  readonly aiErrorQuota: string;
+  readonly aiErrorUnconfigured: string;
+  readonly aiErrorTimeout: string;
+  readonly aiErrorNetwork: string;
+  readonly aiErrorKeyStore: string;
+  readonly aiErrorTooLarge: string;
+  readonly aiErrorFailed: string;
   readonly storageGroup: string;
   readonly clearCache: string;
   readonly cacheUsage: string;
@@ -138,6 +183,282 @@ function button(doc: Document, text: string, className = ''): HTMLButtonElement 
   el.textContent = text;
   return el;
 }
+
+// ── AI 提供商分组(R2)──命令封装、解析与事件广播 ──────────────────────
+
+/** `src-tauri/src/ai.rs` 的端点格式三选一(wire 值 kebab-case,后端测试钉死)。 */
+export type AiEndpointKindId = 'openai-responses' | 'openai-chat' | 'claude-messages';
+
+export const AI_ENDPOINT_KINDS: readonly AiEndpointKindId[] = [
+  'openai-responses',
+  'openai-chat',
+  'claude-messages',
+];
+
+/** 后端不可用(浏览器预览)或未返回 defaults 时的联动预填兜底。 */
+export const AI_ENDPOINT_DEFAULT_BASE_URLS: Readonly<Record<AiEndpointKindId, string>> = {
+  'openai-responses': 'https://api.openai.com/v1',
+  'openai-chat': 'https://api.openai.com/v1',
+  'claude-messages': 'https://api.anthropic.com/v1',
+};
+
+/** 翻译目标语言覆盖项:auto = 跟随界面语言(ADR-4),其余为常用阅读语言。 */
+export const AI_TARGET_LANG_VALUES = ['auto', 'zh-CN', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'ru'] as const;
+
+export type AiTargetLangValue = (typeof AI_TARGET_LANG_VALUES)[number];
+
+export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
+
+export interface AiEndpointDefaultView {
+  readonly endpointKind: AiEndpointKindId;
+  readonly baseUrl: string;
+}
+
+/** `ai_get_config` / `ai_save_config` / `ai_store_key` / `ai_forget_key` 的返回形态。 */
+export interface AiConfigStatusView {
+  readonly endpointKind: AiEndpointKindId;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly allowHttp: boolean;
+  readonly targetLang?: string;
+  readonly hasKey: boolean;
+  readonly configured: boolean;
+  readonly missing: readonly string[];
+  readonly defaults: readonly AiEndpointDefaultView[];
+}
+
+export interface AiConfigInputView {
+  readonly endpointKind: AiEndpointKindId;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly allowHttp: boolean;
+  readonly targetLang?: string;
+}
+
+/** `lightink:reader-ai-configured` 事件负载(与 `ai_configured` 命令同型)。 */
+export interface AiConfiguredDetail {
+  readonly configured: boolean;
+  readonly missing: readonly string[];
+}
+
+export function isAiEndpointKind(value: unknown): value is AiEndpointKindId {
+  return AI_ENDPOINT_KINDS.includes(value as AiEndpointKindId);
+}
+
+function parseAiDefaults(raw: unknown): AiEndpointDefaultView[] {
+  const parsed: AiEndpointDefaultView[] = [];
+  if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { defaults?: unknown[] }).defaults)) {
+    for (const item of (raw as { defaults: unknown[] }).defaults) {
+      if (item === null || typeof item !== 'object') continue;
+      const entry = item as { endpointKind?: unknown; baseUrl?: unknown };
+      if (isAiEndpointKind(entry.endpointKind) && typeof entry.baseUrl === 'string') {
+        parsed.push({ endpointKind: entry.endpointKind, baseUrl: entry.baseUrl });
+      }
+    }
+  }
+  if (parsed.length === 0) {
+    return AI_ENDPOINT_KINDS.map((kind) => ({
+      endpointKind: kind,
+      baseUrl: AI_ENDPOINT_DEFAULT_BASE_URLS[kind],
+    }));
+  }
+  return parsed;
+}
+
+/** 从未保存过时的默认形态(与后端 status_from(None) 一致,预填 openai-chat)。 */
+export function fallbackAiConfigStatus(): AiConfigStatusView {
+  return {
+    endpointKind: 'openai-chat',
+    baseUrl: AI_ENDPOINT_DEFAULT_BASE_URLS['openai-chat'],
+    model: '',
+    allowHttp: false,
+    hasKey: false,
+    configured: false,
+    missing: ['endpoint_kind', 'base_url', 'model', 'api_key'],
+    defaults: parseAiDefaults(null),
+  };
+}
+
+/** 防御解析 `ai_*` 命令返回;形态不对时退回默认形态(永不抛出)。 */
+export function parseAiConfigStatus(raw: unknown): AiConfigStatusView {
+  const fallback = fallbackAiConfigStatus();
+  if (raw === null || typeof raw !== 'object') {
+    return fallback;
+  }
+  const obj = raw as {
+    endpointKind?: unknown;
+    baseUrl?: unknown;
+    model?: unknown;
+    allowHttp?: unknown;
+    targetLang?: unknown;
+    hasKey?: unknown;
+    configured?: unknown;
+    missing?: unknown;
+  };
+  if (!isAiEndpointKind(obj.endpointKind)) {
+    return fallback;
+  }
+  const missing = Array.isArray(obj.missing)
+    ? obj.missing.filter((gap): gap is string => typeof gap === 'string')
+    : [];
+  const targetLang = typeof obj.targetLang === 'string' && obj.targetLang !== '' ? obj.targetLang : undefined;
+  return {
+    endpointKind: obj.endpointKind,
+    baseUrl: typeof obj.baseUrl === 'string' ? obj.baseUrl : '',
+    model: typeof obj.model === 'string' ? obj.model : '',
+    allowHttp: obj.allowHttp === true,
+    targetLang,
+    hasKey: obj.hasKey === true,
+    configured: obj.configured === true || missing.length === 0,
+    missing,
+    defaults: parseAiDefaults(raw),
+  };
+}
+
+export interface AiTestResultView {
+  readonly latencyMs: number;
+  readonly reply: string;
+}
+
+function parseAiTestResult(raw: unknown): AiTestResultView {
+  if (raw !== null && typeof raw === 'object') {
+    const obj = raw as { latencyMs?: unknown; reply?: unknown };
+    return {
+      latencyMs: typeof obj.latencyMs === 'number' && Number.isFinite(obj.latencyMs) ? obj.latencyMs : 0,
+      reply: typeof obj.reply === 'string' ? obj.reply : '',
+    };
+  }
+  return { latencyMs: 0, reply: '' };
+}
+
+export async function invokeAiGetConfig(): Promise<AiConfigStatusView> {
+  return parseAiConfigStatus(await invoke<unknown>('ai_get_config'));
+}
+
+export async function invokeAiSaveConfig(input: AiConfigInputView): Promise<AiConfigStatusView> {
+  return parseAiConfigStatus(await invoke<unknown>('ai_save_config', { input }));
+}
+
+export async function invokeAiStoreKey(key: string): Promise<AiConfigStatusView> {
+  return parseAiConfigStatus(await invoke<unknown>('ai_store_key', { key }));
+}
+
+export async function invokeAiForgetKey(): Promise<AiConfigStatusView> {
+  return parseAiConfigStatus(await invoke<unknown>('ai_forget_key'));
+}
+
+export async function invokeAiTestConnection(): Promise<AiTestResultView> {
+  return parseAiTestResult(await invoke<unknown>('ai_test_connection'));
+}
+
+export function dispatchAiConfigured(
+  detail: AiConfiguredDetail,
+  target: Document | Window = document,
+): void {
+  target.dispatchEvent(new CustomEvent(READER_AI_CONFIGURED_EVENT, { detail }));
+}
+
+export function aiTargetLangLabel(value: AiTargetLangValue, l: LibraryManageLabels): string {
+  switch (value) {
+    case 'auto': return l.aiTargetLangAuto;
+    case 'zh-CN': return l.aiLangZhCN;
+    case 'en': return l.aiLangEn;
+    case 'ja': return l.aiLangJa;
+    case 'ko': return l.aiLangKo;
+    case 'fr': return l.aiLangFr;
+    case 'de': return l.aiLangDe;
+    case 'es': return l.aiLangEs;
+    case 'ru': return l.aiLangRu;
+  }
+}
+
+/** 四要素缺口 token → 本地化字段名(后端 config_gaps 的字段名回报)。 */
+export function aiMissingSummary(l: LibraryManageLabels, missing: readonly string[]): string {
+  const names: string[] = [];
+  for (const gap of missing) {
+    if (gap === 'endpoint_kind') names.push(l.aiEndpointKind);
+    else if (gap === 'base_url') names.push(l.aiBaseUrl);
+    else if (gap === 'model') names.push(l.aiModel);
+    else if (gap === 'api_key') names.push(l.aiKey);
+    else if (gap !== '') names.push(gap);
+  }
+  return names.join(', ');
+}
+
+interface AiErrorParts {
+  readonly code: string;
+  readonly message: string;
+  readonly status?: number;
+}
+
+function aiErrorParts(error: unknown): AiErrorParts {
+  let source: unknown = error;
+  if (typeof source === 'string') {
+    const trimmed = source.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        source = JSON.parse(trimmed) as unknown;
+      } catch {
+        // 保留原始字符串。
+      }
+    }
+  }
+  if (source === null || typeof source !== 'object') {
+    return { code: '', message: typeof error === 'string' ? error : '' };
+  }
+  const obj = source as { code?: unknown; message?: unknown; error?: unknown; status?: unknown };
+  const code = typeof obj.code === 'string' ? obj.code : '';
+  const messageParts = [obj.error, obj.message]
+    .filter((value): value is string => typeof value === 'string' && value !== '')
+    .join(' ');
+  const status = typeof obj.status === 'number' ? obj.status : undefined;
+  return { code, message: messageParts, status };
+}
+
+const AI_ERROR_LABEL_KEYS: Record<string, keyof LibraryManageLabels> = {
+  AI_HTTP_NOT_ALLOWED: 'aiErrorHttpNotAllowed',
+  AI_URL_INVALID: 'aiErrorUrlInvalid',
+  AI_CONFIG_INVALID: 'aiErrorConfigInvalid',
+  AI_STORAGE_ERROR: 'aiErrorConfigInvalid',
+  AI_TARGET_LANG_INVALID: 'aiErrorConfigInvalid',
+  AI_REQUEST_INVALID: 'aiErrorConfigInvalid',
+  AI_MESSAGE_INVALID: 'aiErrorConfigInvalid',
+  AI_KEY_INVALID: 'aiErrorKeyInvalid',
+  AI_MODEL_NOT_FOUND: 'aiErrorModelNotFound',
+  AI_QUOTA_EXCEEDED: 'aiErrorQuota',
+  AI_NOT_CONFIGURED: 'aiErrorUnconfigured',
+  AI_TIMEOUT: 'aiErrorTimeout',
+  AI_NETWORK_ERROR: 'aiErrorNetwork',
+  AI_CLIENT_ERROR: 'aiErrorNetwork',
+  AI_KEY_STORE_FAILED: 'aiErrorKeyStore',
+  AI_RESPONSE_TOO_LARGE: 'aiErrorTooLarge',
+  AI_REQUEST_TOO_LARGE: 'aiErrorTooLarge',
+};
+
+/** 可区分失败:按错误码族取本地化文案,附 HTTP 状态;未知码回退原始消息。 */
+export function aiErrorMessage(
+  l: LibraryManageLabels,
+  error: unknown,
+  missing: readonly string[] = [],
+): string {
+  const parts = aiErrorParts(error);
+  const labelKey = AI_ERROR_LABEL_KEYS[parts.code];
+  let text: string;
+  if (labelKey === undefined) {
+    text = parts.message !== '' ? `${l.aiErrorFailed}: ${parts.message}` : l.aiErrorFailed;
+  } else {
+    text = l[labelKey];
+    if (labelKey === 'aiErrorUnconfigured') {
+      const summary = aiMissingSummary(l, missing);
+      text = summary === '' ? l.aiUnconfigured : text.replace('{missing}', summary);
+    }
+  }
+  if (parts.status !== undefined) {
+    text += ` (HTTP ${parts.status})`;
+  }
+  return text;
+}
+
 
 export function createLibraryManage(
   doc: Document,
@@ -246,6 +567,276 @@ export function createLibraryManage(
     syncDeeplStatus();
   };
 
+  // AI 分组(R2):唯一活动提供商——端点格式三选一(联动预填官方 base URL,
+  // 可改)、base URL/模型/Key、allowHttp、测试连接(role=status 结果)、目标
+  // 语言覆盖;保存/清除密钥后广播 lightink:reader-ai-configured。复用
+  // translate 分组的布局类与 deepl 字段行样式。
+  const aiGroup = doc.createElement('section');
+  aiGroup.className = 'lightink-library-manage-group lightink-library-translate lightink-library-ai';
+  aiGroup.dataset.manageGroup = 'ai';
+  const aiTitle = doc.createElement('h2');
+  aiTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
+  const aiHint = doc.createElement('p');
+  aiHint.className = 'lightink-library-appearance-hint lightink-library-ai-hint';
+
+  const aiEndpointField = doc.createElement('label');
+  aiEndpointField.className = 'lightink-library-reader-pref lightink-library-ai-endpoint-field';
+  const aiEndpointSelect = doc.createElement('select');
+  aiEndpointSelect.name = 'aiEndpointKind';
+  const aiEndpointOptions = new Map<AiEndpointKindId, HTMLOptionElement>();
+  for (const kind of AI_ENDPOINT_KINDS) {
+    const option = doc.createElement('option');
+    option.value = kind;
+    aiEndpointOptions.set(kind, option);
+    aiEndpointSelect.append(option);
+  }
+  const aiEndpointText = doc.createElement('span');
+  aiEndpointField.append(aiEndpointSelect, aiEndpointText);
+
+  const aiBaseField = doc.createElement('label');
+  aiBaseField.className = 'lightink-library-field lightink-library-ai-base-field';
+  const aiBaseLabelText = doc.createElement('span');
+  const aiBaseUrlInput = doc.createElement('input');
+  aiBaseUrlInput.type = 'url';
+  aiBaseUrlInput.name = 'aiBaseUrl';
+  aiBaseUrlInput.autocomplete = 'off';
+  aiBaseUrlInput.spellcheck = false;
+  aiBaseField.append(aiBaseLabelText, aiBaseUrlInput);
+
+  const aiModelField = doc.createElement('label');
+  aiModelField.className = 'lightink-library-field lightink-library-ai-model-field';
+  const aiModelLabelText = doc.createElement('span');
+  const aiModelInput = doc.createElement('input');
+  aiModelInput.type = 'text';
+  aiModelInput.name = 'aiModel';
+  aiModelInput.autocomplete = 'off';
+  aiModelInput.spellcheck = false;
+  aiModelField.append(aiModelLabelText, aiModelInput);
+
+  const aiKeyField = doc.createElement('label');
+  aiKeyField.className = 'lightink-library-field lightink-library-ai-key-field';
+  const aiKeyLabelText = doc.createElement('span');
+  const aiKeyInput = doc.createElement('input');
+  aiKeyInput.type = 'password';
+  aiKeyInput.name = 'aiApiKey';
+  aiKeyInput.autocomplete = 'off';
+  aiKeyInput.spellcheck = false;
+  aiKeyField.append(aiKeyLabelText, aiKeyInput);
+
+  const aiAllowHttpLabel = doc.createElement('label');
+  aiAllowHttpLabel.className = 'lightink-library-reader-pref lightink-library-ai-allow-http';
+  const aiAllowHttpInput = doc.createElement('input');
+  aiAllowHttpInput.type = 'checkbox';
+  aiAllowHttpInput.name = 'aiAllowHttp';
+  const aiAllowHttpText = doc.createElement('span');
+  aiAllowHttpLabel.append(aiAllowHttpInput, aiAllowHttpText);
+
+  const aiTargetLangField = doc.createElement('label');
+  aiTargetLangField.className = 'lightink-library-reader-pref lightink-library-ai-target-lang-field';
+  const aiTargetLangSelect = doc.createElement('select');
+  aiTargetLangSelect.name = 'aiTargetLang';
+  const aiTargetLangOptions = new Map<AiTargetLangValue, HTMLOptionElement>();
+  for (const value of AI_TARGET_LANG_VALUES) {
+    const option = doc.createElement('option');
+    option.value = value;
+    aiTargetLangOptions.set(value, option);
+    aiTargetLangSelect.append(option);
+  }
+  const aiTargetLangText = doc.createElement('span');
+  aiTargetLangField.append(aiTargetLangSelect, aiTargetLangText);
+
+  const aiActions = doc.createElement('div');
+  aiActions.className = 'lightink-library-deepl-actions lightink-library-ai-actions';
+  const aiSave = button(doc, '', 'lightink-library-primary lightink-library-ai-save');
+  const aiTest = button(doc, '', 'lightink-library-ai-test');
+  const aiKeySave = button(doc, '', 'lightink-library-ai-key-save');
+  const aiKeyClear = button(doc, '', 'lightink-library-ai-key-clear');
+  aiActions.append(aiSave, aiTest, aiKeySave, aiKeyClear);
+
+  // 动作反馈(保存拒绝/密钥/测试连接):role=status,空时隐藏。
+  const aiFeedback = doc.createElement('p');
+  aiFeedback.className = 'lightink-library-deepl-status lightink-library-ai-feedback';
+  aiFeedback.setAttribute('role', 'status');
+  aiFeedback.hidden = true;
+  // 配置状态行(已配置/缺口),与 deepl 状态行同型。
+  const aiStatus = doc.createElement('p');
+  aiStatus.className = 'lightink-library-deepl-status lightink-library-ai-status';
+  aiStatus.setAttribute('aria-live', 'polite');
+  aiGroup.append(
+    aiTitle,
+    aiHint,
+    aiEndpointField,
+    aiBaseField,
+    aiModelField,
+    aiKeyField,
+    aiAllowHttpLabel,
+    aiTargetLangField,
+    aiActions,
+    aiFeedback,
+    aiStatus,
+  );
+
+  let aiStatusState = fallbackAiConfigStatus();
+  let aiEndpointKind: AiEndpointKindId = aiStatusState.endpointKind;
+  const aiDefaultsByKind = new Map<AiEndpointKindId, string>();
+  let aiConfigEpoch = 0;
+  let aiTestBusy = false;
+
+  const readAiEndpointKind = (): AiEndpointKindId =>
+    isAiEndpointKind(aiEndpointSelect.value) ? aiEndpointSelect.value : 'openai-chat';
+
+  const syncAiState = (): void => {
+    const l = labels();
+    const summary = aiMissingSummary(l, aiStatusState.missing);
+    aiStatus.textContent = aiStatusState.configured
+      ? l.aiConfigured
+      : summary === ''
+        ? l.aiUnconfigured
+        : l.aiUnconfiguredGaps.replace('{missing}', summary);
+    aiStatus.dataset.aiConfigured = aiStatusState.configured ? 'true' : 'false';
+    aiKeyClear.hidden = !aiStatusState.hasKey;
+    aiKeyClear.disabled = !aiStatusState.hasKey;
+  };
+
+  const setAiFeedback = (text: string, kind: 'info' | 'success' | 'error'): void => {
+    aiFeedback.textContent = text;
+    aiFeedback.hidden = text === '';
+    aiFeedback.dataset.kind = kind;
+  };
+
+  const applyAiStatus = (status: AiConfigStatusView): void => {
+    aiStatusState = status;
+    aiEndpointKind = isAiEndpointKind(status.endpointKind) ? status.endpointKind : 'openai-chat';
+    for (const entry of status.defaults) {
+      aiDefaultsByKind.set(entry.endpointKind, entry.baseUrl);
+    }
+    aiEndpointSelect.value = aiEndpointKind;
+    if (doc.activeElement !== aiBaseUrlInput) {
+      aiBaseUrlInput.value = status.baseUrl;
+    }
+    if (doc.activeElement !== aiModelInput) {
+      aiModelInput.value = status.model;
+    }
+    aiAllowHttpInput.checked = status.allowHttp;
+    aiTargetLangSelect.value = AI_TARGET_LANG_VALUES.includes(
+      status.targetLang as AiTargetLangValue,
+    )
+      ? (status.targetLang as AiTargetLangValue)
+      : 'auto';
+    syncAiState();
+  };
+
+  const refreshAiConfig = async (): Promise<void> => {
+    const epoch = ++aiConfigEpoch;
+    try {
+      const status = await invokeAiGetConfig();
+      if (epoch !== aiConfigEpoch) return;
+      applyAiStatus(status);
+    } catch {
+      // 浏览器预览等无后端环境:保持本地默认形态。
+      if (epoch !== aiConfigEpoch) return;
+      applyAiStatus(fallbackAiConfigStatus());
+    }
+  };
+
+  // 首帧即按默认形态预填(openai-chat + 官方 base URL),避免异步读取期间空表单。
+  applyAiStatus(fallbackAiConfigStatus());
+
+  // 端点格式切换:base URL 仍为旧格式官方默认(或空)时联动预填新格式默认;
+  // 用户改过自定义地址则不动。
+  aiEndpointSelect.addEventListener('change', () => {
+    const next = readAiEndpointKind();
+    const previousDefault = aiDefaultsByKind.get(aiEndpointKind);
+    const current = aiBaseUrlInput.value.trim();
+    if (current === '' || (previousDefault !== undefined && current === previousDefault)) {
+      const nextDefault = aiDefaultsByKind.get(next);
+      if (nextDefault !== undefined) {
+        aiBaseUrlInput.value = nextDefault;
+      }
+    }
+    aiEndpointKind = next;
+  });
+
+  const saveAiConfig = async (): Promise<void> => {
+    aiSave.disabled = true;
+    try {
+      const status = await invokeAiSaveConfig({
+        endpointKind: readAiEndpointKind(),
+        baseUrl: aiBaseUrlInput.value.trim(),
+        model: aiModelInput.value.trim(),
+        allowHttp: aiAllowHttpInput.checked,
+        targetLang: aiTargetLangSelect.value === 'auto' ? undefined : aiTargetLangSelect.value,
+      });
+      applyAiStatus(status);
+      setAiFeedback(labels().aiSaved, 'success');
+      dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
+    } catch (error) {
+      setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
+    } finally {
+      aiSave.disabled = false;
+    }
+  };
+  aiSave.addEventListener('click', () => {
+    void saveAiConfig();
+  });
+
+  aiKeySave.addEventListener('click', () => {
+    const key = aiKeyInput.value.trim();
+    if (key === '') {
+      return;
+    }
+    void (async () => {
+      aiKeySave.disabled = true;
+      try {
+        const status = await invokeAiStoreKey(key);
+        aiKeyInput.value = '';
+        applyAiStatus(status);
+        setAiFeedback(labels().aiKeySaved, 'success');
+        dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
+      } catch (error) {
+        setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
+      } finally {
+        aiKeySave.disabled = false;
+      }
+    })();
+  });
+  aiKeyClear.addEventListener('click', () => {
+    void (async () => {
+      aiKeyClear.disabled = true;
+      try {
+        const status = await invokeAiForgetKey();
+        aiKeyInput.value = '';
+        applyAiStatus(status);
+        setAiFeedback(labels().aiKeyCleared, 'info');
+        dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
+      } catch (error) {
+        setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
+      } finally {
+        aiKeyClear.disabled = false;
+        syncAiState();
+      }
+    })();
+  });
+
+  aiTest.addEventListener('click', () => {
+    void (async () => {
+      aiTestBusy = true;
+      aiTest.disabled = true;
+      aiTest.textContent = labels().aiTesting;
+      setAiFeedback(labels().aiTesting, 'info');
+      try {
+        const result = await invokeAiTestConnection();
+        setAiFeedback(labels().aiTestOk.replace('{ms}', String(result.latencyMs)), 'success');
+      } catch (error) {
+        setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
+      } finally {
+        aiTestBusy = false;
+        aiTest.disabled = false;
+        aiTest.textContent = labels().aiTest;
+      }
+    })();
+  });
+
   // 存储与缓存：用量摘要 + 清理缓存 + 缓存上限（弹层入口）。
   const storage = doc.createElement('section');
   storage.className = 'lightink-library-manage-group';
@@ -297,6 +888,7 @@ export function createLibraryManage(
     appearance,
     readerPrefs,
     translatePrefs,
+    aiGroup,
     storage,
     ...(sync === null ? [] : [sync]),
     other,
@@ -537,6 +1129,39 @@ export function createLibraryManage(
     deeplClear.textContent = l.deeplClear;
     syncDeeplStatus();
     void refreshDeeplConfigured();
+    aiTitle.textContent = l.aiGroup;
+    aiHint.textContent = l.aiHint;
+    aiEndpointText.textContent = l.aiEndpointKind;
+    aiEndpointField.title = l.aiEndpointKind;
+    aiEndpointSelect.setAttribute('aria-label', l.aiEndpointKind);
+    const aiEndpointLabels: Record<AiEndpointKindId, string> = {
+      'openai-responses': l.aiEndpointOpenaiResponses,
+      'openai-chat': l.aiEndpointOpenaiChat,
+      'claude-messages': l.aiEndpointClaudeMessages,
+    };
+    for (const [kind, option] of aiEndpointOptions) {
+      option.textContent = aiEndpointLabels[kind];
+    }
+    aiBaseLabelText.textContent = l.aiBaseUrl;
+    aiBaseUrlInput.placeholder = l.aiBaseUrl;
+    aiModelLabelText.textContent = l.aiModel;
+    aiModelInput.placeholder = l.aiModel;
+    aiKeyLabelText.textContent = l.aiKey;
+    aiKeyInput.placeholder = l.aiKey;
+    aiAllowHttpText.textContent = l.aiAllowHttp;
+    aiAllowHttpLabel.title = l.aiAllowHttp;
+    aiTargetLangText.textContent = l.aiTargetLang;
+    aiTargetLangField.title = l.aiTargetLang;
+    aiTargetLangSelect.setAttribute('aria-label', l.aiTargetLang);
+    for (const [value, option] of aiTargetLangOptions) {
+      option.textContent = aiTargetLangLabel(value, l);
+    }
+    aiSave.textContent = l.aiSave;
+    aiTest.textContent = aiTestBusy ? l.aiTesting : l.aiTest;
+    aiKeySave.textContent = l.aiKeySave;
+    aiKeyClear.textContent = l.aiKeyClear;
+    syncAiState();
+    void refreshAiConfig();
     storageTitle.textContent = l.storageGroup;
     clearCacheButton.textContent = l.clearCache;
     cacheLimitButton.textContent = l.changeCacheLimit;
