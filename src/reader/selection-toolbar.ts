@@ -17,7 +17,8 @@ export type SelectionToolbarAction =
   | 'copy'
   | 'removeHighlight'
   | 'lookup'
-  | 'translate';
+  | 'translate'
+  | 'aiTranslate';
 
 export interface SelectionToolbarActionDetail {
   color?: AnnotationColor;
@@ -42,9 +43,15 @@ export interface SelectionToolbar {
   /** 在选区包围盒附近显示；canRemoveHighlight 时含"取消高亮"按钮。 */
   showAt(
     rect: SelectionToolbarRect,
-    options: { canRemoveHighlight: boolean; translateEnabled?: boolean },
+    options: {
+      canRemoveHighlight: boolean;
+      translateEnabled?: boolean;
+      /** AI 提供商四要素完备时才显示 AI 翻译动作（R3）。 */
+      aiTranslateEnabled?: boolean;
+    },
   ): void;
   setTranslateEnabled(enabled: boolean): void;
+  setAiTranslateEnabled(enabled: boolean): void;
   hide(): void;
   isVisible(): boolean;
   destroy(): void;
@@ -152,6 +159,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   const copyButton = makeButton('copy', 'annotation.copy');
   const lookupButton = makeButton('lookup', 'reader.lookup.action');
   const translateButton = makeButton('translate', 'reader.lookup.translate');
+  const aiTranslateButton = makeButton('aiTranslate', 'reader.lookup.aiTranslate');
   const removeButton = makeButton('removeHighlight', 'annotation.removeHighlight');
   root.append(
     colors,
@@ -160,6 +168,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     copyButton,
     lookupButton,
     translateButton,
+    aiTranslateButton,
     removeButton,
   );
 
@@ -170,6 +179,14 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     translateButton.title = enabled ? deps.t('reader.lookup.translate') : '';
   };
   applyTranslateEnabled(false);
+
+  const applyAiTranslateEnabled = (enabled: boolean): void => {
+    aiTranslateButton.hidden = !enabled;
+    aiTranslateButton.disabled = !enabled;
+    aiTranslateButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    aiTranslateButton.title = enabled ? deps.t('reader.lookup.aiTranslate') : '';
+  };
+  applyAiTranslateEnabled(false);
 
   root.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
@@ -233,6 +250,9 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       if (options.translateEnabled !== undefined) {
         applyTranslateEnabled(options.translateEnabled);
       }
+      if (options.aiTranslateEnabled !== undefined) {
+        applyAiTranslateEnabled(options.aiTranslateEnabled);
+      }
       root.hidden = false;
       dismiss.hidden = false;
       mountDismiss();
@@ -258,6 +278,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       revealSheet(root);
     },
     setTranslateEnabled: applyTranslateEnabled,
+    setAiTranslateEnabled: applyAiTranslateEnabled,
     hide,
     isVisible() {
       return !root.hidden;

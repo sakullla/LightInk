@@ -23,11 +23,31 @@ export const LOOKUP_MAX_TOKENS = 4;
 export const TRANSLATE_MAX_CODE_UNITS = 5000;
 
 export const READER_DEEPL_CONFIGURED_EVENT = 'lightink:reader-deepl-configured';
+/** 与 Manage 页 AI 分组广播的事件同源（`ai-config-ui`），reader 侧自持常量。 */
+export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
 
 export interface LookupEntry {
   readonly partOfSpeech?: string;
   readonly language?: string;
   readonly definitions: readonly string[];
+}
+
+/** 并列译文来源段（R3）：DeepL 与 AI 各自成段，独立状态、段内重试。 */
+export type LookupTranslateSource = 'deepl' | 'ai';
+
+export interface LookupTranslateSection {
+  readonly source: LookupTranslateSource;
+  /** idle = 已配置但尚未触发（段内按钮可发起）；其余与单段状态同义。 */
+  readonly status: 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+  readonly lines?: readonly string[];
+  readonly message?: string;
+  /** AI 段专用：后端截断至 5000 字时提示（R3 与 DeepL 的拒绝语义不同）。 */
+  readonly truncated?: boolean;
+}
+
+export interface LookupTranslateShow {
+  readonly quote: string;
+  readonly sections: readonly LookupTranslateSection[];
 }
 
 export interface LookupPanelShow {
@@ -41,11 +61,17 @@ export interface LookupPanelShow {
 export interface LookupPanelDeps {
   t: (key: MessageKey) => string;
   onDismiss?: () => void;
+  /** 并列段内「重试/翻译」按钮点击：携带来源与面板当前引文。 */
+  onRetryTranslate?: (source: LookupTranslateSource, quote: string) => void;
 }
 
 export interface LookupPanel {
   readonly element: HTMLElement;
   show(input: LookupPanelShow, host: HTMLElement): void;
+  /** 译文并列视图（R3）：按来源分段渲染，段状态独立。 */
+  showTranslate(input: LookupTranslateShow, host: HTMLElement): void;
+  /** 就地更新一个来源段；面板不在译文视图或段不存在时忽略（迟到结果守卫）。 */
+  updateTranslateSection(section: LookupTranslateSection): void;
   hide(): void;
   isVisible(): boolean;
   destroy(): void;
@@ -74,6 +100,109 @@ export function deeplTargetLang(locale: LocaleId): 'ZH' | 'EN' {
 
 export function lookupTooLongCopy(t: (key: MessageKey) => string, translateEnabled: boolean): string {
   return t(translateEnabled ? 'reader.lookup.tooLongUseTranslate' : 'reader.lookup.tooLong');
+}
+
+// ── AI 翻译（R3）：目标语言解析、错误码映射与并列段规划 ───────────────
+
+/** AI 分组目标语言覆盖项的常用代码 → 本地化语言名（提示词内嵌用）。 */
+const AI_LANG_KEYS: Readonly<Record<string, MessageKey>> = {
+  'zh-CN': 'reader.ai.lang.zh-CN',
+  en: 'reader.ai.lang.en',
+  ja: 'reader.ai.lang.ja',
+  ko: 'reader.ai.lang.ko',
+  fr: 'reader.ai.lang.fr',
+  de: 'reader.ai.lang.de',
+  es: 'reader.ai.lang.es',
+  ru: 'reader.ai.lang.ru',
+};
+
+/**
+ * 目标语言解析（R3）：AI 分组覆盖项优先（auto/未设视为跟随界面语言），
+ * 界面语言兜底。返回值内嵌进后端翻译提示词，故映射为本地化语言名；
+ * 未知覆盖值原样透传（用户自定义语言名）。
+ */
+export function aiTranslateTargetLang(
+  t: (key: MessageKey) => string,
+  locale: LocaleId,
+  override?: string,
+): string {
+  const raw = override?.trim();
+  if (raw !== undefined && raw !== '' && raw.toLowerCase() !== 'auto') {
+    const key = AI_LANG_KEYS[raw];
+    return key === undefined ? raw : t(key);
+  }
+  return t(AI_LANG_KEYS[locale] ?? 'reader.ai.lang.en');
+}
+
+const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
+  AI_NETWORK_ERROR: 'reader.ai.error.network',
+  AI_CLIENT_ERROR: 'reader.ai.error.network',
+  AI_TIMEOUT: 'reader.ai.error.timeout',
+  AI_RESPONSE_TOO_LARGE: 'reader.ai.error.tooLarge',
+  AI_REQUEST_TOO_LARGE: 'reader.ai.error.tooLarge',
+  AI_KEY_INVALID: 'reader.ai.error.keyInvalid',
+  AI_MODEL_NOT_FOUND: 'reader.ai.error.modelNotFound',
+  AI_QUOTA_EXCEEDED: 'reader.ai.error.quota',
+  AI_NOT_CONFIGURED: 'reader.ai.error.unconfigured',
+  AI_HTTP_NOT_ALLOWED: 'reader.ai.error.httpNotAllowed',
+  AI_URL_INVALID: 'reader.ai.error.urlInvalid',
+  AI_CONFIG_INVALID: 'reader.ai.error.configInvalid',
+  AI_STORAGE_ERROR: 'reader.ai.error.configInvalid',
+  AI_TARGET_LANG_INVALID: 'reader.ai.error.configInvalid',
+  AI_KEY_STORE_FAILED: 'reader.ai.error.keyStore',
+};
+
+/** AI 命令错误码族 → 本地化文案；未知码回退通用失败。missing 填充未配置缺口。 */
+export function readerAiErrorMessage(
+  t: (key: MessageKey) => string,
+  error: unknown,
+  missing: readonly string[] = [],
+): string {
+  // aidErrorCode 是 DeepL 语义的子串匹配;AI 错误取原始 `AI_*` 码精确对表。
+  const code = aidErrorRaw(error).match(/\bAI_[A-Z_]+\b/)?.[0] ?? '';
+  const key = AI_ERROR_KEYS[code];
+  if (key === undefined) {
+    return t('reader.ai.error.failed');
+  }
+  if (key === 'reader.ai.error.unconfigured') {
+    return missing.length > 0
+      ? t(key).split('{missing}').join(missing.join(', '))
+      : t('reader.ai.unconfigured');
+  }
+  return t(key);
+}
+
+/**
+ * 并列段初始规划：每个已配置来源一段，点名的来源直接 loading、其余 idle
+ * （段内可独立触发）；未配置的来源不出现，唯点名来源未配置（配置态竞态）
+ * 时以单段未配置错误呈现，保证点击动作始终有可见反馈。
+ */
+export function initialTranslateSections(
+  t: (key: MessageKey) => string,
+  deeplConfigured: boolean,
+  aiConfigured: boolean,
+  requested: LookupTranslateSource,
+): LookupTranslateSection[] {
+  const sections: LookupTranslateSection[] = [];
+  if (deeplConfigured) {
+    sections.push({ source: 'deepl', status: requested === 'deepl' ? 'loading' : 'idle' });
+  } else if (requested === 'deepl') {
+    sections.push({
+      source: 'deepl',
+      status: 'error',
+      message: t('reader.lookup.error.unconfigured'),
+    });
+  }
+  if (aiConfigured) {
+    sections.push({ source: 'ai', status: requested === 'ai' ? 'loading' : 'idle' });
+  } else if (requested === 'ai') {
+    sections.push({
+      source: 'ai',
+      status: 'error',
+      message: readerAiErrorMessage(t, { code: 'AI_NOT_CONFIGURED' }),
+    });
+  }
+  return sections;
 }
 
 const AID_ERROR_KEYS = {
@@ -225,6 +354,71 @@ export async function invokeDeepLForgetKey(): Promise<void> {
   await invoke<void>('reader_deepl_forget_key');
 }
 
+/** `ai_get_config` 的 reader 侧投影：显隐判定 + 目标语言覆盖项（无密钥材料）。 */
+export interface AiTranslateConfig {
+  readonly configured: boolean;
+  readonly targetLang?: string;
+  readonly missing: readonly string[];
+}
+
+/** 防御解析 `ai_get_config` 返回；形态不对时视为未配置（永不抛出）。 */
+export function parseAiTranslateConfig(raw: unknown): AiTranslateConfig {
+  if (raw === null || typeof raw !== 'object') {
+    return { configured: false, missing: [] };
+  }
+  const obj = raw as { configured?: unknown; missing?: unknown; targetLang?: unknown };
+  const missingRaw = obj.missing;
+  const missing = Array.isArray(missingRaw)
+    ? missingRaw.filter((gap): gap is string => typeof gap === 'string')
+    : [];
+  const targetLang =
+    typeof obj.targetLang === 'string' && obj.targetLang.trim() !== ''
+      ? obj.targetLang.trim()
+      : undefined;
+  return {
+    configured: obj.configured === true || (Array.isArray(missingRaw) && missing.length === 0),
+    targetLang,
+    missing,
+  };
+}
+
+/** `ai_translate_selection` 的返回形态（截断标志 → 段内提示）。 */
+export interface AiTranslateResultView {
+  readonly text: string;
+  readonly targetLang: string;
+  readonly truncated: boolean;
+}
+
+export function parseAiTranslateResult(raw: unknown): AiTranslateResultView {
+  if (raw !== null && typeof raw === 'object') {
+    const obj = raw as { text?: unknown; targetLang?: unknown; truncated?: unknown };
+    return {
+      text: typeof obj.text === 'string' ? obj.text.trim() : '',
+      targetLang: typeof obj.targetLang === 'string' ? obj.targetLang : '',
+      truncated: obj.truncated === true,
+    };
+  }
+  return { text: '', targetLang: '', truncated: false };
+}
+
+export async function invokeAiTranslateConfig(): Promise<AiTranslateConfig> {
+  return parseAiTranslateConfig(await invoke<unknown>('ai_get_config'));
+}
+
+/** 选区 AI 翻译：超长输入由后端截断至 5000 并置 truncated（与 DeepL 拒绝不同）。 */
+export async function invokeAiTranslateSelection(
+  text: string,
+  targetLang: string,
+): Promise<AiTranslateResultView> {
+  return parseAiTranslateResult(
+    await invoke<unknown>('ai_translate_selection', {
+      text,
+      targetLang,
+      target_lang: targetLang,
+    }),
+  );
+}
+
 export function dispatchDeeplConfigured(configured: boolean, target: Document | Window = document): void {
   target.dispatchEvent(
     new CustomEvent(READER_DEEPL_CONFIGURED_EVENT, { detail: { configured } }),
@@ -352,7 +546,11 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
     { passive: true },
   );
 
+  /** 译文并列视图当前引文（段内重试按钮携带）；null = 非译文视图。 */
+  let translateQuote: string | null = null;
+
   const hide = (): void => {
+    translateQuote = null;
     if (readerChromeTouchMode()) {
       concealSheet(root, () => {
         root.hidden = true;
@@ -372,9 +570,69 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
   });
   close.setAttribute('aria-label', deps.t('reader.lookup.close'));
 
+  /** 单个来源段：段名 + 状态文案/译文 + （错误段）重试、（idle 段）触发按钮。 */
+  const renderTranslateSection = (section: LookupTranslateSection): HTMLElement => {
+    const block = document.createElement('section');
+    block.className = 'lightink-reader-lookup-source';
+    block.dataset.source = section.source;
+    block.dataset.status = section.status;
+    const name = document.createElement('h3');
+    name.className = 'lightink-reader-lookup-source-name';
+    name.textContent = deps.t(
+      section.source === 'deepl' ? 'reader.lookup.source.deepl' : 'reader.lookup.source.ai',
+    );
+    block.appendChild(name);
+    if (section.message !== undefined && section.message !== '') {
+      const message = document.createElement('p');
+      message.className = 'lightink-reader-lookup-message';
+      message.textContent = section.message;
+      block.appendChild(message);
+    }
+    for (const line of section.lines ?? []) {
+      const item = document.createElement('p');
+      item.className = 'lightink-reader-lookup-line';
+      item.textContent = line;
+      block.appendChild(item);
+    }
+    if (section.truncated === true) {
+      const hint = document.createElement('p');
+      hint.className = 'lightink-reader-lookup-hint';
+      hint.textContent = deps.t('reader.lookup.aiTruncated');
+      block.appendChild(hint);
+    }
+    if (section.status === 'error' || section.status === 'idle') {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'lightink-reader-lookup-source-action';
+      action.textContent = deps.t(
+        section.status === 'error' ? 'reader.lookup.retry' : 'reader.lookup.translate',
+      );
+      action.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const quote = translateQuote;
+        if (quote === null) {
+          return;
+        }
+        deps.onRetryTranslate?.(section.source, quote);
+      });
+      block.appendChild(action);
+    }
+    return block;
+  };
+
+  const openPanel = (host: HTMLElement): void => {
+    root.hidden = false;
+    mountReaderOverlay(root, host);
+    adoptReaderOverlayTheme(root, host);
+    positionLookupPanel(root, host);
+    revealSheet(root);
+  };
+
   return {
     element: root,
     show(input, host) {
+      translateQuote = null;
       title.textContent =
         input.kind === 'translate' ? deps.t('reader.lookup.translateTitle') : deps.t('reader.lookup.title');
       close.setAttribute('aria-label', deps.t('reader.lookup.close'));
@@ -400,11 +658,42 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
         item.textContent = line;
         body.appendChild(item);
       }
-      root.hidden = false;
-      mountReaderOverlay(root, host);
-      adoptReaderOverlayTheme(root, host);
-      positionLookupPanel(root, host);
-      revealSheet(root);
+      openPanel(host);
+    },
+    showTranslate(input, host) {
+      const quote = input.quote.trim();
+      translateQuote = quote === '' ? null : quote;
+      title.textContent = deps.t('reader.lookup.translateTitle');
+      close.setAttribute('aria-label', deps.t('reader.lookup.close'));
+      root.dataset.lookupKind = 'translate';
+      // 段状态独立呈现（各段 data-status），面板级状态不再承载单段语义。
+      root.dataset.lookupStatus = 'multi';
+      body.replaceChildren();
+      if (quote !== '') {
+        const quoteEl = document.createElement('p');
+        quoteEl.className = 'lightink-reader-lookup-quote';
+        quoteEl.textContent = quote;
+        body.appendChild(quoteEl);
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'lightink-reader-lookup-sources';
+      for (const section of input.sections) {
+        wrap.appendChild(renderTranslateSection(section));
+      }
+      body.appendChild(wrap);
+      openPanel(host);
+    },
+    updateTranslateSection(section) {
+      if (root.hidden || root.dataset.lookupKind !== 'translate' || translateQuote === null) {
+        return;
+      }
+      const block = body.querySelector<HTMLElement>(
+        `.lightink-reader-lookup-source[data-source="${section.source}"]`,
+      );
+      if (block === null) {
+        return;
+      }
+      block.replaceWith(renderTranslateSection(section));
     },
     hide,
     isVisible() {

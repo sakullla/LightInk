@@ -89,6 +89,66 @@
   color: var(--lightink-fg);
 }
 
+/* 并列译文来源段（R3）：DeepL 与 AI 各一段，状态独立、可段内重试。 */
+.lightink-reader-lookup-sources {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.lightink-reader-lookup-source {
+  margin: 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 60%, transparent);
+  border-radius: 8px;
+}
+
+.lightink-reader-lookup-source[data-status='idle'] {
+  border-style: dashed;
+}
+
+.lightink-reader-lookup-source[data-status='loading'] {
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-lookup-source[data-status='error'] .lightink-reader-lookup-message {
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-lookup-source-name {
+  margin: 0 0 0.3rem;
+  color: var(--lightink-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+}
+
+.lightink-reader-lookup-source-action {
+  margin-top: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  color: var(--lightink-fg);
+  background: var(--lightink-accent-soft);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.lightink-reader-lookup-source-action:hover,
+.lightink-reader-lookup-source-action:focus-visible {
+  filter: brightness(0.96);
+}
+
+.lightink-reader-lookup-hint {
+  margin: 0.3rem 0 0;
+  color: var(--lightink-muted);
+  font-size: 0.75rem;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-source-action {
+  min-height: 36px;
+  min-width: 44px;
+}
+
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-panel.is-touch-sheet {
   width: auto;
   max-width: none;

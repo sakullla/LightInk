@@ -355,6 +355,12 @@ const en = {
   'reader.lookup.deeplUnconfigured': 'No DeepL key saved.',
   'reader.lookup.deeplSaved': 'DeepL key saved.',
   'reader.lookup.deeplCleared': 'DeepL key cleared.',
+  'reader.lookup.aiTranslate': 'AI Translate',
+  'reader.lookup.source.deepl': 'DeepL',
+  'reader.lookup.source.ai': 'AI',
+  'reader.lookup.retry': 'Retry',
+  'reader.lookup.aiTruncated':
+    'The selection exceeded 5000 characters; only the beginning was translated.',
   'reader.ai.group': 'AI',
   'reader.ai.hint':
     'Configure the single AI provider used by AI translation and the assistant. Saving a new configuration replaces the previous one. The API key stays in this device keychain.',
@@ -878,6 +884,11 @@ const zhCN = {
   'reader.lookup.deeplUnconfigured': '尚未保存 DeepL 密钥。',
   'reader.lookup.deeplSaved': 'DeepL 密钥已保存。',
   'reader.lookup.deeplCleared': 'DeepL 密钥已清除。',
+  'reader.lookup.aiTranslate': 'AI 翻译',
+  'reader.lookup.source.deepl': 'DeepL',
+  'reader.lookup.source.ai': 'AI',
+  'reader.lookup.retry': '重试',
+  'reader.lookup.aiTruncated': '选区超过 5000 字，仅翻译了开头部分。',
   'reader.ai.group': 'AI',
   'reader.ai.hint':
     '为 AI 翻译与 AI 助手配置唯一 AI 提供商；保存新配置即覆盖原配置。API 密钥只保存在本机钥匙串。',
