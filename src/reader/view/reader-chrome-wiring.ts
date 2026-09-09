@@ -5,7 +5,8 @@
  * Escape 链（dismissReaderOverlayStep/onDocumentEscapeCapture/setTabActive）、
  * 进度同步与刻度跳转、主题/排版域（applyTypographyPatch/applyFlowLayout/
  * applyPaperTheme/onThemeChange）与 returnToShelf。纯移动自 reader-view.ts，
- * 行为不变。
+ * 行为不变；R5 增 AI 助手面板互斥接线（openAssistantPanel/closeAssistantPanel
+ * × Escape 链 × isOverlayOpen × setTabActive/returnToShelf/destroy 清理挂点）。
  */
 
 import type { MessageKey } from '../../i18n/messages.js';
@@ -80,6 +81,12 @@ import {
   notifyReaderWindowChrome,
   readerChromeTouchMode,
 } from './reader-dom.js';
+import { htmlToSearchText } from '../search-panel.js';
+import {
+  createAssistantPanel,
+  type AssistantChapterContext,
+  type AssistantPanel,
+} from '../assistant-panel.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
 
 function readerChromeCopy(
@@ -100,6 +107,7 @@ function readerChromeCopy(
     ...take('reader.chrome.footer', 'footer'),
     ...take('reader.chrome.bookmarkTick', 'bookmarkTick'),
     ...take('reader.lookup.speak', 'speak'),
+    ...take('reader.chrome.assistant', 'assistant'),
   };
 }
 
@@ -138,6 +146,15 @@ export interface ReaderChromeWiringSurface {
   applyPaperTheme(theme: ReaderThemeId): void;
   onThemeChange(): void;
   mountReaderChrome(): void;
+  /** AI 助手面板（R5）：互斥打开（先收 chrome 面板与标注侧栏）。 */
+  openAssistantPanel(): void;
+  /** 关闭助手面板；返回是否原本打开（Escape 链/清理挂点用）。 */
+  closeAssistantPanel(): boolean;
+  isAssistantPanelVisible(): boolean;
+  /** 选区快捷动作（工具栏「解释/总结」）：打开面板并立即发起。 */
+  askAssistantWithSelection(action: 'explain' | 'summarize', quote: string): void;
+  /** 销毁收尾（reader-view destroy）：停流、摘监听、移除 DOM。 */
+  destroyAssistantPanel(): void;
 }
 
 function ttsFailureCopy(
@@ -542,18 +559,144 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     syncChromeProgress();
   };
 
+  // —— AI 助手面板（R5 / ADR-6）：懒创建；互斥 = 开助手先收 chrome 面板与
+  // 标注侧栏，反向 Escape 链 / setTabActive(false) / returnToShelf / destroy
+  // 全部经 closeAssistantPanel 收口。选区解释/总结经 askAssistantWithSelection。
+  let assistantPanel: AssistantPanel | null = null;
+
+  const assistantOpen = (): boolean => assistantPanel?.isVisible() === true;
+
+  /**
+   * 当前章节上下文供数：flow 族优先已挂载章正文，未挂载回退 exportChapters
+   * 解析（搜索通路同源）；PDF 用当前页文本层；漫画等无文本层格式为 null。
+   */
+  const assistantChapterContext = (): AssistantChapterContext | null => {
+    if (ctx.cbzHandle !== null) {
+      return null;
+    }
+    if (ctx.pdfHandle !== null) {
+      const page = ctx.pdfHandle.controller.page;
+      const layer = ctx.pageHost.querySelector<HTMLElement>(
+        `.pdfViewer .page[data-page-number="${page}"] .textLayer`,
+      );
+      const text = (layer?.textContent ?? '').trim();
+      if (text === '') {
+        return null;
+      }
+      return {
+        title: ctx.t('reader.progress.pageOf', {
+          current: String(page),
+          total: String(ctx.pdfHandle.controller.totalPages),
+        }),
+        text,
+      };
+    }
+    const chapter = ctx.dom.firstVisibleChapter();
+    const article = ctx.scrollHost.querySelector<HTMLElement>(
+      `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
+    );
+    const mounted =
+      article?.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')?.contentDocument
+        ?.body?.textContent ?? '';
+    if (mounted.trim() !== '') {
+      return {
+        title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
+        text: mounted,
+      };
+    }
+    const html = ctx.exportChapters[chapter]?.html ?? '';
+    const text = htmlToSearchText(html);
+    if (text.trim() === '') {
+      return null;
+    }
+    return {
+      title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
+      text,
+    };
+  };
+
+  const ensureAssistantPanel = (): AssistantPanel => {
+    if (assistantPanel !== null) {
+      return assistantPanel;
+    }
+    assistantPanel = createAssistantPanel({
+      t: ctx.t,
+      host: () => ctx.root,
+      chapterContext: assistantChapterContext,
+      // 未配置引导：回合架并打开 Manage（main.ts 监听 lightink:open-manage）。
+      openSettings: () => {
+        closeAssistantPanel();
+        ctx.deps.onReturnToShelf?.();
+        if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+          document.dispatchEvent(new CustomEvent('lightink:open-manage'));
+        }
+      },
+      // 摘要保存为标注（章节级空 quote 锚点，note 文本 = 摘要）。
+      saveAnnotation: (text) => {
+        if (text === '') {
+          return;
+        }
+        ctx.annotation.appendAnnotation(
+          'note',
+          ctx.annotation.currentPositionLocator(),
+          undefined,
+          text,
+        );
+      },
+      readHistory: ctx.deps.readAssistantHistory,
+      writeHistory: ctx.deps.writeAssistantHistory,
+      historyKey: () => ctx.sessionAnnotation.contentHash(),
+    });
+    return assistantPanel;
+  };
+
+  const openAssistantPanel = (): void => {
+    closeChromePanel();
+    if (ctx.sessionAnnotation.sidebarVisibility().visible) {
+      ctx.annotation.setSidebarVisible(false);
+    }
+    ensureAssistantPanel().open();
+    syncChromeActionState();
+  };
+
+  const closeAssistantPanel = (): boolean => {
+    if (!assistantOpen()) {
+      return false;
+    }
+    assistantPanel?.close();
+    syncChromeActionState();
+    return true;
+  };
+
+  const askAssistantWithSelection = (action: 'explain' | 'summarize', quote: string): void => {
+    if (quote.trim() === '') {
+      return;
+    }
+    closeChromePanel();
+    if (ctx.sessionAnnotation.sidebarVisibility().visible) {
+      ctx.annotation.setSidebarVisible(false);
+    }
+    ensureAssistantPanel().askWithSelection(action, quote);
+    syncChromeActionState();
+  };
+
+  const destroyAssistantPanel = (): void => {
+    assistantPanel?.destroy();
+    assistantPanel = null;
+  };
+
   const syncChromeActionState = (): void => {
     if (typeof ctx.root.querySelector !== 'function') {
       return;
     }
-    for (const action of ['toc', 'typography'] as const) {
+    for (const action of ['toc', 'typography', 'assistant'] as const) {
       const button = ctx.root.querySelector<HTMLButtonElement>(
         `[data-reader-chrome-action="${action}"]`,
       );
       if (button === null) {
         continue;
       }
-      const open = ctx.chromePanel === action;
+      const open = action === 'assistant' ? assistantOpen() : ctx.chromePanel === action;
       button.classList.toggle('is-open', open);
       button.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
@@ -609,6 +752,9 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       ctx.annotation.setSidebarVisible(false);
       return true;
     }
+    if (closeAssistantPanel()) {
+      return true;
+    }
     return closeChromePanel();
   };
 
@@ -642,6 +788,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     if (!active) {
       ctx.annotation.hideLookupPanel();
       ctx.annotation.hideSelectionToolbar();
+      closeAssistantPanel();
       closeChromePanel();
       stopSpeakSession();
       ctx.readerChrome?.dismiss();
@@ -665,6 +812,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   const returnToShelf = (): void => {
     ctx.sessionProgress.persistNow();
     ctx.annotation.hideLookupPanel();
+    closeAssistantPanel();
     closeChromePanel();
     stopSpeakSession();
     ctx.readerChrome?.dismiss();
@@ -718,6 +866,9 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     }
     if (ctx.selectionToolbar !== null) {
       adoptReaderOverlayTheme(ctx.selectionToolbar.element, ctx.root);
+    }
+    if (assistantPanel !== null) {
+      adoptReaderOverlayTheme(assistantPanel.element, ctx.root);
     }
   };
 
@@ -873,6 +1024,8 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       closeChromePanel();
       return;
     }
+    // 覆盖层互斥：助手面板让位给目录/排版 popover（反向开助手亦收 popover）。
+    closeAssistantPanel();
     if (ctx.sessionAnnotation.sidebarVisibility().visible) {
       ctx.annotation.setSidebarVisible(false);
     }
@@ -933,6 +1086,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
       openSearch: () => ctx.search.openSearch(),
+      openAssistant: () => openAssistantPanel(),
       toggleBookmark: () => ctx.bookmarks.toggleBookmarkAtCurrentPosition(),
       isBookmarked: () => ctx.bookmarks.bookmarkAtStatePosition(ctx.readerState) !== null,
       onBookmarkTick: (fraction) => ctx.bookmarks.jumpToBookmarkTick(fraction),
@@ -940,10 +1094,14 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         ctx.annotation.setSidebarVisible(!ctx.sessionAnnotation.sidebarVisibility().visible),
       isOverlayOpen: () =>
         ctx.sessionAnnotation.sidebarVisibility().visible ||
-        ctx.chromePanel !== null,
-      // 一次退一层：TOC/排版 → 标注面板。点空白走同一条链。
+        ctx.chromePanel !== null ||
+        assistantOpen(),
+      // 一次退一层：TOC/排版 → 助手面板 → 标注面板。点空白走同一条链。
       dismissOverlay: () => {
         if (closeChromePanel()) {
+          return true;
+        }
+        if (closeAssistantPanel()) {
           return true;
         }
         if (ctx.sessionAnnotation.sidebarVisibility().visible) {
@@ -1002,5 +1160,10 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     applyPaperTheme,
     onThemeChange,
     mountReaderChrome,
+    openAssistantPanel,
+    closeAssistantPanel,
+    isAssistantPanelVisible: assistantOpen,
+    askAssistantWithSelection,
+    destroyAssistantPanel,
   };
 }

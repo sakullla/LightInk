@@ -107,6 +107,10 @@ export interface ReaderViewDeps {
   readAnnotations?: (contentHash: string) => Promise<string>;
   /** 写标注 JSON（Rust write_annotations）。 */
   writeAnnotations?: (contentHash: string, json: string) => Promise<void>;
+  /** 读 AI 助手按书对话历史（Rust assistant_read_history，R5）。 */
+  readAssistantHistory?: (contentHash: string) => Promise<string>;
+  /** 写 AI 助手按书对话历史（Rust assistant_write_history）。 */
+  writeAssistantHistory?: (contentHash: string, json: string) => Promise<void>;
   /** 非阻断提示（标注读失败/写失败时）。 */
   notify?: (message: string) => void;
   /** Session-only consent for remote images; injectable for focused tests. */
@@ -518,6 +522,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       ctx.selectionToolbar = null;
       ctx.pendingSelection = null;
       ctx.annotation.destroyLookupPanel();
+      ctx.chrome.destroyAssistantPanel();
       ctx.readerOutline = [];
       ctx.exportChapters = [];
       ctx.exportStylesheet = '';

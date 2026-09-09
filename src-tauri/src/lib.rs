@@ -8,6 +8,7 @@ mod ai;
 mod annotations;
 mod archive;
 mod asset;
+mod assistant;
 mod cli;
 mod credential_store;
 mod documents;
@@ -143,6 +144,9 @@ pub fn run() {
             ai::ai_test_connection,
             ai::ai_translate_selection,
             ai::ai_chat_stream,
+            assistant::assistant_read_history,
+            assistant::assistant_write_history,
+            assistant::assistant_clear_history,
             webdav::sync_get_profile,
             webdav::sync_save_profile,
             webdav::sync_test_profile,

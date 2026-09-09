@@ -275,6 +275,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   const applyTranslateEnabled = (): void => {
     ctx.selectionToolbar?.setTranslateEnabled(deeplConfigured);
     ctx.selectionToolbar?.setAiTranslateEnabled(aiConfigured);
+    ctx.selectionToolbar?.setAiAssistEnabled(aiConfigured);
   };
 
   const refreshDeeplConfigured = async (): Promise<void> => {
@@ -557,6 +558,12 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           } else {
             runTranslate(action === 'translate' ? 'deepl' : 'ai', pending.quote, generation);
           }
+          return;
+        }
+        if (action === 'explain' || action === 'summarize') {
+          // R5：选区快捷动作——以选中文本为上下文在助手面板发起（不产生标注）。
+          clearSourceSelection();
+          ctx.chrome.askAssistantWithSelection(action, pending.quote);
           return;
         }
         if (action === 'removeHighlight') {
@@ -1042,6 +1049,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         canRemoveHighlight: existingMark !== null,
         translateEnabled: deeplConfigured,
         aiTranslateEnabled: aiConfigured,
+        aiAssistEnabled: aiConfigured,
       },
     );
     setSelectionToolbarOpen(true);

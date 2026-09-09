@@ -41,6 +41,7 @@
 }
 
 #app.is-workspace-shelf .lightink-reader-chrome-panel,
+#app.is-workspace-shelf .lightink-reader-assistant-panel,
 #app.is-workspace-shelf .lightink-reader-sidebar {
   display: none !important;
 }

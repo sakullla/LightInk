@@ -18,7 +18,9 @@ export type SelectionToolbarAction =
   | 'removeHighlight'
   | 'lookup'
   | 'translate'
-  | 'aiTranslate';
+  | 'aiTranslate'
+  | 'explain'
+  | 'summarize';
 
 export interface SelectionToolbarActionDetail {
   color?: AnnotationColor;
@@ -48,10 +50,13 @@ export interface SelectionToolbar {
       translateEnabled?: boolean;
       /** AI 提供商四要素完备时才显示 AI 翻译动作（R3）。 */
       aiTranslateEnabled?: boolean;
+      /** AI 已配置时才显示解释/总结快捷动作（R5，结果进助手面板）。 */
+      aiAssistEnabled?: boolean;
     },
   ): void;
   setTranslateEnabled(enabled: boolean): void;
   setAiTranslateEnabled(enabled: boolean): void;
+  setAiAssistEnabled(enabled: boolean): void;
   hide(): void;
   isVisible(): boolean;
   destroy(): void;
@@ -160,6 +165,8 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   const lookupButton = makeButton('lookup', 'reader.lookup.action');
   const translateButton = makeButton('translate', 'reader.lookup.translate');
   const aiTranslateButton = makeButton('aiTranslate', 'reader.lookup.aiTranslate');
+  const explainButton = makeButton('explain', 'reader.assistant.action.explain');
+  const summarizeButton = makeButton('summarize', 'reader.assistant.action.summarize');
   const removeButton = makeButton('removeHighlight', 'annotation.removeHighlight');
   root.append(
     colors,
@@ -169,6 +176,8 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     lookupButton,
     translateButton,
     aiTranslateButton,
+    explainButton,
+    summarizeButton,
     removeButton,
   );
 
@@ -187,6 +196,17 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     aiTranslateButton.title = enabled ? deps.t('reader.lookup.aiTranslate') : '';
   };
   applyAiTranslateEnabled(false);
+
+  /** R5：解释/总结与 AI 翻译同一配置态（aiConfigured），成对显隐。 */
+  const applyAiAssistEnabled = (enabled: boolean): void => {
+    for (const button of [explainButton, summarizeButton]) {
+      button.hidden = !enabled;
+      button.disabled = !enabled;
+      button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+      button.title = '';
+    }
+  };
+  applyAiAssistEnabled(false);
 
   root.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
@@ -253,6 +273,9 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       if (options.aiTranslateEnabled !== undefined) {
         applyAiTranslateEnabled(options.aiTranslateEnabled);
       }
+      if (options.aiAssistEnabled !== undefined) {
+        applyAiAssistEnabled(options.aiAssistEnabled);
+      }
       root.hidden = false;
       dismiss.hidden = false;
       mountDismiss();
@@ -279,6 +302,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     },
     setTranslateEnabled: applyTranslateEnabled,
     setAiTranslateEnabled: applyAiTranslateEnabled,
+    setAiAssistEnabled: applyAiAssistEnabled,
     hide,
     isVisible() {
       return !root.hidden;

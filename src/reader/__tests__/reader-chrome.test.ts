@@ -5,15 +5,17 @@
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
  * First paint is hidden except a 1px progress hairline. A page click
- * or a pointer near the top/bottom edge reveals five text-labeled actions
+ * or a pointer near the top/bottom edge reveals six text-labeled actions
  * together with a progress footer:
- *   返回书架 · 目录 · 排版 · 书签 · 搜索
+ *   返回书架 · 目录 · 排版 · 书签 · 搜索 · 助手
  * 「返回书架」 is the first control (start of the top bar). It is the only
- * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索
- * call `openOutline` / `openTypography` / `openSearch`. 书签 calls
- * `toggleBookmark` and reflects `isBookmarked` as a two-state toggle.
- * 搜索 lives in the tools cluster and opens the annotation sidebar (notes +
- * in-book search); chrome does not add a second 本书标注 control.
+ * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索 / 助手
+ * call `openOutline` / `openTypography` / `openSearch` / `openAssistant`.
+ * 书签 calls `toggleBookmark` and reflects `isBookmarked` as a two-state
+ * toggle. 搜索 lives in the tools cluster and opens the annotation sidebar
+ * (notes + in-book search); chrome does not add a second 本书标注 control.
+ * 助手 (R5) opens the reader AI assistant panel and carries
+ * aria-haspopup/aria-expanded like the other dialog actions.
  *
  * The bar is out of document flow (`position: absolute|fixed|sticky`) so
  * reveal/dismiss does not change the reading area's top or height.
@@ -47,8 +49,8 @@ import {
   READER_CHROME_TOUCH_HIT_PX,
 } from '../reader-chrome.js';
 
-const LABELS = ['返回书架', '目录', '排版', '书签', '搜索'] as const;
-const THUMB_ACTIONS = ['toc', 'typography', 'bookmark', 'search'] as const;
+const LABELS = ['返回书架', '目录', '排版', '书签', '搜索', '助手'] as const;
+const THUMB_ACTIONS = ['toc', 'typography', 'bookmark', 'search', 'assistant'] as const;
 const PRIMARY_TOUCH_ACTIONS = ['backToShelf', ...THUMB_ACTIONS] as const;
 const AUTO_HIDE_MS = 2500;
 const MIN_HIT_PX = READER_CHROME_TOUCH_HIT_PX;
@@ -104,6 +106,7 @@ function mount(overrides: Record<string, unknown> = {}) {
     openOutline: vi.fn(),
     openSearch: vi.fn(),
     openTypography: vi.fn(),
+    openAssistant: vi.fn(),
     toggleBookmark: vi.fn(),
     isBookmarked: vi.fn(() => false),
     onBookmarkTick: vi.fn(),
@@ -226,14 +229,14 @@ describe('createReaderChrome first paint', () => {
 });
 
 describe('createReaderChrome reveal', () => {
-  it('reveals five text-labeled controls with 返回书架 first after a page click', () => {
+  it('reveals six text-labeled controls with 返回书架 first after a page click', () => {
     const { host, page, chrome } = mount();
 
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
 
     const buttons = labeledButtons(host);
-    expect(buttons).toHaveLength(5);
+    expect(buttons).toHaveLength(6);
     expect(buttons[0]!.textContent?.trim()).toBe('返回书架');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([...LABELS]);
     expect(host.textContent).not.toContain('本书标注');
@@ -265,12 +268,12 @@ describe('createReaderChrome reveal', () => {
   it('uses English chrome labels when locale is en', () => {
     const { host, page } = mount({ locale: 'en' });
     clickPage(page, 120);
-    const actions = ['backToShelf', 'toc', 'typography', 'bookmark', 'search'] as const;
+    const actions = ['backToShelf', 'toc', 'typography', 'bookmark', 'search', 'assistant'] as const;
     expect(
       actions.map((action) =>
         host.querySelector(`[data-reader-chrome-action="${action}"]`)?.textContent?.trim(),
       ),
-    ).toEqual(['Back to Shelf', 'Contents', 'Typography', 'Bookmark', 'Search']);
+    ).toEqual(['Back to Shelf', 'Contents', 'Typography', 'Bookmark', 'Search', 'Assistant']);
   });
 
   it('hides the flow whisper while comic chrome would cover it', () => {
@@ -457,6 +460,41 @@ describe('createReaderChrome search entry', () => {
     buttonByLabel(host, '搜索').click();
     expect(deps.openSearch).toHaveBeenCalledTimes(1);
     expect(deps.toggleSidebar).not.toHaveBeenCalled();
+  });
+});
+
+describe('createReaderChrome assistant entry (R5)', () => {
+  it('declares assistant as a first-class chrome action', () => {
+    expect(READER_CHROME_ACTIONS).toContain('assistant');
+  });
+
+  it('puts 助手 in the tools cluster and only forwards to openAssistant', () => {
+    const { host, chrome, deps } = mount();
+    chrome.reveal();
+
+    const assistant = buttonByLabel(host, '助手');
+    expect(assistant.dataset.readerChromeAction).toBe('assistant');
+    expect(assistant.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(assistant.getAttribute('aria-expanded')).toBe('false');
+    expect(
+      host.querySelector('.lightink-reader-chrome-tools')?.contains(assistant),
+    ).toBe(true);
+
+    assistant.click();
+    expect(deps.openAssistant).toHaveBeenCalledTimes(1);
+    // chrome 自身不开面板、不触碰书架/侧栏——面板互斥在 reader-chrome-wiring。
+    expect(deps.openSearch).not.toHaveBeenCalled();
+    expect(deps.toggleSidebar).not.toHaveBeenCalled();
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('keeps 助手 in the touch footer thumb zone', () => {
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+    const assistant = actionButton(host, 'assistant');
+    expect(chrome.footer.contains(assistant)).toBe(true);
+    expect(chrome.bar.contains(assistant)).toBe(false);
+    expect(assistant.hidden).toBe(false);
   });
 });
 
@@ -1035,13 +1073,14 @@ describe('createReaderChrome footer and whisper', () => {
 });
 
 describe('createReaderChrome speak control (ADR-4)', () => {
-  it('keeps READER_CHROME_ACTIONS as the original five', () => {
+  it('keeps READER_CHROME_ACTIONS as the six reader entries', () => {
     expect([...READER_CHROME_ACTIONS]).toEqual([
       'backToShelf',
       'toc',
       'typography',
       'bookmark',
       'search',
+      'assistant',
     ]);
     expect(READER_CHROME_ACTIONS).not.toContain('speak');
   });
@@ -1059,7 +1098,7 @@ describe('createReaderChrome speak control (ADR-4)', () => {
     expect(speak!.hasAttribute('data-reader-chrome-action')).toBe(false);
     expect(chrome.footer.contains(speak!)).toBe(true);
     expect(chrome.bar.contains(speak!)).toBe(false);
-    expect(labeledButtons(host)).toHaveLength(5);
+    expect(labeledButtons(host)).toHaveLength(6);
     expect(
       [...host.querySelectorAll('[data-reader-chrome-action]')].map(
         (button) => (button as HTMLElement).dataset.readerChromeAction,

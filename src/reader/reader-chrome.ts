@@ -2,8 +2,8 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。桌面顶栏是五项带文字入口（返回书架 · 目录 ·
- * 排版 · 书签 · 搜索）。书签是一等开关：对当前位置添加/取消书签，按钮按
+ * 边缘时顶栏与底栏同时出现。桌面顶栏是六项带文字入口（返回书架 · 目录 ·
+ * 排版 · 书签 · 搜索 · 助手）。书签是一等开关：对当前位置添加/取消书签，按钮按
  * 当前位置是否已书签呈现两态（aria-pressed + is-bookmarked 视觉态）；进度
  * 轨在 TOC 刻度之外再画书签刻度（可点击跳转）。搜索打开同一套标注侧栏
  *（列表 + 书内搜索），不再另放「本书标注」。底栏与沉浸条都是单行：章节名 |
@@ -26,7 +26,13 @@ import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
 
-export type ReaderChromeAction = 'backToShelf' | 'toc' | 'typography' | 'bookmark' | 'search';
+export type ReaderChromeAction =
+  | 'backToShelf'
+  | 'toc'
+  | 'typography'
+  | 'bookmark'
+  | 'search'
+  | 'assistant';
 
 export interface ReaderChromeLabels {
   readonly backToShelf: string;
@@ -34,6 +40,8 @@ export interface ReaderChromeLabels {
   readonly typography: string;
   readonly bookmark: string;
   readonly search: string;
+  /** AI 助手面板入口（R5；未配置时面板内显示配置引导）。 */
+  readonly assistant: string;
   readonly toolbar: string;
   readonly progress: string;
   readonly footer: string;
@@ -58,6 +66,7 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
   'typography',
   'bookmark',
   'search',
+  'assistant',
 ];
 
 export const READER_CHROME_HIDE_DELAY_MS = 2500;
@@ -74,6 +83,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     typography: 'Typography',
     bookmark: 'Bookmark',
     search: 'Search',
+    assistant: 'Assistant',
     toolbar: 'Reading controls',
     progress: 'Reading progress',
     footer: 'Reading progress',
@@ -86,6 +96,7 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     typography: '排版',
     bookmark: '书签',
     search: '搜索',
+    assistant: '助手',
     toolbar: '阅读控件',
     progress: '阅读进度',
     footer: '阅读进度',
@@ -112,6 +123,8 @@ export interface ReaderChromeDeps {
   openTypography?: () => void;
   /** 顶栏搜索一等入口：桌面走标注侧栏搜索，触屏走独立底栏搜索层。 */
   openSearch?: () => void;
+  /** AI 助手面板入口（R5）：打开阅读器助手面板（未配置时面板内引导）。 */
+  openAssistant?: () => void;
   /** 书签一等开关：对当前阅读位置添加/取消书签（宿主裁决两态）。 */
   toggleBookmark?: () => void;
   /** 当前位置是否已书签（按钮 aria-pressed 与视觉态同步源）。 */
@@ -361,7 +374,7 @@ export function createReaderChrome(
     button.dataset.readerChromeAction = action;
     button.textContent = label;
     button.setAttribute('aria-label', label);
-    if (action === 'toc' || action === 'typography') {
+    if (action === 'toc' || action === 'typography' || action === 'assistant') {
       button.setAttribute('aria-haspopup', 'dialog');
       button.setAttribute('aria-expanded', 'false');
     }
@@ -378,6 +391,7 @@ export function createReaderChrome(
   const typographyButton = makeButton('typography', labels.typography);
   const bookmarkButton = makeButton('bookmark', labels.bookmark);
   const searchButton = makeButton('search', labels.search);
+  const assistantButton = makeButton('assistant', labels.assistant);
   const speakButton = document.createElement('button');
   speakButton.type = 'button';
   speakButton.className = 'lightink-reader-chrome-action lightink-reader-chrome-speak';
@@ -391,7 +405,7 @@ export function createReaderChrome(
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, bookmarkButton, searchButton);
+  tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton);
   if (touchMode) {
     const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
     const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
@@ -523,7 +537,14 @@ export function createReaderChrome(
       hideProgress || revealed || attachedHost?.dataset.readingLayout === 'scroll';
     whisper.hidden = hideWhisper;
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
-    for (const button of [backButton, tocButton, typographyButton, bookmarkButton, searchButton]) {
+    for (const button of [
+      backButton,
+      tocButton,
+      typographyButton,
+      bookmarkButton,
+      searchButton,
+      assistantButton,
+    ]) {
       button.hidden = !revealed;
     }
     const speakOn = deps.speakAvailable?.() === true;
@@ -767,6 +788,11 @@ export function createReaderChrome(
     event.preventDefault();
     event.stopPropagation();
     deps.openSearch?.();
+  });
+  assistantButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deps.openAssistant?.();
   });
   bookmarkButton.addEventListener('click', (event) => {
     event.preventDefault();

@@ -2432,6 +2432,11 @@ manager = new TabManager({
         invoke<string>('read_annotations', { contentHash }).catch(() => ''),
       writeAnnotations: (contentHash, json) =>
         writeSyncedAnnotations(contentHash, json),
+      // R5：AI 助手按书对话历史（app_data_dir/assistant/<hash>.json，不同步）。
+      readAssistantHistory: (contentHash) =>
+        invoke<string>('assistant_read_history', { contentHash }).catch(() => ''),
+      writeAssistantHistory: (contentHash, json) =>
+        invoke<void>('assistant_write_history', { contentHash, json }).catch(() => undefined),
       notify: (message) => {
         void showAppAlert(message);
       },
@@ -2846,6 +2851,16 @@ function ensureLibraryView(): LibraryView {
   });
   return libraryView;
 }
+
+// R5：阅读器助手面板「前往配置」——回合架并打开 Manage 页的 AI 分组。
+// 事件由 assistant-panel 的 openSettings 派发（阅读器内无 Manage 直达通道）。
+document.addEventListener('lightink:open-manage', () => {
+  workspace.returnToShelf();
+  const view = ensureLibraryView();
+  view.element
+    .querySelector<HTMLButtonElement>('.lightink-library-manage-entry')
+    ?.click();
+});
 
 // 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。
 applyWorkspaceState();
