@@ -211,6 +211,7 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
   const fail = (reason: TtsFailure): TtsStartResult => {
     playing = false;
     paused = false;
+    clearFollowAlong();
     onFailure?.(reason);
     return { ok: false, reason };
   };
@@ -239,7 +240,7 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
     if (span === undefined) {
       playing = false;
       paused = false;
-      freezeFollowAlong();
+      clearFollowAlong();
       onEnd?.();
       return true;
     }
@@ -362,7 +363,7 @@ export function createTtsController(env?: TtsEnvironment): TtsController {
       } catch {
         /* ignore */
       }
-      freezeFollowAlong();
+      clearFollowAlong();
     },
     setRate(next) {
       rate = clampRate(next);

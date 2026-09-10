@@ -57,11 +57,20 @@ export interface LookupTranslateSection {
   readonly truncated?: boolean;
 }
 
+export interface LookupAnchorRect {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface LookupTranslateShow {
   readonly quote: string;
   readonly sections: readonly LookupTranslateSection[];
   /** 当前目标语言代码（auto 或 zh-CN/en/…）；面板语种切换的选中值。 */
   readonly targetLang?: string;
+  /** 划选包围盒（外层 client 坐标）；缺省沿用上次锚点或阅读区顶部居中。 */
+  readonly anchor?: LookupAnchorRect;
 }
 
 export interface LookupPanelShow {
@@ -70,6 +79,7 @@ export interface LookupPanelShow {
   readonly status: 'loading' | 'ready' | 'empty' | 'error';
   readonly lines?: readonly string[];
   readonly message?: string;
+  readonly anchor?: LookupAnchorRect;
 }
 
 export interface LookupPanelDeps {
@@ -407,23 +417,81 @@ function unwrapAidErrorText(raw: string): string {
   return trimmed;
 }
 
-function positionLookupPanel(panel: HTMLElement, host: HTMLElement): void {
+const LOOKUP_MARGIN_PX = 8;
+const LOOKUP_DESKTOP_WIDTH_PX = 352;
+
+export function lookupPanelPosition(
+  anchor: LookupAnchorRect,
+  panel: { width: number; height: number },
+  viewport: { width: number; height: number; top?: number; bottom?: number },
+): { left: number; top: number; maxHeight: number } {
+  const clamp = (value: number, low: number, high: number): number =>
+    Math.min(Math.max(value, low), Math.max(low, high));
+  const insetTop = viewport.top ?? LOOKUP_MARGIN_PX;
+  const insetBottom = viewport.bottom ?? viewport.height - LOOKUP_MARGIN_PX;
+  const spaceBelow = insetBottom - (anchor.top + anchor.height) - LOOKUP_MARGIN_PX;
+  const spaceAbove = anchor.top - insetTop - LOOKUP_MARGIN_PX;
+  // 优先选区上方；上方不够（贴顶/被 chrome 挡住）再落到下方。
+  const preferAbove = spaceAbove >= Math.min(panel.height, 180) || spaceAbove >= spaceBelow;
+  const maxHeight = Math.max(120, preferAbove ? spaceAbove : spaceBelow);
+  const usedHeight = Math.min(panel.height, maxHeight);
+  const top = clamp(
+    preferAbove
+      ? anchor.top - usedHeight - LOOKUP_MARGIN_PX
+      : anchor.top + anchor.height + LOOKUP_MARGIN_PX,
+    insetTop,
+    Math.max(insetTop, insetBottom - usedHeight),
+  );
+  const left = clamp(
+    anchor.left + anchor.width / 2 - panel.width / 2,
+    LOOKUP_MARGIN_PX,
+    Math.max(LOOKUP_MARGIN_PX, viewport.width - panel.width - LOOKUP_MARGIN_PX),
+  );
+  return { left, top, maxHeight: Math.min(maxHeight, Math.max(120, insetBottom - top)) };
+}
+
+function positionLookupPanel(
+  panel: HTMLElement,
+  host: HTMLElement,
+  anchor: LookupAnchorRect | null,
+): void {
   if (readerChromeTouchMode()) {
     pinFixedOverlay(panel, host);
     return;
   }
   unpinFixedOverlay(panel);
   panel.classList.remove('is-touch-sheet');
-  const box = host.getBoundingClientRect();
-  const width = Math.min(352, Math.max(240, box.width - 24));
-  const left = Math.max(8, box.left + (box.width - width) / 2);
-  const top = Math.max(8, box.top + 48);
+  const hostBox = host.getBoundingClientRect();
+  const viewport = {
+    width: typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 1024,
+    height:
+      typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768,
+    top: Math.max(LOOKUP_MARGIN_PX, hostBox.top + 48),
+    bottom: Math.min(
+      (typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 768) -
+        LOOKUP_MARGIN_PX,
+      hostBox.bottom - LOOKUP_MARGIN_PX,
+    ),
+  };
+  const width = Math.min(LOOKUP_DESKTOP_WIDTH_PX, Math.max(240, viewport.width - LOOKUP_MARGIN_PX * 2));
   panel.style.position = 'fixed';
-  panel.style.left = `${left}px`;
-  panel.style.top = `${top}px`;
   panel.style.width = `${width}px`;
   panel.style.right = 'auto';
   panel.style.bottom = 'auto';
+  if (anchor !== null) {
+    const box = panel.getBoundingClientRect();
+    const height = box.height > 1 ? box.height : 220;
+    const pos = lookupPanelPosition(anchor, { width, height }, viewport);
+    panel.style.left = `${pos.left}px`;
+    panel.style.top = `${pos.top}px`;
+    panel.style.maxHeight = `${pos.maxHeight}px`;
+    return;
+  }
+  const left = Math.max(LOOKUP_MARGIN_PX, hostBox.left + (hostBox.width - width) / 2);
+  const top = Math.max(LOOKUP_MARGIN_PX, hostBox.top + 48);
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  panel.style.maxHeight = '';
 }
 
 export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
@@ -485,9 +553,13 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
 
   /** 译文并列视图当前引文（段内重试按钮携带）；null = 非译文视图。 */
   let translateQuote: string | null = null;
+  let lastAnchor: LookupAnchorRect | null = null;
+  let lastHost: HTMLElement | null = null;
 
   const hide = (): void => {
     translateQuote = null;
+    lastAnchor = null;
+    lastHost = null;
     if (readerChromeTouchMode()) {
       concealSheet(root, () => {
         root.hidden = true;
@@ -557,10 +629,11 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
   };
 
   const openPanel = (host: HTMLElement): void => {
+    lastHost = host;
     root.hidden = false;
     mountReaderOverlay(root, host);
     adoptReaderOverlayTheme(root, host);
-    positionLookupPanel(root, host);
+    positionLookupPanel(root, host, lastAnchor);
     revealSheet(root);
   };
 
@@ -568,6 +641,9 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
     element: root,
     show(input, host) {
       translateQuote = null;
+      if (input.anchor !== undefined) {
+        lastAnchor = input.anchor;
+      }
       langSelect.hidden = true;
       title.textContent =
         input.kind === 'translate' ? deps.t('reader.lookup.translateTitle') : deps.t('reader.lookup.title');
@@ -599,6 +675,9 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
     showTranslate(input, host) {
       const quote = input.quote.trim();
       translateQuote = quote === '' ? null : quote;
+      if (input.anchor !== undefined) {
+        lastAnchor = input.anchor;
+      }
       title.textContent = deps.t('reader.lookup.translateTitle');
       close.setAttribute('aria-label', deps.t('reader.lookup.close'));
       langSelect.hidden = false;
@@ -633,6 +712,9 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
         return;
       }
       block.replaceWith(renderTranslateSection(section));
+      if (lastHost !== null) {
+        positionLookupPanel(root, lastHost, lastAnchor);
+      }
     },
     hide,
     isVisible() {

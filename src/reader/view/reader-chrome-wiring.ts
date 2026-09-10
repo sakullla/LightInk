@@ -35,7 +35,6 @@ import {
   clearFollowAlong,
   createTtsController,
   followAlongMark,
-  freezeFollowAlong,
   type TtsFailure,
 } from '../tts.js';
 import { createTtsDock, type TtsDock } from '../tts-dock.js';
@@ -310,7 +309,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         onStop: () => {
           speakContinueToken += 1;
           tts.stop();
-          freezeFollowAlong();
+          clearFollowAlong();
           ttsDock?.hide();
         },
         onRate: (rate) => tts.setRate(rate),
@@ -322,6 +321,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   const stopSpeakSession = (): void => {
     speakContinueToken += 1;
     tts.stop();
+    clearFollowAlong();
     ttsDock?.hide();
   };
 
@@ -369,7 +369,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         if (continueSpeakAfterChapter(root)) {
           return;
         }
-        freezeFollowAlong();
+        clearFollowAlong();
         dock.hide();
       },
       onFailure: (reason) => {
@@ -438,7 +438,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           return;
         }
         if (tries >= 24) {
-          freezeFollowAlong();
+          clearFollowAlong();
           ttsDock?.hide();
           return;
         }
@@ -457,7 +457,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         return;
       }
       if (index >= ctx.flowChapterCount) {
-        freezeFollowAlong();
+        clearFollowAlong();
         ttsDock?.hide();
         return;
       }

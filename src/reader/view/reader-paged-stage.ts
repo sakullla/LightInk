@@ -271,14 +271,16 @@ export function setupReaderPagedStage(ctx: ReaderViewContext): ReaderPagedStageS
           ? (selection.anchorNode as Element)
           : selection.anchorNode.parentElement;
     const existingMark = anchorElement?.closest('[data-annotation-id]') ?? null;
+    const rect = selectionClientRect(range);
     ctx.pendingSelection = {
       locator,
       quote: text,
       existingHighlightId: existingMark?.getAttribute('data-annotation-id') ?? null,
       frame: null,
+      rect,
     };
     ctx.annotation.ensureSelectionToolbar();
-    ctx.selectionToolbar?.showAt(selectionClientRect(range), {
+    ctx.selectionToolbar?.showAt(rect, {
       canRemoveHighlight: existingMark !== null,
     });
     ctx.annotation.setSelectionToolbarOpen(true);

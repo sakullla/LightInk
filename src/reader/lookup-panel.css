@@ -11,6 +11,7 @@
   width: min(22rem, calc(100vw - 1.5rem));
   max-height: min(60vh, 28rem);
   overflow: hidden;
+  overscroll-behavior: contain;
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
@@ -87,9 +88,14 @@
 }
 
 .lightink-reader-lookup-body {
+  flex: 1 1 auto;
   min-height: 0;
   padding: 0 0.75rem 0.75rem;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lightink-border) transparent;
 }
 
 .lightink-reader-lookup-quote {

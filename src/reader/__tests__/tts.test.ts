@@ -130,7 +130,7 @@ describe('createTtsController', () => {
     expect(onFailure).not.toHaveBeenCalled();
   });
 
-  it('speaks sentence by sentence, pauses, resumes, and stops on the last spoken sentence', () => {
+  it('speaks sentence by sentence, pauses, resumes, and clears the follow-along mark on stop', () => {
     const { speech, queue } = fakeSpeech();
     const tts = createTtsController({
       speech: speech as unknown as SpeechSynthesis,
@@ -150,6 +150,7 @@ describe('createTtsController', () => {
     tts.pause();
     expect(tts.isPaused()).toBe(true);
     expect(speech.paused).toBe(true);
+    expect(root.querySelector(`.${TTS_MARK_CLASS}`)?.textContent).toContain('One.');
 
     tts.resume();
     expect(tts.isPaused()).toBe(false);
@@ -160,7 +161,7 @@ describe('createTtsController', () => {
 
     tts.stop();
     expect(tts.isPlaying()).toBe(false);
-    expect(root.querySelector(`.${TTS_MARK_CLASS}`)?.textContent).toContain('Two.');
+    expect(root.querySelector(`.${TTS_MARK_CLASS}`)).toBeNull();
     expect(root.querySelector('[data-annotation-id]')).toBeNull();
     expect(root.querySelector('.lightink-reader-highlight')).toBeNull();
     expect(root.querySelector('.lightink-reader-search-mark')).toBeNull();

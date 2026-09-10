@@ -79,6 +79,8 @@ export interface ReaderPendingSelection {
   quote: string;
   existingHighlightId: string | null;
   frame: HTMLIFrameElement | null;
+  /** 划选包围盒（外层 client 坐标），lookup/translate 面板锚点。 */
+  rect?: { left: number; top: number; width: number; height: number };
 }
 
 /** 导出图片物化回调（flow commit 采纳 content.embedExportImages）。 */

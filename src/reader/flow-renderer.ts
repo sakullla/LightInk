@@ -179,7 +179,9 @@ html[data-reading-layout='paginated'] .lightink-reader-spread {
   column-gap: var(--lightink-reader-column-gap, 0px) !important;
   column-fill: auto !important;
   /* auto, not hidden: WebView/Chromium often keeps scrollWidth == clientWidth
-     for multicol + overflow:hidden, so wheel/click paging cannot move. */
+     for multicol + overflow:hidden, so wheel/click paging cannot move.
+     Mouse drag-select freezes scrollLeft via bindPagedSelectScrollLock so
+     native selection autoscroll cannot page the spread. */
   overflow-x: auto !important;
   overflow-y: hidden !important;
   /* JS owns horizontal turns. Native overflow-x inertia + host/iframe
@@ -607,6 +609,116 @@ export function readerPagedScroller(frameDocument: Document): HTMLElement {
     frameDocument.querySelector<HTMLElement>(`.${READER_SPREAD_CLASS}`) ??
     frameDocument.documentElement
   );
+}
+
+const pagedSelectScrollLocks = new WeakSet<HTMLElement>();
+
+export function isPagedScrollerSelectLocked(scroller: HTMLElement): boolean {
+  return pagedSelectScrollLocks.has(scroller);
+}
+
+/**
+ * Freeze a paginated spread's horizontal scroll for a mouse/pen drag-select.
+ * Chromium auto-scrolls `overflow-x: auto` while the selection is dragged,
+ * which pages CSS columns as if the reader were turning. Do not toggle
+ * overflow-x: hidden here: multicol + hidden often collapses scrollWidth.
+ */
+export function lockPagedScrollerForSelect(scroller: HTMLElement): () => void {
+  if (pagedSelectScrollLocks.has(scroller)) {
+    return () => undefined;
+  }
+  pagedSelectScrollLocks.add(scroller);
+  const left = scroller.scrollLeft;
+  const freeze = (): void => {
+    if (scroller.scrollLeft !== left) {
+      scroller.scrollLeft = left;
+    }
+  };
+  const doc = scroller.ownerDocument;
+  scroller.addEventListener('scroll', freeze);
+  doc.addEventListener('pointermove', freeze, true);
+  doc.addEventListener('mousemove', freeze, true);
+  freeze();
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    scroller.removeEventListener('scroll', freeze);
+    doc.removeEventListener('pointermove', freeze, true);
+    doc.removeEventListener('mousemove', freeze, true);
+    pagedSelectScrollLocks.delete(scroller);
+    scroller.scrollLeft = left;
+  };
+}
+
+/**
+ * Lock the paged scroller for the duration of a primary mouse/pen press.
+ * Unlock runs in capture so `bindPointerTapPaging` (pointerup) and click
+ * paging can still change `scrollLeft` after the freeze is gone. Touch is
+ * skipped so swipe paging keeps native overflow-x.
+ */
+export function bindPagedSelectScrollLock(
+  frameDocument: Document,
+  options: {
+    enabled(): boolean;
+    scroller(): HTMLElement;
+    hostDocument?: Document | null;
+  },
+): () => void {
+  let unlock: (() => void) | null = null;
+  const release = (): void => {
+    unlock?.();
+    unlock = null;
+  };
+  const onPointerDown = (event: Event): void => {
+    const pointer = event as PointerEvent;
+    if (!options.enabled()) {
+      return;
+    }
+    if (typeof pointer.button === 'number' && pointer.button !== 0) {
+      return;
+    }
+    if (pointer.pointerType === 'touch') {
+      return;
+    }
+    release();
+    unlock = lockPagedScrollerForSelect(options.scroller());
+  };
+  const onPointerUp = (): void => {
+    release();
+  };
+  const capture = { capture: true } as const;
+  frameDocument.addEventListener('pointerdown', onPointerDown, capture);
+  frameDocument.addEventListener('pointerup', onPointerUp, capture);
+  frameDocument.addEventListener('pointercancel', onPointerUp, capture);
+  const frameWindow = frameDocument.defaultView;
+  frameWindow?.addEventListener('pointerup', onPointerUp, capture);
+  frameWindow?.addEventListener('pointercancel', onPointerUp, capture);
+  const hostDocument =
+    options.hostDocument === undefined
+      ? (frameWindow?.parent?.document ?? null)
+      : options.hostDocument;
+  const bindHost = hostDocument !== null && hostDocument !== frameDocument;
+  if (bindHost && hostDocument !== null) {
+    hostDocument.addEventListener('pointerup', onPointerUp, capture);
+    hostDocument.addEventListener('pointercancel', onPointerUp, capture);
+    hostDocument.addEventListener('mouseup', onPointerUp, capture);
+  }
+  return () => {
+    release();
+    frameDocument.removeEventListener('pointerdown', onPointerDown, capture);
+    frameDocument.removeEventListener('pointerup', onPointerUp, capture);
+    frameDocument.removeEventListener('pointercancel', onPointerUp, capture);
+    frameWindow?.removeEventListener('pointerup', onPointerUp, capture);
+    frameWindow?.removeEventListener('pointercancel', onPointerUp, capture);
+    if (bindHost && hostDocument !== null) {
+      hostDocument.removeEventListener('pointerup', onPointerUp, capture);
+      hostDocument.removeEventListener('pointercancel', onPointerUp, capture);
+      hostDocument.removeEventListener('mouseup', onPointerUp, capture);
+    }
+  };
 }
 
 function pagedElementGlyphLeft(element: HTMLElement): number {
@@ -1670,6 +1782,7 @@ export function createFlowRenderer(
     pageBox.style.maxWidth = 'none';
     pageBox.style.setProperty('height', `${height}px`, 'important');
     pageBox.style.setProperty('max-height', `${height}px`, 'important');
+    const selectLocked = isPagedScrollerSelectLocked(pageBox);
     pageBox.style.setProperty('overflow-x', 'auto', 'important');
     pageBox.style.setProperty('overflow-y', 'hidden', 'important');
     pageBox.style.touchAction = 'pan-y';
@@ -1769,7 +1882,8 @@ export function createFlowRenderer(
           : frame.dataset.pagedRestore === 'start'
             ? 0
             : undefined));
-    if (restoreRatio !== undefined) {
+    // Mouse drag-select owns scrollLeft; snapping would fight the freeze.
+    if (!selectLocked && restoreRatio !== undefined) {
       applyPagedProgress(pageBox, restoreRatio, step);
       if (restoreRatio >= 1) {
         scrollPagedScrollerToEdge(pageBox, -1, step);
@@ -1778,7 +1892,7 @@ export function createFlowRenderer(
       } else {
         snapPagedScroller(pageBox, step);
       }
-    } else if (options?.snap !== false && !searchHold) {
+    } else if (!selectLocked && options?.snap !== false && !searchHold) {
       snapPagedScroller(pageBox, step);
       if (pageBox.scrollLeft === 0 && previousRatio > 0) {
         applyPagedProgress(pageBox, previousRatio, step);
@@ -2193,6 +2307,11 @@ export function createFlowRenderer(
         // Parent-side iframe target: WebView2 sometimes delivers wheel here
         // instead of into the srcdoc document.
         frame.addEventListener('wheel', onWheel, { passive: false, capture: true });
+        const releaseSelectScrollLock = bindPagedSelectScrollLock(frameDocument, {
+          enabled: () => isFlowPaginated(root),
+          scroller: () => readerPagedScroller(frameDocument),
+          hostDocument: frameWindow.parent?.document ?? null,
+        });
         // 帧内触控翻页：点按左右热区/横向滑动 → 与滚轮同一 advanceFlowPage 入口；
         // 点按热区非对称（左 20% 上一页、右 30% 下一页），中部 50% 点按不翻页，
         // click 仍走既有 chrome 切换/链接/划选路径。
@@ -2376,6 +2495,7 @@ export function createFlowRenderer(
           resizeObserver?.disconnect();
           overlayScroller.removeEventListener('scroll', onHighlightOverlayScroll);
           releaseImages();
+          releaseSelectScrollLock();
           releaseFrameTouchPaging();
           frameDocument.removeEventListener('touchstart', onCancelTouchSlide);
           releaseFramePointerTap();

@@ -6,6 +6,7 @@ import {
   aiTranslateTargetLang,
   createLookupPanel,
   initialTranslateSections,
+  lookupPanelPosition,
   normalizeLookupTargetLang,
   parseAiTranslateConfig,
   parseAiTranslateResult,
@@ -257,6 +258,51 @@ describe('lookup panel translate sections', () => {
     expect(normalizeLookupTargetLang(undefined)).toBe('auto');
     expect(normalizeLookupTargetLang('ZH-CN')).toBe('zh-CN');
     expect(normalizeLookupTargetLang('pirate')).toBe('auto');
+  });
+
+  it('anchors the panel above the selection, flipping below when the top is blocked', () => {
+    const viewport = { width: 1000, height: 800, top: 48, bottom: 792 };
+    const panel = { width: 352, height: 200 };
+    const above = lookupPanelPosition(
+      { left: 600, top: 400, width: 80, height: 40 },
+      panel,
+      viewport,
+    );
+    expect(above.top).toBe(400 - 200 - 8);
+    expect(above.left).toBe(600 + 40 - 176);
+    expect(above.top).toBeGreaterThanOrEqual(48);
+
+    const nearTop = lookupPanelPosition(
+      { left: 600, top: 80, width: 80, height: 24 },
+      panel,
+      viewport,
+    );
+    expect(nearTop.top).toBe(80 + 24 + 8);
+    expect(nearTop.maxHeight).toBeGreaterThan(120);
+
+    const tall = lookupPanelPosition(
+      { left: 600, top: 200, width: 80, height: 40 },
+      { width: 352, height: 2000 },
+      viewport,
+    );
+    expect(tall.top + tall.maxHeight).toBeLessThanOrEqual(792);
+    expect(tall.maxHeight).toBeGreaterThanOrEqual(120);
+  });
+
+  it('caps the translate panel so long copy can scroll inside the body', () => {
+    const panel = createLookupPanel({ t });
+    panel.showTranslate(
+      {
+        quote: 'selectable',
+        sections: [{ source: 'ai', status: 'ready', lines: [Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n')] }],
+        anchor: { left: 200, top: 160, width: 80, height: 24 },
+      },
+      host(),
+    );
+    expect(panel.element.style.maxHeight).toMatch(/^\d+(\.\d+)?px$/);
+    expect(Number.parseFloat(panel.element.style.maxHeight)).toBeGreaterThanOrEqual(120);
+    const body = panel.element.querySelector('.lightink-reader-lookup-body');
+    expect(body).not.toBeNull();
   });
 
   it('ignores section updates while the panel is not in the translate view', () => {

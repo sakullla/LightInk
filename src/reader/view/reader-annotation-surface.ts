@@ -254,6 +254,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
 
   let lookupPanel: LookupPanel | null = null;
   let lookupEpoch = 0;
+  let lookupAnchor: { left: number; top: number; width: number; height: number } | undefined;
   // AI 提供商态（R3）：四要素完备才显示工具栏 AI 翻译;目标语言覆盖项随取随用。
   let aiConfigured = false;
   let aiTargetLang: string | undefined;
@@ -308,6 +309,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   const hideLookupPanel = (): void => {
     lookupEpoch += 1;
     translateSession = null;
+    lookupAnchor = undefined;
     lookupPanel?.hide();
   };
 
@@ -346,7 +348,14 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   const lookupRequestStale = (epoch: number, generation: number): boolean =>
     ctx.destroyed || generation !== ctx.sessionLoad.generation() || epoch !== lookupEpoch;
 
-  const runLookup = (quote: string, generation: number): void => {
+  const runLookup = (
+    quote: string,
+    generation: number,
+    anchor?: { left: number; top: number; width: number; height: number },
+  ): void => {
+    if (anchor !== undefined) {
+      lookupAnchor = anchor;
+    }
     const epoch = ++lookupEpoch;
     translateSession = null;
     const panel = ensureLookupPanel();
@@ -359,6 +368,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           quote: trimmed,
           status: 'error',
           message: lookupTooLongCopy(ctx.t, aiConfigured),
+          ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
         },
         ctx.root,
       );
@@ -370,6 +380,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         quote: trimmed,
         status: 'loading',
         message: ctx.t('reader.lookup.loading'),
+        ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
       },
       ctx.root,
     );
@@ -382,12 +393,27 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         const lines = formatLookupEntries(entries);
         if (lines.length === 0) {
           panel.show(
-            { kind: 'lookup', quote: trimmed, status: 'empty', message: ctx.t('reader.lookup.empty') },
+            {
+              kind: 'lookup',
+              quote: trimmed,
+              status: 'empty',
+              message: ctx.t('reader.lookup.empty'),
+              ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
+            },
             ctx.root,
           );
           return;
         }
-        panel.show({ kind: 'lookup', quote: trimmed, status: 'ready', lines }, ctx.root);
+        panel.show(
+          {
+            kind: 'lookup',
+            quote: trimmed,
+            status: 'ready',
+            lines,
+            ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
+          },
+          ctx.root,
+        );
       } catch (error) {
         if (lookupRequestStale(epoch, generation)) {
           return;
@@ -398,6 +424,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
             quote: trimmed,
             status: 'error',
             message: readerAidErrorMessage(ctx.t, error),
+            ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
           },
           ctx.root,
         );
@@ -408,7 +435,14 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   /**
    * 译文视图（R3）：打开面板并立即请求 AI 段；失败段可段内重试。
    */
-  const runTranslate = (quote: string, generation: number): void => {
+  const runTranslate = (
+    quote: string,
+    generation: number,
+    anchor?: { left: number; top: number; width: number; height: number },
+  ): void => {
+    if (anchor !== undefined) {
+      lookupAnchor = anchor;
+    }
     const epoch = ++lookupEpoch;
     const panel = ensureLookupPanel();
     const trimmed = quote.trim();
@@ -420,6 +454,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           quote: trimmed,
           status: 'error',
           message: ctx.t('reader.lookup.translateTooLong'),
+          ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
         },
         ctx.root,
       );
@@ -431,6 +466,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         quote: trimmed,
         sections: initialTranslateSections(ctx.t, aiConfigured),
         targetLang: translateTargetLang ?? aiTargetLang ?? 'auto',
+        ...(lookupAnchor === undefined ? {} : { anchor: lookupAnchor }),
       },
       ctx.root,
     );
@@ -515,9 +551,9 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         if (action === 'lookup' || action === 'aiTranslate') {
           const generation = ctx.sessionLoad.generation();
           if (action === 'lookup') {
-            runLookup(pending.quote, generation);
+            runLookup(pending.quote, generation, pending.rect);
           } else {
-            runTranslate(pending.quote, generation);
+            runTranslate(pending.quote, generation, pending.rect);
           }
           return;
         }
@@ -991,11 +1027,13 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           ? (anchorNode as Element)
           : anchorNode.parentElement;
     const existingMark = anchorElement?.closest('[data-annotation-id]') ?? null;
+    const rect = mapFrameClientRect(frame, selectionClientRect(selection.getRangeAt(0)));
     ctx.pendingSelection = {
       locator,
       quote: text,
       existingHighlightId: existingMark?.getAttribute('data-annotation-id') ?? null,
       frame,
+      rect,
     };
     ensureSelectionToolbar();
     if (ctx.selectionToolbar === null) {
@@ -1004,7 +1042,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     // iframe 内 rect 是 frame 视口坐标，叠加 frame 偏移换算为外层 client 坐标。
     // 分栏里 bounding rect 会横跨左右页，改用最后一行盒子锚定工具栏。
     ctx.selectionToolbar.showAt(
-      mapFrameClientRect(frame, selectionClientRect(selection.getRangeAt(0))),
+      rect,
       {
         canRemoveHighlight: existingMark !== null,
         aiTranslateEnabled: aiConfigured,
