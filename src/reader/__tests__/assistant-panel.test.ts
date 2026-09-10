@@ -1131,6 +1131,35 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
     expect(activateKey).not.toHaveBeenCalled();
     expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
   });
+
+  it('returns hits immediately when run() already finished with done=true', async () => {
+    const hits = [{ snippet: 'needle in hay', location: '第 1 页', key: 'p1:0:6' }];
+    const activateKey = vi.fn();
+    const session = {
+      run: vi.fn(() => undefined),
+      hitsState: () => ({ pending: false, searching: false, done: true, hasMore: false }),
+      hitViews: () => hits,
+      activateKey,
+    };
+    const result = await runAssistantSessionSearch(session, 'needle');
+    expect(result).toEqual(hits);
+    expect(session.run).toHaveBeenCalledWith('needle');
+    expect(activateKey).not.toHaveBeenCalled();
+  });
+
+  it('does not hang when run() stays idle forever (comic/no-op)', async () => {
+    const activateKey = vi.fn();
+    const session = {
+      run: vi.fn(() => undefined),
+      hitsState: () => ({ pending: false, searching: false, hasMore: false }),
+      hitViews: () => [],
+      activateKey,
+    };
+    const result = await runAssistantSessionSearch(session, 'needle');
+    expect(result).toEqual([]);
+    expect(session.run).toHaveBeenCalledWith('needle');
+    expect(activateKey).not.toHaveBeenCalled();
+  });
 });
 
 describe('serializeAssistantHistoryStore still round-trips panel writes', () => {

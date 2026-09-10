@@ -212,6 +212,8 @@ export interface ReaderSessionSearch {
   hitViews(): SessionSearchHitView[];
   /** busy/上限表面（原 searchHitsState）。 */
   hitsState(): SessionSearchHitsState;
+  /** 搜索世代：run/clear 递增；漫画/空查询 no-op 不递增。 */
+  generation(): number;
   /** 待滚动命中 key（首命中滚动一次性消费；pdf 族激活时设置）。 */
   pendingScrollKey(): string | null;
   /** 首命中滚动就绪消费：当前 key 命中 pending 且视图确认 mark 已就绪时清除并返回 true。 */
@@ -572,6 +574,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
         hasMore: (state?.hits.length ?? 0) > displayLimit || (!done && revealed),
       };
     },
+    generation: () => searchGeneration,
     pendingScrollKey: () => pendingScrollKey,
     consumePendingScroll: (currentKey, markReady) => {
       if (

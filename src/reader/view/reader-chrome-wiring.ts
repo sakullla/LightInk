@@ -185,10 +185,47 @@ function ttsFailureCopy(
 export interface AssistantSessionSearchIdleState {
   readonly pending?: boolean;
   readonly searching?: boolean;
+  readonly done?: boolean;
 }
+
+/** query_book.search 只读入口：run / hitViews / hitsState，禁止 activateKey。 */
+export interface AssistantSessionSearchHandle {
+  readonly run: (query: string) => void | Promise<void>;
+  readonly hitsState: () => AssistantSessionSearchIdleState;
+  readonly hitViews?: () => readonly unknown[];
+  readonly generation?: () => number;
+}
+
+/** 漫画/空扫不会进入 busy：无世代信号时 idle 等待上限，避免死等。 */
+const ASSISTANT_SESSION_SEARCH_START_WAIT_MS = 50;
 
 function isAssistantSessionSearchBusy(state: AssistantSessionSearchIdleState): boolean {
   return state.pending === true || state.searching === true;
+}
+
+function assistantSessionSearchHitSignature(hits: readonly unknown[]): string {
+  return JSON.stringify(hits);
+}
+
+function waitForAssistantSessionSearchPredicate(
+  check: () => boolean,
+  timeoutMs: number | null,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const poll = (): void => {
+      if (check()) {
+        resolve(true);
+        return;
+      }
+      if (deadline !== null && Date.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      setTimeout(poll, 0);
+    };
+    poll();
+  });
 }
 
 /**
@@ -211,37 +248,57 @@ export function waitForAssistantSessionSearchIdle(
 }
 
 /**
- * PDF runPdfSearch 在首个 onResult 前仍是 idle（state 尚未落地）。
- * 不能把 run() 刚返回时的空闲快照当成扫描结束。
+ * 发起一次书内搜索并等到扫描结束；不激活命中、不改阅读位置。
+ * run() 后已 pending/searching 则等到 idle；已 done 或已有本次命中则立即返回；
+ * 仍 idle 时短等扫描启动，无世代变化则超时按 no-op 收束。
  */
-function waitForAssistantSessionSearchBusy(
-  hitsState: () => AssistantSessionSearchIdleState,
-): Promise<void> {
-  return new Promise((resolve) => {
-    const poll = (): void => {
-      if (isAssistantSessionSearchBusy(hitsState())) {
-        resolve();
-        return;
-      }
-      setTimeout(poll, 0);
-    };
-    poll();
-  });
-}
-
-/** 发起一次书内搜索并等到扫描结束；不激活命中、不改阅读位置。 */
-export function runAssistantSessionSearch(
-  session: {
-    readonly run: (query: string) => void;
-    readonly hitsState: () => AssistantSessionSearchIdleState;
-  },
+export async function runAssistantSessionSearch(
+  session: AssistantSessionSearchHandle,
   query: string,
-): Promise<void> {
-  session.run(query);
+): Promise<readonly unknown[]> {
+  const generationBefore = session.generation?.();
+  const hitsBefore = assistantSessionSearchHitSignature(session.hitViews?.() ?? []);
+  await session.run(query);
+
   const hitsState = (): AssistantSessionSearchIdleState => session.hitsState();
-  return waitForAssistantSessionSearchBusy(hitsState).then(() =>
-    waitForAssistantSessionSearchIdle(hitsState),
+  const hitViews = (): readonly unknown[] => session.hitViews?.() ?? [];
+  const hitsPresent = (): boolean => {
+    const hits = hitViews();
+    return hits.length > 0 && assistantSessionSearchHitSignature(hits) !== hitsBefore;
+  };
+
+  const state = hitsState();
+  if (isAssistantSessionSearchBusy(state)) {
+    await waitForAssistantSessionSearchIdle(hitsState);
+    return hitViews();
+  }
+  if (state.done === true || hitsPresent()) {
+    return hitViews();
+  }
+
+  const generationAfter = session.generation?.();
+  const generationUnchanged =
+    generationBefore !== undefined && generationAfter === generationBefore;
+  if (generationUnchanged) {
+    return hitViews();
+  }
+  const generationStarted =
+    generationBefore !== undefined &&
+    generationAfter !== undefined &&
+    generationAfter !== generationBefore;
+  await waitForAssistantSessionSearchPredicate(
+    () => {
+      const next = hitsState();
+      return (
+        isAssistantSessionSearchBusy(next) || next.done === true || hitsPresent()
+      );
+    },
+    generationStarted ? null : ASSISTANT_SESSION_SEARCH_START_WAIT_MS,
   );
+  if (isAssistantSessionSearchBusy(hitsState())) {
+    await waitForAssistantSessionSearchIdle(hitsState);
+  }
+  return hitViews();
 }
 
 export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWiringSurface {
@@ -851,7 +908,9 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           },
           chapterText: assistantChapterText,
           search: {
-            run: (query) => runAssistantSessionSearch(ctx.sessionSearch, query),
+            run: async (query) => {
+              await runAssistantSessionSearch(ctx.sessionSearch, query);
+            },
             hitViews: () =>
               ctx.sessionSearch.hitViews().map((hit) => ({
                 snippet: hit.snippet,
