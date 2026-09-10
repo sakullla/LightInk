@@ -196,29 +196,25 @@ export interface AssistantSessionSearchHandle {
   readonly generation?: () => number;
 }
 
-/** 漫画/空扫不会进入 busy：无世代信号时 idle 等待上限，避免死等。 */
+/** 已 run 但仍非 pending/searching/done 时，短等扫描启动，避免死等。 */
 const ASSISTANT_SESSION_SEARCH_START_WAIT_MS = 50;
 
 function isAssistantSessionSearchBusy(state: AssistantSessionSearchIdleState): boolean {
   return state.pending === true || state.searching === true;
 }
 
-function assistantSessionSearchHitSignature(hits: readonly unknown[]): string {
-  return JSON.stringify(hits);
-}
-
 function waitForAssistantSessionSearchPredicate(
   check: () => boolean,
-  timeoutMs: number | null,
+  timeoutMs: number,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const deadline = Date.now() + timeoutMs;
     const poll = (): void => {
       if (check()) {
         resolve(true);
         return;
       }
-      if (deadline !== null && Date.now() >= deadline) {
+      if (Date.now() >= deadline) {
         resolve(false);
         return;
       }
@@ -249,51 +245,33 @@ export function waitForAssistantSessionSearchIdle(
 
 /**
  * 发起一次书内搜索并等到扫描结束；不激活命中、不改阅读位置。
- * run() 后已 pending/searching 则等到 idle；已 done 或已有本次命中则立即返回；
- * 仍 idle 时短等扫描启动，无世代变化则超时按 no-op 收束。
+ * run() 后已 pending/searching 则等到二者皆非；已 done 则立即返回；
+ * 仍非 busy 且非 done 时短等 pending/searching/done，busy 再等到 idle。
  */
 export async function runAssistantSessionSearch(
   session: AssistantSessionSearchHandle,
   query: string,
 ): Promise<readonly unknown[]> {
-  const generationBefore = session.generation?.();
-  const hitsBefore = assistantSessionSearchHitSignature(session.hitViews?.() ?? []);
   await session.run(query);
 
   const hitsState = (): AssistantSessionSearchIdleState => session.hitsState();
   const hitViews = (): readonly unknown[] => session.hitViews?.() ?? [];
-  const hitsPresent = (): boolean => {
-    const hits = hitViews();
-    return hits.length > 0 && assistantSessionSearchHitSignature(hits) !== hitsBefore;
-  };
 
   const state = hitsState();
   if (isAssistantSessionSearchBusy(state)) {
     await waitForAssistantSessionSearchIdle(hitsState);
     return hitViews();
   }
-  if (state.done === true || hitsPresent()) {
+  if (state.done === true) {
     return hitViews();
   }
 
-  const generationAfter = session.generation?.();
-  const generationUnchanged =
-    generationBefore !== undefined && generationAfter === generationBefore;
-  if (generationUnchanged) {
-    return hitViews();
-  }
-  const generationStarted =
-    generationBefore !== undefined &&
-    generationAfter !== undefined &&
-    generationAfter !== generationBefore;
   await waitForAssistantSessionSearchPredicate(
     () => {
       const next = hitsState();
-      return (
-        isAssistantSessionSearchBusy(next) || next.done === true || hitsPresent()
-      );
+      return isAssistantSessionSearchBusy(next) || next.done === true;
     },
-    generationStarted ? null : ASSISTANT_SESSION_SEARCH_START_WAIT_MS,
+    ASSISTANT_SESSION_SEARCH_START_WAIT_MS,
   );
   if (isAssistantSessionSearchBusy(hitsState())) {
     await waitForAssistantSessionSearchIdle(hitsState);

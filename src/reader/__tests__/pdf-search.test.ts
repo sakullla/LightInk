@@ -707,7 +707,7 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
     return { host, calls };
   };
 
-  const doneState = { pending: false, searching: false, hasMore: false };
+  const doneState = { pending: false, searching: false, hasMore: false, done: true };
 
   it('无命中保持空态：完成即空列表、不报错、loadMore/步进/点选均为 no-op', async () => {
     const { host } = createFlowHost({ chapterTexts: ['第一章正文', '第二章正文'] });
@@ -830,8 +830,9 @@ describe('session-search 搜索会话核心（世代失效/命中上限/busy rev
     session.run('a');
     session.run('b');
     sinks[0]!.onResult([pdfMatch(3)], true); // 旧查询的迟到最终批：丢弃
-    expect(session.query()).toBeNull();
+    expect(session.query()).toBe('b');
     expect(session.hitViews()).toEqual([]);
+    expect(session.hitsState().done).toBe(false);
     sinks[1]!.onResult([pdfMatch(5)], true); // 新查询落地
     expect(session.query()).toBe('b');
     expect(session.hitViews().map((hit) => hit.key)).toEqual(['5:0:2']);
@@ -1219,16 +1220,36 @@ describe('session-search 会话规则补全（busy reveal/首命中滚动/未挂
       const h = createPendingPdfHost(['abc']);
       const match: PdfSearchMatch = { page: 1, start: 0, end: 3, snippet: 'abc' };
       h.session.run('abc');
-      // 首批回投前无会话状态（pdf 族与原口径一致：空态不显 busy）。
-      expect(h.session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
+      // live scan 已开始：done=false；busy chrome 未揭示故 pending。
+      expect(h.session.hitsState()).toEqual({
+        pending: true,
+        searching: false,
+        hasMore: false,
+        done: false,
+      });
       h.sinks[0]!.onResult([match], false); // 首批部分结果：扫描进行中
-      expect(h.session.hitsState()).toEqual({ pending: true, searching: false, hasMore: false });
+      expect(h.session.hitsState()).toEqual({
+        pending: true,
+        searching: false,
+        hasMore: false,
+        done: false,
+      });
       const before = h.syncHits();
       vi.advanceTimersByTime(SEARCH_BUSY_REVEAL_MS);
       expect(h.syncHits()).toBe(before + 1); // 揭示经 onReveal 重渲染命中表面一次
-      expect(h.session.hitsState()).toEqual({ pending: false, searching: true, hasMore: true });
+      expect(h.session.hitsState()).toEqual({
+        pending: false,
+        searching: true,
+        hasMore: true,
+        done: false,
+      });
       h.sinks[0]!.onResult([match], true); // 终批：busy 熄灭
-      expect(h.session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
+      expect(h.session.hitsState()).toEqual({
+        pending: false,
+        searching: false,
+        hasMore: false,
+        done: true,
+      });
     } finally {
       vi.useRealTimers();
     }

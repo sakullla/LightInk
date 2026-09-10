@@ -1066,22 +1066,25 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
   it('resolves only after pending/searching clear and never calls activateKey', async () => {
     let pending = true;
     let searching = false;
+    let doneFlag = false;
     const activateKey = vi.fn();
     const session = {
       run: vi.fn((query: string) => {
         expect(query).toBe('needle');
         pending = true;
         searching = false;
+        doneFlag = false;
         setTimeout(() => {
           pending = false;
           searching = true;
           setTimeout(() => {
             pending = false;
             searching = false;
+            doneFlag = true;
           }, 8);
         }, 8);
       }),
-      hitsState: () => ({ pending, searching, hasMore: false }),
+      hitsState: () => ({ pending, searching, done: doneFlag, hasMore: false }),
       activateKey,
     };
     const done = runAssistantSessionSearch(session, 'needle');
@@ -1095,27 +1098,35 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
     expect(settled).toBe(true);
     expect(session.run).toHaveBeenCalledWith('needle');
     expect(activateKey).not.toHaveBeenCalled();
-    expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
+    expect(session.hitsState()).toEqual({
+      pending: false,
+      searching: false,
+      done: true,
+      hasMore: false,
+    });
   });
 
   it('does not treat pre-start idle as done when run() stays idle until later', async () => {
     let pending = false;
     let searching = false;
+    let doneFlag = false;
     const activateKey = vi.fn();
     const session = {
       run: vi.fn((query: string) => {
         expect(query).toBe('needle');
         // PDF-like: runPdfSearch returns before onResult, so hitsState stays idle.
+        doneFlag = false;
         setTimeout(() => {
           pending = true;
           searching = false;
           setTimeout(() => {
             pending = false;
             searching = false;
+            doneFlag = true;
           }, 8);
         }, 8);
       }),
-      hitsState: () => ({ pending, searching, hasMore: false }),
+      hitsState: () => ({ pending, searching, done: doneFlag, hasMore: false }),
       activateKey,
     };
     const done = runAssistantSessionSearch(session, 'needle');
@@ -1129,7 +1140,12 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
     expect(settled).toBe(true);
     expect(session.run).toHaveBeenCalledWith('needle');
     expect(activateKey).not.toHaveBeenCalled();
-    expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
+    expect(session.hitsState()).toEqual({
+      pending: false,
+      searching: false,
+      done: true,
+      hasMore: false,
+    });
   });
 
   it('returns hits immediately when run() already finished with done=true', async () => {
@@ -1151,7 +1167,7 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
     const activateKey = vi.fn();
     const session = {
       run: vi.fn(() => undefined),
-      hitsState: () => ({ pending: false, searching: false, hasMore: false }),
+      hitsState: () => ({ pending: false, searching: false, done: true, hasMore: false }),
       hitViews: () => [],
       activateKey,
     };

@@ -98,6 +98,8 @@ export interface SessionSearchHitsState {
   readonly searching: boolean;
   /** 还有未展开命中或扫描仍在进行（load-more 哨兵）。 */
   readonly hasMore: boolean;
+  /** 无在飞扫描（含空态）为 true；live scan 为 false。 */
+  readonly done: boolean;
 }
 
 /** flow 一批章命中：章索引 → 该章命中 spec（共享幂等引擎按章渲染）。 */
@@ -328,6 +330,16 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
     marksReleased = false;
     searchBusy.start();
     cancelScheduled();
+    // onResult 常在 await handle.search 之后：先标 done=false，避免空态被当成已完成。
+    state = {
+      kind: 'pdf',
+      query,
+      hits: [],
+      groups: null,
+      sequence: [],
+      active: -1,
+      done: false,
+    };
     host.searchPdf(query, {
       onResult: (matches, done) => {
         if (!isLive(generation)) {
@@ -572,6 +584,7 @@ export function createReaderSessionSearch(host: SessionSearchHost): ReaderSessio
         pending: !done && !revealed,
         searching: !done && revealed,
         hasMore: (state?.hits.length ?? 0) > displayLimit || (!done && revealed),
+        done,
       };
     },
     generation: () => searchGeneration,
