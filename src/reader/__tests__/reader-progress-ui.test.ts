@@ -325,6 +325,86 @@ describe('playReaderPageTurn', () => {
     });
     expect(root.getAttribute('data-page-anim')).toBe('fade-prev');
   });
+
+  it('clears each reader instance token on its own motion window', () => {
+    // 多标签：TabManager 只在 closeTab 时 destroy reader，切标签仅切 host 的
+    // display，所以桌面上多个 reader root 会同时存活。清理代次按 root 记，
+    // 否则另一个实例翻页会让本实例的 timer 提前返回，token 永久滞留。
+    const a = document.createElement('div');
+    const b = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    const turn = (root: HTMLElement): void => {
+      playReaderPageTurn(root, 1, {
+        matchMedia: () => ({ matches: false }),
+        pageTurnStyle: 'slide',
+        schedule,
+      });
+    };
+
+    turn(a);
+    turn(b);
+    expect(a.getAttribute('data-page-anim')).toBe('slide-next');
+    expect(b.getAttribute('data-page-anim')).toBe('slide-next');
+
+    timers[0]!(); // a 自己的 timer：a 上没有更新的翻页，必须清掉 a 的 token。
+    expect(a.getAttribute('data-page-anim')).toBeNull();
+    expect(b.getAttribute('data-page-anim')).toBe('slide-next');
+
+    timers[1]!();
+    expect(b.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('does not strand one instance token while another instance keeps turning', () => {
+    const a = document.createElement('div');
+    const b = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    const turn = (root: HTMLElement): void => {
+      playReaderPageTurn(root, 1, {
+        matchMedia: () => ({ matches: false }),
+        pageTurnStyle: 'slide',
+        schedule,
+      });
+    };
+
+    turn(a);
+    turn(b);
+    turn(b); // b 连击，只应推进 b 自己的代次。
+
+    timers[0]!(); // a 的 timer 仍应清掉 a 的 token。
+    expect(a.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('keeps the per-instance guard from breaking same-direction bursts on one root', () => {
+    // 回归护栏：按 root 计数不得削弱既有的同向连击保护。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    const turn = (): void => {
+      playReaderPageTurn(root, 1, {
+        matchMedia: () => ({ matches: false }),
+        pageTurnStyle: 'slide',
+        schedule,
+      });
+    };
+
+    turn();
+    turn();
+    timers[0]!(); // 旧 timer 提前到期：新动画仍在播，不得摘除。
+    expect(root.getAttribute('data-page-anim')).toBe('slide-next');
+    timers[1]!();
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
 });
 
 describe('playReaderPageBoundaryBounce', () => {
