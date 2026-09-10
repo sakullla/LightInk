@@ -496,6 +496,12 @@ describe('createReaderChrome assistant entry (R5)', () => {
     expect(chrome.bar.contains(assistant)).toBe(false);
     expect(assistant.hidden).toBe(false);
   });
+
+  it('hides 助手 when assistantAvailable is false', () => {
+    const { host, chrome } = mount({ assistantAvailable: () => false });
+    chrome.reveal();
+    expect(host.querySelector('[data-reader-chrome-action="assistant"]')).toBeNull();
+  });
 });
 
 describe('createReaderChrome bookmark toggle (R1)', () => {

@@ -552,7 +552,20 @@ async function addItemToCollection(
   groupName: string,
 ): Promise<void> {
   await openItemMenu(host, itemId);
-  contextMenuItem(groupName).click();
+  contextMenuItem('加入分组').click();
+  await settle();
+  const overlay = document.querySelector('.lightink-library-membership-overlay:not([hidden])');
+  if (!(overlay instanceof HTMLElement)) throw new Error('membership overlay not found');
+  const checkbox = Array.from(
+    overlay.querySelectorAll<HTMLInputElement>('input[name="membership"]'),
+  ).find((input) => (input.parentElement?.textContent ?? '').includes(groupName));
+  if (!(checkbox instanceof HTMLInputElement)) {
+    throw new Error(`membership checkbox not found: ${groupName}`);
+  }
+  checkbox.checked = true;
+  overlay
+    .querySelector('form')
+    ?.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
   await settle();
 }
 
@@ -634,6 +647,14 @@ function createGroupStore() {
       if (present && existing < 0) memberships.push({ groupId, itemId });
       if (!present && existing >= 0) memberships.splice(existing, 1);
     },
+    async setItemGroups(itemId: string, groupIds: readonly string[]): Promise<void> {
+      for (let index = memberships.length - 1; index >= 0; index -= 1) {
+        if (memberships[index]?.itemId === itemId) memberships.splice(index, 1);
+      }
+      for (const groupId of groupIds) {
+        memberships.push({ groupId, itemId });
+      }
+    },
   };
 }
 
@@ -655,6 +676,9 @@ function collectionDependencies(options: {
     deleteGroup: vi.fn((groupId: string) => store.deleteGroup(groupId)),
     setGroupMember: vi.fn((groupId: string, itemId: string, present: boolean) =>
       store.setGroupMember(groupId, itemId, present),
+    ),
+    setItemGroups: vi.fn((itemId: string, groupIds: readonly string[]) =>
+      store.setItemGroups(itemId, groupIds),
     ),
   };
   const base = dependencies({
@@ -3654,8 +3678,8 @@ describe('LibraryView shelf collections', () => {
     const seriesGroupId =
       collectionButton(host, '某系列').dataset.libraryGroupId ??
       collectionButton(host, '某系列').dataset.groupId;
-    expect(library.setGroupMember).toHaveBeenCalledWith(authorGroupId, novel.id, true);
-    expect(library.setGroupMember).toHaveBeenCalledWith(seriesGroupId, novel.id, true);
+    expect(library.setItemGroups).toHaveBeenCalledWith(novel.id, [authorGroupId]);
+    expect(library.setItemGroups).toHaveBeenCalledWith(novel.id, [authorGroupId, seriesGroupId]);
 
     collectionButton(host, '海猫').click();
     await settle();
@@ -3665,9 +3689,19 @@ describe('LibraryView shelf collections', () => {
     expect(itemRow(host, novel.id)).toBeTruthy();
 
     const menu = await openItemMenu(host, novel.id);
-    expect(menu.textContent).toContain('✓ 海猫');
-    expect(menu.textContent).toContain('✓ 某系列');
+    expect(menu.textContent).toContain('加入分组');
+    expect(menu.textContent).not.toContain('海猫');
+    expect(menu.textContent).not.toContain('某系列');
     expect(menu.textContent).toContain('新建分组');
+    contextMenuItem('加入分组').click();
+    await settle();
+    const overlay = document.querySelector('.lightink-library-membership-overlay:not([hidden])');
+    expect(overlay).not.toBeNull();
+    const checked = Array.from(
+      overlay!.querySelectorAll<HTMLInputElement>('input[name="membership"]:checked'),
+    ).map((input) => input.parentElement?.textContent ?? '');
+    expect(checked.some((label) => label.includes('海猫'))).toBe(true);
+    expect(checked.some((label) => label.includes('某系列'))).toBe(true);
     expect(itemCard(host, novel.id).textContent).not.toContain('加入分组');
     view.destroy();
   });

@@ -6,6 +6,7 @@ import {
   aiTranslateTargetLang,
   createLookupPanel,
   initialTranslateSections,
+  normalizeLookupTargetLang,
   parseAiTranslateConfig,
   parseAiTranslateResult,
   readerAidErrorMessage,
@@ -109,35 +110,12 @@ describe('aiTranslateTargetLang', () => {
 });
 
 describe('initialTranslateSections', () => {
-  it('renders both configured sources with the requested one loading and the other idle', () => {
-    expect(initialTranslateSections(t, true, true, 'ai')).toEqual([
-      { source: 'deepl', status: 'idle' },
-      { source: 'ai', status: 'loading' },
-    ]);
-    expect(initialTranslateSections(t, true, true, 'deepl')).toEqual([
-      { source: 'deepl', status: 'loading' },
-      { source: 'ai', status: 'idle' },
-    ]);
+  it('renders a loading AI section when configured', () => {
+    expect(initialTranslateSections(t, true)).toEqual([{ source: 'ai', status: 'loading' }]);
   });
 
-  it('renders only configured sources', () => {
-    expect(initialTranslateSections(t, false, true, 'ai')).toEqual([
-      { source: 'ai', status: 'loading' },
-    ]);
-    expect(initialTranslateSections(t, true, false, 'deepl')).toEqual([
-      { source: 'deepl', status: 'loading' },
-    ]);
-  });
-
-  it('reports an unconfigured error section for the requested source (config race)', () => {
-    expect(initialTranslateSections(t, true, false, 'ai')).toEqual([
-      { source: 'deepl', status: 'idle' },
-      { source: 'ai', status: 'error', message: 'reader.ai.unconfigured' },
-    ]);
-    expect(initialTranslateSections(t, false, false, 'deepl')).toEqual([
-      { source: 'deepl', status: 'error', message: 'reader.lookup.error.unconfigured' },
-    ]);
-    expect(initialTranslateSections(t, false, false, 'ai')).toEqual([
+  it('reports an unconfigured error section on a config race', () => {
+    expect(initialTranslateSections(t, false)).toEqual([
       { source: 'ai', status: 'error', message: 'reader.ai.unconfigured' },
     ]);
   });
@@ -192,38 +170,30 @@ describe('lookup panel translate sections', () => {
   const sectionElement = (panel: HTMLElement, source: string): HTMLElement | null =>
     panel.querySelector<HTMLElement>(`.lightink-reader-lookup-source[data-source="${source}"]`);
 
-  it('renders DeepL and AI sections side by side with independent statuses', () => {
+  it('renders the AI section with independent statuses', () => {
     const panel = createLookupPanel({ t });
     panel.showTranslate(
       {
         quote: 'selectable',
-        sections: [
-          { source: 'deepl', status: 'ready', lines: ['译文'] },
-          { source: 'ai', status: 'loading', message: 'reader.lookup.translateLoading' },
-        ],
+        sections: [{ source: 'ai', status: 'loading', message: 'reader.lookup.translateLoading' }],
       },
       host(),
     );
     expect(panel.element.hidden).toBe(false);
     expect(panel.element.dataset.lookupStatus).toBe('multi');
-    expect(sectionElement(panel.element, 'deepl')?.dataset.status).toBe('ready');
-    expect(sectionElement(panel.element, 'deepl')?.textContent).toContain('译文');
     expect(sectionElement(panel.element, 'ai')?.dataset.status).toBe('loading');
     expect(sectionElement(panel.element, 'ai')?.textContent).toContain(
       'reader.lookup.translateLoading',
     );
   });
 
-  it('retries a failed section in place without touching the other section', () => {
+  it('retries a failed AI section in place', () => {
     const onRetryTranslate = vi.fn();
     const panel = createLookupPanel({ t, onRetryTranslate });
     panel.showTranslate(
       {
         quote: 'selectable',
-        sections: [
-          { source: 'deepl', status: 'ready', lines: ['译文'] },
-          { source: 'ai', status: 'error', message: 'reader.ai.error.network' },
-        ],
+        sections: [{ source: 'ai', status: 'error', message: 'reader.ai.error.network' }],
       },
       host(),
     );
@@ -235,36 +205,12 @@ describe('lookup panel translate sections', () => {
     expect(onRetryTranslate).toHaveBeenCalledWith('ai', 'selectable');
   });
 
-  it('offers an idle section trigger for the other configured source', () => {
-    const onRetryTranslate = vi.fn();
-    const panel = createLookupPanel({ t, onRetryTranslate });
-    panel.showTranslate(
-      {
-        quote: 'selectable',
-        sections: [
-          { source: 'deepl', status: 'idle' },
-          { source: 'ai', status: 'loading' },
-        ],
-      },
-      host(),
-    );
-    const trigger = sectionElement(panel.element, 'deepl')?.querySelector<HTMLButtonElement>(
-      '.lightink-reader-lookup-source-action',
-    );
-    expect(trigger?.textContent).toBe('reader.lookup.translate');
-    trigger!.click();
-    expect(onRetryTranslate).toHaveBeenCalledWith('deepl', 'selectable');
-  });
-
-  it('updates one section in place and shows the truncation hint', () => {
+  it('updates the AI section in place and shows the truncation hint', () => {
     const panel = createLookupPanel({ t });
     panel.showTranslate(
       {
         quote: 'selectable',
-        sections: [
-          { source: 'deepl', status: 'error', message: 'reader.lookup.translateTooLong' },
-          { source: 'ai', status: 'loading' },
-        ],
+        sections: [{ source: 'ai', status: 'loading' }],
       },
       host(),
     );
@@ -280,7 +226,37 @@ describe('lookup panel translate sections', () => {
     expect(ai?.querySelector('.lightink-reader-lookup-hint')?.textContent).toBe(
       'reader.lookup.aiTruncated',
     );
-    expect(sectionElement(panel.element, 'deepl')?.dataset.status).toBe('error');
+  });
+
+  it('shows a target-language switch on translate and hides it for lookup', () => {
+    const onChangeTargetLang = vi.fn();
+    const panel = createLookupPanel({ t: englishT, onChangeTargetLang });
+    panel.showTranslate(
+      {
+        quote: 'selectable',
+        sections: [{ source: 'ai', status: 'ready', lines: ['译文'] }],
+        targetLang: 'ja',
+      },
+      host(),
+    );
+    const lang = panel.element.querySelector<HTMLSelectElement>('.lightink-reader-lookup-lang');
+    expect(lang?.hidden).toBe(false);
+    expect(lang?.value).toBe('ja');
+    lang!.value = 'en';
+    lang!.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onChangeTargetLang).toHaveBeenCalledWith('en', 'selectable');
+
+    panel.show(
+      { kind: 'lookup', quote: 'word', status: 'ready', lines: ['gloss'] },
+      host(),
+    );
+    expect(lang?.hidden).toBe(true);
+  });
+
+  it('normalizes unknown target-language codes to auto', () => {
+    expect(normalizeLookupTargetLang(undefined)).toBe('auto');
+    expect(normalizeLookupTargetLang('ZH-CN')).toBe('zh-CN');
+    expect(normalizeLookupTargetLang('pirate')).toBe('auto');
   });
 
   it('ignores section updates while the panel is not in the translate view', () => {

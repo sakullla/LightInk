@@ -1,5 +1,5 @@
 /**
- * `lookup-panel` — in-page Wiktionary / DeepL results (ADR-5).
+ * `lookup-panel` — in-page Wiktionary / AI translate results (ADR-5 / R3).
  *
  * Desktop: compact popover. Touch: bottom sheet via sheet-transition.
  * Copy is plain text; Escape / close hide the panel without leaving the book.
@@ -17,12 +17,24 @@ import {
 } from './reader-chrome-panels.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 import { readerChromeTouchMode } from './view/reader-dom.js';
+import {
+  AI_TARGET_LANG_VALUES,
+  lookupTargetLangLabel,
+  normalizeLookupTargetLang,
+} from './ai-target-lang.js';
+
+export {
+  AI_TARGET_LANG_VALUES,
+  aiTranslateTargetLang,
+  lookupTargetLangLabel,
+  normalizeLookupTargetLang,
+} from './ai-target-lang.js';
+export type { AiTargetLangValue } from './ai-target-lang.js';
 
 export const LOOKUP_MAX_CODE_UNITS = 40;
 export const LOOKUP_MAX_TOKENS = 4;
 export const TRANSLATE_MAX_CODE_UNITS = 5000;
 
-export const READER_DEEPL_CONFIGURED_EVENT = 'lightink:reader-deepl-configured';
 /** 与 Manage 页 AI 分组广播的事件同源（`ai-config-ui`），reader 侧自持常量。 */
 export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
 
@@ -32,8 +44,8 @@ export interface LookupEntry {
   readonly definitions: readonly string[];
 }
 
-/** 并列译文来源段（R3）：DeepL 与 AI 各自成段，独立状态、段内重试。 */
-export type LookupTranslateSource = 'deepl' | 'ai';
+/** 译文来源段（R3）：仅 AI；段状态独立、段内可重试。 */
+export type LookupTranslateSource = 'ai';
 
 export interface LookupTranslateSection {
   readonly source: LookupTranslateSource;
@@ -41,13 +53,15 @@ export interface LookupTranslateSection {
   readonly status: 'idle' | 'loading' | 'ready' | 'empty' | 'error';
   readonly lines?: readonly string[];
   readonly message?: string;
-  /** AI 段专用：后端截断至 5000 字时提示（R3 与 DeepL 的拒绝语义不同）。 */
+  /** AI 段专用：后端截断至 5000 字时提示。 */
   readonly truncated?: boolean;
 }
 
 export interface LookupTranslateShow {
   readonly quote: string;
   readonly sections: readonly LookupTranslateSection[];
+  /** 当前目标语言代码（auto 或 zh-CN/en/…）；面板语种切换的选中值。 */
+  readonly targetLang?: string;
 }
 
 export interface LookupPanelShow {
@@ -63,6 +77,8 @@ export interface LookupPanelDeps {
   onDismiss?: () => void;
   /** 并列段内「重试/翻译」按钮点击：携带来源与面板当前引文。 */
   onRetryTranslate?: (source: LookupTranslateSource, quote: string) => void;
+  /** 译文面板切换目标语言：用当前引文按新语种重译。 */
+  onChangeTargetLang?: (lang: string, quote: string) => void;
 }
 
 export interface LookupPanel {
@@ -94,46 +110,11 @@ export function readerAidLocale(t: (key: MessageKey) => string): LocaleId {
   return t('annotation.highlight') === '高亮' ? 'zh-CN' : 'en';
 }
 
-export function deeplTargetLang(locale: LocaleId): 'ZH' | 'EN' {
-  return locale === 'zh-CN' ? 'ZH' : 'EN';
-}
-
 export function lookupTooLongCopy(t: (key: MessageKey) => string, translateEnabled: boolean): string {
   return t(translateEnabled ? 'reader.lookup.tooLongUseTranslate' : 'reader.lookup.tooLong');
 }
 
-// ── AI 翻译（R3）：目标语言解析、错误码映射与并列段规划 ───────────────
-
-/** AI 分组目标语言覆盖项的常用代码 → 本地化语言名（提示词内嵌用；键小写归一）。 */
-const AI_LANG_KEYS: Readonly<Record<string, MessageKey>> = {
-  'zh-cn': 'reader.ai.lang.zh-CN',
-  en: 'reader.ai.lang.en',
-  ja: 'reader.ai.lang.ja',
-  ko: 'reader.ai.lang.ko',
-  fr: 'reader.ai.lang.fr',
-  de: 'reader.ai.lang.de',
-  es: 'reader.ai.lang.es',
-  ru: 'reader.ai.lang.ru',
-};
-
-/**
- * 目标语言解析（R3）：AI 分组覆盖项优先（auto/未设视为跟随界面语言），
- * 界面语言兜底。返回值内嵌进后端翻译提示词，故映射为本地化语言名；
- * 未知覆盖值原样透传（用户自定义语言名）。代码按大小写不敏感匹配
- * （Manage 下拉产生精确代码，手填 'zh-CN'/'ZH-CN' 同样命中）。
- */
-export function aiTranslateTargetLang(
-  t: (key: MessageKey) => string,
-  locale: LocaleId,
-  override?: string,
-): string {
-  const raw = override?.trim();
-  if (raw !== undefined && raw !== '' && raw.toLowerCase() !== 'auto') {
-    const key = AI_LANG_KEYS[raw.toLowerCase()];
-    return key === undefined ? raw : t(key);
-  }
-  return t(AI_LANG_KEYS[locale.toLowerCase()] ?? 'reader.ai.lang.en');
-}
+// ── AI 翻译（R3）：错误码映射与段规划 ─────────────────────────────────
 
 const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
   AI_NETWORK_ERROR: 'reader.ai.error.network',
@@ -163,7 +144,7 @@ export function readerAiErrorMessage(
   error: unknown,
   missing: readonly string[] = [],
 ): string {
-  // aidErrorCode 是 DeepL 语义的子串匹配;AI 错误取原始 `AI_*` 码精确对表。
+  // aidErrorCode 是 Wiktionary 语义的子串匹配;AI 错误取原始 `AI_*` 码精确对表。
   const code = aidErrorRaw(error).match(/\bAI_[A-Z_]+\b/)?.[0] ?? '';
   const key = AI_ERROR_KEYS[code];
   if (key === undefined) {
@@ -178,36 +159,23 @@ export function readerAiErrorMessage(
 }
 
 /**
- * 并列段初始规划：每个已配置来源一段，点名的来源直接 loading、其余 idle
- * （段内可独立触发）；未配置的来源不出现，唯点名来源未配置（配置态竞态）
- * 时以单段未配置错误呈现，保证点击动作始终有可见反馈。
+ * 译文段初始规划：已配置则 loading，未配置（配置态竞态）以单段错误呈现，
+ * 保证点击动作始终有可见反馈。
  */
 export function initialTranslateSections(
   t: (key: MessageKey) => string,
-  deeplConfigured: boolean,
   aiConfigured: boolean,
-  requested: LookupTranslateSource,
 ): LookupTranslateSection[] {
-  const sections: LookupTranslateSection[] = [];
-  if (deeplConfigured) {
-    sections.push({ source: 'deepl', status: requested === 'deepl' ? 'loading' : 'idle' });
-  } else if (requested === 'deepl') {
-    sections.push({
-      source: 'deepl',
-      status: 'error',
-      message: t('reader.lookup.error.unconfigured'),
-    });
-  }
   if (aiConfigured) {
-    sections.push({ source: 'ai', status: requested === 'ai' ? 'loading' : 'idle' });
-  } else if (requested === 'ai') {
-    sections.push({
+    return [{ source: 'ai', status: 'loading' }];
+  }
+  return [
+    {
       source: 'ai',
       status: 'error',
       message: readerAiErrorMessage(t, { code: 'AI_NOT_CONFIGURED' }),
-    });
-  }
-  return sections;
+    },
+  ];
 }
 
 const AID_ERROR_KEYS = {
@@ -215,9 +183,9 @@ const AID_ERROR_KEYS = {
   timeout: 'reader.lookup.error.timeout',
   too_large: 'reader.lookup.error.tooLarge',
   not_found: 'reader.lookup.error.notFound',
-  invalid_key: 'reader.lookup.error.invalidKey',
-  quota: 'reader.lookup.error.quota',
-  unconfigured: 'reader.lookup.error.unconfigured',
+  invalid_key: 'reader.lookup.error.failed',
+  quota: 'reader.lookup.error.failed',
+  unconfigured: 'reader.lookup.error.failed',
   too_long: 'reader.lookup.tooLong',
   translate_too_long: 'reader.lookup.translateTooLong',
   empty: 'reader.lookup.empty',
@@ -299,64 +267,8 @@ export function parseLookupEntries(raw: unknown): LookupEntry[] {
   return collected;
 }
 
-export function parseTranslateText(raw: unknown): string {
-  if (typeof raw === 'string') {
-    return raw.trim();
-  }
-  if (raw !== null && typeof raw === 'object') {
-    const obj = raw as { error?: unknown; text?: unknown; translation?: unknown };
-    if (typeof obj.error === 'string' && obj.error !== '') {
-      throw Object.assign(new Error(obj.error), { code: obj.error });
-    }
-    if (typeof obj.text === 'string') {
-      return obj.text.trim();
-    }
-    if (typeof obj.translation === 'string') {
-      return obj.translation.trim();
-    }
-  }
-  return '';
-}
-
-export function parseDeeplConfigured(raw: unknown): boolean {
-  if (typeof raw === 'boolean') {
-    return raw;
-  }
-  if (raw !== null && typeof raw === 'object') {
-    const configured = (raw as { configured?: unknown }).configured;
-    return configured === true;
-  }
-  return false;
-}
-
 export async function invokeWiktionaryLookup(term: string, locale: LocaleId): Promise<LookupEntry[]> {
   return parseLookupEntries(await invoke<unknown>('reader_wiktionary_lookup', { term, locale }));
-}
-
-export async function invokeDeepLTranslate(text: string, locale: LocaleId): Promise<string> {
-  return parseTranslateText(
-    await invoke<unknown>('reader_deepl_translate', {
-      text,
-      targetLang: deeplTargetLang(locale),
-      target_lang: deeplTargetLang(locale),
-    }),
-  );
-}
-
-export async function invokeDeepLConfigured(): Promise<boolean> {
-  try {
-    return parseDeeplConfigured(await invoke<unknown>('reader_deepl_configured'));
-  } catch {
-    return false;
-  }
-}
-
-export async function invokeDeepLStoreKey(key: string): Promise<void> {
-  await invoke<void>('reader_deepl_store_key', { key });
-}
-
-export async function invokeDeepLForgetKey(): Promise<void> {
-  await invoke<void>('reader_deepl_forget_key');
 }
 
 /** `ai_get_config` 的 reader 侧投影：显隐判定 + 目标语言覆盖项（无密钥材料）。 */
@@ -410,7 +322,7 @@ export async function invokeAiTranslateConfig(): Promise<AiTranslateConfig> {
   return parseAiTranslateConfig(await invoke<unknown>('ai_get_config'));
 }
 
-/** 选区 AI 翻译：超长输入由后端截断至 5000 并置 truncated（与 DeepL 拒绝不同）。 */
+/** 选区 AI 翻译：超长输入由后端截断至 5000 并置 truncated。 */
 export async function invokeAiTranslateSelection(
   text: string,
   targetLang: string,
@@ -421,12 +333,6 @@ export async function invokeAiTranslateSelection(
       targetLang,
       target_lang: targetLang,
     }),
-  );
-}
-
-export function dispatchDeeplConfigured(configured: boolean, target: Document | Window = document): void {
-  target.dispatchEvent(
-    new CustomEvent(READER_DEEPL_CONFIGURED_EVENT, { detail: { configured } }),
   );
 }
 
@@ -529,15 +435,41 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
 
   const head = document.createElement('div');
   head.className = 'lightink-reader-lookup-head';
+  const headMain = document.createElement('div');
+  headMain.className = 'lightink-reader-lookup-head-main';
   const title = document.createElement('h2');
   title.className = 'lightink-reader-lookup-title';
   title.id = 'lightink-reader-lookup-title';
   root.setAttribute('aria-labelledby', title.id);
+  const langSelect = document.createElement('select');
+  langSelect.className = 'lightink-reader-lookup-lang';
+  langSelect.hidden = true;
+  for (const value of AI_TARGET_LANG_VALUES) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = lookupTargetLangLabel(deps.t, value);
+    langSelect.append(option);
+  }
+  langSelect.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+  });
+  langSelect.addEventListener('mousedown', (event) => {
+    event.stopPropagation();
+  });
+  langSelect.addEventListener('change', (event) => {
+    event.stopPropagation();
+    const quote = translateQuote;
+    if (quote === null) {
+      return;
+    }
+    deps.onChangeTargetLang?.(langSelect.value, quote);
+  });
+  headMain.append(title, langSelect);
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'lightink-reader-lookup-close lightink-reader-sidebar-close';
   close.textContent = '×';
-  head.append(title, close);
+  head.append(headMain, close);
 
   const body = document.createElement('div');
   body.className = 'lightink-reader-lookup-body';
@@ -583,9 +515,7 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
     block.dataset.status = section.status;
     const name = document.createElement('h3');
     name.className = 'lightink-reader-lookup-source-name';
-    name.textContent = deps.t(
-      section.source === 'deepl' ? 'reader.lookup.source.deepl' : 'reader.lookup.source.ai',
-    );
+    name.textContent = deps.t('reader.lookup.source.ai');
     block.appendChild(name);
     if (section.message !== undefined && section.message !== '') {
       const message = document.createElement('p');
@@ -638,6 +568,7 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
     element: root,
     show(input, host) {
       translateQuote = null;
+      langSelect.hidden = true;
       title.textContent =
         input.kind === 'translate' ? deps.t('reader.lookup.translateTitle') : deps.t('reader.lookup.title');
       close.setAttribute('aria-label', deps.t('reader.lookup.close'));
@@ -670,6 +601,9 @@ export function createLookupPanel(deps: LookupPanelDeps): LookupPanel {
       translateQuote = quote === '' ? null : quote;
       title.textContent = deps.t('reader.lookup.translateTitle');
       close.setAttribute('aria-label', deps.t('reader.lookup.close'));
+      langSelect.hidden = false;
+      langSelect.setAttribute('aria-label', deps.t('reader.ai.targetLang'));
+      langSelect.value = normalizeLookupTargetLang(input.targetLang);
       root.dataset.lookupKind = 'translate';
       // 段状态独立呈现（各段 data-status），面板级状态不再承载单段语义。
       root.dataset.lookupStatus = 'multi';

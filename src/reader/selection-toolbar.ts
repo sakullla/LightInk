@@ -1,7 +1,7 @@
 /**
  * `selection-toolbar` — 划选工具栏（R3）。
  *
- * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/复制/查词/翻译）。纯 DOM 装配 +
+ * 选中正文文字后在选区附近弹出的行内工具栏（高亮/笔记/复制/查词/AI 翻译）。纯 DOM 装配 +
  * 回调派发；选区包围盒由调用方换算为外层 client 坐标后传入 `showAt`（flow/txt 的
  * iframe 内选区坐标需叠加 frame 偏移，PDF 文本层选区直接可用）。点击工具栏外部或
  * 再次 `hide()` 隐藏；Escape 由 reader-view 统一处理。
@@ -17,7 +17,6 @@ export type SelectionToolbarAction =
   | 'copy'
   | 'removeHighlight'
   | 'lookup'
-  | 'translate'
   | 'aiTranslate'
   | 'explain'
   | 'summarize';
@@ -47,14 +46,12 @@ export interface SelectionToolbar {
     rect: SelectionToolbarRect,
     options: {
       canRemoveHighlight: boolean;
-      translateEnabled?: boolean;
       /** AI 提供商四要素完备时才显示 AI 翻译动作（R3）。 */
       aiTranslateEnabled?: boolean;
       /** AI 已配置时才显示解释/总结快捷动作（R5，结果进助手面板）。 */
       aiAssistEnabled?: boolean;
     },
   ): void;
-  setTranslateEnabled(enabled: boolean): void;
   setAiTranslateEnabled(enabled: boolean): void;
   setAiAssistEnabled(enabled: boolean): void;
   hide(): void;
@@ -163,7 +160,6 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
   const noteButton = makeButton('note', 'annotation.note');
   const copyButton = makeButton('copy', 'annotation.copy');
   const lookupButton = makeButton('lookup', 'reader.lookup.action');
-  const translateButton = makeButton('translate', 'reader.lookup.translate');
   const aiTranslateButton = makeButton('aiTranslate', 'reader.lookup.aiTranslate');
   const explainButton = makeButton('explain', 'reader.assistant.action.explain');
   const summarizeButton = makeButton('summarize', 'reader.assistant.action.summarize');
@@ -174,20 +170,11 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     noteButton,
     copyButton,
     lookupButton,
-    translateButton,
     aiTranslateButton,
     explainButton,
     summarizeButton,
     removeButton,
   );
-
-  const applyTranslateEnabled = (enabled: boolean): void => {
-    translateButton.hidden = !enabled;
-    translateButton.disabled = !enabled;
-    translateButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-    translateButton.title = enabled ? deps.t('reader.lookup.translate') : '';
-  };
-  applyTranslateEnabled(false);
 
   const applyAiTranslateEnabled = (enabled: boolean): void => {
     aiTranslateButton.hidden = !enabled;
@@ -267,9 +254,6 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     element: root,
     showAt(rect, options) {
       removeButton.hidden = !options.canRemoveHighlight;
-      if (options.translateEnabled !== undefined) {
-        applyTranslateEnabled(options.translateEnabled);
-      }
       if (options.aiTranslateEnabled !== undefined) {
         applyAiTranslateEnabled(options.aiTranslateEnabled);
       }
@@ -300,7 +284,6 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
       // 桌面选择器不命中，class 无视觉效果）。
       revealSheet(root);
     },
-    setTranslateEnabled: applyTranslateEnabled,
     setAiTranslateEnabled: applyAiTranslateEnabled,
     setAiAssistEnabled: applyAiAssistEnabled,
     hide,

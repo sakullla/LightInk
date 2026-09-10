@@ -4,7 +4,7 @@
 //!   API Key 仅存 `credential_store`(`lightink.ai` / `provider`),配置文件、
 //!   响应体、错误消息与日志均不出现密钥明文(测试断言把关;本模块不写日志)。
 //! - URL:默认仅 HTTPS,`allow_http` 显式勾选后放行 HTTP;拒绝 userinfo/
-//!   query/fragment;任意主机(R2 自定义地址)。与 reader_aid 的 DeepL 主机
+//!   query/fragment;任意主机(R2 自定义地址)。与 reader_aid 的 Wiktionary 主机
 //!   白名单不同,安全边界由「密钥仅 Rust 侧持有 + 超时/大小上限」承担。
 //! - 端点:OpenAI Responses / OpenAI Chat Completions / Claude Messages
 //!   三种格式各自构造请求并解析文本。
@@ -96,7 +96,8 @@ impl AiEndpointKind {
         }
     }
 
-    /// OpenAI 两式用 `Authorization: Bearer`;Claude 用 `x-api-key`。
+    /// OpenAI 两式只用 `Authorization: Bearer`;Claude Messages 同时发
+    /// `x-api-key` 与 Bearer(官方 Anthropic 认前者,兼容网关常认后者)。
     fn uses_bearer(self) -> bool {
         matches!(self, Self::OpenaiResponses | Self::OpenaiChat)
     }
@@ -372,8 +373,29 @@ fn validate_ai_url(raw: &str, allow_http: bool) -> Result<Url, AiError> {
 fn join_endpoint(base: &Url, kind: AiEndpointKind) -> Result<Url, AiError> {
     let mut url = base.clone();
     let prefix = url.path().trim_end_matches('/');
-    url.set_path(&format!("{prefix}{}", kind.endpoint_path()));
+    let path = if kind == AiEndpointKind::ClaudeMessages {
+        claude_messages_path(prefix)
+    } else {
+        format!("{prefix}{}", kind.endpoint_path())
+    };
+    url.set_path(&path);
     Ok(url)
+}
+
+/// Claude Messages 最终路径必须是 `…/v1/messages`。
+///
+/// 官方默认 base 是 `https://api.anthropic.com/v1`,直接拼 `/messages` 即可;
+/// 兼容网关的 base 常是 `https://host/anthropic`(没有 `/v1`),若只拼
+/// `/messages` 会 404。已含 `/v1` 或 `/messages` 的 base 不再重复拼接。
+fn claude_messages_path(prefix: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.ends_with("/messages") {
+        prefix.to_string()
+    } else if prefix.ends_with("/v1") {
+        format!("{prefix}/messages")
+    } else {
+        format!("{prefix}/v1/messages")
+    }
 }
 
 fn redirect_target_allowed(first: &Url, target: &Url, allow_http: bool) -> bool {
@@ -560,13 +582,14 @@ fn serialize_body(body: &Value) -> Result<Vec<u8>, AiError> {
 
 fn auth_headers(kind: AiEndpointKind, key: &str) -> Result<HeaderMap, AiError> {
     let mut headers = HeaderMap::new();
+    let bearer = HeaderValue::from_str(&format!("Bearer {key}"))
+        .map_err(|_| AiError::new("AI_KEY_INVALID", "API Key 包含请求头不允许的字符"))?;
     if kind.uses_bearer() {
-        let value = HeaderValue::from_str(&format!("Bearer {key}"))
-            .map_err(|_| AiError::new("AI_KEY_INVALID", "API Key 包含请求头不允许的字符"))?;
-        headers.insert(AUTHORIZATION, value);
+        headers.insert(AUTHORIZATION, bearer);
     } else {
         let value = HeaderValue::from_str(key)
             .map_err(|_| AiError::new("AI_KEY_INVALID", "API Key 包含请求头不允许的字符"))?;
+        headers.insert(AUTHORIZATION, bearer);
         headers.insert(HeaderName::from_static("x-api-key"), value);
         headers.insert(
             HeaderName::from_static("anthropic-version"),
@@ -1111,7 +1134,7 @@ fn normalize_target_lang_override(raw: Option<String>) -> Result<Option<String>,
     Ok(Some(value.to_string()))
 }
 
-/// API Key 只写入钥匙串(移动端退化凭据文件同 DeepL 先例),文件仅更新
+/// API Key 只写入钥匙串(移动端退化凭据文件同 Wiktionary 先例),文件仅更新
 /// `has_key` 快照。返回的仍是全量状态,无密钥明文。
 #[tauri::command]
 pub fn ai_store_key(app: AppHandle, key: String) -> Result<AiConfigStatus, AiError> {
@@ -1178,8 +1201,8 @@ pub async fn ai_test_connection(app: AppHandle) -> Result<AiTestResult, AiError>
     })
 }
 
-/// 选区 AI 翻译:超长输入截断至 5000 字符并置 `truncated` 标志(与 DeepL
-/// 的拒绝语义不同,R3 明示截断)。目标语言解析:显式参数 > AI 分组覆盖,
+/// 选区 AI 翻译:超长输入截断至 5000 字符并置 `truncated` 标志。
+/// 目标语言解析:显式参数 > AI 分组覆盖,
 /// 均无或为 auto 时报错,由前端按界面语言传入。
 #[tauri::command]
 pub async fn ai_translate_selection(
@@ -1501,7 +1524,31 @@ mod tests {
             AiEndpointKind::ClaudeMessages,
         )
         .unwrap();
-        assert_eq!(claude.as_str(), "https://api.anthropic.com/messages");
+        assert_eq!(claude.as_str(), "https://api.anthropic.com/v1/messages");
+        let claude_v1 = join_endpoint(
+            &Url::parse("https://api.anthropic.com/v1").unwrap(),
+            AiEndpointKind::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(claude_v1.as_str(), "https://api.anthropic.com/v1/messages");
+        let compat = join_endpoint(
+            &Url::parse("https://ai.example.com/anthropic").unwrap(),
+            AiEndpointKind::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(
+            compat.as_str(),
+            "https://ai.example.com/anthropic/v1/messages"
+        );
+        let compat_v1 = join_endpoint(
+            &Url::parse("https://ai.example.com/anthropic/v1/").unwrap(),
+            AiEndpointKind::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(
+            compat_v1.as_str(),
+            "https://ai.example.com/anthropic/v1/messages"
+        );
         assert_eq!(
             AiEndpointKind::OpenaiChat.default_base_url(),
             "https://api.openai.com/v1"
@@ -1605,7 +1652,10 @@ mod tests {
             claude.get("anthropic-version").unwrap().to_str().unwrap(),
             ANTHROPIC_VERSION
         );
-        assert!(claude.get(AUTHORIZATION).is_none());
+        assert_eq!(
+            claude.get(AUTHORIZATION).unwrap().to_str().unwrap(),
+            "Bearer sk-ant-test-123456"
+        );
 
         assert_eq!(
             auth_headers(AiEndpointKind::OpenaiChat, "\u{7f}bad")

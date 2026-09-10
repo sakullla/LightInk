@@ -2649,7 +2649,9 @@ export function createFlowRenderer(
       event.target instanceof Element &&
       (event.target.closest('.lightink-reader-pages') !== null ||
         event.target.closest('.lightink-reader-sidebar') !== null ||
-        event.target.closest('.lightink-reader-chrome-panel') !== null)
+        event.target.closest('.lightink-reader-chrome-panel') !== null ||
+        event.target.closest('.lightink-reader-assistant-panel') !== null ||
+        event.target.closest('.lightink-reader-lookup-panel') !== null)
     ) {
       return;
     }

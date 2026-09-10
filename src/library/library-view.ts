@@ -41,6 +41,8 @@ import { isShelfCoverUrl } from './local-book-meta.js';
 import {
   bytesLabel,
   createLibraryManage,
+  invokeAiGetConfig,
+  READER_AI_CONFIGURED_EVENT,
   type LibraryManageLabels,
 } from './library-manage.js';
 import { translate, type MessageKey } from '../i18n/messages.js';
@@ -1767,6 +1769,31 @@ export function createLibraryView(
       renderDetail();
     }
   });
+  // AI 入口（整本翻译）仅在密钥配置完成后出现；Manage 保存后经事件即时刷新。
+  let aiConfigured = false;
+  const refreshAiConfigured = (): void => {
+    void invokeAiGetConfig()
+      .then((status) => {
+        aiConfigured = status.configured;
+      })
+      .catch(() => {
+        aiConfigured = false;
+      });
+  };
+  refreshAiConfigured();
+  const onAiConfiguredEvent = (event: Event): void => {
+    const configured = (event as CustomEvent<{ configured?: boolean }>).detail?.configured;
+    if (typeof configured === 'boolean') {
+      aiConfigured = configured;
+    }
+    refreshAiConfigured();
+    if (selected !== null) {
+      renderDetail();
+    }
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
+  }
   const trail: Array<{ title: string; url?: string }> = [];
   let groupListCollapsed = true;
   let smartGroupListCollapsed = true;
@@ -1889,13 +1916,6 @@ export function createLibraryView(
       pageTurnStyleFade: l.pageTurnStyleFade,
       pageTurnStyleCurl: l.pageTurnStyleCurl,
       pageTurnStyleNone: l.pageTurnStyleNone,
-      translateGroup: translate(locale, 'reader.lookup.translateGroup'),
-      deeplKey: translate(locale, 'reader.lookup.deeplKey'),
-      deeplHint: translate(locale, 'reader.lookup.deeplHint'),
-      deeplSave: translate(locale, 'reader.lookup.deeplSave'),
-      deeplClear: translate(locale, 'reader.lookup.deeplClear'),
-      deeplConfigured: translate(locale, 'reader.lookup.deeplConfigured'),
-      deeplUnconfigured: translate(locale, 'reader.lookup.deeplUnconfigured'),
       aiGroup: translate(locale, 'reader.ai.group'),
       aiHint: translate(locale, 'reader.ai.hint'),
       aiEndpointKind: translate(locale, 'reader.ai.endpointKind'),
@@ -1906,6 +1926,7 @@ export function createLibraryView(
       aiModel: translate(locale, 'reader.ai.model'),
       aiKey: translate(locale, 'reader.ai.key'),
       aiKeyClear: translate(locale, 'reader.ai.keyClear'),
+      aiKeySavedPlaceholder: translate(locale, 'reader.ai.keySavedPlaceholder'),
       aiAllowHttp: translate(locale, 'reader.ai.allowHttp'),
       aiTargetLang: translate(locale, 'reader.ai.targetLang'),
       aiTargetLangAuto: translate(locale, 'reader.ai.targetLang.auto'),
@@ -3643,20 +3664,6 @@ export function createLibraryView(
     }
   }
 
-  async function removeItemFromGroup(groupId: string, itemId: string): Promise<void> {
-    try {
-      if (deps.library.setGroupMember === undefined) return;
-      await deps.library.setGroupMember(groupId, itemId, false);
-      memberships = memberships.filter(
-        (entry) => !(entry.groupId === groupId && entry.itemId === itemId),
-      );
-      renderItems();
-      deps.onLocalChange?.();
-    } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
-    }
-  }
-
   /**
    * 手动「标为读完 / 标为在读」：经 library-progress 的 helper 写回
    * ReadingProgress（保持 v2 形状、刷新 updatedAt），随后与其它本地
@@ -3674,7 +3681,33 @@ export function createLibraryView(
     renderDetail();
   }
 
+  function canTranslateDisplay(display: DisplayItem): boolean {
+    const path = display.item.localPath;
+    return (
+      aiConfigured &&
+      deps.bookTranslation !== undefined &&
+      isLocalItem(display.item) &&
+      path != null &&
+      path !== '' &&
+      bookTranslationSupported(display.item.extension)
+    );
+  }
+
+  function launchBookTranslation(display: DisplayItem): void {
+    const path = display.item.localPath;
+    if (path == null || path === '' || deps.bookTranslation === undefined) {
+      return;
+    }
+    void deps.bookTranslation.launch({
+      path,
+      title: display.item.title,
+      extension: display.item.extension ?? '',
+    });
+  }
+
   function openItemCollectionMenu(display: DisplayItem, position: { x: number; y: number }): void {
+    // 右键菜单保持短：分组走「加入分组」打开既有勾选对话框，不把全部分组摊平
+    // 进菜单（Apple HIG / NN/G：长列表用选择器而非扁平菜单）。
     const custom = flattenedCustomGroups();
     const items: MenuItem[] = [];
     const shelfProgress = progressFor(display);
@@ -3690,6 +3723,21 @@ export function createLibraryView(
           );
         },
       });
+    }
+    if (canTranslateDisplay(display)) {
+      const path = display.item.localPath ?? '';
+      const status = deps.bookTranslation?.statusFor(path);
+      const resumable = status?.phase === 'paused' || status?.phase === 'error';
+      items.push({
+        id: 'translate-book',
+        label: translate(
+          deps.getLocale(),
+          resumable ? 'library.translate.resume' : 'library.translate.entry',
+        ),
+        action: () => launchBookTranslation(display),
+      });
+    }
+    if (items.length > 0) {
       items.push({
         id: 'sep-progress',
         label: '',
@@ -3707,26 +3755,12 @@ export function createLibraryView(
         },
       });
     } else {
-      for (const entry of custom) {
-        const present = memberships.some(
-          (membership) =>
-            membership.groupId === entry.group.id && membership.itemId === display.item.id,
-        );
-        items.push({
-          id: entry.group.id,
-          label: present ? `✓ ${entry.group.name}` : entry.group.name,
-          action: () => {
-            void (present
-              ? removeItemFromGroup(entry.group.id, display.item.id)
-              : addItemToGroup(entry.group.id, display.item.id));
-          },
-        });
-      }
       items.push({
-        id: 'sep-new',
-        label: '',
-        separator: true,
-        action: () => undefined,
+        id: 'add',
+        label: labels().addToGroup,
+        action: () => {
+          openMembershipEditor(display.item.id);
+        },
       });
       items.push({
         id: 'new',
@@ -4503,8 +4537,7 @@ export function createLibraryView(
       remove.addEventListener('click', () => void removeItem(selected!.item));
       actions.appendChild(remove);
     }
-    // 整本翻译入口与进度（R4）：本地/受管 + flow 族格式（PDF/CBZ 不出现）；
-    // 运行中/暂停/出错显示章节级进度与暂停（暂停=取消的同义实现，缓存保留）。
+    // 整本翻译进度（R4）：入口已改到封面右键；详情只在运行/暂停/出错时显示进度。
     const translateController = deps.bookTranslation;
     const translatePath = selected.item.localPath;
     if (
@@ -4514,28 +4547,7 @@ export function createLibraryView(
       translatePath !== '' &&
       bookTranslationSupported(selected.item.extension)
     ) {
-      const locale = deps.getLocale();
       const status = translateController.statusFor(translatePath);
-      const resumable = status?.phase === 'paused' || status?.phase === 'error';
-      if (!bookTranslationPhaseIsRunning(status)) {
-        const translateButton = button(
-          doc,
-          translate(
-            locale,
-            resumable ? 'library.translate.resume' : 'library.translate.entry',
-          ),
-          'lightink-library-translate',
-        );
-        const launch = (): void => {
-          void translateController.launch({
-            path: translatePath,
-            title: selected?.item.title ?? translatePath,
-            extension: selected?.item.extension ?? '',
-          });
-        };
-        translateButton.addEventListener('click', launch);
-        actions.appendChild(translateButton);
-      }
       if (status !== null && status.phase !== 'done') {
         detail.appendChild(
           renderTranslateProgress(
@@ -4543,7 +4555,7 @@ export function createLibraryView(
             translateController,
             status,
             translatePath,
-            locale,
+            deps.getLocale(),
           ),
         );
       }
@@ -5741,6 +5753,9 @@ export function createLibraryView(
       for (const controller of activeOperations) controller.abort();
       activeOperations.clear();
       unsubscribeBookTranslation?.();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
+      }
       manage.destroy();
       unbindGroupOverlayReveal();
       unbindSourceOverlayReveal();

@@ -40,8 +40,8 @@ const invokeMock = vi.mocked(invoke);
 beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string) => {
-    if (command === 'reader_deepl_configured') {
-      return { configured: false };
+    if (command === 'ai_get_config') {
+      return { configured: false, missing: ['api_key'] };
     }
     return undefined;
   });
@@ -67,9 +67,10 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(buttonByAction(toolbar, 'note')!.textContent).toBe('annotation.note');
     expect(buttonByAction(toolbar, 'copy')!.textContent).toBe('annotation.copy');
     expect(buttonByAction(toolbar, 'lookup')!.textContent).toBe('reader.lookup.action');
-    expect(buttonByAction(toolbar, 'translate')!.textContent).toBe('reader.lookup.translate');
+    expect(buttonByAction(toolbar, 'aiTranslate')!.textContent).toBe('reader.lookup.aiTranslate');
     expect(buttonByAction(toolbar, 'speak')).toBeNull();
-    expect(buttonByAction(toolbar, 'translate')!.hidden).toBe(true);
+    expect(buttonByAction(toolbar, 'translate')).toBeNull();
+    expect(buttonByAction(toolbar, 'aiTranslate')!.hidden).toBe(true);
     expect(buttonByAction(toolbar, 'removeHighlight')!.hidden).toBe(true);
 
     toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: true });
@@ -78,26 +79,26 @@ describe('划选工具栏（selection-toolbar）', () => {
     expect(toolbar.isVisible()).toBe(false);
   });
 
-  it('enables translate only when a DeepL key is configured', () => {
+  it('enables AI translate only when the provider is configured', () => {
     const actions: string[] = [];
     const toolbar = createSelectionToolbar({ t: (key) => key, onAction: (a) => actions.push(a) });
     document.body.appendChild(toolbar.element);
     toolbar.showAt({ left: 100, top: 100, width: 80, height: 20 }, { canRemoveHighlight: false });
-    const translate = buttonByAction(toolbar, 'translate')!;
+    const translate = buttonByAction(toolbar, 'aiTranslate')!;
     expect(translate.hidden).toBe(true);
     expect(translate.disabled).toBe(true);
     translate.click();
     expect(actions).toEqual([]);
 
-    toolbar.setTranslateEnabled(true);
+    toolbar.setAiTranslateEnabled(true);
     expect(translate.hidden).toBe(false);
     expect(translate.disabled).toBe(false);
     toolbar.showAt(
       { left: 100, top: 100, width: 80, height: 20 },
-      { canRemoveHighlight: false, translateEnabled: true },
+      { canRemoveHighlight: false, aiTranslateEnabled: true },
     );
     translate.click();
-    expect(actions).toEqual(['translate']);
+    expect(actions).toEqual(['aiTranslate']);
     toolbar.destroy();
   });
 
@@ -107,7 +108,7 @@ describe('划选工具栏（selection-toolbar）', () => {
     document.body.appendChild(toolbar.element);
     toolbar.showAt(
       { left: 100, top: 100, width: 80, height: 20 },
-      { canRemoveHighlight: false, translateEnabled: true },
+      { canRemoveHighlight: false, aiTranslateEnabled: true },
     );
     buttonByAction(toolbar, 'lookup')!.click();
     expect(actions).toEqual(['lookup']);
@@ -2054,10 +2055,11 @@ describe('流式触屏划选与版式切换（R6/R7）', () => {
     expect(toolbar!.querySelector('.lightink-reader-selection-action--note')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--copy')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
-    expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).toBeNull();
+    expect(toolbar!.querySelector('.lightink-reader-selection-action--aiTranslate')).not.toBeNull();
     expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).toBeNull();
     expect(
-      toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--translate')
+      toolbar!.querySelector<HTMLButtonElement>('.lightink-reader-selection-action--aiTranslate')
         ?.hidden,
     ).toBe(true);
 
@@ -2433,14 +2435,14 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     await flushAid();
     expect(aidCommands(invokeMock.mock.calls)).not.toContain('reader_wiktionary_lookup');
-    expect(aidCommands(invokeMock.mock.calls)).not.toContain('reader_deepl_translate');
+    expect(aidCommands(invokeMock.mock.calls)).not.toContain('ai_translate_selection');
     await view.destroy();
   });
 
   it('looks up the current quote only after a click', async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return { configured: false, missing: ['api_key'] };
       if (command === 'reader_wiktionary_lookup') {
         return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
       }
@@ -2483,11 +2485,13 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     await view.destroy();
   });
 
-  it('keeps translate disabled until a DeepL key is configured, then sends only the quote', async () => {
+  it('keeps AI translate disabled until the provider is configured, then sends only the quote', async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: true };
-      if (command === 'reader_deepl_translate') return { text: '译文' };
+      if (command === 'ai_get_config') {
+        return { configured: true, missing: [], targetLang: 'zh-CN' };
+      }
+      if (command === 'ai_translate_selection') return { text: '译文', truncated: false };
       return undefined;
     });
     const { view, frames } = await loadAidBook();
@@ -2495,14 +2499,14 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     selectQuote(frames[0]!, 'selectable');
     frames[0]!.contentDocument!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     const translate = visibleSelectionToolbar()!.querySelector<HTMLButtonElement>(
-      '.lightink-reader-selection-action--translate',
+      '.lightink-reader-selection-action--aiTranslate',
     )!;
     expect(translate.disabled).toBe(false);
     invokeMock.mockClear();
     translate.click();
     await flushAid();
     expect(invokeMock).toHaveBeenCalledWith(
-      'reader_deepl_translate',
+      'ai_translate_selection',
       expect.objectContaining({ text: 'selectable' }),
     );
     expect(document.querySelector('.lightink-reader-lookup-panel')?.textContent).toContain('译文');
@@ -2588,7 +2592,8 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
       const toolbar = visibleSelectionToolbar();
       expect(toolbar).not.toBeNull();
       expect(toolbar!.querySelector('.lightink-reader-selection-action--lookup')).not.toBeNull();
-      expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).not.toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--translate')).toBeNull();
+      expect(toolbar!.querySelector('.lightink-reader-selection-action--aiTranslate')).not.toBeNull();
       expect(toolbar!.querySelector('.lightink-reader-selection-action--speak')).toBeNull();
     } finally {
       if (originalRect === undefined) {
@@ -2653,7 +2658,7 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
   it('hides an in-page lookup result when load() begins a new book', async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return { configured: false, missing: ['api_key'] };
       if (command === 'reader_wiktionary_lookup') {
         return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
       }
@@ -2678,7 +2683,7 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
     vi.useFakeTimers();
     let finishLookup: ((value: unknown) => void) | undefined;
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return { configured: false, missing: ['api_key'] };
       if (command === 'reader_wiktionary_lookup') {
         return new Promise((resolve) => {
           finishLookup = resolve;
@@ -2710,7 +2715,7 @@ describe('划选查词与翻译（lookup-translate-ui）', () => {
   it('hides the lookup panel when returning to the shelf', async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
+      if (command === 'ai_get_config') return { configured: false, missing: ['api_key'] };
       if (command === 'reader_wiktionary_lookup') {
         return { entries: [{ partOfSpeech: 'noun', definitions: ['a gloss'] }] };
       }

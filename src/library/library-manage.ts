@@ -13,11 +13,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { LibraryClient } from './library-client.js';
 import {
-  dispatchDeeplConfigured,
-  invokeDeepLConfigured,
-  invokeDeepLForgetKey,
-  invokeDeepLStoreKey,
-} from '../reader/lookup-panel.js';
+  AI_TARGET_LANG_VALUES,
+  type AiTargetLangValue,
+} from '../reader/ai-target-lang.js';
 import {
   applyLibraryTheme,
   LIBRARY_THEMES,
@@ -37,6 +35,9 @@ import {
   type ReaderPageTurnStyle,
 } from '../reader/reader-prefs.js';
 
+export { AI_TARGET_LANG_VALUES };
+export type { AiTargetLangValue };
+
 export type ManageSubpage = 'home' | 'cache-limit';
 
 export interface LibraryManageLabels {
@@ -52,13 +53,6 @@ export interface LibraryManageLabels {
   readonly pageTurnStyleFade: string;
   readonly pageTurnStyleCurl: string;
   readonly pageTurnStyleNone: string;
-  readonly translateGroup: string;
-  readonly deeplKey: string;
-  readonly deeplHint: string;
-  readonly deeplSave: string;
-  readonly deeplClear: string;
-  readonly deeplConfigured: string;
-  readonly deeplUnconfigured: string;
   readonly aiGroup: string;
   readonly aiHint: string;
   readonly aiEndpointKind: string;
@@ -69,6 +63,7 @@ export interface LibraryManageLabels {
   readonly aiModel: string;
   readonly aiKey: string;
   readonly aiKeyClear: string;
+  readonly aiKeySavedPlaceholder: string;
   readonly aiAllowHttp: string;
   readonly aiTargetLang: string;
   readonly aiTargetLangAuto: string;
@@ -200,11 +195,6 @@ export const AI_ENDPOINT_DEFAULT_BASE_URLS: Readonly<Record<AiEndpointKindId, st
   'openai-chat': 'https://api.openai.com/v1',
   'claude-messages': 'https://api.anthropic.com/v1',
 };
-
-/** 翻译目标语言覆盖项:auto = 跟随界面语言(ADR-4),其余为常用阅读语言。 */
-export const AI_TARGET_LANG_VALUES = ['auto', 'zh-CN', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'ru'] as const;
-
-export type AiTargetLangValue = (typeof AI_TARGET_LANG_VALUES)[number];
 
 export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
 
@@ -519,59 +509,13 @@ export function createLibraryManage(
   pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
   const pageTurnText = doc.createElement('span');
   pageTurnField.append(pageTurnSelect, pageTurnText);
-  const deeplHint = doc.createElement('p');
-  deeplHint.className = 'lightink-library-appearance-hint lightink-library-deepl-hint';
-  const deeplField = doc.createElement('label');
-  deeplField.className = 'lightink-library-field lightink-library-deepl-field';
-  const deeplLabelText = doc.createElement('span');
-  const deeplInput = doc.createElement('input');
-  deeplInput.type = 'password';
-  deeplInput.name = 'deeplApiKey';
-  deeplInput.autocomplete = 'off';
-  deeplInput.spellcheck = false;
-  deeplField.append(deeplLabelText, deeplInput);
-  const deeplStatus = doc.createElement('p');
-  deeplStatus.className = 'lightink-library-deepl-status';
-  deeplStatus.setAttribute('aria-live', 'polite');
-  const deeplActions = doc.createElement('div');
-  deeplActions.className = 'lightink-library-deepl-actions';
-  const deeplSave = button(doc, '', 'lightink-library-primary lightink-library-deepl-save');
-  const deeplClear = button(doc, '', 'lightink-library-deepl-clear');
-  deeplActions.append(deeplSave, deeplClear);
   readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel, pageTurnField);
-
-  const translatePrefs = doc.createElement('section');
-  translatePrefs.className = 'lightink-library-manage-group lightink-library-translate';
-  translatePrefs.dataset.manageGroup = 'translate';
-  const translateTitle = doc.createElement('h2');
-  translateTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
-  translatePrefs.append(translateTitle, deeplHint, deeplField, deeplActions, deeplStatus);
-
-  let deeplConfigured = false;
-  let deeplConfiguredEpoch = 0;
-  const syncDeeplStatus = (): void => {
-    const l = labels();
-    deeplStatus.textContent = deeplConfigured ? l.deeplConfigured : l.deeplUnconfigured;
-    deeplStatus.dataset.deeplConfigured = deeplConfigured ? 'true' : 'false';
-    deeplClear.hidden = !deeplConfigured;
-    deeplClear.disabled = !deeplConfigured;
-  };
-  const refreshDeeplConfigured = async (): Promise<void> => {
-    const epoch = ++deeplConfiguredEpoch;
-    const next = await invokeDeepLConfigured();
-    if (epoch !== deeplConfiguredEpoch) {
-      return;
-    }
-    deeplConfigured = next;
-    syncDeeplStatus();
-  };
 
   // AI 分组(R2):唯一活动提供商——端点格式三选一(联动预填官方 base URL,
   // 可改)、base URL/模型/Key、allowHttp、测试连接(role=status 结果)、目标
-  // 语言覆盖;保存/清除密钥后广播 lightink:reader-ai-configured。复用
-  // translate 分组的布局类与 deepl 字段行样式。
+  // 语言覆盖;保存/清除密钥后广播 lightink:reader-ai-configured。
   const aiGroup = doc.createElement('section');
-  aiGroup.className = 'lightink-library-manage-group lightink-library-translate lightink-library-ai';
+  aiGroup.className = 'lightink-library-manage-group lightink-library-ai';
   aiGroup.dataset.manageGroup = 'ai';
   const aiTitle = doc.createElement('h2');
   aiTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
@@ -579,7 +523,7 @@ export function createLibraryManage(
   aiHint.className = 'lightink-library-appearance-hint lightink-library-ai-hint';
 
   const aiEndpointField = doc.createElement('label');
-  aiEndpointField.className = 'lightink-library-reader-pref lightink-library-ai-endpoint-field';
+  aiEndpointField.className = 'lightink-library-field lightink-library-ai-endpoint-field';
   const aiEndpointSelect = doc.createElement('select');
   aiEndpointSelect.name = 'aiEndpointKind';
   const aiEndpointOptions = new Map<AiEndpointKindId, HTMLOptionElement>();
@@ -590,7 +534,7 @@ export function createLibraryManage(
     aiEndpointSelect.append(option);
   }
   const aiEndpointText = doc.createElement('span');
-  aiEndpointField.append(aiEndpointSelect, aiEndpointText);
+  aiEndpointField.append(aiEndpointText, aiEndpointSelect);
 
   const aiBaseField = doc.createElement('label');
   aiBaseField.className = 'lightink-library-field lightink-library-ai-base-field';
@@ -621,6 +565,10 @@ export function createLibraryManage(
   aiKeyInput.autocomplete = 'off';
   aiKeyInput.spellcheck = false;
   aiKeyField.append(aiKeyLabelText, aiKeyInput);
+  const aiKeyClear = button(doc, '', 'lightink-library-ai-key-clear');
+  const aiKeyRow = doc.createElement('div');
+  aiKeyRow.className = 'lightink-library-ai-key-row';
+  aiKeyRow.append(aiKeyField, aiKeyClear);
 
   const aiAllowHttpLabel = doc.createElement('label');
   aiAllowHttpLabel.className = 'lightink-library-reader-pref lightink-library-ai-allow-http';
@@ -631,7 +579,7 @@ export function createLibraryManage(
   aiAllowHttpLabel.append(aiAllowHttpInput, aiAllowHttpText);
 
   const aiTargetLangField = doc.createElement('label');
-  aiTargetLangField.className = 'lightink-library-reader-pref lightink-library-ai-target-lang-field';
+  aiTargetLangField.className = 'lightink-library-field lightink-library-ai-target-lang-field';
   const aiTargetLangSelect = doc.createElement('select');
   aiTargetLangSelect.name = 'aiTargetLang';
   const aiTargetLangOptions = new Map<AiTargetLangValue, HTMLOptionElement>();
@@ -642,24 +590,21 @@ export function createLibraryManage(
     aiTargetLangSelect.append(option);
   }
   const aiTargetLangText = doc.createElement('span');
-  aiTargetLangField.append(aiTargetLangSelect, aiTargetLangText);
+  aiTargetLangField.append(aiTargetLangText, aiTargetLangSelect);
 
   const aiActions = doc.createElement('div');
-  aiActions.className = 'lightink-library-deepl-actions lightink-library-ai-actions';
-  // 单一「保存配置」:密钥框有内容时一并写入钥匙串(清除密钥仍独立)。
+  aiActions.className = 'lightink-library-ai-actions';
+  // 单一「保存配置」:密钥框有内容时一并写入钥匙串(清除密钥在密钥框旁)。
   const aiSave = button(doc, '', 'lightink-library-primary lightink-library-ai-save');
   const aiTest = button(doc, '', 'lightink-library-ai-test');
-  const aiKeyClear = button(doc, '', 'lightink-library-ai-key-clear');
-  aiActions.append(aiSave, aiTest, aiKeyClear);
+  aiActions.append(aiSave, aiTest);
 
-  // 动作反馈(保存拒绝/密钥/测试连接):role=status,空时隐藏。
   const aiFeedback = doc.createElement('p');
-  aiFeedback.className = 'lightink-library-deepl-status lightink-library-ai-feedback';
+  aiFeedback.className = 'lightink-library-ai-feedback';
   aiFeedback.setAttribute('role', 'status');
   aiFeedback.hidden = true;
-  // 配置状态行(已配置/缺口),与 deepl 状态行同型。
   const aiStatus = doc.createElement('p');
-  aiStatus.className = 'lightink-library-deepl-status lightink-library-ai-status';
+  aiStatus.className = 'lightink-library-ai-status';
   aiStatus.setAttribute('aria-live', 'polite');
   aiGroup.append(
     aiTitle,
@@ -667,7 +612,7 @@ export function createLibraryManage(
     aiEndpointField,
     aiBaseField,
     aiModelField,
-    aiKeyField,
+    aiKeyRow,
     aiAllowHttpLabel,
     aiTargetLangField,
     aiActions,
@@ -705,6 +650,7 @@ export function createLibraryManage(
     aiStatus.dataset.aiConfigured = aiStatusState.configured ? 'true' : 'false';
     aiKeyClear.hidden = !aiStatusState.hasKey;
     aiKeyClear.disabled = !aiStatusState.hasKey;
+    aiKeyInput.placeholder = aiStatusState.hasKey ? l.aiKeySavedPlaceholder : l.aiKey;
   };
 
   const setAiFeedback = (text: string, kind: 'info' | 'success' | 'error'): void => {
@@ -886,7 +832,6 @@ export function createLibraryManage(
   home.append(
     appearance,
     readerPrefs,
-    translatePrefs,
     aiGroup,
     storage,
     ...(sync === null ? [] : [sync]),
@@ -1019,39 +964,6 @@ export function createLibraryManage(
     commitReaderPrefs();
   });
 
-  deeplSave.addEventListener('click', () => {
-    const key = deeplInput.value.trim();
-    if (key === '') {
-      return;
-    }
-    void (async () => {
-      try {
-        await invokeDeepLStoreKey(key);
-        deeplInput.value = '';
-        deeplConfiguredEpoch += 1;
-        deeplConfigured = true;
-        syncDeeplStatus();
-        dispatchDeeplConfigured(true, doc);
-      } catch (error) {
-        options.notify(options.formatError(error), 'error');
-      }
-    })();
-  });
-  deeplClear.addEventListener('click', () => {
-    void (async () => {
-      try {
-        await invokeDeepLForgetKey();
-        deeplInput.value = '';
-        deeplConfiguredEpoch += 1;
-        deeplConfigured = false;
-        syncDeeplStatus();
-        dispatchDeeplConfigured(false, doc);
-      } catch (error) {
-        options.notify(options.formatError(error), 'error');
-      }
-    })();
-  });
-
   importButton.addEventListener('click', () => {
     void options.onImport();
   });
@@ -1120,14 +1032,6 @@ export function createLibraryManage(
     for (const [style, option] of pageTurnOptions) {
       option.textContent = optionLabels[style];
     }
-    translateTitle.textContent = l.translateGroup;
-    deeplHint.textContent = l.deeplHint;
-    deeplLabelText.textContent = l.deeplKey;
-    deeplInput.placeholder = l.deeplKey;
-    deeplSave.textContent = l.deeplSave;
-    deeplClear.textContent = l.deeplClear;
-    syncDeeplStatus();
-    void refreshDeeplConfigured();
     aiTitle.textContent = l.aiGroup;
     aiHint.textContent = l.aiHint;
     aiEndpointText.textContent = l.aiEndpointKind;
@@ -1146,7 +1050,6 @@ export function createLibraryManage(
     aiModelLabelText.textContent = l.aiModel;
     aiModelInput.placeholder = l.aiModel;
     aiKeyLabelText.textContent = l.aiKey;
-    aiKeyInput.placeholder = l.aiKey;
     aiAllowHttpText.textContent = l.aiAllowHttp;
     aiAllowHttpLabel.title = l.aiAllowHttp;
     aiTargetLangText.textContent = l.aiTargetLang;

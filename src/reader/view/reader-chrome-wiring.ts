@@ -14,11 +14,12 @@ import {
   createReaderChrome,
   type ReaderChromeLabels,
 } from '../reader-chrome.js';
-import { readerAidLocale } from '../lookup-panel.js';
 import {
-  sessionCapabilitiesForExtension,
-  sessionMemberForExtension,
-} from '../session/adapters.js';
+  invokeAiTranslateConfig,
+  READER_AI_CONFIGURED_EVENT,
+  readerAidLocale,
+} from '../lookup-panel.js';
+import { sessionCapabilitiesForExtension } from '../session/adapters.js';
 import { readerPagedScroller, revealPagedElement } from '../flow-renderer.js';
 import { pagedFrameStep } from '../../ui/reading-layout.js';
 import {
@@ -111,7 +112,6 @@ function readerChromeCopy(
     ...take('reader.chrome.bookmarkTick', 'bookmarkTick'),
     ...take('reader.lookup.speak', 'speak'),
     ...take('reader.chrome.assistant', 'assistant'),
-    ...take('reader.chrome.translateBook', 'translateBook'),
   };
 }
 
@@ -567,6 +567,42 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   // 标注侧栏，反向 Escape 链 / setTabActive(false) / returnToShelf / destroy
   // 全部经 closeAssistantPanel 收口。选区解释/总结经 askAssistantWithSelection。
   let assistantPanel: AssistantPanel | null = null;
+  // 助手入口仅在密钥配置完成后出现；Manage 保存后经事件即时刷新 chrome。
+  let aiConfigured = false;
+  let aiConfiguredEpoch = 0;
+
+  const refreshAiConfigured = async (): Promise<void> => {
+    const epoch = ++aiConfiguredEpoch;
+    let next = false;
+    try {
+      next = (await invokeAiTranslateConfig()).configured;
+    } catch {
+      next = false;
+    }
+    if (epoch !== aiConfiguredEpoch) {
+      return;
+    }
+    aiConfigured = next;
+    if (!aiConfigured) {
+      closeAssistantPanel();
+    }
+    ctx.readerChrome?.refreshAvailability();
+    syncChromeActionState();
+  };
+
+  const onAiConfigured = (event: Event): void => {
+    const configured = (event as CustomEvent<{ configured?: boolean }>).detail?.configured;
+    if (typeof configured === 'boolean') {
+      aiConfiguredEpoch += 1;
+      aiConfigured = configured;
+      if (!aiConfigured) {
+        closeAssistantPanel();
+      }
+      ctx.readerChrome?.refreshAvailability();
+      syncChromeActionState();
+    }
+    void refreshAiConfigured();
+  };
 
   const assistantOpen = (): boolean => assistantPanel?.isVisible() === true;
 
@@ -656,6 +692,9 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   };
 
   const openAssistantPanel = (): void => {
+    if (!aiConfigured) {
+      return;
+    }
     closeChromePanel();
     if (ctx.sessionAnnotation.sidebarVisibility().visible) {
       ctx.annotation.setSidebarVisible(false);
@@ -674,7 +713,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   };
 
   const askAssistantWithSelection = (action: 'explain' | 'summarize', quote: string): void => {
-    if (quote.trim() === '') {
+    if (!aiConfigured || quote.trim() === '') {
       return;
     }
     closeChromePanel();
@@ -706,6 +745,11 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       button.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
   };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfigured);
+  }
+  void refreshAiConfigured();
 
   const closeChromePanel = (): boolean => {
     if (ctx.chromePanel === null) {
@@ -1081,14 +1125,11 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       labels: readerChromeCopy(ctx.t),
       speakAvailable,
       onSpeak: speakFromPosition,
-      // 整本翻译入口（R4）：仅 flow 族格式显示（PDF/CBZ 不出现，R7 排除验证）。
-      translateBookAvailable: () => sessionMemberForExtension(ctx.loadedExt) === 'flow',
-      onTranslateBook: () => {
-        if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-          document.dispatchEvent(new CustomEvent('lightink:reader-translate-book'));
-        }
-      },
+      assistantAvailable: () => aiConfigured,
       onDestroy: () => {
+        if (typeof document !== 'undefined') {
+          document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfigured);
+        }
         stopSpeakSession();
         clearFollowAlong();
         ttsDock?.destroy();

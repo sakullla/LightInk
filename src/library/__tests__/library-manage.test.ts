@@ -38,14 +38,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     pageTurnStyleFade: 'Fade',
     pageTurnStyleCurl: 'Page curl',
     pageTurnStyleNone: 'None',
-    translateGroup: 'Translation',
-    deeplKey: 'DeepL API key',
-    deeplHint:
-      'Add a DeepL API key to show Translate on the selection toolbar. The key stays on this device.',
-    deeplSave: 'Save key',
-    deeplClear: 'Clear key',
-    deeplConfigured: 'DeepL key saved on this device.',
-    deeplUnconfigured: 'No DeepL key saved.',
     aiGroup: 'AI',
     aiHint:
       'Configure the single AI provider. Saving a new configuration replaces the previous one.',
@@ -57,6 +49,7 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiModel: 'Model',
     aiKey: 'API key',
     aiKeyClear: 'Clear key',
+    aiKeySavedPlaceholder: 'Saved on this device. Enter a new key to replace it.',
     aiAllowHttp: 'Allow HTTP address (insecure)',
     aiTargetLang: 'Translation target language',
     aiTargetLangAuto: 'Auto (follow interface language)',
@@ -117,13 +110,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     pageTurnStyleFade: '淡入',
     pageTurnStyleCurl: '仿真翻页',
     pageTurnStyleNone: '无',
-    translateGroup: '翻译',
-    deeplKey: 'DeepL API key',
-    deeplHint: '填写 DeepL 密钥后，划选工具栏才会出现翻译。密钥只保存在本机。',
-    deeplSave: '保存密钥',
-    deeplClear: '清除密钥',
-    deeplConfigured: '已在本机保存 DeepL 密钥。',
-    deeplUnconfigured: '尚未保存 DeepL 密钥。',
     aiGroup: 'AI',
     aiHint: '为 AI 翻译与 AI 助手配置唯一 AI 提供商；保存新配置即覆盖原配置。',
     aiEndpointKind: '端点格式',
@@ -134,6 +120,7 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiModel: '模型名',
     aiKey: 'API 密钥',
     aiKeyClear: '清除密钥',
+    aiKeySavedPlaceholder: '已保存在本机。输入新密钥以替换。',
     aiAllowHttp: '允许 HTTP 地址（不安全）',
     aiTargetLang: '翻译目标语言',
     aiTargetLangAuto: '自动（跟随界面语言）',
@@ -241,7 +228,6 @@ describe('createLibraryManage grouped settings page', () => {
     expect(groupTitles(manage.element)).toEqual([
       'appearance',
       'reading',
-      'translate',
       'ai',
       'storage',
       'sync',
@@ -273,13 +259,8 @@ describe('createLibraryManage grouped settings page', () => {
     expect(manage.element.textContent).toContain(zh.webdavSync);
     expect(manage.element.textContent).toContain(zh.importLocal);
     expect(manage.element.textContent).toContain(zh.markdownEditor);
-    expect(manage.element.querySelector('[data-manage-group="translate"] h2')?.textContent).toBe(
-      zh.translateGroup,
-    );
-    expect(manage.element.textContent).toContain('DeepL');
-    expect(
-      manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')?.type,
-    ).toBe('password');
+    expect(manage.element.querySelector('[data-manage-group="translate"]')).toBeNull();
+    expect(manage.element.textContent).not.toContain('DeepL');
     manage.destroy();
   });
 
@@ -315,7 +296,6 @@ describe('createLibraryManage grouped settings page', () => {
     expect(groupTitles(manage.element)).toEqual([
       'appearance',
       'reading',
-      'translate',
       'ai',
       'storage',
       'other',
@@ -523,74 +503,6 @@ describe('createLibraryManage grouped settings page', () => {
     expect(select.value).toBe('fade');
     manage.destroy();
   });
-
-  it('stores and clears a DeepL key without writing it to reader prefs', async () => {
-    const readerPrefsStorage = memoryStorage();
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
-      return undefined;
-    });
-    const { options } = manageOptions({ readerPrefsStorage });
-    const manage = createLibraryManage(document, options);
-    document.body.appendChild(manage.element);
-    await Promise.resolve();
-
-    const input = manage.element.querySelector<HTMLInputElement>('input[name="deeplApiKey"]')!;
-    expect(manage.element.querySelector('.lightink-library-deepl-hint')?.textContent).toContain(
-      'DeepL',
-    );
-    expect(
-      manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-clear')?.hidden,
-    ).toBe(true);
-    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
-      LABELS['zh-CN'].deeplUnconfigured,
-    );
-
-    const configuredEvents: boolean[] = [];
-    const onDeeplConfigured = (event: Event): void => {
-      configuredEvents.push(
-        (event as CustomEvent<{ configured?: boolean }>).detail?.configured === true,
-      );
-    };
-    const onWindowDeeplConfigured = vi.fn();
-    document.addEventListener('lightink:reader-deepl-configured', onDeeplConfigured);
-    window.addEventListener('lightink:reader-deepl-configured', onWindowDeeplConfigured);
-
-    input.value = 'secret-fx-key';
-    manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-save')!.click();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(invokeMock).toHaveBeenCalledWith('reader_deepl_store_key', { key: 'secret-fx-key' });
-    expect(readerPrefsStorage.store['lightink.reader.prefs']).toBeUndefined();
-    expect(JSON.stringify(readerPrefsStorage.store)).not.toContain('secret-fx-key');
-    expect(input.value).toBe('');
-    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
-      LABELS['zh-CN'].deeplConfigured,
-    );
-    expect(configuredEvents).toEqual([true]);
-    expect(onWindowDeeplConfigured).not.toHaveBeenCalled();
-
-    invokeMock.mockClear();
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: true };
-      return undefined;
-    });
-    manage.element.querySelector<HTMLButtonElement>('.lightink-library-deepl-clear')!.click();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(invokeMock).toHaveBeenCalledWith('reader_deepl_forget_key');
-    expect(JSON.stringify(readerPrefsStorage.store)).not.toContain('secret-fx-key');
-    expect(manage.element.querySelector('.lightink-library-deepl-status')?.textContent).toBe(
-      LABELS['zh-CN'].deeplUnconfigured,
-    );
-    expect(configuredEvents).toEqual([true, false]);
-    expect(onWindowDeeplConfigured).not.toHaveBeenCalled();
-    document.removeEventListener('lightink:reader-deepl-configured', onDeeplConfigured);
-    window.removeEventListener('lightink:reader-deepl-configured', onWindowDeeplConfigured);
-    manage.destroy();
-  });
 });
 
 describe('createLibraryManage AI provider group (R2)', () => {
@@ -616,7 +528,6 @@ describe('createLibraryManage AI provider group (R2)', () => {
 
   function mockAiCommands(overrides: Record<string, unknown> = {}): void {
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
       if (command === 'ai_get_config') return overrides.getConfig ?? aiStatus();
       if (command === 'ai_save_config') {
         if (overrides.saveConfigError !== undefined) throw overrides.saveConfigError;
@@ -709,6 +620,16 @@ describe('createLibraryManage AI provider group (R2)', () => {
     expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
       true,
     );
+    const keyRow = manage.element.querySelector('.lightink-library-ai-key-row');
+    expect(keyRow?.querySelector('[name="aiApiKey"]')).not.toBeNull();
+    expect(keyRow?.querySelector('.lightink-library-ai-key-clear')).not.toBeNull();
+    expect(manage.element.querySelector('.lightink-library-ai-actions .lightink-library-ai-key-clear')).toBeNull();
+    expect(
+      manage.element.querySelector('.lightink-library-ai-endpoint-field')?.firstElementChild?.tagName,
+    ).toBe('SPAN');
+    expect(
+      manage.element.querySelector('.lightink-library-ai-target-lang-field')?.firstElementChild?.tagName,
+    ).toBe('SPAN');
     manage.destroy();
   });
 
@@ -852,7 +773,6 @@ describe('createLibraryManage AI provider group (R2)', () => {
     // 勾选后可保存并广播 configured。
     aiField(manage, 'aiAllowHttp').checked = true;
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'reader_deepl_configured') return { configured: false };
       if (command === 'ai_get_config') return aiStatus();
       return saved;
     });

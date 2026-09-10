@@ -1,31 +1,20 @@
-//! Bounded HTTPS Wiktionary lookup and DeepL translate (ADR-2 / ADR-3).
+//! Bounded HTTPS Wiktionary lookup (ADR-2).
 //!
-//! Requests never reuse `fetch_remote_text`. Hosts are allowlisted, HTTPS-only,
-//! and DeepL keys go through `credential_store` (`lightink.reader` / `deepl`).
+//! Requests never reuse `fetch_remote_text`. Hosts are allowlisted and HTTPS-only.
 
-use crate::credential_store::{delete_credential, get_credential, set_credential};
 use futures_util::StreamExt;
-use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Response, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 use url::Url;
 
-const KEYRING_SERVICE: &str = "lightink.reader";
-const KEYRING_REFERENCE: &str = "deepl";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_LOOKUP_UTF16: usize = 40;
 const MAX_LOOKUP_TOKENS: usize = 4;
-const MAX_TRANSLATE_CHARS: usize = 5000;
-const ALLOWED_HOSTS: &[&str] = &[
-    "zh.wiktionary.org",
-    "en.wiktionary.org",
-    "api-free.deepl.com",
-    "api.deepl.com",
-];
+const ALLOWED_HOSTS: &[&str] = &["zh.wiktionary.org", "en.wiktionary.org"];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -56,12 +45,6 @@ impl ReaderAidError {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DeeplConfigured {
-    pub configured: bool,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct WiktionaryDefinition {
     pub definition: String,
     pub examples: Vec<String>,
@@ -84,19 +67,9 @@ pub struct WiktionaryLookupResult {
     pub entries: Vec<WiktionaryEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DeeplTranslateResult {
-    pub text: String,
-    pub target_lang: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detected_source_language: Option<String>,
-}
-
 #[derive(Clone, Copy)]
 enum ReaderService {
     Wiktionary,
-    DeepL,
 }
 
 #[tauri::command]
@@ -118,89 +91,6 @@ pub async fn reader_wiktionary_lookup(
     } else {
         parse_wiktionary_definitions(term.trim(), host, &value)
     }
-}
-
-#[tauri::command]
-pub async fn reader_deepl_translate(
-    text: String,
-    target_lang: String,
-) -> Result<DeeplTranslateResult, ReaderAidError> {
-    translate_with_key(&text, &target_lang, load_deepl_key()).await
-}
-
-#[tauri::command]
-pub fn reader_deepl_configured() -> DeeplConfigured {
-    deepl_configured_from_secret(load_deepl_key())
-}
-
-#[tauri::command]
-pub fn reader_deepl_store_key(key: String) -> Result<DeeplConfigured, ReaderAidError> {
-    let key = normalize_deepl_key(&key)?;
-    if !set_credential(KEYRING_SERVICE, KEYRING_REFERENCE, &key) {
-        return Err(ReaderAidError::new(
-            "READER_KEY_STORE_FAILED",
-            "无法保存 DeepL 密钥",
-        ));
-    }
-    Ok(DeeplConfigured { configured: true })
-}
-
-#[tauri::command]
-pub fn reader_deepl_forget_key() -> DeeplConfigured {
-    delete_credential(KEYRING_SERVICE, KEYRING_REFERENCE);
-    deepl_configured_from_secret(load_deepl_key())
-}
-
-async fn translate_with_key(
-    text: &str,
-    target_lang: &str,
-    key: Option<String>,
-) -> Result<DeeplTranslateResult, ReaderAidError> {
-    let (url, payload, normalized_lang, key) =
-        prepare_translate(text, target_lang, key.as_deref())?;
-    let client = build_client(&url)?;
-    let authorization = HeaderValue::from_str(&format!("DeepL-Auth-Key {key}"))
-        .map_err(|_| ReaderAidError::new("READER_KEY_INVALID", "DeepL 密钥包含无效字符"))?;
-    let response = client
-        .post(url)
-        .header(AUTHORIZATION, authorization)
-        .header(CONTENT_TYPE, "application/json")
-        .body(payload)
-        .send()
-        .await
-        .map_err(network_error)?;
-    let value = read_json_response(ReaderService::DeepL, response).await?;
-    parse_deepl_translation(&value, &normalized_lang)
-}
-
-fn load_deepl_key() -> Option<String> {
-    get_credential(KEYRING_SERVICE, KEYRING_REFERENCE)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn deepl_configured_from_secret(secret: Option<String>) -> DeeplConfigured {
-    DeeplConfigured {
-        configured: secret.is_some(),
-    }
-}
-
-fn normalize_deepl_key(raw: &str) -> Result<String, ReaderAidError> {
-    if raw.chars().any(char::is_control) {
-        return Err(ReaderAidError::new(
-            "READER_KEY_INVALID",
-            "DeepL 密钥包含控制字符",
-        ));
-    }
-    let key = raw.trim();
-    if key.is_empty() {
-        return Err(missing_key_error());
-    }
-    Ok(key.to_string())
-}
-
-fn missing_key_error() -> ReaderAidError {
-    ReaderAidError::new("READER_KEY_MISSING", "尚未配置 DeepL 密钥")
 }
 
 fn prepare_wiktionary_url(term: &str, locale: &str) -> Result<Url, ReaderAidError> {
@@ -273,86 +163,10 @@ fn wiktionary_host(locale: &str) -> Result<&'static str, ReaderAidError> {
     }
 }
 
-fn prepare_translate(
-    text: &str,
-    target_lang: &str,
-    key: Option<&str>,
-) -> Result<(Url, Vec<u8>, String, String), ReaderAidError> {
-    let key = key.ok_or_else(missing_key_error)?;
-    let (url, payload, target_lang) = prepare_deepl_request(text, target_lang, key)?;
-    Ok((url, payload, target_lang, key.to_string()))
-}
-
-fn prepare_deepl_request(
-    text: &str,
-    target_lang: &str,
-    key: &str,
-) -> Result<(Url, Vec<u8>, String), ReaderAidError> {
-    let text = normalize_translate_text(text)?;
-    let target_lang = normalize_target_lang(target_lang)?;
-    let url = deepl_url_for_key(key)?;
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "text": [text],
-        "target_lang": target_lang,
-    }))
-    .map_err(|_| ReaderAidError::new("READER_RESPONSE_INVALID", "无法准备翻译请求"))?;
-    if payload.len() > MAX_RESPONSE_BYTES {
-        return Err(response_too_large());
-    }
-    Ok((url, payload, target_lang))
-}
-
 fn contains_forbidden_control(value: &str) -> bool {
     value
         .chars()
         .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r'))
-}
-
-fn normalize_translate_text(text: &str) -> Result<&str, ReaderAidError> {
-    if contains_forbidden_control(text) {
-        return Err(ReaderAidError::new(
-            "READER_TEXT_EMPTY",
-            "翻译文本包含控制字符",
-        ));
-    }
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(ReaderAidError::new("READER_TEXT_EMPTY", "翻译文本为空"));
-    }
-    if text.chars().count() > MAX_TRANSLATE_CHARS {
-        return Err(ReaderAidError::new(
-            "READER_TEXT_TOO_LONG",
-            "选区超过 5000 字，无法翻译",
-        ));
-    }
-    Ok(text)
-}
-
-fn normalize_target_lang(target_lang: &str) -> Result<String, ReaderAidError> {
-    let primary = target_lang
-        .trim()
-        .split(['-', '_'])
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    match primary.as_str() {
-        "ZH" => Ok("ZH".to_string()),
-        "EN" => Ok("EN".to_string()),
-        _ => Err(ReaderAidError::new(
-            "READER_TARGET_LANG_INVALID",
-            "仅支持翻译为中文或英文",
-        )),
-    }
-}
-
-fn deepl_url_for_key(key: &str) -> Result<Url, ReaderAidError> {
-    let host = if key.trim().ends_with(":fx") {
-        "api-free.deepl.com"
-    } else {
-        "api.deepl.com"
-    };
-    let url = Url::parse(&format!("https://{host}/v2/translate")).expect("static DeepL URL");
-    validate_reader_url(&url)
 }
 
 #[cfg(test)]
@@ -383,13 +197,13 @@ fn validate_reader_url(url: &Url) -> Result<Url, ReaderAidError> {
         "http" => {
             return Err(ReaderAidError::new(
                 "READER_HTTP_NOT_ALLOWED",
-                "查词与翻译仅允许 HTTPS",
+                "查词仅允许 HTTPS",
             ))
         }
         _ => {
             return Err(ReaderAidError::new(
                 "READER_URL_INVALID",
-                "查词与翻译仅允许 HTTPS",
+                "查词仅允许 HTTPS",
             ))
         }
     }
@@ -465,16 +279,6 @@ fn status_error(service: ReaderService, status: StatusCode) -> Option<ReaderAidE
         (ReaderService::Wiktionary, 404) => Some(ReaderAidError::status(
             "READER_NOT_FOUND",
             "未找到该词条",
-            status,
-        )),
-        (ReaderService::DeepL, 401 | 403) => Some(ReaderAidError::status(
-            "READER_KEY_INVALID",
-            "DeepL 密钥无效",
-            status,
-        )),
-        (ReaderService::DeepL, 456) => Some(ReaderAidError::status(
-            "READER_QUOTA_EXCEEDED",
-            "DeepL 额度已用尽",
             status,
         )),
         (_, _) if status.is_success() => None,
@@ -717,34 +521,6 @@ fn parse_wiktionary_definitions(
     })
 }
 
-fn parse_deepl_translation(
-    value: &Value,
-    target_lang: &str,
-) -> Result<DeeplTranslateResult, ReaderAidError> {
-    let translation = value
-        .get("translations")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .ok_or_else(|| ReaderAidError::new("READER_RESPONSE_INVALID", "DeepL 未返回译文"))?;
-    let text = translation
-        .get("text")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| ReaderAidError::new("READER_RESPONSE_INVALID", "DeepL 未返回译文"))?;
-    let detected_source_language = translation
-        .get("detected_source_language")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    Ok(DeeplTranslateResult {
-        text: text.to_string(),
-        target_lang: target_lang.to_string(),
-        detected_source_language,
-    })
-}
-
 fn strip_markup(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut in_tag = false;
@@ -833,8 +609,6 @@ mod tests {
         for raw in [
             "http://zh.wiktionary.org/api/rest_v1/page/definition/hi",
             "http://en.wiktionary.org/api/rest_v1/page/definition/hi",
-            "http://api-free.deepl.com/v2/translate",
-            "http://api.deepl.com/v2/translate",
         ] {
             assert_eq!(
                 validate_reader_url_str(raw).unwrap_err().code,
@@ -849,7 +623,6 @@ mod tests {
         for raw in [
             "https://www.wiktionary.org/api/rest_v1/page/definition/hi",
             "https://en.wikipedia.org/wiki/Hello",
-            "https://api.deepl.io/v2/translate",
             "https://example.com/v2/translate",
             "https://zh.wiktionary.org.evil.test/api/rest_v1/page/definition/hi",
             "https://en.wiktionary.org:444/api/rest_v1/page/definition/hi",
@@ -864,57 +637,13 @@ mod tests {
 
     #[test]
     fn embedded_userinfo_is_rejected() {
-        for raw in [
-            "https://user:pass@en.wiktionary.org/api/rest_v1/page/definition/hi",
-            "https://user@api.deepl.com/v2/translate",
-        ] {
+        for raw in ["https://user:pass@en.wiktionary.org/api/rest_v1/page/definition/hi"] {
             assert_eq!(
                 validate_reader_url_str(raw).unwrap_err().code,
                 "READER_URL_INVALID",
                 "accepted {raw}"
             );
         }
-    }
-
-    #[test]
-    fn fx_keys_use_free_deepl_host() {
-        let free = deepl_url_for_key("abc:fx").unwrap();
-        assert_eq!(free.scheme(), "https");
-        assert_eq!(free.host_str(), Some("api-free.deepl.com"));
-        assert_eq!(free.path(), "/v2/translate");
-        let pro = deepl_url_for_key("abc-pro").unwrap();
-        assert_eq!(pro.host_str(), Some("api.deepl.com"));
-    }
-
-    #[test]
-    fn translate_without_key_fails_closed() {
-        assert_eq!(
-            prepare_translate("hello", "ZH", None).unwrap_err().code,
-            "READER_KEY_MISSING"
-        );
-    }
-
-    #[test]
-    fn translate_rejects_empty_and_over_limit_text() {
-        let key = "abc:fx";
-        assert_eq!(
-            prepare_deepl_request("   ", "ZH", key).unwrap_err().code,
-            "READER_TEXT_EMPTY"
-        );
-        let too_long = "汉".repeat(MAX_TRANSLATE_CHARS + 1);
-        assert_eq!(
-            prepare_deepl_request(&too_long, "en", key)
-                .unwrap_err()
-                .code,
-            "READER_TEXT_TOO_LONG"
-        );
-        let (url, payload, lang) = prepare_deepl_request("hello", "zh-CN", key).unwrap();
-        assert_eq!(url.host_str(), Some("api-free.deepl.com"));
-        assert_eq!(lang, "ZH");
-        let body: Value = serde_json::from_slice(&payload).unwrap();
-        assert_eq!(body["text"], json!(["hello"]));
-        assert_eq!(body["target_lang"], "ZH");
-        assert!(body.get("auth_key").is_none());
     }
 
     #[test]
@@ -1046,56 +775,12 @@ mod tests {
     }
 
     #[test]
-    fn deepl_status_and_payload_errors_are_visible() {
-        assert_eq!(
-            status_error(ReaderService::DeepL, StatusCode::FORBIDDEN)
-                .unwrap()
-                .code,
-            "READER_KEY_INVALID"
-        );
-        assert_eq!(
-            status_error(ReaderService::DeepL, StatusCode::from_u16(456).unwrap())
-                .unwrap()
-                .code,
-            "READER_QUOTA_EXCEEDED"
-        );
+    fn wiktionary_not_found_status_is_visible() {
         assert_eq!(
             status_error(ReaderService::Wiktionary, StatusCode::NOT_FOUND)
                 .unwrap()
                 .code,
             "READER_NOT_FOUND"
         );
-        let parsed = parse_deepl_translation(
-            &json!({
-                "translations": [{
-                    "detected_source_language": "EN",
-                    "text": "你好"
-                }]
-            }),
-            "ZH",
-        )
-        .unwrap();
-        assert_eq!(parsed.text, "你好");
-        assert_eq!(parsed.target_lang, "ZH");
-        assert_eq!(parsed.detected_source_language.as_deref(), Some("EN"));
-    }
-
-    #[test]
-    fn configured_payload_is_boolean_and_never_the_secret() {
-        let configured = deepl_configured_from_secret(Some("secret-key:fx".into()));
-        let value = serde_json::to_value(&configured).unwrap();
-        assert_eq!(value, json!({ "configured": true }));
-        let object = value.as_object().unwrap();
-        assert_eq!(object.len(), 1);
-        assert!(!value.to_string().contains("secret-key"));
-        assert_eq!(
-            serde_json::to_value(deepl_configured_from_secret(None)).unwrap(),
-            json!({ "configured": false })
-        );
-        assert_eq!(
-            normalize_deepl_key("  ").unwrap_err().code,
-            "READER_KEY_MISSING"
-        );
-        assert_eq!(normalize_deepl_key("abc:fx").unwrap(), "abc:fx");
     }
 }

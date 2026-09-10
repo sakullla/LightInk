@@ -2,8 +2,8 @@
  * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
  *
  * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。桌面顶栏是六项带文字入口（返回书架 · 目录 ·
- * 排版 · 书签 · 搜索 · 助手）。书签是一等开关：对当前位置添加/取消书签，按钮按
+ * 边缘时顶栏与底栏同时出现。桌面顶栏是五项常驻入口（返回书架 · 目录 ·
+ * 排版 · 书签 · 搜索），助手仅在 AI 已配置时出现。书签是一等开关：对当前位置添加/取消书签，按钮按
  * 当前位置是否已书签呈现两态（aria-pressed + is-bookmarked 视觉态）；进度
  * 轨在 TOC 刻度之外再画书签刻度（可点击跳转）。搜索打开同一套标注侧栏
  *（列表 + 书内搜索），不再另放「本书标注」。底栏与沉浸条都是单行：章节名 |
@@ -40,7 +40,7 @@ export interface ReaderChromeLabels {
   readonly typography: string;
   readonly bookmark: string;
   readonly search: string;
-  /** AI 助手面板入口（R5；未配置时面板内显示配置引导）。 */
+  /** AI 助手面板入口（R5；仅 AI 已配置时渲染）。 */
   readonly assistant: string;
   readonly toolbar: string;
   readonly progress: string;
@@ -49,8 +49,6 @@ export interface ReaderChromeLabels {
   readonly bookmarkTick: string;
   /** Footer speak control copy; not a chrome action. */
   readonly speak: string;
-  /** 整本翻译入口文案（R4；不是 chrome action 成员，仅可用时渲染）。 */
-  readonly translateBook: string;
 }
 
 export interface ReaderChromeProgress {
@@ -91,7 +89,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     footer: 'Reading progress',
     bookmarkTick: 'Jump to bookmark',
     speak: 'Speak',
-    translateBook: 'Translate Book',
   },
   'zh-CN': {
     backToShelf: '返回书架',
@@ -105,7 +102,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     footer: '阅读进度',
     bookmarkTick: '跳到书签',
     speak: '朗读',
-    translateBook: '整本翻译',
   },
 };
 
@@ -127,7 +123,7 @@ export interface ReaderChromeDeps {
   openTypography?: () => void;
   /** 顶栏搜索一等入口：桌面走标注侧栏搜索，触屏走独立底栏搜索层。 */
   openSearch?: () => void;
-  /** AI 助手面板入口（R5）：打开阅读器助手面板（未配置时面板内引导）。 */
+  /** AI 助手面板入口（R5）：打开阅读器助手面板。 */
   openAssistant?: () => void;
   /** 书签一等开关：对当前阅读位置添加/取消书签（宿主裁决两态）。 */
   toggleBookmark?: () => void;
@@ -165,12 +161,10 @@ export interface ReaderChromeDeps {
   speakAvailable?: () => boolean;
   onSpeak?: () => void;
   /**
-   * 整本翻译入口（R4）：flow 族格式且宿主支持时为真。与 speak 同型——
-   * 额外 DOM，非 `READER_CHROME_ACTIONS` 成员；不可用时自摘除。
+   * AI 助手入口：密钥未配置时为假，按钮自摘除（与 speak 同型）。
+   * 省略时保持显示，便于 chrome 单测。
    */
-  translateBookAvailable?: () => boolean;
-  /** 点击整本翻译入口（宿主裁决发起/引导/能力提示）。 */
-  onTranslateBook?: () => void;
+  assistantAvailable?: () => boolean;
   onDestroy?: () => void;
 }
 
@@ -189,6 +183,8 @@ export interface ReaderChrome {
   pinDocks(pane: { getBoundingClientRect(): DOMRect } | null, paginated: boolean): void;
   /** Re-apply stay-revealed (scroll at top) vs idle auto-hide. */
   syncStayRevealed(): void;
+  /** 重新根据 speak/assistant 可用性挂摘按钮（配置变更后由宿主调用）。 */
+  refreshAvailability(): void;
   /**
    * One-step back. Never calls `returnToShelf`. True when a layer closed;
    * false when nothing is open (window leftover Escape may 合书).
@@ -410,20 +406,13 @@ export function createReaderChrome(
   speakButton.textContent = labels.speak;
   speakButton.setAttribute('aria-label', labels.speak);
   applyButtonLayout(speakButton, touchMode);
-  const translateButton = document.createElement('button');
-  translateButton.type = 'button';
-  translateButton.className = 'lightink-reader-chrome-action lightink-reader-chrome-translate';
-  translateButton.dataset.readerTranslateBook = 'true';
-  translateButton.textContent = labels.translateBook;
-  translateButton.setAttribute('aria-label', labels.translateBook);
-  applyButtonLayout(translateButton, touchMode);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
   drag.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
-  tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton, translateButton);
+  tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton);
   if (touchMode) {
     const hit = `${READER_CHROME_TOUCH_HIT_PX}px`;
     const gap = `${READER_CHROME_TOUCH_GAP_PX}px`;
@@ -576,13 +565,13 @@ export function createReaderChrome(
     } else if (speakButton.parentNode !== footer) {
       footer.appendChild(speakButton);
     }
-    // 整本翻译入口与 speak 同型（非 chrome action 成员）；不可用时自摘除。
-    const translateOn = deps.translateBookAvailable?.() === true;
-    translateButton.hidden = !revealed || !translateOn;
-    if (!translateOn) {
-      translateButton.remove();
-    } else if (!tools.contains(translateButton)) {
-      tools.appendChild(translateButton);
+    // 助手与 speak 同型：未配置时自摘除，配置后挂回 tools。
+    const assistantOn = deps.assistantAvailable?.() !== false;
+    assistantButton.hidden = !revealed || !assistantOn;
+    if (!assistantOn) {
+      assistantButton.remove();
+    } else if (!tools.contains(assistantButton)) {
+      tools.appendChild(assistantButton);
     }
   };
 
@@ -831,11 +820,6 @@ export function createReaderChrome(
     event.stopPropagation();
     deps.onSpeak?.();
   });
-  translateButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    deps.onTranslateBook?.();
-  });
 
   const onDockEnter = (): void => {
     pointerInsideBar = true;
@@ -1004,6 +988,9 @@ export function createReaderChrome(
       }
       syncDom();
       scheduleHide();
+    },
+    refreshAvailability: () => {
+      syncDom();
     },
     dismiss,
     toggle() {

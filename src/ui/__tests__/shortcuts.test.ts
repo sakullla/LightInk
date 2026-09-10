@@ -139,6 +139,10 @@ describe('wheelPagingShouldIgnoreTarget', () => {
       classList: { contains: (name: string) => name === 'lightink-reader-lookup-panel' },
     };
     expect(wheelPagingShouldIgnoreTarget({ parentElement: lookup })).toBe(true);
+    const assistant = {
+      classList: { contains: (name: string) => name === 'lightink-reader-assistant-panel' },
+    };
+    expect(wheelPagingShouldIgnoreTarget({ parentElement: assistant })).toBe(true);
     const popover = {
       classList: { contains: (name: string) => name === 'lightink-reader-chrome-popover' },
     };

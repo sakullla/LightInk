@@ -2942,47 +2942,6 @@ document.addEventListener('lightink:open-manage', () => {
     ?.click();
 });
 
-// R4：阅读器 chrome「整本翻译」入口（reader-chrome-wiring 派发）。本地/受管
-// flow 书发起；确认后返回书架（进度在详情面板）；远程书提示先缓存。
-document.addEventListener('lightink:reader-translate-book', () => {
-  void (async () => {
-    const tab = manager?.activeTab;
-    if (tab === null || tab === undefined || tab.kind !== 'reader') {
-      return;
-    }
-    const target = tab.target;
-    if (target.kind !== 'local') {
-      void showAppAlert(i18n.t('library.translate.remoteOnly'));
-      return;
-    }
-    const extension = target.extension || extOfPath(target.path);
-    const controller = await ensureBookTranslationController();
-    const result = await controller.launch(
-      {
-        path: target.path,
-        title: target.displayName || target.path,
-        extension,
-      },
-      {
-        onConfirmed: () => {
-          workspace.returnToShelf();
-          void showAppAlert(i18n.t('library.translate.readerStart'));
-        },
-      },
-    );
-    if (result === 'paused' || result === 'completed' || result === 'failed') {
-      const view = ensureLibraryView();
-      void view.refresh();
-    }
-  })().catch((error: unknown) => {
-    void showAppAlert(
-      i18n.t('library.translate.failed', {
-        reason: error instanceof Error ? error.message : String(error ?? ''),
-      }),
-    );
-  });
-});
-
 // 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。
 applyWorkspaceState();
 

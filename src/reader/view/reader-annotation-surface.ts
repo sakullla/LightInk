@@ -40,8 +40,6 @@ import {
   initialTranslateSections,
   invokeAiTranslateConfig,
   invokeAiTranslateSelection,
-  invokeDeepLConfigured,
-  invokeDeepLTranslate,
   invokeWiktionaryLookup,
   lookupQuoteTooLong,
   lookupTooLongCopy,
@@ -49,8 +47,6 @@ import {
   readerAiErrorMessage,
   readerAidLocale,
   READER_AI_CONFIGURED_EVENT,
-  READER_DEEPL_CONFIGURED_EVENT,
-  translateQuoteTooLong,
   type LookupPanel,
   type LookupTranslateSection,
   type LookupTranslateSource,
@@ -258,14 +254,14 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
 
   let lookupPanel: LookupPanel | null = null;
   let lookupEpoch = 0;
-  let deeplConfigured = false;
-  let deeplConfiguredEpoch = 0;
   // AI 提供商态（R3）：四要素完备才显示工具栏 AI 翻译;目标语言覆盖项随取随用。
   let aiConfigured = false;
   let aiTargetLang: string | undefined;
+  /** 译文面板当场切换的目标语言（覆盖 Manage 配置，仅本阅读会话）。 */
+  let translateTargetLang: string | undefined;
   let aiMissing: readonly string[] = [];
   let aiConfiguredEpoch = 0;
-  /** 译文并列视图会话：同一引文下的段级请求令牌（epoch 随面板级请求递增）。 */
+  /** 译文视图会话：同一引文下的段级请求令牌（epoch 随面板级请求递增）。 */
   let translateSession: {
     quote: string;
     epoch: number;
@@ -273,35 +269,9 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   } | null = null;
 
   const applyTranslateEnabled = (): void => {
-    ctx.selectionToolbar?.setTranslateEnabled(deeplConfigured);
     ctx.selectionToolbar?.setAiTranslateEnabled(aiConfigured);
     ctx.selectionToolbar?.setAiAssistEnabled(aiConfigured);
   };
-
-  const refreshDeeplConfigured = async (): Promise<void> => {
-    const epoch = ++deeplConfiguredEpoch;
-    const next = await invokeDeepLConfigured();
-    if (ctx.destroyed || epoch !== deeplConfiguredEpoch) {
-      return;
-    }
-    deeplConfigured = next;
-    applyTranslateEnabled();
-  };
-
-  const onDeeplConfigured = (event: Event): void => {
-    const configured = (event as CustomEvent<{ configured?: boolean }>).detail?.configured;
-    if (typeof configured === 'boolean') {
-      deeplConfiguredEpoch += 1;
-      deeplConfigured = configured;
-      applyTranslateEnabled();
-      return;
-    }
-    void refreshDeeplConfigured();
-  };
-  if (typeof document !== 'undefined') {
-    document.addEventListener(READER_DEEPL_CONFIGURED_EVENT, onDeeplConfigured);
-  }
-  void refreshDeeplConfigured();
 
   const refreshAiConfigured = async (): Promise<void> => {
     const epoch = ++aiConfiguredEpoch;
@@ -345,7 +315,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     lookupEpoch += 1;
     translateSession = null;
     if (typeof document !== 'undefined') {
-      document.removeEventListener(READER_DEEPL_CONFIGURED_EVENT, onDeeplConfigured);
       document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfigured);
     }
     lookupPanel?.destroy();
@@ -366,6 +335,10 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         }
         runTranslateSection(source, ctx.sessionLoad.generation());
       },
+      onChangeTargetLang: (lang, quote) => {
+        translateTargetLang = lang;
+        runTranslate(quote, ctx.sessionLoad.generation());
+      },
     });
     return lookupPanel;
   };
@@ -385,7 +358,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           kind: 'lookup',
           quote: trimmed,
           status: 'error',
-          message: lookupTooLongCopy(ctx.t, deeplConfigured || aiConfigured),
+          message: lookupTooLongCopy(ctx.t, aiConfigured),
         },
         ctx.root,
       );
@@ -433,14 +406,9 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   };
 
   /**
-   * 译文并列视图（R3）：点名的来源立即请求，其余已配置来源以 idle 段呈现、
-   * 可段内独立触发；各段状态独立，失败段可段内重试。
+   * 译文视图（R3）：打开面板并立即请求 AI 段；失败段可段内重试。
    */
-  const runTranslate = (
-    source: LookupTranslateSource,
-    quote: string,
-    generation: number,
-  ): void => {
+  const runTranslate = (quote: string, generation: number): void => {
     const epoch = ++lookupEpoch;
     const panel = ensureLookupPanel();
     const trimmed = quote.trim();
@@ -457,16 +425,17 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       );
       return;
     }
-    translateSession = { quote: trimmed, epoch, seq: { deepl: 0, ai: 0 } };
+    translateSession = { quote: trimmed, epoch, seq: { ai: 0 } };
     panel.showTranslate(
       {
         quote: trimmed,
-        sections: initialTranslateSections(ctx.t, deeplConfigured, aiConfigured, source),
+        sections: initialTranslateSections(ctx.t, aiConfigured),
+        targetLang: translateTargetLang ?? aiTargetLang ?? 'auto',
       },
       ctx.root,
     );
-    if (source === 'deepl' ? deeplConfigured : aiConfigured) {
-      runTranslateSection(source, generation);
+    if (aiConfigured) {
+      runTranslateSection('ai', generation);
     }
   };
 
@@ -493,31 +462,19 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         translateSession.epoch !== session.epoch ||
         translateSession.seq[source] !== seq;
       let section: LookupTranslateSection;
-      if (source === 'deepl') {
-        if (translateQuoteTooLong(quote)) {
-          section = { source, status: 'error', message: ctx.t('reader.lookup.translateTooLong') };
-        } else {
-          try {
-            const text = await invokeDeepLTranslate(quote, readerAidLocale(ctx.t));
-            section =
-              text === ''
-                ? { source, status: 'error', message: ctx.t('reader.lookup.error.failed') }
-                : { source, status: 'ready', lines: [text] };
-          } catch (error) {
-            section = { source, status: 'error', message: readerAidErrorMessage(ctx.t, error) };
-          }
-        }
-      } else {
-        const targetLang = aiTranslateTargetLang(ctx.t, readerAidLocale(ctx.t), aiTargetLang);
-        try {
-          const result = await invokeAiTranslateSelection(quote, targetLang);
-          section =
-            result.text === ''
-              ? { source, status: 'error', message: ctx.t('reader.ai.error.failed') }
-              : { source, status: 'ready', lines: [result.text], truncated: result.truncated };
-        } catch (error) {
-          section = { source, status: 'error', message: readerAiErrorMessage(ctx.t, error, aiMissing) };
-        }
+      const targetLang = aiTranslateTargetLang(
+        ctx.t,
+        readerAidLocale(ctx.t),
+        translateTargetLang ?? aiTargetLang,
+      );
+      try {
+        const result = await invokeAiTranslateSelection(quote, targetLang);
+        section =
+          result.text === ''
+            ? { source, status: 'error', message: ctx.t('reader.ai.error.failed') }
+            : { source, status: 'ready', lines: [result.text], truncated: result.truncated };
+      } catch (error) {
+        section = { source, status: 'error', message: readerAiErrorMessage(ctx.t, error, aiMissing) };
       }
       if (stale()) {
         // 会话已翻页（文档切换等）时不得把该段留在 loading——回到 idle，
@@ -535,7 +492,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   const ensureSelectionToolbar = (): void => {
     if (ctx.selectionToolbar !== null) {
       applyTranslateEnabled();
-      void refreshDeeplConfigured();
       void refreshAiConfigured();
       return;
     }
@@ -556,12 +512,12 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
             window.getSelection()?.removeAllRanges();
           }
         };
-        if (action === 'lookup' || action === 'translate' || action === 'aiTranslate') {
+        if (action === 'lookup' || action === 'aiTranslate') {
           const generation = ctx.sessionLoad.generation();
           if (action === 'lookup') {
             runLookup(pending.quote, generation);
           } else {
-            runTranslate(action === 'translate' ? 'deepl' : 'ai', pending.quote, generation);
+            runTranslate(pending.quote, generation);
           }
           return;
         }
@@ -602,7 +558,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       },
     });
     applyTranslateEnabled();
-    void refreshDeeplConfigured();
     void refreshAiConfigured();
     mountReaderOverlay(ctx.selectionToolbar.element, ctx.root);
   };
@@ -1052,7 +1007,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       mapFrameClientRect(frame, selectionClientRect(selection.getRangeAt(0))),
       {
         canRemoveHighlight: existingMark !== null,
-        translateEnabled: deeplConfigured,
         aiTranslateEnabled: aiConfigured,
         aiAssistEnabled: aiConfigured,
       },

@@ -37,10 +37,36 @@
   padding: 0.55rem 0.7rem 0.35rem;
 }
 
+.lightink-reader-lookup-head-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+}
+
 .lightink-reader-lookup-title {
   margin: 0;
   font-size: 0.82rem;
   font-weight: 650;
+}
+
+.lightink-reader-lookup-lang {
+  box-sizing: border-box;
+  max-width: 9.75rem;
+  min-width: 0;
+  min-height: 1.7rem;
+  padding: 0.12rem 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 6px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.lightink-reader-lookup-lang[hidden] {
+  display: none;
 }
 
 .lightink-reader-lookup-close {
@@ -147,6 +173,12 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-source-action {
   min-height: 36px;
   min-width: 44px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-lang {
+  min-height: 36px;
+  max-width: 11rem;
+  font-size: 0.8rem;
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-panel.is-touch-sheet {

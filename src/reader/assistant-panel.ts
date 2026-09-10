@@ -486,7 +486,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     (event) => {
       event.stopPropagation();
     },
-    { passive: true },
+    { passive: true, capture: true },
   );
   root.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
