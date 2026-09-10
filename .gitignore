@@ -14,10 +14,6 @@ __pycache__/
 
 # Local workflow notes stay untracked; product requirements are versioned.
 docs/*
-!docs/requirements/
 docs/requirements/*
-!docs/requirements/opds-streaming-archives.md
-!docs/requirements/webdav-sync-groups-opds2.md
-!docs/requirements/2026-09-03-markdown-排版渲染优化.md
 /.idea/
 .claude/worktrees
