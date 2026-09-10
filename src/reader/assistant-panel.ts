@@ -1,21 +1,9 @@
 /**
- * `assistant-panel` — AI 助手面板（ADR-6 / R5）。
+ * `assistant-panel` — AI 助手面板（ADR-6 / R1）。
  *
  * 复用面板框架：桌面钉阅读区右侧（mountReaderOverlay + pinFixedOverlay），
- * 触屏是底部 sheet（is-touch-sheet + revealSheet/concealSheet 过渡）。互斥、
- * Escape 链与关闭清理挂点由 reader-chrome-wiring 接入（面板只管自身显隐）。
- *
- * - 对话：`ai_chat_stream` 经 Tauri IPC `Channel` 增量推送 delta，回答消息
- *   渐进显示；多轮上下文 = 系统提示 + 章节全文 + 此前轮次。
- * - 历史：按书（与标注同源的内容哈希）存 `app_data_dir/assistant/<hash>.json`
- *   （Rust 命令读写），重开续显；身份不可用时退化为仅内存。
- * - 上下文：当前章全文（注册表限额截断，保留前部并在回答前提示）或选中文本
- *   （解释/总结快捷动作）。
- * - 快捷动作：面板内「本章摘要 / 生词卡 / 章节测验」以当前章为上下文，结果
- *   以对话消息呈现；摘要消息可保存为标注（章节级锚点由宿主实现）。
- * - 失败：消息级错误展示 + 原地重试（重发同一请求，历史不重复）；未配置 AI
- *   时显示前往配置引导而非空聊天框。
- * - 编辑器界面无任何 AI 入口：本组件只被阅读器装配（R6）。
+ * 触屏是底部 sheet。对话编排（工具循环、停止、历史入口、Markdown）在本文件；
+ * 历史 schema、请求分层、工具执行与消毒渲染分别交给 sibling 模块。
  */
 
 import './assistant-panel.css';
@@ -37,24 +25,43 @@ import {
 } from './lookup-panel.js';
 import { READER_LIMITS } from './reader-limits.js';
 import { readerChromeTouchMode } from './view/reader-dom.js';
+import {
+  AssistantHistoryTooLargeError,
+  activeAssistantConversation,
+  createAssistantConversation,
+  deleteAssistantConversation,
+  emptyAssistantHistoryStore,
+  parseAssistantHistoryStore,
+  serializeAssistantHistoryStore,
+  setAssistantConversationMessages,
+  switchAssistantConversation,
+  type AssistantHistoryAction,
+  type AssistantHistoryMessage,
+  type AssistantHistoryStore,
+} from './assistant-history.js';
+import {
+  createAssistantMarkdownStream,
+  renderAssistantMarkdown,
+} from './assistant-markdown.js';
+import {
+  buildAssistantChatRequest,
+  type AssistantChapterSource,
+  type AssistantChatMessage,
+  type AssistantChatRequest,
+  type AssistantContextKind,
+  type AssistantRequestTurn,
+  type AssistantToolCall,
+} from './assistant-request.js';
+import {
+  QUERY_BOOK_TOOL_NAME,
+  SAVE_TO_BOOK_TOOL_NAME,
+  type AssistantToolSession,
+} from './assistant-tools.js';
 
 // ── 消息模型与常量 ───────────────────────────────────────────────────
 
 /** 快捷动作（选区解释/总结由工具栏触发；其余是面板动作区按钮）。 */
-export type AssistantQuickAction =
-  | 'explain'
-  | 'summarize'
-  | 'chapterSummary'
-  | 'vocabulary'
-  | 'quiz';
-
-const ASSISTANT_ACTIONS: readonly string[] = [
-  'explain',
-  'summarize',
-  'chapterSummary',
-  'vocabulary',
-  'quiz',
-];
+export type AssistantQuickAction = AssistantHistoryAction;
 
 /** 面板内动作区按钮（以当前章为上下文）。 */
 export const ASSISTANT_PANEL_ACTIONS: readonly AssistantQuickAction[] = [
@@ -63,45 +70,40 @@ export const ASSISTANT_PANEL_ACTIONS: readonly AssistantQuickAction[] = [
   'quiz',
 ];
 
-/** 单次请求携带的历史轮次上限（ai.rs MAX_MESSAGES=200 的安全余量）。 */
-export const ASSISTANT_MAX_TURNS = 30;
-/** 请求字符预算（系统提示 + 历史 + 问题；章节上下文另计）。 */
-const ASSISTANT_REQUEST_CHAR_BUDGET = 180_000;
-/** 历史文件消息条数上限（敌意文件防膨胀；正常对话远低于此）。 */
-const ASSISTANT_HISTORY_MAX_MESSAGES = 400;
+/** 同一条用户发送内的工具往返上限（ADR-2 / R6）。 */
+export const ASSISTANT_MAX_TOOL_ROUNDS = 24;
 
-/** 面板视图消息（也是历史文件的 schema）。 */
-export interface AssistantHistoryMessage {
-  readonly role: 'user' | 'assistant';
-  readonly content: string;
-  readonly createdAt: number;
-  /** user 轮：发起该消息的快捷动作（解释/总结/本章摘要…）。 */
-  readonly action?: AssistantQuickAction;
-  /** assistant 轮：本次回答注入的章节上下文发生了截断。 */
-  readonly contextTruncated?: boolean;
-  /** assistant 轮：流式失败的可展示错误文案（可原地重试）。 */
-  readonly error?: string;
+export type { AssistantHistoryMessage };
+
+interface AssistantToolBlock {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+  readonly result?: string;
 }
 
-/** `ai_chat_stream` 的请求消息（ai.rs AiChatMessage 的前端投影）。 */
-export interface AiChatMessageView {
-  readonly role: 'system' | 'user' | 'assistant';
-  readonly content: string;
+interface PanelMessage extends AssistantHistoryMessage {
+  readonly toolBlocks?: readonly AssistantToolBlock[];
+  readonly toolLimitReached?: boolean;
 }
 
 /** `ai_chat_stream` 经 Channel 推送的事件（snake_case tag 与 ai.rs 钉死）。 */
 export interface AiStreamEventView {
-  readonly type: 'delta';
-  readonly text: string;
+  readonly type: 'delta' | 'tool_call';
+  readonly text?: string;
+  readonly id?: string;
+  readonly name?: string;
+  readonly arguments?: string;
 }
 
 /** `ai_chat_stream` 的返回终态。 */
 export interface AiStreamDoneView {
   readonly finish: string;
   readonly totalChars: number;
+  readonly toolCalls: readonly AssistantToolCall[];
 }
 
-// ── 纯函数：上下文截断 / 历史序列化 / 请求构造 ──────────────────────
+// ── 纯函数：上下文截断 / 快捷动作文案 ────────────────────────────────
 
 export interface AssistantContextClip {
   readonly text: string;
@@ -109,8 +111,7 @@ export interface AssistantContextClip {
 }
 
 /**
- * 章节上下文截断（R5）：超限保留前部、截断后部；在代理对边界处回退一字，
- * 不产生半个字符。选择上下文复用同一预算。
+ * 章节/选区截断：超限保留前部；在代理对边界处回退一字，不产生半个字符。
  */
 export function clipAssistantContext(
   text: string,
@@ -128,130 +129,6 @@ export function clipAssistantContext(
   return { text: cut, truncated: true };
 }
 
-/** 防御解析历史文件：坏 JSON / 坏形态返回空，不抛出。 */
-export function parseAssistantHistory(raw: string): AssistantHistoryMessage[] {
-  const text = raw.trim();
-  if (text === '') {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (parsed === null || typeof parsed !== 'object') {
-    return [];
-  }
-  const list = (parsed as { messages?: unknown }).messages;
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  const messages: AssistantHistoryMessage[] = [];
-  for (const item of list) {
-    if (item === null || typeof item !== 'object') {
-      continue;
-    }
-    const obj = item as Record<string, unknown>;
-    const role = obj.role;
-    const content = obj.content;
-    if (role !== 'user' && role !== 'assistant') {
-      continue;
-    }
-    if (typeof content !== 'string') {
-      continue;
-    }
-    const createdAt =
-      typeof obj.createdAt === 'number' && Number.isFinite(obj.createdAt) ? obj.createdAt : 0;
-    const action =
-      typeof obj.action === 'string' && ASSISTANT_ACTIONS.includes(obj.action)
-        ? (obj.action as AssistantQuickAction)
-        : undefined;
-    const error = typeof obj.error === 'string' && obj.error !== '' ? obj.error : undefined;
-    messages.push({
-      role,
-      content,
-      createdAt,
-      ...(action !== undefined ? { action } : {}),
-      ...(obj.contextTruncated === true ? { contextTruncated: true } : {}),
-      ...(error !== undefined ? { error } : {}),
-    });
-    if (messages.length >= ASSISTANT_HISTORY_MAX_MESSAGES) {
-      break;
-    }
-  }
-  return messages;
-}
-
-/** 序列化历史文件（v1 信封：{version, messages, updatedAt}）。 */
-export function serializeAssistantHistory(
-  messages: readonly AssistantHistoryMessage[],
-): string {
-  return JSON.stringify({
-    version: 1,
-    messages: messages.map((message) => {
-      const entry: Record<string, unknown> = {
-        role: message.role,
-        content: message.content,
-        createdAt: message.createdAt,
-      };
-      if (message.action !== undefined) {
-        entry.action = message.action;
-      }
-      if (message.contextTruncated === true) {
-        entry.contextTruncated = true;
-      }
-      if (message.error !== undefined) {
-        entry.error = message.error;
-      }
-      return entry;
-    }),
-    updatedAt: Date.now(),
-  });
-}
-
-/**
- * 构造一次流式请求：系统提示（含章节上下文）+ 近期轮次。失败占位
- * （error 且无内容）不进请求；从最新向前累计直至轮数/字符预算。
- */
-export function buildAssistantChatRequest(
-  systemPrompt: string,
-  history: readonly AssistantHistoryMessage[],
-  maxTurns: number = ASSISTANT_MAX_TURNS,
-  charBudget: number = ASSISTANT_REQUEST_CHAR_BUDGET,
-): AiChatMessageView[] {
-  const turns: AssistantHistoryMessage[] = [];
-  let budget = charBudget - systemPrompt.length;
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const message = history[index]!;
-    if (message.role === 'assistant' && message.content.trim() === '') {
-      continue; // 失败占位/流式中：不进请求
-    }
-    if (turns.length >= maxTurns || budget - message.content.length <= 0) {
-      break;
-    }
-    budget -= message.content.length;
-    turns.unshift(message);
-  }
-  return [
-    { role: 'system', content: systemPrompt },
-    ...turns.map((message) => ({ role: message.role, content: message.content })),
-  ];
-}
-
-/** 系统提示组装：基础助手提示 +（有章节文本时）章节上下文块。 */
-export function assistantSystemPrompt(
-  base: string,
-  chapter: { title: string; text: string } | null,
-): string {
-  if (chapter === null || chapter.text === '') {
-    return base;
-  }
-  const title = chapter.title.trim();
-  const head = title === '' ? '当前章节' : `当前章节：${title}`;
-  return `${base}\n\n【${head}】\n<chapter>\n${chapter.text}\n</chapter>`;
-}
-
 /** 快捷动作发起的用户消息内容（同时是历史存储与气泡展示）。 */
 export function assistantActionContent(
   action: AssistantQuickAction,
@@ -265,6 +142,111 @@ export function assistantActionContent(
   return instruction;
 }
 
+function persistableMessages(list: readonly PanelMessage[]): AssistantHistoryMessage[] {
+  return list.map((message) => {
+    const entry: AssistantHistoryMessage = {
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+    };
+    return {
+      ...entry,
+      ...(message.action !== undefined ? { action: message.action } : {}),
+      ...(message.contextTruncated === true ? { contextTruncated: true } : {}),
+      ...(message.error !== undefined ? { error: message.error } : {}),
+    };
+  });
+}
+
+function historyTurns(list: readonly PanelMessage[], end: number): AssistantRequestTurn[] {
+  const turns: AssistantRequestTurn[] = [];
+  for (let index = 0; index < end; index += 1) {
+    const message = list[index];
+    if (message === undefined) {
+      continue;
+    }
+    if (message.role === 'user') {
+      turns.push({ role: 'user', content: message.content });
+      continue;
+    }
+    const blocks = message.toolBlocks ?? [];
+    if (blocks.length > 0) {
+      turns.push({
+        role: 'assistant',
+        content: '',
+        toolCalls: blocks.map((block) => ({
+          id: block.id,
+          name: block.name,
+          arguments: block.arguments,
+        })),
+      });
+      for (const block of blocks) {
+        turns.push({
+          role: 'tool',
+          content: block.result ?? '',
+          toolCallId: block.id,
+          name: block.name,
+        });
+      }
+    }
+    if (message.content.trim() === '') {
+      continue;
+    }
+    turns.push({ role: 'assistant', content: message.content });
+  }
+  return turns;
+}
+
+function serializeChatMessage(message: AssistantChatMessage): Record<string, unknown> {
+  return {
+    role: message.role,
+    content: message.content,
+    ...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
+    ...(message.name !== undefined ? { name: message.name } : {}),
+    ...(message.toolCalls !== undefined && message.toolCalls.length > 0
+      ? { toolCalls: message.toolCalls }
+      : {}),
+  };
+}
+
+function locatorTarget(
+  chapterRaw: string | undefined,
+  pageRaw: string | undefined,
+): { chapter?: number; page?: number } {
+  const target: { chapter?: number; page?: number } = {};
+  if (chapterRaw !== undefined && chapterRaw !== '') {
+    const chapter = Number(chapterRaw);
+    if (Number.isFinite(chapter)) {
+      target.chapter = Math.trunc(chapter);
+    }
+  }
+  if (pageRaw !== undefined && pageRaw !== '') {
+    const page = Number(pageRaw);
+    if (Number.isFinite(page)) {
+      target.page = Math.trunc(page);
+    }
+  }
+  return target;
+}
+
+function dropAssistantChannel<T>(channel: AssistantChannel<T>): void {
+  channel.onmessage = () => undefined;
+  const record = channel as unknown as { cleanupCallback?: () => void };
+  try {
+    record.cleanupCallback?.();
+  } catch {
+    // Channel 已关闭时忽略。
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  const code =
+    error !== null && typeof error === 'object'
+      ? String((error as { code?: unknown }).code ?? (error as { message?: unknown }).message ?? '')
+      : String(error);
+  return code.includes('AI_STREAM_ABORTED');
+}
+
 // ── 流式通道（Tauri IPC Channel；注入面供测试） ──────────────────────
 
 export type AssistantInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -276,6 +258,7 @@ export interface AssistantChannel<T> {
 export interface AssistantStreamDeps {
   readonly invoke?: AssistantInvoke;
   readonly createChannel?: <T>() => AssistantChannel<T>;
+  readonly onStart?: (abort: () => void) => void;
 }
 
 const defaultAssistantInvoke: AssistantInvoke = (command, args) =>
@@ -286,42 +269,118 @@ function defaultCreateChannel<T>(): AssistantChannel<T> {
 }
 
 /**
- * 流式多轮对话：invoke 携带 `Channel`，delta 增量回调；终态
- * （完成 finish/totalChars）由命令返回值承载，失败以抛出错误码族呈现。
+ * 流式一轮模型 IO：invoke 携带 `Channel`，delta / tool_call 增量回调；
+ * 终态由命令返回值承载。停止时丢掉 Channel，Rust 侧得到 AI_STREAM_ABORTED。
  */
 export async function streamAssistantChat(
-  messages: readonly AiChatMessageView[],
+  request: Pick<AssistantChatRequest, 'messages' | 'tools'>,
   onDelta: (delta: string) => void,
   deps: AssistantStreamDeps = {},
 ): Promise<AiStreamDoneView> {
   const invokeFn = deps.invoke ?? defaultAssistantInvoke;
   const createChannel = deps.createChannel ?? defaultCreateChannel;
   const channel = createChannel<AiStreamEventView>();
+  const collected = new Map<string, AssistantToolCall>();
+  let dropped = false;
+  const abort = (): void => {
+    if (dropped) {
+      return;
+    }
+    dropped = true;
+    dropAssistantChannel(channel);
+  };
+  deps.onStart?.(abort);
   channel.onmessage = (event) => {
-    if (event !== null && typeof event === 'object' && event.type === 'delta') {
+    if (dropped || event === null || typeof event !== 'object') {
+      return;
+    }
+    if (event.type === 'delta') {
       if (typeof event.text === 'string' && event.text !== '') {
         onDelta(event.text);
       }
+      return;
+    }
+    if (event.type === 'tool_call' && typeof event.id === 'string' && typeof event.name === 'string') {
+      collected.set(event.id, {
+        id: event.id,
+        name: event.name,
+        arguments: typeof event.arguments === 'string' ? event.arguments : '',
+      });
     }
   };
-  const done = await invokeFn('ai_chat_stream', {
-    messages: messages.map((message) => ({ role: message.role, content: message.content })),
-    onEvent: channel,
-  });
-  if (done !== null && typeof done === 'object') {
-    const obj = done as { finish?: unknown; totalChars?: unknown };
-    return {
-      finish: typeof obj.finish === 'string' ? obj.finish : 'closed',
-      totalChars: typeof obj.totalChars === 'number' ? obj.totalChars : 0,
-    };
+  try {
+    const done = await invokeFn('ai_chat_stream', {
+      messages: request.messages.map(serializeChatMessage),
+      tools: request.tools,
+      onEvent: channel,
+    });
+    const toolCalls: AssistantToolCall[] = [];
+    let finish = 'closed';
+    let totalChars = 0;
+    if (done !== null && typeof done === 'object') {
+      const obj = done as {
+        finish?: unknown;
+        totalChars?: unknown;
+        toolCalls?: unknown;
+      };
+      finish = typeof obj.finish === 'string' ? obj.finish : 'closed';
+      totalChars = typeof obj.totalChars === 'number' ? obj.totalChars : 0;
+      if (Array.isArray(obj.toolCalls)) {
+        for (const item of obj.toolCalls) {
+          if (item === null || typeof item !== 'object') {
+            continue;
+          }
+          const call = item as { id?: unknown; name?: unknown; arguments?: unknown };
+          if (typeof call.id !== 'string' || typeof call.name !== 'string') {
+            continue;
+          }
+          collected.set(call.id, {
+            id: call.id,
+            name: call.name,
+            arguments: typeof call.arguments === 'string' ? call.arguments : '',
+          });
+        }
+      }
+    }
+    for (const call of collected.values()) {
+      toolCalls.push(call);
+    }
+    return { finish, totalChars, toolCalls };
+  } finally {
+    dropped = true;
   }
-  return { finish: 'closed', totalChars: 0 };
+}
+
+async function executeToolCalls(
+  session: AssistantToolSession,
+  calls: readonly AssistantToolCall[],
+): Promise<readonly AssistantToolBlock[]> {
+  const results = new Map<string, string>();
+  const queries = calls.filter((call) => call.name === QUERY_BOOK_TOOL_NAME);
+  const rest = calls.filter((call) => call.name !== QUERY_BOOK_TOOL_NAME);
+  await Promise.all(
+    queries.map(async (call) => {
+      const result = await session.execute(call.name, call.arguments);
+      results.set(call.id, JSON.stringify(result));
+    }),
+  );
+  for (const call of rest) {
+    const result = await session.execute(call.name, call.arguments);
+    results.set(call.id, JSON.stringify(result));
+  }
+  return calls.map((call) => ({
+    id: call.id,
+    name: call.name,
+    arguments: call.arguments,
+    result: results.get(call.id) ?? JSON.stringify({ ok: false, error: 'missing_result' }),
+  }));
 }
 
 // ── 面板组件 ─────────────────────────────────────────────────────────
 
 /** 章节上下文供数（wiring 实现：flow 章全文 / PDF 当前页文本层 / cbz null）。 */
 export interface AssistantChapterContext {
+  readonly kind?: AssistantContextKind;
   readonly title: string;
   readonly text: string;
 }
@@ -348,6 +407,16 @@ export interface AssistantPanelDeps {
   historyKey?: () => string | null;
   /** 流式通道注入（测试）。 */
   stream?: AssistantStreamDeps;
+  /** 阅读器当前选区（引用选区 / 工具 selection）。 */
+  currentSelection?: () => string;
+  /** PDF 当前页码，只写入本轮用户消息。 */
+  currentPage?: () => number | undefined;
+  /** 前端工具循环的执行会话；缺省则 tool_call 回失败结果。 */
+  createToolSession?: () => AssistantToolSession;
+  /** 回答中的章节/页码定位点击（用户操作，不由工具翻页）。 */
+  jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
+  /** 助手 Markdown 外链（沿用应用外部打开策略）。 */
+  openExternalLink?: (href: string) => void;
 }
 
 export interface AssistantPanel {
@@ -391,6 +460,16 @@ function assistantPromptKey(action: AssistantQuickAction): MessageKey {
   }
 }
 
+function toolLabelKey(name: string): MessageKey {
+  if (name === QUERY_BOOK_TOOL_NAME) {
+    return 'reader.assistant.toolQuery';
+  }
+  if (name === SAVE_TO_BOOK_TOOL_NAME) {
+    return 'reader.assistant.toolSave';
+  }
+  return 'reader.assistant.toolUnknown';
+}
+
 /**
  * 创建 AI 助手面板。element 由面板自理挂载（open 时 portal 到 body 并按
  * 桌面右栏 / 触屏底栏钉位）；显隐互斥与 Escape 链在 reader-chrome-wiring。
@@ -418,15 +497,29 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   close.textContent = '×';
   close.setAttribute('aria-label', t('annotation.closeSidebar'));
   close.setAttribute('title', t('annotation.closeSidebar'));
-  // 清除本书对话（assistant_clear_history 幂等;同时清内存会话）。
-  const clearHistoryButton = document.createElement('button');
-  clearHistoryButton.type = 'button';
-  clearHistoryButton.className = 'lightink-reader-assistant-clear';
-  clearHistoryButton.textContent = t('reader.assistant.clearHistory');
-  clearHistoryButton.setAttribute('title', t('reader.assistant.clearHistory'));
-  head.append(title, clearHistoryButton, close);
+  const historyToggle = document.createElement('button');
+  historyToggle.type = 'button';
+  historyToggle.className = 'lightink-reader-assistant-history-toggle';
+  historyToggle.textContent = t('reader.assistant.history');
+  historyToggle.setAttribute('title', t('reader.assistant.history'));
+  historyToggle.setAttribute('aria-expanded', 'false');
+  head.append(title, historyToggle, close);
 
-  // —— 未配置引导（R5：引导而非空聊天框） ——
+  const historyPane = document.createElement('div');
+  historyPane.className = 'lightink-reader-assistant-history';
+  historyPane.hidden = true;
+  const historyNew = document.createElement('button');
+  historyNew.type = 'button';
+  historyNew.className = 'lightink-reader-assistant-history-new';
+  historyNew.dataset.assistantHistoryNew = 'true';
+  historyNew.textContent = t('reader.assistant.historyNew');
+  const historyEmpty = document.createElement('p');
+  historyEmpty.className = 'lightink-reader-assistant-history-empty';
+  historyEmpty.textContent = t('reader.assistant.historyEmpty');
+  const historyList = document.createElement('ul');
+  historyList.className = 'lightink-reader-assistant-history-list';
+  historyPane.append(historyNew, historyEmpty, historyList);
+
   const guide = document.createElement('div');
   guide.className = 'lightink-reader-assistant-guide';
   const guideHint = document.createElement('p');
@@ -438,13 +531,27 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   settingsButton.textContent = t('reader.assistant.openSettings');
   guide.append(guideHint, settingsButton);
 
-  // —— 对话主体 ——
   const main = document.createElement('div');
   main.className = 'lightink-reader-assistant-main';
+  const contextHint = document.createElement('p');
+  contextHint.className = 'lightink-reader-assistant-context';
+  const messagesWrap = document.createElement('div');
+  messagesWrap.className = 'lightink-reader-assistant-messages-wrap';
   const messagesHost = document.createElement('div');
   messagesHost.className = 'lightink-reader-assistant-messages';
   messagesHost.setAttribute('aria-live', 'polite');
   messagesHost.setAttribute('aria-label', t('reader.assistant.title'));
+  const jumpBottom = document.createElement('button');
+  jumpBottom.type = 'button';
+  jumpBottom.className = 'lightink-reader-assistant-jump-bottom';
+  jumpBottom.dataset.assistantJumpBottom = 'true';
+  jumpBottom.textContent = t('reader.assistant.jumpBottom');
+  jumpBottom.hidden = true;
+  messagesWrap.append(messagesHost, jumpBottom);
+
+  const persistNotice = document.createElement('p');
+  persistNotice.className = 'lightink-reader-assistant-notice';
+  persistNotice.hidden = true;
 
   const actions = document.createElement('div');
   actions.className = 'lightink-reader-assistant-actions';
@@ -468,18 +575,38 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const composer = document.createElement('form');
   composer.className = 'lightink-reader-assistant-composer';
+  const composerTools = document.createElement('div');
+  composerTools.className = 'lightink-reader-assistant-composer-tools';
+  const quoteButton = document.createElement('button');
+  quoteButton.type = 'button';
+  quoteButton.className = 'lightink-reader-assistant-quote';
+  quoteButton.dataset.assistantQuote = 'true';
+  quoteButton.textContent = t('reader.assistant.quote');
+  const composerHint = document.createElement('p');
+  composerHint.className = 'lightink-reader-assistant-composer-hint';
+  composerHint.textContent = t('reader.assistant.composerHint');
+  composerTools.append(quoteButton, composerHint);
+  const composerRow = document.createElement('div');
+  composerRow.className = 'lightink-reader-assistant-composer-row';
   const input = document.createElement('textarea');
   input.className = 'lightink-reader-assistant-input';
-  input.rows = 1;
+  input.rows = 4;
   input.setAttribute('placeholder', t('reader.assistant.placeholder'));
   input.setAttribute('aria-label', t('reader.assistant.placeholder'));
   const send = document.createElement('button');
   send.type = 'submit';
   send.className = 'lightink-reader-assistant-send';
   send.textContent = t('reader.assistant.send');
-  composer.append(input, send);
-  main.append(messagesHost, actions, composer);
-  root.append(head, guide, main);
+  const stop = document.createElement('button');
+  stop.type = 'button';
+  stop.className = 'lightink-reader-assistant-stop';
+  stop.dataset.assistantStop = 'true';
+  stop.textContent = t('reader.assistant.stop');
+  stop.disabled = true;
+  composerRow.append(input, send, stop);
+  composer.append(composerTools, composerRow);
+  main.append(contextHint, messagesWrap, persistNotice, actions, composer);
+  root.append(head, historyPane, guide, main);
 
   root.addEventListener(
     'wheel',
@@ -495,18 +622,20 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.stopPropagation();
   });
 
-  // —— 状态 ——
-  let messages: AssistantHistoryMessage[] = [];
+  let messages: PanelMessage[] = [];
+  let store: AssistantHistoryStore = emptyAssistantHistoryStore();
   let streaming = false;
+  let stopRequested = false;
+  let abortActive: (() => void) | null = null;
   let loadedKey: string | null = null;
-  /** 会话代数：换书重置时递增，作废仍在飞行的流式回调（delta/终态/持久化）。 */
   let sessionGeneration = 0;
   let aiConfigured = false;
   let aiMissing: readonly string[] = [];
-  /** 已保存为标注的助手消息（createdAt 键控；防重复保存按钮）。 */
   const savedAnswers = new Set<number>();
-  /** 流式期间直接更新的正文节点（渐进显示不经全量重绘）。 */
-  let streamingText: HTMLParagraphElement | null = null;
+  let streamingText: HTMLElement | null = null;
+  let markdownStream = createAssistantMarkdownStream();
+  let stickToBottom = true;
+  let persistError: string | null = null;
 
   const chapterContextOrNull = (): AssistantChapterContext | null => {
     try {
@@ -516,11 +645,61 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
 
-  const scrollMessagesBottom = (): void => {
-    messagesHost.scrollTop = messagesHost.scrollHeight;
+  const chapterSource = (): AssistantChapterSource | null => {
+    const chapter = chapterContextOrNull();
+    if (chapter === null) {
+      return null;
+    }
+    return {
+      kind: chapter.kind ?? 'flow',
+      title: chapter.title,
+      text: chapter.text,
+    };
   };
 
-  /** 该助手消息是否提供「保存为标注」（前一轮是本章摘要）。 */
+  const currentSelectionText = (): string => {
+    try {
+      return (deps.currentSelection?.() ?? '').trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const currentPageNumber = (): number | undefined => {
+    const source = chapterSource();
+    if (source?.kind !== 'pdf') {
+      return undefined;
+    }
+    try {
+      const page = deps.currentPage?.();
+      return typeof page === 'number' && Number.isFinite(page) && page > 0 ? Math.trunc(page) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const resizeInput = (): void => {
+    input.style.height = 'auto';
+    input.style.height = `${input.scrollHeight}px`;
+  };
+
+  const updateStickFromScroll = (): void => {
+    const slack = 48;
+    stickToBottom =
+      messagesHost.scrollHeight - messagesHost.scrollTop - messagesHost.clientHeight <= slack;
+    jumpBottom.hidden = stickToBottom;
+  };
+
+  const scrollMessagesBottom = (force = false): void => {
+    if (!force && !stickToBottom) {
+      jumpBottom.hidden = false;
+      return;
+    }
+    messagesHost.scrollTop = messagesHost.scrollHeight;
+    stickToBottom = true;
+    jumpBottom.hidden = true;
+  };
+
   const savableAt = (index: number): boolean =>
     messages[index] !== undefined &&
     messages[index]!.role === 'assistant' &&
@@ -528,7 +707,25 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     messages[index]!.error === undefined &&
     messages[index - 1]?.action === 'chapterSummary';
 
-  const renderMessage = (message: AssistantHistoryMessage, index: number): HTMLElement => {
+  const renderToolBlock = (block: AssistantToolBlock): HTMLElement => {
+    const el = document.createElement('div');
+    el.className = 'lightink-reader-assistant-tool';
+    el.dataset.tool = block.name;
+    const name = document.createElement('div');
+    name.className = 'lightink-reader-assistant-tool-name';
+    name.textContent = t(toolLabelKey(block.name));
+    const body = document.createElement('pre');
+    body.className = 'lightink-reader-assistant-tool-body';
+    const parts = [block.arguments];
+    if (block.result !== undefined && block.result !== '') {
+      parts.push(block.result);
+    }
+    body.textContent = parts.filter((part) => part !== '').join('\n');
+    el.append(name, body);
+    return el;
+  };
+
+  const renderMessage = (message: PanelMessage, index: number): HTMLElement => {
     const bubble = document.createElement('div');
     bubble.className = `lightink-reader-assistant-message is-${message.role}`;
     bubble.dataset.role = message.role;
@@ -542,6 +739,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       bubble.appendChild(text);
       return bubble;
     }
+    for (const block of message.toolBlocks ?? []) {
+      bubble.appendChild(renderToolBlock(block));
+    }
     if (message.contextTruncated === true) {
       const notice = document.createElement('p');
       notice.className = 'lightink-reader-assistant-notice';
@@ -550,13 +750,22 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       });
       bubble.appendChild(notice);
     }
-    const text = document.createElement('p');
+    if (message.toolLimitReached === true) {
+      const notice = document.createElement('p');
+      notice.className = 'lightink-reader-assistant-notice';
+      notice.dataset.assistantToolLimit = 'true';
+      notice.textContent = t('reader.assistant.maxToolRounds', {
+        n: String(ASSISTANT_MAX_TOOL_ROUNDS),
+      });
+      bubble.appendChild(notice);
+    }
+    const text = document.createElement('div');
     text.className = 'lightink-reader-assistant-message-text';
     if (message.content === '' && message.error === undefined) {
       text.classList.add('is-streaming');
       text.textContent = streaming ? t('reader.assistant.streaming') : '';
-    } else {
-      text.textContent = message.content;
+    } else if (message.content !== '') {
+      text.innerHTML = renderAssistantMarkdown(message.content);
     }
     bubble.appendChild(text);
     if (message.error !== undefined && message.error !== '') {
@@ -601,7 +810,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     streamingText = null;
     if (messages.length === 0) {
       messagesHost.replaceChildren();
-      scrollMessagesBottom();
+      scrollMessagesBottom(true);
       return;
     }
     const nodes = messages.map((message, index) => renderMessage(message, index));
@@ -616,6 +825,79 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     scrollMessagesBottom();
   };
 
+  const renderHistoryList = (): void => {
+    const conversations = store.conversations;
+    historyEmpty.hidden = conversations.length > 0;
+    historyList.replaceChildren();
+    for (const conversation of conversations) {
+      const item = document.createElement('li');
+      item.className = 'lightink-reader-assistant-history-item';
+      item.dataset.assistantHistoryId = conversation.id;
+      if (conversation.id === store.activeId) {
+        item.classList.add('is-active');
+      }
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'lightink-reader-assistant-history-open';
+      openButton.textContent =
+        conversation.title.trim() === '' ? t('reader.assistant.untitled') : conversation.title;
+      openButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        switchConversation(conversation.id);
+      });
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'lightink-reader-assistant-history-delete';
+      deleteButton.dataset.assistantHistoryDelete = conversation.id;
+      deleteButton.textContent = '×';
+      deleteButton.setAttribute('aria-label', t('reader.assistant.historyDelete'));
+      deleteButton.setAttribute('title', t('reader.assistant.historyDelete'));
+      deleteButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeConversation(conversation.id);
+      });
+      item.append(openButton, deleteButton);
+      historyList.appendChild(item);
+    }
+  };
+
+  const syncQuoteButton = (): void => {
+    const quote = currentSelectionText();
+    quoteButton.disabled = quote === '';
+    quoteButton.title = quote === '' ? t('reader.assistant.quoteUnavailable') : t('reader.assistant.quote');
+  };
+
+  const syncContextHint = (): void => {
+    const chapter = chapterContextOrNull();
+    const parts: string[] = [];
+    if (chapter !== null && (chapter.title.trim() !== '' || chapter.text.trim() !== '')) {
+      const label = chapter.title.trim();
+      if (label !== '') {
+        parts.push(label);
+      }
+      const clipped = clipAssistantContext(chapter.text);
+      if (clipped.truncated) {
+        parts.push(
+          t('reader.assistant.truncated', { n: String(READER_LIMITS.maxAssistantContextChars) }),
+        );
+      }
+    }
+    if (currentSelectionText() !== '') {
+      parts.push(t('reader.assistant.contextSelection'));
+    }
+    contextHint.hidden = parts.length === 0;
+    contextHint.textContent = parts.join(' · ');
+  };
+
+  const syncComposer = (): void => {
+    send.disabled = streaming;
+    stop.disabled = !streaming;
+    syncQuoteButton();
+    syncActionButtons();
+  };
+
   const syncActionButtons = (): void => {
     const chapterAvailable = chapterContextOrNull() !== null;
     for (const [action, button] of actionButtons) {
@@ -628,10 +910,15 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const applyConfiguredView = (): void => {
     guide.hidden = aiConfigured;
     main.hidden = !aiConfigured;
-    syncActionButtons();
+    historyToggle.hidden = !aiConfigured;
+    if (!aiConfigured) {
+      historyPane.hidden = true;
+      historyToggle.setAttribute('aria-expanded', 'false');
+    }
+    syncComposer();
+    syncContextHint();
   };
 
-  // —— 配置态（初始查询 + Manage 广播事件同源） ——
   const refreshConfig = async (): Promise<void> => {
     const fetchConfig = deps.fetchConfig ?? invokeAiTranslateConfig;
     let next: AiTranslateConfig;
@@ -660,10 +947,18 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
   }
 
-  // —— 历史装载与持久化（按书哈希；重开续显） ——
-  /** 交互代数：首个交换开始后，迟到的磁盘历史不再覆写内存对话。 */
   let historyEpoch = 0;
   let historyLoad: Promise<void> | null = null;
+
+  const loadActiveMessages = (): void => {
+    const active = activeAssistantConversation(store);
+    messages = active === null ? [] : active.messages.map((message) => ({ ...message }));
+    savedAnswers.clear();
+    persistError = null;
+    persistNotice.hidden = true;
+    renderMessages();
+    renderHistoryList();
+  };
 
   const ensureHistory = (): Promise<void> => {
     const key = deps.historyKey?.() ?? null;
@@ -675,16 +970,19 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       return historyLoad ?? Promise.resolve();
     }
     if (loadedKey !== null) {
-      // 换书（触屏 replace-existing-reader 复用同一面板实例）：整会话复位，
-      // 旧书对话不得残留展示、也不得经 persistHistory 写进新书的哈希文件。
       sessionGeneration += 1;
       streaming = false;
+      stopRequested = true;
+      abortActive?.();
+      abortActive = null;
       streamingText = null;
-      send.disabled = false;
+      store = emptyAssistantHistoryStore();
       messages = [];
       savedAnswers.clear();
       historyEpoch = 0;
       renderMessages();
+      renderHistoryList();
+      syncComposer();
     }
     loadedKey = key;
     historyLoad = (async () => {
@@ -698,37 +996,72 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         return;
       }
       if (historyEpoch !== 0) {
-        return; // 装载窗口内已有交互：内存对话优先于磁盘快照
+        return;
       }
-      messages = parseAssistantHistory(raw);
-      savedAnswers.clear();
-      renderMessages();
+      store = parseAssistantHistoryStore(raw);
+      loadActiveMessages();
     })();
     return historyLoad;
   };
 
   const persistHistory = (): void => {
+    persistNotice.hidden = persistError === null;
+    if (persistError !== null) {
+      persistNotice.textContent = persistError;
+    }
     const key = deps.historyKey?.() ?? null;
     if (key === null || deps.writeHistory === undefined) {
       return;
     }
-    const json = serializeAssistantHistory(messages);
-    void deps.writeHistory(key, json).catch(() => undefined);
+    if (store.activeId === '' && messages.length === 0) {
+      return;
+    }
+    if (store.activeId === '') {
+      store = createAssistantConversation(store);
+    }
+    store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+    renderHistoryList();
+    try {
+      const json = serializeAssistantHistoryStore(store);
+      persistError = null;
+      persistNotice.hidden = true;
+      void deps.writeHistory(key, json).catch(() => undefined);
+    } catch (error) {
+      if (error instanceof AssistantHistoryTooLargeError) {
+        persistError = t('reader.assistant.historyTooLarge');
+        persistNotice.hidden = false;
+        persistNotice.textContent = persistError;
+      }
+    }
   };
 
-  // —— 流式请求 ——
+  const ensureActiveConversation = (): void => {
+    if (activeAssistantConversation(store) !== null) {
+      return;
+    }
+    store = createAssistantConversation(store);
+    renderHistoryList();
+  };
+
+  const abortStream = (): void => {
+    stopRequested = true;
+    abortActive?.();
+  };
+
   const runStream = async (targetIndex: number): Promise<void> => {
     const generation = sessionGeneration;
-    const chapter = chapterContextOrNull();
-    const clip = chapter === null ? null : clipAssistantContext(chapter.text);
-    const context =
-      chapter !== null && clip !== null && clip.text !== ''
-        ? { title: chapter.title, text: clip.text }
-        : null;
-    const contextTruncated = clip?.truncated === true;
-    const basePrompt = t('reader.assistant.systemPrompt');
-    const systemPrompt = assistantSystemPrompt(basePrompt, context);
-    const history = messages.slice(0, targetIndex);
+    const user = messages[targetIndex - 1];
+    const userMessage = user?.role === 'user' ? user.content : '';
+    const prior = historyTurns(messages, Math.max(0, targetIndex - 1));
+    const loopTurns: AssistantRequestTurn[] = [];
+    const toolBlocks: AssistantToolBlock[] = [];
+    markdownStream = createAssistantMarkdownStream();
+    let visible = '';
+    let contextTruncated = false;
+    let toolLimitReached = false;
+    const session = deps.createToolSession?.() ?? null;
+    let toolRoundTrips = 0;
+
     const onDelta = (delta: string): void => {
       if (disposed.value || generation !== sessionGeneration) {
         return;
@@ -737,52 +1070,145 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (entry === undefined) {
         return;
       }
-      const nextContent = entry.content + delta;
-      messages[targetIndex] = { ...entry, content: nextContent };
+      visible += delta;
+      const html = markdownStream.append(delta);
+      messages[targetIndex] = {
+        ...entry,
+        content: visible,
+        toolBlocks: toolBlocks.slice(),
+      };
       if (streamingText !== null) {
-        streamingText.textContent = nextContent;
+        streamingText.innerHTML = html;
         streamingText.classList.remove('is-streaming');
         scrollMessagesBottom();
       }
     };
+
     streaming = true;
-    syncActionButtons();
-    send.disabled = true;
+    stopRequested = false;
+    syncComposer();
     renderMessages();
     try {
-      await streamAssistantChat(buildAssistantChatRequest(systemPrompt, history), onDelta, streamDeps);
+      while (!disposed.value && generation === sessionGeneration && !stopRequested) {
+        if (toolRoundTrips >= ASSISTANT_MAX_TOOL_ROUNDS) {
+          toolLimitReached = true;
+          break;
+        }
+        const request = buildAssistantChatRequest({
+          systemPrompt: t('reader.assistant.systemPrompt'),
+          chapter: chapterSource(),
+          history: [...prior, ...loopTurns],
+          userMessage,
+          page: currentPageNumber(),
+        });
+        contextTruncated = request.truncated;
+        const done = await streamAssistantChat(
+          request,
+          onDelta,
+          {
+            ...streamDeps,
+            onStart: (abort) => {
+              abortActive = abort;
+              streamDeps.onStart?.(abort);
+            },
+          },
+        );
+        abortActive = null;
+        if (disposed.value || generation !== sessionGeneration || stopRequested) {
+          break;
+        }
+        const calls = done.toolCalls;
+        if (calls.length === 0) {
+          break;
+        }
+        if (toolRoundTrips >= ASSISTANT_MAX_TOOL_ROUNDS) {
+          toolLimitReached = true;
+          break;
+        }
+        loopTurns.push({
+          role: 'assistant',
+          content: '',
+          toolCalls: calls,
+        });
+        const executed =
+          session === null
+            ? calls.map((call) => ({
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+                result: JSON.stringify({
+                  ok: false,
+                  error: 'tools_unavailable',
+                  message: '工具执行不可用。',
+                }),
+              }))
+            : await executeToolCalls(session, calls);
+        if (disposed.value || generation !== sessionGeneration || stopRequested) {
+          break;
+        }
+        for (const block of executed) {
+          toolBlocks.push(block);
+          loopTurns.push({
+            role: 'tool',
+            content: block.result ?? '',
+            toolCallId: block.id,
+            name: block.name,
+          });
+        }
+        const entry = messages[targetIndex];
+        if (entry !== undefined) {
+          messages[targetIndex] = { ...entry, toolBlocks: toolBlocks.slice(), content: visible };
+          renderMessages();
+        }
+        toolRoundTrips += 1;
+      }
       const entry = messages[targetIndex];
       if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
-        messages[targetIndex] = { ...entry, error: undefined, contextTruncated };
+        const stopped = stopRequested;
+        messages[targetIndex] = {
+          ...entry,
+          content: visible,
+          toolBlocks: toolBlocks.slice(),
+          contextTruncated,
+          toolLimitReached,
+          ...(stopped ? { error: t('reader.assistant.stopped') } : { error: undefined }),
+        };
       }
     } catch (error) {
       const entry = messages[targetIndex];
       if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
         messages[targetIndex] = {
           ...entry,
-          error: readerAiErrorMessage(t, error, aiMissing),
+          content: visible,
+          toolBlocks: toolBlocks.slice(),
+          contextTruncated,
+          toolLimitReached,
+          error: stopRequested || isAbortError(error)
+            ? t('reader.assistant.stopped')
+            : readerAiErrorMessage(t, error, aiMissing),
         };
       }
     } finally {
       if (generation === sessionGeneration) {
         streaming = false;
+        abortActive = null;
         streamingText = null;
-        send.disabled = false;
         if (!disposed.value) {
           renderMessages();
-          syncActionButtons();
+          syncComposer();
           persistHistory();
         }
       }
     }
   };
 
-  const appendExchange = (user: AssistantHistoryMessage): void => {
+  const appendExchange = (user: PanelMessage): void => {
     if (streaming) {
       return;
     }
     historyEpoch += 1;
-    const assistant: AssistantHistoryMessage = {
+    ensureActiveConversation();
+    const assistant: PanelMessage = {
       role: 'assistant',
       content: '',
       createdAt: Date.now(),
@@ -791,7 +1217,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     void runStream(messages.length - 1);
   };
 
-  /** 发起一轮提问；返回是否真的发出（流式中/空文本/未配置不发）。 */
   const ask = (content: string, action?: AssistantQuickAction): boolean => {
     const question = content.trim();
     if (question === '' || !aiConfigured || streaming) {
@@ -801,7 +1226,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     return true;
   };
 
-  /** 快捷动作：指令 +（选区动作）引文为用户消息；面板动作以当前章为上下文。 */
   const runQuickAction = (action: AssistantQuickAction, quote?: string): void => {
     if (!aiConfigured || streaming) {
       return;
@@ -828,11 +1252,52 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     void runStream(index);
   };
 
-  // —— 输入 ——
+  const switchConversation = (id: string): void => {
+    if (id === store.activeId) {
+      historyPane.hidden = true;
+      historyToggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    if (streaming) {
+      abortStream();
+    }
+    store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+    store = switchAssistantConversation(store, id);
+    loadActiveMessages();
+    persistHistory();
+    historyPane.hidden = true;
+    historyToggle.setAttribute('aria-expanded', 'false');
+  };
+
+  const removeConversation = (id: string): void => {
+    if (streaming && id === store.activeId) {
+      abortStream();
+    }
+    if (id === store.activeId) {
+      store = setAssistantConversationMessages(store, id, persistableMessages(messages));
+    }
+    store = deleteAssistantConversation(store, id);
+    loadActiveMessages();
+    persistHistory();
+  };
+
+  const startNewConversation = (): void => {
+    if (streaming) {
+      abortStream();
+    }
+    if (store.activeId !== '') {
+      store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+    }
+    store = createAssistantConversation(store);
+    loadActiveMessages();
+    persistHistory();
+  };
+
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
     if (ask(input.value)) {
-      input.value = ''; // 只在真正发出后清空（流式中保留草稿）
+      input.value = '';
+      resizeInput();
     }
   });
   input.addEventListener('keydown', (event) => {
@@ -843,6 +1308,62 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.stopPropagation();
     if (ask(input.value)) {
       input.value = '';
+      resizeInput();
+    }
+  });
+  input.addEventListener('input', () => {
+    resizeInput();
+  });
+  quoteButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const quote = currentSelectionText();
+    if (quote === '') {
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const pad = before === '' || before.endsWith('\n') ? '' : '\n';
+    input.value = `${before}${pad}${quote}${after}`;
+    resizeInput();
+    input.focus();
+  });
+  stop.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!streaming) {
+      return;
+    }
+    abortStream();
+  });
+  jumpBottom.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stickToBottom = true;
+    scrollMessagesBottom(true);
+  });
+  messagesHost.addEventListener('scroll', () => {
+    updateStickFromScroll();
+  });
+  messagesHost.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const locator = target.closest('a[data-chapter], a[data-page]');
+    if (locator instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      deps.jumpToLocator?.(locatorTarget(locator.dataset.chapter, locator.dataset.page));
+      return;
+    }
+    const link = target.closest('a[href]');
+    if (link instanceof HTMLAnchorElement && /^(https?:)/i.test(link.getAttribute('href') ?? '')) {
+      event.preventDefault();
+      event.stopPropagation();
+      deps.openExternalLink?.(link.href);
     }
   });
 
@@ -851,23 +1372,20 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.stopPropagation();
     closePanel();
   });
-  clearHistoryButton.addEventListener('click', (event) => {
+  historyToggle.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    // 清内存会话并作废在飞流式;磁盘清除幂等（失败不阻断,可再点）。
-    sessionGeneration += 1;
-    streaming = false;
-    streamingText = null;
-    send.disabled = false;
-    messages = [];
-    savedAnswers.clear();
-    historyEpoch = 0;
-    renderMessages();
-    syncActionButtons();
-    const key = deps.historyKey?.() ?? null;
-    if (key !== null) {
-      void deps.clearHistory?.(key).catch(() => undefined);
+    const next = historyPane.hidden;
+    historyPane.hidden = !next;
+    historyToggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (next) {
+      renderHistoryList();
     }
+  });
+  historyNew.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startNewConversation();
   });
   settingsButton.addEventListener('click', (event) => {
     event.preventDefault();
@@ -875,13 +1393,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     deps.openSettings();
   });
 
-  // —— 显隐（挂载/钉位/过渡面板自理） ——
   const positionPanel = (): void => {
     const host = deps.host();
     mountReaderOverlay(root, host);
     adoptReaderOverlayTheme(root, host);
-    // 钉位沿用 chrome 面板口径：触屏是底部 sheet（键盘让位内联处理），
-    // 桌面贴阅读区右缘全高（pinFixedOverlay 两个分支各自的几何）。
     const pane =
       typeof host.closest === 'function'
         ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
@@ -896,6 +1411,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     void refreshConfig();
     applyConfiguredView();
     renderMessages();
+    renderHistoryList();
+    resizeInput();
     revealSheet(root);
     if (!readerChromeTouchMode()) {
       try {
@@ -907,6 +1424,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const closePanel = (): void => {
+    historyPane.hidden = true;
+    historyToggle.setAttribute('aria-expanded', 'false');
     if (readerChromeTouchMode()) {
       concealSheet(root, () => {
         root.hidden = true;
@@ -928,7 +1447,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     isVisible: () => !root.hidden,
     askWithSelection(action, quote) {
       openPanel();
-      // 先等本书历史落位再发起，避免装载竞态覆写刚开始的交换。
       void ensureHistory().then(() => {
         if (!disposed.value) {
           runQuickAction(action, quote);
@@ -938,6 +1456,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     destroy() {
       disposed.value = true;
       streaming = false;
+      stopRequested = true;
+      abortActive?.();
+      abortActive = null;
       streamingText = null;
       if (typeof document !== 'undefined') {
         document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);

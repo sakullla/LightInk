@@ -73,8 +73,8 @@
   color: var(--lightink-fg);
 }
 
-/* 清除本书对话：次级文字按钮，窄面板下溢出省略。 */
-.lightink-reader-assistant-clear {
+/* 历史入口：次级文字按钮，窄面板下溢出省略。 */
+.lightink-reader-assistant-history-toggle {
   flex: 0 1 auto;
   min-height: 28px;
   padding: 0 0.5rem;
@@ -90,7 +90,93 @@
   cursor: pointer;
 }
 
-.lightink-reader-assistant-clear:hover {
+.lightink-reader-assistant-history-toggle:hover,
+.lightink-reader-assistant-history-toggle[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.lightink-reader-assistant-history[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-history-new {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lightink-reader-assistant-history-empty {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 0.72rem;
+}
+
+.lightink-reader-assistant-history-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.lightink-reader-assistant-history-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.28rem 0.45rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.74rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-history-item.is-active .lightink-reader-assistant-history-open {
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+}
+
+.lightink-reader-assistant-history-delete {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-muted);
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-history-delete:hover {
   background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
   color: var(--lightink-fg);
 }
@@ -138,6 +224,25 @@
   display: none;
 }
 
+.lightink-reader-assistant-context {
+  margin: 0;
+  padding: 0.4rem 0.75rem 0;
+  color: var(--lightink-muted);
+  font-size: 0.72rem;
+}
+
+.lightink-reader-assistant-context[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-messages-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .lightink-reader-assistant-messages {
   flex: 1 1 auto;
   min-height: 8rem;
@@ -150,11 +255,30 @@
   scrollbar-color: var(--lightink-border) transparent;
 }
 
+.lightink-reader-assistant-jump-bottom {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.45rem;
+  min-height: 28px;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.72rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-jump-bottom[hidden] {
+  display: none;
+}
+
 .lightink-reader-assistant-message {
   max-width: 92%;
   padding: 0.5rem 0.7rem;
   border-radius: 12px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -162,6 +286,7 @@
   align-self: flex-end;
   background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
   border-bottom-right-radius: 4px;
+  white-space: pre-wrap;
 }
 
 .lightink-reader-assistant-message.is-assistant {
@@ -173,6 +298,44 @@
 
 .lightink-reader-assistant-message-text {
   margin: 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote) {
+  margin: 0.35em 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote):first-child {
+  margin-top: 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote):last-child {
+  margin-bottom: 0;
+}
+
+.lightink-reader-assistant-message-text a[data-chapter],
+.lightink-reader-assistant-message-text a[data-page] {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.lightink-reader-assistant-tool {
+  margin: 0 0 0.45rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-fg) 4%, transparent);
+  font-size: 0.72rem;
+}
+
+.lightink-reader-assistant-tool-name {
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-tool-body {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--lightink-muted);
 }
 
 .lightink-reader-assistant-message-text.is-streaming {
@@ -247,19 +410,56 @@
   cursor: default;
 }
 
-/* ===== 输入区 ===== */
+/* ===== 输入区（ADR-6：默认约 4 行，随内容长高，封顶后框内滚动） ===== */
 
 .lightink-reader-assistant-composer {
   display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem 0.7rem;
+}
+
+.lightink-reader-assistant-composer-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lightink-reader-assistant-quote {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-quote:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lightink-reader-assistant-composer-hint {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 0.68rem;
+}
+
+.lightink-reader-assistant-composer-row {
+  display: flex;
   align-items: flex-end;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem 0.7rem;
 }
 
 .lightink-reader-assistant-input {
   flex: 1 1 auto;
-  min-height: 2.1rem;
-  max-height: 7rem;
+  min-height: 5.6rem;
+  max-height: 12rem;
   box-sizing: border-box;
   padding: 0.45rem 0.65rem;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
@@ -267,6 +467,8 @@
   background: var(--lightink-bg);
   color: var(--lightink-fg);
   font: inherit;
+  line-height: 1.4;
+  overflow-y: auto;
   resize: none;
 }
 
@@ -288,9 +490,23 @@
   cursor: pointer;
 }
 
-.lightink-reader-assistant-send:disabled {
+.lightink-reader-assistant-send:disabled,
+.lightink-reader-assistant-stop:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.lightink-reader-assistant-stop {
+  flex: 0 0 auto;
+  min-height: 2.1rem;
+  padding: 0.4rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 24%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 /* ===== 触屏底部 sheet（几何/键盘让位由 pinFixedOverlay 内联提供） ===== */

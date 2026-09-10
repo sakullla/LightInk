@@ -85,11 +85,19 @@ import {
   readerChromeTouchMode,
 } from './reader-dom.js';
 import { htmlToSearchText } from '../search-panel.js';
+import { invoke } from '@tauri-apps/api/core';
+import { showConfirmDialog } from '../../ui/confirm-dialog.js';
 import {
   createAssistantPanel,
   type AssistantChapterContext,
   type AssistantPanel,
 } from '../assistant-panel.js';
+import {
+  createAssistantToolSession,
+  type AssistantChapterBody,
+  type AssistantChapterTarget,
+  type AssistantToolSelection,
+} from '../assistant-tools.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
 
 function readerChromeCopy(
@@ -624,6 +632,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         return null;
       }
       return {
+        kind: 'pdf',
         title: ctx.t('reader.progress.pageOf', {
           current: String(page),
           total: String(ctx.pdfHandle.controller.totalPages),
@@ -640,6 +649,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         ?.body?.textContent ?? '';
     if (mounted.trim() !== '') {
       return {
+        kind: 'flow',
         title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
         text: mounted,
       };
@@ -650,9 +660,79 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       return null;
     }
     return {
+      kind: 'flow',
       title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
       text,
     };
+  };
+
+  const assistantPdfPageText = (page: number): AssistantChapterBody => {
+    const layer = ctx.pageHost.querySelector<HTMLElement>(
+      `.pdfViewer .page[data-page-number="${page}"] .textLayer`,
+    );
+    const text = (layer?.textContent ?? '').trim();
+    if (text === '') {
+      return { text: '', page, reason: 'page_not_ready' };
+    }
+    return { text, page };
+  };
+
+  const assistantFlowChapterText = async (
+    index: number,
+    title?: string,
+  ): Promise<AssistantChapterBody> => {
+    const mounted = ctx.dom.chapterFrame(index)?.contentDocument?.body?.textContent ?? '';
+    if (mounted.trim() !== '') {
+      return { text: mounted, chapter: index, ...(title !== undefined ? { title } : {}) };
+    }
+    const source = ctx.exportChapters[index];
+    if (source === undefined) {
+      return { text: '', chapter: index, reason: 'no_text', ...(title !== undefined ? { title } : {}) };
+    }
+    if (source.load !== undefined && source.html.trim() === '') {
+      try {
+        await source.load();
+      } catch {
+        return { text: '', chapter: index, reason: 'no_text', ...(title !== undefined ? { title } : {}) };
+      }
+    }
+    const text = htmlToSearchText(source.html);
+    if (text.trim() === '') {
+      return { text: '', chapter: index, reason: 'no_text', ...(title !== undefined ? { title } : {}) };
+    }
+    return {
+      text,
+      chapter: index,
+      title: title ?? source.title,
+    };
+  };
+
+  const assistantChapterText = async (
+    target: AssistantChapterTarget,
+  ): Promise<AssistantChapterBody> => {
+    if (ctx.cbzHandle !== null) {
+      return { text: '', reason: 'no_text', ...target };
+    }
+    if (ctx.pdfHandle !== null) {
+      const page = target.page;
+      if (page === undefined) {
+        return { text: '', reason: 'page_not_ready', ...target };
+      }
+      return assistantPdfPageText(page);
+    }
+    if (target.chapter === undefined) {
+      return { text: '', reason: 'no_text', ...target };
+    }
+    return assistantFlowChapterText(target.chapter, target.title);
+  };
+
+  const assistantToolSelection = (): AssistantToolSelection | null => {
+    const pending = ctx.pendingSelection;
+    const quote = pending?.quote.trim() ?? '';
+    if (quote === '' || pending === undefined || pending === null) {
+      return quote === '' ? null : { quote };
+    }
+    return { quote, locator: pending.locator };
   };
 
   const ensureAssistantPanel = (): AssistantPanel => {
@@ -687,6 +767,99 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       writeHistory: ctx.deps.writeAssistantHistory,
       clearHistory: ctx.deps.clearAssistantHistory,
       historyKey: () => ctx.sessionAnnotation.contentHash(),
+      currentSelection: () => ctx.pendingSelection?.quote.trim() ?? '',
+      currentPage: () =>
+        ctx.pdfHandle !== null ? ctx.pdfHandle.controller.page : undefined,
+      createToolSession: () =>
+        createAssistantToolSession({
+          outline: () => ctx.readerOutline,
+          currentChapter: () => {
+            const current = assistantChapterContext();
+            if (current === null) {
+              return null;
+            }
+            return {
+              text: current.text,
+              title: current.title,
+              ...(current.kind === 'pdf'
+                ? { page: ctx.pdfHandle?.controller.page }
+                : { chapter: ctx.dom.firstVisibleChapter() }),
+            };
+          },
+          chapterText: assistantChapterText,
+          search: {
+            run: (query) => {
+              ctx.sessionSearch.run(query);
+            },
+            hitViews: () =>
+              ctx.sessionSearch.hitViews().map((hit) => ({
+                snippet: hit.snippet,
+                location: hit.location,
+                key: hit.key,
+                payload: hit.payload,
+              })),
+            hitsState: () => ({ hasMore: ctx.sessionSearch.hitsState().hasMore }),
+          },
+          selection: assistantToolSelection,
+          bookInfo: () => ({ title: ctx.loadedTitle }),
+          currentLocator: () => ctx.annotation.currentPositionLocator(),
+          appendAnnotation: (kind, locator, quote, note) => {
+            ctx.annotation.appendAnnotation(kind, locator, quote, note);
+          },
+          confirm: async (request) => {
+            const kindKey =
+              request.kind === 'highlight'
+                ? 'annotation.kind.highlight'
+                : request.kind === 'bookmark'
+                  ? 'annotation.kind.bookmark'
+                  : 'annotation.kind.note';
+            const choice = await showConfirmDialog(document, {
+              title: ctx.t('reader.assistant.saveConfirmTitle'),
+              message: ctx.t('reader.assistant.saveConfirmMessage', { kind: ctx.t(kindKey) }),
+              buttons: [
+                {
+                  id: 'save',
+                  label: ctx.t('reader.assistant.saveConfirmAccept'),
+                  kind: 'primary',
+                },
+                { id: 'cancel', label: ctx.t('reader.assistant.saveConfirmReject') },
+              ],
+              cancelId: 'cancel',
+              themeHost: ctx.root,
+            });
+            return choice === 'save';
+          },
+        }),
+      jumpToLocator: (target) => {
+        if (target.page !== undefined) {
+          if (ctx.pdfHandle !== null) {
+            ctx.pdfHandle.scrollToPage(Math.max(1, target.page));
+            ctx.paged.syncPageState();
+            return;
+          }
+          const byPage = ctx.readerOutline.find((item) => item.page === target.page);
+          if (byPage !== undefined) {
+            ctx.jumpToOutlineItem(byPage);
+            return;
+          }
+        }
+        if (target.chapter !== undefined) {
+          const byChapter = ctx.readerOutline.find((item) => item.chapter === target.chapter);
+          if (byChapter !== undefined) {
+            ctx.jumpToOutlineItem(byChapter);
+            return;
+          }
+          ctx.jumpToOutlineItem({
+            level: 1,
+            text: '',
+            anchor: target.chapter,
+            chapter: target.chapter,
+          });
+        }
+      },
+      openExternalLink: (href) => {
+        void invoke('open_in_browser', { url: href }).catch(() => undefined);
+      },
     });
     return assistantPanel;
   };

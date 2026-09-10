@@ -1,35 +1,34 @@
 // @vitest-environment jsdom
 
 /**
- * Contract for `src/reader/assistant-panel.ts` (ADR-6 / R5):
+ * Contract for `src/reader/assistant-panel.ts` (ADR-6 / R1):
  *
- * - 纯函数：章节上下文截断（保留前部、代理对边界安全）、历史文件防御解析/
- *   序列化、流式请求构造（系统提示 + 近期轮次，失败占位不进请求）。
- * - 流式通道：`ai_chat_stream` 经注入的 invoke + Channel 增量回调，终态解析。
- * - 面板：未配置显示前往配置引导而非空聊天框；配置后提问/快捷动作以对话
- *   消息呈现，回答渐进显示；章节上下文超限在回答前提示；失败显示错误且
- *   可原地重试；本章摘要可保存为标注；按书哈希历史重开续显、身份不可用
- *   时退化为仅内存。
+ * - 输入默认多行并长高；可引用选区；生成中可停止且保留已生成文字。
+ * - 面板管理多段历史；工具调用显示为块；查询定位可点跳转。
+ * - 一次发送内工具往返满 24 轮后停止并提示。
+ * - 用户消息纯文本；助手消息 Markdown。流式停止丢掉 Channel。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ASSISTANT_MAX_TOOL_ROUNDS,
   ASSISTANT_PANEL_ACTIONS,
   assistantActionContent,
-  assistantSystemPrompt,
-  buildAssistantChatRequest,
   clipAssistantContext,
   createAssistantPanel,
-  parseAssistantHistory,
-  serializeAssistantHistory,
   streamAssistantChat,
-  type AssistantHistoryMessage,
   type AssistantInvoke,
   type AssistantPanelDeps,
 } from '../assistant-panel.js';
+import {
+  parseAssistantHistoryStore,
+  serializeAssistantHistoryStore,
+  type AssistantHistoryMessage,
+} from '../assistant-history.js';
 import { READER_LIMITS } from '../reader-limits.js';
 import { translate, type MessageKey } from '../../i18n/messages.js';
+import type { AssistantToolSession } from '../assistant-tools.js';
 
 const t = (key: MessageKey, vars?: Readonly<Record<string, string>>): string =>
   translate('zh-CN', key, vars);
@@ -40,13 +39,20 @@ const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+const flushUntil = async (predicate: () => boolean, tries = 80): Promise<void> => {
+  for (let index = 0; index < tries; index += 1) {
+    if (predicate()) {
+      return;
+    }
+    await flush();
+  }
+};
+
 afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-touch-primary');
   document.documentElement.removeAttribute('data-android');
 });
-
-// ── 纯函数 ───────────────────────────────────────────────────────────
 
 describe('clipAssistantContext', () => {
   it('keeps short chapters whole and marks long ones truncated at the head', () => {
@@ -55,7 +61,6 @@ describe('clipAssistantContext', () => {
     const clipped = clipAssistantContext(long);
     expect(clipped.truncated).toBe(true);
     expect(clipped.text).toBe('a'.repeat(READER_LIMITS.maxAssistantContextChars));
-    // 保留的是前部（R5 措辞），不是尾部。
     expect(clipped.text.endsWith('aaaaa')).toBe(true);
   });
 
@@ -63,7 +68,6 @@ describe('clipAssistantContext', () => {
     const emoji = '😀'.repeat(READER_LIMITS.maxAssistantContextChars + 1);
     const clipped = clipAssistantContext(emoji);
     expect(clipped.truncated).toBe(true);
-    // 每个 😀 是 2 个 code unit：回退一字后必为偶数长度，无半个字符。
     expect(clipped.text.length % 2).toBe(0);
     expect(clipped.text).not.toContain('\u{FFFD}');
   });
@@ -73,58 +77,7 @@ describe('clipAssistantContext', () => {
   });
 });
 
-describe('parseAssistantHistory / serializeAssistantHistory', () => {
-  const sample: AssistantHistoryMessage[] = [
-    { role: 'user', content: '这章讲什么?', createdAt: 1, action: 'chapterSummary' },
-    { role: 'assistant', content: '要点……', createdAt: 2, contextTruncated: true },
-    { role: 'assistant', content: '失败了一半', createdAt: 3, error: '请求超时。' },
-  ];
-
-  it('round-trips through the v1 envelope', () => {
-    const json = serializeAssistantHistory(sample);
-    const parsed = JSON.parse(json) as { version: number; messages: unknown[]; updatedAt: number };
-    expect(parsed.version).toBe(1);
-    expect(parsed.messages).toHaveLength(3);
-    expect(parseAssistantHistory(json)).toEqual(sample);
-  });
-
-  it('treats corrupt or malformed files as empty history, never throws', () => {
-    for (const raw of ['', '   ', '{not-json', 'null', '[]', '{"messages":"no"}']) {
-      expect(parseAssistantHistory(raw)).toEqual([]);
-    }
-  });
-
-  it('drops invalid entries and caps hostile files', () => {
-    const entries: Array<{ role: string; content: string; createdAt: number }> = Array.from(
-      { length: 500 },
-      (_, index) => ({
-        role: index % 2 === 0 ? 'user' : 'assistant',
-        content: `m${index}`,
-        createdAt: index,
-      }),
-    );
-    entries[4] = { role: 'tool', content: 'bad role', createdAt: 0 };
-    const parsed = parseAssistantHistory(
-      JSON.stringify({ messages: [...entries, { role: 'user', content: 42 }] }),
-    );
-    // 499 条合法（1 条坏 role 被丢）+ 追加的 content 非字符串被丢 → 截到 400 上限。
-    expect(parsed).toHaveLength(400);
-    expect(parsed.every((message) => typeof message.content === 'string')).toBe(true);
-  });
-});
-
-describe('assistantSystemPrompt / assistantActionContent', () => {
-  it('appends the chapter block only when chapter text exists', () => {
-    const base = '你是助手。';
-    expect(assistantSystemPrompt(base, null)).toBe(base);
-    expect(assistantSystemPrompt(base, { title: '', text: '' })).toBe(base);
-    const withChapter = assistantSystemPrompt(base, { title: '第一章', text: '正文' });
-    expect(withChapter.startsWith(base)).toBe(true);
-    expect(withChapter).toContain('【当前章节：第一章】');
-    expect(withChapter).toContain('<chapter>\n正文\n</chapter>');
-    expect(assistantSystemPrompt(base, { title: '', text: '正文' })).toContain('【当前章节】');
-  });
-
+describe('assistantActionContent', () => {
   it('embeds the selection quote for explain/summarize and clips long quotes', () => {
     const explain = assistantActionContent('explain', '请解释：', '难句');
     expect(explain).toContain('请解释：');
@@ -132,59 +85,12 @@ describe('assistantSystemPrompt / assistantActionContent', () => {
     const longQuote = '字'.repeat(READER_LIMITS.maxAssistantContextChars + 20);
     const summarize = assistantActionContent('summarize', '请总结：', longQuote);
     const body = /<selection>\n([\s\S]*)\n<\/selection>/.exec(summarize)?.[1] ?? '';
-    expect(body).not.toBe(longQuote); // 超长引文被截断（保留前部）
+    expect(body).not.toBe(longQuote);
     expect(body).toBe('字'.repeat(READER_LIMITS.maxAssistantContextChars));
-
-    const chapterAction = assistantActionContent('quiz', '出题指令');
-    expect(chapterAction).toBe('出题指令');
+    expect(assistantActionContent('quiz', '出题指令')).toBe('出题指令');
   });
 });
 
-describe('buildAssistantChatRequest', () => {
-  it('puts the system prompt first and carries recent turns in order', () => {
-    const history: AssistantHistoryMessage[] = [
-      { role: 'user', content: 'q1', createdAt: 1 },
-      { role: 'assistant', content: 'a1', createdAt: 2 },
-      { role: 'user', content: 'q2', createdAt: 3 },
-    ];
-    const request = buildAssistantChatRequest('SYS', history);
-    expect(request.map((message) => message.role)).toEqual(['system', 'user', 'assistant', 'user']);
-    expect(request[0]).toEqual({ role: 'system', content: 'SYS' });
-    expect(request[2]?.content).toBe('a1');
-  });
-
-  it('excludes failed placeholders and empty assistant turns', () => {
-    const history: AssistantHistoryMessage[] = [
-      { role: 'user', content: 'q1', createdAt: 1 },
-      { role: 'assistant', content: '', createdAt: 2, error: '超时' },
-      { role: 'assistant', content: '   ', createdAt: 3 },
-    ];
-    const request = buildAssistantChatRequest('SYS', history);
-    expect(request.map((message) => message.role)).toEqual(['system', 'user']);
-  });
-
-  it('caps the turn count and the character budget from the newest side', () => {
-    const many: AssistantHistoryMessage[] = Array.from({ length: 40 }, (_, index) => ({
-      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
-      content: `msg-${index}`,
-      createdAt: index,
-    }));
-    const capped = buildAssistantChatRequest('SYS', many, 5);
-    expect(capped).toHaveLength(6);
-    expect(capped[capped.length - 1]?.content).toBe('msg-39');
-
-    const wide: AssistantHistoryMessage[] = Array.from({ length: 10 }, (_, index) => ({
-      role: 'user' as const,
-      content: 'x'.repeat(50_000),
-      createdAt: index,
-    }));
-    const budgeted = buildAssistantChatRequest('SYS', wide, 40, 120_000);
-    expect(budgeted.length).toBeLessThan(wide.length + 1);
-    expect(budgeted[budgeted.length - 1]?.content.startsWith('x')).toBe(true);
-  });
-});
-
-/** 注入 mock 的调用记录形态（invoke 兼容 + mock.calls 可读）。 */
 type InvokeMock = AssistantInvoke & {
   readonly mock: { readonly calls: ReadonlyArray<[string, Record<string, unknown>?]> };
 };
@@ -200,7 +106,7 @@ describe('streamAssistantChat', () => {
     }) as unknown as InvokeMock;
     const deltas: string[] = [];
     const done = await streamAssistantChat(
-      [{ role: 'user', content: 'hi' }],
+      { messages: [{ role: 'user', content: 'hi' }], tools: [] },
       (delta) => deltas.push(delta),
       {
         invoke,
@@ -209,57 +115,151 @@ describe('streamAssistantChat', () => {
       },
     );
     expect(deltas).toEqual(['你', '好']);
-    expect(done).toEqual({ finish: 'stop', totalChars: 2 });
-    const payload = invoke.mock.calls[0]?.[1] as { messages: unknown[]; onEvent: unknown };
+    expect(done).toEqual({ finish: 'stop', totalChars: 2, toolCalls: [] });
+    const payload = invoke.mock.calls[0]?.[1] as {
+      messages: unknown[];
+      tools: unknown;
+      onEvent: unknown;
+    };
     expect(payload.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(payload.tools).toEqual([]);
     expect(payload.onEvent).toBeDefined();
   });
 
+  it('collects tool_call events and terminal toolCalls', async () => {
+    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      const channel = args?.onEvent as { onmessage: (event: unknown) => void };
+      channel.onmessage({
+        type: 'tool_call',
+        id: 'c1',
+        name: 'query_book',
+        arguments: '{"action":"toc"}',
+      });
+      return {
+        finish: 'tool_calls',
+        totalChars: 0,
+        toolCalls: [{ id: 'c1', name: 'query_book', arguments: '{"action":"toc"}' }],
+      };
+    }) as unknown as InvokeMock;
+    const done = await streamAssistantChat(
+      { messages: [{ role: 'user', content: '目录' }], tools: [] },
+      () => undefined,
+      {
+        invoke,
+        createChannel: () => ({ onmessage: () => undefined }),
+      },
+    );
+    expect(done.finish).toBe('tool_calls');
+    expect(done.toolCalls).toEqual([
+      { id: 'c1', name: 'query_book', arguments: '{"action":"toc"}' },
+    ]);
+  });
+
   it('normalizes a missing terminal payload', async () => {
-    const done = await streamAssistantChat([], () => undefined, {
+    const done = await streamAssistantChat({ messages: [], tools: [] }, () => undefined, {
       invoke: vi.fn(async () => undefined),
       createChannel: () => ({ onmessage: () => undefined }),
     });
-    expect(done).toEqual({ finish: 'closed', totalChars: 0 });
+    expect(done).toEqual({ finish: 'closed', totalChars: 0, toolCalls: [] });
+  });
+
+  it('drops the Channel on abort so the invoke can surface AI_STREAM_ABORTED', async () => {
+    let abortFn: (() => void) | null = null;
+    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      const channel = args?.onEvent as { cleanupCallback?: () => void };
+      return await new Promise((_resolve, reject) => {
+        const previous = channel.cleanupCallback;
+        channel.cleanupCallback = () => {
+          previous?.();
+          reject({ code: 'AI_STREAM_ABORTED', message: '流式通道已关闭' });
+        };
+      });
+    });
+    const pending = streamAssistantChat(
+      { messages: [{ role: 'user', content: 'hi' }], tools: [] },
+      () => undefined,
+      {
+        invoke,
+        createChannel: () => ({
+          onmessage: () => undefined,
+          cleanupCallback() {
+            return undefined;
+          },
+        }),
+        onStart: (abort) => {
+          abortFn = abort;
+        },
+      },
+    );
+    await flush();
+    expect(abortFn).not.toBeNull();
+    abortFn!();
+    await expect(pending).rejects.toMatchObject({ code: 'AI_STREAM_ABORTED' });
   });
 });
-
-// ── 面板组件 ─────────────────────────────────────────────────────────
 
 interface StreamScript {
   readonly emit: (text: string) => void;
   readonly messages: readonly { role: string; content: string }[];
+  readonly tools: unknown;
 }
 
 type Script = (script: StreamScript) => Promise<unknown> | unknown;
 
-/** 注入面：invoke 捕获请求，channel 把 delta 回灌面板。 */
 function fakeStream(script: Script): {
   invoke: InvokeMock;
-  createChannel: () => { onmessage: (message: unknown) => void };
+  createChannel: () => {
+    onmessage: (message: unknown) => void;
+    cleanupCallback: () => void;
+  };
 } {
   const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
-    const channel = args?.onEvent as { onmessage: (event: unknown) => void };
+    const channel = args?.onEvent as {
+      onmessage: (event: unknown) => void;
+      cleanupCallback?: () => void;
+    };
     const messages = (args?.messages as { role: string; content: string }[]) ?? [];
-    return await script({
-      emit: (text: string) => {
-        channel.onmessage({ type: 'delta', text });
-      },
-      messages,
+    let rejectAbort: ((reason: unknown) => void) | null = null;
+    const abortPromise = new Promise((_resolve, reject) => {
+      rejectAbort = reject;
     });
+    const previous = channel.cleanupCallback;
+    channel.cleanupCallback = () => {
+      previous?.();
+      rejectAbort?.({ code: 'AI_STREAM_ABORTED', message: '流式通道已关闭' });
+    };
+    return await Promise.race([
+      script({
+        emit: (text: string) => {
+          channel.onmessage({ type: 'delta', text });
+        },
+        messages,
+        tools: args?.tools,
+      }),
+      abortPromise,
+    ]);
   });
   return {
     invoke: invoke as unknown as InvokeMock,
-    createChannel: () => ({ onmessage: () => undefined }),
+    createChannel: () => ({
+      onmessage: () => undefined,
+      cleanupCallback() {
+        return undefined;
+      },
+    }),
   };
 }
 
 interface MountOptions {
   readonly configured?: boolean;
-  readonly chapter?: { title: string; text: string } | null;
+  readonly chapter?: { title: string; text: string; kind?: 'flow' | 'pdf' | 'cbz' } | null;
   readonly historyKey?: string | null;
   readonly historyJson?: string;
   readonly script?: Script;
+  readonly currentSelection?: string;
+  readonly currentPage?: number;
+  readonly createToolSession?: () => AssistantToolSession;
+  readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
 }
 
 function mountPanel(options: MountOptions = {}): {
@@ -270,10 +270,12 @@ function mountPanel(options: MountOptions = {}): {
     saveAnnotation: ReturnType<typeof vi.fn>;
     readHistory: ReturnType<typeof vi.fn>;
     writeHistory: ReturnType<typeof vi.fn>;
+    jumpToLocator: ReturnType<typeof vi.fn>;
   };
 } {
   const script: Script =
-    options.script ?? (async ({ emit }) => {
+    options.script ??
+    (async ({ emit }) => {
       emit('回答内容');
       return { finish: 'stop', totalChars: 4 };
     });
@@ -283,6 +285,7 @@ function mountPanel(options: MountOptions = {}): {
     saveAnnotation: vi.fn(),
     readHistory: vi.fn(async () => options.historyJson ?? ''),
     writeHistory: vi.fn(async () => undefined),
+    jumpToLocator: vi.fn(options.jumpToLocator),
   };
   const deps: AssistantPanelDeps = {
     t,
@@ -298,6 +301,10 @@ function mountPanel(options: MountOptions = {}): {
     writeHistory: options.historyKey === null ? undefined : calls.writeHistory,
     historyKey: () => options.historyKey ?? null,
     stream,
+    currentSelection: () => options.currentSelection ?? '',
+    currentPage: () => options.currentPage,
+    createToolSession: options.createToolSession,
+    jumpToLocator: calls.jumpToLocator,
   };
   const panel = createAssistantPanel(deps);
   return { panel, invoke: stream.invoke, deps: calls };
@@ -308,10 +315,9 @@ host.className = 'lightink-reader';
 document.body.append(host);
 
 function bubbleTexts(panel: ReturnType<typeof createAssistantPanel>, role: string): string[] {
-  return [...panel.element.querySelectorAll(`.lightink-reader-assistant-message[data-role="${role}"]`)]
-    .map((bubble) =>
-      bubble.querySelector('.lightink-reader-assistant-message-text')?.textContent ?? '',
-    );
+  return [...panel.element.querySelectorAll(`.lightink-reader-assistant-message[data-role="${role}"]`)].map(
+    (bubble) => bubble.querySelector('.lightink-reader-assistant-message-text')?.textContent ?? '',
+  );
 }
 
 function submitQuestion(panel: ReturnType<typeof createAssistantPanel>, question: string): void {
@@ -334,6 +340,10 @@ function actionButton(
   return button!;
 }
 
+function v1History(messages: AssistantHistoryMessage[]): string {
+  return JSON.stringify({ version: 1, messages, updatedAt: 1 });
+}
+
 describe('createAssistantPanel unconfigured guide (R5)', () => {
   it('shows the guide with a settings entry instead of an empty chat box', async () => {
     const { panel, deps } = mountPanel({ configured: false });
@@ -343,9 +353,7 @@ describe('createAssistantPanel unconfigured guide (R5)', () => {
     const main = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-main');
     expect(guide?.hidden).toBe(false);
     expect(main?.hidden).toBe(true);
-    panel.element
-      .querySelector<HTMLButtonElement>('.lightink-reader-assistant-settings')
-      ?.click();
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-settings')?.click();
     expect(deps.openSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -366,13 +374,19 @@ describe('createAssistantPanel unconfigured guide (R5)', () => {
     });
     panel.open();
     await flush();
-    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-main')?.hidden).toBe(true);
+    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-main')?.hidden).toBe(
+      true,
+    );
     configured = true;
     document.dispatchEvent(
       new CustomEvent('lightink:reader-ai-configured', { detail: { configured: true } }),
     );
-    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-main')?.hidden).toBe(false);
-    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-guide')?.hidden).toBe(true);
+    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-main')?.hidden).toBe(
+      false,
+    );
+    expect(panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-guide')?.hidden).toBe(
+      true,
+    );
     panel.destroy();
   });
 });
@@ -391,22 +405,26 @@ describe('createAssistantPanel streaming conversation', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     const payload = invoke.mock.calls[0]?.[1] as {
       messages: { role: string; content: string }[];
+      tools: { name: string }[];
     };
+    expect(payload.tools.map((tool) => tool.name)).toEqual(['query_book', 'save_to_book']);
     expect(payload.messages[0]?.role).toBe('system');
-    expect(payload.messages[0]?.content).toContain('章节正文');
-    expect(payload.messages[payload.messages.length - 1]).toEqual({ role: 'user', content: '这章讲什么?' });
+    expect(payload.messages.some((message) => message.content.includes('章节正文'))).toBe(true);
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '这章讲什么?',
+    });
     expect(bubbleTexts(panel, 'user')).toEqual(['这章讲什么?']);
     expect(bubbleTexts(panel, 'assistant')).toEqual(['回答内容']);
 
     expect(deps.writeHistory).toHaveBeenCalledTimes(1);
-    const [key, json] = deps.writeHistory.mock.calls[0] as unknown as [
-      string,
-      string,
-    ];
+    const [key, json] = deps.writeHistory.mock.calls[0] as unknown as [string, string];
     expect(key).toBe('0123456789abcdef');
-    const persisted = parseAssistantHistory(json);
-    expect(persisted.map((message) => message.role)).toEqual(['user', 'assistant']);
-    expect(persisted[1]?.content).toBe('回答内容');
+    const persisted = parseAssistantHistoryStore(json);
+    expect(persisted.version).toBe(2);
+    const active = persisted.conversations.find((conversation) => conversation.id === persisted.activeId);
+    expect(active?.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(active?.messages[1]?.content).toBe('回答内容');
     panel.destroy();
   });
 
@@ -419,15 +437,14 @@ describe('createAssistantPanel streaming conversation', () => {
     submitQuestion(panel, '追问');
     await flush();
     expect(invoke).toHaveBeenCalledTimes(2);
-    const second = invoke.mock.calls[1]?.[1] as {
-      messages: { role: string; content: string }[];
-    };
-    expect(second.messages.map((message) => `${message.role}:${message.content}`)).toEqual([
-      `system:${second.messages[0]!.content}`,
-      'user:第一问',
-      'assistant:回答内容',
-      'user:追问',
-    ]);
+    const first = invoke.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+    const second = invoke.mock.calls[1]?.[1] as { messages: { role: string; content: string }[] };
+    const prefix = (messages: { role: string; content: string }[]): string =>
+      JSON.stringify(messages.filter((message) => message.role === 'system'));
+    expect(prefix(first.messages)).toBe(prefix(second.messages));
+    expect(second.messages.some((message) => message.content === '第一问')).toBe(true);
+    expect(second.messages.some((message) => message.content === '回答内容')).toBe(true);
+    expect(second.messages[second.messages.length - 1]).toEqual({ role: 'user', content: '追问' });
     panel.destroy();
   });
 
@@ -441,16 +458,16 @@ describe('createAssistantPanel streaming conversation', () => {
     submitQuestion(panel, '总结');
     await flush();
 
-    const system = (invoke.mock.calls[0]?.[1] as { messages: { content: string }[] }).messages[0]!
-      .content;
-    expect(system).toContain('章'.repeat(10));
-    expect(system.endsWith('章'.repeat(100))).toBe(false);
+    const chapterMessage = (
+      invoke.mock.calls[0]?.[1] as { messages: { content: string }[] }
+    ).messages.find((message) => message.content.includes('<chapter>'));
+    expect(chapterMessage?.content).toContain('章'.repeat(10));
+    expect(chapterMessage?.content.endsWith('章'.repeat(100))).toBe(false);
 
     const bubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
     const answer = bubbles[bubbles.length - 1]!;
     const notice = answer.querySelector('.lightink-reader-assistant-notice');
     expect(notice?.textContent).toContain(String(READER_LIMITS.maxAssistantContextChars));
-    // 提示出现在回答文本之前（回答前提示）。
     expect(answer.firstElementChild?.className).toBe('lightink-reader-assistant-notice');
     panel.destroy();
   });
@@ -479,14 +496,12 @@ describe('createAssistantPanel streaming conversation', () => {
     expect(failed.querySelector('.lightink-reader-assistant-error')?.textContent).toContain(
       '无法连接 AI 服务',
     );
-    // 半截内容仍在（历史不删除）。
     expect(bubbleTexts(panel, 'assistant')).toEqual(['半截']);
 
     fail = false;
     failed.querySelector<HTMLButtonElement>('.lightink-reader-assistant-retry')?.click();
     await flush();
     expect(invoke).toHaveBeenCalledTimes(2);
-    // 重试是重发同一请求：两条消息（user + assistant 占位），不新增 user 轮。
     bubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
     expect(bubbles).toHaveLength(2);
     expect(bubbleTexts(panel, 'assistant')).toEqual(['恢复后的回答']);
@@ -514,10 +529,100 @@ describe('createAssistantPanel streaming conversation', () => {
     const input = panel.element.querySelector<HTMLTextAreaElement>(
       '.lightink-reader-assistant-input',
     );
-    expect(input?.value).toBe('第二问'); // 流式中未发出：草稿保留
+    expect(input?.value).toBe('第二问');
     expect(bubbleTexts(panel, 'user')).toEqual(['第一问']);
     (release as ((value: unknown) => void) | null)?.(null);
     await flush();
+    panel.destroy();
+  });
+
+  it('renders assistant replies as markdown and keeps user bubbles as plain text', async () => {
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        emit('# 标题\n\n- 一项');
+        return { finish: 'stop', totalChars: 10 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '**用户粗体**');
+    await flush();
+    const user = panel.element.querySelector('.lightink-reader-assistant-message.is-user');
+    expect(user?.querySelector('strong')).toBeNull();
+    expect(user?.textContent).toContain('**用户粗体**');
+    const assistant = panel.element.querySelector('.lightink-reader-assistant-message.is-assistant');
+    expect(assistant?.querySelector('h1')?.textContent).toBe('标题');
+    expect(assistant?.querySelector('li')?.textContent).toBe('一项');
+    panel.destroy();
+  });
+});
+
+describe('createAssistantPanel composer (R1)', () => {
+  it('defaults the input to multiple lines and grows with content', async () => {
+    const { panel } = mountPanel();
+    panel.open();
+    await flush();
+    const input = panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.rows).toBe(4);
+    Object.defineProperty(input!, 'scrollHeight', { configurable: true, value: 120 });
+    input!.value = '第一行\n第二行\n第三行\n第四行\n第五行';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(input?.style.height).toBe('120px');
+    panel.destroy();
+  });
+
+  it('quotes the current selection into the input and stays disabled without one', async () => {
+    const { panel } = mountPanel({ currentSelection: '' });
+    panel.open();
+    await flush();
+    const quote = panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]');
+    expect(quote?.disabled).toBe(true);
+    expect(quote?.title).toBe(t('reader.assistant.quoteUnavailable'));
+    panel.destroy();
+
+    const next = mountPanel({ currentSelection: '选中的句子' });
+    next.panel.open();
+    await flush();
+    const enabled = next.panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]');
+    expect(enabled?.disabled).toBe(false);
+    enabled!.click();
+    const input = next.panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.value).toContain('选中的句子');
+    submitQuestion(next.panel, input!.value);
+    await flush();
+    expect(bubbleTexts(next.panel, 'user')[0]).toContain('选中的句子');
+    next.panel.destroy();
+  });
+
+  it('stops generation, keeps partial text, and allows another question', async () => {
+    const { panel, invoke } = mountPanel({
+      script: async ({ emit }) => {
+        emit('半截回答');
+        await new Promise(() => undefined);
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    expect(bubbleTexts(panel, 'assistant')[0]).toContain('半截回答');
+    const stop = panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]');
+    expect(stop?.disabled).toBe(false);
+    stop!.click();
+    await flush();
+    expect(bubbleTexts(panel, 'assistant')[0]).toContain('半截回答');
+    expect(panel.element.querySelector('.lightink-reader-assistant-error')?.textContent).toBe(
+      t('reader.assistant.stopped'),
+    );
+    expect(stop?.disabled).toBe(true);
+    submitQuestion(panel, '第二问');
+    await flush();
+    expect(invoke.mock.calls.length).toBeGreaterThan(1);
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
     panel.destroy();
   });
 });
@@ -535,8 +640,10 @@ describe('createAssistantPanel quick actions', () => {
     await flush();
     expect(invoke).toHaveBeenCalledTimes(1);
     const payload = invoke.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
-    expect(payload.messages[0]?.content).toContain('本章正文内容');
-    expect(payload.messages[payload.messages.length - 1]?.content).toBe(t('reader.assistant.prompt.chapterSummary'));
+    expect(payload.messages.some((message) => message.content.includes('本章正文内容'))).toBe(true);
+    expect(payload.messages[payload.messages.length - 1]?.content).toBe(
+      t('reader.assistant.prompt.chapterSummary'),
+    );
 
     const bubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
     const answer = bubbles[bubbles.length - 1]!;
@@ -546,11 +653,9 @@ describe('createAssistantPanel quick actions', () => {
     expect(deps.saveAnnotation).toHaveBeenCalledWith('回答内容');
     expect(save!.disabled).toBe(true);
     expect(save!.textContent).toBe(t('reader.assistant.saved'));
-    // 已保存后重复点击不再触发。
     save!.click();
     expect(deps.saveAnnotation).toHaveBeenCalledTimes(1);
 
-    // 生词卡 / 章节测验同样以对话消息呈现（无保存按钮）。
     actionButton(panel, 'vocabulary').click();
     await flush();
     actionButton(panel, 'quiz').click();
@@ -558,10 +663,14 @@ describe('createAssistantPanel quick actions', () => {
     expect(invoke).toHaveBeenCalledTimes(3);
     const vocab = invoke.mock.calls[1]?.[1] as { messages: { content: string }[] };
     const quiz = invoke.mock.calls[2]?.[1] as { messages: { content: string }[] };
-    expect(vocab.messages[vocab.messages.length - 1]?.content).toBe(t('reader.assistant.prompt.vocabulary'));
+    expect(vocab.messages[vocab.messages.length - 1]?.content).toBe(
+      t('reader.assistant.prompt.vocabulary'),
+    );
     expect(quiz.messages[quiz.messages.length - 1]?.content).toBe(t('reader.assistant.prompt.quiz'));
     const lastBubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
-    expect(lastBubbles[lastBubbles.length - 1]!.querySelector('.lightink-reader-assistant-save')).toBeNull();
+    expect(
+      lastBubbles[lastBubbles.length - 1]!.querySelector('.lightink-reader-assistant-save'),
+    ).toBeNull();
     panel.destroy();
   });
 
@@ -599,7 +708,7 @@ describe('createAssistantPanel quick actions', () => {
 });
 
 describe('createAssistantPanel history lifecycle', () => {
-  const storedHistory = serializeAssistantHistory([
+  const storedHistory = v1History([
     { role: 'user', content: '上次的问题', createdAt: 10 },
     { role: 'assistant', content: '上次的回答', createdAt: 11 },
   ]);
@@ -618,7 +727,7 @@ describe('createAssistantPanel history lifecycle', () => {
     panel.close();
     panel.open();
     await flush();
-    expect(deps.readHistory).toHaveBeenCalledTimes(1); // 同书重开不重读
+    expect(deps.readHistory).toHaveBeenCalledTimes(1);
     expect(bubbleTexts(panel, 'user')).toEqual(['上次的问题']);
     panel.destroy();
   });
@@ -648,9 +757,7 @@ describe('createAssistantPanel history lifecycle', () => {
     expect(bubbleTexts(panel, 'user')).toEqual(['上次的问题']);
 
     key = 'fedcba9876543210';
-    json = serializeAssistantHistory([
-      { role: 'user', content: '另一本书的问题', createdAt: 20 },
-    ]);
+    json = v1History([{ role: 'user', content: '另一本书的问题', createdAt: 20 }]);
     panel.open();
     await flush();
     expect(readHistory).toHaveBeenCalledTimes(2);
@@ -659,8 +766,6 @@ describe('createAssistantPanel history lifecycle', () => {
   });
 
   it('drops the previous book conversation when identity changes after interaction', async () => {
-    // 回归:触屏 replace-existing-reader 复用同一面板实例——书 A 交互过(epoch>=1)
-    // 后换书 B,旧对话不得残留展示,更不得被写进书 B 的历史文件。
     let key = '0123456789abcdef';
     let reply = '书A的回答';
     const written: Array<{ key: string; json: string }> = [];
@@ -689,12 +794,11 @@ describe('createAssistantPanel history lifecycle', () => {
     expect(bubbleTexts(panel, 'assistant')).toEqual(['书A的回答']);
 
     key = 'fedcba9876543210';
-    panel.open(); // 换书重开:会话复位并装载书 B 历史(为空)
+    panel.open();
     await flush();
     expect(bubbleTexts(panel, 'user')).toEqual([]);
     expect(bubbleTexts(panel, 'assistant')).toEqual([]);
 
-    // 书 B 新对话只包含书 B 内容;书 A 的消息从未写入书 B 的键。
     reply = '书B的回答';
     submitQuestion(panel, '书B的问题');
     await flush();
@@ -708,41 +812,45 @@ describe('createAssistantPanel history lifecycle', () => {
     panel.destroy();
   });
 
-  it('clears this book’s conversation from memory and disk via the header action', async () => {
-    const clearedKeys: string[] = [];
-    const stream = fakeStream(async ({ emit }) => {
-      emit('回答');
-      return { finish: 'stop', totalChars: 2 };
-    });
-    const panel = createAssistantPanel({
-      t,
-      host: () => host,
-      chapterContext: () => null,
-      openSettings: () => undefined,
-      saveAnnotation: () => undefined,
-      fetchConfig: async () => ({ configured: true, missing: [] }),
-      readHistory: async () => '',
-      writeHistory: async () => undefined,
-      clearHistory: async (key) => {
-        clearedKeys.push(key);
-      },
-      historyKey: () => '0123456789abcdef',
-      stream,
-    });
+  it('creates, switches, and deletes conversations from the history entry', async () => {
+    const { panel, deps } = mountPanel({ historyKey: '0123456789abcdef' });
     panel.open();
     await flush();
-    submitQuestion(panel, '要被清除的问题');
+    submitQuestion(panel, '第一段问题');
     await flush();
-    expect(bubbleTexts(panel, 'user')).toEqual(['要被清除的问题']);
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一段问题']);
 
-    const clearButton = panel.element.querySelector<HTMLButtonElement>(
-      '.lightink-reader-assistant-clear',
-    );
-    expect(clearButton).not.toBeNull();
-    clearButton!.click();
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')?.click();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-history-new]')?.click();
     await flush();
     expect(bubbleTexts(panel, 'user')).toEqual([]);
-    expect(clearedKeys).toEqual(['0123456789abcdef']);
+    submitQuestion(panel, '第二段问题');
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第二段问题']);
+
+    const items = [
+      ...panel.element.querySelectorAll<HTMLElement>('[data-assistant-history-id]'),
+    ];
+    expect(items.length).toBe(2);
+    const first = items.find((item) => !item.classList.contains('is-active'));
+    first?.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-open')?.click();
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一段问题']);
+
+    const activeId = panel.element
+      .querySelector<HTMLElement>('.lightink-reader-assistant-history-item.is-active')
+      ?.getAttribute('data-assistant-history-id');
+    expect(activeId).not.toBeNull();
+    panel.element
+      .querySelector<HTMLButtonElement>(`[data-assistant-history-delete="${activeId}"]`)
+      ?.click();
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第二段问题']);
+    const writes = deps.writeHistory.mock.calls;
+    const lastWrite = writes[writes.length - 1]?.[1] as string;
+    const store = parseAssistantHistoryStore(lastWrite);
+    expect(store.conversations).toHaveLength(1);
+    expect(store.conversations[0]?.title).toContain('第二段问题');
     panel.destroy();
   });
 
@@ -759,7 +867,70 @@ describe('createAssistantPanel history lifecycle', () => {
     panel.close();
     panel.open();
     await flush();
-    expect(bubbleTexts(panel, 'user')).toEqual(['临时问题']); // 内存续显
+    expect(bubbleTexts(panel, 'user')).toEqual(['临时问题']);
+    panel.destroy();
+  });
+});
+
+describe('createAssistantPanel tools and locators', () => {
+  it('renders tool calls as blocks and stops after 24 tool rounds with a notice', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({
+      ok: true,
+      tool: 'query_book',
+      action: 'toc',
+      items: [],
+    }));
+    const { panel, invoke } = mountPanel({
+      script: async () => {
+        round += 1;
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: `c${round}`, name: 'query_book', arguments: '{"action":"toc"}' }],
+        };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '读很多章');
+    await flushUntil(() => invoke.mock.calls.length >= ASSISTANT_MAX_TOOL_ROUNDS);
+    expect(invoke).toHaveBeenCalledTimes(ASSISTANT_MAX_TOOL_ROUNDS);
+    expect(execute).toHaveBeenCalledTimes(ASSISTANT_MAX_TOOL_ROUNDS);
+    expect(panel.element.querySelectorAll('[data-tool="query_book"]').length).toBe(
+      ASSISTANT_MAX_TOOL_ROUNDS,
+    );
+    expect(
+      panel.element.querySelector('[data-assistant-tool-limit]')?.textContent,
+    ).toBe(t('reader.assistant.maxToolRounds', { n: String(ASSISTANT_MAX_TOOL_ROUNDS) }));
+    panel.destroy();
+  });
+
+  it('jumps when a query-based answer locator is clicked', async () => {
+    const { panel, deps } = mountPanel({
+      script: async ({ emit }) => {
+        emit('见 [第二章](chapter:2) 与 [第3页](page:3)');
+        return { finish: 'stop', totalChars: 20 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '定位');
+    await flush();
+    const chapterLink = panel.element.querySelector<HTMLAnchorElement>('a[data-chapter="2"]');
+    const pageLink = panel.element.querySelector<HTMLAnchorElement>('a[data-page="3"]');
+    expect(chapterLink).not.toBeNull();
+    expect(pageLink).not.toBeNull();
+    chapterLink!.click();
+    expect(deps.jumpToLocator).toHaveBeenCalledWith({ chapter: 2 });
+    pageLink!.click();
+    expect(deps.jumpToLocator).toHaveBeenCalledWith({ page: 3 });
     panel.destroy();
   });
 });
@@ -772,10 +943,10 @@ describe('createAssistantPanel lifecycle hygiene', () => {
     panel.open();
     await flush();
     expect(panel.isVisible()).toBe(true);
-    expect(panel.element.parentNode).toBe(document.body); // portal 到 body
-    expect(document.body.contains(panel.element.querySelector('.lightink-reader-assistant-input'))).toBe(
-      true,
-    );
+    expect(panel.element.parentNode).toBe(document.body);
+    expect(
+      document.body.contains(panel.element.querySelector('.lightink-reader-assistant-input')),
+    ).toBe(true);
     panel.close();
     expect(panel.isVisible()).toBe(false);
     panel.open();
@@ -788,7 +959,7 @@ describe('createAssistantPanel lifecycle hygiene', () => {
     const stream = fakeStream(
       ({ emit }) =>
         new Promise(() => {
-          lateEmit = emit; // 悬挂的流：destroy 后才推 delta / 永不 resolve
+          lateEmit = emit;
         }),
     );
     const panel = createAssistantPanel({
@@ -802,13 +973,12 @@ describe('createAssistantPanel lifecycle hygiene', () => {
     });
     panel.open();
     await flush();
-    submitQuestion(panel, '问题'); // 流式启动，invoke 已捕获 emit
+    submitQuestion(panel, '问题');
     await flush();
     expect(lateEmit).not.toBeNull();
 
     panel.destroy();
     expect(() => lateEmit!('迟到的增量')).not.toThrow();
-    // 销毁后迟到 delta 不落消息：气泡停留在销毁前的流式占位。
     expect(bubbleTexts(panel, 'assistant')).toEqual([t('reader.assistant.streaming')]);
     expect(panel.element.textContent).not.toContain('迟到的增量');
     expect(() =>
@@ -816,5 +986,23 @@ describe('createAssistantPanel lifecycle hygiene', () => {
         new CustomEvent('lightink:reader-ai-configured', { detail: { configured: false } }),
       ),
     ).not.toThrow();
+  });
+});
+
+describe('serializeAssistantHistoryStore still round-trips panel writes', () => {
+  it('keeps v2 envelopes written by the panel', () => {
+    const json = serializeAssistantHistoryStore({
+      version: 2,
+      activeId: 'a',
+      conversations: [
+        {
+          id: 'a',
+          title: '问',
+          messages: [{ role: 'user', content: '问', createdAt: 1 }],
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(parseAssistantHistoryStore(json).activeId).toBe('a');
   });
 });
