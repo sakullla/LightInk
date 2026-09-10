@@ -1097,6 +1097,40 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
     expect(activateKey).not.toHaveBeenCalled();
     expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
   });
+
+  it('does not treat pre-start idle as done when run() stays idle until later', async () => {
+    let pending = false;
+    let searching = false;
+    const activateKey = vi.fn();
+    const session = {
+      run: vi.fn((query: string) => {
+        expect(query).toBe('needle');
+        // PDF-like: runPdfSearch returns before onResult, so hitsState stays idle.
+        setTimeout(() => {
+          pending = true;
+          searching = false;
+          setTimeout(() => {
+            pending = false;
+            searching = false;
+          }, 8);
+        }, 8);
+      }),
+      hitsState: () => ({ pending, searching, hasMore: false }),
+      activateKey,
+    };
+    const done = runAssistantSessionSearch(session, 'needle');
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    await done;
+    expect(settled).toBe(true);
+    expect(session.run).toHaveBeenCalledWith('needle');
+    expect(activateKey).not.toHaveBeenCalled();
+    expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
+  });
 });
 
 describe('serializeAssistantHistoryStore still round-trips panel writes', () => {

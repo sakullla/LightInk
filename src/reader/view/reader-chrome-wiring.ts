@@ -187,6 +187,10 @@ export interface AssistantSessionSearchIdleState {
   readonly searching?: boolean;
 }
 
+function isAssistantSessionSearchBusy(state: AssistantSessionSearchIdleState): boolean {
+  return state.pending === true || state.searching === true;
+}
+
 /**
  * 等 sessionSearch 不再 pending/searching。query_book.search 只 run + 读命中，
  * 不得 activateKey。
@@ -196,8 +200,26 @@ export function waitForAssistantSessionSearchIdle(
 ): Promise<void> {
   return new Promise((resolve) => {
     const poll = (): void => {
-      const state = hitsState();
-      if (state.pending !== true && state.searching !== true) {
+      if (!isAssistantSessionSearchBusy(hitsState())) {
+        resolve();
+        return;
+      }
+      setTimeout(poll, 0);
+    };
+    poll();
+  });
+}
+
+/**
+ * PDF runPdfSearch 在首个 onResult 前仍是 idle（state 尚未落地）。
+ * 不能把 run() 刚返回时的空闲快照当成扫描结束。
+ */
+function waitForAssistantSessionSearchBusy(
+  hitsState: () => AssistantSessionSearchIdleState,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const poll = (): void => {
+      if (isAssistantSessionSearchBusy(hitsState())) {
         resolve();
         return;
       }
@@ -216,7 +238,10 @@ export function runAssistantSessionSearch(
   query: string,
 ): Promise<void> {
   session.run(query);
-  return waitForAssistantSessionSearchIdle(() => session.hitsState());
+  const hitsState = (): AssistantSessionSearchIdleState => session.hitsState();
+  return waitForAssistantSessionSearchBusy(hitsState).then(() =>
+    waitForAssistantSessionSearchIdle(hitsState),
+  );
 }
 
 export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWiringSurface {
