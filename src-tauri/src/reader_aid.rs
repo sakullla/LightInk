@@ -637,13 +637,12 @@ mod tests {
 
     #[test]
     fn embedded_userinfo_is_rejected() {
-        for raw in ["https://user:pass@en.wiktionary.org/api/rest_v1/page/definition/hi"] {
-            assert_eq!(
-                validate_reader_url_str(raw).unwrap_err().code,
-                "READER_URL_INVALID",
-                "accepted {raw}"
-            );
-        }
+        let raw = "https://user:pass@en.wiktionary.org/api/rest_v1/page/definition/hi";
+        assert_eq!(
+            validate_reader_url_str(raw).unwrap_err().code,
+            "READER_URL_INVALID",
+            "accepted {raw}"
+        );
     }
 
     #[test]

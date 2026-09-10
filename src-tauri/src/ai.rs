@@ -405,7 +405,7 @@ fn redirect_target_allowed(first: &Url, target: &Url, allow_http: bool) -> bool 
     same_origin
         && target.username().is_empty()
         && target.password().is_none()
-        && validate_ai_url(&target.to_string(), allow_http).is_ok()
+        && validate_ai_url(target.as_ref(), allow_http).is_ok()
 }
 
 // ── Provider 解析与请求构造 ──────────────────────────────────────────
