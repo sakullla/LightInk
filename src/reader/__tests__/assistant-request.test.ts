@@ -18,30 +18,31 @@ import {
   formatAssistantUserMessage,
   type AssistantRequestTurn,
 } from '../assistant-request.js';
+import { ASSISTANT_TOOL_DEFINITIONS } from '../assistant-tools.js';
 
 const systemPrompt = '你是阅读器助手。';
 const chapter = { kind: 'flow' as const, title: '第一章', text: '春江潮水连海平' };
 
 describe('ASSISTANT_BUILTIN_TOOLS', () => {
-  it('exposes exactly query_book then save_to_book', () => {
+  it('uses the executor tool JSON, including query_book chapter/title/index/page', () => {
+    expect(ASSISTANT_BUILTIN_TOOLS).toBe(ASSISTANT_TOOL_DEFINITIONS);
     expect(ASSISTANT_BUILTIN_TOOLS.map((tool) => tool.name)).toEqual([
       'query_book',
       'save_to_book',
     ]);
     expect(ASSISTANT_BUILTIN_TOOLS).toHaveLength(2);
-    const queryEnum = (ASSISTANT_BUILTIN_TOOLS[0]?.parameters as { properties?: { action?: { enum?: unknown } } })
-      .properties?.action?.enum;
-    expect(queryEnum).toEqual([
-      'toc',
-      'current_chapter',
-      'chapter',
-      'selection',
-      'book_info',
-      'search',
-    ]);
-    const kindEnum = (ASSISTANT_BUILTIN_TOOLS[1]?.parameters as { properties?: { kind?: { enum?: unknown } } })
-      .properties?.kind?.enum;
-    expect(kindEnum).toEqual(['highlight', 'bookmark', 'note']);
+    const queryProperties = ASSISTANT_BUILTIN_TOOLS[0]?.parameters.properties ?? {};
+    expect(queryProperties.action).toMatchObject({
+      enum: ['toc', 'current_chapter', 'chapter', 'selection', 'book_info', 'search'],
+    });
+    expect(queryProperties).toHaveProperty('query');
+    expect(queryProperties).toHaveProperty('chapter');
+    expect(queryProperties).toHaveProperty('title');
+    expect(queryProperties).toHaveProperty('index');
+    expect(queryProperties).toHaveProperty('page');
+    expect(ASSISTANT_BUILTIN_TOOLS[1]?.parameters.properties.kind).toMatchObject({
+      enum: ['highlight', 'bookmark', 'note'],
+    });
   });
 });
 
@@ -102,7 +103,18 @@ describe('buildAssistantChatRequest', () => {
       ],
       userMessage: '这章讲什么？',
     });
+    expect(request.tools).toBe(ASSISTANT_TOOL_DEFINITIONS);
     expect(request.tools).toBe(ASSISTANT_BUILTIN_TOOLS);
+    expect(request.tools[0]?.parameters.properties).toEqual(
+      ASSISTANT_TOOL_DEFINITIONS[0]?.parameters.properties,
+    );
+    expect(request.tools[0]?.parameters.properties).toMatchObject({
+      query: expect.any(Object),
+      chapter: expect.any(Object),
+      title: expect.any(Object),
+      index: expect.any(Object),
+      page: expect.any(Object),
+    });
     expect(request.messages.map((message) => message.role)).toEqual([
       'system',
       'system',
@@ -215,7 +227,7 @@ describe('buildAssistantChatRequest', () => {
     expect(request.messages[request.messages.length - 1]?.content).toBe('本轮问题');
     expect(request.messages[0]?.content).toBe(systemPrompt);
     expect(request.messages[1]?.content).toContain('春江潮水连海平');
-    expect(request.tools).toBe(ASSISTANT_BUILTIN_TOOLS);
+    expect(request.tools).toBe(ASSISTANT_TOOL_DEFINITIONS);
     const historyContents = request.messages
       .slice(2, -1)
       .map((message) => message.content);

@@ -6,6 +6,7 @@
  * 同章追问必须使 ①②③ 字节级相同；PDF 页码只写入 ⑤，不进 ③。
  */
 
+import { ASSISTANT_TOOL_DEFINITIONS } from './assistant-tools.js';
 import { READER_LIMITS } from './reader-limits.js';
 
 /** 单次请求携带的历史条数上限（ai.rs MAX_MESSAGES=200 的安全余量）。 */
@@ -28,11 +29,8 @@ export interface AssistantToolCall {
   readonly arguments: string;
 }
 
-export interface AssistantToolDefinition {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: Record<string, unknown>;
-}
+/** ① 发给模型的工具项：与 `assistant-tools` 执行器同一份 JSON。 */
+export type AssistantToolDefinition = (typeof ASSISTANT_TOOL_DEFINITIONS)[number];
 
 /** 发给 `ai_chat_stream` 的消息（camelCase 与 ai.rs AiChatMessage 对齐）。 */
 export interface AssistantChatMessage {
@@ -69,59 +67,8 @@ export interface AssistantChatRequest {
   readonly truncated: boolean;
 }
 
-export const ASSISTANT_QUERY_BOOK_TOOL: AssistantToolDefinition = {
-  name: 'query_book',
-  description:
-    '查询当前打开的书。用 action 区分：toc 目录（无正文）、current_chapter 当前章、chapter 指定章（query 为序号或标题）、selection 当前选区、book_info 书籍信息、search 书内关键词搜索（query 为关键词；只返回定位与短摘录）。查询不改变阅读位置。截断、还有更多、找不到或标题歧义必须写在结果里。',
-  parameters: {
-    type: 'object',
-    properties: {
-      action: {
-        type: 'string',
-        enum: ['toc', 'current_chapter', 'chapter', 'selection', 'book_info', 'search'],
-        description: '查询动作',
-      },
-      query: {
-        type: 'string',
-        description: 'search 的关键词，或 chapter 的标题/序号',
-      },
-    },
-    required: ['action'],
-    additionalProperties: false,
-  },
-};
-
-export const ASSISTANT_SAVE_TO_BOOK_TOOL: AssistantToolDefinition = {
-  name: 'save_to_book',
-  description:
-    '保存到当前书的标注。kind 为 highlight（高亮，必须有选区或引文）、bookmark（书签，不需选区）或 note（笔记）。缺省定位用当前阅读位置。必须经用户确认后才写入；拒绝则不写入。',
-  parameters: {
-    type: 'object',
-    properties: {
-      kind: {
-        type: 'string',
-        enum: ['highlight', 'bookmark', 'note'],
-        description: '标注种类',
-      },
-      quote: {
-        type: 'string',
-        description: '高亮或笔记所依据的引文',
-      },
-      note: {
-        type: 'string',
-        description: '笔记正文',
-      },
-    },
-    required: ['kind'],
-    additionalProperties: false,
-  },
-};
-
-/** ① 模型可见工具清单：顺序固定为查询当前书、保存到当前书。 */
-export const ASSISTANT_BUILTIN_TOOLS: readonly AssistantToolDefinition[] = [
-  ASSISTANT_QUERY_BOOK_TOOL,
-  ASSISTANT_SAVE_TO_BOOK_TOOL,
-];
+/** ① 模型可见工具清单：与执行器同一引用，顺序固定为查询当前书、保存到当前书。 */
+export const ASSISTANT_BUILTIN_TOOLS = ASSISTANT_TOOL_DEFINITIONS;
 
 function clipChapterText(text: string, limit: number): { text: string; truncated: boolean } {
   const clean = text.trim();
