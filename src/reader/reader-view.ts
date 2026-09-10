@@ -109,6 +109,8 @@ export interface ReaderViewDeps {
   writeAnnotations?: (contentHash: string, json: string) => Promise<void>;
   /** 读 AI 助手按书对话历史（Rust assistant_read_history，R5）。 */
   readAssistantHistory?: (contentHash: string) => Promise<string>;
+  /** 清除本书 AI 助手对话历史（Rust assistant_clear_history，幂等）。 */
+  clearAssistantHistory?: (contentHash: string) => Promise<void>;
   /** 写 AI 助手按书对话历史（Rust assistant_write_history）。 */
   writeAssistantHistory?: (contentHash: string, json: string) => Promise<void>;
   /** 非阻断提示（标注读失败/写失败时）。 */
@@ -431,6 +433,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         ctx.sessionAnnotation.invalidateWrites();
         ctx.annotation.hideSelectionToolbar();
         ctx.annotation.hideLookupPanel();
+        ctx.chrome.destroyAssistantPanel(); // 换书不得残留旧书对话（触屏复用同一 view 实例）
         ctx.sessionProgress.beginSession();
         ctx.readerOutline = [];
         ctx.exportChapters = [];

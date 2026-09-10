@@ -52,6 +52,18 @@ describe('readerAiErrorMessage', () => {
     );
   });
 
+  it('maps storage and text-family codes to their dedicated keys', () => {
+    expect(readerAiErrorMessage(t, { code: 'AI_STORAGE_ERROR' })).toBe('reader.ai.error.storage');
+    expect(readerAiErrorMessage(t, { code: 'AI_TEXT_INVALID' })).toBe('reader.ai.error.textInvalid');
+    expect(readerAiErrorMessage(t, { code: 'AI_TEXT_EMPTY' })).toBe('reader.ai.error.textEmpty');
+    expect(readerAiErrorMessage(t, { code: 'AI_REQUEST_INVALID' })).toBe(
+      'reader.ai.error.requestInvalid',
+    );
+    expect(readerAiErrorMessage(t, { code: 'AI_RESPONSE_INVALID' })).toBe(
+      'reader.ai.error.responseInvalid',
+    );
+  });
+
   it('matches the exact AI code even when the message mentions other causes', () => {
     expect(readerAiErrorMessage(t, { code: 'AI_HTTP_ERROR', message: 'network unavailable' })).toBe(
       'reader.ai.error.failed',
@@ -88,6 +100,11 @@ describe('aiTranslateTargetLang', () => {
 
   it('passes unknown override values through for the prompt', () => {
     expect(aiTranslateTargetLang(englishT, 'en', 'Pirate English')).toBe('Pirate English');
+  });
+
+  it('matches known codes case-insensitively', () => {
+    expect(aiTranslateTargetLang(englishT, 'en', 'ZH-CN')).toBe('简体中文');
+    expect(aiTranslateTargetLang(englishT, 'en', 'Ja')).toBe('日本語');
   });
 });
 

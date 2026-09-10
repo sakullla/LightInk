@@ -157,7 +157,7 @@ export interface ReaderChromeWiringSurface {
   isAssistantPanelVisible(): boolean;
   /** 选区快捷动作（工具栏「解释/总结」）：打开面板并立即发起。 */
   askAssistantWithSelection(action: 'explain' | 'summarize', quote: string): void;
-  /** 销毁收尾（reader-view destroy）：停流、摘监听、移除 DOM。 */
+  /** 销毁收尾（reader-view destroy 与换书 beginOpen）：停流、摘监听、移除 DOM。 */
   destroyAssistantPanel(): void;
 }
 
@@ -649,6 +649,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       },
       readHistory: ctx.deps.readAssistantHistory,
       writeHistory: ctx.deps.writeAssistantHistory,
+      clearHistory: ctx.deps.clearAssistantHistory,
       historyKey: () => ctx.sessionAnnotation.contentHash(),
     });
     return assistantPanel;
@@ -1096,13 +1097,21 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       returnToShelf,
       openOutline: () => openChromePanel('toc'),
       openTypography: () => openChromePanel('typography'),
-      openSearch: () => ctx.search.openSearch(),
+      openSearch: () => {
+        closeAssistantPanel(); // 覆盖层互斥对称:开侧栏(搜索)反向收起助手面板
+        ctx.search.openSearch();
+      },
       openAssistant: () => openAssistantPanel(),
       toggleBookmark: () => ctx.bookmarks.toggleBookmarkAtCurrentPosition(),
       isBookmarked: () => ctx.bookmarks.bookmarkAtStatePosition(ctx.readerState) !== null,
       onBookmarkTick: (fraction) => ctx.bookmarks.jumpToBookmarkTick(fraction),
-      toggleSidebar: () =>
-        ctx.annotation.setSidebarVisible(!ctx.sessionAnnotation.sidebarVisibility().visible),
+      toggleSidebar: () => {
+        // 同上:侧栏转为可见时对称收起助手,避免两个右缘全高面板叠层。
+        if (!ctx.sessionAnnotation.sidebarVisibility().visible) {
+          closeAssistantPanel();
+        }
+        ctx.annotation.setSidebarVisible(!ctx.sessionAnnotation.sidebarVisibility().visible);
+      },
       isOverlayOpen: () =>
         ctx.sessionAnnotation.sidebarVisibility().visible ||
         ctx.chromePanel !== null ||

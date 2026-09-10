@@ -385,7 +385,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
           kind: 'lookup',
           quote: trimmed,
           status: 'error',
-          message: lookupTooLongCopy(ctx.t, deeplConfigured),
+          message: lookupTooLongCopy(ctx.t, deeplConfigured || aiConfigured),
         },
         ctx.root,
       );
@@ -520,6 +520,11 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
         }
       }
       if (stale()) {
+        // 会话已翻页（文档切换等）时不得把该段留在 loading——回到 idle，
+        // 面板若仍可见，该段可再次触发（同会话内更新的 seq 由新调用接管）。
+        if (!ctx.destroyed && generation !== ctx.sessionLoad.generation()) {
+          panel.updateTranslateSection({ source, status: 'idle' });
+        }
         return;
       }
       panel.updateTranslateSection(section);

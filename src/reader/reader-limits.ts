@@ -40,9 +40,9 @@ export interface ReaderLimits {
   /** ComicInfo.xml 条目字节上限（超限跳过元数据，现行语义）。 */
   readonly maxComicInfoBytes: number;
   /**
-   * AI 助手单次注入的章节上下文字符上限（R5）：超出保留前部、截断后部，
-   * 回答前在面板提示截断。选区上下文沿用 TRANSLATE_MAX_CODE_UNITS 量级，
-   * 不占此条目。
+   * AI 助手单次注入的上下文字符上限（R5）：章节全文与选区引文（经
+   * assistantActionContent 截断）共用此额度，超出保留前部、截断后部，
+   * 回答前在面板提示截断。
    */
   readonly maxAssistantContextChars: number;
 }

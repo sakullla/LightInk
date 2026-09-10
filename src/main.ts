@@ -2437,6 +2437,8 @@ manager = new TabManager({
         invoke<string>('assistant_read_history', { contentHash }).catch(() => ''),
       writeAssistantHistory: (contentHash, json) =>
         invoke<void>('assistant_write_history', { contentHash, json }).catch(() => undefined),
+      clearAssistantHistory: (contentHash) =>
+        invoke<void>('assistant_clear_history', { contentHash }).catch(() => undefined),
       notify: (message) => {
         void showAppAlert(message);
       },

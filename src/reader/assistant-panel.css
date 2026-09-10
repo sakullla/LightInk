@@ -73,6 +73,28 @@
   color: var(--lightink-fg);
 }
 
+/* 清除本书对话：次级文字按钮，窄面板下溢出省略。 */
+.lightink-reader-assistant-clear {
+  flex: 0 1 auto;
+  min-height: 28px;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-clear:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
 /* ===== 未配置引导（R5：引导而非空聊天框） ===== */
 
 .lightink-reader-assistant-guide {

@@ -104,9 +104,9 @@ export function lookupTooLongCopy(t: (key: MessageKey) => string, translateEnabl
 
 // ── AI 翻译（R3）：目标语言解析、错误码映射与并列段规划 ───────────────
 
-/** AI 分组目标语言覆盖项的常用代码 → 本地化语言名（提示词内嵌用）。 */
+/** AI 分组目标语言覆盖项的常用代码 → 本地化语言名（提示词内嵌用；键小写归一）。 */
 const AI_LANG_KEYS: Readonly<Record<string, MessageKey>> = {
-  'zh-CN': 'reader.ai.lang.zh-CN',
+  'zh-cn': 'reader.ai.lang.zh-CN',
   en: 'reader.ai.lang.en',
   ja: 'reader.ai.lang.ja',
   ko: 'reader.ai.lang.ko',
@@ -119,7 +119,8 @@ const AI_LANG_KEYS: Readonly<Record<string, MessageKey>> = {
 /**
  * 目标语言解析（R3）：AI 分组覆盖项优先（auto/未设视为跟随界面语言），
  * 界面语言兜底。返回值内嵌进后端翻译提示词，故映射为本地化语言名；
- * 未知覆盖值原样透传（用户自定义语言名）。
+ * 未知覆盖值原样透传（用户自定义语言名）。代码按大小写不敏感匹配
+ * （Manage 下拉产生精确代码，手填 'zh-CN'/'ZH-CN' 同样命中）。
  */
 export function aiTranslateTargetLang(
   t: (key: MessageKey) => string,
@@ -128,10 +129,10 @@ export function aiTranslateTargetLang(
 ): string {
   const raw = override?.trim();
   if (raw !== undefined && raw !== '' && raw.toLowerCase() !== 'auto') {
-    const key = AI_LANG_KEYS[raw];
+    const key = AI_LANG_KEYS[raw.toLowerCase()];
     return key === undefined ? raw : t(key);
   }
-  return t(AI_LANG_KEYS[locale] ?? 'reader.ai.lang.en');
+  return t(AI_LANG_KEYS[locale.toLowerCase()] ?? 'reader.ai.lang.en');
 }
 
 const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
@@ -147,9 +148,13 @@ const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
   AI_HTTP_NOT_ALLOWED: 'reader.ai.error.httpNotAllowed',
   AI_URL_INVALID: 'reader.ai.error.urlInvalid',
   AI_CONFIG_INVALID: 'reader.ai.error.configInvalid',
-  AI_STORAGE_ERROR: 'reader.ai.error.configInvalid',
+  AI_STORAGE_ERROR: 'reader.ai.error.storage',
   AI_TARGET_LANG_INVALID: 'reader.ai.error.configInvalid',
   AI_KEY_STORE_FAILED: 'reader.ai.error.keyStore',
+  AI_TEXT_INVALID: 'reader.ai.error.textInvalid',
+  AI_TEXT_EMPTY: 'reader.ai.error.textEmpty',
+  AI_REQUEST_INVALID: 'reader.ai.error.requestInvalid',
+  AI_RESPONSE_INVALID: 'reader.ai.error.responseInvalid',
 };
 
 /** AI 命令错误码族 → 本地化文案；未知码回退通用失败。missing 填充未配置缺口。 */

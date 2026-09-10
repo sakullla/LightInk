@@ -658,6 +658,94 @@ describe('createAssistantPanel history lifecycle', () => {
     panel.destroy();
   });
 
+  it('drops the previous book conversation when identity changes after interaction', async () => {
+    // 回归:触屏 replace-existing-reader 复用同一面板实例——书 A 交互过(epoch>=1)
+    // 后换书 B,旧对话不得残留展示,更不得被写进书 B 的历史文件。
+    let key = '0123456789abcdef';
+    let reply = '书A的回答';
+    const written: Array<{ key: string; json: string }> = [];
+    const stream = fakeStream(async ({ emit }) => {
+      emit(reply);
+      return { finish: 'stop', totalChars: reply.length };
+    });
+    const panel = createAssistantPanel({
+      t,
+      host: () => host,
+      chapterContext: () => null,
+      openSettings: () => undefined,
+      saveAnnotation: () => undefined,
+      fetchConfig: async () => ({ configured: true, missing: [] }),
+      readHistory: vi.fn(async () => ''),
+      writeHistory: vi.fn(async (writeKey: string, json: string) => {
+        written.push({ key: writeKey, json });
+      }),
+      historyKey: () => key,
+      stream,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '书A的问题');
+    await flush();
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['书A的回答']);
+
+    key = 'fedcba9876543210';
+    panel.open(); // 换书重开:会话复位并装载书 B 历史(为空)
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual([]);
+    expect(bubbleTexts(panel, 'assistant')).toEqual([]);
+
+    // 书 B 新对话只包含书 B 内容;书 A 的消息从未写入书 B 的键。
+    reply = '书B的回答';
+    submitQuestion(panel, '书B的问题');
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['书B的问题']);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['书B的回答']);
+    const bookBWrites = written.filter((entry) => entry.key === 'fedcba9876543210');
+    expect(bookBWrites.length).toBeGreaterThan(0);
+    for (const entry of bookBWrites) {
+      expect(entry.json).not.toContain('书A');
+    }
+    panel.destroy();
+  });
+
+  it('clears this book’s conversation from memory and disk via the header action', async () => {
+    const clearedKeys: string[] = [];
+    const stream = fakeStream(async ({ emit }) => {
+      emit('回答');
+      return { finish: 'stop', totalChars: 2 };
+    });
+    const panel = createAssistantPanel({
+      t,
+      host: () => host,
+      chapterContext: () => null,
+      openSettings: () => undefined,
+      saveAnnotation: () => undefined,
+      fetchConfig: async () => ({ configured: true, missing: [] }),
+      readHistory: async () => '',
+      writeHistory: async () => undefined,
+      clearHistory: async (key) => {
+        clearedKeys.push(key);
+      },
+      historyKey: () => '0123456789abcdef',
+      stream,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '要被清除的问题');
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['要被清除的问题']);
+
+    const clearButton = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-clear',
+    );
+    expect(clearButton).not.toBeNull();
+    clearButton!.click();
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual([]);
+    expect(clearedKeys).toEqual(['0123456789abcdef']);
+    panel.destroy();
+  });
+
   it('falls back to in-memory only when the identity or storage is unavailable', async () => {
     const { panel, deps } = mountPanel({ historyKey: null });
     panel.open();

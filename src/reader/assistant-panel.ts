@@ -342,6 +342,8 @@ export interface AssistantPanelDeps {
   readHistory?: (contentHash: string) => Promise<string>;
   /** 按书历史写入。 */
   writeHistory?: (contentHash: string, json: string) => Promise<void>;
+  /** 清除本书历史（Rust `assistant_clear_history`，幂等；缺省仅清内存）。 */
+  clearHistory?: (contentHash: string) => Promise<void>;
   /** 当前书的存储键（与标注身份同源）；null = 不持久化。 */
   historyKey?: () => string | null;
   /** 流式通道注入（测试）。 */
@@ -416,7 +418,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   close.textContent = '×';
   close.setAttribute('aria-label', t('annotation.closeSidebar'));
   close.setAttribute('title', t('annotation.closeSidebar'));
-  head.append(title, close);
+  // 清除本书对话（assistant_clear_history 幂等;同时清内存会话）。
+  const clearHistoryButton = document.createElement('button');
+  clearHistoryButton.type = 'button';
+  clearHistoryButton.className = 'lightink-reader-assistant-clear';
+  clearHistoryButton.textContent = t('reader.assistant.clearHistory');
+  clearHistoryButton.setAttribute('title', t('reader.assistant.clearHistory'));
+  head.append(title, clearHistoryButton, close);
 
   // —— 未配置引导（R5：引导而非空聊天框） ——
   const guide = document.createElement('div');
@@ -491,6 +499,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let messages: AssistantHistoryMessage[] = [];
   let streaming = false;
   let loadedKey: string | null = null;
+  /** 会话代数：换书重置时递增，作废仍在飞行的流式回调（delta/终态/持久化）。 */
+  let sessionGeneration = 0;
   let aiConfigured = false;
   let aiMissing: readonly string[] = [];
   /** 已保存为标注的助手消息（createdAt 键控；防重复保存按钮）。 */
@@ -664,6 +674,18 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (loadedKey === key) {
       return historyLoad ?? Promise.resolve();
     }
+    if (loadedKey !== null) {
+      // 换书（触屏 replace-existing-reader 复用同一面板实例）：整会话复位，
+      // 旧书对话不得残留展示、也不得经 persistHistory 写进新书的哈希文件。
+      sessionGeneration += 1;
+      streaming = false;
+      streamingText = null;
+      send.disabled = false;
+      messages = [];
+      savedAnswers.clear();
+      historyEpoch = 0;
+      renderMessages();
+    }
     loadedKey = key;
     historyLoad = (async () => {
       let raw = '';
@@ -696,6 +718,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   // —— 流式请求 ——
   const runStream = async (targetIndex: number): Promise<void> => {
+    const generation = sessionGeneration;
     const chapter = chapterContextOrNull();
     const clip = chapter === null ? null : clipAssistantContext(chapter.text);
     const context =
@@ -707,7 +730,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     const systemPrompt = assistantSystemPrompt(basePrompt, context);
     const history = messages.slice(0, targetIndex);
     const onDelta = (delta: string): void => {
-      if (disposed.value) {
+      if (disposed.value || generation !== sessionGeneration) {
         return;
       }
       const entry = messages[targetIndex];
@@ -729,25 +752,27 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     try {
       await streamAssistantChat(buildAssistantChatRequest(systemPrompt, history), onDelta, streamDeps);
       const entry = messages[targetIndex];
-      if (entry !== undefined) {
+      if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
         messages[targetIndex] = { ...entry, error: undefined, contextTruncated };
       }
     } catch (error) {
       const entry = messages[targetIndex];
-      if (entry !== undefined && !disposed.value) {
+      if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
         messages[targetIndex] = {
           ...entry,
           error: readerAiErrorMessage(t, error, aiMissing),
         };
       }
     } finally {
-      streaming = false;
-      streamingText = null;
-      send.disabled = false;
-      if (!disposed.value) {
-        renderMessages();
-        syncActionButtons();
-        persistHistory();
+      if (generation === sessionGeneration) {
+        streaming = false;
+        streamingText = null;
+        send.disabled = false;
+        if (!disposed.value) {
+          renderMessages();
+          syncActionButtons();
+          persistHistory();
+        }
       }
     }
   };
@@ -825,6 +850,24 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.preventDefault();
     event.stopPropagation();
     closePanel();
+  });
+  clearHistoryButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    // 清内存会话并作废在飞流式;磁盘清除幂等（失败不阻断,可再点）。
+    sessionGeneration += 1;
+    streaming = false;
+    streamingText = null;
+    send.disabled = false;
+    messages = [];
+    savedAnswers.clear();
+    historyEpoch = 0;
+    renderMessages();
+    syncActionButtons();
+    const key = deps.historyKey?.() ?? null;
+    if (key !== null) {
+      void deps.clearHistory?.(key).catch(() => undefined);
+    }
   });
   settingsButton.addEventListener('click', (event) => {
     event.preventDefault();
