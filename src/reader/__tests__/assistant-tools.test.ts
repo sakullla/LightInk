@@ -144,6 +144,29 @@ describe('query_book', () => {
     expect(session.specifiedChapterCount()).toBe(1);
   });
 
+  it('resolves a specified chapter from query integer or title', async () => {
+    const chapterText = vi.fn(
+      (target: AssistantChapterTarget): AssistantChapterBody => ({
+        title: target.title,
+        text: `正文-${target.chapter}`,
+        chapter: target.chapter,
+      }),
+    );
+    const session = createAssistantToolSession(deps({ chapterText }));
+
+    const byIndex = await session.execute('query_book', { action: 'chapter', query: '1' });
+    expect(byIndex.ok).toBe(true);
+    expect(chapterText).toHaveBeenCalledWith({ chapter: 1, title: '出发' });
+    expect(byIndex.text).toBe('正文-1');
+    expect(byIndex.title).toBe('出发');
+
+    const byTitle = await session.execute('query_book', { action: 'chapter', query: '出发' });
+    expect(byTitle.ok).toBe(true);
+    expect(chapterText).toHaveBeenNthCalledWith(2, { chapter: 1, title: '出发' });
+    expect(byTitle.text).toBe('正文-1');
+    expect(byTitle.title).toBe('出发');
+  });
+
   it('resolves a unique title and reports ambiguous titles as candidates', async () => {
     const chapterText = vi.fn(
       (target: AssistantChapterTarget): AssistantChapterBody => ({

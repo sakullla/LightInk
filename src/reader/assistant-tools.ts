@@ -169,7 +169,7 @@ const QUERY_BOOK_DEFINITION: AssistantToolDefinition = {
       },
       query: {
         type: 'string',
-        description: 'search 的关键词',
+        description: 'search 的关键词；chapter 时为 0-based 序号或标题',
       },
       chapter: {
         description: '指定章：0-based 序号或标题',
@@ -392,6 +392,19 @@ function resolveSpecifiedChapter(
         chapter = numeric;
       } else {
         title = trimmed;
+      }
+    }
+  }
+
+  // Live schema sends { action: "chapter", query } with no chapter/title/index.
+  if ((title === undefined || title === '') && chapter === undefined) {
+    const query = readString(args.query)?.trim();
+    if (query !== undefined && query !== '') {
+      const numeric = readIndex(query);
+      if (numeric !== undefined && /^-?\d+(\.0+)?$/.test(query)) {
+        chapter = numeric;
+      } else {
+        title = query;
       }
     }
   }
