@@ -466,6 +466,16 @@ describe('readerPageInnerPadPx', () => {
     expect(css).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
 
+  it('clips curl page-turn so the next CSS column cannot paint beside the spread', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\[data-page-anim\^='curl-'\]\s+\.lightink-reader-chapter\.is-active,[\s\S]*?clip-path:\s*inset\(0\)/,
+    );
+    expect(css).toMatch(
+      /:not\(\[data-reading-layout='scroll'\]\)\s+\.lightink-reader-chapter\.is-active\s*\{[^}]*overflow:\s*hidden/,
+    );
+  });
+
   it('overrides the editor measure after .lightink-tab-host so an open book can fill the pane', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/ui/theme.css'), 'utf-8');
     const measure = css.indexOf('max-width: var(--lightink-measure, 48rem);');

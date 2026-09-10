@@ -545,6 +545,24 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 /*
+ * overflow:hidden does not clip 3D-transformed descendants, so curl's
+ * perspective+rotateY otherwise paints the next CSS columns along the
+ * right edge of the current spread. clip-path is applied in local box
+ * space before the transform.
+ */
+.lightink-reader[data-page-anim^='curl-'] .lightink-reader-chapter.is-active,
+.lightink-reader[data-page-anim^='curl-'] .lightink-reader-pages[data-reader-active='true'] {
+  overflow: hidden;
+  clip-path: inset(0);
+  backface-visibility: hidden;
+}
+
+.lightink-reader[data-page-anim^='curl-'] .lightink-reader-chapter.is-active .lightink-reader-chapter-frame {
+  overflow: hidden;
+  clip-path: inset(0);
+}
+
+/*
  * prefers-reduced-motion 兜底：仅未显式选择（html[data-reader-page-turn='auto']，
  * 由 applyReaderPrefs 盖章）时抑制。显式选择 slide/fade/curl 后按用户选择
  * 执行（R1 覆盖通道）；'none' 时 JS 不设 token，无需兜底。
@@ -999,6 +1017,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  overflow: hidden;
 }
 
 .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter-title {
@@ -1010,6 +1029,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   width: 100%;
   min-height: 0;
   overflow: hidden;
+  clip-path: inset(0);
   margin-inline: 0;
   border: 0;
   outline: none;
