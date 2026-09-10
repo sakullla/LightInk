@@ -68,7 +68,6 @@ export interface LibraryManageLabels {
   readonly aiBaseUrl: string;
   readonly aiModel: string;
   readonly aiKey: string;
-  readonly aiKeySave: string;
   readonly aiKeyClear: string;
   readonly aiAllowHttp: string;
   readonly aiTargetLang: string;
@@ -89,7 +88,6 @@ export interface LibraryManageLabels {
   readonly aiUnconfigured: string;
   readonly aiUnconfiguredGaps: string;
   readonly aiSaved: string;
-  readonly aiKeySaved: string;
   readonly aiKeyCleared: string;
   readonly aiErrorHttpNotAllowed: string;
   readonly aiErrorUrlInvalid: string;
@@ -648,11 +646,11 @@ export function createLibraryManage(
 
   const aiActions = doc.createElement('div');
   aiActions.className = 'lightink-library-deepl-actions lightink-library-ai-actions';
+  // 单一「保存配置」:密钥框有内容时一并写入钥匙串(清除密钥仍独立)。
   const aiSave = button(doc, '', 'lightink-library-primary lightink-library-ai-save');
   const aiTest = button(doc, '', 'lightink-library-ai-test');
-  const aiKeySave = button(doc, '', 'lightink-library-ai-key-save');
   const aiKeyClear = button(doc, '', 'lightink-library-ai-key-clear');
-  aiActions.append(aiSave, aiTest, aiKeySave, aiKeyClear);
+  aiActions.append(aiSave, aiTest, aiKeyClear);
 
   // 动作反馈(保存拒绝/密钥/测试连接):role=status,空时隐藏。
   const aiFeedback = doc.createElement('p');
@@ -775,6 +773,13 @@ export function createLibraryManage(
   const saveAiConfig = async (): Promise<void> => {
     aiSave.disabled = true;
     try {
+      // 密钥框有内容时先写入钥匙串(失败即止,输入保留待重试);
+      // 留空不动既有密钥——清除密钥仍走独立按钮。
+      const key = aiKeyInput.value.trim();
+      if (key !== '') {
+        await invokeAiStoreKey(key);
+        aiKeyInput.value = '';
+      }
       const status = await invokeAiSaveConfig({
         endpointKind: readAiEndpointKind(),
         baseUrl: aiBaseUrlInput.value.trim(),
@@ -793,27 +798,6 @@ export function createLibraryManage(
   };
   aiSave.addEventListener('click', () => {
     void saveAiConfig();
-  });
-
-  aiKeySave.addEventListener('click', () => {
-    const key = aiKeyInput.value.trim();
-    if (key === '') {
-      return;
-    }
-    void (async () => {
-      aiKeySave.disabled = true;
-      try {
-        const status = await invokeAiStoreKey(key);
-        aiKeyInput.value = '';
-        applyAiStatus(status, true);
-        setAiFeedback(labels().aiKeySaved, 'success');
-        dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
-      } catch (error) {
-        setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
-      } finally {
-        aiKeySave.disabled = false;
-      }
-    })();
   });
   aiKeyClear.addEventListener('click', () => {
     void (async () => {
@@ -1173,7 +1157,6 @@ export function createLibraryManage(
     }
     aiSave.textContent = l.aiSave;
     aiTest.textContent = aiTestBusy ? l.aiTesting : l.aiTest;
-    aiKeySave.textContent = l.aiKeySave;
     aiKeyClear.textContent = l.aiKeyClear;
     syncAiState();
     void refreshAiConfig();

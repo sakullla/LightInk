@@ -56,7 +56,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiBaseUrl: 'Base URL',
     aiModel: 'Model',
     aiKey: 'API key',
-    aiKeySave: 'Save key',
     aiKeyClear: 'Clear key',
     aiAllowHttp: 'Allow HTTP address (insecure)',
     aiTargetLang: 'Translation target language',
@@ -77,7 +76,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiUnconfigured: 'AI provider is not fully configured yet.',
     aiUnconfiguredGaps: 'AI provider is not fully configured (missing: {missing}).',
     aiSaved: 'AI configuration saved.',
-    aiKeySaved: 'API key saved on this device.',
     aiKeyCleared: 'API key cleared.',
     aiErrorHttpNotAllowed: 'HTTP addresses are rejected unless Allow HTTP address is checked.',
     aiErrorUrlInvalid:
@@ -135,7 +133,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiBaseUrl: 'Base URL',
     aiModel: '模型名',
     aiKey: 'API 密钥',
-    aiKeySave: '保存密钥',
     aiKeyClear: '清除密钥',
     aiAllowHttp: '允许 HTTP 地址（不安全）',
     aiTargetLang: '翻译目标语言',
@@ -156,7 +153,6 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiUnconfigured: 'AI 尚未完成配置。',
     aiUnconfiguredGaps: 'AI 尚未完成配置（缺少：{missing}）。',
     aiSaved: 'AI 配置已保存。',
-    aiKeySaved: '已在本机保存 API 密钥。',
     aiKeyCleared: 'API 密钥已清除。',
     aiErrorHttpNotAllowed: '未勾选「允许 HTTP 地址」时不能保存 HTTP 地址。',
     aiErrorUrlInvalid: 'Base URL 无效：需要不带用户信息、查询参数或片段的 http(s) 地址。',
@@ -895,6 +891,7 @@ describe('createLibraryManage AI provider group (R2)', () => {
     mockAiCommands({
       getConfig: aiStatus(),
       storeKey: withKey,
+      saveConfig: withKey,
       forgetKey: noKey,
     });
     const { options } = manageOptions({ readerPrefsStorage });
@@ -910,13 +907,15 @@ describe('createLibraryManage AI provider group (R2)', () => {
 
     const keyInput = aiField(manage, 'aiApiKey');
     keyInput.value = 'sk-test-secret';
-    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-save')!.click();
+    // 单一「保存配置」:密钥框有内容时一并写入钥匙串。
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
     await settle();
 
     expect(invokeMock).toHaveBeenCalledWith('ai_store_key', { key: 'sk-test-secret' });
+    expect(invokeMock).toHaveBeenCalledWith('ai_save_config', expect.anything());
     expect(keyInput.value).toBe('');
     const feedback = aiFeedbackOf(manage);
-    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiKeySaved);
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiSaved);
     expect(events).toEqual([{ configured: true, missing: [] }]);
     expect(manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-key-clear')!.hidden).toBe(
       false,
