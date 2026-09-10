@@ -83,6 +83,7 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiErrorUrlInvalid:
       'The base URL is invalid: use an http(s) address without user info, query, or fragment.',
     aiErrorConfigInvalid: 'The configuration values are invalid or too long.',
+    aiErrorStorage: 'Could not read or save the AI configuration on this device.',
     aiErrorKeyInvalid: 'The provider rejected the API key.',
     aiErrorModelNotFound: 'The model does not exist or is unavailable.',
     aiErrorQuota: 'Requests are rate-limited or the quota is exhausted.',
@@ -160,6 +161,7 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiErrorHttpNotAllowed: '未勾选「允许 HTTP 地址」时不能保存 HTTP 地址。',
     aiErrorUrlInvalid: 'Base URL 无效：需要不带用户信息、查询参数或片段的 http(s) 地址。',
     aiErrorConfigInvalid: '配置值无效或过长。',
+    aiErrorStorage: '无法在本机读取或保存 AI 配置。',
     aiErrorKeyInvalid: '服务商拒绝了 API 密钥。',
     aiErrorModelNotFound: '模型不存在或不可用。',
     aiErrorQuota: '请求过于频繁或额度不足。',
@@ -991,6 +993,69 @@ describe('createLibraryManage AI provider group (R2)', () => {
     expect(feedback.textContent).toBe(
       LABELS['zh-CN'].aiErrorUnconfigured.replace('{missing}', '模型名, API 密钥'),
     );
+    manage.destroy();
+  });
+
+  it('maps AI_STORAGE_ERROR to the dedicated storage copy, not config-invalid', async () => {
+    mockAiCommands({
+      saveConfigError: { code: 'AI_STORAGE_ERROR', message: 'app data dir unavailable' },
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+    const feedback = aiFeedbackOf(manage);
+    expect(feedback.dataset.kind).toBe('error');
+    expect(feedback.textContent).toBe(LABELS['zh-CN'].aiErrorStorage);
+    manage.destroy();
+  });
+
+  it('keeps unsaved edits when retranslate refreshes the saved configuration', async () => {
+    mockAiCommands({
+      getConfig: aiStatus({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }),
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+    const baseUrl = aiField(manage, 'aiBaseUrl');
+    const model = aiField(manage, 'aiModel');
+    expect(baseUrl.value).toBe('https://api.openai.com/v1');
+
+    // 用户手改 base URL/模型但未保存 → 语言切换触发 retranslate 刷新时不得覆写。
+    baseUrl.value = 'https://my-proxy.example/v1';
+    baseUrl.dispatchEvent(new Event('input', { bubbles: true }));
+    model.value = 'my-model';
+    model.dispatchEvent(new Event('input', { bubbles: true }));
+    manage.retranslate();
+    await settle();
+    expect(baseUrl.value).toBe('https://my-proxy.example/v1');
+    expect(model.value).toBe('my-model');
+
+    // 保存成功后 dirty 复位,后续刷新恢复回填。
+    mockAiCommands({
+      getConfig: aiStatus({
+        baseUrl: 'https://my-proxy.example/v1',
+        model: 'my-model',
+        configured: true,
+        missing: [],
+      }),
+      saveConfig: aiStatus({
+        baseUrl: 'https://my-proxy.example/v1',
+        model: 'my-model',
+        configured: true,
+        missing: [],
+      }),
+    });
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+    manage.retranslate();
+    await settle();
+    expect(baseUrl.value).toBe('https://my-proxy.example/v1');
+    expect(model.value).toBe('my-model');
     manage.destroy();
   });
 

@@ -64,6 +64,13 @@ export type BookTranslationLaunchResult =
   | 'guided'
   | 'failed';
 
+/** 单块翻译有界重试：首次 + 2 次重试（R4「有限次重试，仍失败则暂停可续译」）。 */
+const CHUNK_ATTEMPTS = 3;
+const CHUNK_RETRY_DELAY_MS = 800;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 /** 一次装载结果：翻译单元 + 译本构建闭包（EPUB 原包字节闭包持有）。 */
 export interface BookPayload {
   readonly kind: 'epub' | 'fresh';
@@ -353,19 +360,35 @@ export function createBookTranslationController(
           ...statuses.get(request.path)!,
           currentChapterTitle: unit?.title ?? '',
         });
-        let result: { text: string };
-        try {
-          result = await deps.translateChunk(
-            chunk.text,
-            targetLang,
-            glossaryForPrompt(glossary),
-            aborter.signal,
-          );
-        } catch (error) {
+        let result: { text: string } | null = null;
+        let lastError: unknown = null;
+        for (
+          let attempt = 0;
+          attempt < CHUNK_ATTEMPTS && result === null && !aborted();
+          attempt += 1
+        ) {
+          try {
+            result = await deps.translateChunk(
+              chunk.text,
+              targetLang,
+              glossaryForPrompt(glossary),
+              aborter.signal,
+            );
+          } catch (error) {
+            lastError = error;
+            if (aborted()) {
+              break;
+            }
+            if (attempt + 1 < CHUNK_ATTEMPTS) {
+              await sleep(CHUNK_RETRY_DELAY_MS); // 瞬时网络抖动不等整轮失败
+            }
+          }
+        }
+        if (result === null) {
           if (aborted()) {
             break;
           }
-          const message = localizeError(error, config.missing);
+          const message = localizeError(lastError, config.missing);
           setStatus({ ...statuses.get(request.path)!, phase: 'error', error: message });
           deps.notify(t('library.translate.failed', { reason: message }), 'error');
           return 'failed';

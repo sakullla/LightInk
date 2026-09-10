@@ -730,6 +730,68 @@ describe('createBookTranslationController', () => {
     expect(harness.cleared).toEqual([]);
   });
 
+  it('断点状态写盘失败同样上抛落入 error 终态（done 位不静默丢失）', async () => {
+    const units = fakeUnits([[120]]);
+    const harness = createHarness({ units });
+    const failing = {
+      ...harness.deps,
+      writeState: async () => {
+        throw new Error('状态写失败');
+      },
+    };
+    const controller = createBookTranslationController(failing);
+    await expect(controller.launch(harness.request)).resolves.toBe('failed');
+    const status = controller.statusFor(harness.request.path);
+    expect(status?.phase).toBe('error');
+    expect(status?.error).toContain('状态写失败');
+    expect(harness.cleared).toEqual([]);
+  });
+
+  it('单块瞬时失败按有限次重试后成功，不中断整轮', async () => {
+    const units = fakeUnits([[100]]);
+    const harness = createHarness({ units });
+    const original = harness.deps.translateChunk;
+    let attempts = 0;
+    const controller = createBookTranslationController({
+      ...harness.deps,
+      translateChunk: async (text, lang, glossary, signal) => {
+        attempts += 1;
+        if (attempts <= 2) {
+          throw new Error('网络抖动');
+        }
+        return original(text, lang, glossary, signal);
+      },
+    });
+    await expect(controller.launch(harness.request)).resolves.toBe('completed');
+    expect(attempts).toBe(3); // 首次 + 2 次重试
+    expect(harness.translated.length).toBe(1);
+  });
+
+  it('单块连续失败重试耗尽后暂停并提示可续译', async () => {
+    const units = fakeUnits([
+      [100],
+      [120],
+    ]);
+    const harness = createHarness({ units });
+    let attempts = 0;
+    const controller = createBookTranslationController({
+      ...harness.deps,
+      translateChunk: async (_text, _lang, _glossary, _signal) => {
+        attempts += 1;
+        if (attempts > 1) {
+          throw new Error('持续断网');
+        }
+        return { text: '第一块译文' };
+      },
+    });
+    await expect(controller.launch(harness.request)).resolves.toBe('failed');
+    expect(attempts).toBe(4); // 第一块成功 1 次 + 第二块 3 次尝试
+    const status = controller.statusFor(harness.request.path);
+    expect(status?.phase).toBe('error');
+    expect(status?.error).toContain('持续断网');
+    expect(harness.cleared).toEqual([]); // 缓存保留，可重发起续译
+  });
+
   it('同书重复发起在运行中不重复启动', async () => {
     const units = fakeUnits([[120], [130]]);
     const harness = createHarness({ units });

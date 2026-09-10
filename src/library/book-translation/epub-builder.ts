@@ -146,7 +146,7 @@ export interface RebuiltEpubInput {
   readonly spinePaths: readonly string[];
   /** 与 spinePaths 同序的替换 body 片段。 */
   readonly unitBodies: readonly string[];
-  /** 新书名（写入 OPF dc:title；无 dc:title 时插入）。 */
+  /** 新书名（替换 OPF 既有 dc:title；原包无 dc:title 时不插入，书架标题经 upsertItem 兜底）。 */
   readonly title: string;
 }
 

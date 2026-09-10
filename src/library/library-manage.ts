@@ -94,6 +94,7 @@ export interface LibraryManageLabels {
   readonly aiErrorHttpNotAllowed: string;
   readonly aiErrorUrlInvalid: string;
   readonly aiErrorConfigInvalid: string;
+  readonly aiErrorStorage: string;
   readonly aiErrorKeyInvalid: string;
   readonly aiErrorModelNotFound: string;
   readonly aiErrorQuota: string;
@@ -419,7 +420,7 @@ const AI_ERROR_LABEL_KEYS: Record<string, keyof LibraryManageLabels> = {
   AI_HTTP_NOT_ALLOWED: 'aiErrorHttpNotAllowed',
   AI_URL_INVALID: 'aiErrorUrlInvalid',
   AI_CONFIG_INVALID: 'aiErrorConfigInvalid',
-  AI_STORAGE_ERROR: 'aiErrorConfigInvalid',
+  AI_STORAGE_ERROR: 'aiErrorStorage',
   AI_TARGET_LANG_INVALID: 'aiErrorConfigInvalid',
   AI_REQUEST_INVALID: 'aiErrorConfigInvalid',
   AI_MESSAGE_INVALID: 'aiErrorConfigInvalid',
@@ -681,6 +682,16 @@ export function createLibraryManage(
   const aiDefaultsByKind = new Map<AiEndpointKindId, string>();
   let aiConfigEpoch = 0;
   let aiTestBusy = false;
+  // 未保存的手工编辑标记:语言切换触发 retranslate → refreshAiConfig 回填时,
+  // 不得用已保存值静默覆写用户正在编辑(且未聚焦)的 base URL/模型输入。
+  let aiBaseDirty = false;
+  let aiModelDirty = false;
+  aiBaseUrlInput.addEventListener('input', () => {
+    aiBaseDirty = true;
+  });
+  aiModelInput.addEventListener('input', () => {
+    aiModelDirty = true;
+  });
 
   const readAiEndpointKind = (): AiEndpointKindId =>
     isAiEndpointKind(aiEndpointSelect.value) ? aiEndpointSelect.value : 'openai-chat';
@@ -704,17 +715,21 @@ export function createLibraryManage(
     aiFeedback.dataset.kind = kind;
   };
 
-  const applyAiStatus = (status: AiConfigStatusView): void => {
+  const applyAiStatus = (status: AiConfigStatusView, fromSave = false): void => {
     aiStatusState = status;
     aiEndpointKind = isAiEndpointKind(status.endpointKind) ? status.endpointKind : 'openai-chat';
     for (const entry of status.defaults) {
       aiDefaultsByKind.set(entry.endpointKind, entry.baseUrl);
     }
     aiEndpointSelect.value = aiEndpointKind;
-    if (doc.activeElement !== aiBaseUrlInput) {
+    if (fromSave) {
+      aiBaseDirty = false;
+      aiModelDirty = false;
+    }
+    if (fromSave || (!aiBaseDirty && doc.activeElement !== aiBaseUrlInput)) {
       aiBaseUrlInput.value = status.baseUrl;
     }
-    if (doc.activeElement !== aiModelInput) {
+    if (fromSave || (!aiModelDirty && doc.activeElement !== aiModelInput)) {
       aiModelInput.value = status.model;
     }
     aiAllowHttpInput.checked = status.allowHttp;
@@ -767,7 +782,7 @@ export function createLibraryManage(
         allowHttp: aiAllowHttpInput.checked,
         targetLang: aiTargetLangSelect.value === 'auto' ? undefined : aiTargetLangSelect.value,
       });
-      applyAiStatus(status);
+      applyAiStatus(status, true);
       setAiFeedback(labels().aiSaved, 'success');
       dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
     } catch (error) {
@@ -790,7 +805,7 @@ export function createLibraryManage(
       try {
         const status = await invokeAiStoreKey(key);
         aiKeyInput.value = '';
-        applyAiStatus(status);
+        applyAiStatus(status, true);
         setAiFeedback(labels().aiKeySaved, 'success');
         dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
       } catch (error) {
@@ -806,7 +821,7 @@ export function createLibraryManage(
       try {
         const status = await invokeAiForgetKey();
         aiKeyInput.value = '';
-        applyAiStatus(status);
+        applyAiStatus(status, true);
         setAiFeedback(labels().aiKeyCleared, 'info');
         dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
       } catch (error) {

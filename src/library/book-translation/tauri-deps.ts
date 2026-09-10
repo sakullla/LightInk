@@ -63,11 +63,10 @@ export function createTauriBookTranslationDeps(
     },
     readState: (contentHash) =>
       invoke<string>('book_translation_read_state', { contentHash }).catch(() => ''),
+    // 状态写失败必须上抛（与 writeChunk 同口径）：静默吞掉会让 done 位丢失、
+    // 续译重译已完成块。controller 的 catch 会兜底为可续译的 error 终态。
     writeState: (contentHash, json) =>
-      invoke<void>('book_translation_write_state', { contentHash, json }).then(
-        unwrapVoid,
-        unwrapVoid,
-      ),
+      invoke<void>('book_translation_write_state', { contentHash, json }),
     readChunk: (contentHash, chunkIndex) =>
       invoke<string>('book_translation_read_chunk', { contentHash, chunkIndex }).catch(() => ''),
     writeChunk: (contentHash, chunkIndex, text) =>

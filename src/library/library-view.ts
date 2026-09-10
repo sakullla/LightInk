@@ -1931,6 +1931,7 @@ export function createLibraryView(
       aiErrorHttpNotAllowed: translate(locale, 'reader.ai.error.httpNotAllowed'),
       aiErrorUrlInvalid: translate(locale, 'reader.ai.error.urlInvalid'),
       aiErrorConfigInvalid: translate(locale, 'reader.ai.error.configInvalid'),
+      aiErrorStorage: translate(locale, 'reader.ai.error.storage'),
       aiErrorKeyInvalid: translate(locale, 'reader.ai.error.keyInvalid'),
       aiErrorModelNotFound: translate(locale, 'reader.ai.error.modelNotFound'),
       aiErrorQuota: translate(locale, 'reader.ai.error.quota'),
