@@ -192,6 +192,13 @@ function toChatMessage(turn: AssistantRequestTurn): AssistantChatMessage {
   };
 }
 
+/** maxTurns/预算截断后，④ 不得以缺少匹配 tool_calls 的 tool 结果开头。 */
+function dropLeadingOrphanToolTurns(turns: AssistantRequestTurn[]): void {
+  while (turns[0]?.role === 'tool') {
+    turns.shift();
+  }
+}
+
 /**
  * ①②③ 的稳定前缀（JSON 字节）。同章两问应完全相等，仅 ④⑤ 增长。
  */
@@ -241,6 +248,7 @@ export function buildAssistantChatRequest(
     budget -= turn.content.length;
     kept.unshift(turn);
   }
+  dropLeadingOrphanToolTurns(kept);
   for (const turn of kept) {
     messages.push(toChatMessage(turn));
   }

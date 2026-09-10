@@ -223,6 +223,40 @@ describe('buildAssistantChatRequest', () => {
     expect(historyContents.join()).not.toContain('old-0-');
   });
 
+  it('does not start ④ with an orphan tool after maxTurns cuts the matching tool_calls', () => {
+    const request = buildAssistantChatRequest({
+      systemPrompt,
+      chapter,
+      history: [
+        { role: 'user', content: '查目录' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'c1', name: 'query_book', arguments: '{}' }],
+        },
+        { role: 'tool', content: '{"toc":[]}', toolCallId: 'c1', name: 'query_book' },
+        { role: 'assistant', content: '目录如上' },
+      ],
+      userMessage: '继续',
+      maxTurns: 2,
+    });
+    const historyMessages = request.messages.slice(2, -1);
+    expect(historyMessages[0]?.role).not.toBe('tool');
+    expect(request.messages[request.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '继续',
+    });
+    for (let index = 0; index < historyMessages.length; index += 1) {
+      const message = historyMessages[index]!;
+      if (message.role !== 'tool') {
+        continue;
+      }
+      const previous = historyMessages[index - 1];
+      expect(previous?.role).toBe('assistant');
+      expect(previous?.toolCalls?.some((call) => call.id === message.toolCallId)).toBe(true);
+    }
+  });
+
   it('skips empty assistant placeholders and keeps tool turns', () => {
     const request = buildAssistantChatRequest({
       systemPrompt,
