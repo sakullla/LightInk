@@ -35,6 +35,7 @@ import {
   serializeAssistantHistoryStore,
   setAssistantConversationMessages,
   switchAssistantConversation,
+  type AssistantConversation,
   type AssistantHistoryAction,
   type AssistantHistoryMessage,
   type AssistantHistoryStore,
@@ -156,6 +157,42 @@ function persistableMessages(list: readonly PanelMessage[]): AssistantHistoryMes
       ...(message.error !== undefined ? { error: message.error } : {}),
     };
   });
+}
+
+/**
+ * 加载完成时内存店可能已有本轮会话：用磁盘店补齐兄弟段，活动段以内存为准，
+ * 避免 persistHistory 把尚未合并的空店写回、冲掉其它会话。
+ */
+function mergeLoadedHistoryWithMemory(
+  loaded: AssistantHistoryStore,
+  memory: AssistantHistoryStore,
+): AssistantHistoryStore {
+  if (memory.conversations.length === 0) {
+    return loaded;
+  }
+  if (loaded.conversations.length === 0) {
+    return memory;
+  }
+  const memoryById = new Map(memory.conversations.map((conversation) => [conversation.id, conversation]));
+  const seen = new Set<string>();
+  const conversations: AssistantConversation[] = [];
+  for (const conversation of loaded.conversations) {
+    conversations.push(memoryById.get(conversation.id) ?? conversation);
+    seen.add(conversation.id);
+  }
+  for (const conversation of memory.conversations) {
+    if (!seen.has(conversation.id)) {
+      conversations.push(conversation);
+      seen.add(conversation.id);
+    }
+  }
+  const activeId =
+    memory.activeId !== '' && seen.has(memory.activeId)
+      ? memory.activeId
+      : loaded.activeId !== '' && seen.has(loaded.activeId)
+        ? loaded.activeId
+        : (conversations[conversations.length - 1]?.id ?? '');
+  return { version: 2, activeId, conversations };
 }
 
 function historyTurns(list: readonly PanelMessage[], end: number): AssistantRequestTurn[] {
@@ -864,10 +901,26 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const syncQuoteButton = (): void => {
+    // 选区来自阅读器 pendingSelection，开面板时的快照会过期；按钮保持可点，
+    // 是否插入在 click 时用 live currentSelectionText() 决定。
     const quote = currentSelectionText();
-    quoteButton.disabled = quote === '';
+    quoteButton.disabled = false;
     quoteButton.title = quote === '' ? t('reader.assistant.quoteUnavailable') : t('reader.assistant.quote');
   };
+
+  const onSelectionChange = (): void => {
+    if (disposed.value || root.hidden) {
+      return;
+    }
+    syncQuoteButton();
+    syncContextHint();
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('selectionchange', onSelectionChange);
+  }
+  quoteButton.addEventListener('pointerenter', () => {
+    syncQuoteButton();
+  });
 
   const syncContextHint = (): void => {
     const chapter = chapterContextOrNull();
@@ -960,6 +1013,37 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     renderHistoryList();
   };
 
+  const persistHistory = (): void => {
+    persistNotice.hidden = persistError === null;
+    if (persistError !== null) {
+      persistNotice.textContent = persistError;
+    }
+    const key = deps.historyKey?.() ?? null;
+    if (key === null || deps.writeHistory === undefined) {
+      return;
+    }
+    if (store.activeId === '' && messages.length === 0) {
+      return;
+    }
+    if (store.activeId === '') {
+      store = createAssistantConversation(store);
+    }
+    store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+    renderHistoryList();
+    try {
+      const json = serializeAssistantHistoryStore(store);
+      persistError = null;
+      persistNotice.hidden = true;
+      void deps.writeHistory(key, json).catch(() => undefined);
+    } catch (error) {
+      if (error instanceof AssistantHistoryTooLargeError) {
+        persistError = t('reader.assistant.historyTooLarge');
+        persistNotice.hidden = false;
+        persistNotice.textContent = persistError;
+      }
+    }
+  };
+
   const ensureHistory = (): Promise<void> => {
     const key = deps.historyKey?.() ?? null;
     const readHistory = deps.readHistory;
@@ -995,44 +1079,17 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (disposed.value || loadedKey !== key) {
         return;
       }
-      if (historyEpoch !== 0) {
+      const loaded = parseAssistantHistoryStore(raw);
+      if (historyEpoch !== 0 || store.conversations.length > 0 || messages.length > 0) {
+        store = mergeLoadedHistoryWithMemory(loaded, store);
+        renderHistoryList();
+        persistHistory();
         return;
       }
-      store = parseAssistantHistoryStore(raw);
+      store = loaded;
       loadActiveMessages();
     })();
     return historyLoad;
-  };
-
-  const persistHistory = (): void => {
-    persistNotice.hidden = persistError === null;
-    if (persistError !== null) {
-      persistNotice.textContent = persistError;
-    }
-    const key = deps.historyKey?.() ?? null;
-    if (key === null || deps.writeHistory === undefined) {
-      return;
-    }
-    if (store.activeId === '' && messages.length === 0) {
-      return;
-    }
-    if (store.activeId === '') {
-      store = createAssistantConversation(store);
-    }
-    store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
-    renderHistoryList();
-    try {
-      const json = serializeAssistantHistoryStore(store);
-      persistError = null;
-      persistNotice.hidden = true;
-      void deps.writeHistory(key, json).catch(() => undefined);
-    } catch (error) {
-      if (error instanceof AssistantHistoryTooLargeError) {
-        persistError = t('reader.assistant.historyTooLarge');
-        persistNotice.hidden = false;
-        persistNotice.textContent = persistError;
-      }
-    }
   };
 
   const ensureActiveConversation = (): void => {
@@ -1217,17 +1274,30 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     void runStream(messages.length - 1);
   };
 
+  let sendGate = false;
+
   const ask = (content: string, action?: AssistantQuickAction): boolean => {
     const question = content.trim();
-    if (question === '' || !aiConfigured || streaming) {
+    if (question === '' || !aiConfigured || streaming || sendGate) {
       return false;
     }
-    appendExchange({ role: 'user', content: question, createdAt: Date.now(), action });
+    sendGate = true;
+    void (async () => {
+      try {
+        await ensureHistory();
+        if (disposed.value || !aiConfigured || streaming) {
+          return;
+        }
+        appendExchange({ role: 'user', content: question, createdAt: Date.now(), action });
+      } finally {
+        sendGate = false;
+      }
+    })();
     return true;
   };
 
   const runQuickAction = (action: AssistantQuickAction, quote?: string): void => {
-    if (!aiConfigured || streaming) {
+    if (!aiConfigured || streaming || sendGate) {
       return;
     }
     if (action === 'explain' || action === 'summarize') {
@@ -1244,12 +1314,27 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const retryAt = (index: number): void => {
     const entry = messages[index];
-    if (entry === undefined || entry.role !== 'assistant' || streaming) {
+    if (entry === undefined || entry.role !== 'assistant' || streaming || sendGate) {
       return;
     }
-    historyEpoch += 1;
-    messages[index] = { role: 'assistant', content: '', createdAt: entry.createdAt };
-    void runStream(index);
+    sendGate = true;
+    void (async () => {
+      try {
+        await ensureHistory();
+        if (disposed.value || streaming) {
+          return;
+        }
+        const current = messages[index];
+        if (current === undefined || current.role !== 'assistant') {
+          return;
+        }
+        historyEpoch += 1;
+        messages[index] = { role: 'assistant', content: '', createdAt: current.createdAt };
+        void runStream(index);
+      } finally {
+        sendGate = false;
+      }
+    })();
   };
 
   const switchConversation = (id: string): void => {
@@ -1285,12 +1370,20 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (streaming) {
       abortStream();
     }
-    if (store.activeId !== '') {
-      store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
-    }
-    store = createAssistantConversation(store);
-    loadActiveMessages();
-    persistHistory();
+    void ensureHistory().then(() => {
+      if (disposed.value) {
+        return;
+      }
+      if (streaming) {
+        abortStream();
+      }
+      if (store.activeId !== '') {
+        store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+      }
+      store = createAssistantConversation(store);
+      loadActiveMessages();
+      persistHistory();
+    });
   };
 
   composer.addEventListener('submit', (event) => {
@@ -1318,6 +1411,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.preventDefault();
     event.stopPropagation();
     const quote = currentSelectionText();
+    syncQuoteButton();
     if (quote === '') {
       return;
     }
@@ -1462,6 +1556,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       streamingText = null;
       if (typeof document !== 'undefined') {
         document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
+        document.removeEventListener('selectionchange', onSelectionChange);
       }
       delete root.dataset.open;
       root.hidden = true;

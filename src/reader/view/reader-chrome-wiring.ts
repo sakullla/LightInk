@@ -181,6 +181,44 @@ function ttsFailureCopy(
   return t('reader.tts.failed');
 }
 
+/** 工具搜索等待会话 idle（pending/searching 皆非 true）时的状态切片。 */
+export interface AssistantSessionSearchIdleState {
+  readonly pending?: boolean;
+  readonly searching?: boolean;
+}
+
+/**
+ * 等 sessionSearch 不再 pending/searching。query_book.search 只 run + 读命中，
+ * 不得 activateKey。
+ */
+export function waitForAssistantSessionSearchIdle(
+  hitsState: () => AssistantSessionSearchIdleState,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const poll = (): void => {
+      const state = hitsState();
+      if (state.pending !== true && state.searching !== true) {
+        resolve();
+        return;
+      }
+      setTimeout(poll, 0);
+    };
+    poll();
+  });
+}
+
+/** 发起一次书内搜索并等到扫描结束；不激活命中、不改阅读位置。 */
+export function runAssistantSessionSearch(
+  session: {
+    readonly run: (query: string) => void;
+    readonly hitsState: () => AssistantSessionSearchIdleState;
+  },
+  query: string,
+): Promise<void> {
+  session.run(query);
+  return waitForAssistantSessionSearchIdle(() => session.hitsState());
+}
+
 export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWiringSurface {
   const watchPageChrome = (): void => {
     ctx.pageChromeObserver?.disconnect();
@@ -788,9 +826,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           },
           chapterText: assistantChapterText,
           search: {
-            run: (query) => {
-              ctx.sessionSearch.run(query);
-            },
+            run: (query) => runAssistantSessionSearch(ctx.sessionSearch, query),
             hitViews: () =>
               ctx.sessionSearch.hitViews().map((hit) => ({
                 snippet: hit.snippet,

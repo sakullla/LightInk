@@ -29,6 +29,7 @@ import {
 import { READER_LIMITS } from '../reader-limits.js';
 import { translate, type MessageKey } from '../../i18n/messages.js';
 import type { AssistantToolSession } from '../assistant-tools.js';
+import { runAssistantSessionSearch } from '../view/reader-chrome-wiring.js';
 
 const t = (key: MessageKey, vars?: Readonly<Record<string, string>>): string =>
   translate('zh-CN', key, vars);
@@ -256,7 +257,7 @@ interface MountOptions {
   readonly historyKey?: string | null;
   readonly historyJson?: string;
   readonly script?: Script;
-  readonly currentSelection?: string;
+  readonly currentSelection?: string | (() => string);
   readonly currentPage?: number;
   readonly createToolSession?: () => AssistantToolSession;
   readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
@@ -301,7 +302,10 @@ function mountPanel(options: MountOptions = {}): {
     writeHistory: options.historyKey === null ? undefined : calls.writeHistory,
     historyKey: () => options.historyKey ?? null,
     stream,
-    currentSelection: () => options.currentSelection ?? '',
+    currentSelection: () =>
+      typeof options.currentSelection === 'function'
+        ? options.currentSelection()
+        : (options.currentSelection ?? ''),
     currentPage: () => options.currentPage,
     createToolSession: options.createToolSession,
     jumpToLocator: calls.jumpToLocator,
@@ -573,29 +577,29 @@ describe('createAssistantPanel composer (R1)', () => {
     panel.destroy();
   });
 
-  it('quotes the current selection into the input and stays disabled without one', async () => {
-    const { panel } = mountPanel({ currentSelection: '' });
+  it('quotes live selection at click even if the panel opened without one', async () => {
+    let selection = '';
+    const { panel } = mountPanel({ currentSelection: () => selection });
     panel.open();
     await flush();
     const quote = panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]');
-    expect(quote?.disabled).toBe(true);
+    expect(quote?.disabled).toBe(false);
     expect(quote?.title).toBe(t('reader.assistant.quoteUnavailable'));
-    panel.destroy();
-
-    const next = mountPanel({ currentSelection: '选中的句子' });
-    next.panel.open();
-    await flush();
-    const enabled = next.panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]');
-    expect(enabled?.disabled).toBe(false);
-    enabled!.click();
-    const input = next.panel.element.querySelector<HTMLTextAreaElement>(
+    quote!.click();
+    const input = panel.element.querySelector<HTMLTextAreaElement>(
       '.lightink-reader-assistant-input',
     );
-    expect(input?.value).toContain('选中的句子');
-    submitQuestion(next.panel, input!.value);
+    expect(input?.value).toBe('');
+
+    selection = '后来选中的句子';
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(quote?.title).toBe(t('reader.assistant.quote'));
+    quote!.click();
+    expect(input?.value).toContain('后来选中的句子');
+    submitQuestion(panel, input!.value);
     await flush();
-    expect(bubbleTexts(next.panel, 'user')[0]).toContain('选中的句子');
-    next.panel.destroy();
+    expect(bubbleTexts(panel, 'user')[0]).toContain('后来选中的句子');
+    panel.destroy();
   });
 
   it('stops generation, keeps partial text, and allows another question', async () => {
@@ -854,6 +858,75 @@ describe('createAssistantPanel history lifecycle', () => {
     panel.destroy();
   });
 
+  it('does not persist a new ask over sibling conversations while history is still loading', async () => {
+    let releaseRead: ((json: string) => void) | null = null;
+    const readHistory = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    const writeHistory = vi.fn(async () => undefined);
+    const stream = fakeStream(async ({ emit }) => {
+      emit('新回答');
+      return { finish: 'stop', totalChars: 3 };
+    });
+    const siblings = serializeAssistantHistoryStore({
+      version: 2,
+      activeId: 'b',
+      conversations: [
+        {
+          id: 'a',
+          title: '会话A问题',
+          messages: [{ role: 'user', content: '会话A问题', createdAt: 1 }],
+          updatedAt: 1,
+        },
+        {
+          id: 'b',
+          title: '会话B问题',
+          messages: [{ role: 'user', content: '会话B问题', createdAt: 2 }],
+          updatedAt: 2,
+        },
+      ],
+    });
+    const panel = createAssistantPanel({
+      t,
+      host: () => host,
+      chapterContext: () => null,
+      openSettings: () => undefined,
+      saveAnnotation: () => undefined,
+      fetchConfig: async () => ({ configured: true, missing: [] }),
+      readHistory,
+      writeHistory,
+      historyKey: () => '0123456789abcdef',
+      stream,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '新问题');
+    await flush();
+    expect(stream.invoke).not.toHaveBeenCalled();
+    expect(releaseRead).not.toBeNull();
+    releaseRead!(siblings);
+    await flushUntil(() => writeHistory.mock.calls.length > 0);
+    expect(stream.invoke).toHaveBeenCalled();
+    expect(bubbleTexts(panel, 'user')).toEqual(['会话B问题', '新问题']);
+    const lastWrite = writeHistory.mock.calls[writeHistory.mock.calls.length - 1]?.[1] as string;
+    const store = parseAssistantHistoryStore(lastWrite);
+    expect(store.conversations).toHaveLength(2);
+    expect(
+      store.conversations.some((conversation) =>
+        conversation.messages.some((message) => message.content === '会话A问题'),
+      ),
+    ).toBe(true);
+    expect(
+      store.conversations.some((conversation) =>
+        conversation.messages.some((message) => message.content === '新问题'),
+      ),
+    ).toBe(true);
+    panel.destroy();
+  });
+
   it('falls back to in-memory only when the identity or storage is unavailable', async () => {
     const { panel, deps } = mountPanel({ historyKey: null });
     panel.open();
@@ -986,6 +1059,43 @@ describe('createAssistantPanel lifecycle hygiene', () => {
         new CustomEvent('lightink:reader-ai-configured', { detail: { configured: false } }),
       ),
     ).not.toThrow();
+  });
+});
+
+describe('runAssistantSessionSearch (tool search wiring)', () => {
+  it('resolves only after pending/searching clear and never calls activateKey', async () => {
+    let pending = true;
+    let searching = false;
+    const activateKey = vi.fn();
+    const session = {
+      run: vi.fn((query: string) => {
+        expect(query).toBe('needle');
+        pending = true;
+        searching = false;
+        setTimeout(() => {
+          pending = false;
+          searching = true;
+          setTimeout(() => {
+            pending = false;
+            searching = false;
+          }, 8);
+        }, 8);
+      }),
+      hitsState: () => ({ pending, searching, hasMore: false }),
+      activateKey,
+    };
+    const done = runAssistantSessionSearch(session, 'needle');
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    await done;
+    expect(settled).toBe(true);
+    expect(session.run).toHaveBeenCalledWith('needle');
+    expect(activateKey).not.toHaveBeenCalled();
+    expect(session.hitsState()).toEqual({ pending: false, searching: false, hasMore: false });
   });
 });
 
