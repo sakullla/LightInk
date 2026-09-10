@@ -226,7 +226,7 @@ export const ASSISTANT_TOOL_DEFINITIONS: readonly AssistantToolDefinition[] = Ob
   SAVE_TO_BOOK_DEFINITION,
 ]);
 
-const QUERY_ACTIONS: ReadonlySet<string> = new Set([
+const QUERY_ACTIONS: ReadonlySet<QueryBookAction> = new Set([
   'toc',
   'current_chapter',
   'chapter',
@@ -461,8 +461,12 @@ async function executeQueryBook(
   args: Record<string, unknown>,
   chapterReads: { count: number },
 ): Promise<AssistantToolResult> {
-  const action = readString(args.action);
-  if (action === undefined || !QUERY_ACTIONS.has(action)) {
+  const actionRaw = readString(args.action);
+  const action: QueryBookAction | undefined =
+    actionRaw !== undefined && QUERY_ACTIONS.has(actionRaw as QueryBookAction)
+      ? (actionRaw as QueryBookAction)
+      : undefined;
+  if (action === undefined) {
     return fail(QUERY_BOOK_TOOL_NAME, 'invalid_action', {
       message: 'action 必须是 toc、current_chapter、chapter、selection、book_info 或 search。',
     });

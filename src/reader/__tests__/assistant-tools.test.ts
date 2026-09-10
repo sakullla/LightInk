@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OutlineItem } from '../../outline/outline-model.js';
-import type { AnnotationKind, Locator } from '../annotations.js';
+import type { Locator } from '../annotations.js';
 import {
   ASSISTANT_MAX_SPECIFIED_CHAPTERS,
   ASSISTANT_TOOL_DEFINITIONS,

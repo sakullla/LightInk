@@ -911,8 +911,10 @@ describe('createAssistantPanel history lifecycle', () => {
     await flushUntil(() => writeHistory.mock.calls.length > 0);
     expect(stream.invoke).toHaveBeenCalled();
     expect(bubbleTexts(panel, 'user')).toEqual(['会话B问题', '新问题']);
-    const lastWrite = writeHistory.mock.calls[writeHistory.mock.calls.length - 1]?.[1] as string;
-    const store = parseAssistantHistoryStore(lastWrite);
+    const lastCall = writeHistory.mock.calls.at(-1);
+    const lastWrite = lastCall?.[1];
+    expect(typeof lastWrite).toBe('string');
+    const store = parseAssistantHistoryStore(String(lastWrite));
     expect(store.conversations).toHaveLength(2);
     expect(
       store.conversations.some((conversation) =>
