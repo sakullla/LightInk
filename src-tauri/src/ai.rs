@@ -7,11 +7,14 @@
 //!   query/fragment;任意主机(R2 自定义地址)。与 reader_aid 的 Wiktionary 主机
 //!   白名单不同,安全边界由「密钥仅 Rust 侧持有 + 超时/大小上限」承担。
 //! - 端点:OpenAI Responses / OpenAI Chat Completions / Claude Messages
-//!   三种格式各自构造请求并解析文本。
+//!   三种格式各自构造请求并解析文本。Chat 路径可带 `tools`;Claude 在 ①②③
+//!   上打 `cache_control` 并附 prompt-caching beta(忽略该字段的网关仍按纯文本
+//!   对话成功)。SSE 除 delta 外可推送 `tool_call`;关闭 Channel 即
+//!   `AI_STREAM_ABORTED`。
 //! - 网络:连接 15s;非流式总超时 60s、响应上限 256KB;流式无总超时、逐块
-//!   读取超时 60s、累计 2MB 上限,经 Tauri IPC `Channel` 增量推送 delta,
-//!   终态(完成或错误码)由命令返回值承载。服务器忽略 stream:true 返回整体
-//!   JSON 时退化为单次解析(ADR-3 降级路径,功能不丢)。
+//!   读取超时 60s、累计 2MB 上限,经 Tauri IPC `Channel` 增量推送。
+//!   Chat 请求上限 2MB,翻译等非对话命令仍 512KB。服务器忽略 stream:true
+//!   返回整体 JSON 时退化为单次解析(ADR-3 降级路径,功能不丢)。
 
 use crate::credential_store::{delete_credential, get_credential, set_credential};
 use futures_util::StreamExt;
@@ -31,12 +34,15 @@ const CONFIG_FILE: &str = "ai-provider.json";
 const KEYRING_SERVICE: &str = "lightink.ai";
 const KEYRING_REFERENCE: &str = "provider";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_BETA_PROMPT_CACHING: &str = "prompt-caching-2024-07-31";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_STREAM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 512 * 1024;
+const MAX_CHAT_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TOOLS: usize = 16;
 const MAX_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MAX_TRANSLATE_CHARS: usize = 5000;
 const MAX_MESSAGES: usize = 200;
@@ -181,26 +187,72 @@ pub struct AiTranslationResult {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatMessage {
     pub role: String,
+    #[serde(default)]
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<AiToolCall>,
 }
 
-/// `ai_chat_stream` 的终态:`finish` 为 stop/done/incomplete/closed 之一。
+impl AiChatMessage {
+    fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// 前端传入的 function 工具(JSON Schema 在 `parameters`)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolDefinition {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub parameters: Value,
+}
+
+/// 一轮流式结束时带回的完整 tool_call(arguments 为 JSON 字符串)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// `ai_chat_stream` 的终态:`finish` 为 stop/done/incomplete/closed/tool_calls 之一。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStreamDone {
     pub finish: String,
     pub total_chars: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<AiToolCall>,
 }
 
-/// 经 IPC Channel 增量推送的事件:`{"type":"delta","text":"..."}`。
+/// 经 IPC Channel 增量推送的事件:`delta` 或 `tool_call`(snake_case tag)。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AiStreamEvent {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+    },
 }
 
 fn now_ms() -> i64 {
@@ -482,6 +534,21 @@ fn validate_chat_messages(kind: AiEndpointKind, messages: &[AiChatMessage]) -> R
         match message.role.as_str() {
             "system" => {}
             "user" | "assistant" => has_turn = true,
+            "tool" => {
+                has_turn = true;
+                if message
+                    .tool_call_id
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    return Err(AiError::new(
+                        "AI_MESSAGE_INVALID",
+                        "工具结果缺少 toolCallId",
+                    ));
+                }
+            }
             other => {
                 return Err(AiError::new(
                     "AI_MESSAGE_INVALID",
@@ -489,11 +556,27 @@ fn validate_chat_messages(kind: AiEndpointKind, messages: &[AiChatMessage]) -> R
                 ))
             }
         }
-        if message.content.trim().is_empty() {
+        let empty_content = message.content.trim().is_empty();
+        let has_tool_calls = !message.tool_calls.is_empty();
+        if empty_content && !has_tool_calls && message.role != "tool" {
             return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容不能为空"));
         }
         if contains_forbidden_control(&message.content) {
             return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容包含控制字符"));
+        }
+        for call in &message.tool_calls {
+            if call.id.trim().is_empty() || call.name.trim().is_empty() {
+                return Err(AiError::new(
+                    "AI_MESSAGE_INVALID",
+                    "tool_call 缺少 id 或 name",
+                ));
+            }
+            if contains_forbidden_control(&call.id)
+                || contains_forbidden_control(&call.name)
+                || contains_forbidden_control(&call.arguments)
+            {
+                return Err(AiError::new("AI_MESSAGE_INVALID", "tool_call 包含控制字符"));
+            }
         }
     }
     if kind == AiEndpointKind::ClaudeMessages && !has_turn {
@@ -502,8 +585,244 @@ fn validate_chat_messages(kind: AiEndpointKind, messages: &[AiChatMessage]) -> R
     Ok(())
 }
 
-fn message_value(message: &AiChatMessage) -> Value {
-    json!({ "role": message.role, "content": message.content })
+fn validate_tools(tools: &[AiToolDefinition]) -> Result<(), AiError> {
+    if tools.len() > MAX_TOOLS {
+        return Err(AiError::new(
+            "AI_REQUEST_INVALID",
+            format!("工具数量超过 {MAX_TOOLS} 个上限"),
+        ));
+    }
+    for tool in tools {
+        if tool.name.trim().is_empty() || contains_forbidden_control(&tool.name) {
+            return Err(AiError::new("AI_REQUEST_INVALID", "工具名无效"));
+        }
+        if contains_forbidden_control(&tool.description) {
+            return Err(AiError::new("AI_REQUEST_INVALID", "工具描述包含控制字符"));
+        }
+        if !(tool.parameters.is_object() || tool.parameters.is_null()) {
+            return Err(AiError::new(
+                "AI_REQUEST_INVALID",
+                "工具参数必须是 JSON 对象",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn tool_parameters(tool: &AiToolDefinition) -> Value {
+    if tool.parameters.is_null() {
+        json!({ "type": "object", "properties": {} })
+    } else {
+        tool.parameters.clone()
+    }
+}
+
+fn cache_control_ephemeral() -> Value {
+    json!({ "type": "ephemeral" })
+}
+
+fn openai_chat_tools(tools: &[AiToolDefinition]) -> Value {
+    Value::Array(
+        tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool_parameters(tool),
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn openai_responses_tools(tools: &[AiToolDefinition]) -> Value {
+    Value::Array(
+        tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool_parameters(tool),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn claude_tools(tools: &[AiToolDefinition]) -> Value {
+    let mut items: Vec<Value> = tools
+        .iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool_parameters(tool),
+            })
+        })
+        .collect();
+    if let Some(last) = items.last_mut() {
+        if let Some(object) = last.as_object_mut() {
+            object.insert("cache_control".to_string(), cache_control_ephemeral());
+        }
+    }
+    Value::Array(items)
+}
+
+fn claude_system_blocks(messages: &[AiChatMessage]) -> Option<Value> {
+    let blocks: Vec<Value> = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| {
+            json!({
+                "type": "text",
+                "text": message.content,
+                "cache_control": cache_control_ephemeral(),
+            })
+        })
+        .collect();
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(Value::Array(blocks))
+    }
+}
+
+fn parse_tool_arguments(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return json!({});
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|_| json!({ "raw": raw }))
+}
+
+fn openai_chat_message(message: &AiChatMessage) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("role".to_string(), json!(message.role));
+    if message.role == "tool" {
+        object.insert(
+            "tool_call_id".to_string(),
+            json!(message.tool_call_id.as_deref().unwrap_or("")),
+        );
+        if let Some(name) = &message.name {
+            object.insert("name".to_string(), json!(name));
+        }
+        object.insert("content".to_string(), json!(message.content));
+    } else if !message.tool_calls.is_empty() {
+        if message.content.trim().is_empty() {
+            object.insert("content".to_string(), Value::Null);
+        } else {
+            object.insert("content".to_string(), json!(message.content));
+        }
+        object.insert(
+            "tool_calls".to_string(),
+            Value::Array(
+                message
+                    .tool_calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments,
+                            }
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    } else {
+        object.insert("content".to_string(), json!(message.content));
+    }
+    Value::Object(object)
+}
+
+fn openai_responses_items(messages: &[AiChatMessage]) -> Value {
+    let mut items = Vec::new();
+    for message in messages {
+        if message.role == "tool" {
+            items.push(json!({
+                "type": "function_call_output",
+                "call_id": message.tool_call_id.as_deref().unwrap_or(""),
+                "output": message.content,
+            }));
+            continue;
+        }
+        if !message.tool_calls.is_empty() {
+            if !message.content.trim().is_empty() {
+                items.push(json!({ "role": message.role, "content": message.content }));
+            }
+            for call in &message.tool_calls {
+                items.push(json!({
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                }));
+            }
+            continue;
+        }
+        items.push(json!({ "role": message.role, "content": message.content }));
+    }
+    Value::Array(items)
+}
+
+fn claude_messages(messages: &[AiChatMessage]) -> Value {
+    let mut items: Vec<Value> = Vec::new();
+    for message in messages {
+        if message.role == "system" {
+            continue;
+        }
+        if message.role == "tool" {
+            let block = json!({
+                "type": "tool_result",
+                "tool_use_id": message.tool_call_id.as_deref().unwrap_or(""),
+                "content": message.content,
+            });
+            if let Some(Value::Object(last)) = items.last_mut() {
+                if last.get("role").and_then(Value::as_str) == Some("user") {
+                    if let Some(Value::Array(content)) = last.get_mut("content") {
+                        if content.iter().any(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("tool_result")
+                        }) {
+                            content.push(block);
+                            continue;
+                        }
+                    }
+                }
+            }
+            items.push(json!({
+                "role": "user",
+                "content": [block],
+            }));
+            continue;
+        }
+        if !message.tool_calls.is_empty() {
+            let mut content = Vec::new();
+            if !message.content.trim().is_empty() {
+                content.push(json!({ "type": "text", "text": message.content }));
+            }
+            for call in &message.tool_calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": parse_tool_arguments(&call.arguments),
+                }));
+            }
+            items.push(json!({ "role": "assistant", "content": content }));
+            continue;
+        }
+        items.push(json!({ "role": message.role, "content": message.content }));
+    }
+    Value::Array(items)
 }
 
 /// 三种端点格式各构造请求体;密钥只进请求头,永远不进请求体。
@@ -514,15 +833,41 @@ pub(crate) fn build_chat_body(
     max_tokens: Option<u32>,
     stream: bool,
 ) -> Result<Value, AiError> {
+    build_chat_body_with_tools(kind, model, messages, None, max_tokens, stream)
+}
+
+fn build_chat_body_with_tools(
+    kind: AiEndpointKind,
+    model: &str,
+    messages: &[AiChatMessage],
+    tools: Option<&[AiToolDefinition]>,
+    max_tokens: Option<u32>,
+    stream: bool,
+) -> Result<Value, AiError> {
     validate_chat_messages(kind, messages)?;
+    let tools = tools.filter(|items| !items.is_empty());
+    if let Some(tools) = tools {
+        validate_tools(tools)?;
+    }
+    let cache_prefix = tools.is_some()
+        || messages
+            .iter()
+            .filter(|message| message.role == "system")
+            .count()
+            > 1;
     let mut body = serde_json::Map::new();
     body.insert("model".to_string(), json!(model));
+    if let Some(tools) = tools {
+        let encoded = match kind {
+            AiEndpointKind::OpenaiResponses => openai_responses_tools(tools),
+            AiEndpointKind::OpenaiChat => openai_chat_tools(tools),
+            AiEndpointKind::ClaudeMessages => claude_tools(tools),
+        };
+        body.insert("tools".to_string(), encoded);
+    }
     match kind {
         AiEndpointKind::OpenaiResponses => {
-            body.insert(
-                "input".to_string(),
-                Value::Array(messages.iter().map(message_value).collect()),
-            );
+            body.insert("input".to_string(), openai_responses_items(messages));
             if let Some(max) = max_tokens {
                 body.insert("max_output_tokens".to_string(), json!(max));
             }
@@ -530,7 +875,7 @@ pub(crate) fn build_chat_body(
         AiEndpointKind::OpenaiChat => {
             body.insert(
                 "messages".to_string(),
-                Value::Array(messages.iter().map(message_value).collect()),
+                Value::Array(messages.iter().map(openai_chat_message).collect()),
             );
             if let Some(max) = max_tokens {
                 body.insert("max_tokens".to_string(), json!(max));
@@ -538,24 +883,23 @@ pub(crate) fn build_chat_body(
         }
         AiEndpointKind::ClaudeMessages => {
             // Claude Messages 不接受 messages 内的 system 角色,提升为顶层。
-            let system: Vec<&str> = messages
-                .iter()
-                .filter(|message| message.role == "system")
-                .map(|message| message.content.as_str())
-                .collect();
-            if !system.is_empty() {
-                body.insert("system".to_string(), json!(system.join("\n\n")));
+            // 分层请求把 ②③ 做成带 cache_control 的内容块;无 tools 的单段
+            // system(翻译等)仍拼成字符串,兼容只认 string 的网关。
+            if cache_prefix {
+                if let Some(system) = claude_system_blocks(messages) {
+                    body.insert("system".to_string(), system);
+                }
+            } else {
+                let system: Vec<&str> = messages
+                    .iter()
+                    .filter(|message| message.role == "system")
+                    .map(|message| message.content.as_str())
+                    .collect();
+                if !system.is_empty() {
+                    body.insert("system".to_string(), json!(system.join("\n\n")));
+                }
             }
-            body.insert(
-                "messages".to_string(),
-                Value::Array(
-                    messages
-                        .iter()
-                        .filter(|message| message.role != "system")
-                        .map(message_value)
-                        .collect(),
-                ),
-            );
+            body.insert("messages".to_string(), claude_messages(messages));
             body.insert(
                 "max_tokens".to_string(),
                 json!(max_tokens.unwrap_or(CHAT_MAX_TOKENS)),
@@ -569,12 +913,16 @@ pub(crate) fn build_chat_body(
 }
 
 fn serialize_body(body: &Value) -> Result<Vec<u8>, AiError> {
+    serialize_body_limited(body, MAX_REQUEST_BYTES)
+}
+
+fn serialize_body_limited(body: &Value, limit: usize) -> Result<Vec<u8>, AiError> {
     let payload = serde_json::to_vec(body)
         .map_err(|_| AiError::new("AI_REQUEST_INVALID", "无法构造 AI 请求"))?;
-    if payload.len() > MAX_REQUEST_BYTES {
+    if payload.len() > limit {
         return Err(AiError::new(
             "AI_REQUEST_TOO_LARGE",
-            format!("请求超过 {} 字节上限", MAX_REQUEST_BYTES),
+            format!("请求超过 {limit} 字节上限"),
         ));
     }
     Ok(payload)
@@ -594,6 +942,10 @@ fn auth_headers(kind: AiEndpointKind, key: &str) -> Result<HeaderMap, AiError> {
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
+        headers.insert(
+            HeaderName::from_static("anthropic-beta"),
+            HeaderValue::from_static(ANTHROPIC_BETA_PROMPT_CACHING),
         );
     }
     Ok(headers)
@@ -844,8 +1196,108 @@ pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<
 enum SseData {
     Skip,
     Delta(String),
+    ToolCall(AiToolCall),
     Done(String),
     Failed(Option<String>),
+}
+
+#[derive(Default)]
+struct PendingToolCall {
+    index: i64,
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Default)]
+struct ToolCallAccumulator {
+    pending: Vec<PendingToolCall>,
+    completed: Vec<AiToolCall>,
+    finish_hint: Option<String>,
+}
+
+impl ToolCallAccumulator {
+    fn already_completed(&self, id: &str) -> bool {
+        !id.is_empty() && self.completed.iter().any(|call| call.id == id)
+    }
+
+    fn pending_at(&mut self, index: i64) -> &mut PendingToolCall {
+        if let Some(position) = self.pending.iter().position(|item| item.index == index) {
+            return &mut self.pending[position];
+        }
+        self.pending.push(PendingToolCall {
+            index,
+            ..PendingToolCall::default()
+        });
+        self.pending.last_mut().expect("just pushed")
+    }
+
+    fn upsert_openai_delta(&mut self, item: &Value) {
+        let index = item.get("index").and_then(Value::as_i64).unwrap_or(0);
+        let slot = self.pending_at(index);
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                slot.id = id.to_string();
+            }
+        }
+        if let Some(name) = item
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("name").and_then(Value::as_str))
+        {
+            if !name.is_empty() {
+                slot.name = name.to_string();
+            }
+        }
+        if let Some(arguments) = item
+            .pointer("/function/arguments")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("arguments").and_then(Value::as_str))
+        {
+            slot.arguments.push_str(arguments);
+        }
+    }
+
+    fn start_named(&mut self, index: i64, id: &str, name: &str) {
+        let slot = self.pending_at(index);
+        if !id.is_empty() {
+            slot.id = id.to_string();
+        }
+        if !name.is_empty() {
+            slot.name = name.to_string();
+        }
+    }
+
+    fn append_arguments(&mut self, index: i64, delta: &str) {
+        self.pending_at(index).arguments.push_str(delta);
+    }
+
+    fn complete_index(&mut self, index: i64) -> Option<AiToolCall> {
+        let position = self.pending.iter().position(|item| item.index == index)?;
+        let pending = self.pending.remove(position);
+        self.finish_pending(pending)
+    }
+
+    fn complete_all(&mut self) -> Vec<AiToolCall> {
+        let pending = std::mem::take(&mut self.pending);
+        pending
+            .into_iter()
+            .filter_map(|item| self.finish_pending(item))
+            .collect()
+    }
+
+    fn finish_pending(&mut self, pending: PendingToolCall) -> Option<AiToolCall> {
+        if pending.id.is_empty() && pending.name.is_empty() {
+            return None;
+        }
+        let call = AiToolCall {
+            id: pending.id,
+            name: pending.name,
+            arguments: pending.arguments,
+        };
+        self.completed.push(call.clone());
+        Some(call)
+    }
 }
 
 /// 按字节缓冲、只在换行到达后切行,保证跨 chunk 拆开的多字节字符在完整
@@ -889,7 +1341,11 @@ impl SseLines {
     }
 }
 
-fn classify_data_line(kind: AiEndpointKind, line: &str) -> SseData {
+fn classify_data_line(
+    kind: AiEndpointKind,
+    line: &str,
+    pending: &mut ToolCallAccumulator,
+) -> SseData {
     let Some(payload) = line.strip_prefix("data:") else {
         return SseData::Skip;
     };
@@ -898,87 +1354,237 @@ fn classify_data_line(kind: AiEndpointKind, line: &str) -> SseData {
         return SseData::Skip;
     }
     if payload == "[DONE]" {
-        return SseData::Done("done".to_string());
+        return SseData::Done(
+            pending
+                .finish_hint
+                .clone()
+                .unwrap_or_else(|| "done".to_string()),
+        );
     }
     let Ok(value) = serde_json::from_str::<Value>(payload) else {
         return SseData::Skip;
     };
-    classify_sse_event(kind, &value)
+    classify_sse_event(kind, &value, pending)
 }
 
-fn classify_sse_event(kind: AiEndpointKind, value: &Value) -> SseData {
+fn classify_sse_event(
+    kind: AiEndpointKind,
+    value: &Value,
+    pending: &mut ToolCallAccumulator,
+) -> SseData {
     match kind {
-        AiEndpointKind::OpenaiResponses => match value.get("type").and_then(Value::as_str) {
-            Some("response.output_text.delta") => value
-                .get("delta")
-                .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
-                .map(|text| SseData::Delta(text.to_string()))
-                .unwrap_or(SseData::Skip),
-            Some("response.completed") => SseData::Done("stop".to_string()),
-            Some("response.incomplete") => SseData::Done("incomplete".to_string()),
-            Some("response.failed") => SseData::Failed(
-                value
-                    .pointer("/response/error/message")
+        AiEndpointKind::OpenaiResponses => classify_openai_responses_event(value, pending),
+        AiEndpointKind::OpenaiChat => classify_openai_chat_event(value, pending),
+        AiEndpointKind::ClaudeMessages => classify_claude_event(value, pending),
+    }
+}
+
+fn classify_openai_responses_event(value: &Value, pending: &mut ToolCallAccumulator) -> SseData {
+    match value.get("type").and_then(Value::as_str) {
+        Some("response.output_text.delta") => value
+            .get("delta")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| SseData::Delta(text.to_string()))
+            .unwrap_or(SseData::Skip),
+        Some("response.output_item.added") => {
+            let item = value.get("item").unwrap_or(value);
+            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                let index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
                     .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            Some("error") => SseData::Failed(
-                value
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            _ => SseData::Skip,
-        },
-        AiEndpointKind::OpenaiChat => {
-            if let Some(text) = value
-                .pointer("/choices/0/delta/content")
-                .and_then(Value::as_str)
-            {
-                if !text.is_empty() {
-                    return SseData::Delta(text.to_string());
+                    .unwrap_or("");
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                pending.start_named(index, id, name);
+                if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                    pending.append_arguments(index, arguments);
                 }
-            }
-            if let Some(finish) = value
-                .pointer("/choices/0/finish_reason")
-                .and_then(Value::as_str)
-            {
-                if !finish.is_empty() {
-                    return SseData::Done(finish.to_string());
-                }
-            }
-            if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
-                return SseData::Failed(Some(message.trim().to_string()));
             }
             SseData::Skip
         }
-        AiEndpointKind::ClaudeMessages => match value.get("type").and_then(Value::as_str) {
-            Some("content_block_delta")
-                if value.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") =>
-            {
-                value
-                    .pointer("/delta/text")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .map(|text| SseData::Delta(text.to_string()))
-                    .unwrap_or(SseData::Skip)
+        Some("response.function_call_arguments.delta") => {
+            let index = value
+                .get("output_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                pending.append_arguments(index, delta);
             }
-            Some("message_stop") => SseData::Done("stop".to_string()),
-            Some("error") => SseData::Failed(
-                value
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            _ => SseData::Skip,
-        },
+            SseData::Skip
+        }
+        Some("response.function_call_arguments.done") => {
+            let index = value
+                .get("output_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if let Some(arguments) = value.get("arguments").and_then(Value::as_str) {
+                let slot = pending.pending_at(index);
+                if slot.arguments.is_empty() {
+                    slot.arguments = arguments.to_string();
+                }
+            }
+            pending
+                .complete_index(index)
+                .map(SseData::ToolCall)
+                .unwrap_or(SseData::Skip)
+        }
+        Some("response.output_item.done")
+            if value.pointer("/item/type").and_then(Value::as_str) == Some("function_call") =>
+        {
+            let index = value
+                .get("output_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let item = value.get("item");
+            let id = item
+                .and_then(|item| item.get("call_id").or_else(|| item.get("id")))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if pending.already_completed(id) {
+                return SseData::Skip;
+            }
+            if let Some(item) = item {
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                pending.start_named(index, id, name);
+                if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                    let slot = pending.pending_at(index);
+                    if slot.arguments.is_empty() {
+                        slot.arguments = arguments.to_string();
+                    }
+                }
+            }
+            pending
+                .complete_index(index)
+                .map(SseData::ToolCall)
+                .unwrap_or(SseData::Skip)
+        }
+        Some("response.completed") => SseData::Done("stop".to_string()),
+        Some("response.incomplete") => SseData::Done("incomplete".to_string()),
+        Some("response.failed") => SseData::Failed(
+            value
+                .pointer("/response/error/message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned),
+        ),
+        Some("error") => SseData::Failed(
+            value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned),
+        ),
+        _ => SseData::Skip,
+    }
+}
+
+fn classify_openai_chat_event(value: &Value, pending: &mut ToolCallAccumulator) -> SseData {
+    if let Some(calls) = value
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(Value::as_array)
+    {
+        for call in calls {
+            pending.upsert_openai_delta(call);
+        }
+    }
+    if let Some(text) = value
+        .pointer("/choices/0/delta/content")
+        .and_then(Value::as_str)
+    {
+        if !text.is_empty() {
+            return SseData::Delta(text.to_string());
+        }
+    }
+    if let Some(finish) = value
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+    {
+        if !finish.is_empty() {
+            pending.finish_hint = Some(finish.to_string());
+            return SseData::Done(finish.to_string());
+        }
+    }
+    if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+        return SseData::Failed(Some(message.trim().to_string()));
+    }
+    SseData::Skip
+}
+
+fn classify_claude_event(value: &Value, pending: &mut ToolCallAccumulator) -> SseData {
+    match value.get("type").and_then(Value::as_str) {
+        Some("content_block_start")
+            if value.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use") =>
+        {
+            let index = value.get("index").and_then(Value::as_i64).unwrap_or(0);
+            let id = value
+                .pointer("/content_block/id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let name = value
+                .pointer("/content_block/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            pending.start_named(index, id, name);
+            SseData::Skip
+        }
+        Some("content_block_delta")
+            if value.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") =>
+        {
+            value
+                .pointer("/delta/text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| SseData::Delta(text.to_string()))
+                .unwrap_or(SseData::Skip)
+        }
+        Some("content_block_delta")
+            if value.pointer("/delta/type").and_then(Value::as_str) == Some("input_json_delta") =>
+        {
+            let index = value.get("index").and_then(Value::as_i64).unwrap_or(0);
+            if let Some(partial) = value.pointer("/delta/partial_json").and_then(Value::as_str) {
+                pending.append_arguments(index, partial);
+            }
+            SseData::Skip
+        }
+        Some("content_block_stop") => {
+            let index = value.get("index").and_then(Value::as_i64).unwrap_or(0);
+            pending
+                .complete_index(index)
+                .map(SseData::ToolCall)
+                .unwrap_or(SseData::Skip)
+        }
+        Some("message_delta") => {
+            if let Some(reason) = value
+                .pointer("/delta/stop_reason")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            {
+                pending.finish_hint = Some(reason.to_string());
+            }
+            SseData::Skip
+        }
+        Some("message_stop") => SseData::Done(
+            pending
+                .finish_hint
+                .clone()
+                .unwrap_or_else(|| "stop".to_string()),
+        ),
+        Some("error") => SseData::Failed(
+            value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned),
+        ),
+        _ => SseData::Skip,
     }
 }
 
@@ -1001,34 +1607,148 @@ fn stream_failure(key: &str, detail: Option<String>) -> AiError {
     AiError::new("AI_STREAM_FAILED", message)
 }
 
+fn send_stream_event(
+    on_event: &Channel<AiStreamEvent>,
+    event: AiStreamEvent,
+) -> Result<(), AiError> {
+    on_event
+        .send(event)
+        .map_err(|_| AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"))
+}
+
+fn send_tool_call(on_event: &Channel<AiStreamEvent>, call: AiToolCall) -> Result<(), AiError> {
+    send_stream_event(
+        on_event,
+        AiStreamEvent::ToolCall {
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+        },
+    )
+}
+
 fn stream_step(
     kind: AiEndpointKind,
     key: &str,
     line: &str,
     on_event: &Channel<AiStreamEvent>,
     total_chars: &mut usize,
+    pending: &mut ToolCallAccumulator,
 ) -> Result<Option<AiStreamDone>, AiError> {
-    match classify_data_line(kind, line) {
+    match classify_data_line(kind, line, pending) {
         SseData::Skip => Ok(None),
-        SseData::Done(finish) => Ok(Some(AiStreamDone {
-            finish,
-            total_chars: *total_chars,
-        })),
+        SseData::Done(finish) => {
+            for call in pending.complete_all() {
+                send_tool_call(on_event, call)?;
+            }
+            Ok(Some(AiStreamDone {
+                finish,
+                total_chars: *total_chars,
+                tool_calls: pending.completed.clone(),
+            }))
+        }
         SseData::Delta(text) => {
             *total_chars += text.chars().count();
-            if on_event.send(AiStreamEvent::Delta { text }).is_err() {
-                return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
-            }
+            send_stream_event(on_event, AiStreamEvent::Delta { text })?;
+            Ok(None)
+        }
+        SseData::ToolCall(call) => {
+            send_tool_call(on_event, call)?;
             Ok(None)
         }
         SseData::Failed(detail) => Err(stream_failure(key, detail)),
     }
 }
 
-/// 服务器忽略 stream:true 返回整体 JSON 时的降级解析(ADR-3:功能不丢)。
-fn fallback_stream_text(kind: AiEndpointKind, raw: &[u8]) -> Result<String, AiError> {
+fn extract_tool_calls(kind: AiEndpointKind, value: &Value) -> Vec<AiToolCall> {
+    match kind {
+        AiEndpointKind::OpenaiChat => value
+            .pointer("/choices/0/message/tool_calls")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let id = item.get("id").and_then(Value::as_str)?;
+                        let name = item.pointer("/function/name").and_then(Value::as_str)?;
+                        let arguments = item
+                            .pointer("/function/arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        Some(AiToolCall {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            arguments: arguments.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        AiEndpointKind::OpenaiResponses => value
+            .get("output")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        item.get("type").and_then(Value::as_str) == Some("function_call")
+                    })
+                    .filter_map(|item| {
+                        let id = item
+                            .get("call_id")
+                            .or_else(|| item.get("id"))
+                            .and_then(Value::as_str)?;
+                        let name = item.get("name").and_then(Value::as_str)?;
+                        let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
+                        Some(AiToolCall {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            arguments: arguments.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        AiEndpointKind::ClaudeMessages => value
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .filter_map(|item| {
+                        let id = item.get("id").and_then(Value::as_str)?;
+                        let name = item.get("name").and_then(Value::as_str)?;
+                        let arguments = item.get("input").map(|input| {
+                            if input.is_string() {
+                                input.as_str().unwrap_or("").to_string()
+                            } else {
+                                input.to_string()
+                            }
+                        })?;
+                        Some(AiToolCall {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            arguments,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn fallback_stream_payload(
+    kind: AiEndpointKind,
+    raw: &[u8],
+) -> Result<(Option<String>, Vec<AiToolCall>), AiError> {
     let value = parse_json_bytes(raw)?;
-    extract_reply_text(kind, &value)
+    let tool_calls = extract_tool_calls(kind, &value);
+    let text = extract_reply_text(kind, &value).ok();
+    if text.is_none() && tool_calls.is_empty() {
+        return Err(AiError::new("AI_RESPONSE_INVALID", "AI 未返回文本"));
+    }
+    Ok((text, tool_calls))
 }
 
 // ── 状态视图 ─────────────────────────────────────────────────────────
@@ -1180,10 +1900,7 @@ pub fn ai_configured(app: AppHandle) -> Result<AiConfigured, AiError> {
 pub async fn ai_test_connection(app: AppHandle) -> Result<AiTestResult, AiError> {
     let started = Instant::now();
     let (_config, provider) = resolve_provider(&app)?;
-    let probe = [AiChatMessage {
-        role: "user".to_string(),
-        content: "ping".to_string(),
-    }];
+    let probe = [AiChatMessage::text("user", "ping")];
     let body = build_chat_body(
         provider.kind,
         &provider.model,
@@ -1221,10 +1938,7 @@ pub async fn ai_translate_selection(
     let (text, truncated) = truncate_translate_input(text);
     let lang = resolve_target_lang(target_lang, config.target_lang.clone())?;
     let prompt = translate_prompt(&text, &lang);
-    let message = AiChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    };
+    let message = AiChatMessage::text("user", prompt);
     let body = build_chat_body(
         provider.kind,
         &provider.model,
@@ -1358,10 +2072,7 @@ pub(crate) async fn translate_book_chunk(
     let text = validate_book_chunk_input(text, glossary)?;
     let lang = resolve_target_lang(Some(target_lang.to_string()), config.target_lang.clone())?;
     let prompt = book_chunk_prompt(&text, &lang, glossary);
-    let message = AiChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    };
+    let message = AiChatMessage::text("user", prompt);
     let body = build_chat_body(
         provider.kind,
         &provider.model,
@@ -1379,24 +2090,27 @@ pub(crate) async fn translate_book_chunk(
     })
 }
 
-/// 流式多轮对话:经 IPC `Channel` 增量推送 `{type:\"delta\",text}`,
-/// 终态由返回值承载(完成含 finish 与累计字数)或以 `AiError` 错误码失败。
-/// 流式累计 2MB 上限;相邻 chunk 读取间隔超 60s 判超时。
+/// 流式多轮对话:经 IPC `Channel` 增量推送 `{type:\"delta\",text}` 或
+/// `{type:\"tool_call\",...}`,终态由返回值承载(完成含 finish、累计字数与
+/// tool_calls)或以 `AiError` 错误码失败。Channel 发送失败即 `AI_STREAM_ABORTED`。
+/// Chat 请求上限 2MB;流式累计 2MB;相邻 chunk 读取间隔超 60s 判超时。
 #[tauri::command]
 pub async fn ai_chat_stream(
     app: AppHandle,
     messages: Vec<AiChatMessage>,
     on_event: Channel<AiStreamEvent>,
+    tools: Option<Vec<AiToolDefinition>>,
 ) -> Result<AiStreamDone, AiError> {
     let (_config, provider) = resolve_provider(&app)?;
-    let body = build_chat_body(
+    let body = build_chat_body_with_tools(
         provider.kind,
         &provider.model,
         &messages,
+        tools.as_deref(),
         max_tokens_for(provider.kind, AiPurpose::Chat),
         true,
     )?;
-    let payload = serialize_body(&body)?;
+    let payload = serialize_body_limited(&body, MAX_CHAT_REQUEST_BYTES)?;
     let client = build_client(&provider.url, provider.allow_http, true)?;
     let request = client
         .post(provider.url.clone())
@@ -1413,6 +2127,7 @@ pub async fn ai_chat_stream(
     let mut lines = SseLines::new();
     let mut received = 0usize;
     let mut total_chars = 0usize;
+    let mut pending = ToolCallAccumulator::default();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(network_error)?;
         received = advance_stream_budget(received, chunk.len())?;
@@ -1423,6 +2138,7 @@ pub async fn ai_chat_stream(
                 &line,
                 &on_event,
                 &mut total_chars,
+                &mut pending,
             )? {
                 return Ok(done);
             }
@@ -1435,21 +2151,38 @@ pub async fn ai_chat_stream(
             &last,
             &on_event,
             &mut total_chars,
+            &mut pending,
         )? {
             return Ok(done);
         }
     }
-    if total_chars == 0 {
+    if total_chars == 0 && pending.completed.is_empty() && pending.pending.is_empty() {
         // 服务器忽略 stream:true 返回整体 JSON:单次解析后一次性推送。
-        let text = fallback_stream_text(provider.kind, lines.raw())?;
-        total_chars = text.chars().count();
-        if on_event.send(AiStreamEvent::Delta { text }).is_err() {
-            return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
+        let (text, tool_calls) = fallback_stream_payload(provider.kind, lines.raw())?;
+        if let Some(text) = text {
+            total_chars = text.chars().count();
+            send_stream_event(&on_event, AiStreamEvent::Delta { text })?;
         }
+        for call in tool_calls.clone() {
+            send_tool_call(&on_event, call)?;
+        }
+        return Ok(AiStreamDone {
+            finish: if tool_calls.is_empty() {
+                "closed".to_string()
+            } else {
+                "tool_calls".to_string()
+            },
+            total_chars,
+            tool_calls,
+        });
+    }
+    for call in pending.complete_all() {
+        send_tool_call(&on_event, call)?;
     }
     Ok(AiStreamDone {
         finish: "closed".to_string(),
         total_chars,
+        tool_calls: pending.completed,
     })
 }
 
@@ -1653,6 +2386,10 @@ mod tests {
             ANTHROPIC_VERSION
         );
         assert_eq!(
+            claude.get("anthropic-beta").unwrap().to_str().unwrap(),
+            ANTHROPIC_BETA_PROMPT_CACHING
+        );
+        assert_eq!(
             claude.get(AUTHORIZATION).unwrap().to_str().unwrap(),
             "Bearer sk-ant-test-123456"
         );
@@ -1668,14 +2405,8 @@ mod tests {
     #[test]
     fn request_bodies_match_each_endpoint_kind() {
         let messages = vec![
-            AiChatMessage {
-                role: "system".to_string(),
-                content: "你是翻译引擎".to_string(),
-            },
-            AiChatMessage {
-                role: "user".to_string(),
-                content: "你好".to_string(),
-            },
+            AiChatMessage::text("system", "你是翻译引擎"),
+            AiChatMessage::text("user", "你好"),
         ];
         let chat = build_chat_body(
             AiEndpointKind::OpenaiChat,
@@ -1749,10 +2480,19 @@ mod tests {
             build_chat_body(
                 AiEndpointKind::OpenaiChat,
                 "m",
-                &[AiChatMessage {
-                    role: "tool".to_string(),
-                    content: "x".to_string(),
-                }],
+                &[AiChatMessage::text("function", "x")],
+                None,
+                false
+            )
+            .unwrap_err()
+            .code,
+            "AI_MESSAGE_INVALID"
+        );
+        assert_eq!(
+            build_chat_body(
+                AiEndpointKind::OpenaiChat,
+                "m",
+                &[AiChatMessage::text("tool", "x")],
                 None,
                 false
             )
@@ -1764,10 +2504,7 @@ mod tests {
             build_chat_body(
                 AiEndpointKind::ClaudeMessages,
                 "m",
-                &[AiChatMessage {
-                    role: "system".to_string(),
-                    content: "只系统".to_string(),
-                }],
+                &[AiChatMessage::text("system", "只系统")],
                 None,
                 false
             )
@@ -1775,6 +2512,105 @@ mod tests {
             .code,
             "AI_MESSAGE_INVALID"
         );
+        assert!(chat.get("tools").is_none());
+        assert!(responses.get("tools").is_none());
+        assert!(claude.get("tools").is_none());
+        let claude_text = serde_json::to_string(&claude).unwrap();
+        assert!(
+            !claude_text.contains("cache_control"),
+            "无 tools 的单段 system 不得打 cache 断点"
+        );
+    }
+
+    #[test]
+    fn same_chapter_prefix_bytes_stay_identical_and_claude_blocks_cache() {
+        let tools = sample_tools();
+        let first = layered_messages("这章讲什么？", &[]);
+        let second = layered_messages(
+            "再详细点",
+            &[
+                AiChatMessage::text("user", "这章讲什么？"),
+                AiChatMessage::text("assistant", "潮水"),
+            ],
+        );
+        for kind in [
+            AiEndpointKind::OpenaiChat,
+            AiEndpointKind::OpenaiResponses,
+            AiEndpointKind::ClaudeMessages,
+        ] {
+            let a =
+                build_chat_body_with_tools(kind, "m", &first, Some(&tools), None, true).unwrap();
+            let b =
+                build_chat_body_with_tools(kind, "m", &second, Some(&tools), None, true).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&prefix_value(kind, &a)).unwrap(),
+                serde_json::to_vec(&prefix_value(kind, &b)).unwrap(),
+                "{kind:?} 同章两问前缀字节应一致"
+            );
+            assert!(a.get("tools").is_some());
+            assert_eq!(a["tools"], b["tools"]);
+        }
+
+        let claude = build_chat_body_with_tools(
+            AiEndpointKind::ClaudeMessages,
+            "m",
+            &first,
+            Some(&tools),
+            None,
+            true,
+        )
+        .unwrap();
+        let claude_tools = claude["tools"].as_array().unwrap();
+        assert_eq!(claude_tools.len(), 2);
+        assert!(claude_tools[0].get("cache_control").is_none());
+        assert_eq!(
+            claude_tools[1]["cache_control"],
+            json!({ "type": "ephemeral" })
+        );
+        let system = claude["system"].as_array().unwrap();
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["text"], json!("你是阅读器助手。"));
+        assert_eq!(system[0]["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(system[1]["cache_control"], json!({ "type": "ephemeral" }));
+        assert!(system[1]["text"].as_str().unwrap().contains("<chapter>"));
+
+        let chat = build_chat_body_with_tools(
+            AiEndpointKind::OpenaiChat,
+            "m",
+            &first,
+            Some(&tools),
+            None,
+            true,
+        )
+        .unwrap();
+        let chat_json = serde_json::to_string(&chat).unwrap();
+        assert!(
+            !chat_json.contains("cache_control"),
+            "OpenAI 不得发明 cache_control"
+        );
+        assert_eq!(chat["tools"][0]["type"], json!("function"));
+        assert_eq!(chat["tools"][0]["function"]["name"], json!("query_book"));
+        assert_eq!(chat["messages"][0]["role"], json!("system"));
+        assert_eq!(chat["messages"][1]["role"], json!("system"));
+    }
+
+    #[test]
+    fn chat_request_limit_is_two_mebibytes_translate_stays_512kib() {
+        let over_translate = json!({ "text": "a".repeat(MAX_REQUEST_BYTES) });
+        assert_eq!(
+            serialize_body(&over_translate).unwrap_err().code,
+            "AI_REQUEST_TOO_LARGE"
+        );
+        assert!(serialize_body_limited(&over_translate, MAX_CHAT_REQUEST_BYTES).is_ok());
+        let over_chat = json!({ "text": "a".repeat(MAX_CHAT_REQUEST_BYTES) });
+        assert_eq!(
+            serialize_body_limited(&over_chat, MAX_CHAT_REQUEST_BYTES)
+                .unwrap_err()
+                .code,
+            "AI_REQUEST_TOO_LARGE"
+        );
+        let small = json!({ "ok": true });
+        assert!(serialize_body(&small).is_ok());
     }
 
     #[test]
@@ -1827,15 +2663,90 @@ mod tests {
     fn feed_all(kind: AiEndpointKind, chunks: &[&[u8]]) -> Vec<SseData> {
         let mut lines = SseLines::new();
         let mut events = Vec::new();
+        let mut pending = ToolCallAccumulator::default();
         for chunk in chunks {
             for line in lines.feed(chunk) {
-                events.push(classify_data_line(kind, &line));
+                let event = classify_data_line(kind, &line, &mut pending);
+                if matches!(event, SseData::Done(_)) {
+                    for call in pending.complete_all() {
+                        events.push(SseData::ToolCall(call));
+                    }
+                }
+                events.push(event);
             }
         }
         if let Some(last) = lines.finish() {
-            events.push(classify_data_line(kind, &last));
+            let event = classify_data_line(kind, &last, &mut pending);
+            if matches!(event, SseData::Done(_)) {
+                for call in pending.complete_all() {
+                    events.push(SseData::ToolCall(call));
+                }
+            }
+            events.push(event);
         }
         events
+    }
+
+    fn tool_calls(events: &[SseData]) -> Vec<(String, String, String)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SseData::ToolCall(call) => {
+                    Some((call.id.clone(), call.name.clone(), call.arguments.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sample_tools() -> Vec<AiToolDefinition> {
+        vec![
+            AiToolDefinition {
+                name: "query_book".to_string(),
+                description: "查询当前书".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "action": { "type": "string" } },
+                    "required": ["action"]
+                }),
+            },
+            AiToolDefinition {
+                name: "save_to_book".to_string(),
+                description: "保存到当前书".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "kind": { "type": "string" } },
+                    "required": ["kind"]
+                }),
+            },
+        ]
+    }
+
+    fn layered_messages(user: &str, extra: &[AiChatMessage]) -> Vec<AiChatMessage> {
+        let mut messages = vec![
+            AiChatMessage::text("system", "你是阅读器助手。"),
+            AiChatMessage::text("system", "【当前章节：一】\n<chapter>\n正文\n</chapter>"),
+        ];
+        messages.extend(extra.iter().cloned());
+        messages.push(AiChatMessage::text("user", user));
+        messages
+    }
+
+    fn prefix_value(kind: AiEndpointKind, body: &Value) -> Value {
+        match kind {
+            AiEndpointKind::OpenaiChat => json!({
+                "tools": body.get("tools"),
+                "messages": body["messages"].as_array().unwrap().iter().take(2).cloned().collect::<Vec<_>>(),
+            }),
+            AiEndpointKind::OpenaiResponses => json!({
+                "tools": body.get("tools"),
+                "input": body["input"].as_array().unwrap().iter().take(2).cloned().collect::<Vec<_>>(),
+            }),
+            AiEndpointKind::ClaudeMessages => json!({
+                "tools": body.get("tools"),
+                "system": body.get("system"),
+            }),
+        }
     }
 
     fn deltas(events: &[SseData]) -> Vec<String> {
@@ -1903,6 +2814,64 @@ mod tests {
     }
 
     #[test]
+    fn sse_streams_emit_text_delta_and_tool_call() {
+        let chat = b"data: {\"choices\":[{\"delta\":{\"content\":\"Look\"}}]}\n\
+                      \ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"query_book\",\"arguments\":\"\"}}]}}]}\n\
+                      \ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"action\\\":\\\"toc\\\"}\"}}]}}]}\n\
+                      \ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\
+                      \ndata: [DONE]\n\n";
+        let events = feed_all(AiEndpointKind::OpenaiChat, &[chat]);
+        assert_eq!(deltas(&events), ["Look"]);
+        assert_eq!(
+            tool_calls(&events),
+            [(
+                "call_1".to_string(),
+                "query_book".to_string(),
+                "{\"action\":\"toc\"}".to_string()
+            )]
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, SseData::Done(reason) if reason == "tool_calls")));
+
+        let claude = b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Check\"}}\n\n\
+                      data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"query_book\",\"input\":{}}}\n\n\
+                      data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"action\\\":\\\"toc\\\"}\"}}\n\n\
+                      data: {\"type\":\"content_block_stop\",\"index\":1}\n\n\
+                      data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n\
+                      data: {\"type\":\"message_stop\"}\n\n";
+        let events = feed_all(AiEndpointKind::ClaudeMessages, &[claude]);
+        assert_eq!(deltas(&events), ["Check"]);
+        assert_eq!(
+            tool_calls(&events),
+            [(
+                "toolu_1".to_string(),
+                "query_book".to_string(),
+                "{\"action\":\"toc\"}".to_string()
+            )]
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, SseData::Done(reason) if reason == "tool_use")));
+
+        let responses = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n\
+                          data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_9\",\"name\":\"save_to_book\",\"arguments\":\"\"}}\n\n\
+                          data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"kind\\\":\\\"bookmark\\\"}\"}\n\n\
+                          data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"arguments\":\"{\\\"kind\\\":\\\"bookmark\\\"}\"}\n\n\
+                          data: {\"type\":\"response.completed\"}\n\n";
+        let events = feed_all(AiEndpointKind::OpenaiResponses, &[responses]);
+        assert_eq!(deltas(&events), ["Hi"]);
+        assert_eq!(
+            tool_calls(&events),
+            [(
+                "call_9".to_string(),
+                "save_to_book".to_string(),
+                "{\"kind\":\"bookmark\"}".to_string()
+            )]
+        );
+    }
+
+    #[test]
     fn sse_failure_events_surface_sanitized_detail() {
         let key = "sk-secret-abcdef";
         let failed = format!(
@@ -1945,24 +2914,28 @@ mod tests {
     #[test]
     fn whole_json_stream_fallback_extracts_reply() {
         let raw = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"整体回复\"}}]}";
+        let (text, tools) =
+            fallback_stream_payload(AiEndpointKind::OpenaiChat, raw.as_bytes()).unwrap();
+        assert_eq!(text.as_deref(), Some("整体回复"));
+        assert!(tools.is_empty());
+        let (text, tools) = fallback_stream_payload(
+            AiEndpointKind::ClaudeMessages,
+            "{\"content\":[{\"type\":\"text\",\"text\":\"Réponse\"}]}".as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(text.as_deref(), Some("Réponse"));
+        assert!(tools.is_empty());
         assert_eq!(
-            fallback_stream_text(AiEndpointKind::OpenaiChat, raw.as_bytes()).unwrap(),
-            "整体回复"
-        );
-        assert_eq!(
-            fallback_stream_text(
-                AiEndpointKind::ClaudeMessages,
-                "{\"content\":[{\"type\":\"text\",\"text\":\"Réponse\"}]}".as_bytes()
-            )
-            .unwrap(),
-            "Réponse"
-        );
-        assert_eq!(
-            fallback_stream_text(AiEndpointKind::OpenaiChat, b"garbage")
+            fallback_stream_payload(AiEndpointKind::OpenaiChat, b"garbage")
                 .unwrap_err()
                 .code,
             "AI_RESPONSE_INVALID"
         );
+        let tool_only = "{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"query_book\",\"arguments\":\"{}\"}}]}}]}";
+        let (text, tools) =
+            fallback_stream_payload(AiEndpointKind::OpenaiChat, tool_only.as_bytes()).unwrap();
+        assert!(text.is_none());
+        assert_eq!(tools[0].name, "query_book");
     }
 
     #[test]
@@ -1988,6 +2961,27 @@ mod tests {
             .unwrap(),
             json!({ "type": "delta", "text": "你好" })
         );
+        assert_eq!(
+            serde_json::to_value(AiStreamEvent::ToolCall {
+                id: "call_1".to_string(),
+                name: "query_book".to_string(),
+                arguments: "{\"action\":\"toc\"}".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "type": "tool_call",
+                "id": "call_1",
+                "name": "query_book",
+                "arguments": "{\"action\":\"toc\"}"
+            })
+        );
+        let done = serde_json::to_value(AiStreamDone {
+            finish: "stop".to_string(),
+            total_chars: 2,
+            tool_calls: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(done, json!({ "finish": "stop", "totalChars": 2 }));
         let input: AiConfigInput = serde_json::from_str(
             r#"{"endpointKind":"openai-chat","baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#,
         )
