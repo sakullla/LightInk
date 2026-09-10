@@ -222,6 +222,94 @@ describe('playReaderPageTurn', () => {
     });
     expect(root.getAttribute('data-page-anim')).toBeNull();
   });
+
+  it('keeps the attribute when a stale same-direction timer fires during a newer turn', () => {
+    // 连击同方向：两次 token 都是 next，第一次的 timer 提前到期不得清掉第二次的属性。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    expect(root.getAttribute('data-page-anim')).toBe('next');
+    timers[0]!(); // 第一次翻页的旧 timer 先到期：第二次仍在播。
+    expect(root.getAttribute('data-page-anim')).toBe('next');
+    timers[1]!(); // 最新一次的 timer 才允许移除。
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('keeps the attribute when a reused token brings a stale timer back into match', () => {
+    // next → prev → next：第一次的 timer 到期时属性又变回 next，只比对 token 会误清。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(root, -1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    expect(root.getAttribute('data-page-anim')).toBe('next');
+    timers[0]!();
+    expect(root.getAttribute('data-page-anim')).toBe('next');
+    timers[1]!();
+    expect(root.getAttribute('data-page-anim')).toBe('next');
+    timers[2]!(); // 只有最后一次的 timer 结束这段动画。
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('keeps each reader root on its own cleanup lifecycle', () => {
+    // 两个阅读器实例各自计数：一个实例的清理既不得跳过自己，也不得波及另一个。
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(first, 1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(second, 1, { matchMedia: () => ({ matches: false }), schedule });
+    timers[0]!();
+    expect(first.getAttribute('data-page-anim')).toBeNull();
+    expect(second.getAttribute('data-page-anim')).toBe('next');
+    timers[1]!();
+    expect(second.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('lets a live cleanup finish when a skipped call lands in the middle', () => {
+    // 早退的调用（切到连续滚动等）不排 timer，也不得作废已在飞的清理，
+    // 否则 data-page-anim 会被永久钉住。
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    root.dataset.readingLayout = 'scroll';
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    expect(timers).toHaveLength(1);
+    timers[0]!();
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
+
+  it('leaves no page-turn attribute behind once a rapid burst settles', () => {
+    const root = document.createElement('div');
+    const timers: Array<() => void> = [];
+    const schedule = (fn: () => void): number => {
+      timers.push(fn);
+      return timers.length;
+    };
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(root, -1, { matchMedia: () => ({ matches: false }), schedule });
+    playReaderPageTurn(root, 1, { matchMedia: () => ({ matches: false }), schedule });
+    for (const fire of timers) {
+      fire();
+    }
+    expect(root.getAttribute('data-page-anim')).toBeNull();
+  });
 });
 
 describe('playReaderPageBoundaryBounce', () => {

@@ -202,6 +202,9 @@ export function readerProgressTickFractions(
   return { chapters: unique, bookmarks: ticks.bookmarks };
 }
 
+/** 连击时旧 timer 的清理回调序号：按 root 计数，只有最新一次调用才允许移除属性。 */
+const readerPageTurnSeq = new WeakMap<HTMLElement, number>();
+
 export function playReaderPageTurn(
   root: HTMLElement,
   direction: 1 | -1,
@@ -241,7 +244,14 @@ export function playReaderPageTurn(
   const schedule =
     options?.schedule ??
     ((fn, ms) => (typeof setTimeout === 'function' ? (setTimeout(fn, ms) as unknown as number) : 0));
+  const seq = (readerPageTurnSeq.get(root) ?? 0) + 1;
+  readerPageTurnSeq.set(root, seq);
   schedule(() => {
+    // 连击：旧 timer 提前到期时新一次翻页尚在播，不得移除属性。按 root 计数，
+    // 不同阅读器实例互不干扰。
+    if (readerPageTurnSeq.get(root) !== seq) {
+      return;
+    }
     if (root.getAttribute('data-page-anim') === token) {
       root.removeAttribute('data-page-anim');
     }
