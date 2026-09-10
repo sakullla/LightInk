@@ -146,6 +146,7 @@ const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
   AI_TEXT_EMPTY: 'reader.ai.error.textEmpty',
   AI_REQUEST_INVALID: 'reader.ai.error.requestInvalid',
   AI_RESPONSE_INVALID: 'reader.ai.error.responseInvalid',
+  AI_RESPONSE_TRUNCATED: 'reader.ai.error.truncated',
 };
 
 /** AI 命令错误码族 → 本地化文案；未知码回退通用失败。missing 填充未配置缺口。 */

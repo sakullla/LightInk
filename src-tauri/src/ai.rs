@@ -19,12 +19,15 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
+use tokio::sync::Notify;
 use url::Url;
 
 const CONFIG_FILE: &str = "ai-provider.json";
@@ -37,6 +40,8 @@ const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_STREAM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 512 * 1024;
+/// 助手请求上限(可携带最多 12 章工具结果,独立于翻译/测试请求)。
+const MAX_CHAT_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MAX_TRANSLATE_CHARS: usize = 5000;
 const MAX_MESSAGES: usize = 200;
@@ -188,12 +193,15 @@ pub struct AiChatMessage {
     pub content: String,
 }
 
-/// `ai_chat_stream` 的终态:`finish` 为 stop/done/incomplete/closed 之一。
+/// `ai_chat_stream` 的终态:`finish` 为 stop/done/incomplete/closed/tool_calls
+/// 之一;`tool_calls` 非空表示模型要求应用执行工具后继续。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStreamDone {
     pub finish: String,
     pub total_chars: usize,
+    #[serde(default)]
+    pub tool_calls: Vec<AiToolCall>,
 }
 
 /// 经 IPC Channel 增量推送的事件:`{"type":"delta","text":"..."}`。
@@ -201,6 +209,66 @@ pub struct AiStreamDone {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AiStreamEvent {
     Delta { text: String },
+}
+
+// ── 助手对话请求模型(R4/R5/R6):分层上下文 + 内置工具 ─────────────────
+
+/// 内置工具定义(前端固定清单,顺序稳定;是可缓存前缀的第①层)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolDef {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// 模型发起的一次工具调用(三端点格式归一:id + 名称 + JSON 参数)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// 应用执行工具后的回传(失败/拒绝/超时也必须回传,is_error 标记)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolResult {
+    pub call_id: String,
+    pub name: String,
+    pub content: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// 对话一轮:user(可携带工具结果)或 assistant(可携带工具调用)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatTurn {
+    pub role: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub tool_calls: Vec<AiToolCall>,
+    #[serde(default)]
+    pub tool_results: Vec<AiToolResult>,
+}
+
+/// `ai_chat_stream` 的请求:①tools ②system ③context(当前章)固定顺序在前,
+/// ④⑤对话轮次在后。同一章追问 ①②③ 字节级不变(提供商前缀缓存生效)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatRequest {
+    /// 前端生成的请求标识(`ai_chat_abort` 用);空串表示不可中断。
+    #[serde(default)]
+    pub request_id: String,
+    pub system: String,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<AiToolDef>,
+    pub turns: Vec<AiChatTurn>,
 }
 
 fn now_ms() -> i64 {
@@ -375,6 +443,10 @@ fn join_endpoint(base: &Url, kind: AiEndpointKind) -> Result<Url, AiError> {
     let prefix = url.path().trim_end_matches('/');
     let path = if kind == AiEndpointKind::ClaudeMessages {
         claude_messages_path(prefix)
+    } else if prefix.ends_with(kind.endpoint_path()) {
+        // base 已经是完整端点(用户把 /v1/chat/completions 整个贴进来):不再重复
+        // 拼接,否则 404 会被归因成「模型不存在」而误导去改模型名。
+        prefix.to_string()
     } else {
         format!("{prefix}{}", kind.endpoint_path())
     };
@@ -580,6 +652,368 @@ fn serialize_body(body: &Value) -> Result<Vec<u8>, AiError> {
     Ok(payload)
 }
 
+// ── 助手请求构造(分层前缀 + 工具 + 缓存标记) ─────────────────────────
+
+fn validate_chat_turns(turns: &[AiChatTurn]) -> Result<(), AiError> {
+    if turns.is_empty() {
+        return Err(AiError::new("AI_MESSAGE_INVALID", "对话消息不能为空"));
+    }
+    if turns.len() > MAX_MESSAGES {
+        return Err(AiError::new(
+            "AI_MESSAGE_INVALID",
+            format!("对话消息超过 {MAX_MESSAGES} 条上限"),
+        ));
+    }
+    for turn in turns {
+        match turn.role.as_str() {
+            "user" | "assistant" => {}
+            other => {
+                return Err(AiError::new(
+                    "AI_MESSAGE_INVALID",
+                    format!("不支持的消息角色: {other}"),
+                ))
+            }
+        }
+        let has_tool_payload = !turn.tool_calls.is_empty() || !turn.tool_results.is_empty();
+        if turn.content.trim().is_empty() && !has_tool_payload {
+            return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容不能为空"));
+        }
+        if contains_forbidden_control(&turn.content) {
+            return Err(AiError::new("AI_MESSAGE_INVALID", "消息内容包含控制字符"));
+        }
+        for call in &turn.tool_calls {
+            if call.id.trim().is_empty() || call.name.trim().is_empty() {
+                return Err(AiError::new("AI_MESSAGE_INVALID", "工具调用缺少 id 或名称"));
+            }
+        }
+        for result in &turn.tool_results {
+            if result.call_id.trim().is_empty() {
+                return Err(AiError::new("AI_MESSAGE_INVALID", "工具结果缺少调用 id"));
+            }
+            if contains_forbidden_control(&result.content) {
+                return Err(AiError::new("AI_MESSAGE_INVALID", "工具结果包含控制字符"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_chat_request(request: &AiChatRequest) -> Result<(), AiError> {
+    if request.system.trim().is_empty() {
+        return Err(AiError::new("AI_MESSAGE_INVALID", "系统提示不能为空"));
+    }
+    if contains_forbidden_control(&request.system)
+        || request
+            .context
+            .as_deref()
+            .is_some_and(contains_forbidden_control)
+    {
+        return Err(AiError::new("AI_MESSAGE_INVALID", "系统提示包含控制字符"));
+    }
+    for tool in &request.tools {
+        if tool.name.trim().is_empty() || !tool.input_schema.is_object() {
+            return Err(AiError::new("AI_MESSAGE_INVALID", "工具定义无效"));
+        }
+    }
+    validate_chat_turns(&request.turns)
+}
+
+fn arguments_string(arguments: &Value) -> String {
+    match arguments {
+        Value::Null => "{}".to_string(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// OpenAI 两式把系统提示与当前章合并为一条 system 消息:提示在前、章在后,
+/// 换章只改变后半段,工具 + 系统提示前缀依旧可缓存。
+fn joined_system(request: &AiChatRequest) -> String {
+    match request.context.as_deref().map(str::trim) {
+        Some(context) if !context.is_empty() => format!("{}\n\n{}", request.system, context),
+        _ => request.system.clone(),
+    }
+}
+
+fn openai_chat_tools(tools: &[AiToolDef]) -> Value {
+    Value::Array(
+        tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn openai_responses_tools(tools: &[AiToolDef]) -> Value {
+    Value::Array(
+        tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn claude_tools(tools: &[AiToolDef]) -> Value {
+    let last = tools.len().saturating_sub(1);
+    Value::Array(
+        tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                let mut value = json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                });
+                if index == last {
+                    value["cache_control"] = json!({ "type": "ephemeral" });
+                }
+                value
+            })
+            .collect(),
+    )
+}
+
+fn openai_chat_turns(turns: &[AiChatTurn]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for turn in turns {
+        if turn.role == "assistant" {
+            let mut message = json!({ "role": "assistant" });
+            if turn.content.trim().is_empty() {
+                message["content"] = Value::Null;
+            } else {
+                message["content"] = json!(turn.content);
+            }
+            if !turn.tool_calls.is_empty() {
+                message["tool_calls"] = Value::Array(
+                    turn.tool_calls
+                        .iter()
+                        .map(|call| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": arguments_string(&call.arguments),
+                                }
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            out.push(message);
+            continue;
+        }
+        for result in &turn.tool_results {
+            out.push(json!({
+                "role": "tool",
+                "tool_call_id": result.call_id,
+                "content": result.content,
+            }));
+        }
+        if !turn.content.trim().is_empty() {
+            out.push(json!({ "role": "user", "content": turn.content }));
+        }
+    }
+    out
+}
+
+fn openai_responses_turns(turns: &[AiChatTurn]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for turn in turns {
+        if turn.role == "assistant" {
+            if !turn.content.trim().is_empty() {
+                out.push(json!({ "role": "assistant", "content": turn.content }));
+            }
+            for call in &turn.tool_calls {
+                out.push(json!({
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": arguments_string(&call.arguments),
+                }));
+            }
+            continue;
+        }
+        for result in &turn.tool_results {
+            out.push(json!({
+                "type": "function_call_output",
+                "call_id": result.call_id,
+                "output": result.content,
+            }));
+        }
+        if !turn.content.trim().is_empty() {
+            out.push(json!({ "role": "user", "content": turn.content }));
+        }
+    }
+    out
+}
+
+/// Claude Messages:内容块数组;tool_result 必须排在同一 user 消息的文本之前。
+fn claude_turns(turns: &[AiChatTurn]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for turn in turns {
+        let mut blocks: Vec<Value> = Vec::new();
+        if turn.role == "assistant" {
+            if !turn.content.trim().is_empty() {
+                blocks.push(json!({ "type": "text", "text": turn.content }));
+            }
+            for call in &turn.tool_calls {
+                let input = if call.arguments.is_object() {
+                    call.arguments.clone()
+                } else {
+                    json!({})
+                };
+                blocks.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": input,
+                }));
+            }
+        } else {
+            for result in &turn.tool_results {
+                let mut block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": result.call_id,
+                    "content": result.content,
+                });
+                if result.is_error {
+                    block["is_error"] = json!(true);
+                }
+                blocks.push(block);
+            }
+            if !turn.content.trim().is_empty() {
+                blocks.push(json!({ "type": "text", "text": turn.content }));
+            }
+        }
+        if blocks.is_empty() {
+            continue;
+        }
+        // 同角色连续消息合并为一条(工具结果轮紧接新提问):Claude 要求 user/
+        // assistant 交替,块顺序保持 tool_result 在前、文本在后。
+        if let Some(previous) = out.last_mut() {
+            if previous.get("role").and_then(Value::as_str) == Some(turn.role.as_str()) {
+                if let Some(Value::Array(existing)) = previous.get_mut("content") {
+                    existing.extend(blocks);
+                    continue;
+                }
+            }
+        }
+        out.push(json!({ "role": turn.role, "content": Value::Array(blocks) }));
+    }
+    // 增长的对话:最后一条消息的最后一个块打断点,提供商自动命中更早前缀。
+    if let Some(last) = out.last_mut() {
+        if let Some(Value::Array(blocks)) = last.get_mut("content") {
+            if let Some(block) = blocks.last_mut() {
+                block["cache_control"] = json!({ "type": "ephemeral" });
+            }
+        }
+    }
+    out
+}
+
+/// 助手请求体(三端点格式):①工具 ②系统提示 ③当前章 固定顺序在前,对话在后。
+/// Claude 在 ①②③ 与最后一条消息上设显式 `cache_control` 断点;OpenAI 两式
+/// 只保证前缀字节稳定(自动前缀缓存)。密钥永不进入请求体。
+pub(crate) fn build_chat_request_body(
+    kind: AiEndpointKind,
+    model: &str,
+    request: &AiChatRequest,
+    max_tokens: Option<u32>,
+    stream: bool,
+) -> Result<Value, AiError> {
+    validate_chat_request(request)?;
+    let mut body = serde_json::Map::new();
+    body.insert("model".to_string(), json!(model));
+    match kind {
+        AiEndpointKind::OpenaiResponses => {
+            let mut input = vec![json!({ "role": "system", "content": joined_system(request) })];
+            input.extend(openai_responses_turns(&request.turns));
+            body.insert("input".to_string(), Value::Array(input));
+            if !request.tools.is_empty() {
+                body.insert("tools".to_string(), openai_responses_tools(&request.tools));
+            }
+            if let Some(max) = max_tokens {
+                body.insert("max_output_tokens".to_string(), json!(max));
+            }
+        }
+        AiEndpointKind::OpenaiChat => {
+            let mut messages = vec![json!({ "role": "system", "content": joined_system(request) })];
+            messages.extend(openai_chat_turns(&request.turns));
+            body.insert("messages".to_string(), Value::Array(messages));
+            if !request.tools.is_empty() {
+                body.insert("tools".to_string(), openai_chat_tools(&request.tools));
+            }
+            if let Some(max) = max_tokens {
+                body.insert("max_tokens".to_string(), json!(max));
+            }
+        }
+        AiEndpointKind::ClaudeMessages => {
+            let mut system = vec![json!({
+                "type": "text",
+                "text": request.system,
+                "cache_control": { "type": "ephemeral" },
+            })];
+            if let Some(context) = request.context.as_deref().map(str::trim) {
+                if !context.is_empty() {
+                    system.push(json!({
+                        "type": "text",
+                        "text": context,
+                        "cache_control": { "type": "ephemeral" },
+                    }));
+                }
+            }
+            body.insert("system".to_string(), Value::Array(system));
+            if !request.tools.is_empty() {
+                body.insert("tools".to_string(), claude_tools(&request.tools));
+            }
+            let messages = claude_turns(&request.turns);
+            if messages.is_empty() {
+                return Err(AiError::new("AI_MESSAGE_INVALID", "对话缺少用户或助手消息"));
+            }
+            body.insert("messages".to_string(), Value::Array(messages));
+            body.insert(
+                "max_tokens".to_string(),
+                json!(max_tokens.unwrap_or(CHAT_MAX_TOKENS)),
+            );
+        }
+    }
+    if stream {
+        body.insert("stream".to_string(), json!(true));
+    }
+    Ok(Value::Object(body))
+}
+
+/// 助手请求可携带多章工具结果,上限独立于翻译/测试请求。
+fn serialize_chat_body(body: &Value) -> Result<Vec<u8>, AiError> {
+    let payload = serde_json::to_vec(body)
+        .map_err(|_| AiError::new("AI_REQUEST_INVALID", "无法构造 AI 请求"))?;
+    if payload.len() > MAX_CHAT_REQUEST_BYTES {
+        return Err(AiError::new(
+            "AI_REQUEST_TOO_LARGE",
+            format!("请求超过 {} 字节上限", MAX_CHAT_REQUEST_BYTES),
+        ));
+    }
+    Ok(payload)
+}
+
 fn auth_headers(kind: AiEndpointKind, key: &str) -> Result<HeaderMap, AiError> {
     let mut headers = HeaderMap::new();
     let bearer = HeaderValue::from_str(&format!("Bearer {key}"))
@@ -779,7 +1213,8 @@ fn network_error(error: reqwest::Error) -> AiError {
 
 // ── 三端点回复文本解析 ──────────────────────────────────────────────
 
-pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<String, AiError> {
+/// 三端点回复文本(可为空;工具调用回合可能没有文本)。
+fn reply_text_of(kind: AiEndpointKind, value: &Value) -> String {
     let text = match kind {
         AiEndpointKind::OpenaiResponses => {
             // 标准 Responses JSON 没有 SDK 的顶层 output_text 便利字段;
@@ -792,13 +1227,23 @@ pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<
                     for item in items {
                         if let Some(contents) = item.get("content").and_then(Value::as_array) {
                             for content in contents {
-                                if content.get("type").and_then(Value::as_str)
-                                    == Some("output_text")
-                                {
-                                    if let Some(text) = content.get("text").and_then(Value::as_str)
-                                    {
-                                        parts.push(text);
+                                match content.get("type").and_then(Value::as_str) {
+                                    Some("output_text") => {
+                                        if let Some(text) =
+                                            content.get("text").and_then(Value::as_str)
+                                        {
+                                            parts.push(text);
+                                        }
                                     }
+                                    // 安全拒答:文本在 refusal 字段,同样是给用户看的回复。
+                                    Some("refusal") => {
+                                        if let Some(text) =
+                                            content.get("refusal").and_then(Value::as_str)
+                                        {
+                                            parts.push(text);
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -809,6 +1254,12 @@ pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<
         }
         AiEndpointKind::OpenaiChat => match value.pointer("/choices/0/message/content") {
             Some(Value::String(text)) => text.clone(),
+            // 拒答时 content 为 null,文本在 message.refusal。
+            Some(Value::Null) | None => value
+                .pointer("/choices/0/message/refusal")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             // 兼容多模态分段 content:[{type:"text",text}]。
             Some(Value::Array(items)) => items
                 .iter()
@@ -831,21 +1282,126 @@ pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<
             })
             .unwrap_or_default(),
     };
-    let text = text.trim();
+    text.trim().to_string()
+}
+
+pub(crate) fn extract_reply_text(kind: AiEndpointKind, value: &Value) -> Result<String, AiError> {
+    let text = reply_text_of(kind, value);
     if text.is_empty() {
         return Err(AiError::new("AI_RESPONSE_INVALID", "AI 未返回文本"));
     }
-    Ok(text.to_string())
+    Ok(text)
 }
 
-// ── SSE 流式解析 ─────────────────────────────────────────────────────
+// ── SSE 流式解析(文本增量 + 工具调用累加) ───────────────────────────
+
+/// 工具调用增量(三端点归一):`key` 是端点内的块标识(Claude/OpenAI chat 用
+/// 块 index,Responses 用 item id),累加器按 key 合并 id/名称/参数片段。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ToolChunk {
+    key: String,
+    id: Option<String>,
+    name: Option<String>,
+    arguments_delta: Option<String>,
+    /// 端点给出的完整参数串(Responses `output_item.done`):覆盖累加片段。
+    arguments_full: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SseData {
     Skip,
     Delta(String),
+    Tool(ToolChunk),
+    /// 提前告知的结束原因(Claude `message_delta.stop_reason`),终态仍等 Done。
+    StopReason(String),
     Done(String),
     Failed(Option<String>),
+}
+
+#[derive(Debug, Default)]
+struct ToolCallDraft {
+    id: String,
+    name: String,
+    arguments: String,
+    full: Option<String>,
+}
+
+/// 跨 chunk 累加工具调用:按出现顺序输出,参数串在终态解析为 JSON 对象。
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    order: Vec<String>,
+    drafts: HashMap<String, ToolCallDraft>,
+}
+
+impl ToolCallAccumulator {
+    fn apply(&mut self, chunk: ToolChunk) {
+        if !self.drafts.contains_key(&chunk.key) {
+            self.order.push(chunk.key.clone());
+            self.drafts
+                .insert(chunk.key.clone(), ToolCallDraft::default());
+        }
+        let draft = self
+            .drafts
+            .get_mut(&chunk.key)
+            .expect("draft inserted above");
+        if let Some(id) = chunk.id.filter(|value| !value.is_empty()) {
+            draft.id = id;
+        }
+        if let Some(name) = chunk.name.filter(|value| !value.is_empty()) {
+            draft.name = name;
+        }
+        if let Some(delta) = chunk.arguments_delta {
+            draft.arguments.push_str(&delta);
+        }
+        if let Some(full) = chunk.arguments_full {
+            draft.full = Some(full);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    fn finish(self) -> Result<Vec<AiToolCall>, AiError> {
+        let mut calls = Vec::with_capacity(self.order.len());
+        let mut drafts = self.drafts;
+        for (index, key) in self.order.iter().enumerate() {
+            let Some(draft) = drafts.remove(key) else {
+                continue;
+            };
+            if draft.name.trim().is_empty() {
+                return Err(AiError::new("AI_RESPONSE_INVALID", "工具调用缺少名称"));
+            }
+            let raw = draft.full.unwrap_or(draft.arguments);
+            let arguments = parse_tool_arguments(&raw)?;
+            let id = if draft.id.trim().is_empty() {
+                format!("call_{index}")
+            } else {
+                draft.id
+            };
+            calls.push(AiToolCall {
+                id,
+                name: draft.name,
+                arguments,
+            });
+        }
+        Ok(calls)
+    }
+}
+
+/// 工具参数串 → JSON 对象;空串视为无参数,非对象/非 JSON 视为响应无效。
+fn parse_tool_arguments(raw: &str) -> Result<Value, AiError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(json!({}));
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) if value.is_object() => Ok(value),
+        _ => Err(AiError::new(
+            "AI_RESPONSE_INVALID",
+            "工具调用参数不是 JSON 对象",
+        )),
+    }
 }
 
 /// 按字节缓冲、只在换行到达后切行,保证跨 chunk 拆开的多字节字符在完整
@@ -889,95 +1445,194 @@ impl SseLines {
     }
 }
 
-fn classify_data_line(kind: AiEndpointKind, line: &str) -> SseData {
+fn classify_data_line(kind: AiEndpointKind, line: &str) -> Vec<SseData> {
     let Some(payload) = line.strip_prefix("data:") else {
-        return SseData::Skip;
+        return vec![SseData::Skip];
     };
     let payload = payload.trim();
-    if payload.is_empty() || payload == ": keep-alive" {
-        return SseData::Skip;
+    if payload.is_empty() {
+        return vec![SseData::Skip];
     }
     if payload == "[DONE]" {
-        return SseData::Done("done".to_string());
+        return vec![SseData::Done("done".to_string())];
     }
     let Ok(value) = serde_json::from_str::<Value>(payload) else {
-        return SseData::Skip;
+        return vec![SseData::Skip];
     };
     classify_sse_event(kind, &value)
 }
 
-fn classify_sse_event(kind: AiEndpointKind, value: &Value) -> SseData {
+fn value_string(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn failure_detail(value: &Value, pointer: &str) -> SseData {
+    SseData::Failed(
+        value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned),
+    )
+}
+
+fn classify_sse_event(kind: AiEndpointKind, value: &Value) -> Vec<SseData> {
     match kind {
         AiEndpointKind::OpenaiResponses => match value.get("type").and_then(Value::as_str) {
-            Some("response.output_text.delta") => value
+            // 安全拒答走 response.refusal.delta,文本同样是给用户看的:按普通增量推送,
+            // 否则 completed 时零文本会被当成「服务器忽略了 stream」去整体解析而报错。
+            Some("response.output_text.delta") | Some("response.refusal.delta") => value
                 .get("delta")
                 .and_then(Value::as_str)
                 .filter(|text| !text.is_empty())
-                .map(|text| SseData::Delta(text.to_string()))
-                .unwrap_or(SseData::Skip),
-            Some("response.completed") => SseData::Done("stop".to_string()),
-            Some("response.incomplete") => SseData::Done("incomplete".to_string()),
-            Some("response.failed") => SseData::Failed(
-                value
-                    .pointer("/response/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            Some("error") => SseData::Failed(
-                value
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            _ => SseData::Skip,
+                .map(|text| vec![SseData::Delta(text.to_string())])
+                .unwrap_or_else(|| vec![SseData::Skip]),
+            Some("response.output_item.added") | Some("response.output_item.done") => {
+                if value.pointer("/item/type").and_then(Value::as_str) != Some("function_call") {
+                    return vec![SseData::Skip];
+                }
+                let call_id = value_string(value, "/item/call_id");
+                let key = value_string(value, "/item/id")
+                    .or_else(|| call_id.clone())
+                    .unwrap_or_default();
+                let done =
+                    value.get("type").and_then(Value::as_str) == Some("response.output_item.done");
+                vec![SseData::Tool(ToolChunk {
+                    key,
+                    id: call_id,
+                    name: value_string(value, "/item/name"),
+                    arguments_delta: None,
+                    arguments_full: if done {
+                        value_string(value, "/item/arguments")
+                    } else {
+                        None
+                    },
+                })]
+            }
+            Some("response.function_call_arguments.delta") => vec![SseData::Tool(ToolChunk {
+                key: value_string(value, "/item_id").unwrap_or_default(),
+                id: None,
+                name: None,
+                arguments_delta: value_string(value, "/delta"),
+                arguments_full: None,
+            })],
+            Some("response.function_call_arguments.done") => vec![SseData::Tool(ToolChunk {
+                key: value_string(value, "/item_id").unwrap_or_default(),
+                id: None,
+                name: None,
+                arguments_delta: None,
+                arguments_full: value_string(value, "/arguments"),
+            })],
+            Some("response.completed") => vec![SseData::Done("stop".to_string())],
+            Some("response.incomplete") => vec![SseData::Done("incomplete".to_string())],
+            Some("response.failed") => vec![failure_detail(value, "/response/error/message")],
+            Some("error") => vec![failure_detail(value, "/error/message")],
+            _ => vec![SseData::Skip],
         },
         AiEndpointKind::OpenaiChat => {
-            if let Some(text) = value
-                .pointer("/choices/0/delta/content")
-                .and_then(Value::as_str)
-            {
-                if !text.is_empty() {
-                    return SseData::Delta(text.to_string());
+            let mut events = Vec::new();
+            // 拒答走 delta.refusal,与 delta.content 一样按文本推送。
+            for pointer in ["/choices/0/delta/content", "/choices/0/delta/refusal"] {
+                if let Some(text) = value.pointer(pointer).and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        events.push(SseData::Delta(text.to_string()));
+                    }
                 }
+            }
+            if let Some(calls) = value
+                .pointer("/choices/0/delta/tool_calls")
+                .and_then(Value::as_array)
+            {
+                for (ordinal, call) in calls.iter().enumerate() {
+                    // 标准 OpenAI 按 index 累加(后续片段只带 index 不带 id);网关省略
+                    // index 时每块都是完整调用,按 id 区分,再没有才退回数组序号——否则
+                    // 多个调用会全部落到 "0",参数串拼在一起解析失败。
+                    let key = match call.get("index").and_then(Value::as_u64) {
+                        Some(index) => format!("i{index}"),
+                        None => value_string(call, "/id")
+                            .filter(|id| !id.is_empty())
+                            .map(|id| format!("id:{id}"))
+                            .unwrap_or_else(|| format!("o{ordinal}")),
+                    };
+                    events.push(SseData::Tool(ToolChunk {
+                        key,
+                        id: value_string(call, "/id"),
+                        name: value_string(call, "/function/name"),
+                        arguments_delta: value_string(call, "/function/arguments"),
+                        arguments_full: None,
+                    }));
+                }
+            }
+            // 同一事件既带 error 又带 finish_reason 时以失败为准:stream_step 遇到 Done
+            // 即返回,Failed 必须排在前面。
+            if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+                events.push(SseData::Failed(Some(message.trim().to_string())));
             }
             if let Some(finish) = value
                 .pointer("/choices/0/finish_reason")
                 .and_then(Value::as_str)
             {
                 if !finish.is_empty() {
-                    return SseData::Done(finish.to_string());
+                    events.push(SseData::Done(finish.to_string()));
                 }
             }
-            if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
-                return SseData::Failed(Some(message.trim().to_string()));
+            if events.is_empty() {
+                events.push(SseData::Skip);
             }
-            SseData::Skip
+            events
         }
         AiEndpointKind::ClaudeMessages => match value.get("type").and_then(Value::as_str) {
-            Some("content_block_delta")
-                if value.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") =>
+            Some("content_block_start")
+                if value.pointer("/content_block/type").and_then(Value::as_str)
+                    == Some("tool_use") =>
             {
-                value
-                    .pointer("/delta/text")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .map(|text| SseData::Delta(text.to_string()))
-                    .unwrap_or(SseData::Skip)
+                vec![SseData::Tool(ToolChunk {
+                    key: value
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        .to_string(),
+                    id: value_string(value, "/content_block/id"),
+                    name: value_string(value, "/content_block/name"),
+                    arguments_delta: None,
+                    arguments_full: None,
+                })]
             }
-            Some("message_stop") => SseData::Done("stop".to_string()),
-            Some("error") => SseData::Failed(
-                value
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToOwned::to_owned),
-            ),
-            _ => SseData::Skip,
+            Some("content_block_delta") => {
+                match value.pointer("/delta/type").and_then(Value::as_str) {
+                    Some("text_delta") => value
+                        .pointer("/delta/text")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| vec![SseData::Delta(text.to_string())])
+                        .unwrap_or_else(|| vec![SseData::Skip]),
+                    Some("input_json_delta") => vec![SseData::Tool(ToolChunk {
+                        key: value
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                            .to_string(),
+                        id: None,
+                        name: None,
+                        arguments_delta: value_string(value, "/delta/partial_json"),
+                        arguments_full: None,
+                    })],
+                    _ => vec![SseData::Skip],
+                }
+            }
+            Some("message_delta") => value
+                .pointer("/delta/stop_reason")
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| vec![SseData::StopReason(reason.to_string())])
+                .unwrap_or_else(|| vec![SseData::Skip]),
+            Some("message_stop") => vec![SseData::Done("stop".to_string())],
+            Some("error") => vec![failure_detail(value, "/error/message")],
+            _ => vec![SseData::Skip],
         },
     }
 }
@@ -1001,34 +1656,257 @@ fn stream_failure(key: &str, detail: Option<String>) -> AiError {
     AiError::new("AI_STREAM_FAILED", message)
 }
 
+/// 一次流式会话的累积态:字数、工具调用草稿、提前告知的结束原因。
+#[derive(Debug, Default)]
+struct StreamState {
+    total_chars: usize,
+    tools: ToolCallAccumulator,
+    stop_reason: Option<String>,
+}
+
+/// 处理一行 SSE:文本增量即时推送;工具片段累加;Done 返回结束原因。
 fn stream_step(
     kind: AiEndpointKind,
     key: &str,
     line: &str,
     on_event: &Channel<AiStreamEvent>,
-    total_chars: &mut usize,
-) -> Result<Option<AiStreamDone>, AiError> {
-    match classify_data_line(kind, line) {
-        SseData::Skip => Ok(None),
-        SseData::Done(finish) => Ok(Some(AiStreamDone {
-            finish,
-            total_chars: *total_chars,
-        })),
-        SseData::Delta(text) => {
-            *total_chars += text.chars().count();
-            if on_event.send(AiStreamEvent::Delta { text }).is_err() {
-                return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
+    state: &mut StreamState,
+) -> Result<Option<String>, AiError> {
+    for data in classify_data_line(kind, line) {
+        match data {
+            SseData::Skip => {}
+            SseData::Delta(text) => {
+                state.total_chars += text.chars().count();
+                if on_event.send(AiStreamEvent::Delta { text }).is_err() {
+                    return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
+                }
             }
-            Ok(None)
+            SseData::Tool(chunk) => state.tools.apply(chunk),
+            SseData::StopReason(reason) => state.stop_reason = Some(reason),
+            SseData::Done(finish) => {
+                return Ok(Some(state.stop_reason.take().unwrap_or(finish)));
+            }
+            SseData::Failed(detail) => return Err(stream_failure(key, detail)),
         }
-        SseData::Failed(detail) => Err(stream_failure(key, detail)),
+    }
+    Ok(None)
+}
+
+/// 收口本轮工具调用。输出因长度上限被截断时参数 JSON 必然不完整:给出明确原因,
+/// 而不是笼统的「响应无效」(用户可缩短备注 / 缩小请求后重试)。
+fn finish_tool_calls(
+    tools: ToolCallAccumulator,
+    finish: Option<&str>,
+) -> Result<Vec<AiToolCall>, AiError> {
+    if tools.is_empty() {
+        return Ok(Vec::new());
+    }
+    match tools.finish() {
+        Ok(calls) => Ok(calls),
+        Err(_)
+            if matches!(
+                finish,
+                Some("length") | Some("max_tokens") | Some("incomplete")
+            ) =>
+        {
+            Err(AiError::new(
+                "AI_RESPONSE_TRUNCATED",
+                "输出达到长度上限,工具调用参数不完整;请缩短内容后重试",
+            ))
+        }
+        Err(error) => Err(error),
     }
 }
 
-/// 服务器忽略 stream:true 返回整体 JSON 时的降级解析(ADR-3:功能不丢)。
-fn fallback_stream_text(kind: AiEndpointKind, raw: &[u8]) -> Result<String, AiError> {
+/// 整体 JSON 里的工具调用(服务器忽略 stream:true 时的降级路径)。
+fn extract_tool_calls(kind: AiEndpointKind, value: &Value) -> Result<Vec<AiToolCall>, AiError> {
+    let mut calls = Vec::new();
+    match kind {
+        AiEndpointKind::ClaudeMessages => {
+            for item in value
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if item.get("type").and_then(Value::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let input = item.get("input").cloned().unwrap_or_else(|| json!({}));
+                calls.push(AiToolCall {
+                    id: value_string(item, "/id").unwrap_or_default(),
+                    name: value_string(item, "/name").unwrap_or_default(),
+                    arguments: if input.is_object() { input } else { json!({}) },
+                });
+            }
+        }
+        AiEndpointKind::OpenaiChat => {
+            for item in value
+                .pointer("/choices/0/message/tool_calls")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                calls.push(AiToolCall {
+                    id: value_string(item, "/id").unwrap_or_default(),
+                    name: value_string(item, "/function/name").unwrap_or_default(),
+                    arguments: parse_tool_arguments(
+                        &value_string(item, "/function/arguments").unwrap_or_default(),
+                    )?,
+                });
+            }
+        }
+        AiEndpointKind::OpenaiResponses => {
+            for item in value
+                .get("output")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                    continue;
+                }
+                calls.push(AiToolCall {
+                    id: value_string(item, "/call_id").unwrap_or_default(),
+                    name: value_string(item, "/name").unwrap_or_default(),
+                    arguments: parse_tool_arguments(
+                        &value_string(item, "/arguments").unwrap_or_default(),
+                    )?,
+                });
+            }
+        }
+    }
+    for (index, call) in calls.iter_mut().enumerate() {
+        if call.name.trim().is_empty() {
+            return Err(AiError::new("AI_RESPONSE_INVALID", "工具调用缺少名称"));
+        }
+        if call.id.trim().is_empty() {
+            call.id = format!("call_{index}");
+        }
+    }
+    Ok(calls)
+}
+
+/// 服务器忽略 stream:true 返回整体 JSON 时的降级解析(ADR-3:功能不丢):
+/// 文本与工具调用都取;两者皆空才算无效响应。
+fn fallback_stream_reply(
+    kind: AiEndpointKind,
+    raw: &[u8],
+) -> Result<(String, Vec<AiToolCall>), AiError> {
     let value = parse_json_bytes(raw)?;
-    extract_reply_text(kind, &value)
+    let tool_calls = extract_tool_calls(kind, &value)?;
+    let text = reply_text_of(kind, &value);
+    if text.is_empty() && tool_calls.is_empty() {
+        return Err(AiError::new("AI_RESPONSE_INVALID", "AI 未返回文本"));
+    }
+    Ok((text, tool_calls))
+}
+
+/// 翻译/测试连接的降级路径沿用纯文本口径。
+#[cfg(test)]
+fn fallback_stream_text(kind: AiEndpointKind, raw: &[u8]) -> Result<String, AiError> {
+    let (text, _) = fallback_stream_reply(kind, raw)?;
+    if text.is_empty() {
+        return Err(AiError::new("AI_RESPONSE_INVALID", "AI 未返回文本"));
+    }
+    Ok(text)
+}
+
+// ── 流式中止登记(R1 停止生成) ────────────────────────────────────────
+
+/// 活跃流式请求 id 与已登记的中止 id。中止只对活跃请求登记:请求结束时两者
+/// 一起清掉,完成/停止竞态下迟到的中止不会在集合里永久残留。
+#[derive(Default)]
+struct ChatAbortRegistry {
+    /// 活跃请求 → 中止信号:中止时唤醒正在等网络的那个 future,不必等下一块到达。
+    active: HashMap<String, Arc<Notify>>,
+    aborts: HashSet<String>,
+}
+
+static CHAT_ABORTS: OnceLock<Mutex<ChatAbortRegistry>> = OnceLock::new();
+
+fn lock_aborts() -> std::sync::MutexGuard<'static, ChatAbortRegistry> {
+    CHAT_ABORTS
+        .get_or_init(|| Mutex::new(ChatAbortRegistry::default()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 请求开始:登记为活跃并返回本次的中止信号;同 id 复用不继承旧登记(旧信号
+/// 连同其未消费的唤醒一起丢弃)。空 id 拿到的信号永远不会被唤醒。
+fn begin_abortable(request_id: &str) -> Arc<Notify> {
+    let notify = Arc::new(Notify::new());
+    if request_id.is_empty() {
+        return notify;
+    }
+    let mut registry = lock_aborts();
+    registry.aborts.remove(request_id);
+    registry
+        .active
+        .insert(request_id.to_string(), Arc::clone(&notify));
+    notify
+}
+
+/// 消费一次中止请求(命中即移除);空 id 永不中止。
+fn take_abort(request_id: &str) -> bool {
+    if request_id.is_empty() {
+        return false;
+    }
+    lock_aborts().aborts.remove(request_id)
+}
+
+/// 请求结束:活跃与中止登记一起清掉。
+fn clear_abort(request_id: &str) {
+    if !request_id.is_empty() {
+        let mut registry = lock_aborts();
+        registry.active.remove(request_id);
+        registry.aborts.remove(request_id);
+    }
+}
+
+/// 测试用:某 id 是否(活跃, 已登记中止)。按 id 查而不是数总量,测试并行时不互相干扰。
+#[cfg(test)]
+fn abort_registered(request_id: &str) -> (bool, bool) {
+    let registry = lock_aborts();
+    (
+        registry.active.contains_key(request_id),
+        registry.aborts.contains(request_id),
+    )
+}
+
+/// 请求前端停止某次流式回答:立即唤醒正在等待网络的流式命令,使其以
+/// `AI_STREAM_ABORTED` 结束(不等下一块到达),已推送的增量保留在前端。
+/// 未知/已结束的 id 直接忽略(不登记,不报错)。
+#[tauri::command]
+pub fn ai_chat_abort(request_id: String) -> Result<(), AiError> {
+    let id = request_id.trim();
+    if id.is_empty() {
+        return Err(AiError::new("AI_REQUEST_INVALID", "缺少请求标识"));
+    }
+    let mut registry = lock_aborts();
+    if let Some(notify) = registry.active.get(id) {
+        // 先唤醒再登记:notify_one 在无等待者时存一次许可,后到的 notified() 也会立即返回。
+        notify.notify_one();
+        registry.aborts.insert(id.to_string());
+    }
+    Ok(())
+}
+
+fn stream_aborted() -> AiError {
+    AiError::new("AI_STREAM_ABORTED", "已停止生成")
+}
+
+/// 让一次网络等待(发送请求 / 读下一块)可被中止信号打断:信号先到或已到时
+/// 直接以中止结束,等待中的请求/读取随 future 一起丢弃,不再占用提供商。
+async fn abortable<T, F>(future: F, abort: &Notify) -> Result<T, AiError>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::select! {
+        biased;
+        _ = abort.notified() => Err(stream_aborted()),
+        value = future => Ok(value),
+    }
 }
 
 // ── 状态视图 ─────────────────────────────────────────────────────────
@@ -1379,77 +2257,110 @@ pub(crate) async fn translate_book_chunk(
     })
 }
 
-/// 流式多轮对话:经 IPC `Channel` 增量推送 `{type:\"delta\",text}`,
-/// 终态由返回值承载(完成含 finish 与累计字数)或以 `AiError` 错误码失败。
-/// 流式累计 2MB 上限;相邻 chunk 读取间隔超 60s 判超时。
+/// 助手流式多轮对话(R4/R5/R6):请求 = ①工具 ②系统提示 ③当前章 + 对话轮次,
+/// 经 IPC `Channel` 增量推送 `{type:"delta",text}`;终态由返回值承载(结束
+/// 原因、累计字数、模型发起的工具调用),失败以 `AiError` 错误码呈现。
+/// 流式累计 2MB 上限;相邻 chunk 读取间隔超 60s 判超时;`ai_chat_abort`
+/// 的中止立即打断正在等待的发送/读取。
 #[tauri::command]
 pub async fn ai_chat_stream(
     app: AppHandle,
-    messages: Vec<AiChatMessage>,
+    request: AiChatRequest,
     on_event: Channel<AiStreamEvent>,
 ) -> Result<AiStreamDone, AiError> {
-    let (_config, provider) = resolve_provider(&app)?;
-    let body = build_chat_body(
+    let request_id = request.request_id.trim().to_string();
+    // 同 id 复用时不继承旧的中止登记。
+    let abort = begin_abortable(&request_id);
+    let result = run_chat_stream(&app, &request, &request_id, &abort, &on_event).await;
+    clear_abort(&request_id);
+    result
+}
+
+async fn run_chat_stream(
+    app: &AppHandle,
+    request: &AiChatRequest,
+    request_id: &str,
+    abort: &Notify,
+    on_event: &Channel<AiStreamEvent>,
+) -> Result<AiStreamDone, AiError> {
+    let (_config, provider) = resolve_provider(app)?;
+    let body = build_chat_request_body(
         provider.kind,
         &provider.model,
-        &messages,
+        request,
         max_tokens_for(provider.kind, AiPurpose::Chat),
         true,
     )?;
-    let payload = serialize_body(&body)?;
+    let payload = serialize_chat_body(&body)?;
     let client = build_client(&provider.url, provider.allow_http, true)?;
-    let request = client
+    let http = client
         .post(provider.url.clone())
         .header(CONTENT_TYPE, "application/json")
         .headers(auth_headers(provider.kind, &provider.key)?)
         .body(payload);
-    let response = request.send().await.map_err(network_error)?;
+    let response = abortable(http.send(), abort)
+        .await?
+        .map_err(network_error)?;
     if !response.status().is_success() {
         let status = response.status();
-        let detail = error_body_message(response).await;
+        // 错误正文的读取同样受中止信号约束:慢速滴漏的错误体不能让「停止」失效。
+        let detail = abortable(error_body_message(response), abort).await?;
         return Err(compose_http_error(&provider.key, status, detail));
     }
     let mut stream = response.bytes_stream();
     let mut lines = SseLines::new();
     let mut received = 0usize;
-    let mut total_chars = 0usize;
-    while let Some(chunk) = stream.next().await {
+    let mut state = StreamState::default();
+    let mut finish: Option<String> = None;
+    while let Some(chunk) = abortable(stream.next(), abort).await? {
+        if take_abort(request_id) {
+            return Err(stream_aborted());
+        }
         let chunk = chunk.map_err(network_error)?;
         received = advance_stream_budget(received, chunk.len())?;
         for line in lines.feed(&chunk) {
-            if let Some(done) = stream_step(
-                provider.kind,
-                &provider.key,
-                &line,
-                &on_event,
-                &mut total_chars,
-            )? {
-                return Ok(done);
+            if let Some(done) =
+                stream_step(provider.kind, &provider.key, &line, on_event, &mut state)?
+            {
+                finish = Some(done);
+                break;
             }
         }
-    }
-    if let Some(last) = lines.finish() {
-        if let Some(done) = stream_step(
-            provider.kind,
-            &provider.key,
-            &last,
-            &on_event,
-            &mut total_chars,
-        )? {
-            return Ok(done);
+        if finish.is_some() {
+            break;
         }
     }
-    if total_chars == 0 {
-        // 服务器忽略 stream:true 返回整体 JSON:单次解析后一次性推送。
-        let text = fallback_stream_text(provider.kind, lines.raw())?;
+    if finish.is_none() {
+        if let Some(last) = lines.finish() {
+            finish = stream_step(provider.kind, &provider.key, &last, on_event, &mut state)?;
+        }
+    }
+    let StreamState {
+        mut total_chars,
+        tools,
+        ..
+    } = state;
+    let mut tool_calls = finish_tool_calls(tools, finish.as_deref())?;
+    // F1:只有完全没有 SSE 终态(服务器忽略 stream:true 返回整体 JSON)才走降级解析;
+    // 正常收尾但零文本(content_filter、工具结果后无话可说)保留真实结束原因,
+    // 不能把整段 SSE 当 JSON 解析然后报「响应无效」。
+    if finish.is_none() && total_chars == 0 && tool_calls.is_empty() {
+        let (text, calls) = fallback_stream_reply(provider.kind, lines.raw())?;
         total_chars = text.chars().count();
-        if on_event.send(AiStreamEvent::Delta { text }).is_err() {
+        if !text.is_empty() && on_event.send(AiStreamEvent::Delta { text }).is_err() {
             return Err(AiError::new("AI_STREAM_ABORTED", "流式通道已关闭"));
         }
+        tool_calls = calls;
     }
+    let finish = if !tool_calls.is_empty() {
+        "tool_calls".to_string()
+    } else {
+        finish.unwrap_or_else(|| "closed".to_string())
+    };
     Ok(AiStreamDone {
-        finish: "closed".to_string(),
+        finish,
         total_chars,
+        tool_calls,
     })
 }
 
@@ -1829,11 +2740,11 @@ mod tests {
         let mut events = Vec::new();
         for chunk in chunks {
             for line in lines.feed(chunk) {
-                events.push(classify_data_line(kind, &line));
+                events.extend(classify_data_line(kind, &line));
             }
         }
         if let Some(last) = lines.finish() {
-            events.push(classify_data_line(kind, &last));
+            events.extend(classify_data_line(kind, &last));
         }
         events
     }
@@ -2264,5 +3175,653 @@ mod tests {
                 .code,
             "AI_CONFIG_INVALID"
         );
+    }
+
+    // ── 助手分层请求 / 工具调用 / 缓存标记(R4/R5/R6) ──────────────────
+
+    fn sample_tools() -> Vec<AiToolDef> {
+        vec![
+            AiToolDef {
+                name: "query_book".to_string(),
+                description: "查询当前书".to_string(),
+                input_schema: json!({ "type": "object", "properties": { "action": { "type": "string" } } }),
+            },
+            AiToolDef {
+                name: "save_to_book".to_string(),
+                description: "保存到当前书".to_string(),
+                input_schema: json!({ "type": "object", "properties": { "kind": { "type": "string" } } }),
+            },
+        ]
+    }
+
+    fn sample_request(turns: Vec<AiChatTurn>) -> AiChatRequest {
+        AiChatRequest {
+            request_id: "req-1".to_string(),
+            system: "你是助手".to_string(),
+            context: Some("【当前章节:第一章】\n正文".to_string()),
+            tools: sample_tools(),
+            turns,
+        }
+    }
+
+    fn user(content: &str) -> AiChatTurn {
+        AiChatTurn {
+            role: "user".to_string(),
+            content: content.to_string(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+        }
+    }
+
+    fn assistant(content: &str) -> AiChatTurn {
+        AiChatTurn {
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+        }
+    }
+
+    fn tool_round() -> Vec<AiChatTurn> {
+        vec![
+            user("第三章讲什么?"),
+            AiChatTurn {
+                role: "assistant".to_string(),
+                content: String::new(),
+                tool_calls: vec![AiToolCall {
+                    id: "call_a".to_string(),
+                    name: "query_book".to_string(),
+                    arguments: json!({ "action": "chapter", "chapter_index": 2 }),
+                }],
+                tool_results: Vec::new(),
+            },
+            AiChatTurn {
+                role: "user".to_string(),
+                content: String::new(),
+                tool_calls: Vec::new(),
+                tool_results: vec![AiToolResult {
+                    call_id: "call_a".to_string(),
+                    name: "query_book".to_string(),
+                    content: "{\"text\":\"第三章正文\"}".to_string(),
+                    is_error: false,
+                }],
+            },
+        ]
+    }
+
+    #[test]
+    fn chat_request_layers_tools_system_context_then_turns_per_kind() {
+        let request = sample_request(tool_round());
+
+        let chat =
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, true).unwrap();
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], json!("system"));
+        assert_eq!(
+            messages[0]["content"],
+            json!("你是助手\n\n【当前章节:第一章】\n正文")
+        );
+        assert_eq!(messages[1]["role"], json!("user"));
+        assert_eq!(messages[2]["role"], json!("assistant"));
+        assert_eq!(messages[2]["content"], Value::Null);
+        assert_eq!(messages[2]["tool_calls"][0]["id"], json!("call_a"));
+        assert_eq!(messages[2]["tool_calls"][0]["type"], json!("function"));
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["name"],
+            json!("query_book")
+        );
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["arguments"],
+            json!("{\"action\":\"chapter\",\"chapter_index\":2}")
+        );
+        assert_eq!(messages[3]["role"], json!("tool"));
+        assert_eq!(messages[3]["tool_call_id"], json!("call_a"));
+        assert_eq!(chat["tools"][0]["type"], json!("function"));
+        assert_eq!(chat["tools"][0]["function"]["name"], json!("query_book"));
+        assert_eq!(chat["tools"][1]["function"]["name"], json!("save_to_book"));
+        assert_eq!(chat["stream"], json!(true));
+
+        let responses =
+            build_chat_request_body(AiEndpointKind::OpenaiResponses, "m", &request, None, false)
+                .unwrap();
+        let input = responses["input"].as_array().unwrap();
+        assert_eq!(input[0]["role"], json!("system"));
+        assert_eq!(input[2]["type"], json!("function_call"));
+        assert_eq!(input[2]["call_id"], json!("call_a"));
+        assert_eq!(input[3]["type"], json!("function_call_output"));
+        assert_eq!(input[3]["output"], json!("{\"text\":\"第三章正文\"}"));
+        assert_eq!(responses["tools"][0]["type"], json!("function"));
+        assert_eq!(responses["tools"][0]["name"], json!("query_book"));
+        assert!(responses["tools"][0].get("function").is_none());
+
+        let claude =
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &request, None, true)
+                .unwrap();
+        let system = claude["system"].as_array().unwrap();
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["text"], json!("你是助手"));
+        assert_eq!(system[0]["cache_control"]["type"], json!("ephemeral"));
+        assert_eq!(system[1]["text"], json!("【当前章节:第一章】\n正文"));
+        assert_eq!(system[1]["cache_control"]["type"], json!("ephemeral"));
+        let tools = claude["tools"].as_array().unwrap();
+        assert!(tools[0].get("cache_control").is_none());
+        assert_eq!(tools[1]["cache_control"]["type"], json!("ephemeral"));
+        assert_eq!(tools[0]["input_schema"]["type"], json!("object"));
+        let messages = claude["messages"].as_array().unwrap();
+        assert_eq!(messages[1]["content"][0]["type"], json!("tool_use"));
+        assert_eq!(messages[1]["content"][0]["id"], json!("call_a"));
+        assert_eq!(
+            messages[1]["content"][0]["input"],
+            json!({ "action": "chapter", "chapter_index": 2 })
+        );
+        assert_eq!(messages[2]["content"][0]["type"], json!("tool_result"));
+        assert_eq!(messages[2]["content"][0]["tool_use_id"], json!("call_a"));
+        assert!(messages[2]["content"][0].get("is_error").is_none());
+        // 最后一条消息的最后一个块带断点(增长对话自动缓存)。
+        assert_eq!(
+            messages[2]["content"][0]["cache_control"]["type"],
+            json!("ephemeral")
+        );
+        assert!(messages[1]["content"][0].get("cache_control").is_none());
+        assert_eq!(claude["max_tokens"], json!(CHAT_MAX_TOKENS));
+        for body in [&chat, &responses, &claude] {
+            assert!(!serde_json::to_string(body).unwrap().contains("sk-"));
+        }
+    }
+
+    #[test]
+    fn same_chapter_follow_up_keeps_prefix_identical_and_grows_turns_only() {
+        let first = sample_request(vec![user("第一问")]);
+        let second = sample_request(vec![user("第一问"), assistant("答"), user("追问")]);
+        for kind in [
+            AiEndpointKind::OpenaiChat,
+            AiEndpointKind::OpenaiResponses,
+            AiEndpointKind::ClaudeMessages,
+        ] {
+            let a = build_chat_request_body(kind, "m", &first, None, true).unwrap();
+            let b = build_chat_request_body(kind, "m", &second, None, true).unwrap();
+            assert_eq!(a["tools"], b["tools"], "{kind:?} tools drift");
+            let (list_a, list_b) = if kind == AiEndpointKind::OpenaiResponses {
+                (a["input"].clone(), b["input"].clone())
+            } else {
+                (a["messages"].clone(), b["messages"].clone())
+            };
+            let list_a = list_a.as_array().unwrap();
+            let list_b = list_b.as_array().unwrap();
+            if kind == AiEndpointKind::ClaudeMessages {
+                assert_eq!(a["system"], b["system"]);
+                // 首问的最后一块带断点,追问时同一块不再带(断点移到新的末块)。
+                let mut head_a = list_a[0].clone();
+                head_a["content"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("cache_control");
+                assert_eq!(head_a, list_b[0]);
+                assert!(list_b[2]["content"][0].get("cache_control").is_some());
+            } else {
+                assert_eq!(list_a[0], list_b[0], "{kind:?} system prefix drift");
+                assert_eq!(list_a[1], list_b[1]);
+            }
+            assert_eq!(list_b.len(), list_a.len() + 2);
+        }
+        // 换章只改 ③:工具与系统提示块不变。
+        let mut other = sample_request(vec![user("第一问")]);
+        other.context = Some("【当前章节:第二章】\n另一章".to_string());
+        let claude_a =
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &first, None, true)
+                .unwrap();
+        let claude_b =
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &other, None, true)
+                .unwrap();
+        assert_eq!(claude_a["tools"], claude_b["tools"]);
+        assert_eq!(claude_a["system"][0], claude_b["system"][0]);
+        assert_ne!(claude_a["system"][1], claude_b["system"][1]);
+        let chat_a =
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &first, None, true).unwrap();
+        let chat_b =
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &other, None, true).unwrap();
+        let sys_a = chat_a["messages"][0]["content"].as_str().unwrap();
+        let sys_b = chat_b["messages"][0]["content"].as_str().unwrap();
+        assert!(sys_a.starts_with("你是助手\n\n"));
+        assert!(sys_b.starts_with("你是助手\n\n"));
+        assert_ne!(sys_a, sys_b);
+    }
+
+    #[test]
+    fn claude_merges_consecutive_same_role_turns() {
+        let mut turns = tool_round();
+        turns.push(user("接着问"));
+        let request = sample_request(turns);
+        let claude =
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &request, None, false)
+                .unwrap();
+        let messages = claude["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        let blocks = messages[2]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], json!("tool_result"));
+        assert_eq!(blocks[1]["type"], json!("text"));
+        assert_eq!(blocks[1]["text"], json!("接着问"));
+        assert!(blocks[0].get("cache_control").is_none());
+        assert_eq!(blocks[1]["cache_control"]["type"], json!("ephemeral"));
+        // OpenAI chat 不合并:tool 消息与 user 消息各自独立。
+        let chat = build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, false)
+            .unwrap();
+        assert_eq!(chat["messages"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn chat_request_without_context_or_tools_stays_valid() {
+        let mut request = sample_request(vec![user("你好")]);
+        request.context = None;
+        request.tools.clear();
+        let claude =
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &request, None, false)
+                .unwrap();
+        assert_eq!(claude["system"].as_array().unwrap().len(), 1);
+        assert!(claude.get("tools").is_none());
+        let chat = build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, false)
+            .unwrap();
+        assert!(chat.get("tools").is_none());
+        assert_eq!(chat["messages"][0]["content"], json!("你是助手"));
+    }
+
+    #[test]
+    fn chat_request_rejects_empty_turns_and_bad_roles() {
+        let mut request = sample_request(vec![]);
+        assert_eq!(
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, false)
+                .unwrap_err()
+                .code,
+            "AI_MESSAGE_INVALID"
+        );
+        request.turns = vec![AiChatTurn {
+            role: "tool".to_string(),
+            content: "x".to_string(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+        }];
+        assert_eq!(
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, false)
+                .unwrap_err()
+                .code,
+            "AI_MESSAGE_INVALID"
+        );
+        request.turns = vec![user("   ")];
+        assert_eq!(
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &request, None, false)
+                .unwrap_err()
+                .code,
+            "AI_MESSAGE_INVALID"
+        );
+        request.turns = vec![user("ok")];
+        request.system = String::new();
+        assert_eq!(
+            build_chat_request_body(AiEndpointKind::ClaudeMessages, "m", &request, None, false)
+                .unwrap_err()
+                .code,
+            "AI_MESSAGE_INVALID"
+        );
+    }
+
+    fn run_stream_lines(
+        kind: AiEndpointKind,
+        chunks: &[&[u8]],
+    ) -> (Vec<String>, StreamState, Option<String>) {
+        let mut lines = SseLines::new();
+        let mut state = StreamState::default();
+        let mut deltas = Vec::new();
+        let mut finish = None;
+        let mut all_lines = Vec::new();
+        for chunk in chunks {
+            all_lines.extend(lines.feed(chunk));
+        }
+        if let Some(last) = lines.finish() {
+            all_lines.push(last);
+        }
+        for line in all_lines {
+            for data in classify_data_line(kind, &line) {
+                match data {
+                    SseData::Delta(text) => deltas.push(text),
+                    SseData::Tool(chunk) => state.tools.apply(chunk),
+                    SseData::StopReason(reason) => state.stop_reason = Some(reason),
+                    SseData::Done(reason) => {
+                        if finish.is_none() {
+                            finish = Some(state.stop_reason.take().unwrap_or(reason));
+                        }
+                    }
+                    SseData::Failed(detail) => panic!("unexpected failure {detail:?}"),
+                    SseData::Skip => {}
+                }
+            }
+        }
+        (deltas, state, finish)
+    }
+
+    #[test]
+    fn claude_stream_accumulates_tool_use_blocks() {
+        let stream = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+                      data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"先查一下\"}}\n\n\
+                      data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"query_book\",\"input\":{}}}\n\n\
+                      data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"action\\\":\"}}\n\n\
+                      data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"outline\\\"}\"}}\n\n\
+                      data: {\"type\":\"content_block_stop\",\"index\":1}\n\n\
+                      data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n\
+                      data: {\"type\":\"message_stop\"}\n\n";
+        let (deltas, state, finish) =
+            run_stream_lines(AiEndpointKind::ClaudeMessages, &[stream.as_bytes()]);
+        assert_eq!(deltas, ["先查一下"]);
+        assert_eq!(finish.as_deref(), Some("tool_use"));
+        let calls = state.tools.finish().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_1");
+        assert_eq!(calls[0].name, "query_book");
+        assert_eq!(calls[0].arguments, json!({ "action": "outline" }));
+    }
+
+    #[test]
+    fn openai_chat_stream_accumulates_tool_call_deltas_by_index() {
+        let stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"query_book\",\"arguments\":\"\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"action\\\":\\\"sea\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"rch\\\",\\\"query\\\":\\\"龙\\\"}\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_y\",\"function\":{\"name\":\"save_to_book\",\"arguments\":\"{}\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                      data: [DONE]\n\n";
+        let (deltas, state, finish) =
+            run_stream_lines(AiEndpointKind::OpenaiChat, &[stream.as_bytes()]);
+        assert!(deltas.is_empty());
+        assert_eq!(finish.as_deref(), Some("tool_calls"));
+        let calls = state.tools.finish().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_x");
+        assert_eq!(
+            calls[0].arguments,
+            json!({ "action": "search", "query": "龙" })
+        );
+        assert_eq!(calls[1].id, "call_y");
+        assert_eq!(calls[1].name, "save_to_book");
+        assert_eq!(calls[1].arguments, json!({}));
+    }
+
+    #[test]
+    fn responses_stream_takes_function_call_items() {
+        let stream = b"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"query_book\",\"arguments\":\"\"}}\n\n\
+                      data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"{\\\"action\\\":\"}\n\n\
+                      data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"\\\"current_chapter\\\"}\"}\n\n\
+                      data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"arguments\":\"{\\\"action\\\":\\\"current_chapter\\\"}\"}\n\n\
+                      data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"query_book\",\"arguments\":\"{\\\"action\\\":\\\"current_chapter\\\"}\"}}\n\n\
+                      data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+        let (deltas, state, finish) = run_stream_lines(AiEndpointKind::OpenaiResponses, &[stream]);
+        assert!(deltas.is_empty());
+        assert_eq!(finish.as_deref(), Some("stop"));
+        let calls = state.tools.finish().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].arguments, json!({ "action": "current_chapter" }));
+    }
+
+    #[test]
+    fn responses_stream_surfaces_refusal_deltas_as_text() {
+        let stream = b"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"m1\"}}\n\n\
+                      data: {\"type\":\"response.refusal.delta\",\"item_id\":\"m1\",\"delta\":\"I can't \"}\n\n\
+                      data: {\"type\":\"response.refusal.delta\",\"item_id\":\"m1\",\"delta\":\"help with that.\"}\n\n\
+                      data: {\"type\":\"response.refusal.done\",\"item_id\":\"m1\",\"refusal\":\"I can't help with that.\"}\n\n\
+                      data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+        let (deltas, state, finish) = run_stream_lines(AiEndpointKind::OpenaiResponses, &[stream]);
+        assert_eq!(deltas.join(""), "I can't help with that.");
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert!(state.tools.is_empty());
+        // Chat Completions 的拒答走 delta.refusal,同样按文本推送。
+        let chat = b"data: {\"choices\":[{\"delta\":{\"refusal\":\"No.\"},\"index\":0}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}]}\n\n\
+                    data: [DONE]\n\n";
+        let (chat_deltas, _, _) = run_stream_lines(AiEndpointKind::OpenaiChat, &[chat]);
+        assert_eq!(chat_deltas.join(""), "No.");
+        // 整体 JSON(非流式降级)里的拒答内容也当作回复文本。
+        let responses = json!({ "output": [
+            { "type": "message", "content": [{ "type": "refusal", "refusal": "Declined" }] }
+        ] });
+        assert_eq!(
+            reply_text_of(AiEndpointKind::OpenaiResponses, &responses),
+            "Declined"
+        );
+        let chat_json =
+            json!({ "choices": [{ "message": { "content": null, "refusal": "Nope" } }] });
+        assert_eq!(
+            reply_text_of(AiEndpointKind::OpenaiChat, &chat_json),
+            "Nope"
+        );
+    }
+
+    #[test]
+    fn openai_chat_stream_keys_tool_calls_by_id_when_index_is_missing() {
+        let stream = b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"query_book\",\"arguments\":\"{\\\"action\\\":\\\"outline\\\"}\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"query_book\",\"arguments\":\"{\\\"action\\\":\\\"book_info\\\"}\"}}]}}]}\n\n\
+                      data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                      data: [DONE]\n\n";
+        let (_, state, finish) = run_stream_lines(AiEndpointKind::OpenaiChat, &[stream]);
+        assert_eq!(finish.as_deref(), Some("tool_calls"));
+        let calls = state.tools.finish().unwrap();
+        let ids: Vec<&str> = calls.iter().map(|call| call.id.as_str()).collect();
+        assert_eq!(ids, ["call_a", "call_b"]);
+        assert_eq!(calls[1].arguments, json!({ "action": "book_info" }));
+    }
+
+    #[test]
+    fn chat_event_carrying_an_error_fails_even_with_finish_reason() {
+        let line = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"error\":{\"message\":\"boom\"}}";
+        let events = classify_data_line(AiEndpointKind::OpenaiChat, line);
+        assert!(
+            matches!(events.first(), Some(SseData::Failed(Some(message))) if message == "boom")
+        );
+    }
+
+    #[test]
+    fn truncated_tool_arguments_report_the_length_limit() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.apply(ToolChunk {
+            key: "0".to_string(),
+            id: Some("call_1".to_string()),
+            name: Some("save_to_book".to_string()),
+            arguments_delta: Some("{\"kind\":\"note\",\"note\":\"very lo".to_string()),
+            arguments_full: None,
+        });
+        assert_eq!(
+            finish_tool_calls(acc, Some("length")).unwrap_err().code,
+            "AI_RESPONSE_TRUNCATED"
+        );
+        let mut broken = ToolCallAccumulator::default();
+        broken.apply(ToolChunk {
+            key: "0".to_string(),
+            id: None,
+            name: Some("query_book".to_string()),
+            arguments_delta: Some("{oops".to_string()),
+            arguments_full: None,
+        });
+        assert_eq!(
+            finish_tool_calls(broken, Some("stop")).unwrap_err().code,
+            "AI_RESPONSE_INVALID"
+        );
+        assert!(finish_tool_calls(ToolCallAccumulator::default(), None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn full_endpoint_base_is_not_joined_twice() {
+        let chat = join_endpoint(
+            &Url::parse("https://host/v1/chat/completions").unwrap(),
+            AiEndpointKind::OpenaiChat,
+        )
+        .unwrap();
+        assert_eq!(chat.as_str(), "https://host/v1/chat/completions");
+        let responses = join_endpoint(
+            &Url::parse("https://host/v1/responses/").unwrap(),
+            AiEndpointKind::OpenaiResponses,
+        )
+        .unwrap();
+        assert_eq!(responses.as_str(), "https://host/v1/responses");
+    }
+
+    #[test]
+    fn tool_arguments_must_be_json_objects() {
+        assert_eq!(parse_tool_arguments("").unwrap(), json!({}));
+        assert_eq!(
+            parse_tool_arguments(" {\"a\":1} ").unwrap(),
+            json!({ "a": 1 })
+        );
+        assert_eq!(
+            parse_tool_arguments("[1]").unwrap_err().code,
+            "AI_RESPONSE_INVALID"
+        );
+        assert_eq!(
+            parse_tool_arguments("{oops").unwrap_err().code,
+            "AI_RESPONSE_INVALID"
+        );
+        let mut acc = ToolCallAccumulator::default();
+        acc.apply(ToolChunk {
+            key: "0".to_string(),
+            id: None,
+            name: Some("query_book".to_string()),
+            arguments_delta: Some("{}".to_string()),
+            arguments_full: None,
+        });
+        let calls = acc.finish().unwrap();
+        assert_eq!(calls[0].id, "call_0"); // 缺 id 时按序补齐
+        let mut nameless = ToolCallAccumulator::default();
+        nameless.apply(ToolChunk {
+            key: "0".to_string(),
+            id: Some("x".to_string()),
+            name: None,
+            arguments_delta: None,
+            arguments_full: None,
+        });
+        assert_eq!(nameless.finish().unwrap_err().code, "AI_RESPONSE_INVALID");
+    }
+
+    #[test]
+    fn whole_json_fallback_extracts_tool_calls_per_kind() {
+        let claude = "{\"content\":[{\"type\":\"text\",\"text\":\"先看目录\"},{\"type\":\"tool_use\",\"id\":\"toolu_9\",\"name\":\"query_book\",\"input\":{\"action\":\"outline\"}}]}";
+        let (text, calls) =
+            fallback_stream_reply(AiEndpointKind::ClaudeMessages, claude.as_bytes()).unwrap();
+        assert_eq!(text, "先看目录");
+        assert_eq!(calls[0].id, "toolu_9");
+        assert_eq!(calls[0].arguments, json!({ "action": "outline" }));
+
+        let chat = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_z\",\"type\":\"function\",\"function\":{\"name\":\"save_to_book\",\"arguments\":\"{\\\"kind\\\":\\\"bookmark\\\"}\"}}]}}]}";
+        let (text, calls) =
+            fallback_stream_reply(AiEndpointKind::OpenaiChat, chat.as_bytes()).unwrap();
+        assert_eq!(text, "");
+        assert_eq!(calls[0].name, "save_to_book");
+        assert_eq!(calls[0].arguments, json!({ "kind": "bookmark" }));
+
+        let responses = "{\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_r\",\"name\":\"query_book\",\"arguments\":\"{}\"}]}";
+        let (_, calls) =
+            fallback_stream_reply(AiEndpointKind::OpenaiResponses, responses.as_bytes()).unwrap();
+        assert_eq!(calls[0].id, "call_r");
+        // 既无文本也无工具调用才算无效响应。
+        assert_eq!(
+            fallback_stream_reply(AiEndpointKind::OpenaiChat, b"{\"choices\":[]}")
+                .unwrap_err()
+                .code,
+            "AI_RESPONSE_INVALID"
+        );
+    }
+
+    #[test]
+    fn abort_registry_is_consumed_once_and_ignores_blank_ids() {
+        assert!(ai_chat_abort("  ".to_string()).is_err());
+        assert!(!take_abort(""));
+        // 活跃请求才登记;消费一次即移除。
+        begin_abortable("req-abort-test");
+        ai_chat_abort("req-abort-test".to_string()).unwrap();
+        assert!(take_abort("req-abort-test"));
+        assert!(!take_abort("req-abort-test"));
+        clear_abort("req-abort-test");
+        // 结束后再来的中止(完成/停止竞态)不登记,集合不增长。
+        begin_abortable("req-abort-clear");
+        clear_abort("req-abort-clear");
+        ai_chat_abort("req-abort-clear".to_string()).unwrap();
+        ai_chat_abort("req-never-started".to_string()).unwrap();
+        assert_eq!(abort_registered("req-abort-clear"), (false, false));
+        assert_eq!(abort_registered("req-never-started"), (false, false));
+        assert!(!take_abort("req-abort-clear"));
+        // 同 id 复用不继承旧中止。
+        begin_abortable("req-reuse");
+        ai_chat_abort("req-reuse".to_string()).unwrap();
+        begin_abortable("req-reuse");
+        assert!(!take_abort("req-reuse"));
+        clear_abort("req-reuse");
+    }
+
+    #[tokio::test]
+    async fn abort_interrupts_a_pending_network_wait() {
+        // 中止先到:等待中的读取立即以 AI_STREAM_ABORTED 结束,不等下一块。
+        let abort = begin_abortable("req-abort-pending");
+        ai_chat_abort("req-abort-pending".to_string()).unwrap();
+        let result = abortable(std::future::pending::<u8>(), &abort).await;
+        assert_eq!(result.unwrap_err().code, "AI_STREAM_ABORTED");
+        clear_abort("req-abort-pending");
+        // 没有中止:正常返回值。
+        let calm = begin_abortable("req-abort-calm");
+        assert_eq!(abortable(async { 7u8 }, &calm).await.unwrap(), 7);
+        clear_abort("req-abort-calm");
+        // 同 id 复用拿到新信号:旧信号上的未消费唤醒不会打断新请求。
+        let stale = begin_abortable("req-abort-reuse");
+        ai_chat_abort("req-abort-reuse".to_string()).unwrap();
+        let fresh = begin_abortable("req-abort-reuse");
+        assert!(!Arc::ptr_eq(&stale, &fresh));
+        assert_eq!(abortable(async { 1u8 }, &fresh).await.unwrap(), 1);
+        clear_abort("req-abort-reuse");
+        clear_abort("req-reuse");
+    }
+
+    #[test]
+    fn chat_request_size_limit_is_wider_than_translate_limit() {
+        let big = "汉".repeat(MAX_REQUEST_BYTES);
+        let request = sample_request(vec![user(&big)]);
+        let body =
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, true).unwrap();
+        assert!(serialize_body(&body).is_err());
+        assert!(serialize_chat_body(&body).is_ok());
+        let huge = "汉".repeat(MAX_CHAT_REQUEST_BYTES);
+        let request = sample_request(vec![user(&huge)]);
+        let body =
+            build_chat_request_body(AiEndpointKind::OpenaiChat, "m", &request, None, true).unwrap();
+        assert_eq!(
+            serialize_chat_body(&body).unwrap_err().code,
+            "AI_REQUEST_TOO_LARGE"
+        );
+    }
+
+    #[test]
+    fn stream_done_wire_format_carries_tool_calls() {
+        let done = AiStreamDone {
+            finish: "tool_calls".to_string(),
+            total_chars: 0,
+            tool_calls: vec![AiToolCall {
+                id: "call_1".to_string(),
+                name: "query_book".to_string(),
+                arguments: json!({ "action": "outline" }),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&done).unwrap(),
+            json!({
+                "finish": "tool_calls",
+                "totalChars": 0,
+                "toolCalls": [{ "id": "call_1", "name": "query_book", "arguments": { "action": "outline" } }]
+            })
+        );
+        let request: AiChatRequest = serde_json::from_str(
+            r#"{"requestId":"r","system":"s","context":null,"tools":[],"turns":[{"role":"user","content":"hi"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(request.turns[0].tool_calls.len(), 0);
+        let turn: AiChatTurn = serde_json::from_str(
+            r#"{"role":"user","toolResults":[{"callId":"c","name":"query_book","content":"{}","isError":true}]}"#,
+        )
+        .unwrap();
+        assert!(turn.tool_results[0].is_error);
+        assert_eq!(turn.content, "");
     }
 }

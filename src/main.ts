@@ -2435,10 +2435,11 @@ manager = new TabManager({
       // R5：AI 助手按书对话历史（app_data_dir/assistant/<hash>.json，不同步）。
       readAssistantHistory: (contentHash) =>
         invoke<string>('assistant_read_history', { contentHash }).catch(() => ''),
+      // 写失败（超过体积上限等）要上抛：面板据此提示，不静默丢掉已显示的消息。
       writeAssistantHistory: (contentHash, json) =>
-        invoke<void>('assistant_write_history', { contentHash, json }).catch(() => undefined),
-      clearAssistantHistory: (contentHash) =>
-        invoke<void>('assistant_clear_history', { contentHash }).catch(() => undefined),
+        invoke<void>('assistant_write_history', { contentHash, json }),
+      // 清除失败要上抛：面板据此提示并把磁盘上的历史读回来，不假装已清空。
+      clearAssistantHistory: (contentHash) => invoke<void>('assistant_clear_history', { contentHash }),
       notify: (message) => {
         void showAppAlert(message);
       },

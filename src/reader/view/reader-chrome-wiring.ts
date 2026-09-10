@@ -6,9 +6,11 @@
  * 进度同步与刻度跳转、主题/排版域（applyTypographyPatch/applyFlowLayout/
  * applyPaperTheme/onThemeChange）与 returnToShelf。纯移动自 reader-view.ts，
  * 行为不变；R5 增 AI 助手面板互斥接线（openAssistantPanel/closeAssistantPanel
- * × Escape 链 × isOverlayOpen × setTabActive/returnToShelf/destroy 清理挂点）。
+ * × Escape 链 × isOverlayOpen × setTabActive/returnToShelf/destroy 清理挂点），
+ * 章节上下文与内置工具供数在 reader-assistant-access。
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import type { MessageKey } from '../../i18n/messages.js';
 import {
   createReaderChrome,
@@ -84,12 +86,8 @@ import {
   notifyReaderWindowChrome,
   readerChromeTouchMode,
 } from './reader-dom.js';
-import { htmlToSearchText } from '../search-panel.js';
-import {
-  createAssistantPanel,
-  type AssistantChapterContext,
-  type AssistantPanel,
-} from '../assistant-panel.js';
+import { createAssistantPanel, type AssistantPanel } from '../assistant-panel.js';
+import { createReaderAssistantAccess } from './reader-assistant-access.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
 
 function readerChromeCopy(
@@ -158,6 +156,8 @@ export interface ReaderChromeWiringSurface {
   askAssistantWithSelection(action: 'explain' | 'summarize', quote: string): void;
   /** 销毁收尾（reader-view destroy 与换书 beginOpen）：停流、摘监听、移除 DOM。 */
   destroyAssistantPanel(): void;
+  /** 书籍身份（标注哈希）就绪：面板把身份到来前的内存会话并入磁盘历史。 */
+  notifyBookIdentityReady(): void;
 }
 
 function ttsFailureCopy(
@@ -606,63 +606,35 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
 
   const assistantOpen = (): boolean => assistantPanel?.isVisible() === true;
 
-  /**
-   * 当前章节上下文供数：flow 族优先已挂载章正文，未挂载回退 exportChapters
-   * 解析（搜索通路同源）；PDF 用当前页文本层；漫画等无文本层格式为 null。
-   */
-  const assistantChapterContext = (): AssistantChapterContext | null => {
-    if (ctx.cbzHandle !== null) {
-      return null;
-    }
-    if (ctx.pdfHandle !== null) {
-      const page = ctx.pdfHandle.controller.page;
-      const layer = ctx.pageHost.querySelector<HTMLElement>(
-        `.pdfViewer .page[data-page-number="${page}"] .textLayer`,
-      );
-      const text = (layer?.textContent ?? '').trim();
-      if (text === '') {
-        return null;
-      }
-      return {
-        title: ctx.t('reader.progress.pageOf', {
-          current: String(page),
-          total: String(ctx.pdfHandle.controller.totalPages),
-        }),
-        text,
-      };
-    }
-    const chapter = ctx.dom.firstVisibleChapter();
-    const article = ctx.scrollHost.querySelector<HTMLElement>(
-      `.lightink-reader-chapter[data-chapter-index="${chapter}"]`,
-    );
-    const mounted =
-      article?.querySelector<HTMLIFrameElement>('.lightink-reader-chapter-frame')?.contentDocument
-        ?.body?.textContent ?? '';
-    if (mounted.trim() !== '') {
-      return {
-        title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
-        text: mounted,
-      };
-    }
-    const html = ctx.exportChapters[chapter]?.html ?? '';
-    const text = htmlToSearchText(html);
-    if (text.trim() === '') {
-      return null;
-    }
-    return {
-      title: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
-      text,
-    };
-  };
-
   const ensureAssistantPanel = (): AssistantPanel => {
     if (assistantPanel !== null) {
       return assistantPanel;
     }
+    // 内置工具供数（R6）：目录 / 章文本 / 书内搜索 / 选区 / 确认后写标注 / 定位跳转。
+    const access = createReaderAssistantAccess(ctx, {
+      t: ctx.t,
+      locationFallback,
+      // PDF 页文本迟到（文字层未挂载时后台抽取）：抽到后让面板重新评估章节动作。
+      onContextReady: () => assistantPanel?.refreshContext(),
+      // 确认框弹出期间面板被关（换页签 / 回书架）：确认结果作废，不往后台书里写。
+      isPanelOpen: () => assistantPanel?.isVisible() === true,
+    });
     assistantPanel = createAssistantPanel({
       t: ctx.t,
       host: () => ctx.root,
-      chapterContext: assistantChapterContext,
+      chapterContext: access.currentChapterContext,
+      access,
+      // 用户点击回答里的定位后跳转（不是工具自动翻页）；触屏 sheet 遮住正文，跳转后收起。
+      locate: (target) => {
+        access.locate(target);
+        if (readerChromeTouchMode()) {
+          closeAssistantPanel();
+        }
+      },
+      // 外部链接沿用应用的系统浏览器打开策略（Rust open_in_browser 校验 http(s)）。
+      openLink: (href) => {
+        void invoke('open_in_browser', { url: href }).catch(() => undefined);
+      },
       // 未配置引导：回合架并打开 Manage（main.ts 监听 lightink:open-manage）。
       openSettings: () => {
         closeAssistantPanel();
@@ -671,17 +643,26 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           document.dispatchEvent(new CustomEvent('lightink:open-manage'));
         }
       },
-      // 摘要保存为标注（章节级空 quote 锚点，note 文本 = 摘要）。
-      saveAnnotation: (text) => {
-        if (text === '') {
-          return;
+      // 摘要保存为标注（章节级空 quote 锚点，note 文本 = 摘要）。与工具路径同口径：
+      // 没有可持久化的存储就不写、不报成功；落盘结果回传给面板决定按钮态。
+      saveAnnotation: async (text, source) => {
+        if (
+          text === '' ||
+          !ctx.sessionAnnotation.canPersist() ||
+          ctx.sessionAnnotation.contentHash() === null
+        ) {
+          return false;
         }
-        ctx.annotation.appendAnnotation(
-          'note',
-          ctx.annotation.currentPositionLocator(),
-          undefined,
-          text,
-        );
+        // 锚到发起摘要时的章 / 页，而不是点击时正在看的位置（用户可能已经翻走，或在
+        // 历史里点的是旧摘要）；来源已失效就不写。
+        const locator =
+          source === undefined
+            ? ctx.annotation.currentPositionLocator()
+            : ctx.annotation.positionLocatorFor(source);
+        if (locator === null) {
+          return false;
+        }
+        return ctx.annotation.appendAnnotationPersisted('note', locator, undefined, text);
       },
       readHistory: ctx.deps.readAssistantHistory,
       writeHistory: ctx.deps.writeAssistantHistory,
@@ -1226,5 +1207,6 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     isAssistantPanelVisible: assistantOpen,
     askAssistantWithSelection,
     destroyAssistantPanel,
+    notifyBookIdentityReady: () => assistantPanel?.syncIdentity(),
   };
 }

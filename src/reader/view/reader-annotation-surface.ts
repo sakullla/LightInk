@@ -80,8 +80,19 @@ function newAnnotationId(): string {
 
 export interface ReaderAnnotationSurface {
   createSessionHost(): SessionAnnotationHost;
-  saveAnnotations(): Promise<void>;
+  /** 保存标注；返回是否真正落盘（助手工具据此回报成功/失败）。 */
+  saveAnnotations(): Promise<boolean>;
   removeAnnotationById(id: string): void;
+  /** 丢弃一条从未落盘的标注（助手写失败回滚）：不产 tombstone、不排队写入。 */
+  discardAnnotationById(id: string): void;
+  /** 追加并等落盘；没落盘就把刚追加的这条丢弃，回传结果。助手与摘要保存共用。 */
+  appendAnnotationPersisted(
+    kind: AnnotationKind,
+    locator: Locator,
+    quote: string | undefined,
+    note: string | undefined,
+    color?: AnnotationColor,
+  ): Promise<boolean>;
   setSelectionToolbarOpen(open: boolean): void;
   hideSelectionToolbar(): void;
   keepCommittedSelection(): boolean;
@@ -92,13 +103,15 @@ export interface ReaderAnnotationSurface {
   hideLookupPanel(): void;
   destroyLookupPanel(): void;
   currentPositionLocator(): Locator;
+  /** 指定章 / 页开头的定位（章级空引文锚点）；越界或与当前格式不符返回 null。 */
+  positionLocatorFor(target: { readonly chapter?: number; readonly page?: number }): Locator | null;
   appendAnnotation(
     kind: AnnotationKind,
     locator: Locator,
     quote: string | undefined,
     note: string | undefined,
     color?: AnnotationColor,
-  ): void;
+  ): Promise<boolean>;
   addAnnotation(kind: AnnotationKind): void;
   jumpToAnnotation(annotation: Annotation): void;
   ensureSidebar(): void;
@@ -179,9 +192,8 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   });
 
   /** 写队列策略唯一实现在 session-annotation（按当前身份串行写入，失败提示带会话守卫）。 */
-  const saveAnnotations = async (): Promise<void> => {
-    await ctx.sessionAnnotation.save(ctx.annotations);
-  };
+  const saveAnnotations = async (): Promise<boolean> =>
+    ctx.sessionAnnotation.save(ctx.annotations);
 
   /** 移除标注（侧栏/划选工具栏共用）：v3 删除产 tombstone（同步合并按记录级
    * LWW 收敛，防复活），更新集合、经共享引擎清正文 mark、刷新书签表面、保存。 */
@@ -198,6 +210,48 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     ctx.bookmarks.syncBookmarkIndicators();
     ctx.bookmarks.syncChromeBookmarkState();
     void saveAnnotations();
+  };
+
+  const discardAnnotationById = (id: string): void => {
+    ctx.annotations = ctx.annotations.filter((item) => item.id !== id);
+    for (const doc of ctx.dom.flowDocuments()) {
+      removeAnnotationMarks(doc.body, id);
+      paintAnnotationOverlays(doc);
+    }
+    for (const layer of ctx.pageHost.querySelectorAll('.pdfViewer .textLayer')) {
+      removeAnnotationMarks(layer, id);
+    }
+    renderSidebarAnnotations();
+    ctx.bookmarks.syncBookmarkIndicators();
+    ctx.bookmarks.syncChromeBookmarkState();
+  };
+
+  /** 助手侧的追加串行执行：上一条没落盘定之前不排下一条，否则后一份快照会带着前一条
+   * 失败的标注写成功，重启后它又回来了。 */
+  let assistantAppendChain: Promise<unknown> = Promise.resolve();
+  const appendAnnotationPersisted = (
+    kind: AnnotationKind,
+    locator: Locator,
+    quote: string | undefined,
+    note: string | undefined,
+    color?: AnnotationColor,
+  ): Promise<boolean> => {
+    const run = assistantAppendChain.then(async () => {
+      const known = new Set(ctx.annotations.map((item) => item.id));
+      const write = appendAnnotation(kind, locator, quote, note, color);
+      const added = ctx.annotations.find((item) => !known.has(item.id)) ?? null;
+      const persisted = await write;
+      if (!persisted && added !== null) {
+        // 没落盘的不能继续挂在侧栏上：否则重试会重复、重开书后又消失。
+        discardAnnotationById(added.id);
+        // 等待期间用户手动加的高亮 / 书签已经把这条一起排进快照：再排一份纠正快照，
+        // 让最终落盘的是丢弃之后的集合，不让它在重启后复活。
+        void saveAnnotations();
+      }
+      return persisted;
+    });
+    assistantAppendChain = run.catch(() => undefined);
+    return run;
   };
 
   const setSelectionToolbarOpen = (open: boolean): void => {
@@ -632,14 +686,46 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     return { format: 'flow', chapter, ...anchor };
   };
 
-  /** 追加标注并同步正文高亮/侧栏/书签表面/持久化。 */
+  const positionLocatorFor = (target: {
+    readonly chapter?: number;
+    readonly page?: number;
+  }): Locator | null => {
+    if (ctx.pdfHandle !== null) {
+      const total = ctx.pdfHandle.controller.totalPages;
+      if (target.page === undefined || target.page < 1 || target.page > total) {
+        return null;
+      }
+      return { format: 'pdf', page: target.page, quote: '' };
+    }
+    if (ctx.cbzHandle !== null) {
+      if (target.page === undefined || target.page < 1 || target.page > ctx.cbzHandle.totalPages) {
+        return null;
+      }
+      return { format: 'cbz', page: target.page };
+    }
+    const chapter = target.chapter;
+    if (chapter === undefined || chapter < 0 || chapter >= ctx.flowChapterCount) {
+      return null;
+    }
+    const anchor = { start: 0, end: 0, quote: '', prefix: '', suffix: '' };
+    if (ctx.loadedExt === 'txt') {
+      return { format: 'text', chapter, ...anchor };
+    }
+    return { format: 'flow', chapter, ...anchor };
+  };
+
+  /**
+   * 追加标注并同步正文高亮/侧栏/书签表面/持久化。
+   * 返回这一次排队写入的落盘结果（与 saveAnnotations 同口径）：调用方要等结果时
+   * 直接等它，不要再调一次 saveAnnotations（否则同一快照被排队写两次）。
+   */
   const appendAnnotation = (
     kind: AnnotationKind,
     locator: Locator,
     quote: string | undefined,
     note: string | undefined,
     color?: AnnotationColor,
-  ): void => {
+  ): Promise<boolean> => {
     ctx.annotations = [
       ...ctx.annotations,
       {
@@ -656,7 +742,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     renderSidebarAnnotations();
     ctx.bookmarks.syncBookmarkIndicators();
     ctx.bookmarks.syncChromeBookmarkState();
-    void saveAnnotations();
+    return saveAnnotations();
   };
 
   /** 添加书签或笔记（笔记经多行弹层输入，取消不创建）。 */
@@ -1084,6 +1170,8 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     createSessionHost,
     saveAnnotations,
     removeAnnotationById,
+    discardAnnotationById,
+    appendAnnotationPersisted,
     setSelectionToolbarOpen,
     hideSelectionToolbar,
     keepCommittedSelection,
@@ -1094,6 +1182,7 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     hideLookupPanel,
     destroyLookupPanel,
     currentPositionLocator,
+    positionLocatorFor,
     appendAnnotation,
     addAnnotation,
     jumpToAnnotation,

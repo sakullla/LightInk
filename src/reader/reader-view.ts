@@ -416,6 +416,8 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       sessionMemberForExtension(ctx.loadedExt) === 'comic' ? null : ctx.sessionAnnotation.contentHash(),
     );
     ctx.dom.setReaderPhase('ready');
+    // 书籍身份（标注哈希）此刻才确定：面板若已开始对话，现在把内存会话并入磁盘历史。
+    ctx.chrome.notifyBookIdentityReady();
     ctx.sessionProgress.applyPendingWithRetry();
     if (PAGE_EXTS.has(ctx.loadedExt)) {
       ctx.paged.syncPageState();

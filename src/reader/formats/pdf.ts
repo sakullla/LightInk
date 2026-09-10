@@ -194,15 +194,23 @@ export interface PdfRenderHandle {
   rerender(): Promise<void>;
   /** 滚动到指定页（1-based），并同步 controller.page。供翻页/侧栏跳转。 */
   scrollToPage(page: number): void;
-  /** 全文搜索（大小写不敏感）：按页序返回命中（页码 + 该页拼接文本偏移）。 */
+  /**
+   * 全文搜索（大小写不敏感）：按页序返回命中（页码 + 该页拼接文本偏移）。
+   * `onProgress` 返回 `false` 时停止扫描并返回已累计的命中（调用方据此实现
+   * 时间/数量预算）；返回其它值继续。
+   */
   search(
     query: string,
     options?: {
-      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => void;
+      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => boolean | void;
     },
   ): Promise<PdfSearchMatch[]>;
   /** PDF 书签树拍平后的大纲（无书签则为空）。 */
   outline(): Promise<OutlineItem[]>;
+  /** 某页拼接文本（1-based；懒取并缓存；越界/已销毁返回空串）。供 AI 助手按页取文。 */
+  pageText(page: number): Promise<string>;
+  /** 已缓存的某页文本（1-based）；尚未取过返回 undefined。同步路径用，不触发抽取。 */
+  pageTextCached(page: number): string | undefined;
   /** 释放 pdfjs 文档资源 + 摘除全部监听（关闭/重开 PDF 时调用）。 */
   destroy(): Promise<void>;
 }
@@ -447,6 +455,8 @@ export async function renderPdfInto(
   });
   /** 每页拼接文本缓存（原始字形坐标系，与官方文本层 DOM 拼接文本一致；懒填充）。 */
   const pageTexts: string[] = [];
+  /** 同页并发抽取合并成一次（助手在文字层挂载前会多次问同一页）。 */
+  const pageTextLoads = new Map<number, Promise<string>>();
   /** 文本层选区护栏卸载函数（层根键控）：官方渲染缓冲驱逐/模块注册表 prune 掉
    * detached 层后按连接性对称摘除，防已作废卸载闭包滞留到 destroy。 */
   const textLayerUnbinds = new Map<HTMLElement, () => void>();
@@ -643,17 +653,27 @@ export async function renderPdfInto(
     if (cached !== undefined) {
       return cached;
     }
-    const page = await doc.getPage(index + 1);
-    const content = await page.getTextContent({ disableNormalization: true });
-    const text = content.items.map((item) => ('str' in item ? item.str : '')).join('');
-    pageTexts[index] = text;
-    return text;
+    const inFlight = pageTextLoads.get(index);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const load = (async () => {
+      const page = await doc.getPage(index + 1);
+      const content = await page.getTextContent({ disableNormalization: true });
+      const text = content.items.map((item) => ('str' in item ? item.str : '')).join('');
+      pageTexts[index] = text;
+      return text;
+    })().finally(() => {
+      pageTextLoads.delete(index);
+    });
+    pageTextLoads.set(index, load);
+    return load;
   };
 
   const search = async (
     query: string,
     options?: {
-      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => void;
+      readonly onProgress?: (matches: PdfSearchMatch[], done: boolean) => boolean | void;
     },
   ): Promise<PdfSearchMatch[]> => {
     if (query.trim().length === 0 || destroyed || isAborted()) {
@@ -667,7 +687,9 @@ export async function renderPdfInto(
       const done = index === total - 1;
       if (done || (index + 1) % 2 === 0) {
         matches = findPdfMatches(texts, query);
-        options?.onProgress?.(matches, done);
+        if (options?.onProgress?.(matches, done) === false) {
+          return matches; // 调用方叫停：返回目前累计的命中，不再抽后续页文本
+        }
         if (!done) {
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 0);
@@ -685,12 +707,28 @@ export async function renderPdfInto(
     return outlineFromPdf(doc);
   };
 
+  const pageText = async (page: number): Promise<string> => {
+    if (destroyed || isAborted() || !Number.isSafeInteger(page) || page < 1 || page > total) {
+      return '';
+    }
+    try {
+      return await ensurePageText(page - 1);
+    } catch {
+      return '';
+    }
+  };
+
+  const pageTextCached = (page: number): string | undefined =>
+    Number.isSafeInteger(page) && page >= 1 && page <= total ? pageTexts[page - 1] : undefined;
+
   return {
     controller,
     rerender,
     scrollToPage,
     search,
     outline,
+    pageText,
+    pageTextCached,
     destroy: async () => {
       if (destroyed) {
         return;

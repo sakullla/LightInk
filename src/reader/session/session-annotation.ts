@@ -135,7 +135,8 @@ export interface ReaderSessionAnnotation {
     context: SessionRunContext,
   ): Promise<Annotation[] | null>;
   /** 写队列策略：按当前身份串行写入（无身份/无写入注入为 no-op）。 */
-  save(annotations: readonly Annotation[]): Promise<void>;
+  /** 写入标注；返回是否真正落盘（无身份/无存储/写失败/已作废 → false）。 */
+  save(annotations: readonly Annotation[]): Promise<boolean>;
   /** 侧栏可见偏好切换（开启收起 chrome 面板；笔记本关闭作废搜索，整页搜索保留）。 */
   setSidebarVisible(visible: boolean): void;
   /** 标签可见性变化（只影响 shown，不改偏好）；返回状态是否变化。 */
@@ -258,10 +259,10 @@ export function createReaderSessionAnnotation(
     save: async (annotations) => {
       const hash = contentHash;
       if (hash === null || storage.writeAnnotations === undefined) {
-        return;
+        return false;
       }
       const json = serializeAnnotations(annotations);
-      await writeQueue.enqueue(hash, json, storage.writeAnnotations, () => {
+      return writeQueue.enqueue(hash, json, storage.writeAnnotations, () => {
         if (!host.isDestroyed() && contentHash === hash) {
           host.notifySaveFailed();
         }

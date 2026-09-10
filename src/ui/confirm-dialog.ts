@@ -74,6 +74,8 @@ export interface ConfirmDialogSpec {
   readonly cancelId?: string;
   /** Copy tokens from this host; otherwise infer library/reader surface. */
   readonly themeHost?: HTMLElement | null;
+  /** 触发后按取消处理并关闭弹层（调用方的上下文没了：面板关闭、换页签）。 */
+  readonly signal?: AbortSignal;
 }
 
 /** Enter / 默认聚焦的按钮 id：第一个 primary，否则第一个按钮；无按钮为 null。 */
@@ -118,6 +120,14 @@ export function showConfirmDialog(doc: Document, spec: ConfirmDialogSpec): Promi
       releaseModal();
       resolve(id);
     };
+    if (spec.signal !== undefined) {
+      const cancel = (): void => settle(resolveCancelId(spec));
+      if (spec.signal.aborted) {
+        queueMicrotask(cancel); // 弹层节点在下面才创建，先建再收
+      } else {
+        spec.signal.addEventListener('abort', cancel, { once: true });
+      }
+    }
 
     const overlay = doc.createElement('div');
     overlay.className = 'lightink-modal-overlay';

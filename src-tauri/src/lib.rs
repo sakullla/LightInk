@@ -141,6 +141,7 @@ pub fn run() {
             ai::ai_test_connection,
             ai::ai_translate_selection,
             ai::ai_chat_stream,
+            ai::ai_chat_abort,
             assistant::assistant_read_history,
             assistant::assistant_write_history,
             assistant::assistant_clear_history,
