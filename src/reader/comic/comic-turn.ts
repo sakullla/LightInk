@@ -29,8 +29,8 @@ const COMIC_SLOT_SLIDE_MS = 200;
 const COMIC_SLOT_FADE_MS = 240;
 /**
  * 翻页防闪屏（decode-gated swap）：相邻翻页时新页图片未解码就绪就先不换屏，
- * 旧页保持显示，待 loadPage（读档 + img.decode 预热位图）完成后一次性交换；
- * 超过此上限则不再等待（照旧显示底色占位），保证快速连翻不粘手。
+ * 旧页保持显示，待 loadPage（读档 + img.decode 预热位图）完成后一次性交换。
+ * 超过此上限若仍未物化则不 applySwap，留在旧页（不对近黑占位换屏/滑入）。
  */
 const COMIC_TURN_HOLD_MS = 300;
 
@@ -183,16 +183,19 @@ export function showPagedSpread(
     const effect: ReaderPageTurnEffect = effectiveReaderPageTurnEffect(media ?? undefined);
     const doc = container.ownerDocument as ComicViewTransitionDocument;
     // Android WebView 的 View Transition 快照常带黑底，旧页滑开就是闪屏。
-    // 手机跳过 VT，改走 slot 滑入（合成器 transform，不截 canvas）。
-    const androidComic = androidReaderRoot(doc.documentElement) !== null;
+    // data-android 或 data-touch-primary 都跳过 VT，改走 slot 滑入
+    // （合成器 transform，不截 canvas），避免漏盖 data-android 时仍截黑快照。
+    const skipViewTransition =
+      androidReaderRoot(doc.documentElement) !== null ||
+      isTouchPrimaryDocument(doc);
     // 首选 View Transition push 转场：旧帧快照滑出、新帧滑入同帧合成，
-    // 中途不露底色。跳转（direction 0）、fade/none、Android 与拖动
+    // 中途不露底色。跳转（direction 0）、fade/none、触屏/Android 与拖动
     // 提交（跟手已有实时帧，快照重截旧帧反而跳变）直切。
     if (
       source !== 'drag' &&
       direction !== 0 &&
       (effect === 'slide' || effect === 'curl') &&
-      !androidComic &&
+      !skipViewTransition &&
       typeof doc.startViewTransition === 'function'
     ) {
       try {
@@ -218,21 +221,21 @@ export function showPagedSpread(
     // T2 回退路径：进入 slot 播放动画。fade 为跨端淡入；slide/curl 仅触屏
     // 滑入（桌面由 VT push 承担）。strip、跳转（direction 0）、拖动提交
     // （跟手→缓动→落位已是一段连续运动）与生效样式 none 不播。
-    if (entering.length > 0 && direction !== 0 && source !== 'drag' && effect !== 'none') {
+    // 只对已物化进入槽播动效，避免近黑 loading 占位滑入成闪屏。
+    const motionEntering = entering.filter((index) => session.materialized.has(index));
+    if (motionEntering.length > 0 && direction !== 0 && source !== 'drag' && effect !== 'none') {
       if (effect === 'fade') {
-        fadeEnteringComicSlots(session, entering);
+        fadeEnteringComicSlots(session, motionEntering);
       } else if (isTouchPrimaryDocument(container.ownerDocument)) {
-        slideEnteringComicSlots(session, entering, direction);
+        slideEnteringComicSlots(session, motionEntering, direction);
       }
     }
   };
   // decode-gated swap：相邻翻页（±1）且新页图片未就绪时旧页保持在屏，
-  // 待解码完成或超时后一次性换屏。跳转（direction 0）仍硬落位——远跳的
-  // 旧页多已被缓存窗口释放，等待无意义。Android 点按不等 hold：先滑入
-  // （未物化页带加载态），解码在动画里完成，避免整屏停顿再直切。
-  const androidComic = androidReaderRoot(container.ownerDocument.documentElement) !== null;
+  // 待解码完成后一次性换屏。跳转（direction 0）仍硬落位——远跳的旧页
+  // 多已被缓存窗口释放，等待无意义。超时若仍未物化则不 applySwap。
   const awaited =
-    direction === 0 || androidComic
+    direction === 0
       ? []
       : shown.filter(
           (next) =>
@@ -247,8 +250,19 @@ export function showPagedSpread(
   const holdDeadline = new Promise<void>((resolve) => {
     setTimeout(resolve, COMIC_TURN_HOLD_MS);
   });
-  void Promise.race([
-    Promise.all(awaited.map((next) => loadPage(session, next).catch(() => undefined))),
-    holdDeadline,
-  ]).then(commit);
+  const loadAll = Promise.all(
+    awaited.map((next) => loadPage(session, next).catch(() => undefined)),
+  );
+  let swapped = false;
+  const finish = (): void => {
+    if (swapped || session.destroyed || generation !== session.spreadSwapGeneration) return;
+    const ready = awaited.every(
+      (next) => session.materialized.has(next) || session.failed.has(next),
+    );
+    if (!ready) return;
+    swapped = true;
+    commit();
+  };
+  void loadAll.then(finish);
+  void holdDeadline.then(finish);
 }

@@ -865,6 +865,95 @@ describe('CBZ page materialization', () => {
     }
   });
 
+  it('keeps the previous Android page on screen until the next page decodes', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    let decodeCalls = 0;
+    const queued: Array<() => void> = [];
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value() {
+        decodeCalls += 1;
+        if (decodeCalls === 1) return Promise.resolve();
+        return new Promise<void>((resolve) => queued.push(resolve));
+      },
+    });
+    const updates: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: Promise.resolve(),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+        preferenceStorage: pagedStorage({ spread: 'single' }),
+      });
+      expect(visiblePageIndices(container)).toEqual(['0']);
+
+      expect(handle.nextPage()).toBe(true);
+      expect(handle.currentPage).toBe(2);
+      expect(visiblePageIndices(container)).toEqual(['0']);
+      expect(updates).toHaveLength(0);
+      expect(document.documentElement.dataset.comicTurn).toBeUndefined();
+      expect(container.querySelectorAll('.lightink-comic-slot-slide-next')).toHaveLength(0);
+      expect(container.querySelector('[data-page-index="0"] img')).not.toBeNull();
+
+      // hold 超时仍未物化：不 applySwap，旧槽保持可见，不对近黑占位滑入。
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(visiblePageIndices(container)).toEqual(['0']);
+      expect(container.querySelectorAll('.lightink-comic-slot-slide-next')).toHaveLength(0);
+
+      await vi.waitFor(() => expect(queued.length).toBeGreaterThan(0));
+      queued.splice(0).forEach((resolve) => resolve());
+      await vi.waitFor(() => expect(visiblePageIndices(container)).toEqual(['1']));
+      expect(updates).toHaveLength(0);
+      expect(container.querySelectorAll('.lightink-comic-slot-slide-next').length).toBeGreaterThan(0);
+      await handle.destroy();
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+      document.documentElement.removeAttribute('data-android');
+    }
+  });
+
+  it('skips View Transition on data-touch-primary so a tap does not snapshot a black canvas', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const updates: Array<() => void> = [];
+    const doc = document as Document & { startViewTransition?: unknown };
+    doc.startViewTransition = ((update: () => void) => {
+      updates.push(update);
+      update();
+      return {
+        finished: Promise.resolve(),
+        skipTransition: () => undefined,
+      };
+    }) as unknown as Document['startViewTransition'];
+    try {
+      const container = document.createElement('div');
+      sizeCanvas(container);
+      const handle = await renderCbzInto(await buildCbz(3), container, undefined, {
+        preferenceStorage: pagedStorage({ spread: 'single' }),
+      });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-page-index="1"] img')).not.toBeNull(),
+      );
+      expect(handle.nextPage()).toBe(true);
+      expect(updates).toHaveLength(0);
+      expect(document.documentElement.dataset.comicTurn).toBeUndefined();
+      expect(visiblePageIndices(container)).toEqual(['1']);
+      await handle.destroy();
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition');
+      delete document.documentElement.dataset.comicTurn;
+      document.documentElement.removeAttribute('data-touch-primary');
+    }
+  });
+
   it('shows a retryable structured state when the browser rejects an image', async () => {
     document.documentElement.lang = 'en';
     const container = document.createElement('div');
