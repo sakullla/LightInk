@@ -1078,8 +1078,8 @@ describe('createReaderChrome footer and whisper', () => {
   });
 });
 
-describe('createReaderChrome speak control (ADR-4)', () => {
-  it('keeps READER_CHROME_ACTIONS as the six reader entries', () => {
+describe('createReaderChrome has no speak control', () => {
+  it('keeps READER_CHROME_ACTIONS as the six reader entries without speak', () => {
     expect([...READER_CHROME_ACTIONS]).toEqual([
       'backToShelf',
       'toc',
@@ -1091,53 +1091,21 @@ describe('createReaderChrome speak control (ADR-4)', () => {
     expect(READER_CHROME_ACTIONS).not.toContain('speak');
   });
 
-  it('adds a footer speak button outside the chrome action enum when available', () => {
-    const onSpeak = vi.fn();
-    const { host, chrome, deps } = mount({
-      speakAvailable: () => true,
-      onSpeak,
-    });
-    chrome.reveal();
-    const speak = host.querySelector<HTMLButtonElement>('[data-reader-tts-speak]');
-    expect(speak).not.toBeNull();
-    expect(speak!.hidden).toBe(false);
-    expect(speak!.hasAttribute('data-reader-chrome-action')).toBe(false);
-    expect(chrome.footer.contains(speak!)).toBe(true);
-    expect(chrome.bar.contains(speak!)).toBe(false);
-    expect(labeledButtons(host)).toHaveLength(6);
+  it('does not render a speak button on desktop or touch chrome', () => {
+    const desktop = mount();
+    desktop.chrome.reveal();
+    expect(desktop.host.querySelector('[data-reader-tts-speak]')).toBeNull();
+    expect(desktop.host.querySelector('.lightink-reader-tts-dock')).toBeNull();
+    expect(labeledButtons(desktop.host)).toHaveLength(6);
     expect(
-      [...host.querySelectorAll('[data-reader-chrome-action]')].map(
+      [...desktop.host.querySelectorAll('[data-reader-chrome-action]')].map(
         (button) => (button as HTMLElement).dataset.readerChromeAction,
       ),
     ).toEqual([...READER_CHROME_ACTIONS]);
-    speak!.click();
-    expect(onSpeak).toHaveBeenCalledTimes(1);
-    expect(deps.returnToShelf).not.toHaveBeenCalled();
-  });
 
-  it('does not gain a speak control for comics or textless PDFs', () => {
-    const { host, chrome } = mount({
-      speakAvailable: () => false,
-      suppressProgressDock: () => true,
-    });
-    chrome.reveal();
-    expect(host.querySelector('[data-reader-tts-speak]')).toBeNull();
-    expect(
-      [...host.querySelectorAll('[data-reader-chrome-action]')].map(
-        (button) => (button as HTMLElement).dataset.readerChromeAction,
-      ),
-    ).toEqual([...READER_CHROME_ACTIONS]);
-  });
-
-  it('places the speak control in the touch footer tools cluster without a chrome action token', () => {
-    const { host, chrome } = mount({
-      touchMode: true,
-      speakAvailable: () => true,
-    });
-    chrome.reveal();
-    const speak = host.querySelector<HTMLButtonElement>('[data-reader-tts-speak]');
-    expect(speak).not.toBeNull();
-    expect(footerThumbZone(chrome.footer).contains(speak!)).toBe(true);
-    expect(speak!.hasAttribute('data-reader-chrome-action')).toBe(false);
+    const touch = mount({ touchMode: true, suppressProgressDock: () => true });
+    touch.chrome.reveal();
+    expect(touch.host.querySelector('[data-reader-tts-speak]')).toBeNull();
+    expect(footerThumbZone(touch.chrome.footer).querySelector('[data-reader-tts-speak]')).toBeNull();
   });
 });

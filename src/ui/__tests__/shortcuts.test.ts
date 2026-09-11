@@ -15,6 +15,7 @@ import {
   isModalTarget,
   matchEvent,
   pagingShouldIgnoreTarget,
+  READER_WHEEL_IGNORE_SELECTOR,
   ShortcutRegistry,
   type KeyboardEventLike,
   wheelPagingShouldIgnoreEvent,
@@ -148,6 +149,13 @@ describe('wheelPagingShouldIgnoreTarget', () => {
       classList: { contains: (name: string) => name === 'lightink-reader-chrome-popover' },
     };
     expect(wheelPagingShouldIgnoreTarget(popover)).toBe(true);
+    expect(READER_WHEEL_IGNORE_SELECTOR).not.toContain('tts-dock');
+    expect(READER_WHEEL_IGNORE_SELECTOR).not.toContain('tts');
+    const ttsDock = {
+      classList: { contains: (name: string) => name === 'lightink-reader-tts-dock' },
+    };
+    expect(isModalTarget(ttsDock)).toBe(false);
+    expect(wheelPagingShouldIgnoreTarget(ttsDock)).toBe(false);
   });
 });
 

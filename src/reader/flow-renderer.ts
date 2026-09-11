@@ -380,8 +380,7 @@ export function eventTargetsFlowScroller(
     element.closest('.lightink-reader-sidebar') !== null ||
     element.closest('.lightink-reader-chrome-panel') !== null ||
     element.closest('.lightink-reader-assistant-panel') !== null ||
-    element.closest('.lightink-reader-lookup-panel') !== null ||
-    element.closest('.lightink-reader-tts-dock') !== null
+    element.closest('.lightink-reader-lookup-panel') !== null
   ) {
     return false;
   }

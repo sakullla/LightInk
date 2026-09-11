@@ -47,8 +47,6 @@ export interface ReaderChromeLabels {
   readonly footer: string;
   /** 书签刻度按钮的 aria-label（进度轨上的可点击书签刻度）。 */
   readonly bookmarkTick: string;
-  /** Footer speak control copy; not a chrome action. */
-  readonly speak: string;
 }
 
 export interface ReaderChromeProgress {
@@ -88,7 +86,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     progress: 'Reading progress',
     footer: 'Reading progress',
     bookmarkTick: 'Jump to bookmark',
-    speak: 'Speak',
   },
   'zh-CN': {
     backToShelf: '返回书架',
@@ -101,7 +98,6 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     progress: '阅读进度',
     footer: '阅读进度',
     bookmarkTick: '跳到书签',
-    speak: '朗读',
   },
 };
 
@@ -155,13 +151,7 @@ export interface ReaderChromeDeps {
   /** Drag the footer scrubber to a 0..1 book position. */
   onSeekProgress?: (progress: number) => void;
   /**
-   * Optional footer speak control (ADR-4). Extra DOM only — never a
-   * `READER_CHROME_ACTIONS` member. Comics / textless PDFs pass false.
-   */
-  speakAvailable?: () => boolean;
-  onSpeak?: () => void;
-  /**
-   * AI 助手入口：密钥未配置时为假，按钮自摘除（与 speak 同型）。
+   * AI 助手入口：密钥未配置时为假，按钮自摘除。
    * 省略时保持显示，便于 chrome 单测。
    */
   assistantAvailable?: () => boolean;
@@ -183,7 +173,7 @@ export interface ReaderChrome {
   pinDocks(pane: { getBoundingClientRect(): DOMRect } | null, paginated: boolean): void;
   /** Re-apply stay-revealed (scroll at top) vs idle auto-hide. */
   syncStayRevealed(): void;
-  /** 重新根据 speak/assistant 可用性挂摘按钮（配置变更后由宿主调用）。 */
+  /** 重新根据 assistant 可用性挂摘按钮（配置变更后由宿主调用）。 */
   refreshAvailability(): void;
   /**
    * One-step back. Never calls `returnToShelf`. True when a layer closed;
@@ -399,13 +389,6 @@ export function createReaderChrome(
   const bookmarkButton = makeButton('bookmark', labels.bookmark);
   const searchButton = makeButton('search', labels.search);
   const assistantButton = makeButton('assistant', labels.assistant);
-  const speakButton = document.createElement('button');
-  speakButton.type = 'button';
-  speakButton.className = 'lightink-reader-chrome-action lightink-reader-chrome-speak';
-  speakButton.dataset.readerTtsSpeak = 'true';
-  speakButton.textContent = labels.speak;
-  speakButton.setAttribute('aria-label', labels.speak);
-  applyButtonLayout(speakButton, touchMode);
   const drag = document.createElement('div');
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
@@ -554,18 +537,7 @@ export function createReaderChrome(
     ]) {
       button.hidden = !revealed;
     }
-    const speakOn = deps.speakAvailable?.() === true;
-    speakButton.hidden = !revealed || !speakOn;
-    if (!speakOn) {
-      speakButton.remove();
-    } else if (touchMode) {
-      if (!tools.contains(speakButton)) {
-        tools.appendChild(speakButton);
-      }
-    } else if (speakButton.parentNode !== footer) {
-      footer.appendChild(speakButton);
-    }
-    // 助手与 speak 同型：未配置时自摘除，配置后挂回 tools。
+    // 助手未配置时自摘除，配置后挂回 tools。
     const assistantOn = deps.assistantAvailable?.() !== false;
     assistantButton.hidden = !revealed || !assistantOn;
     if (!assistantOn) {
@@ -815,11 +787,6 @@ export function createReaderChrome(
     deps.toggleBookmark?.();
     syncBookmarkState();
   });
-  speakButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    deps.onSpeak?.();
-  });
 
   const onDockEnter = (): void => {
     pointerInsideBar = true;
@@ -1014,7 +981,6 @@ export function createReaderChrome(
       element.remove();
       footer.remove();
       whisper.remove();
-      speakButton.remove();
       revealed = false;
       syncDom();
     },

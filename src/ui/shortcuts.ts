@@ -184,8 +184,7 @@ export function isModalTarget(target: unknown): boolean {
       current.classList?.contains?.('lightink-reader-chrome-popover') === true ||
       current.classList?.contains?.('lightink-reader-sidebar') === true ||
       current.classList?.contains?.('lightink-reader-lookup-panel') === true ||
-      current.classList?.contains?.('lightink-reader-assistant-panel') === true ||
-      current.classList?.contains?.('lightink-reader-tts-dock') === true
+      current.classList?.contains?.('lightink-reader-assistant-panel') === true
     ) {
       return true;
     }
@@ -218,7 +217,6 @@ export const READER_WHEEL_IGNORE_SELECTOR = [
   '.lightink-reader-chrome-popover',
   '.lightink-reader-sidebar',
   '.lightink-reader-lookup-panel',
-  '.lightink-reader-tts-dock',
 ].join(', ');
 
 /**
