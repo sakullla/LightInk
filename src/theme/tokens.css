@@ -9,7 +9,7 @@
  *
  * 可读性约定（长时写作 / 代码块）：
  *   - 正文：深灰字 + 暖/雾底，对比度贴近 WCAG AA（≥4.5:1），避免纯黑/纯白；
- *   - 代码：与正文分离的底，语法色在 code-bg 上保持足够对比（尤其 comment）；
+ *   - 代码：与正文分离的底；语法色按角色色相族区分，在 code-bg 上 ≥4.5:1；
  *   - 字体：UI / 正文 / 等宽 分栈，由 theme.css 消费。
  *
  * 令牌约定：
@@ -48,9 +48,9 @@
   --lightink-accent: #9a5828;
   --lightink-accent-soft: #efe2cc;
   --lightink-border: #d9d0bc;
-  /* Code surface: cooler than page so blocks read as “ink on card”, not mud. */
-  --lightink-code-bg: #f7f3ea;
-  --lightink-code-fg: #2c2923;
+  /* Code surface: cooler linen card so blocks read as ink on card, not mud. */
+  --lightink-code-bg: #f2eee4;
+  --lightink-code-fg: #2a261f;
   --lightink-selection: rgba(154, 88, 40, 0.2);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 38%, var(--lightink-bg));
   --lightink-danger: #a83a2e;
@@ -93,20 +93,23 @@
   --lightink-radius-dialog: 12px;
 
   /*
-   * Syntax on light code-bg: deeper hues for ≥4.5:1 where practical
-   * (sacrifice neon for legibility). function ≠ title; variable ≠ attr.
+   * Light syntax hue families (cool-light uses the same structure, cooler bias):
+   * attr cyan-ink; string green; number terracotta; literal slate-cyan;
+   * punctuation neutral gray; comment/meta stone; keyword/tag wine;
+   * builtin muted violet; function ink-navy; title indigo; variable pine.
+   * Each role ≥4.5:1 on code-bg; keyword/builtin are desaturated, not neon.
    */
-  --lightink-syntax-keyword: #8b3354;
-  --lightink-syntax-comment: #6a6354; /* critical: muted comments must stay readable */
-  --lightink-syntax-string: #3f6b28;
-  --lightink-syntax-number: #9a4f1c; /* terracotta numerals */
-  --lightink-syntax-function: #24527a; /* ink-blue verbs */
-  --lightink-syntax-title: #3d456e; /* dusk indigo types — not function */
-  --lightink-syntax-variable: #3d5a48; /* pine-ink identifiers — not attr olive */
-  --lightink-syntax-attr: #6b5424;
-  --lightink-syntax-builtin: #53428c;
-  --lightink-syntax-literal: #3d5f6a; /* slate-ink true/false/null — not number rust */
-  --lightink-syntax-punctuation: #5c5648; /* braces/colons: quieter than keys, not bare ink */
+  --lightink-syntax-keyword: #85475e;
+  --lightink-syntax-comment: #656353; /* stone: quiet, not washed out */
+  --lightink-syntax-string: #3a672c;
+  --lightink-syntax-number: #8c4c24; /* terracotta — not next to attr */
+  --lightink-syntax-function: #2d4c80; /* ink-navy verbs */
+  --lightink-syntax-title: #41456c; /* indigo types — not function */
+  --lightink-syntax-variable: #3a5846; /* pine identifiers — not attr */
+  --lightink-syntax-attr: #2b646e; /* cyan-ink JSON/YAML keys — not strings */
+  --lightink-syntax-builtin: #5d5681; /* muted violet — not electric */
+  --lightink-syntax-literal: #3d5c64; /* slate-cyan true/false/null — not number */
+  --lightink-syntax-punctuation: #67626f; /* neutral gray: weaker than keys, still visible */
 }
 
 /* 云白浅色：雾白底、青蓝强调，干净利落。 */
@@ -120,8 +123,8 @@
   --lightink-accent: #2a66ad;
   --lightink-accent-soft: #e4ebf5;
   --lightink-border: #d0d6de;
-  --lightink-code-bg: #eef2f6;
-  --lightink-code-fg: #1f2530;
+  --lightink-code-bg: #e8eef4;
+  --lightink-code-fg: #1c222c;
   --lightink-selection: rgba(42, 102, 173, 0.18);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg));
   --lightink-danger: #b03a30;
@@ -145,17 +148,18 @@
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
-  --lightink-syntax-keyword: #7d2f62;
-  --lightink-syntax-comment: #5c6572;
-  --lightink-syntax-string: #216a4a;
-  --lightink-syntax-number: #9a4e1c;
-  --lightink-syntax-function: #1f4f8f; /* cobalt verbs */
-  --lightink-syntax-title: #32367a; /* indigo types — not function */
-  --lightink-syntax-variable: #215a68; /* sea-slate identifiers */
-  --lightink-syntax-attr: #63501f;
-  --lightink-syntax-builtin: #463f96;
-  --lightink-syntax-literal: #2c5d6e;
-  --lightink-syntax-punctuation: #4e5764;
+  /* Same hue families as warm-light, cooler temperature. */
+  --lightink-syntax-keyword: #753a5c;
+  --lightink-syntax-comment: #5e6356; /* cooler stone */
+  --lightink-syntax-string: #1f6648;
+  --lightink-syntax-number: #8a4c24;
+  --lightink-syntax-function: #1e4d86; /* cobalt verbs */
+  --lightink-syntax-title: #34387a; /* indigo types — not function */
+  --lightink-syntax-variable: #296559; /* sea-stone identifiers — not attr */
+  --lightink-syntax-attr: #2d5f80; /* blue-ink keys — not strings */
+  --lightink-syntax-builtin: #4a4574; /* muted violet — not electric */
+  --lightink-syntax-literal: #2a5a6a;
+  --lightink-syntax-punctuation: #5c616c; /* cool-neutral gray, weaker than keys */
 }
 
 /* 墨夜深色：暖炭底、蜜蜡强调，夜间护眼。 */
@@ -169,8 +173,8 @@
   --lightink-accent: #d4a066;
   --lightink-accent-soft: #3a342a;
   --lightink-border: #3f3a32;
-  --lightink-code-bg: #25221c;
-  --lightink-code-fg: #d6ccb6;
+  --lightink-code-bg: #26231d;
+  --lightink-code-fg: #d2c8b2;
   --lightink-selection: rgba(212, 160, 102, 0.28);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-bg));
   --lightink-danger: #d4786a;
@@ -194,17 +198,21 @@
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
-  --lightink-syntax-keyword: #e09ab0;
-  --lightink-syntax-comment: #9c9484; /* lifted to ≥4.5:1 on warm charcoal code-bg */
-  --lightink-syntax-string: #b3c77a;
-  --lightink-syntax-number: #e0ae72; /* honey numerals */
-  --lightink-syntax-function: #93b8dc; /* dusty sky verbs */
-  --lightink-syntax-title: #6aa8b0; /* sea-glass types — not function */
-  --lightink-syntax-variable: #d4a48c; /* clay identifiers — not honey numbers */
-  --lightink-syntax-attr: #d0b870;
-  --lightink-syntax-builtin: #c0a8e4;
-  --lightink-syntax-literal: #8eb8a8; /* dusty celadon — distinct from honey numbers */
-  --lightink-syntax-punctuation: #a89f8e;
+  /*
+   * Dark syntax: independent dusty palette (not inverted light).
+   * Dusty rose/green, not near-white or fluorescent; attr sand-gold.
+   */
+  --lightink-syntax-keyword: #bf929c; /* dusty rose */
+  --lightink-syntax-comment: #a19887; /* ≥4.5:1 but quieter than content */
+  --lightink-syntax-string: #94a776; /* dusty green */
+  --lightink-syntax-number: #c6a27b; /* muted honey */
+  --lightink-syntax-function: #92a8bf; /* dusty sky verbs */
+  --lightink-syntax-title: #7aa8ae; /* sea-glass types — not function */
+  --lightink-syntax-variable: #c79c8e; /* clay-rose identifiers — not sand attr */
+  --lightink-syntax-attr: #b7a266; /* sand-gold keys */
+  --lightink-syntax-builtin: #a698c3; /* dusty violet — not electric */
+  --lightink-syntax-literal: #7eaa9a; /* dusty celadon — not honey numbers */
+  --lightink-syntax-punctuation: #9f9d93; /* dark gray, quieter than keys */
 }
 
 /* 深空深色：夜空蓝底、星蓝强调，冷调沉静。 */
@@ -218,8 +226,8 @@
   --lightink-accent: #7eafdf;
   --lightink-accent-soft: #273040;
   --lightink-border: #313947;
-  --lightink-code-bg: #1a2029;
-  --lightink-code-fg: #c8d0db;
+  --lightink-code-bg: #1b212b;
+  --lightink-code-fg: #bec6d2;
   --lightink-selection: rgba(126, 175, 223, 0.26);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 42%, var(--lightink-bg));
   --lightink-danger: #d07878;
@@ -243,17 +251,18 @@
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
-  --lightink-syntax-keyword: #e0a0b8;
-  --lightink-syntax-comment: #84909e; /* lifted to ≥4.5:1 on night-sky code-bg */
-  --lightink-syntax-string: #a8cf84;
-  --lightink-syntax-number: #e2ae70;
-  --lightink-syntax-function: #93c0ea; /* star-blue verbs */
-  --lightink-syntax-title: #6aacc0; /* ice-teal types — not function */
-  --lightink-syntax-variable: #c4b49c; /* star-dust identifiers — not sand numbers */
-  --lightink-syntax-attr: #d4c074;
-  --lightink-syntax-builtin: #bca8e4;
-  --lightink-syntax-literal: #8ab4b0;
-  --lightink-syntax-punctuation: #8e97a6;
+  /* Midnight syntax: independent cool dusty palette; comments quieter than content. */
+  --lightink-syntax-keyword: #c492a8; /* dusty mauve */
+  --lightink-syntax-comment: #8d97a5; /* ≥4.5:1 but quieter than content */
+  --lightink-syntax-string: #96b878; /* dusty sage */
+  --lightink-syntax-number: #d0a474; /* muted apricot */
+  --lightink-syntax-function: #93aac8; /* dusty steel-blue verbs */
+  --lightink-syntax-title: #6faaae; /* ice-teal types — not function */
+  --lightink-syntax-variable: #8faea5; /* sea-stone identifiers — not sand attr */
+  --lightink-syntax-attr: #c4b070; /* sand-gold keys */
+  --lightink-syntax-builtin: #a89cc8; /* dusty periwinkle — not electric */
+  --lightink-syntax-literal: #7aa8a4;
+  --lightink-syntax-punctuation: #929baa; /* dark cool gray */
 }
 
 /* hljs 类 → 主题令牌映射：T5 的 code-highlight 只输出 hljs-* 类名，
@@ -315,6 +324,12 @@
 .hljs-built_in,
 .hljs-builtin-name {
   color: var(--lightink-syntax-builtin);
+}
+.hljs-addition {
+  color: var(--lightink-syntax-string);
+}
+.hljs-deletion {
+  color: var(--lightink-danger);
 }
 .hljs-emphasis {
   font-style: italic;

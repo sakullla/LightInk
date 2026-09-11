@@ -6,10 +6,13 @@
  *     function/title/variable/attr/builtin/literal/punctuation）；
  *   - function 与 title、number 与 literal 在每套主题里必须是不同 hex；
  *   - comment/keyword/string/function/variable/number 两两 hex 不同；
- *   - 注释相对该主题 --lightink-code-bg 的 WCAG 对比度 ≥ 4.5:1；
+ *   - attr ≠ string、attr ≠ punctuation、number ≠ punctuation；
+ *   - keyword/comment/string/number/attr/punctuation/code-fg 相对该主题
+ *     --lightink-code-bg 的 WCAG 对比度 ≥ 4.5:1；
  *   - :root / warm-light 定义嵌套 chrome 半径令牌，且 control < panel < dialog；
  *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源），
- *     含 .hljs-punctuation、.hljs-meta、.hljs-variable；
+ *     含 .hljs-punctuation、.hljs-meta、.hljs-variable、
+ *     .hljs-addition → string、.hljs-deletion → danger；
  *     .hljs-attr / .hljs-attribute 留在 attr，不与 variable 共用。
  *
  * 说明：不锁死具体艺术 hex，只锁不变量。视觉气质无法 headless 验证。
@@ -32,6 +35,16 @@ const SYNTAX_ROLES = [
   'function',
   'variable',
   'number',
+] as const;
+
+/** R3 要求相对 code-bg ≥4.5:1 的语法角色（不含已由 code-fg 覆盖的默认字色）。 */
+const CONTRAST_ROLES = [
+  'keyword',
+  'comment',
+  'string',
+  'number',
+  'attr',
+  'punctuation',
 ] as const;
 
 /** 提取 `[data-theme="<id>"] { ... }` 块的内容（允许组合选择器如 `:root,`）。 */
@@ -173,6 +186,7 @@ describe('tokens.css 内置主题', () => {
       '--lightink-accent',
       '--lightink-border',
       '--lightink-code-bg',
+      '--lightink-code-fg',
     ]) {
       tokenValue(block, token);
     }
@@ -215,16 +229,36 @@ describe('tokens.css 内置主题', () => {
     }
   });
 
-  it.each(BUILTIN_THEMES)('%s 注释相对 code-bg 对比度 ≥ 4.5:1', (id) => {
+  it.each(BUILTIN_THEMES)('%s attr 与 string、punctuation 不同色，number 与 punctuation 不同色', (id) => {
     const block = themeBlock(id);
-    const comment = tokenValue(block, '--lightink-syntax-comment');
+    const attr = tokenValue(block, '--lightink-syntax-attr').toLowerCase();
+    const string = tokenValue(block, '--lightink-syntax-string').toLowerCase();
+    const punctuation = tokenValue(block, '--lightink-syntax-punctuation').toLowerCase();
+    const number = tokenValue(block, '--lightink-syntax-number').toLowerCase();
+    expect(attr).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(string).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(punctuation).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(number).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(attr, `${id} attr 与 string 不得同色`).not.toBe(string);
+    expect(attr, `${id} attr 与 punctuation 不得同色`).not.toBe(punctuation);
+    expect(number, `${id} number 与 punctuation 不得同色`).not.toBe(punctuation);
+  });
+
+  it.each(BUILTIN_THEMES)('%s R3 角色与 code-fg 相对 code-bg 对比度 ≥ 4.5:1', (id) => {
+    const block = themeBlock(id);
     const codeBg = tokenValue(block, '--lightink-code-bg');
-    expect(comment).toMatch(/^#[0-9a-f]{6}$/i);
     expect(codeBg).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(
-      contrastRatio(comment, codeBg),
-      `${id} 注释 ${comment} vs code-bg ${codeBg}`,
-    ).toBeGreaterThanOrEqual(4.5);
+    const roles: Array<readonly [string, string]> = [
+      ...CONTRAST_ROLES.map((role) => [`--lightink-syntax-${role}`, tokenValue(block, `--lightink-syntax-${role}`)] as const),
+      ['--lightink-code-fg', tokenValue(block, '--lightink-code-fg')] as const,
+    ];
+    for (const [name, value] of roles) {
+      expect(value, `${id} ${name}`).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(
+        contrastRatio(value, codeBg),
+        `${id} ${name} ${value} vs code-bg ${codeBg}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('定义嵌套 chrome 半径令牌且 control < panel < dialog', () => {
@@ -257,6 +291,8 @@ describe('tokens.css hljs 类映射', () => {
       '.hljs-literal',
       '.hljs-punctuation',
       '.hljs-meta',
+      '.hljs-addition',
+      '.hljs-deletion',
     ]) {
       expect(css).toContain(cls);
     }
@@ -274,5 +310,7 @@ describe('tokens.css hljs 类映射', () => {
     expect(css).toMatch(/\.hljs-built_in[^{]*\{[^}]*var\(--lightink-syntax-builtin\)/);
     expect(css).toMatch(/\.hljs-punctuation[^{]*\{[^}]*var\(--lightink-syntax-punctuation\)/);
     expect(css).toMatch(/\.hljs-meta\s*\{[^}]*var\(--lightink-syntax-comment\)/);
+    expect(css).toMatch(/\.hljs-addition[^{]*\{[^}]*var\(--lightink-syntax-string\)/);
+    expect(css).toMatch(/\.hljs-deletion[^{]*\{[^}]*var\(--lightink-danger\)/);
   });
 });
