@@ -164,6 +164,18 @@ describe('keyboard format bar CSS (R2)', () => {
       /\.lightink-keyboard-format-bar__btn\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,
     );
   });
+
+  it('pads the markdown slot by bar height plus keyboard-inset (safe-bottom when inset is 0)', () => {
+    expect(themeCss).toMatch(
+      /#lightink-editor-area\[data-surface='markdown'\]:has\(\.lightink-keyboard-format-bar\.is-visible\)\s*\{[^}]*padding-bottom:\s*calc\(\s*48px \+ max\(\s*var\(--lightink-keyboard-inset,\s*0px\),\s*var\(--lightink-safe-bottom,\s*0px\)\s*\)/,
+    );
+  });
+
+  it('lifts the link-dialog overlay like note-dialog', () => {
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-modal-overlay:has\(\.lightink-link-dialog\)\s*\{[^}]*align-items:\s*flex-end[^}]*padding-bottom:\s*max\(\s*var\(--lightink-keyboard-inset,\s*0px\),\s*var\(--lightink-safe-bottom,\s*0px\)\s*\)/,
+    );
+  });
 });
 
 describe('keyboardFormatBarPlugin (Milkdown wiring)', () => {

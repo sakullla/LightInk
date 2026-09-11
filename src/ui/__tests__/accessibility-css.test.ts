@@ -111,6 +111,7 @@ describe('accessibility media preferences', () => {
       // 见下方 TS 断言）；CSS 侧死规则已删（T3 清理）。
       { name: 'groups-sheet', tokens: ['.lightink-library-groups-sheet'] },
       { name: 'note-dialog', tokens: ['.lightink-note-dialog'] },
+      { name: 'link-dialog', tokens: ['.lightink-link-dialog'] },
     ];
 
     for (const overlay of overlays) {

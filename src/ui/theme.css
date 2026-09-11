@@ -476,7 +476,10 @@ html[data-display='xuhd'] {
 :is(html[data-android], html[data-touch-primary])
   #app.is-workspace-reader
   #lightink-editor-area[data-surface='markdown']:has(.lightink-keyboard-format-bar.is-visible) {
-  padding-bottom: calc(var(--lightink-safe-bottom, 0px) + 48px);
+  /* Bar height + keyboard-inset; inset 0 still keeps safe-bottom. */
+  padding-bottom: calc(
+    48px + max(var(--lightink-keyboard-inset, 0px), var(--lightink-safe-bottom, 0px))
+  );
 }
 
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */
@@ -3013,6 +3016,17 @@ html[data-reading-layout='scroll']:has(
   word-break: break-all;
   max-height: 6em;
   overflow: auto;
+}
+
+/* Same single-channel lift as note-dialog: overlay padding-bottom is the
+   only keyboard-inset consumer; inset 0 still keeps safe-bottom. */
+:is(html[data-android], html[data-touch-primary]) .lightink-modal-overlay:has(.lightink-link-dialog) {
+  align-items: flex-end;
+  padding-top: var(--lightink-safe-top, 0px);
+  padding-bottom: max(
+    var(--lightink-keyboard-inset, 0px),
+    var(--lightink-safe-bottom, 0px)
+  );
 }
 
 /* 版本历史弹层（R13）：双栏——左版本时间线 / 右内容预览。 */
