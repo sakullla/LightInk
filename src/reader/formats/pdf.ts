@@ -9,7 +9,7 @@
  * 页 DOM（`.pdfViewer > .page[data-page-number]`）、懒渲染/缓冲（PDFPageViewBuffer）、
  * 缩放锚点与 scale 变量（`--scale-factor`→`.page` 级联）全部由官方组件承担；本模块只做
  * 事件接线（页码回写/档位映射/触底钳制/文本层护栏安装）、fit-width 计算、搜索/大纲
- * （面向 PDFDocumentProxy）与对称作废。
+ * （面向 PDFDocumentProxy）、目录缩略图按需预览与对称作废。
  *
  * canvas/文本层真实渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
@@ -79,6 +79,50 @@ export function pdfHostFitContentWidth(
 /** PDF 唯一比例：适合页宽 × 用户档。 */
 export function pdfCssScale(fitWidthScale: number, userZoom: number): number {
   return fitWidthScale * userZoom;
+}
+
+/** 目录缩略图最长边（CSS 像素）；按页比例缩放，失败由调用方占位。 */
+export const PDF_THUMB_MAX_EDGE = 128;
+
+/** 缩略图绘制所需的 pdf.js 页最小面。 */
+export interface PdfThumbPage<TViewport extends { width: number; height: number } = { width: number; height: number }> {
+  getViewport(params: { scale: number }): TViewport;
+  render(params: {
+    canvasContext: CanvasRenderingContext2D;
+    viewport: TViewport;
+    canvas: HTMLCanvasElement;
+  }): { promise: Promise<unknown>; cancel?: () => void };
+}
+
+/**
+ * 把一页画进小画布。任一步失败返回 false，不抛给目录列表。
+ * 真实栅格化留手工验证；本函数供句柄 preview 与纯逻辑单测共用。
+ */
+export async function renderPdfThumb<TViewport extends { width: number; height: number }>(
+  page: PdfThumbPage<TViewport>,
+  canvas: HTMLCanvasElement,
+  maxEdge: number = PDF_THUMB_MAX_EDGE,
+): Promise<boolean> {
+  const edge = Number.isFinite(maxEdge) && maxEdge > 0 ? maxEdge : PDF_THUMB_MAX_EDGE;
+  try {
+    const base = page.getViewport({ scale: 1 });
+    if (!(base.width > 0) || !(base.height > 0)) {
+      return false;
+    }
+    const scale = edge / Math.max(base.width, base.height);
+    const viewport = page.getViewport({ scale });
+    const context = canvas.getContext('2d');
+    if (context === null) {
+      return false;
+    }
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const task = page.render({ canvasContext: context, viewport, canvas });
+    await task.promise;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface PdfPageController {
@@ -204,6 +248,11 @@ export interface PdfRenderHandle {
   ): Promise<PdfSearchMatch[]>;
   /** PDF 书签树拍平后的大纲（无书签则为空）。 */
   outline(): Promise<OutlineItem[]>;
+  /**
+   * 按需把 1-based 页画进目录缩略图画布。失败返回 false（调用方占位），
+   * 不让单页错误关掉整表。打开目录不得同步渲染全部页。
+   */
+  preview(page: number, canvas: HTMLCanvasElement): Promise<boolean>;
   /** 释放 pdfjs 文档资源 + 摘除全部监听（关闭/重开 PDF 时调用）。 */
   destroy(): Promise<void>;
 }
@@ -730,12 +779,32 @@ export async function renderPdfInto(
     return outlineFromPdf(doc);
   };
 
+  const preview = async (page: number, canvas: HTMLCanvasElement): Promise<boolean> => {
+    if (destroyed || isAborted()) {
+      return false;
+    }
+    const target = Math.min(total, Math.max(1, Math.floor(page)));
+    if (!Number.isFinite(target) || target < 1) {
+      return false;
+    }
+    try {
+      const pdfPage = await doc.getPage(target);
+      if (destroyed || isAborted()) {
+        return false;
+      }
+      return await renderPdfThumb(pdfPage, canvas);
+    } catch {
+      return false;
+    }
+  };
+
   return {
     controller,
     rerender,
     scrollToPage,
     search,
     outline,
+    preview,
     destroy: async () => {
       if (destroyed) {
         return;

@@ -8,7 +8,7 @@
  * ComicInfo 共享解码（readComicInfo）。真实 canvas/zip 渲染（renderPdfInto/
  * renderCbzInto）留手工验证。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { listImageEntries, naturalCompare, readComicInfo } from '../formats/cbz.js';
 import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
@@ -21,9 +21,11 @@ import {
 import {
   createPdfPageController,
   PDF_SCALE_STEPS,
+  PDF_THUMB_MAX_EDGE,
   pdfCssScale,
   pdfFitWidthScale,
   pdfHostFitContentWidth,
+  renderPdfThumb,
 } from '../formats/pdf.js';
 import { ReaderLimitError } from '../formats/types.js';
 
@@ -126,6 +128,60 @@ describe('createPdfPageController', () => {
   it('totalPages 至少为 1', () => {
     expect(createPdfPageController(0).totalPages).toBe(1);
     expect(createPdfPageController(-3).totalPages).toBe(1);
+  });
+});
+
+describe('renderPdfThumb', () => {
+  function fakeCanvas(): HTMLCanvasElement {
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({}) as CanvasRenderingContext2D,
+    };
+    return canvas as unknown as HTMLCanvasElement;
+  }
+
+  it('scales the longest edge to the thumb max and paints the canvas', async () => {
+    const render = vi.fn(async () => undefined);
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 200 * scale,
+        height: 400 * scale,
+      }),
+      render: ({ viewport }: { viewport: { width: number; height: number } }) => {
+        expect(Math.max(viewport.width, viewport.height)).toBeCloseTo(PDF_THUMB_MAX_EDGE);
+        return { promise: render() };
+      },
+    };
+    const canvas = fakeCanvas();
+    await expect(renderPdfThumb(page, canvas)).resolves.toBe(true);
+    expect(canvas.width).toBe(Math.round(PDF_THUMB_MAX_EDGE / 2));
+    expect(canvas.height).toBe(PDF_THUMB_MAX_EDGE);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false when a page render throws, without leaking the error', async () => {
+    const page = {
+      getViewport: () => ({ width: 100, height: 100 }),
+      render: () => ({
+        promise: Promise.reject(new Error('render failed')),
+      }),
+    };
+    await expect(renderPdfThumb(page, fakeCanvas())).resolves.toBe(false);
+  });
+
+  it('returns false when the canvas has no 2d context', async () => {
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => null,
+    } as unknown as HTMLCanvasElement;
+    const page = {
+      getViewport: () => ({ width: 80, height: 120 }),
+      render: vi.fn(() => ({ promise: Promise.resolve() })),
+    };
+    await expect(renderPdfThumb(page, canvas)).resolves.toBe(false);
+    expect(page.render).not.toHaveBeenCalled();
   });
 });
 

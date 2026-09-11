@@ -24,6 +24,7 @@ import {
   READER_TOC_SEARCH_DEBOUNCE_MS,
   readerChromeFooterInset,
   unpinFixedOverlay,
+  type ReaderTocPdfPages,
 } from '../reader-chrome-panels.js';
 import type { OutlineItem } from '../../outline/outline-model.js';
 
@@ -606,6 +607,177 @@ describe('reader chrome panels', () => {
       expect(list.querySelector('.lightink-reader-toc-load-more')).toBeNull();
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
+  function pdfTocPages(overrides: Partial<ReaderTocPdfPages> = {}): ReaderTocPdfPages {
+    return {
+      totalPages: 4,
+      page: 2,
+      preview: vi.fn(async () => true),
+      onSelectPage: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  class ThumbIntersectionObserver {
+    static instances: ThumbIntersectionObserver[] = [];
+
+    readonly observed: Element[] = [];
+
+    private readonly callback: IntersectionObserverCallback;
+
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+      ThumbIntersectionObserver.instances.push(this);
+    }
+
+    observe(el: Element): void {
+      this.observed.push(el);
+    }
+
+    unobserve(el: Element): void {
+      const index = this.observed.indexOf(el);
+      if (index >= 0) {
+        this.observed.splice(index, 1);
+      }
+    }
+
+    disconnect(): void {
+      this.observed.length = 0;
+    }
+
+    trigger(target: Element, isIntersecting = true): void {
+      this.callback(
+        [{ isIntersecting, target } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver,
+      );
+    }
+  }
+
+  const outlineItems: OutlineItem[] = [
+    { level: 1, text: '封面', anchor: 0, chapter: 0 },
+    { level: 1, text: '正文', anchor: 1, chapter: 1 },
+  ];
+
+  it('lets a PDF contents sheet switch between outline and thumbnails', () => {
+    const panel = document.createElement('div');
+    const pages = pdfTocPages();
+    fillReaderTocPanel(
+      panel,
+      outlineItems,
+      defaultReaderChromePanelCopy(),
+      { chapter: 1 },
+      vi.fn(),
+      undefined,
+      pages,
+    );
+    expect(panel.querySelector('[data-toc-mode="outline"]')).not.toBeNull();
+    expect(panel.querySelector('[data-toc-mode="thumbs"]')).not.toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+    expect(panel.querySelector('.lightink-reader-toc-list.is-thumbs')).toBeNull();
+    expect(panel.querySelector('[data-toc-mode="outline"]')?.getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+
+    panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+    expect(panel.dataset.readerTocMode).toBe('thumbs');
+    expect(panel.querySelector('.lightink-reader-toc-list.is-thumbs')).not.toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(0);
+    const thumbs = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-thumb');
+    expect(thumbs).toHaveLength(4);
+    expect(panel.querySelector('.lightink-reader-toc-count')?.textContent).toBe('4 页');
+    expect(thumbs[1]!.classList.contains('is-current')).toBe(true);
+    expect(thumbs[1]!.getAttribute('aria-current')).toBe('page');
+
+    thumbs[3]!.click();
+    expect(pages.onSelectPage).toHaveBeenCalledWith(4);
+    expect(thumbs[3]!.classList.contains('is-current')).toBe(true);
+    expect(thumbs[1]!.classList.contains('is-current')).toBe(false);
+  });
+
+  it('opens PDF contents on thumbnails when the outline is empty', () => {
+    const panel = document.createElement('div');
+    const pages = pdfTocPages({ totalPages: 3, page: 3 });
+    fillReaderTocPanel(
+      panel,
+      [],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      vi.fn(),
+      undefined,
+      pages,
+    );
+    expect(panel.dataset.readerTocMode).toBe('thumbs');
+    expect(panel.querySelector('.lightink-reader-toc-list.is-thumbs')).not.toBeNull();
+    expect(panel.querySelector('.lightink-reader-chrome-panel-empty')).toBeNull();
+    const thumbs = panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-thumb');
+    expect(thumbs).toHaveLength(3);
+    expect(thumbs[2]!.classList.contains('is-current')).toBe(true);
+    thumbs[0]!.click();
+    expect(pages.onSelectPage).toHaveBeenCalledWith(1);
+  });
+
+  it('keeps flow and comic contents as text lists without a thumbnail mode', () => {
+    const panel = document.createElement('div');
+    fillReaderTocPanel(
+      panel,
+      [{ level: 1, text: '第一章', anchor: 0, chapter: 0 }],
+      defaultReaderChromePanelCopy(),
+      { chapter: 0 },
+      vi.fn(),
+    );
+    expect(panel.querySelector('.lightink-reader-toc-modes')).toBeNull();
+    expect(panel.querySelector('.lightink-reader-toc-thumb')).toBeNull();
+    expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(1);
+
+    const empty = document.createElement('div');
+    fillReaderTocPanel(empty, [], defaultReaderChromePanelCopy(), { chapter: 0 }, vi.fn());
+    expect(empty.querySelector('.lightink-reader-toc-modes')).toBeNull();
+    expect(empty.querySelector('.lightink-reader-chrome-panel-empty')?.textContent).toBe(
+      '暂无目录',
+    );
+  });
+
+  it('lazy-draws visible PDF thumbs and keeps a failed page as a placeholder', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    vi.useFakeTimers();
+    try {
+      const preview = vi.fn(async (page: number) => page !== 2);
+      const pages = pdfTocPages({ preview, totalPages: 4, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        outlineItems,
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+      const thumbs = [...panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-thumb')];
+      expect(thumbs).toHaveLength(4);
+      expect(preview).not.toHaveBeenCalled();
+      expect(observers).toHaveLength(1);
+      expect(observers[0]!.observed).toHaveLength(4);
+
+      observers[0]!.trigger(thumbs[0]!, true);
+      observers[0]!.trigger(thumbs[1]!, true);
+      await vi.runAllTimersAsync();
+      expect(preview).toHaveBeenCalledTimes(2);
+      expect(thumbs[0]!.dataset.thumbState).toBe('ready');
+      expect(thumbs[1]!.dataset.thumbState).toBe('failed');
+      expect(thumbs[1]!.classList.contains('is-failed')).toBe(true);
+      expect(thumbs[2]!.dataset.thumbState).toBe('pending');
+      expect(thumbs[3]!.dataset.thumbState).toBe('pending');
+    } finally {
+      vi.useRealTimers();
       globalThis.IntersectionObserver = originalObserver;
     }
   });

@@ -28,6 +28,7 @@ import {
   positionReaderChromePanel,
   unpinFixedOverlay,
   type ReaderChromePanelCopy,
+  type ReaderTocPdfPages,
   type ReaderTypographyComicControls,
 } from '../reader-chrome-panels.js';
 import { concealSheet, revealSheet } from '../../ui/touch/sheet-transition.js';
@@ -904,6 +905,10 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     tocEmptySearch: ctx.t('outline.emptySearch'),
     tocSearchCount: ctx.t('outline.searchCount'),
     tocCount: ctx.t('reader.toc.count'),
+    tocOutline: ctx.t('reader.toc.outline'),
+    tocThumbs: ctx.t('reader.toc.thumbs'),
+    tocPage: ctx.t('reader.toc.page'),
+    tocPages: ctx.t('reader.toc.pages'),
     typeTitle: ctx.t('reader.type.title'),
     theme: ctx.t('reader.type.theme'),
     size: ctx.t('reader.type.size'),
@@ -964,6 +969,21 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
 
   const renderTocPanel = (): void => {
     const current = outlineLocationFromReader(ctx.readerState);
+    const pdf = ctx.pdfHandle;
+    const pdfPages: ReaderTocPdfPages | null =
+      pdf === null
+        ? null
+        : {
+            totalPages: pdf.controller.totalPages,
+            page: pdf.controller.page,
+            preview: (page, canvas) => pdf.preview(page, canvas),
+            onSelectPage: (page) => {
+              pdf.scrollToPage(page);
+              ctx.paged.syncPageState();
+              ctx.sessionProgress.schedulePersist();
+              closeChromePanel();
+            },
+          };
     fillReaderTocPanel(
       ctx.tocPanel,
       ctx.readerOutline,
@@ -976,6 +996,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       () => {
         closeChromePanel();
       },
+      pdfPages,
     );
   };
 
