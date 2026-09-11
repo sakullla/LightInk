@@ -6,7 +6,9 @@ import {
   ANDROID_BACK_BRIDGE_GLOBAL,
   decideLayeredEscapeLeftover,
   dispatchLayeredBackPress,
+  leaveMarkdownReaderToShelf,
   registerAndroidBackNavigation,
+  shouldPromptMarkdownSaveFailure,
 } from '../back-navigation.js';
 
 const cleanups: Array<() => void> = [];
@@ -392,6 +394,67 @@ describe('Markdown 编辑态 leftover Escape / 系统返回', () => {
     expect(dispatchLayeredBackPress(document)).toBe(true);
     expect(finishMarkdownEdit).not.toHaveBeenCalled();
     expect(returnToShelf).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('shouldPromptMarkdownSaveFailure', () => {
+  it('saveActiveTab false 且 saveStatus error 才提示', () => {
+    expect(shouldPromptMarkdownSaveFailure(false, 'error')).toBe(true);
+  });
+
+  it('另存取消（dirty/saved）不提示', () => {
+    expect(shouldPromptMarkdownSaveFailure(false, 'dirty')).toBe(false);
+    expect(shouldPromptMarkdownSaveFailure(false, 'saved')).toBe(false);
+  });
+
+  it('保存成功或冲突已弹对话框时不提示', () => {
+    expect(shouldPromptMarkdownSaveFailure(true, 'error')).toBe(false);
+    expect(shouldPromptMarkdownSaveFailure(false, 'conflict')).toBe(false);
+    expect(shouldPromptMarkdownSaveFailure(false, null)).toBe(false);
+  });
+});
+
+describe('leaveMarkdownReaderToShelf', () => {
+  it('只读回书架不走 finishMarkdownEdit', async () => {
+    const finishMarkdownEdit = vi.fn(async () => true);
+    const returnToShelf = vi.fn();
+    await expect(
+      leaveMarkdownReaderToShelf({
+        markdownEditing: false,
+        finishMarkdownEdit,
+        returnToShelf,
+      }),
+    ).resolves.toBe(true);
+    expect(finishMarkdownEdit).not.toHaveBeenCalled();
+    expect(returnToShelf).toHaveBeenCalledTimes(1);
+  });
+
+  it('编辑态保存成功后才 returnToShelf', async () => {
+    const finishMarkdownEdit = vi.fn(async () => true);
+    const returnToShelf = vi.fn();
+    await expect(
+      leaveMarkdownReaderToShelf({
+        markdownEditing: true,
+        finishMarkdownEdit,
+        returnToShelf,
+      }),
+    ).resolves.toBe(true);
+    expect(finishMarkdownEdit).toHaveBeenCalledTimes(1);
+    expect(returnToShelf).toHaveBeenCalledTimes(1);
+  });
+
+  it('编辑态保存失败不 returnToShelf', async () => {
+    const finishMarkdownEdit = vi.fn(async () => false);
+    const returnToShelf = vi.fn();
+    await expect(
+      leaveMarkdownReaderToShelf({
+        markdownEditing: true,
+        finishMarkdownEdit,
+        returnToShelf,
+      }),
+    ).resolves.toBe(false);
+    expect(finishMarkdownEdit).toHaveBeenCalledTimes(1);
+    expect(returnToShelf).not.toHaveBeenCalled();
   });
 });
 

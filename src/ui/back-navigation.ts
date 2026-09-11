@@ -61,6 +61,35 @@ export function decideLayeredEscapeLeftover(input: {
   return 'return-to-shelf';
 }
 
+/**
+ * Immersive Markdown 完成/系统返回：saveActiveTab false 且 saveStatus 为
+ * error 时才弹提示。另存取消是 dirty/saved，冲突对话框已处理，都不弹。
+ */
+export function shouldPromptMarkdownSaveFailure(
+  saved: boolean,
+  saveStatus: string | null | undefined,
+): boolean {
+  return saved === false && saveStatus === 'error';
+}
+
+/**
+ * Chrome 回书架：编辑态先走 finishMarkdownEdit；保存失败不 returnToShelf。
+ */
+export async function leaveMarkdownReaderToShelf(input: {
+  readonly markdownEditing: boolean;
+  readonly finishMarkdownEdit: () => Promise<boolean>;
+  readonly returnToShelf: () => void;
+}): Promise<boolean> {
+  if (input.markdownEditing) {
+    const saved = await input.finishMarkdownEdit();
+    if (!saved) {
+      return false;
+    }
+  }
+  input.returnToShelf();
+  return true;
+}
+
 /** 可被派发 Escape keydown 的最小目标（document 或等价物），便于测试注入。 */
 export interface BackPressDispatchTarget {
   dispatchEvent(event: Event): boolean;

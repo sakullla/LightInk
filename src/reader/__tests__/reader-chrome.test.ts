@@ -1158,6 +1158,14 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
     expect(button.textContent?.trim()).toBe('编辑');
   });
 
+  it('编辑态 返回书架 仍调用 returnToShelf（宿主拦截保存退出）', () => {
+    const { host, chrome, deps } = mountMarkdownChrome({ markdownEditing: true });
+    chrome.reveal();
+    buttonByLabel(host, '返回书架').click();
+    expect(deps.returnToShelf).toHaveBeenCalledTimes(1);
+    expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
+  });
+
   it('handleEscape dismisses chrome in edit mode and never finishes or 合书', () => {
     const { chrome, deps } = mountMarkdownChrome({ markdownEditing: true });
     chrome.reveal();

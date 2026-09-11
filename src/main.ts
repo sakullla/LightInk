@@ -182,7 +182,9 @@ import {
 import { bindSafeAreaBridge } from './ui/safe-area.js';
 import {
   decideLayeredEscapeLeftover,
+  leaveMarkdownReaderToShelf,
   registerAndroidBackNavigation,
+  shouldPromptMarkdownSaveFailure,
 } from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import {
@@ -809,6 +811,14 @@ function enterMarkdownEdit(): void {
   markdownReaderChrome?.syncMarkdownEdit();
 }
 
+function activeMarkdownSaveStatus(): string | null {
+  const tab = manager.activeTab;
+  if (tab === null || tab.kind !== 'markdown') {
+    return null;
+  }
+  return manager.getSaveStatus(tab.id);
+}
+
 async function finishMarkdownEdit(): Promise<boolean> {
   if (!markdownEditing) {
     return true;
@@ -819,14 +829,21 @@ async function finishMarkdownEdit(): Promise<boolean> {
   markdownEditSaving = true;
   try {
     commitActiveSourceMode();
-    const ok = await manager.saveActiveTab();
+    let ok = false;
+    try {
+      ok = await manager.saveActiveTab();
+    } catch {
+      ok = false;
+    }
     if (ok) {
       markdownEditing = false;
       applyMarkdownEditable(false);
       markdownReaderChrome?.syncMarkdownEdit();
+      return true;
     }
-    return ok;
-  } catch {
+    if (shouldPromptMarkdownSaveFailure(ok, activeMarkdownSaveStatus())) {
+      await showAppAlert(i18n.t('status.save.error'));
+    }
     return false;
   } finally {
     markdownEditSaving = false;
@@ -861,7 +878,13 @@ function syncMarkdownReaderChrome(): void {
       touchMode: true,
       locale: i18n.locale,
       returnToShelf: () => {
-        workspace.returnToShelf();
+        void leaveMarkdownReaderToShelf({
+          markdownEditing,
+          finishMarkdownEdit,
+          returnToShelf: () => {
+            workspace.returnToShelf();
+          },
+        });
       },
       suppressProgressDock: () => true,
       toggleSidebar: () => {
