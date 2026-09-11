@@ -7,10 +7,12 @@
  *
  * 多指捏合（注入 scale 绑定）：Mozilla PDF.js 与漫画同一策略——进行中只做
  * CSS `scale()` 预览（不写 currentScale，避免每帧重栅格），松手才落一次
- * currentScale 并按两指中点做 pdfZoomAnchorScroll。基指固定为进入时的首两指；
- * 基指抬起但仍有 ≥2 指时重定基线。捏合期 touch-action 恒 none（含 sync()
- * 重估），结束恢复 pan-x pan-y。双击（280ms/36px）在适宽与 2× 间切换。
- * 窗口内单击暂扣；多指结束的吞 click 布防在下一次 pointerdown 清除。
+ * currentScale 并按两指中点做 pdfZoomAnchorScroll。写前滚动覆盖官方 setter
+ * 内部重锚；随后一次 scalechanging / 帧更新若再改滚动，用同一锚点再覆盖一次。
+ * 基指固定为进入时的首两指；基指抬起但仍有 ≥2 指时重定基线。捏合期
+ * touch-action 恒 none（含 sync() 重估），结束恢复 pan-x pan-y。双击
+ * （280ms/36px）在适宽与 2× 间切换。窗口内单击暂扣；多指结束的吞 click
+ * 布防在下一次 pointerdown 清除。
  *
  * 另导出无 DOM 依赖的纯函数，供手势接线层 headless 复用与断言。
  */
@@ -119,7 +121,8 @@ export function pdfZoomAnchorScroll(
 
 /**
  * 捏合/双击的 currentScale 读写绑定（由 pdf.ts 注入，官方 viewer 是真源）。
- * 写入后官方组件自管重排并派发 scalechanging，吸档由 pdf.ts 回环负责。
+ * 写入后官方组件自管重排并派发 scalechanging；pdf.ts 只回写 chrome 档位，
+ * 不得把 currentScale 再吸到档位。
  */
 export interface PdfScaleBinding {
   /** 当前 currentScale（钳制区间与锚点 ratio 的旧值基准）。 */
@@ -135,6 +138,11 @@ export interface PdfScaleBinding {
 export interface PdfDragPanHandle {
   /** 缩放/量页重排后重估横向溢出标记；捏合中保持 touch-action:none。 */
   sync(): void;
+  /**
+   * 官方 scalechanging / 页更新后：若本次缩放提交的滚动被再次改写，
+   * 用同一锚点再覆盖一次（只限这一次提交）。
+   */
+  reapplyPinchAnchor(): void;
   release(): void;
 }
 
@@ -148,7 +156,11 @@ export function bindPdfDragPan(
 ): PdfDragPanHandle {
   const touchPrimary = options?.touchPrimary ?? isTouchPrimaryDocument(scroller.ownerDocument);
   if (!touchPrimary) {
-    return { sync: () => undefined, release: () => undefined };
+    return {
+      sync: () => undefined,
+      reapplyPinchAnchor: () => undefined,
+      release: () => undefined,
+    };
   }
   const scaleBinding = options?.scale;
   const view = scroller.ownerDocument.defaultView;
@@ -171,6 +183,10 @@ export function bindPdfDragPan(
   /** 已预览但尚未落盘的比例与锚点（松手提交 / 重定基线用）。 */
   let lastPinchScale: number | null = null;
   let lastPinchAnchor = { x: 0, y: 0 };
+  /** 本次缩放提交的写前锚点覆盖；官方事后再改滚动时只再应用一次。 */
+  let pinchAnchorOverlay: PdfZoomAnchorScroll | null = null;
+  let pinchAnchorReapplyPending = false;
+  let pinchAnchorFrameId: number | null = null;
   let lastTap: PdfTapPoint | null = null;
   /** 双击窗口内的单击暂扣：等第二击（吞掉）或超时原样放行。 */
   let holdArmed = false;
@@ -228,6 +244,43 @@ export function bindPdfDragPan(
     return fit !== undefined && Number.isFinite(fit) && fit > 0 ? fit : 1;
   };
 
+  const cancelPinchAnchorFrame = (): void => {
+    if (pinchAnchorFrameId !== null && typeof view?.cancelAnimationFrame === 'function') {
+      view.cancelAnimationFrame(pinchAnchorFrameId);
+    }
+    pinchAnchorFrameId = null;
+  };
+
+  const applyPinchAnchorOverlay = (): void => {
+    if (pinchAnchorOverlay === null) {
+      return;
+    }
+    scroller.scrollLeft = pinchAnchorOverlay.left;
+    scroller.scrollTop = pinchAnchorOverlay.top;
+  };
+
+  const consumePinchAnchorReapply = (): void => {
+    if (!pinchAnchorReapplyPending) {
+      return;
+    }
+    pinchAnchorReapplyPending = false;
+    cancelPinchAnchorFrame();
+    applyPinchAnchorOverlay();
+    pinchAnchorOverlay = null;
+  };
+
+  const armPinchAnchorReapply = (overlay: PdfZoomAnchorScroll): void => {
+    pinchAnchorOverlay = overlay;
+    pinchAnchorReapplyPending = true;
+    cancelPinchAnchorFrame();
+    if (typeof view?.requestAnimationFrame === 'function') {
+      pinchAnchorFrameId = view.requestAnimationFrame(() => {
+        pinchAnchorFrameId = null;
+        consumePinchAnchorReapply();
+      });
+    }
+  };
+
   /**
    * 写比例并按锚点修正滚动（ratio = 新/旧 currentScale，锚点为滚动口偏移）。
    * 锚定修正以写比例前的滚动为基准：官方 currentScale setter 内部会同步重锚
@@ -235,7 +288,8 @@ export function bindPdfDragPan(
    * scrollLeft/Top ≈ pre×ratio），写入返回后再读已是重锚值——在其上叠加修正
    * 会把 scroll 项乘两次 ratio，非零阅读偏移下每个捏合帧/每次双击都过度修正
    * 跳读位。故先取写前偏移，写后用修正结果整体覆盖（内置重锚只留下一次正确
-   * 的最终应用），不试图抑制官方内部行为。
+   * 的最终应用），不试图抑制官方内部行为。若随后一次 scalechanging / 页更新
+   * 再次改写滚动，用同一覆盖再应用一次。
    */
   const writeScaleAnchored = (nextScale: number, anchorX: number, anchorY: number): void => {
     if (scaleBinding === undefined) {
@@ -251,6 +305,7 @@ export function bindPdfDragPan(
     const corrected = pdfZoomAnchorScroll(preLeft, preTop, anchorX, anchorY, nextScale / current);
     scroller.scrollLeft = corrected.left;
     scroller.scrollTop = corrected.top;
+    armPinchAnchorReapply(corrected);
   };
 
   /** 捏合候选指：活跃指针按 Map 插入序取前两（进入捏合/重定基线时用）。 */
@@ -644,6 +699,7 @@ export function bindPdfDragPan(
 
   return {
     sync,
+    reapplyPinchAnchor: consumePinchAnchorReapply,
     release: () => {
       scroller.removeEventListener('pointerdown', onPointerDown);
       scroller.removeEventListener('pointermove', onPointerMove);
@@ -651,6 +707,9 @@ export function bindPdfDragPan(
       scroller.removeEventListener('pointercancel', onPointerCancel);
       scroller.removeEventListener('click', onClick, { capture: true });
       cancelPinchFrame();
+      pinchAnchorReapplyPending = false;
+      pinchAnchorOverlay = null;
+      cancelPinchAnchorFrame();
       pinch = null;
       pendingPinchScale = null;
       lastPinchScale = null;

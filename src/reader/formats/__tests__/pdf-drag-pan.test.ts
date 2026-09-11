@@ -6,7 +6,7 @@
  * 覆盖：横向溢出判定（≤4px 亚像素容差）、触屏环境门控、单指交给原生
  * pan-x pan-y、捏合 CSS 预览且松手才写 currentScale、双击适宽↔2×、
  * 窗口内单击暂扣、非触屏 no-op、捏合期 sync() 恒 none、重定基线不换对、
- * 松手早于 rAF 预览仍按末次两指中点锚定。
+ * 松手早于 rAF 预览仍按末次两指中点锚定、官方事后重锚再用同一覆盖一次。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -390,6 +390,68 @@ describe('bindPdfDragPan multi-pointer gestures', () => {
     expect(el.scrollTop).toBeCloseTo(expected.top);
     expect((155 + el.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
     expect((300 + el.scrollTop) / 3).toBeCloseTo((300 + 1200) / 2.5);
+    handle.release();
+  });
+
+  it('re-applies the same pinch overlay once if the official setter re-anchors after commit', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    el.scrollLeft = 5000;
+    el.scrollTop = 1200;
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
+    frames.flush();
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    const expected = pdfZoomAnchorScroll(5000, 1200, 155, 300, 3 / 2.5);
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
+
+    // 官方事后重锚：只乘 ratio、丢掉锚点项。随后一帧用同一覆盖再写一次。
+    el.scrollLeft = 5000 * (3 / 2.5);
+    el.scrollTop = 1200 * (3 / 2.5);
+    frames.flush();
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
+    expect((155 + el.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
+
+    // 只限这次提交：再改滚动不再覆盖。
+    el.scrollLeft = 11;
+    el.scrollTop = 22;
+    handle.reapplyPinchAnchor();
+    frames.flush();
+    expect(el.scrollLeft).toBe(11);
+    expect(el.scrollTop).toBe(22);
+    handle.release();
+  });
+
+  it('re-applies the pinch overlay from scalechanging when the preview frame has not flushed', () => {
+    const frames = fakeFrames();
+    const el = makeScroller({ scrollWidth: 400, clientWidth: 400 });
+    el.scrollLeft = 5000;
+    el.scrollTop = 1200;
+    const { binding, setCurrentScale } = makeScaleBinding(el, { current: 2.5, fit: 2.5 });
+    const handle = bindPdfDragPan(el, { touchPrimary: true, scale: binding });
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
+    frames.flush();
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    el.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
+    expect(setCurrentScale).toHaveBeenCalledTimes(1);
+    const expected = pdfZoomAnchorScroll(5000, 1200, 155, 300, 3 / 2.5);
+
+    el.scrollLeft = 5000 * (3 / 2.5);
+    el.scrollTop = 1200 * (3 / 2.5);
+    handle.reapplyPinchAnchor();
+    expect(el.scrollLeft).toBeCloseTo(expected.left);
+    expect(el.scrollTop).toBeCloseTo(expected.top);
     handle.release();
   });
 

@@ -130,6 +130,12 @@ class MockPDFViewer {
   }
 
   set currentScale(value: number) {
+    const previous = this.#currentScale;
+    if (previous > 0 && Number.isFinite(value) && value > 0) {
+      const ratio = value / previous;
+      this.options.container.scrollLeft *= ratio;
+      this.options.container.scrollTop *= ratio;
+    }
     this.#currentScale = value;
     viewerRuntime.scaleSets.push(value);
   }
@@ -621,10 +627,115 @@ describe('viewer event wiring', () => {
     expect(viewer.currentScale).toBeCloseTo(3.75);
     expect(viewerRuntime.scaleSets).toEqual([2.5, 3.75]);
 
-    // 落档权威保持：scalechanging → syncScale 吸档回环把 userZoom 吸到 1.5。
+    // chrome 档位可吸到 1.5，但不得再 applyScale 写 viewer 比例。
     lastEventBus().dispatch('scalechanging', { source: viewer, scale: viewer.currentScale });
     expect(handle.controller.scale).toBe(1.5);
+    expect(viewer.currentScale).toBeCloseTo(3.75);
+    await handle.rerender();
+    expect(viewer.currentScale).toBeCloseTo(3.75);
+    expect(viewerRuntime.scaleSets).toEqual([2.5, 3.75]);
     expect(container.style.touchAction).toBe('pan-x pan-y');
+    document.documentElement.removeAttribute('data-touch-primary');
+    await handle.destroy();
+  });
+
+  it('keeps a non-step pinch scale after chrome snap and still honors later zoomIn', async () => {
+    mockPdf();
+    document.documentElement.setAttribute('data-touch-primary', 'true');
+    const container = document.createElement('div');
+    defineClientSize(container, { clientWidth: 400 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    const viewer = lastViewer();
+    viewer.pageViews = [{ width: 160, scale: 1, textLayer: null }];
+    lastEventBus().dispatch('pagesinit', { source: viewer });
+    expect(viewerRuntime.scaleSets).toEqual([2.5]);
+
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        frames.push(callback);
+        return frames.length;
+      },
+    );
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((): void => undefined);
+
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 70, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 225, clientY: 300 }));
+    frames.splice(0).forEach((callback) => {
+      callback(0);
+    });
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 70, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 225, clientY: 300 }));
+    // 指距 100 → 155：2.5 × 1.55 = 3.875，不是档位。
+    expect(viewer.currentScale).toBeCloseTo(3.875);
+    expect(viewerRuntime.scaleSets).toEqual([2.5, 3.875]);
+
+    lastEventBus().dispatch('scalechanging', { source: viewer, scale: viewer.currentScale });
+    expect(handle.controller.scale).toBe(1.5);
+    expect(viewer.currentScale).toBeCloseTo(3.875);
+    await handle.rerender();
+    expect(viewer.currentScale).toBeCloseTo(3.875);
+    expect(viewerRuntime.scaleSets).toEqual([2.5, 3.875]);
+
+    expect(handle.controller.zoomIn()).toBe(true);
+    await handle.rerender();
+    expect(handle.controller.scale).toBe(2);
+    expect(viewer.currentScale).toBeCloseTo(5);
+    expect(viewerRuntime.scaleSets).toEqual([2.5, 3.875, 5]);
+    document.documentElement.removeAttribute('data-touch-primary');
+    await handle.destroy();
+  });
+
+  it('restores the pinch overlay if scalechanging re-anchors after commit', async () => {
+    mockPdf();
+    document.documentElement.setAttribute('data-touch-primary', 'true');
+    const container = document.createElement('div');
+    defineClientSize(container, { clientWidth: 400 });
+    document.body.appendChild(container);
+    const handle = await renderPdfInto(new Uint8Array([1]), container);
+
+    const viewer = lastViewer();
+    viewer.pageViews = [{ width: 160, scale: 1, textLayer: null }];
+    lastEventBus().dispatch('pagesinit', { source: viewer });
+    container.scrollLeft = 5000;
+    container.scrollTop = 1200;
+
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        frames.push(callback);
+        return frames.length;
+      },
+    );
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((): void => undefined);
+
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2, clientX: 200, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 1, clientX: 95, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointermove', { pointerId: 2, clientX: 215, clientY: 300 }));
+    frames.splice(0).forEach((callback) => {
+      callback(0);
+    });
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 1, clientX: 95, clientY: 300 }));
+    container.dispatchEvent(pointerEvent('pointerup', { pointerId: 2, clientX: 215, clientY: 300 }));
+    expect(viewer.currentScale).toBeCloseTo(3);
+    const expectedLeft = 5000 * (3 / 2.5) + 155 * (3 / 2.5 - 1);
+    const expectedTop = 1200 * (3 / 2.5) + 300 * (3 / 2.5 - 1);
+    expect(container.scrollLeft).toBeCloseTo(expectedLeft);
+    expect(container.scrollTop).toBeCloseTo(expectedTop);
+
+    container.scrollLeft = 5000 * (3 / 2.5);
+    container.scrollTop = 1200 * (3 / 2.5);
+    lastEventBus().dispatch('scalechanging', { source: viewer, scale: viewer.currentScale });
+    expect(handle.controller.scale).toBe(1.25);
+    expect(viewer.currentScale).toBeCloseTo(3);
+    expect(container.scrollLeft).toBeCloseTo(expectedLeft);
+    expect(container.scrollTop).toBeCloseTo(expectedTop);
+    expect((155 + container.scrollLeft) / 3).toBeCloseTo((155 + 5000) / 2.5);
     document.documentElement.removeAttribute('data-touch-primary');
     await handle.destroy();
   });

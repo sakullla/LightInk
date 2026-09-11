@@ -93,14 +93,15 @@ export interface PdfPageController {
   zoomIn(): boolean;
   zoomOut(): boolean;
   resetScale(): boolean;
-  /** 官方 viewer 缩放事件回写：把 userZoom 吸附到最近档位（保持 controller.scale 与 currentScale 同源）。 */
+  /** 官方 viewer 缩放事件回写：把 chrome 档位吸到最近项，不改写 viewer currentScale。 */
   syncScale(userZoom: number): boolean;
 }
 
 /**
  * 创建页码/缩放状态机。所有变更返回是否真正改变（供调用方决定是否重绘）。
  * 纯逻辑、无 DOM，headless 可测。渲染内核接线时页码由 viewer `pagechanging`
- * 事件回写、档位由 `scalechanging` 回写（syncScale），消费方仍只读写本状态机。
+ * 事件回写、chrome 档位由 `scalechanging` 回写（syncScale）。捏合提交后
+ * syncScale 不得再经 applyScale 改写 viewer 比例。
  */
 export function createPdfPageController(totalPages: number): PdfPageController {
   const total = Math.max(1, Math.floor(totalPages));
@@ -433,12 +434,17 @@ export async function renderPdfInto(
 
   // PDF 只在页宿主连续竖滚；不按 html[data-reading-layout] 切到 editor-area。
   // 触屏环境：单指原生双轴滚动；捏合进行中只做 CSS 预览，松手才写
-  // currentScale（避免每帧重栅格卡死），落档仍由下方
-  // scalechanging→syncScale 吸档回环负责（官方不提供触屏手势，见 pdf-drag-pan）。
+  // currentScale（避免每帧重栅格卡死）。scalechanging 只 syncScale 更新
+  // chrome 档位，不得 applyScale 把 viewer 比例改回档位。
+  let gestureScaleHold: { viewerScale: number; controllerScaleAtCommit: number } | null = null;
   const dragPan = bindPdfDragPan(container, {
     scale: {
       getCurrentScale: () => pdfViewer.currentScale,
       setCurrentScale: (scale: number): void => {
+        gestureScaleHold = {
+          viewerScale: scale,
+          controllerScaleAtCommit: controller.scale,
+        };
         pdfViewer.currentScale = scale;
       },
       getFitWidthScale: () => fitWidthScale,
@@ -469,8 +475,46 @@ export async function renderPdfInto(
     fitWidthScale = pdfFitWidthScale(pageHostContentWidth(container), firstPageCssWidth);
   };
 
+  const nearestScaleStep = (userZoom: number): number => {
+    let best = PDF_SCALE_STEPS[DEFAULT_SCALE_IDX]!;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const step of PDF_SCALE_STEPS) {
+      const dist = Math.abs(step - userZoom);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = step;
+      }
+    }
+    return best;
+  };
+
+  /** 手势刚写入的 currentScale：chrome 吸档不得再经本函数改回档位。 */
+  const shouldHoldGestureScale = (): boolean => {
+    if (gestureScaleHold === null) {
+      return false;
+    }
+    const current = pdfViewer.currentScale;
+    if (!(Number.isFinite(current) && Math.abs(current - gestureScaleHold.viewerScale) < 1e-9)) {
+      gestureScaleHold = null;
+      return false;
+    }
+    if (controller.scale === gestureScaleHold.controllerScaleAtCommit) {
+      return true;
+    }
+    const userZoom =
+      fitWidthScale > 0 ? gestureScaleHold.viewerScale / fitWidthScale : gestureScaleHold.viewerScale;
+    if (controller.scale === nearestScaleStep(userZoom)) {
+      return true;
+    }
+    gestureScaleHold = null;
+    return false;
+  };
+
   /** 档位 → currentScale：官方自管重排、懒渲染与滚动锚点。 */
   const applyScale = (): void => {
+    if (shouldHoldGestureScale()) {
+      return;
+    }
     pdfViewer.currentScale = pdfCssScale(fitWidthScale, controller.scale);
   };
 
@@ -537,8 +581,8 @@ export async function renderPdfInto(
     controller.setPage(page);
   };
 
-  // 官方自发的缩放变化（触屏手势/未来接线）回写档位，避免 controller.scale 与
-  // currentScale 脱钩；缩放后横向溢出可能出现/消失，重估拖拽平移开关。
+  // 官方自发的缩放变化回写 chrome 档位（不写 currentScale）；捏合提交后若
+  // 官方再次重锚滚动，用同一锚点再覆盖一次。
   const onScaleChanging = (evt: ViewerScaleEvent): void => {
     if (destroyed) {
       return;
@@ -546,6 +590,7 @@ export async function renderPdfInto(
     if (fitWidthScale > 0) {
       controller.syncScale(evt.scale / fitWidthScale);
     }
+    dragPan.reapplyPinchAnchor();
     dragPan.sync();
   };
 
