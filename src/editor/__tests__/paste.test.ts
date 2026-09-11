@@ -12,9 +12,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildPastePayload,
+  isLightInkClipboardHtml,
   looksLikeMarkdown,
   payloadHasStructuredBlocks,
+  resolveClipboardPaste,
   routeClipboardPaste,
+  wrapLightInkClipboardHtml,
 } from '../paste.js';
 import { collectMdastTypes } from '../parser.js';
 import { markdownClipboardData } from '../plugins/clipboard-md.js';
@@ -183,6 +186,84 @@ describe('R9 clipboard routing', () => {
 
   it('markdownClipboardData puts the markdown source into text/plain', () => {
     const md = '# H\n\n**b**';
-    expect(markdownClipboardData(md)).toEqual({ 'text/plain': md });
+    const payload = markdownClipboardData(md);
+    expect(payload['text/plain']).toBe(md);
+    expect(payload['application/x-lightink-markdown']).toBe(md);
+    expect(payload['text/html']).toBeUndefined();
+  });
+
+  it('markdownClipboardData adds marked HTML when a rendered fragment is provided', () => {
+    const md = '# H\n\n**b**';
+    const payload = markdownClipboardData(md, '<h1>H</h1><p><strong>b</strong></p>');
+    expect(payload['text/plain']).toBe(md);
+    expect(payload['text/html']).toBeDefined();
+    expect(isLightInkClipboardHtml(payload['text/html'] ?? '')).toBe(true);
+    expect(payload['text/html']).toContain('<h1>H</h1>');
+    expect(payload['text/html']).toContain('<strong>b</strong>');
+  });
+});
+
+describe('dual-format clipboard paste routing', () => {
+  const md = '# 标题\n\n行内 $a^2$ 与\n\n```mermaid\ngraph TD\nA-->B\n```';
+  const markedHtml = wrapLightInkClipboardHtml('<h1>标题</h1><p>行内 $a^2$</p><pre>graph TD</pre>');
+
+  it('wrapLightInkClipboardHtml marks HTML as a LightInk copy', () => {
+    const wrapped = wrapLightInkClipboardHtml('<p><strong>粗</strong></p>');
+    expect(isLightInkClipboardHtml(wrapped)).toBe(true);
+    expect(isLightInkClipboardHtml('<p><strong>粗</strong></p>')).toBe(false);
+    expect(isLightInkClipboardHtml('')).toBe(false);
+  });
+
+  it('detects the marker inside a CF_HTML envelope', () => {
+    const envelope = [
+      '<html><body><!--StartFragment-->',
+      markedHtml,
+      '<!--EndFragment--></body></html>',
+    ].join('');
+    expect(isLightInkClipboardHtml(envelope)).toBe(true);
+  });
+
+  it('prefers Markdown source for LightInk HTML + text (math/mermaid round-trip)', () => {
+    expect(
+      resolveClipboardPaste({ html: markedHtml, text: md }),
+    ).toEqual({ kind: 'markdown-source', text: md });
+  });
+
+  it('prefers custom MIME source even when HTML has no marker', () => {
+    expect(
+      resolveClipboardPaste({
+        html: '<h1>标题</h1>',
+        text: '标题',
+        ownMarkdown: md,
+      }),
+    ).toEqual({ kind: 'markdown-source', text: md });
+  });
+
+  it('routes external Word/Feishu HTML to html conversion, not source', () => {
+    const word = '<html><body><p><b>粗体</b> 来自 Word</p></body></html>';
+    expect(resolveClipboardPaste({ html: word, text: '粗体 来自 Word' })).toEqual({
+      kind: 'html',
+      html: word,
+    });
+  });
+
+  it('routes VS Code markdown-only text as markdown source', () => {
+    expect(resolveClipboardPaste({ html: '', text: '- 项一\n- 项二' })).toEqual({
+      kind: 'markdown-source',
+      text: '- 项一\n- 项二',
+    });
+  });
+
+  it('routes unmarked prose as plain', () => {
+    expect(resolveClipboardPaste({ html: '', text: '普通纯文本段落，无标记' })).toEqual({
+      kind: 'plain',
+    });
+  });
+
+  it('falls back to html when a LightInk copy lost its markdown text', () => {
+    expect(resolveClipboardPaste({ html: markedHtml, text: '' })).toEqual({
+      kind: 'html',
+      html: markedHtml,
+    });
   });
 });

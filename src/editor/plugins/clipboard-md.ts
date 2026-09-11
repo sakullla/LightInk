@@ -1,16 +1,16 @@
 /**
- * `clipboard-md` — Markdown 源复制 / 粘贴解析（R9），`$prose` 插件。
+ * `clipboard-md` — Markdown 源复制 / 粘贴解析（R9 + 双格式剪贴板），`$prose` 插件。
  *
- * 复制（copy/cut）：把选区序列化为 **Markdown 源**写入剪贴板 `text/plain`，
- *   使得「全选复制→粘贴到纯文本编辑器」得到完整 Markdown 源（而非渲染纯文本）。
- * 粘贴（paste）：读取剪贴板 `text/plain`，经 `paste.ts` 的 `routeClipboardPaste`
- *   判定为 Markdown 源时，用 Milkdown parser 解析并替换选区为结构化内容；纯文本
- *   或图片粘贴交默认 / 图片插件。
+ * 复制（copy/cut）：普通选区同时写入
+ *   - `text/plain` = Markdown 源（VS Code 等）
+ *   - `text/html` = 渲染选区 HTML（Word/浏览器/飞书）
+ *   - `application/x-lightink-markdown` = Markdown 源（本应用往返识别）
+ * 粘贴：本应用复制优先用 Markdown 源；外部 HTML 仍转 Markdown；纯文本启发式解析。
  *
  * 实现要点：
  *   - prosemirror-view@1.42 **没有** `handleCopy`/`handleCut` 插件 prop——其 copy/cut
  *     始终用 `serializeForClipboard` 写渲染态 `text/plain`。故复制改写在编辑区 DOM
- *     的 **捕获阶段** 监听 `copy`/`cut`：先于 PM 的冒泡处理器写入 `text/plain`=Markdown
+ *     的 **捕获阶段** 监听 `copy`/`cut`：先于 PM 的冒泡处理器写入双格式
  *     并 `stopImmediatePropagation`，避免 PM 覆盖；cut 额外复刻 `deleteSelection`。
  *   - 粘贴走真正的 `handlePaste` prop（PM 在默认解析前先询问）。
  *   - 图片粘贴优先：剪贴板带文件（`files.length>0`）时直接返回 false，交
@@ -18,19 +18,25 @@
  *   - 序列化/解析复用 Milkdown ctx 的 serializer/parser（经 `@milkdown/utils` 的
  *     `getMarkdown` / `insert` 宏），与编辑器同源、无格式丢失。
  *
- * 纯逻辑 `routeClipboardPaste`（见 `paste.ts`）headless 可测；本文件的 DOM/ctx
+ * 纯逻辑 `resolveClipboardPaste`（见 `paste.ts`）headless 可测；本文件的 DOM/ctx
  * 装配属编辑器集成面（同既有插件，仅断言工厂形态）。
  */
 
 import { $prose, getMarkdown, insert } from '@milkdown/utils';
 import type { Ctx } from '@milkdown/ctx';
+import { DOMSerializer } from '@milkdown/prose/model';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { CellSelection } from '@milkdown/prose/tables';
 import type { EditorView } from '@milkdown/prose/view';
 
 import { clipboardHasImage } from '../../asset/clipboard.js';
 import { convertHtmlToMarkdown } from '../html-to-markdown.js';
-import { routeClipboardPaste } from '../paste.js';
+import {
+  LIGHTINK_MARKDOWN_MIME,
+  readClipboardMime,
+  resolveClipboardPaste,
+  wrapLightInkClipboardHtml,
+} from '../paste.js';
 import {
   encodeMatrixClipboardText,
   matrixToHtmlTable,
@@ -42,25 +48,41 @@ import {
 const PLUGIN_KEY = new PluginKey('lightink-clipboard-md');
 
 /**
- * 安全读取剪贴板某 MIME：部分宿主对自定义/未知 MIME 调 getData 会抛错或返回非串，
- * 统一兜底为空串。`application/x-lightink-table` 用于识别 LightInk 内部表格复制载荷
- * （含 text/html 的 HTML 表格），此时须交 tableOpsPlugin 接管，不走 HTML→MD 转换。
+ * 构造复制剪贴板数据：`text/plain` 与自定义 MIME 为 Markdown 源；
+ * 有渲染 HTML 时写入带 LightInk 标记的 `text/html`。
  */
-function readClipboardMime(dt: DataTransfer | null | undefined, mime: string): string {
-  if (dt === null || dt === undefined) return '';
-  try {
-    return dt.getData(mime) ?? '';
-  } catch {
-    return '';
+export function markdownClipboardData(
+  markdown: string,
+  html = '',
+): {
+  'text/plain': string;
+  'text/html'?: string;
+  'application/x-lightink-markdown': string;
+} {
+  const payload: {
+    'text/plain': string;
+    'text/html'?: string;
+    'application/x-lightink-markdown': string;
+  } = {
+    'text/plain': markdown,
+    [LIGHTINK_MARKDOWN_MIME]: markdown,
+  };
+  const wrapped = wrapLightInkClipboardHtml(html);
+  if (wrapped !== '') {
+    payload['text/html'] = wrapped;
   }
+  return payload;
 }
 
-/**
- * 构造复制剪贴板数据：`text/plain` 即 Markdown 源（R9 outcome#1 的纯逻辑契约）。
- * 与 `text/html` 解耦——内部粘贴回 LightInk 时由 `handlePaste` 重新解析 `text/plain`。
- */
-export function markdownClipboardData(markdown: string): { 'text/plain': string } {
-  return { 'text/plain': markdown };
+/** Schema-based HTML for the current selection (not nodeView chrome). */
+export function selectionToClipboardHtml(view: EditorView): string {
+  if (typeof document === 'undefined') return '';
+  const slice = view.state.selection.content();
+  if (slice.content.size === 0) return '';
+  const serializer = DOMSerializer.fromSchema(view.state.schema);
+  const wrap = document.createElement('div');
+  wrap.appendChild(serializer.serializeFragment(slice.content));
+  return wrap.innerHTML;
 }
 
 export const clipboardMdPlugin = $prose((ctx: Ctx) => {
@@ -82,12 +104,24 @@ export const clipboardMdPlugin = $prose((ctx: Ctx) => {
         if (view.state.selection instanceof CellSelection) {
           return false;
         }
-        // R8 富文本粘贴：剪贴板含 text/html（飞书/钉钉/浏览器/Word）且非 LightInk
-        // 内部表格载荷时，优先 HTML→Markdown 结构化插入；转换空/解析失败则回退到
-        // 下方既有纯文本路径，保证不丢内容、不崩溃。
-        const html = readClipboardMime(dt, 'text/html');
-        if (html !== '' && readClipboardMime(dt, 'application/x-lightink-table') === '') {
-          const md = convertHtmlToMarkdown(html);
+        if (readClipboardMime(dt, 'application/x-lightink-table') !== '') {
+          return false;
+        }
+        const action = resolveClipboardPaste({
+          html: readClipboardMime(dt, 'text/html'),
+          text: readClipboardMime(dt, 'text/plain'),
+          ownMarkdown: readClipboardMime(dt, LIGHTINK_MARKDOWN_MIME),
+        });
+        if (action.kind === 'markdown-source') {
+          try {
+            insert(action.text)(ctx);
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        if (action.kind === 'html') {
+          const md = convertHtmlToMarkdown(action.html);
           if (md !== '') {
             try {
               insert(md)(ctx);
@@ -97,18 +131,7 @@ export const clipboardMdPlugin = $prose((ctx: Ctx) => {
             }
           }
         }
-        // 既有路径：纯文本看起来像 Markdown 源 → 解析替换选区；纯文本交默认。
-        const text = dt?.getData('text/plain') ?? '';
-        if (routeClipboardPaste(text) !== 'markdown') {
-          return false;
-        }
-        try {
-          insert(text)(ctx);
-          return true;
-        } catch {
-          // 解析失败（parser 异常）→ 交默认粘贴，保证不丢内容。
-          return false;
-        }
+        return false;
       },
     },
     view(editorView: EditorView) {
@@ -169,8 +192,26 @@ export const clipboardMdPlugin = $prose((ctx: Ctx) => {
         if (markdown === '') {
           return false;
         }
-        const payload = markdownClipboardData(markdown);
+        let html = '';
+        try {
+          html = selectionToClipboardHtml(editorView);
+        } catch {
+          html = '';
+        }
+        const payload = markdownClipboardData(markdown, html);
         event.clipboardData.setData('text/plain', payload['text/plain']);
+        if (payload['text/html'] !== undefined && payload['text/html'] !== '') {
+          try {
+            event.clipboardData.setData('text/html', payload['text/html']);
+          } catch {
+            // Some environments only allow text/plain.
+          }
+        }
+        try {
+          event.clipboardData.setData(LIGHTINK_MARKDOWN_MIME, payload[LIGHTINK_MARKDOWN_MIME]);
+        } catch {
+          /* ignore */
+        }
         // 阻止 PM 冒泡阶段的默认复制（会用渲染态文本覆盖 text/plain）。
         event.preventDefault();
         event.stopImmediatePropagation();

@@ -17,6 +17,23 @@ import type { ParsedDocument } from './types.js';
 
 export type PasteKind = 'markdown' | 'plain';
 
+/** Custom MIME for LightInk Markdown source (same-app round-trip). */
+export const LIGHTINK_MARKDOWN_MIME = 'application/x-lightink-markdown' as const;
+
+const LIGHTINK_HTML_ATTR = /data-lightink-clipboard\s*=\s*(['"]?)markdown\1/i;
+const LIGHTINK_HTML_COMMENT = /<!--\s*lightink-clipboard:markdown\s*-->/i;
+
+export type ClipboardPasteAction =
+  | { readonly kind: 'markdown-source'; readonly text: string }
+  | { readonly kind: 'html'; readonly html: string }
+  | { readonly kind: 'plain' };
+
+export interface ClipboardPasteInput {
+  readonly html: string;
+  readonly text: string;
+  readonly ownMarkdown?: string;
+}
+
 /** Markers used by the markdown detector. Order matters for readability only. */
 const HEADING_MARKER = /(^|\n)#{1,6}\s+\S/;
 const BULLET_MARKER = /(^|\n)\s*[-*+]\s+\S/;
@@ -86,6 +103,55 @@ export function buildPastePayload(text: string): PastePayload {
  */
 export function routeClipboardPaste(text: string): PasteKind {
   return buildPastePayload(text).kind;
+}
+
+/**
+ * 安全读取剪贴板某 MIME：部分宿主对自定义/未知 MIME 调 getData 会抛错或返回非串。
+ */
+export function readClipboardMime(dt: DataTransfer | null | undefined, mime: string): string {
+  if (dt === null || dt === undefined) return '';
+  try {
+    return dt.getData(mime) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** True when HTML was written by LightInk dual-format copy. */
+export function isLightInkClipboardHtml(html: string): boolean {
+  if (typeof html !== 'string' || html.length === 0) return false;
+  return LIGHTINK_HTML_ATTR.test(html) || LIGHTINK_HTML_COMMENT.test(html);
+}
+
+/** Wrap rendered selection HTML with a LightInk marker Word/Feishu will not emit. */
+export function wrapLightInkClipboardHtml(innerHtml: string): string {
+  if (typeof innerHtml !== 'string' || innerHtml === '') return '';
+  if (isLightInkClipboardHtml(innerHtml)) return innerHtml;
+  return `<!--lightink-clipboard:markdown--><div data-lightink-clipboard="markdown">${innerHtml}</div>`;
+}
+
+/**
+ * Dual-format paste router: LightInk copies prefer Markdown source; external
+ * HTML still converts; plain-only markdown uses the existing heuristic.
+ */
+export function resolveClipboardPaste(input: ClipboardPasteInput): ClipboardPasteAction {
+  const html = typeof input.html === 'string' ? input.html : '';
+  const text = typeof input.text === 'string' ? input.text : '';
+  const own = typeof input.ownMarkdown === 'string' ? input.ownMarkdown : '';
+  const fromSelf = own !== '' || isLightInkClipboardHtml(html);
+  if (fromSelf) {
+    const source = own !== '' ? own : text;
+    if (source !== '') {
+      return { kind: 'markdown-source', text: source };
+    }
+  }
+  if (html !== '') {
+    return { kind: 'html', html };
+  }
+  if (routeClipboardPaste(text) === 'markdown') {
+    return { kind: 'markdown-source', text };
+  }
+  return { kind: 'plain' };
 }
 
 /**

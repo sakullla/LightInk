@@ -18,6 +18,11 @@
 
 import { ensureHighlightLanguage, highlightCode } from './plugins/code-highlight.js';
 import { convertHtmlToMarkdown } from './html-to-markdown.js';
+import {
+  LIGHTINK_MARKDOWN_MIME,
+  readClipboardMime,
+  resolveClipboardPaste,
+} from './paste.js';
 
 /** 编辑模式。 */
 export type EditorMode = 'wysiwyg' | 'source';
@@ -330,14 +335,32 @@ export class SourceView {
     textarea.addEventListener('keyup', onCaretMove);
     textarea.addEventListener('click', onCaretMove);
     textarea.addEventListener('wheel', onWheel, { passive: false });
-    // R8：源码模式粘贴富文本（text/html）同样转结构化 Markdown 插入，不插入原始
-    // HTML 标签；无 text/html 或转换失败则回落原生纯文本粘贴，保证不丢内容。
+    // 源码模式粘贴：本应用复制优先插入 Markdown 源；外部 text/html 转 Markdown，
+    // 不插入原始 HTML 标签；无可用载荷或转换失败则回落原生纯文本粘贴。
     const onPaste = (event: ClipboardEvent): void => {
       const cd = event.clipboardData;
       if (cd === null) return;
-      const pastedHtml = cd.getData('text/html');
-      if (pastedHtml === '') return;
-      const md = convertHtmlToMarkdown(pastedHtml);
+      const action = resolveClipboardPaste({
+        html: readClipboardMime(cd, 'text/html'),
+        text: readClipboardMime(cd, 'text/plain'),
+        ownMarkdown: readClipboardMime(cd, LIGHTINK_MARKDOWN_MIME),
+      });
+      let md = '';
+      if (action.kind === 'markdown-source') {
+        // text/plain-only markdown can use native textarea paste; intercept when
+        // HTML or LightInk MIME is present so we do not HTML-convert our own copy.
+        if (
+          readClipboardMime(cd, 'text/html') === '' &&
+          readClipboardMime(cd, LIGHTINK_MARKDOWN_MIME) === ''
+        ) {
+          return;
+        }
+        md = action.text;
+      } else if (action.kind === 'html') {
+        md = convertHtmlToMarkdown(action.html);
+      } else {
+        return;
+      }
       if (md === '') return; // 回落原生纯文本粘贴
       event.preventDefault();
       const ta2 = this.textarea;
