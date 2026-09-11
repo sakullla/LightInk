@@ -3,17 +3,26 @@
  *
  * 覆盖：takePendingPath 的取出语义（路径 / 空槽 / 空串 / 桥缺失 / 抛错）、
  * installExternalOpenBridge 的通知处理器安装与冷启动 drain 返回值、
- * 运行期通知只消费一次。Kotlin 侧以注入的普通对象模拟（契约见
+ * 运行期通知只消费一次、复制失败标记到达既有 reportOpenFailure。
+ * Kotlin 侧以注入的普通对象模拟（契约见
  * src-tauri/gen/android/.../MainActivity.kt「外部打开桥」）。
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  EXTERNAL_OPEN_FAILURE_PREFIX,
+  externalOpenFailureReportPath,
   installExternalOpenBridge,
+  isExternalOpenFailureToken,
   takePendingExternalOpenPath,
   type ExternalOpenBridgeHost,
 } from '../android-view-open.js';
+import {
+  handleExternalOpen,
+  planColdStartSurface,
+  type ExternalOpenDeps,
+} from '../../ui/external-open.js';
 
 function hostWithPending(paths: Array<string | null>): ExternalOpenBridgeHost {
   const queue = [...paths];
@@ -93,5 +102,94 @@ describe('installExternalOpenBridge', () => {
     expect(installExternalOpenBridge(onOpen, host)).toBeNull();
     host.__lightinkExternalOpenNotify?.();
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('drains a Kotlin copy-failure token on cold start without treating it as a path', () => {
+    const token = `${EXTERNAL_OPEN_FAILURE_PREFIX}Failed to copy external document`;
+    const host = hostWithPending([token]);
+    const onOpen = vi.fn();
+    expect(installExternalOpenBridge(onOpen, host)).toBe(token);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(isExternalOpenFailureToken(token)).toBe(true);
+  });
+
+  it('delivers a runtime copy-failure token through notify exactly once', () => {
+    const host = hostWithPending([]);
+    const onOpen = vi.fn();
+    expect(installExternalOpenBridge(onOpen, host)).toBeNull();
+    const token = `${EXTERNAL_OPEN_FAILURE_PREFIX}Failed to open external document stream`;
+    (host.LightInkExternalOpen as { takePendingPath(): string | null }).takePendingPath = (() => {
+      let taken = false;
+      return () => {
+        if (taken) {
+          return null;
+        }
+        taken = true;
+        return token;
+      };
+    })();
+    host.__lightinkExternalOpenNotify?.();
+    host.__lightinkExternalOpenNotify?.();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(token);
+  });
+});
+
+describe('external open failure tokens', () => {
+  it('keeps the Kotlin prefix aligned and never looks like a reader or markdown path', () => {
+    expect(EXTERNAL_OPEN_FAILURE_PREFIX).toBe('lightink-external-open-error:');
+    expect(isExternalOpenFailureToken('/cache/view-cache/1/book.cbz')).toBe(false);
+    expect(isExternalOpenFailureToken(`${EXTERNAL_OPEN_FAILURE_PREFIX}book.cbz`)).toBe(true);
+    expect(externalOpenFailureReportPath(`${EXTERNAL_OPEN_FAILURE_PREFIX}book.cbz`)).toBe(
+      'book_cbz',
+    );
+    expect(externalOpenFailureReportPath(EXTERNAL_OPEN_FAILURE_PREFIX)).toBe('external-open');
+  });
+
+  it('plans a copy-failure cold start as shelf so the token is not opened as Markdown', () => {
+    const token = `${EXTERNAL_OPEN_FAILURE_PREFIX}Failed to copy`;
+    const isReaderPath = (path: string): boolean => /\.(cbz|epub)$/i.test(path);
+    expect(planColdStartSurface(token, { isReaderPath, immersive: true })).toBe('shelf');
+    expect(planColdStartSurface(token, { isReaderPath, immersive: false })).toBe('shelf');
+  });
+
+  function failureDeps(): {
+    deps: ExternalOpenDeps;
+    openPath: ReturnType<typeof vi.fn>;
+    reportOpen: ReturnType<typeof vi.fn>;
+  } {
+    const openPath = vi.fn(async () => null);
+    const reportOpen = vi.fn();
+    const deps: ExternalOpenDeps = {
+      openPath,
+      workspace: {
+        openBook: vi.fn(),
+        enterReader: vi.fn(),
+        enterEditor: vi.fn(),
+      },
+      notify: vi.fn(),
+      reportOpenFailure: reportOpen,
+      restoreWindow: vi.fn(async () => true),
+    };
+    return { deps, openPath, reportOpen };
+  }
+
+  it('reports a cold-start copy failure through the existing error UI and does not open as Markdown', async () => {
+    const { deps, openPath, reportOpen } = failureDeps();
+    const token = `${EXTERNAL_OPEN_FAILURE_PREFIX}Failed to copy external document`;
+    await expect(handleExternalOpen(token, 'cold-start', deps)).resolves.toBeNull();
+    expect(openPath).not.toHaveBeenCalled();
+    expect(deps.restoreWindow).not.toHaveBeenCalled();
+    expect(reportOpen).toHaveBeenCalledWith('Failed to copy external document');
+  });
+
+  it('reports a running-instance copy failure after restore, without opening a tab', async () => {
+    const { deps, openPath, reportOpen } = failureDeps();
+    const token = `${EXTERNAL_OPEN_FAILURE_PREFIX}Unrecognized external file type`;
+    await expect(handleExternalOpen(token, 'running', deps)).resolves.toBeNull();
+    expect(deps.restoreWindow).toHaveBeenCalledOnce();
+    expect(openPath).not.toHaveBeenCalled();
+    expect(reportOpen).toHaveBeenCalledWith('Unrecognized external file type');
+    expect(deps.notify).not.toHaveBeenCalled();
   });
 });

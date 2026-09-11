@@ -82,6 +82,10 @@ import org.json.JSONObject
  *   通知 `window.__lightinkExternalOpenNotify()`；前端经
  *   `window.LightInkExternalOpen.takePendingPath()`（取出即清空）拉取。
  *   前端未就绪时通知丢失无妨——bootstrap 时会主动 drain 一次。
+ * - 复制失败不得吞掉：写入 EXTERNAL_OPEN_FAILURE_PREFIX + 消息（与
+ *   src/file/android-view-open.ts 逐字相同）并同样 notify；JS 走既有
+ *   reportOpenFailure / showAppAlert。无扩展名按 MIME，octet-stream/未知
+ *   再按 ZIP/RAR/7z 魔数补漫画后缀；仍无法识别则失败标记，不当 Markdown。
  */
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
@@ -179,12 +183,11 @@ class MainActivity : TauriActivity() {
     val mimeType = intent.type
     safCopyExecutor.execute {
       try {
-        val path = copyToViewCache(uri, mimeType)
-        pendingExternalOpenPath.set(path)
-        runOnUiThread { notifyExternalOpen() }
-      } catch (_: Exception) {
-        // 流打开/复制失败（源应用撤权、磁盘满等）：无法读取即无书可开；
-        // 冷启动此刻多半没有前端上下文可提示，静默放弃。
+        publishExternalOpen(copyToViewCache(uri, mimeType))
+      } catch (ex: Exception) {
+        publishExternalOpen(
+          EXTERNAL_OPEN_FAILURE_PREFIX + (ex.message ?: "Failed to copy external document"),
+        )
       }
     }
   }
@@ -286,7 +289,8 @@ class MainActivity : TauriActivity() {
 
   /**
    * JS 可见的外部打开桥入口。取出即清空，保证一次打开只消费一次；
-   * 无待打开文件返回 null（JS 侧收到 null）。
+   * 无待打开文件返回 null（JS 侧收到 null）。槽内也可能是
+   * EXTERNAL_OPEN_FAILURE_PREFIX 失败标记。
    */
   private inner class ExternalOpenJsInterface {
     @JavascriptInterface
@@ -424,37 +428,27 @@ class MainActivity : TauriActivity() {
     return target.absolutePath
   }
 
+  /** 写入单槽并提醒前端拉取（成功路径或失败标记；WebView 未就绪时仅落槽）。 */
+  private fun publishExternalOpen(value: String) {
+    pendingExternalOpenPath.set(value)
+    runOnUiThread { notifyExternalOpen() }
+  }
+
   /**
    * 外部打开（VIEW intent）：把 content:// 流复制到 cacheDir/view-cache/<序号>/
    * 下，返回真实文件路径。与 copyToImportCache 同理由分子目录、保留干净显示名
    * （reader 标签标题/书架标题取自文件名）；序号仅在单线程 executor 上自增。
+   * 无扩展名先按 intent MIME 补后缀；octet-stream/未知再读已复制文件的
+   * ZIP/RAR/7z 魔数改名。仍无法识别则抛错，由 handleViewIntent 写成失败标记。
    */
   private fun copyToViewCache(uri: Uri, mimeType: String?): String {
     val rawName = sanitizeFileName(queryDisplayName(uri))
       ?: sanitizeFileName(uri.lastPathSegment?.substringAfterLast('/'))
       ?: "external-open"
-    // 前端按扩展名路由（reader/编辑器）；显示名没有扩展名时按 intent MIME 兜底，
-    // 否则打开会以「不支持的文件」失败。application/zip 视作 cbz（本应用只在
-    // 漫画语境下声明 zip 关联）。
-    val displayName = if (rawName.contains('.')) {
-      rawName
-    } else {
-      val ext = when (mimeType?.lowercase()) {
-        "application/pdf" -> "pdf"
-        "application/epub+zip" -> "epub"
-        "application/x-mobipocket-ebook" -> "mobi"
-        "application/x-fictionbook+xml", "text/fb2+xml" -> "fb2"
-        "application/vnd.comicbook+zip", "application/x-cbz", "application/zip" -> "cbz"
-        "application/vnd.comicbook-rar", "application/x-cbr" -> "cbr"
-        "application/x-cb7" -> "cb7"
-        "application/vnd.rar", "application/x-rar-compressed" -> "rar"
-        "application/x-7z-compressed" -> "7z"
-        "text/plain" -> "txt"
-        "text/markdown" -> "md"
-        else -> null
-      }
-      if (ext != null) "$rawName.$ext" else rawName
-    }
+    // 前端按扩展名路由（reader/编辑器）；显示名没有扩展名时按 intent MIME 兜底。
+    // application/zip 视作 cbz（本应用只在漫画语境下声明 zip 关联）。
+    val mimeExt = if (rawName.contains('.')) null else extensionFromMime(mimeType)
+    val displayName = if (mimeExt != null) "$rawName.$mimeExt" else rawName
     externalOpenCounter += 1
     val dir = File(File(cacheDir, "view-cache"), externalOpenCounter.toString())
     if (!dir.exists() && !dir.mkdirs()) {
@@ -464,7 +458,80 @@ class MainActivity : TauriActivity() {
     contentResolver.openInputStream(uri)?.use { input ->
       target.outputStream().use { output -> input.copyTo(output) }
     } ?: throw java.io.IOException("Failed to open external document stream")
-    return target.absolutePath
+    if (displayName.contains('.')) {
+      return target.absolutePath
+    }
+    val sniffed = sniffArchiveExtension(target)
+      ?: throw java.io.IOException("Unrecognized external file type")
+    val renamed = File(dir, "$rawName.$sniffed")
+    if (!target.renameTo(renamed)) {
+      renamed.outputStream().use { output ->
+        target.inputStream().use { input -> input.copyTo(output) }
+      }
+      target.delete()
+    }
+    return renamed.absolutePath
+  }
+
+  /** 无扩展名时的 intent MIME → 前端路由后缀；octet-stream/未知返回 null 以便魔数嗅探。 */
+  private fun extensionFromMime(mimeType: String?): String? {
+    return when (mimeType?.lowercase()) {
+      "application/pdf" -> "pdf"
+      "application/epub+zip" -> "epub"
+      "application/x-mobipocket-ebook" -> "mobi"
+      "application/x-fictionbook+xml", "text/fb2+xml" -> "fb2"
+      "application/vnd.comicbook+zip", "application/x-cbz", "application/zip" -> "cbz"
+      "application/vnd.comicbook-rar", "application/x-cbr" -> "cbr"
+      "application/x-cb7" -> "cb7"
+      "application/vnd.rar", "application/x-rar-compressed" -> "rar"
+      "application/x-7z-compressed" -> "7z"
+      "text/plain" -> "txt"
+      "text/markdown" -> "md"
+      else -> null
+    }
+  }
+
+  /** ZIP → cbz、RAR → cbr、7z → cb7；本应用只在漫画语境下关联这些归档。 */
+  private fun sniffArchiveExtension(file: File): String? {
+    val header = ByteArray(8)
+    val read = file.inputStream().use { it.read(header) }
+    if (read < 4) {
+      return null
+    }
+    if (header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()) {
+      val third = header[2]
+      val fourth = header[3]
+      if (
+        (third == 0x03.toByte() && fourth == 0x04.toByte()) ||
+        (third == 0x05.toByte() && fourth == 0x06.toByte()) ||
+        (third == 0x07.toByte() && fourth == 0x08.toByte())
+      ) {
+        return "cbz"
+      }
+    }
+    if (
+      read >= 6 &&
+      header[0] == 0x52.toByte() &&
+      header[1] == 0x61.toByte() &&
+      header[2] == 0x72.toByte() &&
+      header[3] == 0x21.toByte() &&
+      header[4] == 0x1A.toByte() &&
+      header[5] == 0x07.toByte()
+    ) {
+      return "cbr"
+    }
+    if (
+      read >= 6 &&
+      header[0] == 0x37.toByte() &&
+      header[1] == 0x7A.toByte() &&
+      header[2] == 0xBC.toByte() &&
+      header[3] == 0xAF.toByte() &&
+      header[4] == 0x27.toByte() &&
+      header[5] == 0x1C.toByte()
+    ) {
+      return "cb7"
+    }
+    return null
   }
 
   private fun queryDisplayName(uri: Uri): String? {
@@ -492,5 +559,8 @@ class MainActivity : TauriActivity() {
     // 同步表达式：桥函数缺失 → false；JS 抛错 → 回调结果为 "null"，同样按未消费处理。
     private const val JS_BACK_BRIDGE =
       "(window.__lightinkAndroidBackPress ? window.__lightinkAndroidBackPress() === true : false)"
+
+    // 与 src/file/android-view-open.ts EXTERNAL_OPEN_FAILURE_PREFIX 逐字相同。
+    private const val EXTERNAL_OPEN_FAILURE_PREFIX = "lightink-external-open-error:"
   }
 }

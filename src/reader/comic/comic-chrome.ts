@@ -374,7 +374,16 @@ export function setChromeVisible(session: ComicSession, visible: boolean): void 
   if (changed) notifyComicSystemBars(session, visible);
 }
 
+const chromeIdleArmed = new WeakSet<ComicSession>();
+
+/** 首页 loadPage 完成后再允许 2800ms 空闲隐藏；此前保持 chrome 可感知。 */
+export function armComicChromeIdle(session: ComicSession): void {
+  chromeIdleArmed.add(session);
+  scheduleChromeHide(session);
+}
+
 export function scheduleChromeHide(session: ComicSession): void {
+  if (!chromeIdleArmed.has(session)) return;
   if (session.chromeTimer !== null) clearTimeout(session.chromeTimer);
   session.chromeTimer = setTimeout(() => {
     if (!session.destroyed && !session.chrome.contains(document.activeElement)) {

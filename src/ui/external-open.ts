@@ -8,6 +8,10 @@
  * and uses the existing error dialog on failure.
  */
 
+import {
+  externalOpenFailureReportPath,
+  isExternalOpenFailureToken,
+} from '../file/android-view-open.js';
 import { displayNameOfPath } from '../file/path-ext.js';
 
 export type ExternalOpenSource = 'running' | 'cold-start';
@@ -226,7 +230,11 @@ export function planColdStartSurface(
   startupPath: string | null,
   options: { readonly isReaderPath: (path: string) => boolean; readonly immersive: boolean },
 ): ColdStartSurfacePlan {
-  if (startupPath === null || options.isReaderPath(startupPath)) {
+  if (
+    startupPath === null ||
+    isExternalOpenFailureToken(startupPath) ||
+    options.isReaderPath(startupPath)
+  ) {
     return 'shelf';
   }
   return options.immersive ? 'open-first' : 'editor';
@@ -266,6 +274,11 @@ export async function handleExternalOpen(
     } catch {
       restored = false;
     }
+  }
+
+  if (isExternalOpenFailureToken(path)) {
+    deps.reportOpenFailure(externalOpenFailureReportPath(path));
+    return null;
   }
 
   let tab: ExternalOpenedTab | null;

@@ -62,10 +62,10 @@ import {
   stripCacheCenters,
 } from '../comic/comic-cache.js';
 import {
+  armComicChromeIdle,
   buildComicChrome,
   notifyComicSystemBars,
   revealChrome,
-  scheduleChromeHide,
   setChromeVisible,
   syncComicBookmarkButton,
   updateToolbar,
@@ -692,7 +692,6 @@ export async function renderCbzInto(
     container.addEventListener('pointercancel', handlers.onPointerUp);
     session.chrome.addEventListener('pointerenter', onChromePointerEnter);
     container.addEventListener('wheel', handlers.onWheel, { passive: false });
-    scheduleChromeHide(session);
 
     session.scroller.addEventListener('scroll', handlers.onScrollEvent, { passive: true });
     observeComicStripSlots(session);
@@ -713,6 +712,7 @@ export async function renderCbzInto(
           )
         : stripCacheCenters(session.currentPage - 1, session.images.length);
     await Promise.all(firstPages.map((index) => loadPage(session, index)));
+    armComicChromeIdle(session);
     const prefetchTimer = setTimeout(() => {
       if (session.destroyed) return;
       session.prefetchNeighbors = true;
