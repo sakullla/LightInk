@@ -90,6 +90,11 @@ export interface MountOptions {
    */
   readonly assetsDir?: string;
   /**
+   * Initial ProseMirror editable flag. Default true (desktop). Immersive
+   * Markdown reading mounts false and later calls `setEditable`.
+   */
+  readonly editable?: boolean;
+  /**
    * R14：Ctrl/Cmd+点击文档内链接 mark 时回调（由 main.ts 分类后跳转：外链→浏览器、
    * 本地 .md→新标签、其他本地文件→系统默认程序）。
    */
@@ -195,6 +200,13 @@ export interface EditorInstance {
    * (immersive shell R4 empty/new-tab path). No-op if the editor is not ready.
    */
   focus(): void;
+  /**
+   * Switch ProseMirror `editable`. Reading false (`contenteditable=false`,
+   * no keyboard, document commands no-op); editing true. Desktop stays true.
+   */
+  setEditable(editable: boolean): void;
+  /** Current `setEditable` flag. Unready editors report the last requested value. */
+  isEditable(): boolean;
   /**
    * 全选当前文档（渐进式：表格内逐层 cell→table→doc，表外 文本块→整篇），与
    * Mod-a 行为一致。供「编辑/右键 全选」菜单（R10）使用；未就绪时为空操作。

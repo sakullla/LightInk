@@ -72,6 +72,7 @@ export function toggleTaskCheckedTr(
 
 /** Dispatch toggle; returns whether a transaction was applied. */
 export function toggleTaskChecked(view: EditorView, pos: number): boolean {
+  if (view.editable === false) return false;
   const tr = toggleTaskCheckedTr(view.state, pos);
   if (tr === null) return false;
   view.dispatch(tr);

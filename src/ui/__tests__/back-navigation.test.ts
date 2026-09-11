@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ANDROID_BACK_BRIDGE_GLOBAL,
+  decideLayeredEscapeLeftover,
   dispatchLayeredBackPress,
   registerAndroidBackNavigation,
 } from '../back-navigation.js';
@@ -30,15 +31,28 @@ function installLayeredChain(workspace: {
   mode: 'reader' | 'shelf';
   hasOpenBook: boolean;
   returnToShelf: () => void;
+  markdownEditing?: boolean;
+  finishMarkdownEdit?: () => void;
+  chromeHandleEscape?: () => boolean;
 }): void {
   onDocumentKeyDown((event) => {
     if (event.key !== 'Escape' || event.defaultPrevented) {
       return;
     }
-    if (workspace.mode !== 'reader' || !workspace.hasOpenBook) {
+    const action = decideLayeredEscapeLeftover({
+      chromeConsumed: workspace.chromeHandleEscape?.() === true,
+      markdownEditing: workspace.markdownEditing === true,
+      workspaceMode: workspace.mode,
+      hasOpenBook: workspace.hasOpenBook,
+    });
+    if (action === 'none') {
       return;
     }
-    workspace.returnToShelf();
+    if (action === 'finish-markdown-edit') {
+      workspace.finishMarkdownEdit?.();
+    } else if (action === 'return-to-shelf') {
+      workspace.returnToShelf();
+    }
     event.preventDefault();
   });
 }
@@ -294,3 +308,90 @@ describe('registerAndroidBackNavigation', () => {
     ).toBeUndefined();
   });
 });
+
+describe('decideLayeredEscapeLeftover Markdown 编辑态', () => {
+  it('chrome 已消费时不退出编辑也不回书架', () => {
+    expect(
+      decideLayeredEscapeLeftover({
+        chromeConsumed: true,
+        markdownEditing: true,
+        workspaceMode: 'reader',
+        hasOpenBook: true,
+      }),
+    ).toBe('chrome');
+  });
+
+  it('编辑态 leftover 先保存退出，不 returnToShelf', () => {
+    expect(
+      decideLayeredEscapeLeftover({
+        chromeConsumed: false,
+        markdownEditing: true,
+        workspaceMode: 'reader',
+        hasOpenBook: true,
+      }),
+    ).toBe('finish-markdown-edit');
+  });
+
+  it('只读且已打开书时 leftover 仍回书架', () => {
+    expect(
+      decideLayeredEscapeLeftover({
+        chromeConsumed: false,
+        markdownEditing: false,
+        workspaceMode: 'reader',
+        hasOpenBook: true,
+      }),
+    ).toBe('return-to-shelf');
+  });
+});
+
+describe('Markdown 编辑态 leftover Escape / 系统返回', () => {
+  it('编辑态 leftover 调用完成保存，不触达 returnToShelf', () => {
+    const returnToShelf = vi.fn();
+    const finishMarkdownEdit = vi.fn();
+    installLayeredChain({
+      mode: 'reader',
+      hasOpenBook: true,
+      returnToShelf,
+      markdownEditing: true,
+      finishMarkdownEdit,
+    });
+
+    expect(dispatchLayeredBackPress(document)).toBe(true);
+    expect(finishMarkdownEdit).toHaveBeenCalledTimes(1);
+    expect(returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('chrome handleEscape 消费后不保存退出', () => {
+    const returnToShelf = vi.fn();
+    const finishMarkdownEdit = vi.fn();
+    installLayeredChain({
+      mode: 'reader',
+      hasOpenBook: true,
+      returnToShelf,
+      markdownEditing: true,
+      finishMarkdownEdit,
+      chromeHandleEscape: () => true,
+    });
+
+    expect(dispatchLayeredBackPress(document)).toBe(true);
+    expect(finishMarkdownEdit).not.toHaveBeenCalled();
+    expect(returnToShelf).not.toHaveBeenCalled();
+  });
+
+  it('只读打开书 leftover 仍回书架', () => {
+    const returnToShelf = vi.fn();
+    const finishMarkdownEdit = vi.fn();
+    installLayeredChain({
+      mode: 'reader',
+      hasOpenBook: true,
+      returnToShelf,
+      markdownEditing: false,
+      finishMarkdownEdit,
+    });
+
+    expect(dispatchLayeredBackPress(document)).toBe(true);
+    expect(finishMarkdownEdit).not.toHaveBeenCalled();
+    expect(returnToShelf).toHaveBeenCalledTimes(1);
+  });
+});
+

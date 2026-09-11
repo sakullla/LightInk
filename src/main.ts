@@ -180,7 +180,10 @@ import {
   isTouchPrimary,
 } from './ui/mobile-platform.js';
 import { bindSafeAreaBridge } from './ui/safe-area.js';
-import { registerAndroidBackNavigation } from './ui/back-navigation.js';
+import {
+  decideLayeredEscapeLeftover,
+  registerAndroidBackNavigation,
+} from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
 import {
   ShortcutRegistry,
@@ -501,6 +504,9 @@ function isImmersiveMarkdownPlatform(): boolean {
 
 let markdownReaderChrome: ReaderChrome | null = null;
 let markdownReaderChromeHost: HTMLElement | null = null;
+/** Immersive Markdown in-place edit (same Milkdown instance; not enterEditor). */
+let markdownEditing = false;
+let markdownEditSaving = false;
 // Cold start is the reader cover wall, not the Markdown editor.
 workspace.enterReaderHome();
 let applyingWorkspaceSurfaces = false;
@@ -789,39 +795,52 @@ function markdownOpenAsReader(): boolean {
   );
 }
 
-function disposeMarkdownReaderChrome(): void {
-  if (markdownReaderChromeHost !== null) {
-    markdownReaderChromeHost.removeEventListener('click', onMarkdownReaderChromeClick);
-    markdownReaderChromeHost = null;
-  }
-  markdownReaderChrome?.destroy();
-  markdownReaderChrome = null;
+function applyMarkdownEditable(editable: boolean): void {
+  activeMarkdownTab()?.editor.setEditable(editable);
 }
 
-function onMarkdownReaderChromeClick(event: Event): void {
-  if (markdownReaderChrome === null || event.defaultPrevented) {
+function enterMarkdownEdit(): void {
+  if (!markdownOpenAsReader()) {
     return;
   }
-  const target = event.target;
-  if (target instanceof Node) {
-    if (
-      markdownReaderChrome.element.contains(target) ||
-      markdownReaderChrome.footer.contains(target) ||
-      markdownReaderChrome.whisper.contains(target)
-    ) {
-      return;
+  markdownEditing = true;
+  applyMarkdownEditable(true);
+  activeMarkdownTab()?.editor.focus();
+  markdownReaderChrome?.syncMarkdownEdit();
+}
+
+async function finishMarkdownEdit(): Promise<boolean> {
+  if (!markdownEditing) {
+    return true;
+  }
+  if (markdownEditSaving) {
+    return false;
+  }
+  markdownEditSaving = true;
+  try {
+    commitActiveSourceMode();
+    const ok = await manager.saveActiveTab();
+    if (ok) {
+      markdownEditing = false;
+      applyMarkdownEditable(false);
+      markdownReaderChrome?.syncMarkdownEdit();
     }
+    return ok;
+  } catch {
+    return false;
+  } finally {
+    markdownEditSaving = false;
   }
-  if (target instanceof Element && typeof target.closest === 'function') {
-    if (target.closest('a, button, input, textarea, select, .lightink-reader-chrome-panel') !== null) {
-      return;
-    }
+}
+
+function disposeMarkdownReaderChrome(): void {
+  if (markdownEditing) {
+    markdownEditing = false;
+    applyMarkdownEditable(false);
   }
-  const selection = typeof window !== 'undefined' ? window.getSelection() : null;
-  if (selection !== null && selection.toString().trim() !== '') {
-    return;
-  }
-  markdownReaderChrome.toggle();
+  markdownReaderChromeHost = null;
+  markdownReaderChrome?.destroy();
+  markdownReaderChrome = null;
 }
 
 function syncMarkdownReaderChrome(): void {
@@ -832,6 +851,8 @@ function syncMarkdownReaderChrome(): void {
   }
   const host = tab.hostElement;
   if (markdownReaderChrome !== null && markdownReaderChromeHost === host) {
+    applyMarkdownEditable(markdownEditing);
+    markdownReaderChrome.syncMarkdownEdit();
     return;
   }
   disposeMarkdownReaderChrome();
@@ -856,9 +877,14 @@ function syncMarkdownReaderChrome(): void {
         }
         return false;
       },
+      onMarkdownEdit: () => enterMarkdownEdit(),
+      onMarkdownFinish: () => {
+        void finishMarkdownEdit();
+      },
+      markdownEditing: () => markdownEditing,
     });
     markdownReaderChromeHost = host;
-    host.addEventListener('click', onMarkdownReaderChromeClick);
+    applyMarkdownEditable(false);
   } catch {
     // Failure: no persistent overlay; system back / returnToShelf still works.
     markdownReaderChrome = null;
@@ -3729,29 +3755,35 @@ shortcuts.attach(document);
 // on an open book returns to the shelf. Shelf Escape is a no-op.
 /**
  * Escape 与 Android 系统返回共用的文档级分层判定（02 D4）：overlay 层已在
- * 各自 keydown 监听中消费（preventDefault），剩余事件到达此处——阅读器
- * 打开书 → returnToShelf 并消费；书架 → 不消费（桌面 Escape no-op，
- * Android 由 Kotlin 回落系统默认）。Android 返回经 ui/back-navigation.ts
- * 的合成 Escape 走同一监听链，不复制分层逻辑。
+ * 各自 keydown 监听中消费（preventDefault），剩余事件到达此处——chrome 层
+ * → Markdown 编辑态 saveActiveTab（失败仍可编辑）→ 只读打开书 returnToShelf；
+ * 书架 → 不消费（桌面 Escape no-op，Android 由 Kotlin 回落系统默认）。
+ * Android 返回经 ui/back-navigation.ts 的合成 Escape 走同一监听链。
  */
 function consumeLayeredEscapeLeftover(): boolean {
-  if (markdownReaderChrome?.handleEscape() === true) {
+  const action = decideLayeredEscapeLeftover({
+    chromeConsumed: markdownReaderChrome?.handleEscape() === true,
+    markdownEditing,
+    workspaceMode: workspace.mode,
+    hasOpenBook: workspace.hasOpenBook,
+    hiddenShelfOnReader: isAndroidApp && libraryView?.element.hidden === true,
+  });
+  if (action === 'chrome') {
     return true;
   }
-  if (workspace.mode !== 'reader') {
-    return false;
+  if (action === 'finish-markdown-edit') {
+    void finishMarkdownEdit();
+    return true;
   }
-  if (!workspace.hasOpenBook) {
-    // Phone: opening Markdown hides the shelf overlay without flipping
-    // workspace. Restore the cover wall instead of exiting the app.
-    if (isAndroidApp && libraryView?.element.hidden === true) {
-      void libraryView.show();
-      return true;
-    }
-    return false;
+  if (action === 'restore-hidden-shelf') {
+    void libraryView?.show();
+    return true;
   }
-  workspace.returnToShelf();
-  return true;
+  if (action === 'return-to-shelf') {
+    workspace.returnToShelf();
+    return true;
+  }
+  return false;
 }
 
 document.addEventListener('keydown', (event) => {

@@ -15,15 +15,51 @@
  * （modal-focus/context-menu 的 document 捕获监听在捕获阶段先于 main.ts
  * 启动期注册的文档级冒泡监听运行；reader/library 根元素上的元素级监听在
  * 焦点位于其子树时参与冒泡）先消费（preventDefault），剩余事件落到
- * main.ts 文档级共享判定 `consumeLayeredEscapeLeftover`（阅读器
- * returnToShelf）；书架无人消费，返回 false 交还系统默认。desktop 下
- * `registerAndroidBackNavigation` 为 no-op，桌面行为逐字节不变。
+ * main.ts 文档级共享判定 `consumeLayeredEscapeLeftover`（chrome 层 →
+ * Markdown 编辑态 saveActiveTab → 只读打开书 returnToShelf）；书架无人
+ * 消费，返回 false 交还系统默认。desktop 下 `registerAndroidBackNavigation`
+ * 为 no-op，桌面行为逐字节不变。
  */
 
 import { isAndroidApp } from './mobile-platform.js';
 
 /** Kotlin 侧 evaluateJavascript 求值的全局桥函数名（两侧保持同步）。 */
 export const ANDROID_BACK_BRIDGE_GLOBAL = '__lightinkAndroidBackPress';
+
+/** Leftover Escape / Android back after overlay listeners ran. */
+export type LayeredEscapeLeftoverAction =
+  | 'chrome'
+  | 'finish-markdown-edit'
+  | 'restore-hidden-shelf'
+  | 'return-to-shelf'
+  | 'none';
+
+/**
+ * Document-level leftover after overlay keydown handlers. Chrome consume
+ * wins; Markdown in-place edit saves/exits instead of 合书; read-only open
+ * book still returns to the shelf.
+ */
+export function decideLayeredEscapeLeftover(input: {
+  readonly chromeConsumed: boolean;
+  readonly markdownEditing: boolean;
+  readonly workspaceMode: string;
+  readonly hasOpenBook: boolean;
+  readonly hiddenShelfOnReader?: boolean;
+}): LayeredEscapeLeftoverAction {
+  if (input.chromeConsumed) {
+    return 'chrome';
+  }
+  if (input.markdownEditing) {
+    return 'finish-markdown-edit';
+  }
+  if (input.workspaceMode !== 'reader') {
+    return 'none';
+  }
+  if (!input.hasOpenBook) {
+    return input.hiddenShelfOnReader === true ? 'restore-hidden-shelf' : 'none';
+  }
+  return 'return-to-shelf';
+}
 
 /** 可被派发 Escape keydown 的最小目标（document 或等价物），便于测试注入。 */
 export interface BackPressDispatchTarget {

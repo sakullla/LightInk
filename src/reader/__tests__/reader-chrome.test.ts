@@ -1109,3 +1109,83 @@ describe('createReaderChrome has no speak control', () => {
     expect(footerThumbZone(touch.chrome.footer).querySelector('[data-reader-tts-speak]')).toBeNull();
   });
 });
+
+describe('createReaderChrome Markdown 编辑/完成', () => {
+  function mountMarkdownChrome(
+    overrides: { markdownEditing?: boolean } = {},
+  ): ReturnType<typeof mount> {
+    let editing = overrides.markdownEditing === true;
+    return mount({
+      touchMode: true,
+      suppressProgressDock: () => true,
+      markdownEditing: () => editing,
+      onMarkdownEdit: vi.fn(() => {
+        editing = true;
+      }),
+      onMarkdownFinish: vi.fn(() => {
+        editing = false;
+      }),
+    });
+  }
+
+  it('does not render 编辑 unless Markdown edit deps are provided', () => {
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+    expect(host.querySelector('[data-reader-chrome-action="markdownEdit"]')).toBeNull();
+    expect(labeledButtons(host)).toHaveLength(6);
+  });
+
+  it('places 编辑 on the top bar and switches it to 完成 after edit', () => {
+    const { host, chrome, deps } = mountMarkdownChrome();
+    chrome.reveal();
+    const button = actionButton(host, 'markdownEdit');
+    expect(chrome.bar.contains(button)).toBe(true);
+    expect(button.textContent?.trim()).toBe('编辑');
+    expect(button.getAttribute('aria-label')).toBe('编辑');
+    expect(button.hidden).toBe(false);
+    expect(Number.parseInt(button.dataset.readerChromeHit ?? '0', 10)).toBe(MIN_HIT_PX);
+
+    button.click();
+    expect(deps.onMarkdownEdit).toHaveBeenCalledTimes(1);
+    expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
+    chrome.syncMarkdownEdit();
+    expect(button.textContent?.trim()).toBe('完成');
+    expect(button.getAttribute('data-markdown-editing')).toBe('true');
+
+    button.click();
+    expect(deps.onMarkdownFinish).toHaveBeenCalledTimes(1);
+    chrome.syncMarkdownEdit();
+    expect(button.textContent?.trim()).toBe('编辑');
+  });
+
+  it('handleEscape dismisses chrome in edit mode and never finishes or 合书', () => {
+    const { chrome, deps } = mountMarkdownChrome({ markdownEditing: true });
+    chrome.reveal();
+    expect(chrome.handleEscape()).toBe(true);
+    expect(chrome.isRevealed()).toBe(false);
+    expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+    expect(chrome.handleEscape()).toBe(false);
+    expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
+  });
+
+  it('toggles chrome on contenteditable=false body click, not on contenteditable=true', () => {
+    const { host, chrome } = mount({ touchMode: true });
+    const readable = document.createElement('div');
+    readable.className = 'ProseMirror lightink-prose';
+    readable.setAttribute('contenteditable', 'false');
+    readable.textContent = 'body';
+    const writable = document.createElement('div');
+    writable.className = 'ProseMirror lightink-prose';
+    writable.setAttribute('contenteditable', 'true');
+    writable.textContent = 'edit';
+    host.append(readable, writable);
+
+    clickPage(writable, 120);
+    expect(chrome.isRevealed()).toBe(false);
+
+    clickPage(readable, 120);
+    expect(chrome.isRevealed()).toBe(true);
+  });
+});
+

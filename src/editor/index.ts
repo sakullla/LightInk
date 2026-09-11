@@ -131,6 +131,18 @@ function getView(state: MountState): EditorView | null {
   }
 }
 
+/** Apply Milkdown/ProseMirror editable + contenteditable; blur when leaving edit. */
+function applyEditableProps(view: EditorView, next: boolean): void {
+  view.setProps({ editable: () => next });
+  const dom = view.dom as HTMLElement;
+  if (typeof dom.contentEditable === 'string') {
+    dom.contentEditable = next ? 'true' : 'false';
+  }
+  if (!next && typeof dom.blur === 'function') {
+    dom.blur();
+  }
+}
+
 /**
  * 解析指定文档位置处的链接（R3/R7/R14）。取该位置的 link mark，并向前/向后
  * 展开到该 mark 覆盖的完整文本范围，返回 href 与链接文本；无链接返回 null。
@@ -190,6 +202,7 @@ export async function mountEditor(
     mounted: false,
     cachedMarkdown: options.initialMarkdown ?? '',
   };
+  let editable = options.editable !== false;
 
   const ready = new Promise<void>((resolve, reject) => {
     try {
@@ -202,6 +215,7 @@ export async function mountEditor(
           ctx.set(defaultValueCtx, state.cachedMarkdown);
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
+            editable: () => editable,
             attributes: {
               class: 'lightink-prose',
             },
@@ -309,6 +323,7 @@ export async function mountEditor(
           const view = getView(state);
           if (view !== null) {
             collapseNonEmptySelection(view);
+            applyEditableProps(view, editable);
           }
           resolve();
         }
@@ -385,16 +400,26 @@ export async function mountEditor(
       if (coords === null) return null;
       return resolveLinkAt(view, coords.pos);
     },
+    setEditable(next: boolean): void {
+      editable = next === true;
+      const view = getView(state);
+      if (view !== null) {
+        applyEditableProps(view, editable);
+      }
+    },
+    isEditable(): boolean {
+      return editable;
+    },
     toggleMark(markName: string): void {
       const view = getView(state);
-      if (view === null) return;
+      if (view === null || !editable) return;
       const markType = view.state.schema.marks[markName];
       if (markType === undefined) return;
       toggleMark(markType)(view.state, (tr) => view.dispatch(tr));
     },
     setLink(href: string, text?: string): void {
       const view = getView(state);
-      if (view === null) return;
+      if (view === null || !editable) return;
       const linkType = view.state.schema.marks['link'];
       if (linkType === undefined) return;
       const cleanHref = typeof href === 'string' ? href.trim() : '';
@@ -430,12 +455,12 @@ export async function mountEditor(
     },
     insertImage(url: string, alt: string): void {
       const view = getView(state);
-      if (view === null) return;
+      if (view === null || !editable) return;
       insertImageAt(view, null, url, alt);
     },
     insertMarkdown(markdown: string): boolean {
       const view = getView(state);
-      if (view === null || state.editor === null) return false;
+      if (view === null || state.editor === null || !editable) return false;
       try {
         // Prefer action(ctx) — Editor.ctx is not a stable public surface across builds.
         const parse = state.editor.action((ctx) => ctx.get(parserCtx));
@@ -451,7 +476,7 @@ export async function mountEditor(
     },
     runTableOp(op: TableOpId): boolean {
       const view = getView(state);
-      if (view === null) return false;
+      if (view === null || !editable) return false;
       return runTableOp(view, op);
     },
     focus(): void {
@@ -476,12 +501,12 @@ export async function mountEditor(
     },
     undo(): void {
       const view = getView(state);
-      if (view === null) return;
+      if (view === null || !editable) return;
       undo(view.state, view.dispatch);
     },
     redo(): void {
       const view = getView(state);
-      if (view === null) return;
+      if (view === null || !editable) return;
       redo(view.state, view.dispatch);
     },
     toggleFoldAtOrdinal(ordinal: number): void {

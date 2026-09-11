@@ -181,10 +181,23 @@ export function getFormatToolbarLinkEditor(): LinkEditorFn | null {
   return linkEditor;
 }
 
+const ANNOTATION_FORMAT_TOOLS: ReadonlySet<FormatToolId> = new Set([
+  'highlight',
+  'note',
+  'copy',
+]);
+
+export function isAnnotationFormatTool(id: FormatToolId): boolean {
+  return ANNOTATION_FORMAT_TOOLS.has(id);
+}
+
 /** 应用某个格式工具到当前选区（mark 切换 / link 包裹）。 */
 function applyFormatTool(view: EditorView, id: FormatToolId): void {
-  if (id === 'highlight' || id === 'note' || id === 'copy') {
+  if (isAnnotationFormatTool(id)) {
     resolveFormatToolbarAnnotationAction(view.dom)?.(id);
+    return;
+  }
+  if (view.editable === false) {
     return;
   }
   const tool = FORMAT_TOOLS.find((t) => t.id === id);
@@ -277,6 +290,11 @@ function syncToolbar(view: EditorView, toolbar: HTMLElement): void {
   if (!shouldShowFormatToolbar(view)) {
     toolbar.style.display = 'none';
     return;
+  }
+  const allowDocumentTools = view.editable !== false;
+  for (const btn of toolbar.querySelectorAll<HTMLButtonElement>('button[data-tool]')) {
+    const id = btn.dataset['tool'] as FormatToolId | undefined;
+    btn.hidden = id !== undefined && !isAnnotationFormatTool(id) && !allowDocumentTools;
   }
   // 先显示以测得尺寸（display:none 时 getBoundingClientRect 为 0）。
   toolbar.style.display = '';

@@ -31,6 +31,8 @@ export function makeFakeEditor(initial: string): EditorInstance & { content: str
     isInTable: () => false,
     runTableOp: () => false,
     focus: vi.fn(),
+    setEditable: vi.fn(),
+    isEditable: () => true,
     selectAll: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),

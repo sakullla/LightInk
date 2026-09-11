@@ -42,6 +42,10 @@ export interface ReaderChromeLabels {
   readonly search: string;
   /** AI 助手面板入口（R5；仅 AI 已配置时渲染）。 */
   readonly assistant: string;
+  /** Markdown immersive chrome: enter in-place edit (not desktop workspace). */
+  readonly edit: string;
+  /** Markdown immersive chrome: save via saveActiveTab and return to read-only. */
+  readonly done: string;
   readonly toolbar: string;
   readonly progress: string;
   readonly footer: string;
@@ -82,6 +86,8 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     bookmark: 'Bookmark',
     search: 'Search',
     assistant: 'Assistant',
+    edit: 'Edit',
+    done: 'Done',
     toolbar: 'Reading controls',
     progress: 'Reading progress',
     footer: 'Reading progress',
@@ -94,6 +100,8 @@ export const READER_CHROME_LABELS: Record<ReaderChromeLocale, ReaderChromeLabels
     bookmark: '书签',
     search: '搜索',
     assistant: '助手',
+    edit: '编辑',
+    done: '完成',
     toolbar: '阅读控件',
     progress: '阅读进度',
     footer: '阅读进度',
@@ -155,6 +163,13 @@ export interface ReaderChromeDeps {
    * 省略时保持显示，便于 chrome 单测。
    */
   assistantAvailable?: () => boolean;
+  /**
+   * Markdown immersive chrome only. When set, a top-bar 编辑/完成 control
+   * is added; EPUB/PDF/comic chrome omit these deps and stay unchanged.
+   */
+  onMarkdownEdit?: () => void;
+  onMarkdownFinish?: () => void | Promise<void>;
+  markdownEditing?: () => boolean;
   onDestroy?: () => void;
 }
 
@@ -175,6 +190,8 @@ export interface ReaderChrome {
   syncStayRevealed(): void;
   /** 重新根据 assistant 可用性挂摘按钮（配置变更后由宿主调用）。 */
   refreshAvailability(): void;
+  /** Re-read `markdownEditing()` and swap 编辑/完成 label. */
+  syncMarkdownEdit(): void;
   /**
    * One-step back. Never calls `returnToShelf`. True when a layer closed;
    * false when nothing is open (window leftover Escape may 合书).
@@ -364,7 +381,9 @@ export function createReaderChrome(
   bar.setAttribute('data-tauri-drag-region', '');
   applyBarLayout(bar);
 
-  const makeButton = (action: ReaderChromeAction, label: string): HTMLButtonElement => {
+  const markdownEditEnabled = typeof deps.onMarkdownEdit === 'function';
+
+  const makeButton = (action: string, label: string): HTMLButtonElement => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `lightink-reader-chrome-action lightink-reader-chrome-action--${action}`;
@@ -384,6 +403,7 @@ export function createReaderChrome(
   };
 
   const backButton = makeButton('backToShelf', labels.backToShelf);
+  const editButton = markdownEditEnabled ? makeButton('markdownEdit', labels.edit) : null;
   const tocButton = makeButton('toc', labels.toc);
   const typographyButton = makeButton('typography', labels.typography);
   const bookmarkButton = makeButton('bookmark', labels.bookmark);
@@ -410,6 +430,9 @@ export function createReaderChrome(
     bar.append(backButton, drag);
   } else {
     bar.append(backButton, tools, drag);
+  }
+  if (editButton !== null) {
+    backButton.after(editButton);
   }
   element.appendChild(bar);
 
@@ -536,6 +559,16 @@ export function createReaderChrome(
       assistantButton,
     ]) {
       button.hidden = !revealed;
+    }
+    if (editButton !== null) {
+      const editing = deps.markdownEditing?.() === true;
+      const label = editing ? labels.done : labels.edit;
+      if (editButton.textContent !== label) {
+        editButton.textContent = label;
+      }
+      writeAttr(editButton, 'aria-label', label);
+      writeAttr(editButton, 'data-markdown-editing', editing ? 'true' : 'false');
+      editButton.hidden = !revealed;
     }
     // 助手未配置时自摘除，配置后挂回 tools。
     const assistantOn = deps.assistantAvailable?.() !== false;
@@ -761,6 +794,15 @@ export function createReaderChrome(
     event.stopPropagation();
     deps.returnToShelf();
   });
+  editButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (deps.markdownEditing?.() === true) {
+      void deps.onMarkdownFinish?.();
+      return;
+    }
+    deps.onMarkdownEdit?.();
+  });
   tocButton.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -957,6 +999,9 @@ export function createReaderChrome(
       scheduleHide();
     },
     refreshAvailability: () => {
+      syncDom();
+    },
+    syncMarkdownEdit: () => {
       syncDom();
     },
     dismiss,

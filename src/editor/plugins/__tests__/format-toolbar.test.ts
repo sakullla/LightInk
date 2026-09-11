@@ -13,6 +13,7 @@ import type { EditorView } from '@milkdown/prose/view';
 import {
   FORMAT_TOOLS,
   formatToolbarPlugin,
+  isAnnotationFormatTool,
   placeToolbar,
   shouldShowFormatToolbar,
 } from '../format-toolbar.js';
@@ -96,6 +97,16 @@ describe('placeToolbar placement decision (R7)', () => {
     const p = placeToolbar({ top: 200, bottom: 220, left: 500 }, size, viewport, 20);
     // 上方 200-40-20=140
     expect(p.top).toBe(140);
+  });
+});
+
+describe('isAnnotationFormatTool', () => {
+  it('keeps highlight / note / copy when the editor is read-only', () => {
+    expect(isAnnotationFormatTool('highlight')).toBe(true);
+    expect(isAnnotationFormatTool('note')).toBe(true);
+    expect(isAnnotationFormatTool('copy')).toBe(true);
+    expect(isAnnotationFormatTool('bold')).toBe(false);
+    expect(isAnnotationFormatTool('link')).toBe(false);
   });
 });
 
