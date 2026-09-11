@@ -268,10 +268,13 @@ export function playReaderPageTurn(
   const schedule =
     options?.schedule ??
     ((fn, ms) => (typeof setTimeout === 'function' ? (setTimeout(fn, ms) as unknown as number) : 0));
-  const seq = (readerPageAnimSeq += 1);
+  const seq = (readerPageTurnSeq.get(root) ?? 0) + 1;
+  readerPageTurnSeq.set(root, seq);
   schedule(() => {
     // 连击同方向：旧 timer 提前触发时新动画尚在播，不得摘除 token。
-    if (seq !== readerPageAnimSeq) {
+    // 按 root 计数：另一个阅读器实例翻页不得让本实例的 timer 提前返回，
+    // 否则它的 token 会永久滞留，宿主再显示时会重播一次没人触发的动画。
+    if (readerPageTurnSeq.get(root) !== seq) {
       return;
     }
     if (root.getAttribute('data-page-anim') === token) {
@@ -280,10 +283,13 @@ export function playReaderPageTurn(
   }, READER_PAGE_ANIM_MS_BY_EFFECT[effect] + 40);
 }
 
-/** 连击同方向时旧 timer 的清理回调序号：只有最新一次调用才允许移除属性。 */
-let readerPageAnimSeq = 0;
+/**
+ * 连击同方向时旧 timer 的清理回调序号：只有最新一次调用才允许移除属性。
+ * 按 root 记，让多标签下同时存活的阅读器实例互不干扰。
+ */
+const readerPageTurnSeq = new WeakMap<HTMLElement, number>();
 
-/** 连击同方向时旧 timer 的清理回调序号（回弹）：同 playReaderPageTurn 先例。 */
+/** 连击同方向时旧 timer 的清理回调序号（回弹）：模块级，触屏路径只有单实例。 */
 let readerBoundaryBounceSeq = 0;
 
 /**
