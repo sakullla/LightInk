@@ -47,6 +47,7 @@ import { contentChangePlugin } from './plugins/content-change.js';
 import { emojiCompletePlugin } from './plugins/emoji-complete.js';
 import { findReplacePlugin } from './plugins/find-replace.js';
 import { formatToolbarPlugin } from './plugins/format-toolbar.js';
+import { keyboardFormatBarPlugin } from './plugins/keyboard-format-bar.js';
 import { frontmatterPlugin } from './plugins/front-matter.js';
 import { linkAffordancePlugin } from './link-affordance.js';
 import { linkExclusiveEndsPlugin, linkNavigationPlugin } from './link-navigation.js';
@@ -239,6 +240,8 @@ export async function mountEditor(
         .use(codeHighlightPlugin)
         // T5：选中文字浮出格式工具条（R7）。
         .use(formatToolbarPlugin)
+        // R2：沉浸编辑态键盘上方触控格式条。
+        .use(keyboardFormatBarPlugin)
         // T6：行首斜杠快速插入菜单（R11），元素集合与 R2 插入菜单同源。
         .use(slashMenuPlugin)
         // T3：`:` 短码 emoji 自动补全（R7），交互模式复用 slash-menu；

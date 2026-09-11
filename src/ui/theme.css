@@ -473,6 +473,12 @@ html[data-display='xuhd'] {
   padding-left: var(--lightink-safe-left, 0px);
 }
 
+:is(html[data-android], html[data-touch-primary])
+  #app.is-workspace-reader
+  #lightink-editor-area[data-surface='markdown']:has(.lightink-keyboard-format-bar.is-visible) {
+  padding-bottom: calc(var(--lightink-safe-bottom, 0px) + 48px);
+}
+
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */
 #lightink-reader-shell.lightink-reader-shell {
   flex: 0 0 0;
@@ -2294,6 +2300,83 @@ html[data-reading-layout='scroll']:has(
   min-width: auto;
   padding: 0 8px;
   font-size: 12px;
+}
+
+/* Immersive Markdown edit: touch format bar above the IME (R2 / ADR-5). */
+.lightink-keyboard-format-bar {
+  display: none;
+  box-sizing: border-box;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  padding: 4px 6px;
+  border-top: 1px solid var(--lightink-border);
+  background: var(--lightink-bg-elevated);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.lightink-keyboard-format-bar::-webkit-scrollbar {
+  display: none;
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']
+  .lightink-keyboard-format-bar.is-visible {
+  display: flex;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--lightink-keyboard-inset, 0px);
+  z-index: 55;
+}
+
+.lightink-keyboard-format-bar__btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-keyboard-format-bar__btn:active {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-keyboard-format-bar__btn--bold {
+  font-weight: 700;
+}
+
+.lightink-keyboard-format-bar__btn--italic {
+  font-style: italic;
+}
+
+.lightink-keyboard-format-bar__btn--strikethrough {
+  text-decoration: line-through;
+}
+
+.lightink-keyboard-format-bar__btn--code,
+.lightink-keyboard-format-bar__btn--code-block {
+  font-family: var(--lightink-font-mono);
+  font-size: 12px;
+}
+
+.lightink-keyboard-format-bar__btn--link svg {
+  display: block;
 }
 
 /* 斜杠命令菜单（R11）：与右键菜单/格式工具条同一浮层语言；

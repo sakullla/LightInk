@@ -16,6 +16,7 @@ import {
   setFormatToolbarLinkEditor,
   setFormatToolbarTitles,
 } from './editor/plugins/format-toolbar.js';
+import { setKeyboardFormatBarTitles } from './editor/plugins/keyboard-format-bar.js';
 import { setCodeChromeLabels } from './editor/plugins/code-highlight.js';
 import { setMathEditTitle } from './editor/plugins/math.js';
 import { setMermaidEditTitle } from './editor/plugins/mermaid.js';
@@ -410,6 +411,21 @@ function applyLocaleChrome(): void {
     highlight: i18n.t('format.highlight'),
     note: i18n.t('format.note'),
     copy: i18n.t('format.copy'),
+  });
+  setKeyboardFormatBarTitles({
+    bold: i18n.t('format.bold'),
+    italic: i18n.t('format.italic'),
+    strikethrough: i18n.t('format.strikethrough'),
+    code: i18n.t('format.code'),
+    link: i18n.t('format.link'),
+    heading: i18n.t('insert.heading'),
+    list: i18n.t('insert.list'),
+    'task-list': i18n.t('insert.task-list'),
+    blockquote: i18n.t('insert.blockquote'),
+    'code-block': i18n.t('insert.code'),
+    image: i18n.t('insert.image'),
+    undo: i18n.t('edit.undo'),
+    redo: i18n.t('edit.redo'),
   });
   setCodeChromeLabels({
     copy: i18n.t('code.copy'),

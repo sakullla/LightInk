@@ -187,12 +187,14 @@ const ANNOTATION_FORMAT_TOOLS: ReadonlySet<FormatToolId> = new Set([
   'copy',
 ]);
 
-export function isAnnotationFormatTool(id: FormatToolId): boolean {
+export function isAnnotationFormatTool(
+  id: FormatToolId,
+): id is Extract<FormatToolId, 'highlight' | 'note' | 'copy'> {
   return ANNOTATION_FORMAT_TOOLS.has(id);
 }
 
 /** 应用某个格式工具到当前选区（mark 切换 / link 包裹）。 */
-function applyFormatTool(view: EditorView, id: FormatToolId): void {
+export function applyFormatTool(view: EditorView, id: FormatToolId): void {
   if (isAnnotationFormatTool(id)) {
     resolveFormatToolbarAnnotationAction(view.dom)?.(id);
     return;
@@ -271,7 +273,25 @@ function applyFormatTool(view: EditorView, id: FormatToolId): void {
  * Opening a file often leaves a full-document / node selection at (0,0);
  * that must not pop the bar at the top-left of the page.
  */
+function hideSelectionToolbarForKeyboardBar(view: EditorView): boolean {
+  if (view.editable === false) {
+    return false;
+  }
+  if (typeof document === 'undefined' || document.documentElement === null) {
+    return false;
+  }
+  const root = document.documentElement;
+  return (
+    root.getAttribute('data-workspace-mode') === 'reader' &&
+    (root.hasAttribute('data-android') || root.hasAttribute('data-touch-primary'))
+  );
+}
+
 export function shouldShowFormatToolbar(view: EditorView): boolean {
+  // Immersive edit uses the keyboard format bar; keep this selection chrome off.
+  if (hideSelectionToolbarForKeyboardBar(view)) {
+    return false;
+  }
   if (typeof view.hasFocus === 'function' && !view.hasFocus()) {
     return false;
   }
