@@ -2356,7 +2356,7 @@ html[data-reading-layout='scroll']:has(
   cursor: pointer;
 }
 
-.lightink-keyboard-format-bar__btn:active {
+:is(html[data-android], html[data-touch-primary]) .lightink-keyboard-format-bar__btn:active {
   background: var(--lightink-accent-soft);
 }
 
