@@ -525,7 +525,7 @@ export async function renderPdfInto(
   };
 
   const nearestScaleStep = (userZoom: number): number => {
-    let best = PDF_SCALE_STEPS[DEFAULT_SCALE_IDX]!;
+    let best: (typeof PDF_SCALE_STEPS)[number] = PDF_SCALE_STEPS[DEFAULT_SCALE_IDX]!;
     let bestDist = Number.POSITIVE_INFINITY;
     for (const step of PDF_SCALE_STEPS) {
       const dist = Math.abs(step - userZoom);

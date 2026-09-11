@@ -421,15 +421,16 @@ export function resolveAssistantLocatorJump(
     return { page: target.page };
   }
   if (target.chapter !== undefined) {
-    const zero = outline.find((item) => item.chapter === target.chapter);
+    const chapter = target.chapter;
+    const zero = outline.find((item) => item.chapter === chapter);
     const oneBased =
-      target.chapter >= 1
-        ? outline.find((item) => item.chapter === target.chapter - 1)
+      chapter >= 1
+        ? outline.find((item) => item.chapter === chapter - 1)
         : undefined;
     if (titled.length > 0) {
       const hit =
-        titled.find((item) => item.chapter === target.chapter) ??
-        titled.find((item) => item.chapter === target.chapter - 1);
+        titled.find((item) => item.chapter === chapter) ??
+        titled.find((item) => item.chapter === chapter - 1);
       if (hit !== undefined) {
         return hit;
       }
@@ -451,7 +452,7 @@ export function resolveAssistantLocatorJump(
     if (oneBased !== undefined) {
       return oneBased;
     }
-    return { chapter: target.chapter };
+    return { chapter };
   }
   if (titled.length > 0) {
     return titled[0]!;
