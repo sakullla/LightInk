@@ -37,12 +37,9 @@ body {
  *   2) width media queries (fallback when JS is late / narrow or huge windows).
  *
  * The middle reading column (.lightink-tab-host) uses --lightink-measure as
- * max-width and width:100%. 2026-08-09 起按用户决策改为「填满编辑区」：
- * measure = min(分档上限, 94%)。2026-08-09 两度实测后的落点：固定 rem 窄栏
- * 在宽窗下两侧过空，94% 填满又行长超限（CJK 一行 90+ 字视线无法回扫）；
- * 现按可读性研究取值（拉丁 50-75 字符/行、WCAG 1.4.8 CJK 上限 40 字/行、
- * Typora 约 860px 先例），各档内容宽约 44-62rem ≈ 中文 45-56 字/行，
- * 94% 只在窗口窄于上限时兜底填满。
+ * max-width and width:100%. R2 将滚动栏宽收到 32–40rem（WCAG 1.4.8 CJK
+ * ≤40 字/行）：compact 32rem、HD 36rem、QHD 及以上 40rem，均再与 94% 取 min。
+ * 94% 只在窗口窄于上限时兜底填满。2026-08-09 的 44–62rem 填满决策已被替换。
  */
 
 /* Compact: 1366×768, 1280×720, half-tiled — fill the pane, modest type. */
@@ -50,7 +47,7 @@ html[data-display='compact'] {
   --lightink-font-size: 15px;
   --lightink-font-size-ui: 12.5px;
   --lightink-font-size-code: 12.75px;
-  --lightink-measure: min(44rem, 94%);
+  --lightink-measure: min(32rem, 94%);
   --lightink-page-pad-x: 16px;
   --lightink-page-pad-y: 16px;
   --lightink-outline-width: 176px;
@@ -58,7 +55,7 @@ html[data-display='compact'] {
 
 /* HD baseline extras (explicit for clarity when attribute is set). */
 html[data-display='hd'] {
-  --lightink-measure: min(56rem, 94%);
+  --lightink-measure: min(36rem, 94%);
   --lightink-page-pad-x: 28px;
   --lightink-page-pad-y: 24px;
 }
@@ -68,7 +65,7 @@ html[data-display='qhd'] {
   --lightink-font-size: 16.5px;
   --lightink-font-size-ui: 13.5px;
   --lightink-font-size-code: 14px;
-  --lightink-measure: min(58rem, 94%);
+  --lightink-measure: min(40rem, 94%);
   --lightink-page-pad-x: 40px;
   --lightink-page-pad-y: 32px;
   --lightink-outline-width: 248px;
@@ -79,7 +76,7 @@ html[data-display='uhd'] {
   --lightink-font-size: 17.5px;
   --lightink-font-size-ui: 14px;
   --lightink-font-size-code: 14.5px;
-  --lightink-measure: min(60rem, 94%);
+  --lightink-measure: min(40rem, 94%);
   --lightink-page-pad-x: 48px;
   --lightink-page-pad-y: 40px;
   --lightink-outline-width: 280px;
@@ -90,7 +87,7 @@ html[data-display='xuhd'] {
   --lightink-font-size: 18.5px;
   --lightink-font-size-ui: 14.5px;
   --lightink-font-size-code: 15px;
-  --lightink-measure: min(62rem, 94%);
+  --lightink-measure: min(40rem, 94%);
   --lightink-page-pad-x: 56px;
   --lightink-page-pad-y: 48px;
   --lightink-outline-width: 304px;
@@ -103,7 +100,7 @@ html[data-display='xuhd'] {
     --lightink-font-size: 15px;
     --lightink-font-size-ui: 12.5px;
     --lightink-font-size-code: 12.75px;
-    --lightink-measure: min(44rem, 94%);
+    --lightink-measure: min(32rem, 94%);
     --lightink-page-pad-x: 16px;
     --lightink-page-pad-y: 16px;
     --lightink-outline-width: 176px;
@@ -115,7 +112,7 @@ html[data-display='xuhd'] {
     --lightink-font-size: 16.5px;
     --lightink-font-size-ui: 13.5px;
     --lightink-font-size-code: 14px;
-    --lightink-measure: min(58rem, 94%);
+    --lightink-measure: min(40rem, 94%);
     --lightink-page-pad-x: 40px;
     --lightink-page-pad-y: 32px;
     --lightink-outline-width: 248px;
@@ -127,7 +124,7 @@ html[data-display='xuhd'] {
     --lightink-font-size: 17.5px;
     --lightink-font-size-ui: 14px;
     --lightink-font-size-code: 14.5px;
-    --lightink-measure: min(60rem, 94%);
+    --lightink-measure: min(40rem, 94%);
     --lightink-page-pad-x: 48px;
     --lightink-page-pad-y: 40px;
     --lightink-outline-width: 280px;
@@ -139,7 +136,7 @@ html[data-display='xuhd'] {
     --lightink-font-size: 18.5px;
     --lightink-font-size-ui: 14.5px;
     --lightink-font-size-code: 15px;
-    --lightink-measure: min(62rem, 94%);
+    --lightink-measure: min(40rem, 94%);
     --lightink-page-pad-x: 56px;
     --lightink-page-pad-y: 48px;
     --lightink-outline-width: 304px;
@@ -926,8 +923,8 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
 }
 
 /*
- * Reading surface: tier-scaled measure fills the editor pane on large screens
- * (no huge empty gutters), still capped for line length on ultrawide.
+ * Reading surface: --lightink-measure caps the Markdown column at 32–40rem
+ * so line length stays readable; 94% fills only when the pane is narrower.
  */
 #lightink-editor-area {
   /* Horizontal breathing room lives on the host so the column can grow. */
@@ -1771,6 +1768,8 @@ html[data-reading-layout='scroll']:has(
   border-radius: 4px;
   padding: 0.08em 0.36em;
   font-size: 0.92em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .lightink-tab-host blockquote {

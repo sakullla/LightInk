@@ -273,3 +273,91 @@ describe('theme.css 不再持有第二份排版声明', () => {
     expect(readerHost).toBeGreaterThan(measure);
   });
 });
+
+function cssCustomProperty(body: string, name: string): string {
+  const match = new RegExp(`${name}\\s*:\\s*([^;]+);`).exec(body);
+  if (match === null) {
+    throw new Error(`规则体缺少 ${name}`);
+  }
+  return match[1].trim();
+}
+
+function measureOf(selector: string): string {
+  const block = declarationBlocks(themeCss).find((rule) => rule.selector === selector);
+  expect(block, selector).toBeDefined();
+  return cssCustomProperty(block!.body, '--lightink-measure');
+}
+
+describe('theme.css Markdown 栏宽分档 (R2)', () => {
+  it('compact / 窄窗为 min(32rem, 94%)', () => {
+    expect(measureOf("html[data-display='compact']")).toBe('min(32rem, 94%)');
+    expect(
+      measureOf(
+        "html:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd'])",
+      ),
+    ).toBe('min(32rem, 94%)');
+  });
+
+  it('hd 为 min(36rem, 94%)', () => {
+    expect(measureOf("html[data-display='hd']")).toBe('min(36rem, 94%)');
+  });
+
+  it('qhd 及以上为 min(40rem, 94%)', () => {
+    expect(measureOf("html[data-display='qhd']")).toBe('min(40rem, 94%)');
+    expect(measureOf("html[data-display='uhd']")).toBe('min(40rem, 94%)');
+    expect(measureOf("html[data-display='xuhd']")).toBe('min(40rem, 94%)');
+    expect(
+      measureOf(
+        "html:not([data-display='uhd']):not([data-display='xuhd']):not([data-display='compact'])",
+      ),
+    ).toBe('min(40rem, 94%)');
+    expect(measureOf("html:not([data-display='xuhd']):not([data-display='compact'])")).toBe(
+      'min(40rem, 94%)',
+    );
+    const wideHtml = declarationBlocks(themeCss).filter(
+      (rule) => rule.selector === 'html' && /--lightink-measure\s*:/.test(rule.body),
+    );
+    expect(wideHtml).toHaveLength(1);
+    expect(cssCustomProperty(wideHtml[0].body, '--lightink-measure')).toBe('min(40rem, 94%)');
+  });
+
+  it('--lightink-measure 声明只使用 32/36/40rem 上限且均与 94% 取 min', () => {
+    const measures = [...themeCss.matchAll(/--lightink-measure\s*:\s*([^;]+);/g)].map((match) =>
+      match[1].trim(),
+    );
+    expect(measures.length).toBeGreaterThan(0);
+    for (const value of measures) {
+      expect(value).toMatch(/^min\((32|36|40)rem,\s*94%\)$/);
+    }
+  });
+
+  it('桌面编辑器与触控 Markdown 仍共用 .lightink-tab-host 栏宽', () => {
+    const host = declarationBlocks(themeCss).find((rule) => rule.selector === '.lightink-tab-host');
+    expect(host).toBeDefined();
+    expect(host!.body).toContain('max-width: var(--lightink-measure, 48rem)');
+    expect(host!.body).toMatch(/width:\s*100%/);
+  });
+
+  it('正文无 justify、无首行缩进', () => {
+    expect(proseCss).not.toMatch(/text-align\s*:\s*justify/);
+    expect(proseCss).not.toMatch(/text-indent\s*:/);
+    expect(themeCss).not.toMatch(/text-align\s*:\s*justify/);
+    expect(themeCss).not.toMatch(/text-indent\s*:/);
+  });
+
+  it('代码块与宽表在栏内横向滚动，行内 code 可换行', () => {
+    expect(themeCss).toMatch(
+      /\.lightink-tab-host pre[\s\S]*?\.lightink-tab-host \.lightink-code-block > pre\s*\{[^}]*overflow-x:\s*auto/,
+    );
+    const table = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host .tableWrapper',
+    );
+    expect(table).toBeDefined();
+    expect(table!.body).toMatch(/overflow-x:\s*auto/);
+    const inlineCode = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host :not(pre) > code',
+    );
+    expect(inlineCode).toBeDefined();
+    expect(inlineCode!.body).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});

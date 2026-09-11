@@ -148,6 +148,16 @@ describe('tokens.css 内置主题', () => {
     }
   });
 
+  it.each(BUILTIN_THEMES)('%s --lightink-measure 默认为 min(36rem, 94%) (R2)', (id) => {
+    expect(tokenValue(themeBlock(id), '--lightink-measure')).toBe('min(36rem, 94%)');
+  });
+
+  it.each(BUILTIN_THEMES)('%s 正文行高仍 ≥1.75', (id) => {
+    expect(Number(tokenValue(themeBlock(id), '--lightink-line-height-body'))).toBeGreaterThanOrEqual(
+      1.75,
+    );
+  });
+
   it('warm-light 注释色比旧版更易读（非过浅灰）', () => {
     const comment = tokenValue(themeBlock('warm-light'), '--lightink-syntax-comment').toLowerCase();
     const hex = /^#([0-9a-f]{6})$/.exec(comment);
