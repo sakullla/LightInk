@@ -569,7 +569,7 @@ describe('createAssistantPanel composer (R1)', () => {
     const input = panel.element.querySelector<HTMLTextAreaElement>(
       '.lightink-reader-assistant-input',
     );
-    expect(input?.rows).toBe(4);
+    expect(input?.rows).toBe(2);
     Object.defineProperty(input!, 'scrollHeight', { configurable: true, value: 120 });
     input!.value = '第一行\n第二行\n第三行\n第四行\n第五行';
     input!.dispatchEvent(new Event('input', { bubbles: true }));
@@ -579,26 +579,39 @@ describe('createAssistantPanel composer (R1)', () => {
 
   it('quotes live selection at click even if the panel opened without one', async () => {
     let selection = '';
-    const { panel } = mountPanel({ currentSelection: () => selection });
+    const { panel, invoke } = mountPanel({ currentSelection: () => selection });
     panel.open();
     await flush();
     const quote = panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]');
-    expect(quote?.disabled).toBe(false);
+    const chip = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-quote-chip');
+    expect(quote?.disabled).toBe(true);
     expect(quote?.title).toBe(t('reader.assistant.quoteUnavailable'));
     quote!.click();
     const input = panel.element.querySelector<HTMLTextAreaElement>(
       '.lightink-reader-assistant-input',
     );
+    expect(chip?.hidden).toBe(true);
     expect(input?.value).toBe('');
 
     selection = '后来选中的句子';
     document.dispatchEvent(new Event('selectionchange'));
-    expect(quote?.title).toBe(t('reader.assistant.quote'));
+    expect(quote?.disabled).toBe(false);
+    expect(quote?.classList.contains('is-ready')).toBe(true);
+    expect(quote?.title).toBe(t('reader.assistant.quoteReady'));
     quote!.click();
-    expect(input?.value).toContain('后来选中的句子');
-    submitQuestion(panel, input!.value);
+    expect(chip?.hidden).toBe(false);
+    expect(chip?.textContent).toContain('后来选中的句子');
+    expect(input?.value).toBe('');
+    submitQuestion(panel, '这句话什么意思');
     await flush();
-    expect(bubbleTexts(panel, 'user')[0]).toContain('后来选中的句子');
+    expect(
+      panel.element.querySelector('.lightink-reader-assistant-quote-excerpt')?.textContent,
+    ).toBe('后来选中的句子');
+    expect(bubbleTexts(panel, 'user')[0]).toBe('这句话什么意思');
+    const payload = invoke.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+    const last = payload.messages[payload.messages.length - 1]?.content ?? '';
+    expect(last).toContain('<selection>\n后来选中的句子\n</selection>');
+    expect(last).toContain('这句话什么意思');
     panel.destroy();
   });
 
@@ -615,6 +628,7 @@ describe('createAssistantPanel composer (R1)', () => {
     await flush();
     expect(bubbleTexts(panel, 'assistant')[0]).toContain('半截回答');
     const stop = panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]');
+    expect(stop?.hidden).toBe(false);
     expect(stop?.disabled).toBe(false);
     stop!.click();
     await flush();
@@ -622,6 +636,7 @@ describe('createAssistantPanel composer (R1)', () => {
     expect(panel.element.querySelector('.lightink-reader-assistant-error')?.textContent).toBe(
       t('reader.assistant.stopped'),
     );
+    expect(stop?.hidden).toBe(true);
     expect(stop?.disabled).toBe(true);
     submitQuestion(panel, '第二问');
     await flush();
@@ -700,13 +715,28 @@ describe('createAssistantPanel quick actions', () => {
     expect(payload.messages[payload.messages.length - 1]?.content).toContain(
       '<selection>\n一个难句\n</selection>',
     );
-    expect(bubbleTexts(panel, 'user')[0]).toContain('一个难句');
+    expect(panel.element.querySelector('.lightink-reader-assistant-quote-excerpt')?.textContent).toBe(
+      '一个难句',
+    );
 
     panel.close();
     panel.askWithSelection('summarize', '一段要总结的话');
     await flush();
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(bubbleTexts(panel, 'user')[1]).toContain(t('reader.assistant.prompt.summarize'));
+    const excerpts = [
+      ...panel.element.querySelectorAll('.lightink-reader-assistant-quote-excerpt'),
+    ].map((node) => node.textContent);
+    expect(excerpts).toContain('一段要总结的话');
+    expect(bubbleTexts(panel, 'user')[1] ?? '').not.toContain(
+      t('reader.assistant.prompt.summarize'),
+    );
+
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')?.click();
+    const historyTitle = panel.element.querySelector(
+      '.lightink-reader-assistant-history-title',
+    )?.textContent;
+    expect(historyTitle).toBe('一个难句');
+    expect(historyTitle).not.toContain(t('reader.assistant.prompt.summarize'));
     panel.destroy();
   });
 });
@@ -825,7 +855,15 @@ describe('createAssistantPanel history lifecycle', () => {
     expect(bubbleTexts(panel, 'user')).toEqual(['第一段问题']);
 
     panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')?.click();
+    expect(panel.element.classList.contains('is-history')).toBe(true);
     panel.element.querySelector<HTMLButtonElement>('[data-assistant-history-new]')?.click();
+    await flush();
+    expect(panel.element.classList.contains('is-history')).toBe(false);
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')?.click();
+    expect(
+      panel.element.querySelectorAll('[data-assistant-history-id]').length,
+    ).toBe(1);
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')?.click();
     await flush();
     expect(bubbleTexts(panel, 'user')).toEqual([]);
     submitQuestion(panel, '第二段问题');
@@ -1003,9 +1041,30 @@ describe('createAssistantPanel tools and locators', () => {
     expect(chapterLink).not.toBeNull();
     expect(pageLink).not.toBeNull();
     chapterLink!.click();
-    expect(deps.jumpToLocator).toHaveBeenCalledWith({ chapter: 2 });
+    expect(deps.jumpToLocator).toHaveBeenCalledWith({ chapter: 2, title: '第二章' });
     pageLink!.click();
-    expect(deps.jumpToLocator).toHaveBeenCalledWith({ page: 3 });
+    expect(deps.jumpToLocator).toHaveBeenCalledWith({ page: 3, title: '第3页' });
+    panel.destroy();
+  });
+
+  it('passes the citation title so a wrong 0-based index can still jump by TOC', async () => {
+    const { panel, deps } = mountPanel({
+      script: async ({ emit }) => {
+        emit('参考：[第六話 軍事会議にて①](chapter:0) （当前章节）');
+        return { finish: 'stop', totalChars: 20 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '定位');
+    await flush();
+    const link = panel.element.querySelector<HTMLAnchorElement>('a[data-chapter="0"]');
+    expect(link).not.toBeNull();
+    link!.click();
+    expect(deps.jumpToLocator).toHaveBeenCalledWith({
+      chapter: 0,
+      title: '第六話 軍事会議にて①',
+    });
     panel.destroy();
   });
 });

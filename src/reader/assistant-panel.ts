@@ -28,9 +28,11 @@ import { readerChromeTouchMode } from './view/reader-dom.js';
 import {
   AssistantHistoryTooLargeError,
   activeAssistantConversation,
+  assistantConversationTitle,
   createAssistantConversation,
   deleteAssistantConversation,
   emptyAssistantHistoryStore,
+  formatAssistantConversationTime,
   parseAssistantHistoryStore,
   serializeAssistantHistoryStore,
   setAssistantConversationMessages,
@@ -128,6 +130,28 @@ export function clipAssistantContext(
     cut = cut.slice(0, -1);
   }
   return { text: cut, truncated: true };
+}
+
+const SELECTION_WRAP = /<selection>\s*([\s\S]*?)\s*<\/selection>/;
+
+export function splitQuotedUserContent(content: string): { quote: string; body: string } {
+  const match = SELECTION_WRAP.exec(content);
+  if (match === null || match[1] === undefined) {
+    return { quote: '', body: content };
+  }
+  const quote = match[1].trim();
+  const body = `${content.slice(0, match.index)}${content.slice(match.index + match[0].length)}`.trim();
+  return { quote, body };
+}
+
+export function composeQuotedUserContent(quote: string, question: string): string {
+  const sel = quote.trim();
+  const body = question.trim();
+  if (sel === '') {
+    return body;
+  }
+  const wrapped = `<selection>\n${sel}\n</selection>`;
+  return body === '' ? wrapped : `${wrapped}\n${body}`;
 }
 
 /** 快捷动作发起的用户消息内容（同时是历史存储与气泡展示）。 */
@@ -249,12 +273,15 @@ function serializeChatMessage(message: AssistantChatMessage): Record<string, unk
 function locatorTarget(
   chapterRaw: string | undefined,
   pageRaw: string | undefined,
-): { chapter?: number; page?: number } {
-  const target: { chapter?: number; page?: number } = {};
+  titleRaw?: string,
+): { chapter?: number; page?: number; title?: string } {
+  const target: { chapter?: number; page?: number; title?: string } = {};
   if (chapterRaw !== undefined && chapterRaw !== '') {
     const chapter = Number(chapterRaw);
     if (Number.isFinite(chapter)) {
       target.chapter = Math.trunc(chapter);
+    } else {
+      target.title = chapterRaw.trim();
     }
   }
   if (pageRaw !== undefined && pageRaw !== '') {
@@ -262,6 +289,10 @@ function locatorTarget(
     if (Number.isFinite(page)) {
       target.page = Math.trunc(page);
     }
+  }
+  const title = titleRaw?.trim();
+  if (title !== undefined && title !== '') {
+    target.title = target.title ?? title;
   }
   return target;
 }
@@ -451,7 +482,7 @@ export interface AssistantPanelDeps {
   /** 前端工具循环的执行会话；缺省则 tool_call 回失败结果。 */
   createToolSession?: () => AssistantToolSession;
   /** 回答中的章节/页码定位点击（用户操作，不由工具翻页）。 */
-  jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
+  jumpToLocator?: (target: { chapter?: number; page?: number; title?: string }) => void;
   /** 助手 Markdown 外链（沿用应用外部打开策略）。 */
   openExternalLink?: (href: string) => void;
 }
@@ -540,7 +571,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   historyToggle.textContent = t('reader.assistant.history');
   historyToggle.setAttribute('title', t('reader.assistant.history'));
   historyToggle.setAttribute('aria-expanded', 'false');
-  head.append(title, historyToggle, close);
+  head.prepend(historyToggle);
+  head.append(title, close);
 
   const historyPane = document.createElement('div');
   historyPane.className = 'lightink-reader-assistant-history';
@@ -612,24 +644,20 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const composer = document.createElement('form');
   composer.className = 'lightink-reader-assistant-composer';
-  const composerTools = document.createElement('div');
-  composerTools.className = 'lightink-reader-assistant-composer-tools';
+  const composerBox = document.createElement('div');
+  composerBox.className = 'lightink-reader-assistant-composer-box';
+  const input = document.createElement('textarea');
+  input.className = 'lightink-reader-assistant-input';
+  input.rows = 2;
+  input.setAttribute('placeholder', t('reader.assistant.placeholder'));
+  input.setAttribute('aria-label', t('reader.assistant.placeholder'));
+  const composerBar = document.createElement('div');
+  composerBar.className = 'lightink-reader-assistant-composer-bar';
   const quoteButton = document.createElement('button');
   quoteButton.type = 'button';
   quoteButton.className = 'lightink-reader-assistant-quote';
   quoteButton.dataset.assistantQuote = 'true';
   quoteButton.textContent = t('reader.assistant.quote');
-  const composerHint = document.createElement('p');
-  composerHint.className = 'lightink-reader-assistant-composer-hint';
-  composerHint.textContent = t('reader.assistant.composerHint');
-  composerTools.append(quoteButton, composerHint);
-  const composerRow = document.createElement('div');
-  composerRow.className = 'lightink-reader-assistant-composer-row';
-  const input = document.createElement('textarea');
-  input.className = 'lightink-reader-assistant-input';
-  input.rows = 4;
-  input.setAttribute('placeholder', t('reader.assistant.placeholder'));
-  input.setAttribute('aria-label', t('reader.assistant.placeholder'));
   const send = document.createElement('button');
   send.type = 'submit';
   send.className = 'lightink-reader-assistant-send';
@@ -639,9 +667,29 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   stop.className = 'lightink-reader-assistant-stop';
   stop.dataset.assistantStop = 'true';
   stop.textContent = t('reader.assistant.stop');
+  stop.hidden = true;
   stop.disabled = true;
-  composerRow.append(input, send, stop);
-  composer.append(composerTools, composerRow);
+  const quoteChip = document.createElement('div');
+  quoteChip.className = 'lightink-reader-assistant-quote-chip';
+  quoteChip.hidden = true;
+  const quoteChipLabel = document.createElement('span');
+  quoteChipLabel.className = 'lightink-reader-assistant-quote-chip-label';
+  quoteChipLabel.textContent = t('reader.assistant.quote');
+  const quoteChipText = document.createElement('span');
+  quoteChipText.className = 'lightink-reader-assistant-quote-chip-text';
+  const quoteChipClear = document.createElement('button');
+  quoteChipClear.type = 'button';
+  quoteChipClear.className = 'lightink-reader-assistant-quote-chip-clear';
+  quoteChipClear.textContent = '×';
+  quoteChipClear.setAttribute('aria-label', t('reader.assistant.quoteRemove'));
+  quoteChipClear.setAttribute('title', t('reader.assistant.quoteRemove'));
+  quoteChip.append(quoteChipLabel, quoteChipText, quoteChipClear);
+  composerBar.append(quoteButton, send, stop);
+  composerBox.append(quoteChip, input, composerBar);
+  const composerHint = document.createElement('p');
+  composerHint.className = 'lightink-reader-assistant-composer-hint';
+  composerHint.textContent = t('reader.assistant.composerHint');
+  composer.append(composerBox, composerHint);
   main.append(contextHint, messagesWrap, persistNotice, actions, composer);
   root.append(head, historyPane, guide, main);
 
@@ -673,6 +721,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let markdownStream = createAssistantMarkdownStream();
   let stickToBottom = true;
   let persistError: string | null = null;
+  let attachedQuote = '';
 
   const chapterContextOrNull = (): AssistantChapterContext | null => {
     try {
@@ -770,10 +819,28 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       bubble.dataset.action = message.action;
     }
     if (message.role === 'user') {
-      const text = document.createElement('p');
-      text.className = 'lightink-reader-assistant-message-text';
-      text.textContent = message.content;
-      bubble.appendChild(text);
+      const split = splitQuotedUserContent(message.content);
+      if (split.quote !== '') {
+        const card = document.createElement('blockquote');
+        card.className = 'lightink-reader-assistant-quote-card';
+        const label = document.createElement('span');
+        label.className = 'lightink-reader-assistant-quote-card-label';
+        label.textContent = t('reader.assistant.quote');
+        const excerpt = document.createElement('span');
+        excerpt.className = 'lightink-reader-assistant-quote-excerpt';
+        excerpt.textContent = split.quote;
+        card.append(label, excerpt);
+        bubble.appendChild(card);
+      }
+      const hideInstruction =
+        split.quote !== '' &&
+        (message.action === 'explain' || message.action === 'summarize');
+      if (!hideInstruction && (split.body !== '' || split.quote === '')) {
+        const text = document.createElement('p');
+        text.className = 'lightink-reader-assistant-message-text';
+        text.textContent = split.body === '' ? message.content : split.body;
+        bubble.appendChild(text);
+      }
       return bubble;
     }
     for (const block of message.toolBlocks ?? []) {
@@ -862,8 +929,55 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     scrollMessagesBottom();
   };
 
+  const historyLocale = (): string =>
+    typeof document !== 'undefined' && document.documentElement.lang.trim() !== ''
+      ? document.documentElement.lang
+      : 'zh-CN';
+
+  const conversationListTitle = (conversation: AssistantConversation): string => {
+    const derived = assistantConversationTitle(conversation.messages);
+    if (derived !== '') {
+      return derived;
+    }
+    const firstUser = conversation.messages.find(
+      (message) => message.role === 'user' && message.content.trim() !== '',
+    );
+    if (firstUser?.action !== undefined) {
+      return t(assistantActionLabelKey(firstUser.action));
+    }
+    const stored = conversation.title.trim();
+    return stored === '' ? t('reader.assistant.untitled') : stored;
+  };
+
+  const listedConversations = (): AssistantConversation[] =>
+    store.conversations
+      .filter((conversation) =>
+        conversation.messages.some(
+          (message) => message.role === 'user' && message.content.trim() !== '',
+        ),
+      )
+      .slice()
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  const setHistoryOpen = (open: boolean): void => {
+    historyPane.hidden = !open;
+    root.classList.toggle('is-history', open);
+    historyToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    historyToggle.textContent = open
+      ? t('reader.assistant.historyBack')
+      : t('reader.assistant.history');
+    historyToggle.setAttribute(
+      'title',
+      open ? t('reader.assistant.historyBack') : t('reader.assistant.history'),
+    );
+    title.textContent = open ? t('reader.assistant.history') : t('reader.assistant.title');
+    if (open) {
+      renderHistoryList();
+    }
+  };
+
   const renderHistoryList = (): void => {
-    const conversations = store.conversations;
+    const conversations = listedConversations();
     historyEmpty.hidden = conversations.length > 0;
     historyList.replaceChildren();
     for (const conversation of conversations) {
@@ -876,8 +990,18 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'lightink-reader-assistant-history-open';
-      openButton.textContent =
-        conversation.title.trim() === '' ? t('reader.assistant.untitled') : conversation.title;
+      const name = document.createElement('span');
+      name.className = 'lightink-reader-assistant-history-title';
+      name.textContent = conversationListTitle(conversation);
+      const meta = document.createElement('time');
+      meta.className = 'lightink-reader-assistant-history-time';
+      meta.dateTime = new Date(conversation.updatedAt).toISOString();
+      meta.textContent = formatAssistantConversationTime(
+        conversation.updatedAt,
+        Date.now(),
+        historyLocale(),
+      );
+      openButton.append(name, meta);
       openButton.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -900,12 +1024,23 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
 
+  const renderQuoteChip = (): void => {
+    const attached = attachedQuote.trim();
+    quoteChip.hidden = attached === '';
+    quoteChipText.textContent = attached;
+  };
+
   const syncQuoteButton = (): void => {
-    // 选区来自阅读器 pendingSelection，开面板时的快照会过期；按钮保持可点，
-    // 是否插入在 click 时用 live currentSelectionText() 决定。
-    const quote = currentSelectionText();
-    quoteButton.disabled = false;
-    quoteButton.title = quote === '' ? t('reader.assistant.quoteUnavailable') : t('reader.assistant.quote');
+    const live = currentSelectionText();
+    quoteButton.disabled = live === '' && attachedQuote.trim() === '';
+    quoteButton.classList.toggle('is-ready', live !== '' && live !== attachedQuote);
+    quoteButton.title =
+      live === ''
+        ? t('reader.assistant.quoteUnavailable')
+        : live === attachedQuote
+          ? t('reader.assistant.quote')
+          : t('reader.assistant.quoteReady');
+    renderQuoteChip();
   };
 
   const onSelectionChange = (): void => {
@@ -945,7 +1080,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const syncComposer = (): void => {
+    send.hidden = streaming;
     send.disabled = streaming;
+    stop.hidden = !streaming;
     stop.disabled = !streaming;
     syncQuoteButton();
     syncActionButtons();
@@ -965,8 +1102,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     main.hidden = !aiConfigured;
     historyToggle.hidden = !aiConfigured;
     if (!aiConfigured) {
-      historyPane.hidden = true;
-      historyToggle.setAttribute('aria-expanded', 'false');
+      setHistoryOpen(false);
     }
     syncComposer();
     syncContextHint();
@@ -1018,10 +1154,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (persistError !== null) {
       persistNotice.textContent = persistError;
     }
-    const key = deps.historyKey?.() ?? null;
-    if (key === null || deps.writeHistory === undefined) {
-      return;
-    }
     if (store.activeId === '' && messages.length === 0) {
       return;
     }
@@ -1030,6 +1162,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
     renderHistoryList();
+    const key = deps.historyKey?.() ?? null;
+    if (key === null || deps.writeHistory === undefined) {
+      return;
+    }
     try {
       const json = serializeAssistantHistoryStore(store);
       persistError = null;
@@ -1278,7 +1414,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const ask = (content: string, action?: AssistantQuickAction): boolean => {
     const question = content.trim();
-    if (question === '' || !aiConfigured || streaming || sendGate) {
+    const quote = attachedQuote.trim();
+    if ((question === '' && quote === '') || !aiConfigured || streaming || sendGate) {
       return false;
     }
     sendGate = true;
@@ -1288,7 +1425,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         if (disposed.value || !aiConfigured || streaming) {
           return;
         }
-        appendExchange({ role: 'user', content: question, createdAt: Date.now(), action });
+        const payload = composeQuotedUserContent(quote, question);
+        attachedQuote = '';
+        renderQuoteChip();
+        syncQuoteButton();
+        appendExchange({ role: 'user', content: payload, createdAt: Date.now(), action });
       } finally {
         sendGate = false;
       }
@@ -1339,8 +1480,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const switchConversation = (id: string): void => {
     if (id === store.activeId) {
-      historyPane.hidden = true;
-      historyToggle.setAttribute('aria-expanded', 'false');
+      setHistoryOpen(false);
       return;
     }
     if (streaming) {
@@ -1350,8 +1490,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     store = switchAssistantConversation(store, id);
     loadActiveMessages();
     persistHistory();
-    historyPane.hidden = true;
-    historyToggle.setAttribute('aria-expanded', 'false');
+    setHistoryOpen(false);
   };
 
   const removeConversation = (id: string): void => {
@@ -1364,6 +1503,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     store = deleteAssistantConversation(store, id);
     loadActiveMessages();
     persistHistory();
+    if (!historyPane.hidden) {
+      renderHistoryList();
+    }
   };
 
   const startNewConversation = (): void => {
@@ -1377,12 +1519,22 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (streaming) {
         abortStream();
       }
-      if (store.activeId !== '') {
-        store = setAssistantConversationMessages(store, store.activeId, persistableMessages(messages));
+      const hasUserTurn = messages.some(
+        (message) => message.role === 'user' && message.content.trim() !== '',
+      );
+      if (hasUserTurn) {
+        if (store.activeId !== '') {
+          store = setAssistantConversationMessages(
+            store,
+            store.activeId,
+            persistableMessages(messages),
+          );
+        }
+        store = createAssistantConversation(store);
+        loadActiveMessages();
+        persistHistory();
       }
-      store = createAssistantConversation(store);
-      loadActiveMessages();
-      persistHistory();
+      setHistoryOpen(false);
     });
   };
 
@@ -1411,17 +1563,21 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.preventDefault();
     event.stopPropagation();
     const quote = currentSelectionText();
-    syncQuoteButton();
     if (quote === '') {
+      syncQuoteButton();
       return;
     }
-    const start = input.selectionStart ?? input.value.length;
-    const end = input.selectionEnd ?? start;
-    const before = input.value.slice(0, start);
-    const after = input.value.slice(end);
-    const pad = before === '' || before.endsWith('\n') ? '' : '\n';
-    input.value = `${before}${pad}${quote}${after}`;
-    resizeInput();
+    attachedQuote = quote;
+    renderQuoteChip();
+    syncQuoteButton();
+    input.focus();
+  });
+  quoteChipClear.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    attachedQuote = '';
+    renderQuoteChip();
+    syncQuoteButton();
     input.focus();
   });
   stop.addEventListener('click', (event) => {
@@ -1450,7 +1606,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (locator instanceof HTMLAnchorElement) {
       event.preventDefault();
       event.stopPropagation();
-      deps.jumpToLocator?.(locatorTarget(locator.dataset.chapter, locator.dataset.page));
+      deps.jumpToLocator?.(
+        locatorTarget(
+          locator.dataset.chapter,
+          locator.dataset.page,
+          locator.textContent ?? '',
+        ),
+      );
       return;
     }
     const link = target.closest('a[href]');
@@ -1469,12 +1631,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   historyToggle.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const next = historyPane.hidden;
-    historyPane.hidden = !next;
-    historyToggle.setAttribute('aria-expanded', next ? 'true' : 'false');
-    if (next) {
-      renderHistoryList();
-    }
+    setHistoryOpen(historyPane.hidden);
   });
   historyNew.addEventListener('click', (event) => {
     event.preventDefault();

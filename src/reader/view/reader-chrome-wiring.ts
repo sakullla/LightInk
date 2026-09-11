@@ -94,6 +94,7 @@ import {
 } from '../assistant-panel.js';
 import {
   createAssistantToolSession,
+  resolveAssistantLocatorJump,
   type AssistantChapterBody,
   type AssistantChapterTarget,
   type AssistantToolSelection,
@@ -881,7 +882,12 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
               title: current.title,
               ...(current.kind === 'pdf'
                 ? { page: ctx.pdfHandle?.controller.page }
-                : { chapter: ctx.dom.firstVisibleChapter() }),
+                : {
+                    chapter:
+                      ctx.readerState.locationKind === 'chapter' && ctx.readerState.current > 0
+                        ? ctx.readerState.current - 1
+                        : ctx.dom.firstVisibleChapter(),
+                  }),
             };
           },
           chapterText: assistantChapterText,
@@ -929,29 +935,27 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           },
         }),
       jumpToLocator: (target) => {
-        if (target.page !== undefined) {
+        const resolved = resolveAssistantLocatorJump(ctx.readerOutline, target);
+        if (resolved === null) {
+          return;
+        }
+        if ('text' in resolved && 'anchor' in resolved) {
+          ctx.jumpToOutlineItem(resolved);
+          return;
+        }
+        if (resolved.page !== undefined) {
           if (ctx.pdfHandle !== null) {
-            ctx.pdfHandle.scrollToPage(Math.max(1, target.page));
+            ctx.pdfHandle.scrollToPage(Math.max(1, resolved.page));
             ctx.paged.syncPageState();
             return;
           }
-          const byPage = ctx.readerOutline.find((item) => item.page === target.page);
-          if (byPage !== undefined) {
-            ctx.jumpToOutlineItem(byPage);
-            return;
-          }
         }
-        if (target.chapter !== undefined) {
-          const byChapter = ctx.readerOutline.find((item) => item.chapter === target.chapter);
-          if (byChapter !== undefined) {
-            ctx.jumpToOutlineItem(byChapter);
-            return;
-          }
+        if (resolved.chapter !== undefined) {
           ctx.jumpToOutlineItem({
             level: 1,
             text: '',
-            anchor: target.chapter,
-            chapter: target.chapter,
+            anchor: resolved.chapter,
+            chapter: resolved.chapter,
           });
         }
       },

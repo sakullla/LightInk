@@ -18,7 +18,12 @@ import type { InsertElementId } from '../../editor/insert-commands.js';
 import { createAppShell, type AppShellActions } from '../../ui/app-shell.js';
 import { ShortcutRegistry } from '../../ui/shortcuts.js';
 import type { BuiltinThemeId } from '../../theme/theme-service.js';
-import { createFlowRenderer, eventTargetsFlowScroller, type FlowRendererHooks } from '../flow-renderer.js';
+import {
+  createFlowRenderer,
+  eventTargetsFlowScroller,
+  swallowWheelOverPinnedOverlay,
+  type FlowRendererHooks,
+} from '../flow-renderer.js';
 import { sessionRemoteImagePolicy } from '../../media/remote-image-policy.js';
 
 import {
@@ -1284,6 +1289,172 @@ describe('flow host wheel', () => {
     expect(eventTargetsFlowScroller(title, root)).toBe(true);
     expect(readerPageHostOwnsWindowWheel(title)).toBe(true);
     expect(readerPageHostOwnsWindowWheel(document.createElement('div'))).toBe(false);
+  });
+
+  function mockOverlayRect(
+    el: HTMLElement,
+    box: { left: number; top: number; width: number; height: number },
+  ): void {
+    el.getBoundingClientRect = () =>
+      ({
+        x: box.left,
+        y: box.top,
+        width: box.width,
+        height: box.height,
+        top: box.top,
+        right: box.left + box.width,
+        bottom: box.top + box.height,
+        left: box.left,
+        toJSON: () => ({}),
+      }) as DOMRect;
+  }
+
+  it('does not page when the wheel target is inside the assistant panel', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    let called = 0;
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: () => {
+          called += 1;
+          return true;
+        },
+      }),
+    );
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    const messages = document.createElement('div');
+    panel.appendChild(messages);
+    document.body.appendChild(panel);
+    const event = new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true });
+    messages.dispatchEvent(event);
+    expect(called).toBe(0);
+    expect(event.defaultPrevented).toBe(false);
+    renderer.clear();
+  });
+
+  it('does not page a host wheel whose pointer sits over the assistant overlay', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    let called = 0;
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: () => {
+          called += 1;
+          return true;
+        },
+      }),
+    );
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    document.body.appendChild(panel);
+    mockOverlayRect(panel, { left: 800, top: 0, width: 400, height: 800 });
+    const event = new WheelEvent('wheel', {
+      deltaY: 40,
+      bubbles: true,
+      cancelable: true,
+      clientX: 900,
+      clientY: 120,
+    });
+    document.dispatchEvent(event);
+    expect(called).toBe(0);
+    expect(event.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
+
+  it('still pages when the assistant overlay is hidden', () => {
+    const { root, scrollHost } = mountFlowRoot();
+    let called = 0;
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        advancePagedWheel: () => {
+          called += 1;
+          return true;
+        },
+      }),
+    );
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    panel.hidden = true;
+    document.body.appendChild(panel);
+    mockOverlayRect(panel, { left: 800, top: 0, width: 400, height: 800 });
+    const event = new WheelEvent('wheel', {
+      deltaY: 40,
+      bubbles: true,
+      cancelable: true,
+      clientX: 900,
+      clientY: 120,
+    });
+    document.dispatchEvent(event);
+    expect(called).toBe(1);
+    renderer.clear();
+  });
+
+  it('does not scroll the pane when the pointer is over the assistant overlay', () => {
+    const scroller = { scrollTop: 40, scrollLeft: 0, clientHeight: 600 };
+    const { root, scrollHost } = mountFlowRoot();
+    root.dataset.readingLayout = 'scroll';
+    document.documentElement.dataset.readingLayout = 'scroll';
+    const renderer = createFlowRenderer(
+      scrollHost,
+      root,
+      flowRendererHooks({
+        scrollContainer: () => scroller as unknown as HTMLElement,
+      }),
+    );
+    const title = document.createElement('h1');
+    title.className = 'lightink-reader-chapter-title';
+    title.textContent = '第0137章';
+    scrollHost.appendChild(title);
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    document.body.appendChild(panel);
+    mockOverlayRect(panel, { left: 800, top: 0, width: 400, height: 800 });
+    const event = new WheelEvent('wheel', {
+      deltaY: 80,
+      bubbles: true,
+      cancelable: true,
+      clientX: 900,
+      clientY: 120,
+    });
+    title.dispatchEvent(event);
+    expect(scroller.scrollTop).toBe(40);
+    expect(event.defaultPrevented).toBe(true);
+    renderer.clear();
+  });
+
+  it('maps an iframe-local wheel onto a host assistant overlay', () => {
+    const frame = document.createElement('iframe');
+    mockOverlayRect(frame, { left: 100, top: 40, width: 600, height: 400 });
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    document.body.appendChild(panel);
+    mockOverlayRect(panel, { left: 500, top: 0, width: 400, height: 800 });
+    const event = new WheelEvent('wheel', {
+      deltaY: 40,
+      bubbles: true,
+      cancelable: true,
+      clientX: 420,
+      clientY: 80,
+    });
+    Object.defineProperty(event, 'currentTarget', { value: {} });
+    expect(swallowWheelOverPinnedOverlay(event, frame)).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('does not treat the assistant overlay as the flow scroller', () => {
+    const { root } = mountFlowRoot();
+    root.dataset.readingLayout = 'scroll';
+    const panel = document.createElement('div');
+    panel.className = 'lightink-reader-assistant-panel';
+    const messages = document.createElement('div');
+    panel.appendChild(messages);
+    document.body.appendChild(panel);
+    expect(eventTargetsFlowScroller(messages, root)).toBe(false);
   });
 
   it('removes the document wheel listener on clear', () => {

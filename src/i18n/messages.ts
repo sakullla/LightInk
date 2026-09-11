@@ -416,7 +416,7 @@ const en = {
   'reader.assistant.saved': 'Saved',
   'reader.assistant.noChapterContext': 'No chapter text is available for this format.',
   'reader.assistant.systemPrompt':
-    'You are the AI assistant inside the LightInk reader. Use the built-in query_book and save_to_book tools when you need more of the current book or to save a highlight, bookmark, or note. Prefer the current chapter context; when you go beyond it, say so. If an answer relies on queried chapters or search hits, cite them as markdown links [label](chapter:N) or [label](page:N). Reply in the same language the user writes in.',
+    'You are the AI assistant inside the LightInk reader. Use the built-in query_book and save_to_book tools when you need more of the current book or to save a highlight, bookmark, or note. Prefer the current chapter context; when you go beyond it, say so. If an answer relies on queried chapters or search hits, cite them as markdown links [label](chapter:N) or [label](page:N). N must be the 0-based chapter index from the tool result (the first chapter is 0); keep label identical to the table-of-contents title. Reply in the same language the user writes in.',
   'reader.assistant.prompt.explain':
     'Explain the meaning of the selected text below, covering difficult words and how it fits the surrounding story:',
   'reader.assistant.prompt.summarize':
@@ -429,8 +429,11 @@ const en = {
     'Write 5 quiz questions about the current chapter (multiple choice or short answer), then give the answers with brief explanations.',
   'reader.assistant.quote': 'Quote selection',
   'reader.assistant.quoteUnavailable': 'No text is selected in the reader.',
+  'reader.assistant.quoteRemove': 'Remove quote',
+  'reader.assistant.quoteReady': 'Selection ready to quote',
   'reader.assistant.stop': 'Stop',
   'reader.assistant.history': 'Conversations',
+  'reader.assistant.historyBack': 'Back',
   'reader.assistant.historyNew': 'New conversation',
   'reader.assistant.historyEmpty': 'No conversations yet.',
   'reader.assistant.historyDelete': 'Delete conversation',
@@ -1012,7 +1015,7 @@ const zhCN = {
   'reader.assistant.saved': '已保存',
   'reader.assistant.noChapterContext': '当前格式没有可用的章节文本。',
   'reader.assistant.systemPrompt':
-    '你是 LightInk 阅读器中的 AI 助手。需要更多本书内容，或保存高亮、书签、笔记时，使用内置工具 query_book 与 save_to_book。优先依据当前章上下文；超出部分要说明。若回答依据查询到的章节或搜索命中，请用 Markdown 链接引用：[标题](chapter:N) 或 [页码](page:N)。使用与用户提问相同的语言回答。',
+    '你是 LightInk 阅读器中的 AI 助手。需要更多本书内容，或保存高亮、书签、笔记时，使用内置工具 query_book 与 save_to_book。优先依据当前章上下文；超出部分要说明。若回答依据查询到的章节或搜索命中，请用 Markdown 链接引用：[标题](chapter:N) 或 [页码](page:N)。N 必须是工具结果里的 0-based 章节序号（第一章是 0），标题尽量与目录原文一致。使用与用户提问相同的语言回答。',
   'reader.assistant.prompt.explain': '请解释下面选中文本的含义，包括难词难句与它在上下文中的作用：',
   'reader.assistant.prompt.summarize': '请用简明的要点总结下面选中的文本：',
   'reader.assistant.prompt.chapterSummary': '请用要点总结当前章节的主要内容。',
@@ -1021,8 +1024,11 @@ const zhCN = {
   'reader.assistant.prompt.quiz': '请根据当前章节出 5 道测验题（单选或简答），并附答案与简要解析。',
   'reader.assistant.quote': '引用选区',
   'reader.assistant.quoteUnavailable': '阅读器当前没有选中文本。',
+  'reader.assistant.quoteRemove': '去掉引用',
+  'reader.assistant.quoteReady': '已选中文字，点此引用',
   'reader.assistant.stop': '停止',
   'reader.assistant.history': '对话历史',
+  'reader.assistant.historyBack': '返回',
   'reader.assistant.historyNew': '新建对话',
   'reader.assistant.historyEmpty': '还没有对话。',
   'reader.assistant.historyDelete': '删除这段对话',

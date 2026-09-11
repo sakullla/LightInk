@@ -178,7 +178,12 @@ import {
 import { bindSafeAreaBridge } from './ui/safe-area.js';
 import { registerAndroidBackNavigation } from './ui/back-navigation.js';
 import { loadChromePinPrefs } from './ui/chrome-prefs.js';
-import { ShortcutRegistry, pagingShouldIgnoreTarget, wheelPagingShouldIgnoreTarget } from './ui/shortcuts.js';
+import {
+  ShortcutRegistry,
+  pagingShouldIgnoreTarget,
+  wheelHitsPinnedReaderOverlay,
+  wheelPagingShouldIgnoreEvent,
+} from './ui/shortcuts.js';
 import {
   getAppWindow,
   setNativeCaptionColors,
@@ -3795,7 +3800,10 @@ window.addEventListener(
     if (event.ctrlKey || event.metaKey || readingLayout !== 'paginated') {
       return;
     }
-    if (wheelPagingShouldIgnoreTarget(event.target)) {
+    if (wheelPagingShouldIgnoreEvent(event)) {
+      return;
+    }
+    if (wheelHitsPinnedReaderOverlay(event.clientX, event.clientY)) {
       return;
     }
     const delta =

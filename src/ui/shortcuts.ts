@@ -211,6 +211,84 @@ export function wheelPagingShouldIgnoreTarget(target: unknown): boolean {
   return isModalTarget(target) || isFormControlTarget(target);
 }
 
+/** Pinned reader overlays that own their own scroll, including body-portaled panels. */
+export const READER_WHEEL_IGNORE_SELECTOR = [
+  '.lightink-reader-assistant-panel',
+  '.lightink-reader-chrome-panel',
+  '.lightink-reader-chrome-popover',
+  '.lightink-reader-sidebar',
+  '.lightink-reader-lookup-panel',
+  '.lightink-reader-tts-dock',
+].join(', ');
+
+/**
+ * Target/path based ignore: overlay descendants, form controls, composedPath
+ * (shadow / retargeting). Does not hit-test coordinates.
+ */
+export function wheelPagingShouldIgnoreEvent(event: {
+  target?: unknown;
+  composedPath?: () => EventTarget[];
+}): boolean {
+  if (wheelPagingShouldIgnoreTarget(event.target)) {
+    return true;
+  }
+  if (typeof event.composedPath !== 'function') {
+    return false;
+  }
+  try {
+    for (const node of event.composedPath()) {
+      if (wheelPagingShouldIgnoreTarget(node)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+type OverlayQueryRoot = {
+  querySelectorAll: (selector: string) => ArrayLike<Element>;
+};
+
+/**
+ * WebView2 can deliver a wheel to the iframe under a `position:fixed` overlay.
+ * Hit-test host coordinates against visible pinned overlays so the book does
+ * not page/scroll while the conversation (or another overlay) is scrolling.
+ */
+export function wheelHitsPinnedReaderOverlay(
+  clientX: number,
+  clientY: number,
+  root: OverlayQueryRoot | null = typeof document !== 'undefined' ? document : null,
+): boolean {
+  if (root === null || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return false;
+  }
+  const overlays = root.querySelectorAll(READER_WHEEL_IGNORE_SELECTOR);
+  for (let i = 0; i < overlays.length; i += 1) {
+    const overlay = overlays[i];
+    if (!(overlay instanceof HTMLElement) || overlay.hidden) {
+      continue;
+    }
+    if (typeof overlay.getBoundingClientRect !== 'function') {
+      continue;
+    }
+    const box = overlay.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) {
+      continue;
+    }
+    if (
+      clientX >= box.left &&
+      clientX <= box.right &&
+      clientY >= box.top &&
+      clientY <= box.bottom
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Function keys and other non-text global chords that must work inside the editor. */
 export function isGlobalFunctionKey(key: string): boolean {
   return /^f([1-9]|1[0-2])$/.test(key.toLowerCase());

@@ -19,6 +19,7 @@ import {
   SAVE_TO_BOOK_TOOL_NAME,
   collectAssistantSearchHits,
   createAssistantToolSession,
+  resolveAssistantLocatorJump,
   type AssistantBookInfo,
   type AssistantChapterBody,
   type AssistantChapterTarget,
@@ -397,6 +398,48 @@ describe('save_to_book', () => {
     );
     expect(result).toMatchObject({ ok: true, saved: true, kind: 'note', note: '摘要' });
     expect(appendAnnotation).toHaveBeenCalledWith('note', FLOW_LOCATOR, undefined, '摘要');
+  });
+});
+
+describe('resolveAssistantLocatorJump', () => {
+  const outline: OutlineItem[] = [
+    { level: 1, text: '第一話 はじまり', anchor: 0, chapter: 0 },
+    { level: 1, text: '第六話 軍事会議にて①', anchor: 5, chapter: 5 },
+  ];
+
+  it('jumps to the TOC title when the model emits a 1-based or ① chapter index', () => {
+    const hit = resolveAssistantLocatorJump(outline, {
+      chapter: 1,
+      title: '第六話 軍事会議にて① (当前章节)',
+    });
+    expect(hit).toMatchObject({ chapter: 5, text: '第六話 軍事会議にて①' });
+  });
+
+  it('reads 第六話 as index 5 when TOC titles do not match the citation', () => {
+    const hit = resolveAssistantLocatorJump(
+      [
+        { level: 1, text: 'Opening', anchor: 0, chapter: 0 },
+        { level: 1, text: 'War council', anchor: 5, chapter: 5 },
+      ],
+      { chapter: 1, title: '第六話 軍事会議にて① (当前章节)' },
+    );
+    expect(hit).toMatchObject({ chapter: 5, text: 'War council' });
+  });
+
+  it('does not fall back to chapter 0 when the title is a later chapter', () => {
+    const hit = resolveAssistantLocatorJump(outline, {
+      chapter: 0,
+      title: '第六話 軍事会議にて①',
+    });
+    expect(hit).toMatchObject({ chapter: 5 });
+  });
+
+  it('uses 1-based index when it matches the title and 0-based does not', () => {
+    const hit = resolveAssistantLocatorJump(outline, {
+      chapter: 6,
+      title: '第六話',
+    });
+    expect(hit).toMatchObject({ chapter: 5 });
   });
 });
 

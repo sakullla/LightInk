@@ -16,6 +16,7 @@ import {
   AssistantHistoryTooLargeError,
   activeAssistantConversation,
   assistantConversationTitle,
+  formatAssistantConversationTime,
   createAssistantConversation,
   deleteAssistantConversation,
   emptyAssistantHistoryStore,
@@ -76,7 +77,7 @@ describe('parseAssistantHistoryStore v1 → one conversation', () => {
     expect(store.conversations).toHaveLength(1);
     expect(store.activeId).toBe(store.conversations[0]!.id);
     expect(store.conversations[0]!.messages).toEqual(sampleMessages);
-    expect(store.conversations[0]!.title).toBe('这章讲什么?');
+    expect(store.conversations[0]!.title).toBe('');
     expect(store.conversations[0]!.updatedAt).toBe(99);
   });
 
@@ -265,6 +266,31 @@ describe('assistantConversationTitle', () => {
     expect(assistantConversationTitle([user(long, 1)])).toBe(
       '字'.repeat(ASSISTANT_CONVERSATION_TITLE_MAX_CHARS),
     );
+  });
+
+  it('uses the selection body for explain-style messages, not the prompt', () => {
+    expect(
+      assistantConversationTitle([
+        user('请解释下面选中文本的含义\n<selection>\n难句原文\n</selection>', 1, {
+          action: 'explain',
+        }),
+      ]),
+    ).toBe('难句原文');
+  });
+
+  it('leaves action-only prompts untitled so the UI can show the action name', () => {
+    expect(
+      assistantConversationTitle([user('请用要点总结当前章节的主要内容。', 1, { action: 'chapterSummary' })]),
+    ).toBe('');
+  });
+});
+
+describe('formatAssistantConversationTime', () => {
+  it('uses relative minutes then a short date', () => {
+    const now = Date.parse('2026-09-11T12:00:00Z');
+    expect(formatAssistantConversationTime(now - 30_000, now, 'en')).toMatch(/minute|now|this/i);
+    expect(formatAssistantConversationTime(now - 3 * 60_000, now, 'en')).toMatch(/3/);
+    expect(formatAssistantConversationTime(now - 10 * 86_400_000, now, 'en')).toMatch(/Sep|9/);
   });
 });
 

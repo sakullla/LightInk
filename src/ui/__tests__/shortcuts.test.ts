@@ -17,6 +17,7 @@ import {
   pagingShouldIgnoreTarget,
   ShortcutRegistry,
   type KeyboardEventLike,
+  wheelPagingShouldIgnoreEvent,
   wheelPagingShouldIgnoreTarget,
 } from '../shortcuts.js';
 
@@ -147,6 +148,21 @@ describe('wheelPagingShouldIgnoreTarget', () => {
       classList: { contains: (name: string) => name === 'lightink-reader-chrome-popover' },
     };
     expect(wheelPagingShouldIgnoreTarget(popover)).toBe(true);
+  });
+});
+
+describe('wheelPagingShouldIgnoreEvent', () => {
+  it('walks composedPath when the target itself is not a modal', () => {
+    const assistant = {
+      classList: { contains: (name: string) => name === 'lightink-reader-assistant-panel' },
+    };
+    expect(wheelPagingShouldIgnoreEvent({ target: { tagName: 'DIV' } })).toBe(false);
+    expect(
+      wheelPagingShouldIgnoreEvent({
+        target: { tagName: 'DIV' },
+        composedPath: () => [assistant as unknown as EventTarget],
+      }),
+    ).toBe(true);
   });
 });
 

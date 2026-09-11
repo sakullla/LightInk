@@ -16,8 +16,8 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  width: min(21.5rem, calc(100vw - 2rem));
-  max-width: 23rem;
+  width: min(32rem, calc(100vw - 2.5rem));
+  max-width: 36rem;
   max-height: 100%;
   overflow: hidden;
   overscroll-behavior: contain;
@@ -50,6 +50,8 @@
 }
 
 .lightink-reader-assistant-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.82rem;
   font-weight: 650;
   letter-spacing: 0.01em;
@@ -73,9 +75,9 @@
   color: var(--lightink-fg);
 }
 
-/* 历史入口：次级文字按钮，窄面板下溢出省略。 */
+/* 历史入口在标题左侧；展开后变成返回。 */
 .lightink-reader-assistant-history-toggle {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 28px;
   padding: 0 0.5rem;
   border: 0;
@@ -85,8 +87,6 @@
   font-size: 0.72rem;
   line-height: 1.2;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
 
@@ -99,28 +99,41 @@
 .lightink-reader-assistant-history {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.45rem 0.6rem 0.55rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
-  max-height: 12rem;
+  gap: 0.55rem;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 0.7rem 0.75rem 0.85rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .lightink-reader-assistant-history[hidden] {
   display: none;
 }
 
+.lightink-reader-assistant-panel.is-history .lightink-reader-assistant-main,
+.lightink-reader-assistant-panel.is-history .lightink-reader-assistant-guide {
+  display: none;
+}
+
 .lightink-reader-assistant-history-new {
-  align-self: flex-start;
-  min-height: 28px;
-  padding: 0 0.6rem;
+  flex: 0 0 auto;
+  min-height: 2.2rem;
+  width: 100%;
+  padding: 0 0.85rem;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--lightink-bg-elevated);
   color: var(--lightink-fg);
   font: inherit;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
+}
+
+.lightink-reader-assistant-history-new:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
 }
 
 .lightink-reader-assistant-history-list {
@@ -133,31 +146,31 @@
 }
 
 .lightink-reader-assistant-history-empty {
-  margin: 0;
+  margin: 0.4rem 0.2rem;
   color: var(--lightink-muted);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
 }
 
 .lightink-reader-assistant-history-item {
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
+  align-items: stretch;
+  gap: 0.15rem;
 }
 
 .lightink-reader-assistant-history-open {
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   min-width: 0;
-  padding: 0.28rem 0.45rem;
+  padding: 0.55rem 0.6rem;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--lightink-fg);
   font: inherit;
-  font-size: 0.74rem;
   text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
 
@@ -165,8 +178,29 @@
   background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
 }
 
+.lightink-reader-assistant-history-open:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-assistant-history-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 550;
+  line-height: 1.35;
+}
+
+.lightink-reader-assistant-history-time {
+  color: var(--lightink-muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
 .lightink-reader-assistant-history-delete {
   flex: 0 0 auto;
+  align-self: center;
   min-width: 28px;
   min-height: 28px;
   border: 0;
@@ -247,6 +281,7 @@
   flex: 1 1 auto;
   min-height: 8rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.75rem 0.75rem 0.5rem;
   display: flex;
   flex-direction: column;
@@ -314,8 +349,18 @@
 
 .lightink-reader-assistant-message-text a[data-chapter],
 .lightink-reader-assistant-message-text a[data-page] {
+  display: inline;
+  padding: 0 0.12em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: inherit;
   cursor: pointer;
-  text-decoration: underline;
+  text-decoration: none;
+}
+
+.lightink-reader-assistant-message-text a[data-chapter]:hover,
+.lightink-reader-assistant-message-text a[data-page]:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
 }
 
 .lightink-reader-assistant-tool {
@@ -410,61 +455,37 @@
   cursor: default;
 }
 
-/* ===== 输入区（ADR-6：默认约 4 行，随内容长高，封顶后框内滚动） ===== */
+/* ===== 输入区：一块输入框，栏内引用 + 发送/停止互斥 ===== */
 
 .lightink-reader-assistant-composer {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  padding: 0.5rem 0.75rem 0.7rem;
+  padding: 0.45rem 0.75rem 0.7rem;
 }
 
-.lightink-reader-assistant-composer-tools {
+.lightink-reader-assistant-composer-box {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 12px;
+  background: var(--lightink-bg);
 }
 
-.lightink-reader-assistant-quote {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0.2rem 0.65rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
-  border-radius: 999px;
-  background: var(--lightink-bg-elevated);
-  color: var(--lightink-fg);
-  font: inherit;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-
-.lightink-reader-assistant-quote:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.lightink-reader-assistant-composer-hint {
-  margin: 0;
-  color: var(--lightink-muted);
-  font-size: 0.68rem;
-}
-
-.lightink-reader-assistant-composer-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
+.lightink-reader-assistant-composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--lightink-fg) 35%, transparent);
 }
 
 .lightink-reader-assistant-input {
-  flex: 1 1 auto;
-  min-height: 5.6rem;
-  max-height: 12rem;
+  display: block;
+  width: 100%;
+  min-height: 2.8rem;
+  max-height: 10rem;
   box-sizing: border-box;
-  padding: 0.45rem 0.65rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: 10px;
-  background: var(--lightink-bg);
+  margin: 0;
+  padding: 0.55rem 0.75rem 0.2rem;
+  border: 0;
+  background: transparent;
   color: var(--lightink-fg);
   font: inherit;
   line-height: 1.4;
@@ -472,22 +493,136 @@
   resize: none;
 }
 
-.lightink-reader-assistant-input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--lightink-fg) 45%, transparent);
-  outline-offset: 1px;
+.lightink-reader-assistant-input:focus {
+  outline: none;
 }
 
-.lightink-reader-assistant-send {
+.lightink-reader-assistant-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.4rem 0.4rem 0.5rem;
+}
+
+.lightink-reader-assistant-quote-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0.45rem 0.55rem 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-assistant-quote-chip[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-quote-chip-label {
   flex: 0 0 auto;
-  min-height: 2.1rem;
-  padding: 0.4rem 0.95rem;
+  color: var(--lightink-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-quote-chip-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.lightink-reader-assistant-quote-chip-clear {
+  flex: 0 0 auto;
+  min-width: 22px;
+  min-height: 22px;
   border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lightink-muted);
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-quote-chip-clear:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-quote {
+  flex: 0 0 auto;
+  margin-right: auto;
+  min-height: 28px;
+  padding: 0.15rem 0.45rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-quote:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-quote.is-ready {
+  color: var(--lightink-fg);
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+}
+
+.lightink-reader-assistant-quote:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lightink-reader-assistant-quote-card {
+  margin: 0 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid color-mix(in srgb, var(--lightink-fg) 28%, transparent);
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.lightink-reader-assistant-quote-card-label {
+  display: block;
+  color: var(--lightink-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-quote-excerpt {
+  display: block;
+  margin-top: 0.15rem;
+  white-space: pre-wrap;
+}
+
+.lightink-reader-assistant-composer-hint {
+  margin: 0 0.15rem;
+  color: var(--lightink-muted);
+  font-size: 0.68rem;
+}
+
+.lightink-reader-assistant-send,
+.lightink-reader-assistant-stop {
+  flex: 0 0 auto;
+  min-height: 1.9rem;
+  padding: 0.28rem 0.85rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--lightink-fg) 86%, transparent);
-  color: var(--lightink-bg);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+.lightink-reader-assistant-send {
+  border: 0;
+  background: color-mix(in srgb, var(--lightink-fg) 86%, transparent);
+  color: var(--lightink-bg);
 }
 
 .lightink-reader-assistant-send:disabled,
@@ -497,16 +632,9 @@
 }
 
 .lightink-reader-assistant-stop {
-  flex: 0 0 auto;
-  min-height: 2.1rem;
-  padding: 0.4rem 0.95rem;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 24%, transparent);
-  border-radius: 999px;
   background: transparent;
   color: var(--lightink-fg);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
 }
 
 /* ===== 触屏底部 sheet（几何/键盘让位由 pinFixedOverlay 内联提供） ===== */

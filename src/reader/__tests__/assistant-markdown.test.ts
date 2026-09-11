@@ -28,6 +28,16 @@ afterEach(() => {
 });
 
 describe('renderAssistantMarkdown formatting', () => {
+  it('keeps chapter locators and drops a trailing 当前章节 caption', () => {
+    const html = renderAssistantMarkdown(
+      '参考：[第六話 軍事会議にて①](chapter:5) （当前章节）',
+    );
+    const root = fragment(html);
+    const link = root.querySelector('a[data-chapter="5"]');
+    expect(link?.textContent).toBe('第六話 軍事会議にて①');
+    expect(root.textContent ?? '').not.toContain('当前章节');
+  });
+
   it('renders headings, lists, code, tables, and links as HTML rather than raw markers', () => {
     const html = renderAssistantMarkdown(
       [

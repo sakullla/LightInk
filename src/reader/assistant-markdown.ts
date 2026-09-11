@@ -416,6 +416,14 @@ function mdastToHtml(root: MdastRoot): string {
   return renderNode(root as unknown as MdastNode, collectDefinitions(root));
 }
 
+/** Drop leftover “（当前章节）” after a chapter locator so it is not a second caption. */
+function tidyCurrentChapterCitations(html: string): string {
+  return html.replace(
+    /(data-chapter="[^"]*"[\s\S]*?<\/a>)\s*[（(]\s*(当前章节|current chapter)\s*[)）]/gi,
+    '$1',
+  );
+}
+
 /** Render accumulated assistant markdown to sanitized HTML. */
 export function renderAssistantMarkdown(source: string): string {
   if (typeof source !== 'string' || source.length === 0) {
@@ -430,7 +438,7 @@ export function renderAssistantMarkdown(source: string): string {
     if (tail.length > 0) {
       parts.push(renderPlainText(tail));
     }
-    return sanitizeAssistantHtml(parts.join(''));
+    return tidyCurrentChapterCitations(sanitizeAssistantHtml(parts.join('')));
   } catch {
     return renderPlainText(source);
   }

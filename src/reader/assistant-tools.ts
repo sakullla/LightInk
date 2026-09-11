@@ -299,16 +299,164 @@ function tocItem(item: OutlineItem): AssistantTocItem {
   };
 }
 
+const CIRCLED_DIGITS = /[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF]/g;
+const CURRENT_CHAPTER_MARK = /[（(]\s*(当前章节|current chapter)\s*[)）]/gi;
+const CN_DIGIT: Readonly<Record<string, number>> = {
+  零: 0,
+  〇: 0,
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+function chineseNumeralToInt(raw: string): number | undefined {
+  if (raw === '十') {
+    return 10;
+  }
+  if (raw.startsWith('十')) {
+    const ones = CN_DIGIT[raw.slice(1)];
+    return ones === undefined ? undefined : 10 + ones;
+  }
+  const ten = raw.indexOf('十');
+  if (ten >= 0) {
+    const tens = ten === 0 ? 1 : CN_DIGIT[raw.slice(0, ten)];
+    const ones = raw.slice(ten + 1) === '' ? 0 : CN_DIGIT[raw.slice(ten + 1)];
+    if (tens === undefined || ones === undefined) {
+      return undefined;
+    }
+    return tens * 10 + ones;
+  }
+  return CN_DIGIT[raw];
+}
+
+function toAsciiDigits(raw: string): string {
+  return raw.replace(/[０-９]/g, (digit) => String(digit.charCodeAt(0) - 0xff10));
+}
+
+/** 第六話 / 第6章 → 0-based index. */
+export function chapterIndexFromTitle(title: string): number | undefined {
+  const arabic = /第\s*([0-9０-９]+)\s*[話话章回]/.exec(title);
+  if (arabic?.[1] !== undefined) {
+    const value = Number(toAsciiDigits(arabic[1]));
+    return Number.isFinite(value) && value >= 1 ? value - 1 : undefined;
+  }
+  const chinese = /第\s*([一二三四五六七八九十百]+)\s*[話话章回]/.exec(title);
+  if (chinese?.[1] === undefined) {
+    return undefined;
+  }
+  const value = chineseNumeralToInt(chinese[1]);
+  return value !== undefined && value >= 1 ? value - 1 : undefined;
+}
+
+/** Strip citation chrome (circled ①, “当前章节”) so 第六話…① matches the TOC. */
+export function normalizeAssistantLocatorTitle(title: string): string {
+  return title
+    .replace(CURRENT_CHAPTER_MARK, ' ')
+    .replace(CIRCLED_DIGITS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 function matchOutlineTitle(outline: readonly OutlineItem[], title: string): OutlineItem[] {
-  const needle = title.trim().toLowerCase();
+  const needle = normalizeAssistantLocatorTitle(title);
   if (needle === '') {
     return [];
   }
-  const exact = outline.filter((item) => item.text.trim().toLowerCase() === needle);
+  const exact = outline.filter(
+    (item) => normalizeAssistantLocatorTitle(item.text) === needle,
+  );
   if (exact.length > 0) {
     return exact;
   }
-  return outline.filter((item) => item.text.trim().toLowerCase().includes(needle));
+  return outline.filter((item) => {
+    const haystack = normalizeAssistantLocatorTitle(item.text);
+    return haystack.includes(needle) || needle.includes(haystack);
+  });
+}
+
+export interface AssistantLocatorTarget {
+  readonly chapter?: number;
+  readonly page?: number;
+  readonly title?: string;
+}
+
+/**
+ * Click-to-jump: prefer TOC title (models often emit 1-based N or ①), then
+ * 0-based chapter, then 1-based chapter. Page stays 1-based.
+ */
+export function resolveAssistantLocatorJump(
+  outline: readonly OutlineItem[],
+  target: AssistantLocatorTarget,
+): OutlineItem | { chapter?: number; page?: number } | null {
+  const title = (target.title ?? '').trim();
+  const titled = title === '' ? [] : matchOutlineTitle(outline, title);
+  if (titled.length === 1) {
+    return titled[0]!;
+  }
+  const fromTitle = chapterIndexFromTitle(title);
+  if (fromTitle !== undefined) {
+    const byOrdinal =
+      titled.find((item) => item.chapter === fromTitle) ??
+      outline.find((item) => item.chapter === fromTitle);
+    if (byOrdinal !== undefined) {
+      return byOrdinal;
+    }
+  }
+  if (target.page !== undefined) {
+    const byPage = outline.find((item) => item.page === target.page);
+    if (byPage !== undefined) {
+      return byPage;
+    }
+    const titledPage = titled.find((item) => item.page === target.page);
+    if (titledPage !== undefined) {
+      return titledPage;
+    }
+    return { page: target.page };
+  }
+  if (target.chapter !== undefined) {
+    const zero = outline.find((item) => item.chapter === target.chapter);
+    const oneBased =
+      target.chapter >= 1
+        ? outline.find((item) => item.chapter === target.chapter - 1)
+        : undefined;
+    if (titled.length > 0) {
+      const hit =
+        titled.find((item) => item.chapter === target.chapter) ??
+        titled.find((item) => item.chapter === target.chapter - 1);
+      if (hit !== undefined) {
+        return hit;
+      }
+    }
+    const needle = normalizeAssistantLocatorTitle(title);
+    if (needle !== '') {
+      const zeroOk =
+        zero !== undefined && normalizeAssistantLocatorTitle(zero.text).includes(needle);
+      const oneOk =
+        oneBased !== undefined &&
+        normalizeAssistantLocatorTitle(oneBased.text).includes(needle);
+      if (oneOk && !zeroOk) {
+        return oneBased!;
+      }
+    }
+    if (zero !== undefined) {
+      return zero;
+    }
+    if (oneBased !== undefined) {
+      return oneBased;
+    }
+    return { chapter: target.chapter };
+  }
+  if (titled.length > 0) {
+    return titled[0]!;
+  }
+  return null;
 }
 
 function outlineTarget(item: OutlineItem): AssistantChapterTarget {

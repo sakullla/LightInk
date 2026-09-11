@@ -45,7 +45,13 @@ import {
 } from '../ui/reading-layout.js';
 import { playReaderPageBoundaryBounce } from './reader-progress-ui.js';
 import { effectiveReaderPageTurnEffect } from './reader-prefs.js';
-import { DEFAULT_SHORTCUTS, matchEvent, wheelPagingShouldIgnoreTarget } from '../ui/shortcuts.js';
+import {
+  DEFAULT_SHORTCUTS,
+  matchEvent,
+  READER_WHEEL_IGNORE_SELECTOR,
+  wheelHitsPinnedReaderOverlay,
+  wheelPagingShouldIgnoreEvent,
+} from '../ui/shortcuts.js';
 import {
   bindClickPaging,
   bindPointerTapPaging,
@@ -372,7 +378,10 @@ export function eventTargetsFlowScroller(
   if (
     element.closest('.lightink-reader-pages') !== null ||
     element.closest('.lightink-reader-sidebar') !== null ||
-    element.closest('.lightink-reader-chrome-panel') !== null
+    element.closest('.lightink-reader-chrome-panel') !== null ||
+    element.closest('.lightink-reader-assistant-panel') !== null ||
+    element.closest('.lightink-reader-lookup-panel') !== null ||
+    element.closest('.lightink-reader-tts-dock') !== null
   ) {
     return false;
   }
@@ -442,6 +451,14 @@ export function applyFrameWheelToScroller(
   return scroller.scrollTop !== beforeTop || scroller.scrollLeft !== beforeLeft;
 }
 
+/** Map an X inside the iframe document to the parent viewport. */
+export function mapFrameClientX(frame: HTMLElement, clientX: number): number {
+  if (typeof frame.getBoundingClientRect !== 'function') {
+    return clientX;
+  }
+  return frame.getBoundingClientRect().left + clientX;
+}
+
 /** Map a Y inside the iframe document to the parent viewport. */
 export function mapFrameClientY(frame: HTMLElement, clientY: number): number {
   if (typeof frame.getBoundingClientRect !== 'function') {
@@ -465,6 +482,33 @@ export function mapFrameClientRect(
     width: rect.width,
     height: rect.height,
   };
+}
+
+/**
+ * Swallow a wheel whose pointer sits over a pinned overlay.
+ * Used when WebView2 delivers the event to the iframe/host under the overlay.
+ * Callers that already matched the overlay as `event.target` should return
+ * without this, so the overlay can still scroll natively.
+ */
+export function swallowWheelOverPinnedOverlay(
+  event: WheelEvent,
+  frame: HTMLElement | null,
+): boolean {
+  const fromFrameDocument = frame !== null && event.currentTarget !== frame;
+  const hostX = fromFrameDocument && frame !== null
+    ? mapFrameClientX(frame, event.clientX)
+    : event.clientX;
+  const hostY = fromFrameDocument && frame !== null
+    ? mapFrameClientY(frame, event.clientY)
+    : event.clientY;
+  const hostDocument =
+    frame?.ownerDocument ?? (typeof document !== 'undefined' ? document : null);
+  if (!wheelHitsPinnedReaderOverlay(hostX, hostY, hostDocument)) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
 }
 
 function clearPaginatedMediaInline(frameDocument: Document): void {
@@ -2248,6 +2292,9 @@ export function createFlowRenderer(
             return;
           }
           appliedWheel = event;
+          if (swallowWheelOverPinnedOverlay(event, frame)) {
+            return;
+          }
           if (event.ctrlKey || event.metaKey) {
             if (event.deltaY === 0) {
               return;
@@ -2762,17 +2809,18 @@ export function createFlowRenderer(
     if (!flowReaderSurfaceActive(root)) {
       return;
     }
-    if (wheelPagingShouldIgnoreTarget(event.target)) {
+    if (wheelPagingShouldIgnoreEvent(event)) {
       return;
     }
+    const hit = elementFromEventTarget(event.target);
     if (
-      event.target instanceof Element &&
-      (event.target.closest('.lightink-reader-pages') !== null ||
-        event.target.closest('.lightink-reader-sidebar') !== null ||
-        event.target.closest('.lightink-reader-chrome-panel') !== null ||
-        event.target.closest('.lightink-reader-assistant-panel') !== null ||
-        event.target.closest('.lightink-reader-lookup-panel') !== null)
+      hit !== null &&
+      (hit.closest('.lightink-reader-pages') !== null ||
+        hit.closest(READER_WHEEL_IGNORE_SELECTOR) !== null)
     ) {
+      return;
+    }
+    if (swallowWheelOverPinnedOverlay(event, null)) {
       return;
     }
     if (!isFlowPaginated(root)) {

@@ -13,7 +13,8 @@ export const ASSISTANT_HISTORY_MAX_MESSAGES = 400;
 /** 单本会话段数上限（敌意文件防膨胀）。 */
 export const ASSISTANT_HISTORY_MAX_CONVERSATIONS = 100;
 /** 列表标题取自首条用户消息的截断长度。 */
-export const ASSISTANT_CONVERSATION_TITLE_MAX_CHARS = 40;
+export const ASSISTANT_CONVERSATION_TITLE_MAX_CHARS = 48;
+const SELECTION_BLOCK = /<selection>\s*([\s\S]*?)\s*<\/selection>/i;
 
 const ASSISTANT_HISTORY_ACTIONS = [
   'explain',
@@ -66,17 +67,8 @@ export function emptyAssistantHistoryStore(): AssistantHistoryStore {
   return { version: 2, activeId: '', conversations: [] };
 }
 
-/** 标题=首条非空用户消息，空白折叠后按字符上限截断（代理对边界回退一字）。 */
-export function assistantConversationTitle(
-  messages: readonly AssistantHistoryMessage[],
-): string {
-  const firstUser = messages.find(
-    (message) => message.role === 'user' && message.content.trim() !== '',
-  );
-  if (firstUser === undefined) {
-    return '';
-  }
-  const text = firstUser.content.trim().replace(/\s+/g, ' ');
+function clipConversationTitle(raw: string): string {
+  const text = raw.trim().replace(/\s+/g, ' ');
   if (text.length <= ASSISTANT_CONVERSATION_TITLE_MAX_CHARS) {
     return text;
   }
@@ -86,6 +78,60 @@ export function assistantConversationTitle(
     cut = cut.slice(0, -1);
   }
   return cut;
+}
+
+/**
+ * 列表标题：选区类快捷动作取 `<selection>` 正文；带 action 但无选区的
+ * 提示词不进标题（界面用动作名）；普通提问取首条用户消息。
+ */
+export function assistantConversationTitle(
+  messages: readonly AssistantHistoryMessage[],
+): string {
+  const firstUser = messages.find(
+    (message) => message.role === 'user' && message.content.trim() !== '',
+  );
+  if (firstUser === undefined) {
+    return '';
+  }
+  const selected = SELECTION_BLOCK.exec(firstUser.content);
+  if (selected?.[1] !== undefined && selected[1].trim() !== '') {
+    return clipConversationTitle(selected[1]);
+  }
+  if (firstUser.action !== undefined) {
+    return '';
+  }
+  return clipConversationTitle(firstUser.content);
+}
+
+/** 历史列表时间：一小时内用相对分钟，一周内用相对日，更早用短日期。 */
+export function formatAssistantConversationTime(
+  updatedAt: number,
+  now: number = Date.now(),
+  locale: string = 'zh-CN',
+): string {
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+    return '';
+  }
+  const deltaMs = updatedAt - now;
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  const absMin = Math.abs(deltaMs) / 60_000;
+  if (absMin < 1) {
+    return rtf.format(0, 'minute');
+  }
+  if (absMin < 60) {
+    return rtf.format(Math.round(deltaMs / 60_000), 'minute');
+  }
+  const absHr = absMin / 60;
+  if (absHr < 24) {
+    return rtf.format(Math.round(deltaMs / 3_600_000), 'hour');
+  }
+  const absDay = absHr / 24;
+  if (absDay < 7) {
+    return rtf.format(Math.round(deltaMs / 86_400_000), 'day');
+  }
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(
+    new Date(updatedAt),
+  );
 }
 
 export function activeAssistantConversation(
