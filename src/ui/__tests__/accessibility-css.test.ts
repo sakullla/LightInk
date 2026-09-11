@@ -72,11 +72,20 @@ describe('accessibility media preferences', () => {
     const readerPad = themeCss.match(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-reader #lightink-editor-area[\s\S]*?\{[^}]*\}/,
     )?.[0];
+    expect(readerPad).toMatch(/\[data-surface='reader'\]/);
     expect(readerPad).toMatch(/padding-top:\s*0/);
     expect(readerPad).not.toMatch(/56px/);
     expect(readerPad).toMatch(
       /#app\.is-workspace-shelf:has\(\.lightink-library\[hidden\]\)\s*#lightink-editor-area/,
     );
+
+    const markdownPad = themeCss.match(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s*#app\.is-workspace-reader\s*#lightink-editor-area\[data-surface='markdown'\]\s*\{[^}]*\}/,
+    )?.[0];
+    expect(markdownPad).toMatch(/padding-top:\s*var\(--lightink-safe-top,\s*0px\)/);
+    expect(markdownPad).toMatch(/padding-bottom:\s*var\(--lightink-safe-bottom,\s*0px\)/);
+    expect(markdownPad).not.toMatch(/padding-top:\s*0\b/);
+    expect(markdownPad).not.toMatch(/56px/);
 
     expect(themeCss).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) #app\.is-workspace-editor \.lightink-mobile-back-to-shelf\s*\{[^}]*display:\s*inline-flex/,

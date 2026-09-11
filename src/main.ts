@@ -107,7 +107,11 @@ import {
   readerNativeWindowChrome,
 } from './reader/reader-theme.js';
 import { applyReaderPrefs, loadReaderPrefs } from './reader/reader-prefs.js';
-import { restoreEditorDocumentLayout } from './reader/reader-layout.js';
+import {
+  applyMarkdownDocumentLayout,
+  applyReaderDocumentLayout,
+  loadReaderLayout,
+} from './reader/reader-layout.js';
 import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
 import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
@@ -865,8 +869,21 @@ function syncMarkdownReaderChrome(): void {
 function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): void {
   applyingWorkspaceSurfaces = true;
   try {
-    shell?.applyWorkspace(state);
     const markdownOpen = activeMarkdownTab() !== null;
+    // Slot before applyWorkspace so leftover EPUB layout listeners see
+    // markdown and do not restamp html[data-reading-layout=paginated].
+    if (shell?.editorArea !== undefined) {
+      if (state.surface === 'shelf') {
+        shell.editorArea.dataset.surface = 'shelf';
+      } else if (markdownOpen) {
+        shell.editorArea.dataset.surface = 'markdown';
+      } else if (state.surface === 'reader' || activeReaderTab() !== null) {
+        shell.editorArea.dataset.surface = 'reader';
+      } else {
+        shell.editorArea.dataset.surface = 'markdown';
+      }
+    }
+    shell?.applyWorkspace(state);
     const vis = workspaceVisibility(state.surface, { markdownOpen });
     setLibraryVisibility(vis.outlineHidden);
     if (state.surface === 'shelf' && !startupShelfDeferred) {
@@ -880,13 +897,13 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
     if (state.surface === 'shelf') {
       void libraryView?.show();
       if (shell?.editorArea !== undefined) {
-        shell.editorArea.dataset.surface = 'shelf';
         shell.editorArea.scrollTop = 0;
       }
     } else {
       libraryView?.hide({ notifyVisibility: false });
-      if (shell?.editorArea !== undefined) {
-        shell.editorArea.dataset.surface = state.surface === 'reader' ? 'reader' : 'markdown';
+      if (markdownOpen) {
+        applyMarkdownDocumentLayout(document.documentElement, readingLayout);
+        syncReadingColumns();
       }
     }
     // Unseal before restore: hidden hosts have no layout, so scroll/column
@@ -2579,14 +2596,20 @@ manager = new TabManager({
       return;
     }
     if (tab.kind === 'reader') {
+      applyReaderDocumentLayout(
+        document.documentElement,
+        workspace.mode,
+        loadReaderLayout(syncableStorage),
+        readingLayout,
+      );
       tab.reader.restoreReadingProgress?.();
       syncNativeWindowChrome();
       return;
     }
     if (tab.kind === 'markdown') {
-      // Comic/PDF leave html[data-reading-layout=paginated]. Restore the
-      // editor key before Markdown CSS can turn scroll mode into columns.
-      restoreEditorDocumentLayout(document.documentElement, readingLayout);
+      // Comic/PDF leave html[data-reading-layout=paginated]. Stamp the
+      // editor scroll key without flipping workspaceMode to editor.
+      applyMarkdownDocumentLayout(document.documentElement, readingLayout);
       syncReadingColumns();
       editorScroller.scrollTop = manager.getScrollPosition(tab.id);
     }

@@ -486,6 +486,31 @@ describe('R5 markdown chrome: Android/touch opens Markdown as reader', () => {
     expect(createWorkspaceMode({ editorEnabled: true }).enterEditor().surface).toBe('editor');
   });
 
+  it('immersive Markdown uses the markdown slot and scroll layout without flipping workspaceMode', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/main.ts'), 'utf-8');
+    const applyStart = source.indexOf('function applyWorkspaceState');
+    const applyEnd = source.indexOf('function onLibraryMenu');
+    expect(applyStart).toBeGreaterThan(-1);
+    expect(applyEnd).toBeGreaterThan(applyStart);
+    const apply = source.slice(applyStart, applyEnd);
+    expect(apply).toMatch(/dataset\.surface = 'markdown'/);
+    expect(apply).toMatch(/applyMarkdownDocumentLayout\(document\.documentElement, readingLayout\)/);
+    expect(apply).not.toMatch(/restoreEditorDocumentLayout/);
+    expect(apply).not.toMatch(
+      /dataset\.surface = state\.surface === 'reader' \? 'reader' : 'markdown'/,
+    );
+
+    const switchStart = source.indexOf('onTabSwitched:');
+    const switchEnd = source.indexOf('onFoldChanged:');
+    expect(switchStart).toBeGreaterThan(-1);
+    expect(switchEnd).toBeGreaterThan(switchStart);
+    const switched = source.slice(switchStart, switchEnd);
+    expect(switched).toMatch(/tab\?\.kind === 'reader' \? 'reader' : 'markdown'/);
+    expect(switched).toMatch(/applyMarkdownDocumentLayout\(document\.documentElement, readingLayout\)/);
+    expect(switched).toMatch(/applyReaderDocumentLayout\(/);
+    expect(switched).not.toMatch(/restoreEditorDocumentLayout/);
+  });
+
   it('stamps is-workspace-reader for an open Markdown book, not is-workspace-editor', () => {
     const classNames = new Set<string>();
     const root = {

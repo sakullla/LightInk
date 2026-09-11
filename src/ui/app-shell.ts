@@ -11,6 +11,7 @@ import type { InsertElementId } from '../editor/insert-commands.js';
 import { INSERT_ELEMENTS } from '../editor/insert-commands.js';
 import type { MessageKey } from '../i18n/messages.js';
 import {
+  applyMarkdownDocumentLayout,
   applyReaderDocumentLayout,
   applyReaderLayout,
   DEFAULT_READER_FLOW_LAYOUT,
@@ -1089,6 +1090,7 @@ export function createAppShell(
         ? document.documentElement
         : null;
     const editorLayout = actions.getReadingLayout?.() ?? 'scroll';
+    const markdownVisible = actions.activeTabKind?.() === 'markdown';
     // Live PDF: persist the EPUB flow key only. Do not restamp html or
     // broadcast a presentation change that would paginate .lightink-reader.
     // Editor workspace still restores the Markdown key: a visible comic/PDF
@@ -1101,7 +1103,13 @@ export function createAppShell(
       return;
     }
     if (documentRoot !== null) {
-      applyReaderDocumentLayout(documentRoot, workspace, layout, editorLayout);
+      // Immersive Markdown keeps workspaceMode=reader. Do not apply the
+      // reader paginated default or restoreEditorDocumentLayout-as-editor.
+      if (workspace === 'reader' && markdownVisible) {
+        applyMarkdownDocumentLayout(documentRoot, editorLayout);
+      } else {
+        applyReaderDocumentLayout(documentRoot, workspace, layout, editorLayout);
+      }
     }
     dispatchReaderPrefEvent('lightink:reader-flow-layout', layout);
     dispatchReaderPrefEvent('lightink:reader-typography', prefs);

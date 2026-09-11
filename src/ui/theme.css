@@ -457,11 +457,20 @@ html[data-display='xuhd'] {
   padding-top: calc(var(--lightink-safe-top, 0px) + 56px);
 }
 
-:is(html[data-android], html[data-touch-primary]) #app.is-workspace-reader #lightink-editor-area,
+:is(html[data-android], html[data-touch-primary]) #app.is-workspace-reader #lightink-editor-area[data-surface='reader'],
 :is(html[data-android], html[data-touch-primary])
   #app.is-workspace-shelf:has(.lightink-library[hidden])
-  #lightink-editor-area {
+  #lightink-editor-area[data-surface='reader'] {
   padding-top: 0;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  #app.is-workspace-reader
+  #lightink-editor-area[data-surface='markdown'] {
+  padding-top: var(--lightink-safe-top, 0px);
+  padding-right: var(--lightink-safe-right, 0px);
+  padding-bottom: var(--lightink-safe-bottom, 0px);
+  padding-left: var(--lightink-safe-left, 0px);
 }
 
 /* Shelf travel lives in the library header; do not occupy a title-bar strip. */
@@ -846,6 +855,13 @@ html[data-workspace-mode='editor'][data-reading-layout='paginated']
   column-fill: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
+}
+
+/* Immersive Markdown keeps workspace-mode=reader. Force the pane scroller
+   so leftover reader paginated CSS cannot clip long prose. */
+html[data-workspace-mode='reader'] #lightink-editor-area[data-surface='markdown'] {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 html[data-workspace-mode='editor'][data-reading-layout='paginated']

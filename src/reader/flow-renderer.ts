@@ -622,6 +622,15 @@ function syncReaderDocumentLayout(root: HTMLElement): void {
   if (workspaceModeFromHost(root) !== 'reader') {
     return;
   }
+  // Hidden leftover EPUB must not re-stamp html paginated while Markdown
+  // occupies #lightink-editor-area[data-surface=markdown].
+  const editorArea = document.getElementById('lightink-editor-area');
+  if (editorArea?.dataset.surface === 'markdown') {
+    return;
+  }
+  if (root.isConnected && !flowReaderSurfaceActive(root)) {
+    return;
+  }
   applyReaderDocumentLayout(
     document.documentElement,
     'reader',

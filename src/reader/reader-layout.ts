@@ -105,6 +105,10 @@ export function applyReaderDocumentLayout(
  * A leftover reader `paginated` stamp turns scroll-mode prose into CSS
  * columns (`overflow-y: hidden`). Restore the editor key whenever the
  * visible tab is Markdown — do not wait for a workspace-mode change.
+ *
+ * Immersive Android/touch Markdown stays in the reader workspace. Call
+ * `applyMarkdownDocumentLayout` instead of this helper there: this one
+ * stamps `workspaceMode=editor` and would open desktop-shell CSS.
  */
 export function restoreEditorDocumentLayout(
   documentRoot: { dataset: DOMStringMap; classList: DOMTokenList },
@@ -116,6 +120,21 @@ export function restoreEditorDocumentLayout(
     DEFAULT_READER_FLOW_LAYOUT,
     editorLayout,
   );
+}
+
+/**
+ * Visible Markdown: stamp the editor reading key (default scroll) so a
+ * leftover reader `paginated` attribute cannot clip the pane. Keeps the
+ * current `html[data-workspace-mode]` — immersive reading stays `reader`.
+ * Does not write storage keys.
+ */
+export function applyMarkdownDocumentLayout(
+  documentRoot: { dataset: DOMStringMap; classList: DOMTokenList },
+  editorLayout: ReadingLayout = DEFAULT_READING_LAYOUT,
+): ReadingLayout {
+  const next = parseReadingLayout(editorLayout);
+  applyReadingLayout(documentRoot, next, { force: true });
+  return next;
 }
 
 export function toggleReaderFlowLayout(layout: ReaderFlowLayout): ReaderFlowLayout {
