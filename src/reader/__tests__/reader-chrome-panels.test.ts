@@ -964,6 +964,59 @@ describe('reader chrome panels', () => {
     }
   });
 
+  it('does not mark a retried thumb failed when the cancelled preview settles late', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let releaseFirst!: (ok: boolean) => void;
+      const preview = vi.fn(() => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<boolean>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return Promise.resolve(true);
+      });
+      const cancelPreview = vi.fn();
+      const pages = pdfTocPages({ preview, cancelPreview, totalPages: 2, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        outlineItems,
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+      const thumb = panel.querySelector<HTMLButtonElement>('.lightink-reader-toc-thumb')!;
+      const canvas = thumb.querySelector('canvas')!;
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      observers[0]!.trigger(thumb, false);
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      expect(preview).toHaveBeenCalledTimes(2);
+      expect(thumb.dataset.thumbState).toBe('ready');
+      expect(canvas.hidden).toBe(false);
+      releaseFirst(false);
+      await Promise.resolve();
+      expect(thumb.dataset.thumbState).toBe('ready');
+      expect(canvas.hidden).toBe(false);
+      expect(thumb.classList.contains('is-failed')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
   it('groups typography controls and exposes paper swatches', () => {
     const panel = document.createElement('div');
     const onTypography = vi.fn();

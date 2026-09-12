@@ -927,10 +927,16 @@ export async function renderPdfInto(
   };
 
   const previewCanvases = new Set<HTMLCanvasElement>();
-  const cancelledPreviewCanvases = new WeakSet<HTMLCanvasElement>();
+  const previewGeneration = new WeakMap<HTMLCanvasElement, number>();
+
+  const bumpPreviewGeneration = (canvas: HTMLCanvasElement): number => {
+    const next = (previewGeneration.get(canvas) ?? 0) + 1;
+    previewGeneration.set(canvas, next);
+    return next;
+  };
 
   const cancelPreview = (canvas: HTMLCanvasElement): void => {
-    cancelledPreviewCanvases.add(canvas);
+    bumpPreviewGeneration(canvas);
     cancelPdfThumb(canvas);
   };
 
@@ -940,7 +946,8 @@ export async function renderPdfInto(
     cssEdge?: number,
     dpr?: number,
   ): Promise<boolean> => {
-    cancelledPreviewCanvases.delete(canvas);
+    const seq = bumpPreviewGeneration(canvas);
+    cancelPdfThumb(canvas);
     if (destroyed || isAborted()) {
       return false;
     }
@@ -951,7 +958,7 @@ export async function renderPdfInto(
     previewCanvases.add(canvas);
     try {
       const pdfPage = await doc.getPage(target);
-      if (destroyed || isAborted() || cancelledPreviewCanvases.has(canvas)) {
+      if (destroyed || isAborted() || previewGeneration.get(canvas) !== seq) {
         return false;
       }
       return await renderPdfThumb(pdfPage, canvas, cssEdge, dpr);

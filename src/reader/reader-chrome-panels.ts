@@ -617,8 +617,15 @@ export function fillReaderTocPanel(
       drawTimerByButton.delete(button);
     };
 
+    const bumpThumbAttempt = (button: HTMLButtonElement): string => {
+      const next = String((Number(button.dataset.thumbAttempt) || 0) + 1);
+      button.dataset.thumbAttempt = next;
+      return next;
+    };
+
     const cancelThumb = (button: HTMLButtonElement): void => {
       clearDrawTimer(button);
+      bumpThumbAttempt(button);
       const canvas = button.querySelector('canvas');
       if (canvas !== null) {
         pages.cancelPreview?.(canvas);
@@ -635,6 +642,7 @@ export function fillReaderTocPanel(
       if (!Number.isFinite(page) || canvas === null) {
         return;
       }
+      const attempt = bumpThumbAttempt(button);
       button.dataset.thumbState = 'drawing';
       const cssEdge = measureTocThumbCssEdge(button);
       const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : undefined;
@@ -644,7 +652,7 @@ export function fillReaderTocPanel(
       } catch {
         ok = false;
       }
-      if (gen !== thumbGen || button.dataset.thumbState !== 'drawing') {
+      if (gen !== thumbGen || button.dataset.thumbAttempt !== attempt) {
         return;
       }
       button.dataset.thumbState = ok ? 'ready' : 'failed';
