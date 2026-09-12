@@ -8,7 +8,7 @@
  * ComicInfo 共享解码（readComicInfo）。真实 canvas/zip 渲染（renderPdfInto/
  * renderCbzInto）留手工验证。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { listImageEntries, naturalCompare, readComicInfo } from '../formats/cbz.js';
 import { injectEncodingSniffOrder } from '../formats/text-encoding.js';
@@ -132,32 +132,92 @@ describe('createPdfPageController', () => {
 });
 
 describe('renderPdfThumb', () => {
+  function fakeThumbContext(): CanvasRenderingContext2D {
+    return {
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: 'high',
+    } as unknown as CanvasRenderingContext2D;
+  }
+
   function fakeCanvas(): HTMLCanvasElement {
     const canvas = {
       width: 0,
       height: 0,
-      getContext: () => ({}) as CanvasRenderingContext2D,
+      style: { width: '', height: '' },
+      getContext: () => fakeThumbContext(),
     };
     return canvas as unknown as HTMLCanvasElement;
   }
 
-  it('scales the longest edge to the thumb max and paints the canvas', async () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => fakeThumbContext());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sizes the backing store to at least CSS long edge × dpr', async () => {
+    const cssEdge = 160;
+    const dpr = 1.25;
+    const targetLong = Math.round(cssEdge * dpr);
     const render = vi.fn(async () => undefined);
     const page = {
       getViewport: ({ scale }: { scale: number }) => ({
         width: 200 * scale,
         height: 400 * scale,
       }),
+      render: () => ({ promise: render() }),
+    };
+    const canvas = fakeCanvas();
+    await expect(renderPdfThumb(page, canvas, cssEdge, dpr)).resolves.toBe(true);
+    expect(Math.max(canvas.width, canvas.height)).toBeGreaterThanOrEqual(targetLong);
+    expect(canvas.width).toBe(Math.round(targetLong / 2));
+    expect(canvas.height).toBe(targetLong);
+    expect(canvas.style.height).toBe(`${cssEdge}px`);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it('rasters at about 2× target pixels then steps the final canvas down to the target size', async () => {
+    const cssEdge = 128;
+    const dpr = 2;
+    const targetLong = Math.round(cssEdge * dpr);
+    let renderLong = 0;
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 200 * scale,
+        height: 400 * scale,
+      }),
       render: ({ viewport }: { viewport: { width: number; height: number } }) => {
-        expect(Math.max(viewport.width, viewport.height)).toBeCloseTo(PDF_THUMB_MAX_EDGE);
-        return { promise: render() };
+        renderLong = Math.max(viewport.width, viewport.height);
+        return { promise: Promise.resolve() };
       },
     };
     const canvas = fakeCanvas();
+    await expect(renderPdfThumb(page, canvas, cssEdge, dpr)).resolves.toBe(true);
+    expect(renderLong).toBeCloseTo(targetLong * 2);
+    expect(Math.max(canvas.width, canvas.height)).toBe(targetLong);
+    expect(canvas.width).toBe(Math.round(targetLong / 2));
+    expect(canvas.height).toBe(targetLong);
+  });
+
+  it('defaults the CSS long edge so preview() callers keep working', async () => {
+    const dpr =
+      typeof window.devicePixelRatio === 'number' && window.devicePixelRatio > 0
+        ? window.devicePixelRatio
+        : 1;
+    const targetLong = Math.round(PDF_THUMB_MAX_EDGE * dpr);
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 200 * scale,
+        height: 400 * scale,
+      }),
+      render: () => ({ promise: Promise.resolve() }),
+    };
+    const canvas = fakeCanvas();
     await expect(renderPdfThumb(page, canvas)).resolves.toBe(true);
-    expect(canvas.width).toBe(Math.round(PDF_THUMB_MAX_EDGE / 2));
-    expect(canvas.height).toBe(PDF_THUMB_MAX_EDGE);
-    expect(render).toHaveBeenCalledTimes(1);
+    expect(Math.max(canvas.width, canvas.height)).toBeGreaterThanOrEqual(targetLong);
   });
 
   it('returns false when a page render throws, without leaking the error', async () => {
@@ -181,6 +241,15 @@ describe('renderPdfThumb', () => {
       render: vi.fn(() => ({ promise: Promise.resolve() })),
     };
     await expect(renderPdfThumb(page, canvas)).resolves.toBe(false);
+    expect(page.render).not.toHaveBeenCalled();
+  });
+
+  it('returns false when the page viewport has no area, without throwing', async () => {
+    const page = {
+      getViewport: () => ({ width: 0, height: 120 }),
+      render: vi.fn(() => ({ promise: Promise.resolve() })),
+    };
+    await expect(renderPdfThumb(page, fakeCanvas())).resolves.toBe(false);
     expect(page.render).not.toHaveBeenCalled();
   });
 });

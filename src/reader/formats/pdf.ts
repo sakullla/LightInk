@@ -81,8 +81,12 @@ export function pdfCssScale(fitWidthScale: number, userZoom: number): number {
   return fitWidthScale * userZoom;
 }
 
-/** 目录缩略图最长边（CSS 像素）；按页比例缩放，失败由调用方占位。 */
+/** 目录缩略图最长边（CSS 像素）；backing store 为该边 × devicePixelRatio。 */
 export const PDF_THUMB_MAX_EDGE = 128;
+
+/** 先按高于最终物理像素的分辨率栅格，再步进缩小（最多 3 次折半）。 */
+const PDF_THUMB_OVERSAMPLE = 2;
+const PDF_THUMB_DOWNSAMPLE_STEPS = 3;
 
 /** 缩略图绘制所需的 pdf.js 页最小面。 */
 export interface PdfThumbPage<TViewport extends { width: number; height: number } = { width: number; height: number }> {
@@ -94,31 +98,135 @@ export interface PdfThumbPage<TViewport extends { width: number; height: number 
   }): { promise: Promise<unknown>; cancel?: () => void };
 }
 
+function pdfThumbCssEdge(cssEdge: number): number {
+  return Number.isFinite(cssEdge) && cssEdge > 0 ? cssEdge : PDF_THUMB_MAX_EDGE;
+}
+
+function pdfThumbDpr(dpr: number | undefined): number {
+  if (typeof dpr === 'number' && Number.isFinite(dpr) && dpr > 0) {
+    return dpr;
+  }
+  const ratio = typeof window !== 'undefined' ? window.devicePixelRatio : undefined;
+  return typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+}
+
+function prepareThumbContext(context: CanvasRenderingContext2D): void {
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+}
+
+function createThumbSurface(
+  width: number,
+  height: number,
+): { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D } | null {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (context === null) {
+    return null;
+  }
+  prepareThumbContext(context);
+  return { canvas, context };
+}
+
+/** 折半缩小到目标物理像素；中途拿不到 2d 上下文则停在已有位图，绝不放大。 */
+function downsampleThumbCanvas(
+  source: HTMLCanvasElement,
+  targetWidth: number,
+  targetHeight: number,
+): HTMLCanvasElement | null {
+  let current = source;
+  for (let step = 0; step < PDF_THUMB_DOWNSAMPLE_STEPS; step += 1) {
+    if (current.width <= targetWidth && current.height <= targetHeight) {
+      break;
+    }
+    const nextWidth = Math.max(targetWidth, Math.round(current.width / 2));
+    const nextHeight = Math.max(targetHeight, Math.round(current.height / 2));
+    if (nextWidth >= current.width && nextHeight >= current.height) {
+      break;
+    }
+    const next = createThumbSurface(nextWidth, nextHeight);
+    if (next === null) {
+      return current === source ? null : current;
+    }
+    next.context.drawImage(current, 0, 0, nextWidth, nextHeight);
+    current = next.canvas;
+  }
+  return current;
+}
+
+function applyThumbCssSize(canvas: HTMLCanvasElement, cssWidth: number, cssHeight: number): void {
+  const style = canvas.style;
+  if (style === undefined) {
+    return;
+  }
+  style.width = `${cssWidth}px`;
+  style.height = `${cssHeight}px`;
+}
+
 /**
- * 把一页画进小画布。任一步失败返回 false，不抛给目录列表。
+ * 把一页画进小画布。backing store 长边 ≥ CSS 长边 × dpr（1px 取整），
+ * 先约 2× 栅格再步进缩小；任一步失败返回 false，不抛给目录列表。
  * 真实栅格化留手工验证；本函数供句柄 preview 与纯逻辑单测共用。
  */
 export async function renderPdfThumb<TViewport extends { width: number; height: number }>(
   page: PdfThumbPage<TViewport>,
   canvas: HTMLCanvasElement,
-  maxEdge: number = PDF_THUMB_MAX_EDGE,
+  cssEdge: number = PDF_THUMB_MAX_EDGE,
+  dpr?: number,
 ): Promise<boolean> {
-  const edge = Number.isFinite(maxEdge) && maxEdge > 0 ? maxEdge : PDF_THUMB_MAX_EDGE;
+  const edge = pdfThumbCssEdge(cssEdge);
+  const pixelRatio = pdfThumbDpr(dpr);
   try {
     const base = page.getViewport({ scale: 1 });
     if (!(base.width > 0) || !(base.height > 0)) {
       return false;
     }
-    const scale = edge / Math.max(base.width, base.height);
-    const viewport = page.getViewport({ scale });
     const context = canvas.getContext('2d');
     if (context === null) {
       return false;
     }
-    canvas.width = Math.max(1, Math.round(viewport.width));
-    canvas.height = Math.max(1, Math.round(viewport.height));
-    const task = page.render({ canvasContext: context, viewport, canvas });
+    const pageLong = Math.max(base.width, base.height);
+    const targetLong = Math.max(1, Math.round(edge * pixelRatio));
+    const targetScale = targetLong / pageLong;
+    const targetWidth = Math.max(1, Math.round(base.width * targetScale));
+    const targetHeight = Math.max(1, Math.round(base.height * targetScale));
+    if (!(targetWidth > 0) || !(targetHeight > 0)) {
+      return false;
+    }
+    const rasterViewport = page.getViewport({ scale: targetScale * PDF_THUMB_OVERSAMPLE });
+    if (!(rasterViewport.width > 0) || !(rasterViewport.height > 0)) {
+      return false;
+    }
+    const rasterWidth = Math.max(1, Math.round(rasterViewport.width));
+    const rasterHeight = Math.max(1, Math.round(rasterViewport.height));
+    const raster = createThumbSurface(rasterWidth, rasterHeight);
+    const paintCanvas = raster?.canvas ?? canvas;
+    const paintContext = raster?.context ?? context;
+    if (raster === null) {
+      canvas.width = rasterWidth;
+      canvas.height = rasterHeight;
+    }
+    const task = page.render({
+      canvasContext: paintContext,
+      viewport: rasterViewport,
+      canvas: paintCanvas,
+    });
     await task.promise;
+    const reduced = downsampleThumbCanvas(paintCanvas, targetWidth, targetHeight);
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    applyThumbCssSize(canvas, targetWidth / pixelRatio, targetHeight / pixelRatio);
+    if (reduced === null || reduced === canvas) {
+      return true;
+    }
+    const output = canvas.getContext('2d');
+    if (output === null) {
+      return false;
+    }
+    prepareThumbContext(output);
+    output.drawImage(reduced, 0, 0, targetWidth, targetHeight);
     return true;
   } catch {
     return false;
