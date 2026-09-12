@@ -1111,21 +1111,29 @@ describe('createReaderChrome has no speak control', () => {
 });
 
 describe('createReaderChrome Markdown 编辑/完成', () => {
-  function mountMarkdownChrome(
-    overrides: { markdownEditing?: boolean } = {},
-  ): ReturnType<typeof mount> {
+  function mountMarkdownChrome(overrides: { markdownEditing?: boolean } = {}): ReturnType<
+    typeof mount
+  > & {
+    deps: ReturnType<typeof mount>['deps'] & {
+      onMarkdownEdit: ReturnType<typeof vi.fn>;
+      onMarkdownFinish: ReturnType<typeof vi.fn>;
+    };
+  } {
     let editing = overrides.markdownEditing === true;
-    return mount({
+    const onMarkdownEdit = vi.fn(() => {
+      editing = true;
+    });
+    const onMarkdownFinish = vi.fn(() => {
+      editing = false;
+    });
+    const mounted = mount({
       touchMode: true,
       suppressProgressDock: () => true,
       markdownEditing: () => editing,
-      onMarkdownEdit: vi.fn(() => {
-        editing = true;
-      }),
-      onMarkdownFinish: vi.fn(() => {
-        editing = false;
-      }),
+      onMarkdownEdit,
+      onMarkdownFinish,
     });
+    return { ...mounted, deps: { ...mounted.deps, onMarkdownEdit, onMarkdownFinish } };
   }
 
   it('does not render 编辑 unless Markdown edit deps are provided', () => {
