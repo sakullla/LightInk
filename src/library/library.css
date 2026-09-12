@@ -61,7 +61,7 @@
 .lightink-library select {
   min-height: 32px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -104,7 +104,12 @@
   align-items: center;
   column-gap: 0;
   min-height: var(--lightink-titlebar-height, 36px);
-  padding: 0 calc(var(--lightink-titlebar-caption, 32px) * 3 + 20px) 0 0;
+  padding: 0 calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px) 0
+    calc(var(--lightink-titlebar-leading, 0px) + 8px);
+}
+
+html[data-platform='mac'] .lightink-library-header {
+  padding-right: 8px;
 }
 
 html[data-android] .lightink-library-header,
@@ -196,7 +201,7 @@ html[data-touch-primary] .lightink-library-header {
   margin-left: auto;
   padding: 0 28px 0 30px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-accent-soft);
   color: var(--lightink-muted);
 }
@@ -288,7 +293,7 @@ html[data-touch-primary] .lightink-library-header {
   z-index: 30;
   min-height: 32px;
   padding: 4px 12px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-bg-elevated);
   box-shadow: inset 0 0 0 1px var(--lightink-border), var(--lightink-shadow);
   color: var(--lightink-fg);
@@ -296,7 +301,7 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-primary {
-  border-radius: 8px !important;
+  border-radius: var(--lightink-radius-control) !important;
   background: var(--lightink-fg) !important;
   color: var(--lightink-bg) !important;
   font-weight: 600;
@@ -314,7 +319,7 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 28px;
   height: 28px;
   padding: 0 !important;
-  border-radius: 6px !important;
+  border-radius: var(--lightink-radius-control) !important;
   font-size: 16px !important;
   line-height: 1;
 }
@@ -475,10 +480,10 @@ html[data-touch-primary] .lightink-library-header {
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
-  min-height: 28px;
+  min-height: 26px;
   margin-top: 8px;
   padding: 3px 8px;
-  border-radius: 7px;
+  border-radius: var(--lightink-radius-control);
   cursor: pointer;
   user-select: none;
 }
@@ -533,12 +538,12 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-pane-actions .lightink-library-icon-button {
-  width: 22px;
-  min-width: 22px !important;
-  height: 22px;
-  min-height: 22px !important;
+  width: 24px;
+  min-width: 24px !important;
+  height: 24px;
+  min-height: 24px !important;
   font-size: 14px !important;
-  border-radius: 4px !important;
+  border-radius: var(--lightink-radius-control) !important;
 }
 
 .lightink-library-pane-action {
@@ -554,16 +559,16 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-pane-heading:focus-within .lightink-library-pane-action,
 .lightink-library-pane-action[aria-expanded='true'] {
   opacity: 1;
-  width: 22px;
-  min-width: 22px !important;
+  width: 24px;
+  min-width: 24px !important;
   pointer-events: auto;
 }
 
 .lightink-library-pane-heading .lightink-library-group-add,
 .lightink-library-sources .lightink-library-pane-actions > .lightink-library-pane-action:last-child {
   opacity: 0.55;
-  width: 22px;
-  min-width: 22px !important;
+  width: 24px;
+  min-width: 24px !important;
   pointer-events: auto;
 }
 
@@ -604,7 +609,7 @@ html[data-touch-primary] .lightink-library-header {
   margin: 0 0 6px;
   padding: 0 4px 0 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-accent-soft);
   box-shadow: none;
 }
@@ -719,7 +724,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 8px;
   min-height: 26px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--lightink-radius-control);
   cursor: pointer;
   user-select: none;
 }
@@ -778,7 +783,7 @@ html[data-touch-primary] .lightink-library-header {
   padding: 3px 8px;
   overflow: hidden;
   border: none !important;
-  border-radius: 6px;
+  border-radius: var(--lightink-radius-control);
   background: transparent !important;
   color: var(--lightink-fg);
   font-size: 13px;
@@ -883,7 +888,7 @@ html[data-touch-primary] .lightink-library-header {
   margin: 2px 0 4px 22px;
   padding: 4px;
   border: 1px solid var(--lightink-border);
-  border-radius: 6px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow);
 }
@@ -919,7 +924,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 2px;
   min-height: 32px;
   padding: 2px 4px 2px 2px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
 }
 
 .lightink-library-source-row:hover {
@@ -1088,7 +1093,7 @@ html[data-touch-primary] .lightink-library-header {
   width: min(22rem, calc(100% - 48px));
   padding: 18px 16px 14px;
   border: 1px solid var(--lightink-border);
-  border-radius: 12px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1123,7 +1128,7 @@ html[data-touch-primary] .lightink-library-header {
   width: min(22rem, calc(100vw - 48px));
   padding: 18px 16px 14px;
   border: 1px solid var(--lightink-border);
-  border-radius: 12px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1166,7 +1171,7 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 34px;
   padding: 6px 10px;
   border: 1px solid var(--lightink-border);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-bg);
   color: var(--lightink-fg);
 }
@@ -1230,7 +1235,7 @@ html[data-touch-primary] .lightink-library-header {
   overflow: auto;
   padding: 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1330,7 +1335,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-pager button {
   min-height: 30px;
   padding: 3px 10px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   color: var(--lightink-muted);
   font-size: 13px;
 }
@@ -1375,7 +1380,7 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 44px;
   margin: 8px 0 16px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-control);
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: var(--lightink-muted);
   font: inherit;
@@ -1389,7 +1394,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-status button {
   min-height: 32px;
   padding: 4px 14px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-accent-soft);
   color: var(--lightink-fg);
 }
@@ -1409,7 +1414,7 @@ html[data-touch-primary] .lightink-library-header {
   margin: 4px var(--lightink-library-pad-x) 12px;
   padding: 6px;
   border: none;
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-accent-soft);
   color: var(--lightink-fg);
   text-align: left;
@@ -1428,7 +1433,7 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 52px !important;
   padding: 4px 8px 4px 4px !important;
   border: none !important;
-  border-radius: 10px !important;
+  border-radius: var(--lightink-radius-panel) !important;
   background: transparent !important;
   text-align: left;
 }
@@ -1602,7 +1607,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 10px;
   min-height: 44px !important;
   padding: 10px 12px !important;
-  border-radius: 12px !important;
+  border-radius: var(--lightink-radius-panel) !important;
   background: color-mix(in srgb, var(--lightink-fg) 6%, transparent) !important;
   color: var(--lightink-fg);
   text-align: left;
@@ -1885,7 +1890,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 14px;
   min-height: 72px !important;
   padding: 8px 10px !important;
-  border-radius: 10px !important;
+  border-radius: var(--lightink-radius-panel) !important;
 }
 
 .lightink-library-item--row:hover,
@@ -2085,7 +2090,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-deepl-actions button {
   min-height: 36px;
   padding: 6px 12px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-control);
 }
 
 .lightink-library-deepl-field {
@@ -2124,7 +2129,7 @@ html[data-touch-primary] .lightink-library-header {
   flex: 0 0 auto;
   min-height: 34px;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
 }
 
 .lightink-library-ai-actions {
@@ -2136,7 +2141,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-ai-actions button {
   min-height: 36px;
   padding: 6px 12px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-control);
 }
 
 .lightink-library-ai-feedback,
@@ -2191,7 +2196,7 @@ html[data-touch-primary] .lightink-library-header {
   gap: 6px;
   min-height: 0;
   padding: 6px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: transparent;
 }
 
@@ -2200,7 +2205,7 @@ html[data-touch-primary] .lightink-library-header {
   height: var(--lightink-library-theme-preview);
   overflow: hidden;
   border: 1px solid var(--lightink-border);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-panel);
 }
 
 .lightink-library-theme-preview i {
@@ -2283,7 +2288,7 @@ html[data-touch-primary] .lightink-library-header {
   width: 100%;
   min-height: 44px;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg-elevated);
   box-shadow: inset 0 0 0 1px var(--lightink-border);
   color: var(--lightink-fg);
@@ -2319,7 +2324,7 @@ html[data-touch-primary] .lightink-library-header {
   width: min(22rem, calc(100vw - 48px));
   padding: 18px 16px 14px;
   border: 1px solid var(--lightink-border);
-  border-radius: 12px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -2373,7 +2378,7 @@ html[data-touch-primary] .lightink-library-header {
   max-width: var(--lightink-library-manage-max);
   min-height: 44px;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg-elevated);
   box-shadow: inset 0 0 0 1px var(--lightink-border);
   color: var(--lightink-muted);
@@ -2475,7 +2480,7 @@ html[data-touch-primary] .lightink-library-header {
   min-height: 32px;
   margin: 0 0 8px;
   padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   color: var(--lightink-fg);
   font-size: 13px;
   font-weight: 600;
@@ -2555,7 +2560,7 @@ html[data-touch-primary] .lightink-library-header {
   padding: 5px 10px;
   overflow: hidden;
   border: none !important;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent !important;
   color: var(--lightink-fg);
   font-size: 13px;
@@ -3453,7 +3458,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 8px 14px;
     overflow: visible;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--lightink-radius-control);
     background: transparent;
     color: var(--lightink-fg);
     font: inherit;
@@ -3671,7 +3676,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     min-width: 48px;
     min-height: 48px;
     padding: 0;
-    border-radius: 10px;
+    border-radius: var(--lightink-radius-control);
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -3705,7 +3710,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     padding: 8px 12px;
     overflow: hidden;
     border: none;
-    border-radius: 10px;
+    border-radius: var(--lightink-radius-control);
     background: transparent;
     color: var(--lightink-fg);
     font: inherit;
@@ -3725,7 +3730,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     min-width: 48px;
     min-height: 48px;
     padding: 8px 12px;
-    border-radius: 10px;
+    border-radius: var(--lightink-radius-control);
     font-size: var(--lightink-type-ui);
   }
 
@@ -4141,7 +4146,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     gap: 2px;
     min-height: 48px;
     padding: 4px 2px;
-    border-radius: 10px;
+    border-radius: var(--lightink-radius-panel);
     color: var(--lightink-muted);
     font-size: var(--lightink-type-caption);
     transition: background-color 150ms ease, color 150ms ease, font-weight 150ms ease;

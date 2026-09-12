@@ -384,13 +384,20 @@ html[data-display='xuhd'] {
 /* Caption chips sit on the right; keep File/Edit and tabs out from under them. */
 #app.is-workspace-editor #lightink-toolbar,
 #app.is-workspace-editor #lightink-tabbar {
+  padding-left: calc(var(--lightink-titlebar-leading, 0px) + 8px);
   padding-right: calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px);
+}
+
+html[data-platform='mac'] #app.is-workspace-editor #lightink-toolbar,
+html[data-platform='mac'] #app.is-workspace-editor #lightink-tabbar {
+  padding-right: 8px;
 }
 
 /* Workspace travel: quiet menu-bar action, not a leftover native button. */
 .lightink-workspace-travel {
   margin-left: auto;
   flex: 0 0 auto;
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: var(--lightink-radius-control);
   background: transparent;
@@ -493,6 +500,7 @@ html[data-display='xuhd'] {
 }
 
 .lightink-command {
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: var(--lightink-radius-control);
   background: transparent;
@@ -2089,6 +2097,7 @@ html[data-reading-layout='scroll']:has(
 }
 
 .lightink-menu-trigger {
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: var(--lightink-radius-control);
   background: transparent;

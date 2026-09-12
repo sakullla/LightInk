@@ -67,7 +67,8 @@
   align-items: center;
   gap: 0.2rem;
   min-height: var(--lightink-titlebar-height, 2.25rem);
-  padding: 0.3rem calc(var(--lightink-titlebar-caption, 32px) * 3 + 1.25rem) 0.3rem 0.45rem;
+  padding: 0.3rem calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px) 0.3rem
+    calc(var(--lightink-titlebar-leading, 0px) + 8px);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 86%, transparent);
   color: var(--lightink-fg);
   border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 65%, transparent);
@@ -100,10 +101,10 @@
   flex: 0 0 auto;
   flex-shrink: 0;
   isolation: isolate;
-  min-height: 1.85rem;
+  min-height: 32px;
   padding: 0.2rem 0.6rem;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -1142,7 +1143,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid var(--lightink-border);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-panel);
   box-shadow: var(--lightink-shadow);
   pointer-events: auto;
 }
@@ -1579,9 +1580,15 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 .lightink-reader-comic-topbar {
   top: 0;
   min-height: 48px;
-  padding: 8px calc(var(--lightink-titlebar-caption, 36px) * 3 + 36px) 8px 14px;
+  padding: 8px calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px) 8px
+    calc(var(--lightink-titlebar-leading, 0px) + 8px);
   justify-content: space-between;
   -webkit-app-region: drag;
+}
+
+html[data-platform='mac'] .lightink-reader-chrome-bar,
+html[data-platform='mac'] .lightink-reader-comic-topbar {
+  padding-right: 8px;
 }
 
 .lightink-reader-comic-back,
@@ -1623,7 +1630,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-height: 34px;
   padding: 0 8px 0 4px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: inherit;
   font: 600 13px/1 var(--lightink-font-ui);
@@ -1734,7 +1741,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   width: min(320px, 100%);
   padding: 16px;
   border: 1px solid color-mix(in srgb, #ffffff 12%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-comic-canvas, #111);
   color: var(--lightink-comic-fg, #e6e6e6);
   box-shadow: 0 18px 48px color-mix(in srgb, #000 55%, transparent);
@@ -1754,7 +1761,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, #ffffff 18%, transparent);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: color-mix(in srgb, #ffffff 8%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 14px/1.2 var(--lightink-font-ui);
@@ -1773,7 +1780,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   flex: none;
   padding: 8px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: color-mix(in srgb, #ffffff 14%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 13px/1 var(--lightink-font-ui);
@@ -1791,7 +1798,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, #ffffff 7%, transparent);
 }
 
@@ -1802,7 +1809,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-height: 34px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 12px/1 var(--lightink-font-ui);

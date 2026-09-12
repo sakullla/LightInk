@@ -26,7 +26,7 @@
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
-  border-radius: 18px;
+  border-radius: var(--lightink-radius-panel);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
     0 4px 12px rgba(0, 0, 0, 0.08),
@@ -108,7 +108,7 @@
   width: calc(100% - 1.5rem);
   margin: 0 0.75rem 0.35rem;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-control);
   padding: 0.4rem 0.6rem;
   background: color-mix(in srgb, var(--lightink-fg) 4%, var(--lightink-bg));
   color: var(--lightink-fg);
@@ -195,7 +195,7 @@
   gap: 0;
   margin: 0 0.75rem 0.4rem;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, var(--lightink-fg) 6.5%, transparent);
 }
 
@@ -203,7 +203,7 @@
   margin: 0;
   padding: 0.35rem 0.5rem;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -237,7 +237,7 @@
   margin: 0;
   padding: 0.3rem;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -259,7 +259,7 @@
   position: relative;
   overflow: hidden;
   aspect-ratio: 3 / 4;
-  border-radius: 6px;
+  border-radius: var(--lightink-radius-control);
   background: color-mix(in srgb, var(--lightink-fg) 6%, var(--lightink-bg));
 }
 
@@ -445,7 +445,7 @@
   max-width: 1.7rem;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--lightink-reader-swatch-ink, #111) 18%, transparent);
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-reader-swatch-page, #fff);
   box-shadow: none;
   transition: box-shadow 140ms ease;
@@ -484,7 +484,7 @@
   grid-auto-columns: minmax(0, 1fr);
   gap: 0;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-reader-seg-track);
 }
 
@@ -498,7 +498,7 @@
   min-height: 2rem;
   padding: 0.25rem 0.2rem;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: color-mix(in srgb, var(--lightink-fg) 72%, transparent);
   font-size: 0.75rem;
@@ -670,7 +670,7 @@
 .lightink-reader-type-slider .lightink-reader-type-tick {
   width: 2.4rem;
   height: 2.4rem;
-  border-radius: 10px;
+  border-radius: var(--lightink-radius-control);
   color: var(--lightink-muted);
 }
 
@@ -859,7 +859,7 @@
   padding-bottom: calc(14px + var(--lightink-safe-bottom, 0px));
   background: var(--lightink-bg);
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
-  border-radius: 20px 20px 0 0;
+  border-radius: 16px 16px 0 0;
   box-shadow:
     0 -1px 0 color-mix(in srgb, var(--lightink-fg) 4%, transparent),
     0 -12px 36px rgba(0, 0, 0, 0.12);
@@ -1026,7 +1026,7 @@
   gap: 0;
   height: auto;
   padding: 3px;
-  border-radius: 12px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-reader-seg-track);
 }
 
@@ -1041,7 +1041,7 @@
   gap: 0.35rem;
   padding: 0.3rem 0.2rem;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--lightink-radius-control);
   background: transparent;
   color: color-mix(in srgb, var(--lightink-fg) 72%, transparent);
   font-size: 0.85rem;
@@ -1137,7 +1137,7 @@
   margin: 0 1.1rem 0.45rem;
   min-height: 44px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--lightink-radius-control);
   padding: 0.55rem 0.9rem;
   background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
 }

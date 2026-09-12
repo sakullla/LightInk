@@ -324,3 +324,80 @@ describe('tokens.css hljs 类映射', () => {
     expect(css).toMatch(/\.hljs-deletion[^{]*\{[^}]*var\(--lightink-danger\)/);
   });
 });
+
+describe('chrome-shell radius token consumers', () => {
+  const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
+  const assistantCss = readFileSync(
+    new URL('../../reader/assistant-panel.css', import.meta.url),
+    'utf-8',
+  );
+  const annotationCss = readFileSync(
+    new URL('../../reader/annotation-panel.css', import.meta.url),
+    'utf-8',
+  );
+  const lookupCss = readFileSync(new URL('../../reader/lookup-panel.css', import.meta.url), 'utf-8');
+  const chromePanelsCss = readFileSync(
+    new URL('../../reader/reader-chrome-panels.css', import.meta.url),
+    'utf-8',
+  );
+  const readerCss = readFileSync(new URL('../../reader/reader.css', import.meta.url), 'utf-8');
+  const themeCss = readFileSync(new URL('../../ui/theme.css', import.meta.url), 'utf-8');
+
+  it('consumes control/panel/dialog tokens on shelf chrome and reader overlays', () => {
+    expect(libraryCss).toMatch(
+      /\.lightink-library button,\s*\.lightink-library input,\s*\.lightink-library select\s*\{[^}]*border-radius:\s*var\(--lightink-radius-control\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-group-modal \.lightink-modal-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-source-modal \.lightink-modal-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-cache-limit-modal \.lightink-modal-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-membership-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(annotationCss).toMatch(
+      /\.lightink-reader-sidebar\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(lookupCss).toMatch(
+      /\.lightink-reader-lookup-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(chromePanelsCss).toMatch(
+      /\.lightink-reader-chrome-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+    expect(readerCss).toMatch(
+      /\.lightink-reader-comic-jump-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
+  });
+
+  it('keeps desktop cover book-shape and touch 16px overlay language', () => {
+    expect(libraryCss).toMatch(
+      /\.lightink-library-cover\s*\{[^}]*border-radius:\s*3px 6px 6px 3px/,
+    );
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-confirm-dialog\s*\{[^}]*border-radius:\s*16px/,
+    );
+    expect(themeCss).toMatch(
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-context-menu\s*\{[^}]*border-radius:\s*16px/,
+    );
+    expect(libraryCss).toMatch(/border-radius:\s*16px 16px 0 0/);
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-panel\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
+    );
+    expect(lookupCss).toMatch(
+      /\.lightink-reader-lookup-panel\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
+    );
+    expect(annotationCss).toMatch(
+      /\.lightink-reader-sidebar\.is-touch-sheet\s*\{[^}]*border-radius:\s*0/,
+    );
+    expect(chromePanelsCss).toMatch(
+      /\.lightink-reader-chrome-panel\.is-touch-sheet\s*\{[^}]*border-radius:\s*16px 16px 0 0/,
+    );
+  });
+});

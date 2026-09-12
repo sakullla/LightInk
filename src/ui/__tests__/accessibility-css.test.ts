@@ -353,7 +353,7 @@ describe('T4 modal touch form and keyboard-inset single deduction', () => {
       /\.lightink-library-source-modal \.lightink-modal-dialog\s*\{[^}]*\}/,
     )?.[0];
     expect(sourceDialog).toMatch(/width:\s*min\(22rem, calc\(100vw - 48px\)\)/);
-    expect(sourceDialog).toMatch(/border-radius:\s*12px/);
+    expect(sourceDialog).toMatch(/border-radius:\s*var\(--lightink-radius-dialog\)/);
   });
 
   it('keeps every keyboard-inset consumer touch-gated so desktop output is unchanged', () => {

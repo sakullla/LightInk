@@ -1339,3 +1339,72 @@ describe('nested chrome radii in editor shell CSS', () => {
     );
   });
 });
+
+const CAPTION_PAD_RIGHT = 'calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px)';
+const LEADING_PAD_LEFT = 'calc(var(--lightink-titlebar-leading, 0px) + 8px)';
+
+describe('chrome-shell five-bar inset and desktop density', () => {
+  const themeCss = readFileSync(new URL('../theme.css', import.meta.url), 'utf-8');
+  const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
+  const readerCss = readFileSync(new URL('../../reader/reader.css', import.meta.url), 'utf-8');
+
+  it('uses the R4 caption formula on Win/Linux for all five bars', () => {
+    expect(themeCss).toContain(CAPTION_PAD_RIGHT);
+    expect(libraryCss).toContain(CAPTION_PAD_RIGHT);
+    expect(readerCss).toContain(CAPTION_PAD_RIGHT);
+    expect(themeCss).toMatch(
+      /#app\.is-workspace-editor #lightink-toolbar,\s*#app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*calc\(var\(--lightink-titlebar-caption, 36px\) \* 3 \+ 16px\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-header\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-caption, 36px\) \* 3 \+ 16px\)/,
+    );
+    expect(readerCss).toMatch(
+      /\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-caption, 36px\) \* 3 \+ 16px\)/,
+    );
+    expect(readerCss).toMatch(
+      /\.lightink-reader-comic-topbar\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-caption, 36px\) \* 3 \+ 16px\)/,
+    );
+    expect(`${themeCss}\n${libraryCss}\n${readerCss}`).not.toMatch(
+      /--lightink-titlebar-caption,\s*32px/,
+    );
+    expect(`${libraryCss}\n${readerCss}`).not.toMatch(/\* 3 \+ (?:20px|1\.25rem|36px)/);
+  });
+
+  it('replaces five-bar left padding with leading+8px and Mac right gutter 8px', () => {
+    expect(themeCss).toContain(LEADING_PAD_LEFT);
+    expect(libraryCss).toContain(LEADING_PAD_LEFT);
+    expect(readerCss).toContain(LEADING_PAD_LEFT);
+    expect(themeCss).toMatch(
+      /#app\.is-workspace-editor #lightink-toolbar,\s*#app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-left:\s*calc\(var\(--lightink-titlebar-leading, 0px\) \+ 8px\)/,
+    );
+    expect(libraryCss).toMatch(
+      /\.lightink-library-header\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-leading, 0px\) \+ 8px\)/,
+    );
+    expect(readerCss).toMatch(
+      /\.lightink-reader-chrome-bar\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-leading, 0px\) \+ 8px\)/,
+    );
+    expect(readerCss).toMatch(
+      /\.lightink-reader-comic-topbar\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-leading, 0px\) \+ 8px\)/,
+    );
+    expect(themeCss).toMatch(
+      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-toolbar,\s*html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*8px/,
+    );
+    expect(libraryCss).toMatch(
+      /html\[data-platform='mac'\] \.lightink-library-header\s*\{[^}]*padding-right:\s*8px/,
+    );
+    expect(readerCss).toMatch(
+      /html\[data-platform='mac'\] \.lightink-reader-chrome-bar,\s*html\[data-platform='mac'\] \.lightink-reader-comic-topbar\s*\{[^}]*padding-right:\s*8px/,
+    );
+  });
+
+  it('keeps desktop commands at ≥32px and shelf nav/heading at 26px', () => {
+    expect(themeCss).toMatch(/\.lightink-command\s*\{[^}]*min-height:\s*32px/);
+    expect(themeCss).toMatch(/\.lightink-menu-trigger\s*\{[^}]*min-height:\s*32px/);
+    expect(themeCss).toMatch(/\.lightink-workspace-travel\s*\{[^}]*min-height:\s*32px/);
+    expect(libraryCss).toMatch(
+      /\.lightink-library-nav-item,\s*\.lightink-library-source,\s*\.lightink-library-group,\s*\.lightink-library-smart-group\s*\{[^}]*min-height:\s*26px/,
+    );
+    expect(libraryCss).toMatch(/\.lightink-library-pane-heading\s*\{[^}]*min-height:\s*26px/);
+    expect(libraryCss).not.toMatch(/\.lightink-library-pane-heading\s*\{[^}]*min-height:\s*28px/);
+  });
+});

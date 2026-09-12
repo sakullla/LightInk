@@ -72,10 +72,10 @@ describe('touch press feedback baseline (T1)', () => {
         `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab\\.is-active\\s*\\{[^}]*background:\\s*transparent[^}]*color:\\s*var\\(--lightink-accent\\)[^}]*transition:\\s*background-color 150ms ease, color 150ms ease, font-weight 150ms ease`,
       ),
     );
-    // 底色来自既有 token，基块圆角 10px 两态一致（下方形状断言兜底）。
+    // 底色来自既有 token，基块圆角走 panel 令牌，两态一致（下方形状断言兜底）。
     expect(libraryCss).toMatch(
       new RegExp(
-        `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab\\s*\\{[^}]*border-radius:\\s*10px`,
+        `${TOUCH_GATE_RE}\\s*\\.lightink-library-tabbar-tab\\s*\\{[^}]*border-radius:\\s*var\\(--lightink-radius-panel\\)`,
       ),
     );
   });
