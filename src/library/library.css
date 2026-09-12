@@ -654,10 +654,10 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-section-filter-clear {
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-  min-height: 22px;
+  width: 24px;
+  min-width: 24px !important;
+  height: 24px;
+  min-height: 24px !important;
   color: var(--lightink-muted);
   font-size: 16px !important;
 }
@@ -836,7 +836,7 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-custom-group-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 22px;
+  grid-template-columns: 24px minmax(0, 1fr) 22px;
   align-items: center;
   gap: 2px;
   min-width: 0;
@@ -855,9 +855,10 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-group-toggle {
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  min-width: 16px;
-  min-height: 26px;
+  width: 24px;
+  min-width: 24px !important;
+  height: 24px;
+  min-height: 24px !important;
   padding: 0 !important;
   border: none !important;
   background: transparent !important;

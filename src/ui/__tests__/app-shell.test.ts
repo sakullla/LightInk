@@ -1406,5 +1406,22 @@ describe('chrome-shell five-bar inset and desktop density', () => {
     );
     expect(libraryCss).toMatch(/\.lightink-library-pane-heading\s*\{[^}]*min-height:\s*26px/);
     expect(libraryCss).not.toMatch(/\.lightink-library-pane-heading\s*\{[^}]*min-height:\s*28px/);
+    expect(libraryCss).not.toMatch(
+      /\.lightink-library-nav-item,\s*\.lightink-library-source,\s*\.lightink-library-group,\s*\.lightink-library-smart-group\s*\{[^}]*min-height:\s*32px/,
+    );
+    for (const selector of [
+      '.lightink-library-group-toggle',
+      '.lightink-library-section-filter-clear',
+    ]) {
+      expect(libraryCss).toMatch(
+        new RegExp(`${selector.replace(/\./g, '\\.')}\\s*\\{[^}]*width:\\s*24px`),
+      );
+      expect(libraryCss).toMatch(
+        new RegExp(`${selector.replace(/\./g, '\\.')}\\s*\\{[^}]*min-width:\\s*24px`),
+      );
+      expect(libraryCss).toMatch(
+        new RegExp(`${selector.replace(/\./g, '\\.')}\\s*\\{[^}]*min-height:\\s*24px`),
+      );
+    }
   });
 });
