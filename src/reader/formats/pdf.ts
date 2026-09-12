@@ -98,8 +98,17 @@ export interface PdfThumbPage<TViewport extends { width: number; height: number 
   }): { promise: Promise<unknown>; cancel?: () => void };
 }
 
-function pdfThumbCssEdge(cssEdge: number): number {
-  return Number.isFinite(cssEdge) && cssEdge > 0 ? cssEdge : PDF_THUMB_MAX_EDGE;
+function pdfThumbCssEdge(cssEdge: number | undefined): number {
+  return typeof cssEdge === 'number' && Number.isFinite(cssEdge) && cssEdge > 0
+    ? cssEdge
+    : PDF_THUMB_MAX_EDGE;
+}
+
+const inFlightThumbCancels = new WeakMap<HTMLCanvasElement, () => void>();
+
+/** Abort an in-flight `renderPdfThumb` for this canvas; no-op if none. */
+export function cancelPdfThumb(canvas: HTMLCanvasElement): void {
+  inFlightThumbCancels.get(canvas)?.();
 }
 
 function pdfThumbDpr(dpr: number | undefined): number {
@@ -173,14 +182,22 @@ function applyThumbCssSize(canvas: HTMLCanvasElement, cssWidth: number, cssHeigh
 export async function renderPdfThumb<TViewport extends { width: number; height: number }>(
   page: PdfThumbPage<TViewport>,
   canvas: HTMLCanvasElement,
-  cssEdge: number = PDF_THUMB_MAX_EDGE,
+  cssEdge?: number,
   dpr?: number,
 ): Promise<boolean> {
+  inFlightThumbCancels.get(canvas)?.();
   const edge = pdfThumbCssEdge(cssEdge);
   const pixelRatio = pdfThumbDpr(dpr);
+  let cancelled = false;
+  let renderTask: { promise: Promise<unknown>; cancel?: () => void } | undefined;
+  const requestCancel = (): void => {
+    cancelled = true;
+    renderTask?.cancel?.();
+  };
+  inFlightThumbCancels.set(canvas, requestCancel);
   try {
     const base = page.getViewport({ scale: 1 });
-    if (!(base.width > 0) || !(base.height > 0)) {
+    if (!(base.width > 0) || !(base.height > 0) || cancelled) {
       return false;
     }
     const context = canvas.getContext('2d');
@@ -192,7 +209,7 @@ export async function renderPdfThumb<TViewport extends { width: number; height: 
     const targetScale = targetLong / pageLong;
     const targetWidth = Math.max(1, Math.round(base.width * targetScale));
     const targetHeight = Math.max(1, Math.round(base.height * targetScale));
-    if (!(targetWidth > 0) || !(targetHeight > 0)) {
+    if (!(targetWidth > 0) || !(targetHeight > 0) || cancelled) {
       return false;
     }
     const rasterViewport = page.getViewport({ scale: targetScale * PDF_THUMB_OVERSAMPLE });
@@ -208,13 +225,23 @@ export async function renderPdfThumb<TViewport extends { width: number; height: 
       canvas.width = rasterWidth;
       canvas.height = rasterHeight;
     }
-    const task = page.render({
+    renderTask = page.render({
       canvasContext: paintContext,
       viewport: rasterViewport,
       canvas: paintCanvas,
     });
-    await task.promise;
+    if (cancelled) {
+      renderTask.cancel?.();
+      return false;
+    }
+    await renderTask.promise;
+    if (cancelled) {
+      return false;
+    }
     const reduced = downsampleThumbCanvas(paintCanvas, targetWidth, targetHeight);
+    if (cancelled) {
+      return false;
+    }
     canvas.width = targetWidth;
     canvas.height = targetHeight;
     applyThumbCssSize(canvas, targetWidth / pixelRatio, targetHeight / pixelRatio);
@@ -230,6 +257,10 @@ export async function renderPdfThumb<TViewport extends { width: number; height: 
     return true;
   } catch {
     return false;
+  } finally {
+    if (inFlightThumbCancels.get(canvas) === requestCancel) {
+      inFlightThumbCancels.delete(canvas);
+    }
   }
 }
 
@@ -359,8 +390,16 @@ export interface PdfRenderHandle {
   /**
    * 按需把 1-based 页画进目录缩略图画布。失败返回 false（调用方占位），
    * 不让单页错误关掉整表。打开目录不得同步渲染全部页。
+   * `cssEdge` 为格子 CSS 长边；省略时退回 `PDF_THUMB_MAX_EDGE`。
    */
-  preview(page: number, canvas: HTMLCanvasElement): Promise<boolean>;
+  preview(
+    page: number,
+    canvas: HTMLCanvasElement,
+    cssEdge?: number,
+    dpr?: number,
+  ): Promise<boolean>;
+  /** 取消该画布上尚未完成的缩略图栅格；无进行中的绘制则为空操作。 */
+  cancelPreview(canvas: HTMLCanvasElement): void;
   /** 释放 pdfjs 文档资源 + 摘除全部监听（关闭/重开 PDF 时调用）。 */
   destroy(): Promise<void>;
 }
@@ -887,7 +926,21 @@ export async function renderPdfInto(
     return outlineFromPdf(doc);
   };
 
-  const preview = async (page: number, canvas: HTMLCanvasElement): Promise<boolean> => {
+  const previewCanvases = new Set<HTMLCanvasElement>();
+  const cancelledPreviewCanvases = new WeakSet<HTMLCanvasElement>();
+
+  const cancelPreview = (canvas: HTMLCanvasElement): void => {
+    cancelledPreviewCanvases.add(canvas);
+    cancelPdfThumb(canvas);
+  };
+
+  const preview = async (
+    page: number,
+    canvas: HTMLCanvasElement,
+    cssEdge?: number,
+    dpr?: number,
+  ): Promise<boolean> => {
+    cancelledPreviewCanvases.delete(canvas);
     if (destroyed || isAborted()) {
       return false;
     }
@@ -895,14 +948,17 @@ export async function renderPdfInto(
     if (!Number.isFinite(target) || target < 1) {
       return false;
     }
+    previewCanvases.add(canvas);
     try {
       const pdfPage = await doc.getPage(target);
-      if (destroyed || isAborted()) {
+      if (destroyed || isAborted() || cancelledPreviewCanvases.has(canvas)) {
         return false;
       }
-      return await renderPdfThumb(pdfPage, canvas);
+      return await renderPdfThumb(pdfPage, canvas, cssEdge, dpr);
     } catch {
       return false;
+    } finally {
+      previewCanvases.delete(canvas);
     }
   };
 
@@ -913,11 +969,16 @@ export async function renderPdfInto(
     search,
     outline,
     preview,
+    cancelPreview,
     destroy: async () => {
       if (destroyed) {
         return;
       }
       destroyed = true;
+      for (const canvas of previewCanvases) {
+        cancelPreview(canvas);
+      }
+      previewCanvases.clear();
       cancelFitRetry();
       signal?.removeEventListener('abort', onAbort);
       teardown.abort();

@@ -9,6 +9,7 @@ import { createAnnotationPanel } from '../annotation-panel.js';
 import { defaultComicPreferences } from '../comic-preferences.js';
 import { createReaderChrome } from '../reader-chrome.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
+import { PDF_THUMB_MAX_EDGE } from '../formats/pdf.js';
 import {
   adoptReaderOverlayTheme,
   defaultReaderChromePanelCopy,
@@ -776,6 +777,187 @@ describe('reader chrome panels', () => {
       expect(thumbs[1]!.classList.contains('is-failed')).toBe(true);
       expect(thumbs[2]!.dataset.thumbState).toBe('pending');
       expect(thumbs[3]!.dataset.thumbState).toBe('pending');
+    } finally {
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
+  it('calls preview with a cssEdge measured from the thumb frame', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    const originalDpr = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1.5 });
+    vi.useFakeTimers();
+    try {
+      const preview = vi.fn(async () => true);
+      const pages = pdfTocPages({ preview, totalPages: 2, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        outlineItems,
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+      const thumb = panel.querySelector<HTMLButtonElement>('.lightink-reader-toc-thumb')!;
+      const frame = thumb.querySelector<HTMLElement>('.lightink-reader-toc-thumb-frame')!;
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 90 });
+      Object.defineProperty(frame, 'clientHeight', { configurable: true, value: 120 });
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      expect(preview).toHaveBeenCalledTimes(1);
+      expect(preview).toHaveBeenCalledWith(1, thumb.querySelector('canvas'), 120, 1.5);
+    } finally {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        value: originalDpr,
+      });
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
+  it('falls back to PDF_THUMB_MAX_EDGE when the thumb frame has no laid-out size', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    vi.useFakeTimers();
+    try {
+      const preview = vi.fn(async () => true);
+      const pages = pdfTocPages({ preview, totalPages: 1, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        [],
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      const thumb = panel.querySelector<HTMLButtonElement>('.lightink-reader-toc-thumb')!;
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      expect(preview).toHaveBeenCalledWith(
+        1,
+        thumb.querySelector('canvas'),
+        PDF_THUMB_MAX_EDGE,
+        window.devicePixelRatio,
+      );
+    } finally {
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
+  it('cancels in-flight thumb paints when switching back to outline', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    vi.useFakeTimers();
+    try {
+      let release!: (ok: boolean) => void;
+      const preview = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const cancelPreview = vi.fn();
+      const pages = pdfTocPages({ preview, cancelPreview, totalPages: 2, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        outlineItems,
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+      const thumb = panel.querySelector<HTMLButtonElement>('.lightink-reader-toc-thumb')!;
+      const canvas = thumb.querySelector('canvas');
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      expect(thumb.dataset.thumbState).toBe('drawing');
+      expect(() => {
+        panel.querySelector<HTMLButtonElement>('[data-toc-mode="outline"]')!.click();
+      }).not.toThrow();
+      expect(cancelPreview).toHaveBeenCalledTimes(1);
+      expect(cancelPreview).toHaveBeenCalledWith(canvas);
+      release(true);
+      await Promise.resolve();
+      expect(panel.querySelector('.lightink-reader-toc-list.is-thumbs')).toBeNull();
+      expect(panel.querySelectorAll('.lightink-reader-toc-item')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  });
+
+  it('cancels a drawing thumb that leaves the viewport and retries on re-enter', async () => {
+    const observers: ThumbIntersectionObserver[] = [];
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      ThumbIntersectionObserver as unknown as typeof IntersectionObserver;
+    ThumbIntersectionObserver.instances = observers;
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let releaseFirst!: (ok: boolean) => void;
+      const preview = vi.fn(() => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<boolean>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return Promise.resolve(true);
+      });
+      const cancelPreview = vi.fn();
+      const pages = pdfTocPages({ preview, cancelPreview, totalPages: 2, page: 1 });
+      const panel = document.createElement('div');
+      fillReaderTocPanel(
+        panel,
+        outlineItems,
+        defaultReaderChromePanelCopy(),
+        { chapter: 0 },
+        vi.fn(),
+        undefined,
+        pages,
+      );
+      panel.querySelector<HTMLButtonElement>('[data-toc-mode="thumbs"]')!.click();
+      const thumb = panel.querySelector<HTMLButtonElement>('.lightink-reader-toc-thumb')!;
+      const canvas = thumb.querySelector('canvas')!;
+      observers[0]!.trigger(thumb, true);
+      await vi.runAllTimersAsync();
+      expect(thumb.dataset.thumbState).toBe('drawing');
+      observers[0]!.trigger(thumb, false);
+      expect(cancelPreview).toHaveBeenCalledTimes(1);
+      expect(cancelPreview).toHaveBeenCalledWith(canvas);
+      expect(thumb.dataset.thumbState).toBe('cancelled');
+      releaseFirst(true);
+      await Promise.resolve();
+      expect(thumb.dataset.thumbState).toBe('cancelled');
+      expect(canvas.hidden).toBe(true);
+
+      observers[0]!.trigger(thumb, true);
+      expect(thumb.dataset.thumbState).toBe('pending');
+      await vi.runAllTimersAsync();
+      expect(preview).toHaveBeenCalledTimes(2);
+      expect(thumb.dataset.thumbState).toBe('ready');
     } finally {
       vi.useRealTimers();
       globalThis.IntersectionObserver = originalObserver;

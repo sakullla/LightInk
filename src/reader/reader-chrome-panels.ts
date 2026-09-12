@@ -34,6 +34,7 @@ import {
 import type { ReaderFlowLayout } from './reader-layout.js';
 import { READER_THEMES, type ReaderThemeId } from './reader-theme.js';
 import type { ComicPreferences } from './comic-preferences.js';
+import { PDF_THUMB_MAX_EDGE } from './formats/pdf.js';
 import { observeLoadMore } from './search-panel.js';
 
 export const READER_TYPE_LINE_HEIGHTS = [1.5, 1.65, 1.8, 2] as const;
@@ -207,8 +208,23 @@ export type ReaderTocMode = 'outline' | 'thumbs';
 export interface ReaderTocPdfPages {
   readonly totalPages: number;
   readonly page: number;
-  readonly preview: (page: number, canvas: HTMLCanvasElement) => Promise<boolean>;
+  readonly preview: (
+    page: number,
+    canvas: HTMLCanvasElement,
+    cssEdge?: number,
+    dpr?: number,
+  ) => Promise<boolean>;
+  readonly cancelPreview?: (canvas: HTMLCanvasElement) => void;
   readonly onSelectPage: (page: number) => void;
+}
+
+/** Canvas starts hidden so clientWidth is 0; measure the visible thumb frame. */
+function measureTocThumbCssEdge(button: HTMLButtonElement): number {
+  const frame = button.querySelector<HTMLElement>('.lightink-reader-toc-thumb-frame');
+  const width = frame?.clientWidth ?? 0;
+  const height = frame?.clientHeight ?? 0;
+  const edge = Math.max(width, height);
+  return edge > 0 ? edge : PDF_THUMB_MAX_EDGE;
 }
 
 function resolveReaderTocMode(
@@ -574,6 +590,7 @@ export function fillReaderTocPanel(
     let thumbGen = 0;
     let thumbObserver: IntersectionObserver | null = null;
     const drawTimers = new Set<ReturnType<typeof setTimeout>>();
+    const drawTimerByButton = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
 
     const pageLabel = (page: number): string =>
       formatOutlineSearchCount(copy.tocPage ?? '{n}', page);
@@ -590,6 +607,24 @@ export function fillReaderTocPanel(
       }
     };
 
+    const clearDrawTimer = (button: HTMLButtonElement): void => {
+      const timer = drawTimerByButton.get(button);
+      if (timer === undefined) {
+        return;
+      }
+      clearTimeout(timer);
+      drawTimers.delete(timer);
+      drawTimerByButton.delete(button);
+    };
+
+    const cancelThumb = (button: HTMLButtonElement): void => {
+      clearDrawTimer(button);
+      const canvas = button.querySelector('canvas');
+      if (canvas !== null) {
+        pages.cancelPreview?.(canvas);
+      }
+    };
+
     const drawThumb = async (button: HTMLButtonElement): Promise<void> => {
       const gen = thumbGen;
       if (button.dataset.thumbState === 'ready' || button.dataset.thumbState === 'drawing') {
@@ -601,13 +636,15 @@ export function fillReaderTocPanel(
         return;
       }
       button.dataset.thumbState = 'drawing';
+      const cssEdge = measureTocThumbCssEdge(button);
+      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : undefined;
       let ok = false;
       try {
-        ok = await pages.preview(page, canvas);
+        ok = await pages.preview(page, canvas, cssEdge, dpr);
       } catch {
         ok = false;
       }
-      if (gen !== thumbGen) {
+      if (gen !== thumbGen || button.dataset.thumbState !== 'drawing') {
         return;
       }
       button.dataset.thumbState = ok ? 'ready' : 'failed';
@@ -616,15 +653,20 @@ export function fillReaderTocPanel(
     };
 
     const scheduleDraw = (button: HTMLButtonElement): void => {
+      if (button.dataset.thumbState !== 'pending' || drawTimerByButton.has(button)) {
+        return;
+      }
       const gen = thumbGen;
       const timer = setTimeout(() => {
         drawTimers.delete(timer);
+        drawTimerByButton.delete(button);
         if (gen !== thumbGen) {
           return;
         }
         void drawThumb(button);
       }, 0);
       drawTimers.add(timer);
+      drawTimerByButton.set(button, timer);
     };
 
     const watchThumbs = (buttons: readonly HTMLButtonElement[]): void => {
@@ -642,14 +684,29 @@ export function fillReaderTocPanel(
         thumbObserver = new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
-              if (!entry.isIntersecting) {
-                continue;
-              }
               const target = entry.target;
               if (!(target instanceof HTMLButtonElement)) {
                 continue;
               }
-              thumbObserver?.unobserve(target);
+              if (!entry.isIntersecting) {
+                if (target.dataset.thumbState === 'drawing') {
+                  cancelThumb(target);
+                  target.dataset.thumbState = 'cancelled';
+                } else {
+                  clearDrawTimer(target);
+                }
+                continue;
+              }
+              if (
+                target.dataset.thumbState === 'ready' ||
+                target.dataset.thumbState === 'failed' ||
+                target.dataset.thumbState === 'drawing'
+              ) {
+                continue;
+              }
+              if (target.dataset.thumbState === 'cancelled') {
+                target.dataset.thumbState = 'pending';
+              }
               scheduleDraw(target);
             }
           },
@@ -740,6 +797,14 @@ export function fillReaderTocPanel(
 
     bodyTeardown = () => {
       thumbGen += 1;
+      for (const button of list.querySelectorAll<HTMLButtonElement>('.lightink-reader-toc-thumb')) {
+        if (button.dataset.thumbState === 'drawing') {
+          cancelThumb(button);
+          button.dataset.thumbState = 'cancelled';
+        } else {
+          clearDrawTimer(button);
+        }
+      }
       for (const timer of drawTimers) {
         clearTimeout(timer);
       }

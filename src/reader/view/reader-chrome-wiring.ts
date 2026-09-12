@@ -976,7 +976,8 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         : {
             totalPages: pdf.controller.totalPages,
             page: pdf.controller.page,
-            preview: (page, canvas) => pdf.preview(page, canvas),
+            preview: (page, canvas, cssEdge, dpr) => pdf.preview(page, canvas, cssEdge, dpr),
+            cancelPreview: (canvas) => pdf.cancelPreview(canvas),
             onSelectPage: (page) => {
               pdf.scrollToPage(page);
               ctx.paged.syncPageState();

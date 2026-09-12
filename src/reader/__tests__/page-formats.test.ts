@@ -19,6 +19,7 @@ import {
   READER_LIMITS,
 } from '../reader-limits.js';
 import {
+  cancelPdfThumb,
   createPdfPageController,
   PDF_SCALE_STEPS,
   PDF_THUMB_MAX_EDGE,
@@ -251,6 +252,31 @@ describe('renderPdfThumb', () => {
     };
     await expect(renderPdfThumb(page, fakeCanvas())).resolves.toBe(false);
     expect(page.render).not.toHaveBeenCalled();
+  });
+
+  it('cancelPdfThumb aborts the render task and does not paint the destination canvas', async () => {
+    const cancel = vi.fn();
+    let rejectRender!: (error: Error) => void;
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 200 * scale,
+        height: 400 * scale,
+      }),
+      render: () => ({
+        promise: new Promise<void>((_resolve, reject) => {
+          rejectRender = reject;
+        }),
+        cancel,
+      }),
+    };
+    const canvas = fakeCanvas();
+    const pending = renderPdfThumb(page, canvas, 128, 1);
+    cancelPdfThumb(canvas);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    rejectRender(new Error('RenderingCancelledException'));
+    await expect(pending).resolves.toBe(false);
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
   });
 });
 
