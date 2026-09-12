@@ -288,46 +288,46 @@ function measureOf(selector: string): string {
   return cssCustomProperty(block!.body, '--lightink-measure');
 }
 
-describe('theme.css Markdown 栏宽分档 (R2)', () => {
-  it('compact / 窄窗为 min(32rem, 94%)', () => {
-    expect(measureOf("html[data-display='compact']")).toBe('min(32rem, 94%)');
+describe('theme.css Markdown 栏宽分档', () => {
+  it('compact / 窄窗为 min(44rem, 94%)', () => {
+    expect(measureOf("html[data-display='compact']")).toBe('min(44rem, 94%)');
     expect(
       measureOf(
         "html:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd'])",
       ),
-    ).toBe('min(32rem, 94%)');
+    ).toBe('min(44rem, 94%)');
   });
 
-  it('hd 为 min(36rem, 94%)', () => {
-    expect(measureOf("html[data-display='hd']")).toBe('min(36rem, 94%)');
+  it('hd 为 min(56rem, 94%)', () => {
+    expect(measureOf("html[data-display='hd']")).toBe('min(56rem, 94%)');
   });
 
-  it('qhd 及以上为 min(40rem, 94%)', () => {
-    expect(measureOf("html[data-display='qhd']")).toBe('min(40rem, 94%)');
-    expect(measureOf("html[data-display='uhd']")).toBe('min(40rem, 94%)');
-    expect(measureOf("html[data-display='xuhd']")).toBe('min(40rem, 94%)');
+  it('qhd 及以上为 58/60/62rem', () => {
+    expect(measureOf("html[data-display='qhd']")).toBe('min(58rem, 94%)');
+    expect(measureOf("html[data-display='uhd']")).toBe('min(60rem, 94%)');
+    expect(measureOf("html[data-display='xuhd']")).toBe('min(62rem, 94%)');
     expect(
       measureOf(
         "html:not([data-display='uhd']):not([data-display='xuhd']):not([data-display='compact'])",
       ),
-    ).toBe('min(40rem, 94%)');
+    ).toBe('min(58rem, 94%)');
     expect(measureOf("html:not([data-display='xuhd']):not([data-display='compact'])")).toBe(
-      'min(40rem, 94%)',
+      'min(60rem, 94%)',
     );
     const wideHtml = declarationBlocks(themeCss).filter(
       (rule) => rule.selector === 'html' && /--lightink-measure\s*:/.test(rule.body),
     );
     expect(wideHtml).toHaveLength(1);
-    expect(cssCustomProperty(wideHtml[0].body, '--lightink-measure')).toBe('min(40rem, 94%)');
+    expect(cssCustomProperty(wideHtml[0].body, '--lightink-measure')).toBe('min(62rem, 94%)');
   });
 
-  it('--lightink-measure 声明只使用 32/36/40rem 上限且均与 94% 取 min', () => {
+  it('--lightink-measure 声明只使用 44/56/58/60/62rem 上限且均与 94% 取 min', () => {
     const measures = [...themeCss.matchAll(/--lightink-measure\s*:\s*([^;]+);/g)].map((match) =>
       match[1].trim(),
     );
     expect(measures.length).toBeGreaterThan(0);
     for (const value of measures) {
-      expect(value).toMatch(/^min\((32|36|40)rem,\s*94%\)$/);
+      expect(value).toMatch(/^min\((44|56|58|60|62)rem,\s*94%\)$/);
     }
   });
 

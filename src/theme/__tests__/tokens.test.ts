@@ -148,8 +148,8 @@ describe('tokens.css 内置主题', () => {
     }
   });
 
-  it.each(BUILTIN_THEMES)('%s --lightink-measure 默认为 min(36rem, 94%) (R2)', (id) => {
-    expect(tokenValue(themeBlock(id), '--lightink-measure')).toBe('min(36rem, 94%)');
+  it.each(BUILTIN_THEMES)('%s --lightink-measure 默认为 min(56rem, 94%)', (id) => {
+    expect(tokenValue(themeBlock(id), '--lightink-measure')).toBe('min(56rem, 94%)');
   });
 
   it.each(BUILTIN_THEMES)('%s 正文行高仍 ≥1.75', (id) => {
