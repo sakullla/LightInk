@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  collapseRepeatedChapterTitle,
   displayChapterTitle,
   isUsableEpubChapterTitle,
   markDuplicateChapterHeading,
@@ -53,6 +54,23 @@ describe('resolveReaderChapterTitle', () => {
         fallback,
       ),
     ).toBe('chapter:1');
+    expect(
+      resolveReaderChapterTitle(
+        { current: 92, locationKind: 'page' },
+        [{ level: 1, text: '第六章 事件第六章 事件', anchor: 0, page: 90 }],
+        fallback,
+      ),
+    ).toBe('第六章 事件');
+  });
+});
+
+describe('collapseRepeatedChapterTitle', () => {
+  it('collapses converter-stamped doubled headings and leaves real titles', () => {
+    expect(collapseRepeatedChapterTitle('第六章 事件第六章 事件')).toBe('第六章 事件');
+    expect(collapseRepeatedChapterTitle('第六章 事件 第六章 事件')).toBe('第六章 事件');
+    expect(collapseRepeatedChapterTitle('CoverCover')).toBe('Cover');
+    expect(collapseRepeatedChapterTitle('第六章 事件')).toBe('第六章 事件');
+    expect(collapseRepeatedChapterTitle('哈哈哈哈哈哈')).toBe('哈哈哈哈哈哈');
   });
 });
 
@@ -500,6 +518,7 @@ describe('displayChapterTitle', () => {
     expect(displayChapterTitle('第4章 白月光（求收藏）', '第 1 章')).toBe(
       '第4章 白月光（求收藏）',
     );
+    expect(displayChapterTitle('第六章 事件第六章 事件', '第 6 章')).toBe('第六章 事件');
   });
 });
 

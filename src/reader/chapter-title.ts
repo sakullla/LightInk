@@ -17,8 +17,64 @@ export function isUsableEpubChapterTitle(title: string): boolean {
 }
 
 export function displayChapterTitle(title: string, fallback: string): string {
-  const trimmed = title.trim();
+  const trimmed = collapseRepeatedChapterTitle(title);
   return isUsableEpubChapterTitle(trimmed) ? trimmed : fallback;
+}
+
+const NUMBER_CLASS = '零〇一二三四五六七八九十百千万两0-9';
+const HEADING_HINT = new RegExp(
+  `第\\s*[${NUMBER_CLASS}]+\\s*[章回节卷]|Chapter\\s+\\d+|序章|序言|楔子|引子|前言|后记|尾声|番外`,
+  'i',
+);
+
+/**
+ * PDF/EPUB converters often stamp the same heading twice with no separator
+ * (`第六章 事件第六章 事件`). Collapse one exact or whitespace-separated repeat.
+ */
+export function collapseRepeatedChapterTitle(title: string): string {
+  const trimmed = title.replace(/\u0000/g, '').replace(/\s+/g, ' ').trim();
+  if (trimmed.length < 6) {
+    return trimmed;
+  }
+  let current = trimmed;
+  for (let step = 0; step < 3; step += 1) {
+    const next = peelRepeatedTitle(current);
+    if (next === null) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function peelRepeatedTitle(text: string): string | null {
+  if (text.length >= 6 && text.length % 2 === 0) {
+    const half = text.length / 2;
+    const left = text.slice(0, half);
+    if (left === text.slice(half) && isCollapsibleTitleUnit(left)) {
+      return left.trim();
+    }
+  }
+  const spaced = /^(.*\S)\s+\1$/.exec(text);
+  const unit = spaced?.[1];
+  if (unit !== undefined && isCollapsibleTitleUnit(unit)) {
+    return unit.trim();
+  }
+  return null;
+}
+
+function isCollapsibleTitleUnit(unit: string): boolean {
+  const trimmed = unit.trim();
+  if (trimmed.length < 2) {
+    return false;
+  }
+  if (HEADING_HINT.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.length >= 4 && /\s/.test(trimmed)) {
+    return true;
+  }
+  return trimmed.length >= 5;
 }
 
 const SPLIT_HEADING_ATTR = 'data-reader-split-heading';

@@ -3,6 +3,7 @@
  */
 
 import type { OutlineItem } from '../outline/outline-model.js';
+import { collapseRepeatedChapterTitle } from './chapter-title.js';
 
 export interface PdfOutlineNode {
   readonly title?: unknown;
@@ -47,18 +48,30 @@ async function pageFromDest(
   }
 }
 
+function sameOutlineTarget(
+  left: { page?: number; chapter?: number },
+  right: { page?: number; chapter?: number },
+): boolean {
+  return left.page === right.page && left.chapter === right.chapter;
+}
+
 function pushItem(
   items: OutlineItem[],
   title: string,
   level: number,
   target: { page?: number; chapter?: number },
-): void {
+): boolean {
+  const last = items[items.length - 1];
+  if (last !== undefined && last.text === title && sameOutlineTarget(last, target)) {
+    return false;
+  }
   items.push({
     level,
     text: title,
     anchor: items.length,
     ...target,
   });
+  return true;
 }
 
 async function flattenPdfNodes(
@@ -66,6 +79,7 @@ async function flattenPdfNodes(
   resolver: PdfOutlineResolver,
   level: number,
   out: OutlineItem[],
+  parent?: { title: string; page?: number },
 ): Promise<void> {
   if (level > MAX_OUTLINE_DEPTH) {
     return;
@@ -74,13 +88,23 @@ async function flattenPdfNodes(
     if (out.length >= MAX_PDF_OUTLINE_ITEMS) {
       return;
     }
-    const title = typeof node.title === 'string' ? node.title.trim() : '';
+    const raw = typeof node.title === 'string' ? node.title : '';
+    const title = collapseRepeatedChapterTitle(raw);
     const page = await pageFromDest(node.dest, resolver);
+    let pushed = false;
     if (title !== '') {
-      pushItem(out, title, level, { page });
+      const duplicateOfParent =
+        parent !== undefined &&
+        parent.title === title &&
+        (page === parent.page || page === undefined);
+      if (!duplicateOfParent) {
+        pushed = pushItem(out, title, level, { page });
+      }
     }
     if (Array.isArray(node.items) && node.items.length > 0) {
-      await flattenPdfNodes(node.items, resolver, title === '' ? level : level + 1, out);
+      const nextLevel = title === '' || !pushed ? level : level + 1;
+      const nextParent = title === '' ? parent : { title, page: page ?? parent?.page };
+      await flattenPdfNodes(node.items, resolver, nextLevel, out, nextParent);
     }
   }
 }
@@ -108,7 +132,7 @@ export function outlineFromEntries(
 ): OutlineItem[] {
   const items: OutlineItem[] = [];
   for (let index = 0; index < entries.length; index += 1) {
-    const title = entries[index]!.title.trim();
+    const title = collapseRepeatedChapterTitle(entries[index]!.title);
     const text = title === '' ? (kind === 'page' ? String(index + 1) : '') : title;
     if (text === '') {
       continue;

@@ -6,7 +6,7 @@
 import type { OutlineItem } from '../outline/outline-model.js';
 import type { Annotation } from './annotations.js';
 import { isTouchPrimaryDocument } from './comic-preferences.js';
-import { isUsableEpubChapterTitle } from './chapter-title.js';
+import { collapseRepeatedChapterTitle, isUsableEpubChapterTitle } from './chapter-title.js';
 import {
   effectiveReaderPageTurnEffect,
   resolveReaderPageTurnEffect,
@@ -33,6 +33,11 @@ const READER_PAGE_ANIM_MS_BY_EFFECT: Readonly<Record<ReaderPageTurnEffect, numbe
 /** Chapter-edge bounce duration (T2): ~200ms spring, touch only. */
 export const READER_PAGE_BOUNDARY_BOUNCE_MS = 200;
 
+function usableCollapsedTitle(text: string): string | undefined {
+  const title = collapseRepeatedChapterTitle(text);
+  return isUsableEpubChapterTitle(title) ? title : undefined;
+}
+
 export function resolveReaderChapterTitle(
   state: Pick<ReaderState, 'current' | 'locationKind'>,
   outline: readonly OutlineItem[],
@@ -44,26 +49,33 @@ export function resolveReaderChapterTitle(
   if (state.locationKind === 'chapter') {
     const index = state.current - 1;
     const exact = outline.find((item) => item.chapter === index);
-    if (exact?.text && isUsableEpubChapterTitle(exact.text)) {
-      return exact.text;
+    const exactTitle = exact === undefined ? undefined : usableCollapsedTitle(exact.text);
+    if (exactTitle !== undefined) {
+      return exactTitle;
     }
     const previous = outline.filter(
-      (item) =>
-        item.chapter !== undefined &&
-        item.chapter <= index &&
-        isUsableEpubChapterTitle(item.text),
+      (item) => item.chapter !== undefined && item.chapter <= index,
     );
-    return previous[previous.length - 1]?.text ?? fallback('chapter', state.current);
+    for (let offset = previous.length - 1; offset >= 0; offset -= 1) {
+      const title = usableCollapsedTitle(previous[offset]!.text);
+      if (title !== undefined) {
+        return title;
+      }
+    }
+    return fallback('chapter', state.current);
   }
   if (state.locationKind === 'page') {
     const exact = outline.find((item) => item.page === state.current);
     if (exact?.text) {
-      return exact.text;
+      return collapseRepeatedChapterTitle(exact.text);
     }
     const previous = outline.filter(
       (item) => item.page !== undefined && item.page <= state.current && item.text !== '',
     );
-    return previous[previous.length - 1]?.text ?? fallback('page', state.current);
+    const previousTitle = previous[previous.length - 1]?.text;
+    return previousTitle === undefined
+      ? fallback('page', state.current)
+      : collapseRepeatedChapterTitle(previousTitle);
   }
   return '';
 }

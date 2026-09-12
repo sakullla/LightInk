@@ -64,4 +64,39 @@ describe('outlineFromPdf', () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it('collapses doubled bookmark titles and skips same-page child copies', async () => {
+    const resolver: PdfOutlineResolver = {
+      getOutline: async () => [
+        {
+          title: '第六章 事件第六章 事件',
+          dest: [{ num: 90, gen: 0 }, { name: 'XYZ' }],
+          items: [
+            {
+              title: '第六章 事件',
+              dest: [{ num: 90, gen: 0 }, { name: 'XYZ' }],
+              items: [],
+            },
+          ],
+        },
+        {
+          title: '第七章 告别',
+          dest: [{ num: 110, gen: 0 }, { name: 'XYZ' }],
+          items: [],
+        },
+      ],
+      getDestination: async () => null,
+      getPageIndex: async (ref) => {
+        const num = (ref as { num?: number }).num;
+        if (num === 90) return 89;
+        if (num === 110) return 109;
+        throw new Error('unknown dest');
+      },
+    };
+
+    await expect(outlineFromPdf(resolver)).resolves.toEqual([
+      { level: 1, text: '第六章 事件', anchor: 0, page: 90 },
+      { level: 1, text: '第七章 告别', anchor: 1, page: 110 },
+    ]);
+  });
 });
