@@ -288,6 +288,24 @@ function measureOf(selector: string): string {
   return cssCustomProperty(block!.body, '--lightink-measure');
 }
 
+const READER_SHELL_HOST =
+  ":is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'] #lightink-editor-area[data-surface='markdown'] .lightink-tab-host";
+
+function readerShellMeasure(display: string): string {
+  const attr = `[data-display='${display}']`;
+  const block = declarationBlocks(themeCss).find(
+    (rule) =>
+      rule.selector.includes("[data-workspace-mode='reader']") &&
+      rule.selector.includes("[data-surface='markdown']") &&
+      rule.selector.includes('.lightink-tab-host') &&
+      rule.selector.includes(attr) &&
+      !rule.selector.includes(`:not(${attr})`) &&
+      /--lightink-measure\s*:/.test(rule.body),
+  );
+  expect(block, `reader-shell ${display}`).toBeDefined();
+  return cssCustomProperty(block!.body, '--lightink-measure');
+}
+
 describe('theme.css Markdown 栏宽分档', () => {
   it('compact / 窄窗为 min(44rem, 94%)', () => {
     expect(measureOf("html[data-display='compact']")).toBe('min(44rem, 94%)');
@@ -321,21 +339,98 @@ describe('theme.css Markdown 栏宽分档', () => {
     expect(cssCustomProperty(wideHtml[0].body, '--lightink-measure')).toBe('min(62rem, 94%)');
   });
 
-  it('--lightink-measure 声明只使用 44/56/58/60/62rem 上限且均与 94% 取 min', () => {
-    const measures = [...themeCss.matchAll(/--lightink-measure\s*:\s*([^;]+);/g)].map((match) =>
-      match[1].trim(),
-    );
-    expect(measures.length).toBeGreaterThan(0);
-    for (const value of measures) {
+  it('html 分档 --lightink-measure 只使用 44/56/58/60/62rem 上限且均与 94% 取 min', () => {
+    const htmlMeasures = declarationBlocks(themeCss)
+      .filter(
+        (rule) =>
+          /^(html\b|:root\b)/.test(rule.selector) && /--lightink-measure\s*:/.test(rule.body),
+      )
+      .map((rule) => cssCustomProperty(rule.body, '--lightink-measure'));
+    expect(htmlMeasures.length).toBeGreaterThan(0);
+    for (const value of htmlMeasures) {
       expect(value).toMatch(/^min\((44|56|58|60|62)rem,\s*94%\)$/);
     }
+    expect(tokensCss).toMatch(/--lightink-measure:\s*min\(56rem,\s*94%\)/);
   });
 
-  it('桌面编辑器与触控 Markdown 仍共用 .lightink-tab-host 栏宽', () => {
+  it('触控阅读壳 markdown 宿主覆盖栏宽 32/36/40rem，编辑器仍走 html 档', () => {
     const host = declarationBlocks(themeCss).find((rule) => rule.selector === '.lightink-tab-host');
     expect(host).toBeDefined();
     expect(host!.body).toContain('max-width: var(--lightink-measure, 48rem)');
     expect(host!.body).toMatch(/width:\s*100%/);
+    expect(host!.body).not.toMatch(/1\.125/);
+    expect(host!.body).toMatch(
+      /font-size:\s*calc\(\s*var\(--lightink-font-size,\s*16px\)\s*\*\s*var\(--lightink-font-scale,\s*1\)\s*\)/,
+    );
+
+    expect(measureOf(READER_SHELL_HOST)).toBe('min(36rem, 94%)');
+    expect(readerShellMeasure('compact')).toBe('min(32rem, 94%)');
+    expect(readerShellMeasure('hd')).toBe('min(36rem, 94%)');
+    expect(readerShellMeasure('qhd')).toBe('min(36rem, 94%)');
+    expect(readerShellMeasure('uhd')).toBe('min(40rem, 94%)');
+    expect(readerShellMeasure('xuhd')).toBe('min(40rem, 94%)');
+    expect(
+      measureOf(
+        ":is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd']) #lightink-editor-area[data-surface='markdown'] .lightink-tab-host",
+      ),
+    ).toBe('min(32rem, 94%)');
+    expect(
+      measureOf(
+        ":is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='uhd']):not([data-display='xuhd']):not([data-display='compact']) #lightink-editor-area[data-surface='markdown'] .lightink-tab-host",
+      ),
+    ).toBe('min(36rem, 94%)');
+    expect(
+      measureOf(
+        ":is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='xuhd']):not([data-display='compact']) #lightink-editor-area[data-surface='markdown'] .lightink-tab-host",
+      ),
+    ).toBe('min(40rem, 94%)');
+
+    const readerMeasures = declarationBlocks(themeCss)
+      .filter(
+        (rule) =>
+          rule.selector.includes("[data-workspace-mode='reader']") &&
+          rule.selector.includes("[data-surface='markdown']") &&
+          /--lightink-measure\s*:/.test(rule.body),
+      )
+      .map((rule) => cssCustomProperty(rule.body, '--lightink-measure'));
+    expect(readerMeasures.length).toBeGreaterThan(0);
+    for (const value of readerMeasures) {
+      expect(value).toMatch(/^min\((32|36|40)rem,\s*94%\)$/);
+    }
+  });
+
+  it('阅读壳宿主页边 1.5×、正文字号 1.125× font-scale', () => {
+    const shell = declarationBlocks(themeCss).find((rule) => rule.selector === READER_SHELL_HOST);
+    expect(shell).toBeDefined();
+    expect(shell!.body).toMatch(
+      /padding:\s*calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-x,\s*28px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*2\.2\s*\*\s*1\.5\)/,
+    );
+    expect(shell!.body).toMatch(
+      /font-size:\s*calc\(\s*var\(--lightink-font-size,\s*16px\)\s*\*\s*1\.125\s*\*\s*var\(--lightink-font-scale,\s*1\)\s*\)/,
+    );
+  });
+
+  it('阅读壳代码块字号同样 1.125× font-scale', () => {
+    const code = declarationBlocks(themeCss).find(
+      (rule) =>
+        rule.selector.includes("[data-workspace-mode='reader']") &&
+        rule.selector.includes("[data-surface='markdown']") &&
+        rule.selector.includes('.lightink-tab-host') &&
+        (rule.selector.includes('pre') || rule.selector.includes('code')) &&
+        /--lightink-font-size-code/.test(rule.body),
+    );
+    expect(code).toBeDefined();
+    expect(code!.body).toMatch(
+      /font-size:\s*calc\(\s*var\(--lightink-font-size-code,\s*13\.5px\)\s*\*\s*1\.125\s*\*\s*var\(--lightink-font-scale,\s*1\)\s*\)/,
+    );
+  });
+
+  it('电子书 data-surface=reader 仍 max-width none', () => {
+    const ebook = declarationBlocks(themeCss).find((rule) =>
+      rule.selector.includes('.lightink-tab-host.lightink-tab-host--reader'),
+    );
+    expect(ebook).toBeDefined();
+    expect(ebook!.body).toMatch(/max-width:\s*none/);
   });
 
   it('正文无 justify、无首行缩进', () => {

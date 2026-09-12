@@ -42,7 +42,8 @@ body {
  * 在宽窗下两侧过空，94% 填满又行长超限（CJK 一行 90+ 字视线无法回扫）；
  * 现按可读性研究取值（拉丁 50-75 字符/行、WCAG 1.4.8 CJK 上限 40 字/行、
  * Typora 约 860px 先例），各档内容宽约 44-62rem ≈ 中文 45-56 字/行，
- * 94% 只在窗口窄于上限时兜底填满。32–40rem 书栏宽在桌面编辑器上过窄，已还原。
+ * 94% 只在窗口窄于上限时兜底填满。32–40rem 书栏宽在桌面编辑器上过窄，已还原；
+ * 触控阅读壳 markdown 宿主另行覆盖。
  */
 
 /* Compact: 1366×768, 1280×720, half-tiled — fill the pane, modest type. */
@@ -947,6 +948,75 @@ html[data-reading-layout='paginated'] #lightink-editor-area[data-surface='reader
   font-size: calc(var(--lightink-font-size, 16px) * var(--lightink-font-scale, 1));
   line-height: var(--lightink-line-height-body, 1.75);
   color: var(--lightink-fg);
+}
+
+/*
+ * Touch/Android reading-shell Markdown: book measure, 1.5× page pad, 1.125× type.
+ * html[data-display] editor tokens stay 44–62rem. Do not match data-surface=reader.
+ */
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
+  --lightink-measure: min(36rem, 94%);
+  padding: calc(var(--lightink-page-pad-y, 24px) * 1.5)
+    calc(var(--lightink-page-pad-x, 28px) * 1.5)
+    calc(var(--lightink-page-pad-y, 24px) * 2.2 * 1.5);
+  font-size: calc(var(--lightink-font-size, 16px) * 1.125 * var(--lightink-font-scale, 1));
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host
+  :is(pre, .lightink-code-block code) {
+  font-size: calc(var(--lightink-font-size-code, 13.5px) * 1.125 * var(--lightink-font-scale, 1));
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'][data-display='compact']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
+  --lightink-measure: min(32rem, 94%);
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'][data-display='hd']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host,
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'][data-display='qhd']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
+  --lightink-measure: min(36rem, 94%);
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'][data-display='uhd']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host,
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader'][data-display='xuhd']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
+  --lightink-measure: min(40rem, 94%);
+}
+
+@media (max-width: 1279px) {
+  :is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='qhd']):not([data-display='uhd']):not([data-display='xuhd'])
+    #lightink-editor-area[data-surface='markdown']
+    .lightink-tab-host {
+    --lightink-measure: min(32rem, 94%);
+  }
+}
+
+@media (min-width: 1600px) {
+  :is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='uhd']):not([data-display='xuhd']):not([data-display='compact'])
+    #lightink-editor-area[data-surface='markdown']
+    .lightink-tab-host {
+    --lightink-measure: min(36rem, 94%);
+  }
+}
+
+@media (min-width: 2400px) {
+  :is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']:not([data-display='xuhd']):not([data-display='compact'])
+    #lightink-editor-area[data-surface='markdown']
+    .lightink-tab-host {
+    --lightink-measure: min(40rem, 94%);
+  }
 }
 
 /* Must follow .lightink-tab-host: same specificity would otherwise keep the
