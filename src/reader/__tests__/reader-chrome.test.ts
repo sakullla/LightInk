@@ -834,6 +834,18 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
+  it('closes an open sheet on tap even when the footer is already hidden', () => {
+    const { page, chrome, deps } = mount({
+      touchMode: true,
+      isOverlayOpen: vi.fn(() => true),
+    });
+    expect(chrome.isRevealed()).toBe(false);
+    clickPage(page, 200);
+    expect(deps.dismissOverlay).toHaveBeenCalledTimes(1);
+    expect(chrome.isRevealed()).toBe(false);
+    expect(deps.returnToShelf).not.toHaveBeenCalled();
+  });
+
   it('does not rewrite unchanged reveal attributes (mutation-observer loop guard)', () => {
     // reader-view 用 MutationObserver 监听 element 的 data-revealed/class 并在
     // 回调里调回 setProgress。等值 setAttribute 也会产生 mutation record，

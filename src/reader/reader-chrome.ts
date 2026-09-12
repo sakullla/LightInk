@@ -701,11 +701,11 @@ export function createReaderChrome(
     if (isInteractiveTarget(target) || hasNonCollapsedSelection()) {
       return;
     }
+    if (overlayOpen()) {
+      deps.dismissOverlay?.();
+      return;
+    }
     if (revealed) {
-      if (overlayOpen()) {
-        deps.dismissOverlay?.();
-        return;
-      }
       dismiss();
       return;
     }
