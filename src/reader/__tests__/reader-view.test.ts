@@ -3350,6 +3350,8 @@ describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称
     expect(tocPanel!.classList.contains('is-touch-sheet')).toBe(false);
     expect(tocPanel!.style.position).toBe('');
     expect(tocPanel!.style.bottom).toBe('');
+    const footer = document.querySelector<HTMLElement>('.lightink-reader-chrome-footer');
+    expect(footer?.hidden).toBe(true);
 
     // 最后一个 pin 已释放 → 键盘 MutationObserver disconnect，不再触碰已关闭面板。
     await flushKeyboardMutation();
@@ -3357,6 +3359,33 @@ describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称
     expect(tocPanel!.style.position).toBe('');
     expect(tocPanel!.style.top).toBe('');
     expect(tocPanel!.style.bottom).toBe('');
+    await view.destroy();
+  });
+
+  it('closes typography and search overlays and hides the touch footer', async () => {
+    vi.useFakeTimers();
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const { view } = await loadTouchBook();
+    const footer = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('.lightink-reader-chrome-footer');
+
+    chromeAction('typography').click();
+    expect(document.querySelector<HTMLElement>('.lightink-reader-chrome-typography')?.hidden).toBe(
+      false,
+    );
+    chromeAction('typography').click();
+    expect(document.querySelector<HTMLElement>('.lightink-reader-chrome-typography')?.hidden).toBe(
+      true,
+    );
+    expect(footer()?.hidden).toBe(true);
+
+    chromeAction('search').click();
+    const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel');
+    expect(sidebar?.hidden).toBe(false);
+    sidebar?.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')?.click();
+    expect(sidebar?.hidden).toBe(true);
+    expect(footer()?.hidden).toBe(true);
+
     await view.destroy();
   });
 

@@ -114,6 +114,7 @@ class MockPDFViewer {
   });
   readonly cleanup = vi.fn();
   readonly scrollPageIntoView = vi.fn();
+  readonly update = vi.fn();
   pageViews: MockPageView[] = [{ width: 160, scale: 1, textLayer: null }];
   pdfDocument: unknown = null;
   #currentScale = 1;
@@ -556,6 +557,7 @@ describe('viewer event wiring', () => {
     handle.controller.resetScale();
     await handle.rerender();
     expect(viewer.currentScale).toBe(2.5);
+    expect(viewer.update).toHaveBeenCalled();
     await handle.destroy();
   });
 

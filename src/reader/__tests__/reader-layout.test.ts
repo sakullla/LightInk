@@ -939,7 +939,7 @@ describe('touch reader chrome safe areas and 48px hit targets (R2/R7/R9)', () =>
   it('reserves page bottom space so the whisper hairline does not strike the last line', () => {
     const css = readerCss();
     expect(css).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\s*\{[^}]*--lightink-reader-whisper-reserve:\s*calc\(1\.85rem \+ var\(--lightink-safe-bottom/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader\s*\{[^}]*--lightink-reader-whisper-reserve:\s*calc\(2\.35rem \+ var\(--lightink-safe-bottom/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*--lightink-reader-whisper-reserve/,

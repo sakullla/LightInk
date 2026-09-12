@@ -655,7 +655,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   --lightink-reader-pad-y: 0.85rem;
   --lightink-reader-paged-pad-x: 0.2rem;
   /* Idle whisper (hairline + 11%) sits on the page; keep the last line above it. */
-  --lightink-reader-whisper-reserve: calc(1.85rem + var(--lightink-safe-bottom, 0px));
+  --lightink-reader-whisper-reserve: calc(2.35rem + var(--lightink-safe-bottom, 0px));
   /*
    * Phone body: 18px at 100% scale.
    * Compact display tiers otherwise leave --lightink-font-size at 15px.
@@ -683,6 +683,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
   padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
   padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
+  padding-bottom: var(--lightink-reader-whisper-reserve);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-bar {
@@ -811,7 +812,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
     --lightink-reader-pad-x: 0.9rem;
     --lightink-reader-pad-y: 0.85rem;
     --lightink-reader-paged-pad-x: 0.2rem;
-    --lightink-reader-whisper-reserve: calc(1.85rem + var(--lightink-safe-bottom, 0px));
+    --lightink-reader-whisper-reserve: calc(2.35rem + var(--lightink-safe-bottom, 0px));
     --lightink-reader-body-size: 18px;
   }
 
@@ -833,6 +834,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
     padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
     padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
     padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
+    padding-bottom: var(--lightink-reader-whisper-reserve);
   }
 
   .lightink-reader-chrome-bar {

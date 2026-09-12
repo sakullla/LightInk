@@ -128,6 +128,8 @@ export interface ReaderChromeWiringSurface {
   syncChromeProgress(): void;
   syncChromeRevealAttr(): void;
   closeChromePanel(): boolean;
+  /** Touch: drop the tall footer after any overlay (TOC/Aa/search/assistant) closes. */
+  releaseImmersiveChrome(): void;
   dismissReaderOverlayStep(): boolean;
   onDocumentEscapeCapture(event: KeyboardEvent): void;
   setTabActive(active: boolean): void;
@@ -673,6 +675,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     }
     assistantPanel?.close();
     syncChromeActionState();
+    releaseImmersiveChrome();
     return true;
   };
 
@@ -715,6 +718,11 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   }
   void refreshAiConfigured();
 
+  const releaseImmersiveChrome = (): void => {
+    ctx.readerChrome?.dismiss();
+    ctx.zoom.refreshViewport();
+  };
+
   const closeChromePanel = (): boolean => {
     if (ctx.chromePanel === null) {
       return false;
@@ -741,6 +749,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       ctx.typePanel.hidden = true;
     }
     syncChromeActionState();
+    releaseImmersiveChrome();
     return true;
   };
 
@@ -1188,6 +1197,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     syncChromeProgress,
     syncChromeRevealAttr,
     closeChromePanel,
+    releaseImmersiveChrome,
     dismissReaderOverlayStep,
     onDocumentEscapeCapture,
     setTabActive,

@@ -997,7 +997,11 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
     } else if (state.surface === 'reader' && activeMarkdownTab() === null) {
       // Leftover EPUB must not steal an immersive markdown session.
       revealReaderBookTab();
-      activeReaderTab()?.reader.restoreReadingProgress?.();
+      const reader = activeReaderTab()?.reader;
+      // display:none on the shelf drops PDF/WebView canvases. Redraw before
+      // restoring scroll so the same book is not a black screen on reopen.
+      reader?.refreshViewport?.();
+      reader?.restoreReadingProgress?.();
     }
     appliedWorkspaceSurface = state.surface;
     syncReaderStatusBarVisibility();

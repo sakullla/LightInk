@@ -436,9 +436,11 @@ describe('sealReadingHostsForSurface', () => {
     expect(end).toBeGreaterThan(start);
     const apply = source.slice(start, end);
     const sealAt = apply.indexOf('sealReadingHostsForSurface');
+    const refreshAt = apply.indexOf('refreshViewport');
     const restoreAt = apply.indexOf('restoreReadingProgress');
     expect(sealAt).toBeGreaterThan(-1);
-    expect(restoreAt).toBeGreaterThan(sealAt);
+    expect(refreshAt).toBeGreaterThan(sealAt);
+    expect(restoreAt).toBeGreaterThan(refreshAt);
   });
 });
 

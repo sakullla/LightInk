@@ -168,11 +168,18 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
       }, SEARCH_MARK_LINGER_MS);
     },
     afterSidebarSync: () => {
+      const sidebarClosed = !ctx.sessionAnnotation.sidebarVisibility().shown;
       if (skipVisibleFrameSyncOnce) {
         skipVisibleFrameSyncOnce = false;
+        if (sidebarClosed) {
+          ctx.chrome?.releaseImmersiveChrome();
+        }
         return;
       }
       ctx.flow.syncVisibleFlowFrames();
+      if (sidebarClosed) {
+        ctx.chrome?.releaseImmersiveChrome();
+      }
     },
     sidebarSearchQuery: () => ctx.sidebar?.getSearchQuery() ?? '',
     renderSidebarList: () => ctx.sidebar?.render(ctx.annotations),

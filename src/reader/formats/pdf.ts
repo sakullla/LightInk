@@ -861,6 +861,12 @@ export async function renderPdfInto(
       return;
     }
     tryApplyFitWidth();
+    // Same scale after a hidden-tab unseal is a no-op on currentScale;
+    // pdf.js then leaves blank canvases. Force visible pages to redraw.
+    const update = (pdfViewer as { update?: () => void }).update;
+    if (typeof update === 'function') {
+      update.call(pdfViewer);
+    }
   };
 
   const scrollToPage = (page: number): void => {
