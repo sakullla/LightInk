@@ -199,6 +199,7 @@ import {
   setNativeCaptionColors,
   setNativeTheme,
   setNativeTitleBar,
+  shouldStripNativeTitleBarOnFullscreen,
   toggleFullscreen,
 } from './ui/window-chrome.js';
 import { formatDocumentTitle } from './ui/window-title.js';
@@ -2251,8 +2252,10 @@ function applySynchronizedPreferences(): void {
 /** Fullscreen also forces unpinned chrome + fully hidden outline for a clean canvas. */
 async function enterOrExitFullscreen(): Promise<void> {
   const next = await toggleFullscreen();
-  // Client title bar stays decorations:false; hide the strip in fullscreen.
-  await setNativeTitleBar(false);
+  // Client title bar stays decorations:false. macOS keeps .titled traffic lights.
+  if (shouldStripNativeTitleBarOnFullscreen(isMac)) {
+    await setNativeTitleBar(false);
+  }
   if (shell !== undefined) {
     shell.titlebar.hidden = next;
   }

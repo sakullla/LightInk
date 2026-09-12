@@ -1,5 +1,6 @@
 /**
- * `mobile-platform` — 前端唯一平台事实点：Android 应用判定与触屏优先判定。
+ * `mobile-platform` — 前端唯一平台事实点：Android 应用判定、触屏优先判定、
+ * 以及文档根 `data-platform` 戳记。
  *
  * Android 判定机制（文档化回退）：`@tauri-apps/plugin-os` 不在依赖清单中
  * （见 package.json），Tauri v2 的 `os.type()` 不可用；Tauri Android WebView
@@ -8,10 +9,15 @@
  * 实现，消费方（workspace-mode 裁剪、入口抑制、触控门控）不变。
  *
  * 职责分离：`platform.ts` 的 detectPlatform 继续负责桌面外壳判定
- * （mac/windows/linux，用于快捷键标签与修饰键展示），本模块不替代它。
+ * （mac/windows/linux，用于快捷键标签与修饰键展示），不负责 DOM 戳记。
+ * `data-platform` 只在 `applyMobileDocumentFlags` 写入；Android 路径不得调用
+ * detectPlatform（其 UA 含 linux，会被误判成桌面 Linux）。
  */
 
+import { detectPlatform } from './platform.js';
+
 interface NavigatorLike {
+  platform?: string;
   userAgent?: string;
   userAgentData?: { platform?: string };
 }
@@ -80,10 +86,15 @@ export function browserPreviewMobileFacts(
 /**
  * Stamp platform flags on the document so CSS can hide desktop caption chrome
  * and apply safe-area padding without waiting for a media-query paint.
+ *
+ * `data-android` / `data-touch-primary` first; Android then *removes*
+ * `data-platform` and never calls `detectPlatform()`. Desktop hosts stamp
+ * `mac` / `windows` / `linux` only.
  */
 export function applyMobileDocumentFlags(
   root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
   facts: { android?: boolean; touchPrimary?: boolean } = {},
+  nav: NavigatorLike | null = typeof navigator !== 'undefined' ? navigator : null,
 ): void {
   if (root === null) {
     return;
@@ -99,5 +110,15 @@ export function applyMobileDocumentFlags(
     root.setAttribute('data-touch-primary', '');
   } else {
     root.removeAttribute('data-touch-primary');
+  }
+  if (android) {
+    root.removeAttribute('data-platform');
+    return;
+  }
+  const platform = detectPlatform(nav);
+  if (platform === 'mac' || platform === 'windows' || platform === 'linux') {
+    root.setAttribute('data-platform', platform);
+  } else {
+    root.removeAttribute('data-platform');
   }
 }

@@ -88,6 +88,15 @@ export async function toggleFullscreen(
   }
 }
 
+/**
+ * Fullscreen must not call `setDecorations(false)` on macOS: that strips
+ * `NSWindowStyleMaskTitled` and the system traffic lights disappear.
+ * Windows/Linux stay decorations:false either way.
+ */
+export function shouldStripNativeTitleBarOnFullscreen(mac: boolean): boolean {
+  return !mac;
+}
+
 /** Show/hide the native title bar (window decorations); no-op outside Tauri. */
 export async function setNativeTitleBar(
   visible: boolean,

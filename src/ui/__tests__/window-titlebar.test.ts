@@ -127,6 +127,13 @@ describe('window titlebar', () => {
       /#app\.is-comic-reader \.lightink-window-titlebar\s*\{[^}]*color:\s*#e6e6e6/,
     );
     expect(css).not.toMatch(/#app:has\(\[data-comic-reader=/);
+    expect(css).toMatch(/html\s*\{[^}]*--lightink-titlebar-leading:\s*0px/);
+    expect(css).toMatch(
+      /html\[data-platform='mac'\]\s*\{[^}]*--lightink-titlebar-leading:\s*(?!0px)\d+px/,
+    );
+    expect(css).toMatch(
+      /html\[data-platform='mac'\] \.lightink-window-titlebar-controls\s*\{[^}]*display:\s*none/,
+    );
   });
 
   it('keeps editor caption chips on the right so they do not cover the menu bar', () => {

@@ -6,6 +6,12 @@ html {
   --lightink-titlebar-height: 36px;
   --lightink-titlebar-caption: 36px;
   --lightink-titlebar-icon: 16px;
+  --lightink-titlebar-leading: 0px;
+}
+
+/* Traffic lights: 12pt buttons, 8pt gaps, ~20pt left inset. */
+html[data-platform='mac'] {
+  --lightink-titlebar-leading: 78px;
 }
 
 html[data-display='compact'] {
@@ -116,6 +122,11 @@ html[data-display='xuhd'] {
 html[data-android] .lightink-window-titlebar,
 html[data-touch-primary] .lightink-window-titlebar {
   display: none !important;
+}
+
+/* macOS uses system traffic lights; keep the drag strip, drop Win/Linux chips. */
+html[data-platform='mac'] .lightink-window-titlebar-controls {
+  display: none;
 }
 
 @media (pointer: coarse) {

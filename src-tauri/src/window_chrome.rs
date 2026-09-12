@@ -3,7 +3,10 @@
 //! - Windows 11: DWM caption / text tint and `DWMWA_WINDOW_CORNER_PREFERENCE`
 //! - macOS: restored windows are non-opaque so contentView layer radius is the
 //!   compositor silhouette; paper stays on that clipped layer. Maximize and
-//!   fullscreen restore opaque + radius 0. Overlay titlebar stays decorations:false.
+//!   fullscreen restore opaque + radius 0. Shared `decorations` stays false;
+//!   the NSWindow still gets `.titled` (plus closable / miniaturizable /
+//!   resizable / full-size content) so system traffic lights exist. Borderless
+//!   windows return nil from `standardWindowButton`.
 //! - Linux: GTK CSS on client-side decorations (GNOME). Server-side
 //!   window-manager bars (many KDE / XFCE / i3 setups) only follow light/dark.
 //!   Outer rounding is a no-op so we do not stack on the compositor.
@@ -59,6 +62,21 @@ pub fn windows_corner_preference(rounded: bool) -> u32 {
 /// Restored macOS content layer radius in points (system 10–12pt range).
 #[cfg(any(target_os = "macos", test))]
 const MACOS_RESTORED_CORNER_RADIUS_PT: f64 = 12.0;
+
+/// AppKit `NSWindowStyleMask` bits required for system traffic lights.
+///
+/// Titled=1<<0, Closable=1<<1, Miniaturizable=1<<2, Resizable=1<<3,
+/// FullSizeContentView=1<<15 so content stays under a transparent titlebar.
+/// Borderless (`0`) windows return nil from `standardWindowButton`.
+#[cfg(any(target_os = "macos", test))]
+pub const MACOS_TRAFFIC_LIGHT_STYLE_MASK: u64 =
+    (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 15);
+
+/// OR traffic-light chrome onto an existing style mask without forcing fullscreen.
+#[cfg(any(target_os = "macos", test))]
+pub fn macos_style_mask_with_traffic_lights(current: u64) -> u64 {
+    current | MACOS_TRAFFIC_LIGHT_STYLE_MASK
+}
 
 #[cfg(any(target_os = "macos", test))]
 pub fn macos_content_corner_radius_pt(rounded: bool) -> f64 {
@@ -294,6 +312,7 @@ fn macos_chrome_state() -> std::sync::MutexGuard<'static, MacosChromeState> {
 #[cfg(target_os = "macos")]
 fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChromeState) {
     let rounded = state.rounded;
+    ensure_macos_titled_chrome(ns_window);
     // Opaque borderless windows keep a square compositor silhouette even when
     // contentView is clipped; restored rounding needs a clear, non-opaque fill
     // with paper on the clipped content layer.
@@ -312,7 +331,9 @@ fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChrome
     } else {
         ns_window.setBackgroundColor(Some(&paper));
     }
-    ns_window.setTitlebarAppearsTransparent(state.caption.is_some() || rounded);
+    // Titled chrome needs a transparent titlebar so traffic lights overlay
+    // content instead of painting a system caption plate.
+    ns_window.setTitlebarAppearsTransparent(true);
 
     if let Some(content_view) = ns_window.contentView() {
         content_view.setWantsLayer(true);
@@ -328,6 +349,16 @@ fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChrome
         }
     }
     ns_window.invalidateShadow();
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_titled_chrome(ns_window: &objc2_app_kit::NSWindow) {
+    let current = ns_window.styleMask();
+    let next_bits = macos_style_mask_with_traffic_lights(current.0 as u64);
+    if next_bits != current.0 as u64 {
+        ns_window.setStyleMask(objc2_app_kit::NSWindowStyleMask(next_bits as _));
+    }
+    ns_window.setTitleVisibility(objc2_app_kit::NSWindowTitleVisibility::Hidden);
 }
 
 #[cfg(target_os = "macos")]
@@ -528,10 +559,11 @@ mod tests {
     ))]
     use super::linux_caption_css;
     use super::{
-        constrain_max_extent, macos_content_corner_radius_pt, macos_window_background_clear,
-        macos_window_opaque, parse_hex_colorref, parse_hex_rgb, window_outer_should_round,
-        windows_corner_preference, work_area_needs_fit, DWMWA_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_DONOTROUND, DWMWCP_ROUND,
+        constrain_max_extent, macos_content_corner_radius_pt, macos_style_mask_with_traffic_lights,
+        macos_window_background_clear, macos_window_opaque, parse_hex_colorref, parse_hex_rgb,
+        window_outer_should_round, windows_corner_preference, work_area_needs_fit,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+        MACOS_TRAFFIC_LIGHT_STYLE_MASK,
     };
 
     #[test]
@@ -604,5 +636,29 @@ mod tests {
         assert!(macos_window_opaque(false));
         assert!(macos_window_background_clear(true));
         assert!(!macos_window_background_clear(false));
+    }
+
+    #[test]
+    fn macos_titled_mask_exposes_traffic_lights_without_forcing_fullscreen() {
+        const TITLED: u64 = 1 << 0;
+        const CLOSABLE: u64 = 1 << 1;
+        const MINIATURIZABLE: u64 = 1 << 2;
+        const RESIZABLE: u64 = 1 << 3;
+        const FULLSCREEN: u64 = 1 << 14;
+        const FULL_SIZE_CONTENT: u64 = 1 << 15;
+        assert_eq!(
+            MACOS_TRAFFIC_LIGHT_STYLE_MASK,
+            TITLED | CLOSABLE | MINIATURIZABLE | RESIZABLE | FULL_SIZE_CONTENT
+        );
+        let from_borderless = macos_style_mask_with_traffic_lights(0);
+        assert_eq!(from_borderless & TITLED, TITLED);
+        assert_eq!(from_borderless & CLOSABLE, CLOSABLE);
+        assert_eq!(from_borderless & MINIATURIZABLE, MINIATURIZABLE);
+        assert_eq!(from_borderless & RESIZABLE, RESIZABLE);
+        assert_eq!(from_borderless & FULL_SIZE_CONTENT, FULL_SIZE_CONTENT);
+        assert_eq!(from_borderless & FULLSCREEN, 0);
+        let with_fullscreen = macos_style_mask_with_traffic_lights(FULLSCREEN);
+        assert_eq!(with_fullscreen & FULLSCREEN, FULLSCREEN);
+        assert_eq!(with_fullscreen & TITLED, TITLED);
     }
 }

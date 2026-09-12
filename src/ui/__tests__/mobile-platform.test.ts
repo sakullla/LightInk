@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyMobileDocumentFlags,
   browserPreviewMobileFacts,
   detectAndroidApp,
   detectTouchPrimary,
@@ -101,8 +102,7 @@ describe('browserPreviewMobileFacts', () => {
 });
 
 describe('applyMobileDocumentFlags', () => {
-  it('stamps android and touch-primary flags for CSS', async () => {
-    const { applyMobileDocumentFlags } = await import('../mobile-platform.js');
+  it('stamps android and touch-primary flags for CSS', () => {
     const root = document.createElement('html');
     applyMobileDocumentFlags(root, { android: true, touchPrimary: true });
     expect(root.hasAttribute('data-android')).toBe(true);
@@ -110,6 +110,41 @@ describe('applyMobileDocumentFlags', () => {
     applyMobileDocumentFlags(root, { android: false, touchPrimary: false });
     expect(root.hasAttribute('data-android')).toBe(false);
     expect(root.hasAttribute('data-touch-primary')).toBe(false);
+  });
+
+  it('stamps desktop data-platform and never linux on Android', () => {
+    const root = document.createElement('html');
+    const androidLinuxUa = {
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+    };
+    applyMobileDocumentFlags(root, { android: true, touchPrimary: true }, androidLinuxUa);
+    expect(root.getAttribute('data-platform')).toBeNull();
+
+    applyMobileDocumentFlags(
+      root,
+      { android: false, touchPrimary: false },
+      { platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+    );
+    expect(root.getAttribute('data-platform')).toBe('mac');
+
+    applyMobileDocumentFlags(
+      root,
+      { android: false, touchPrimary: false },
+      { platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    );
+    expect(root.getAttribute('data-platform')).toBe('windows');
+
+    applyMobileDocumentFlags(
+      root,
+      { android: false, touchPrimary: false },
+      { platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' },
+    );
+    expect(root.getAttribute('data-platform')).toBe('linux');
+
+    applyMobileDocumentFlags(root, { android: true, touchPrimary: false }, androidLinuxUa);
+    expect(root.getAttribute('data-platform')).toBeNull();
+    expect(root.hasAttribute('data-android')).toBe(true);
   });
 });
 
