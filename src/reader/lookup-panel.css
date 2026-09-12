@@ -83,10 +83,14 @@
   cursor: pointer;
 }
 
-.lightink-reader-lookup-close:hover,
-.lightink-reader-lookup-close:focus-visible {
+.lightink-reader-lookup-close:hover {
   color: var(--lightink-fg);
-  background: var(--lightink-accent-soft);
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+}
+
+.lightink-reader-lookup-close:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-reader-lookup-body {
@@ -167,9 +171,14 @@
   cursor: pointer;
 }
 
-.lightink-reader-lookup-source-action:hover,
+.lightink-reader-lookup-source-action:hover {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
 .lightink-reader-lookup-source-action:focus-visible {
-  filter: brightness(0.96);
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-reader-lookup-hint {
@@ -205,4 +214,25 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-close {
   min-height: 44px;
   min-width: 44px;
+}
+
+/* ===== 触屏按压反馈（ADR-5）：洗色不改圆角/阴影；抬手后 hover 复位 ===== */
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-lookup-close:active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-lookup-source-action:not(:disabled):active {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  transition: background-color 100ms ease;
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-lookup-close:hover:not(:active) {
+  background: transparent;
+  color: var(--lightink-muted);
+}
+
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-lookup-source-action:hover:not(:disabled):not(:active) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
 }

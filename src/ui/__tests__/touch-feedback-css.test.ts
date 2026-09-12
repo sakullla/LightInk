@@ -10,6 +10,11 @@ const annotationCss = readFileSync(
   'utf-8',
 );
 const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
+const assistantCss = readFileSync(
+  new URL('../../reader/assistant-panel.css', import.meta.url),
+  'utf-8',
+);
+const lookupCss = readFileSync(new URL('../../reader/lookup-panel.css', import.meta.url), 'utf-8');
 
 const allCss = [
   { name: 'theme', css: themeCss },
@@ -17,6 +22,8 @@ const allCss = [
   { name: 'reader-chrome-panels', css: panelsCss },
   { name: 'annotation-panel', css: annotationCss },
   { name: 'library', css: libraryCss },
+  { name: 'assistant-panel', css: assistantCss },
+  { name: 'lookup-panel', css: lookupCss },
 ];
 
 const TOUCH_GATE = ':is(html[data-android], html[data-touch-primary])';
@@ -379,5 +386,74 @@ describe('touch press feedback baseline (T1)', () => {
     expect(themeCss).toContain('@media (prefers-reduced-motion: reduce)');
     expect(themeCss).toContain('transition-duration: 0.01ms !important');
     expect(themeCss).toContain('animation-duration: 0.01ms !important');
+  });
+
+  it('ADR-5: assistant/lookup text commands use accent-soft; icon chrome uses ink wash', () => {
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-close:hover\s*\{[^}]*color-mix\(in srgb, var\(--lightink-fg\) 8%, transparent\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-history-delete:hover\s*\{[^}]*color-mix\(in srgb, var\(--lightink-fg\) 8%, transparent\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-history-toggle:hover,[^{]*\{[^}]*background:\s*var\(--lightink-accent-soft\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-history-new:hover\s*\{[^}]*background:\s*var\(--lightink-accent-soft\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-retry:hover,[^{]*\{[^}]*background:\s*var\(--lightink-accent-soft\)/,
+    );
+    expect(assistantCss).toMatch(
+      /\.lightink-reader-assistant-action:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--lightink-accent-soft\)/,
+    );
+    expect(lookupCss).toMatch(
+      /\.lightink-reader-lookup-close:hover\s*\{[^}]*color-mix\(in srgb, var\(--lightink-fg\) 8%, transparent\)/,
+    );
+    expect(lookupCss).not.toMatch(
+      /\.lightink-reader-lookup-close:hover[^{]*\{[^}]*var\(--lightink-accent-soft\)/,
+    );
+    expect(lookupCss).toMatch(
+      /\.lightink-reader-lookup-source-action:hover\s*\{[^}]*background:\s*var\(--lightink-accent-soft\)/,
+    );
+    expect(lookupCss).not.toMatch(/filter:\s*brightness/);
+  });
+
+  it('ADR-5: assistant/lookup new hovers ship TOUCH_GATE :active wash and :hover:not(:active) reset', () => {
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-close:active,[^{]*\\{[^}]*${WASH_RE}`,
+      ),
+    );
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-close:hover:not\\(:active\\),[\\s\\S]*?\\{[^}]*background:\\s*transparent[^}]*color:\\s*var\\(--lightink-muted\\)`,
+      ),
+    );
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-history-toggle:not\\(\\[aria-expanded='true'\\]\\):hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-action:hover:not\\(:disabled\\):not\\(:active\\),[\\s\\S]*?\\{[^}]*background:\\s*var\\(--lightink-bg-elevated\\)`,
+      ),
+    );
+    expect(lookupCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-lookup-close:active,[^{]*\\{[^}]*${WASH_RE}`,
+      ),
+    );
+    expect(lookupCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-lookup-close:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent[^}]*color:\\s*var\\(--lightink-muted\\)`,
+      ),
+    );
+    expect(lookupCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-lookup-source-action:hover:not\\(:disabled\\):not\\(:active\\)\\s*\\{[^}]*background:\\s*var\\(--lightink-accent-soft\\)[^}]*color:\\s*var\\(--lightink-fg\\)`,
+      ),
+    );
   });
 });
