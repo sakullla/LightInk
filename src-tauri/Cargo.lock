@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "lightink"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "block2",
  "embed-resource",
