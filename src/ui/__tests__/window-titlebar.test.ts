@@ -149,6 +149,9 @@ describe('window titlebar', () => {
       /#app\.is-workspace-editor #lightink-toolbar,\s*#app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*calc\(\s*var\(--lightink-titlebar-caption/,
     );
     expect(theme).toMatch(/\.lightink-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
+    expect(theme).toMatch(
+      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-left:\s*4px/,
+    );
   });
 
   it('lets the empty shelf title row drag the window', () => {

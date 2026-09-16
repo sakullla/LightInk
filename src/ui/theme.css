@@ -388,9 +388,27 @@ html[data-display='xuhd'] {
   padding-right: calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px);
 }
 
-html[data-platform='mac'] #app.is-workspace-editor #lightink-toolbar,
-html[data-platform='mac'] #app.is-workspace-editor #lightink-tabbar {
+/*
+ * macOS overlay titlebar: traffic lights occupy only the menu row
+ * (Apple HIG / Safari). Tabs are a second row and must span the window —
+ * the leading inset on #lightink-tabbar was a dead zone left of the first file.
+ */
+html[data-platform='mac'] #app.is-workspace-editor #lightink-toolbar {
+  min-height: var(--lightink-titlebar-height);
+  padding-top: 0;
+  padding-bottom: 0;
   padding-right: 8px;
+}
+
+html[data-platform='mac'] #app.is-workspace-editor #lightink-tabbar {
+  padding-left: 4px;
+  padding-right: 8px;
+}
+
+html[data-platform='mac'] #app.is-workspace-editor .lightink-menu-trigger {
+  min-height: calc(var(--lightink-titlebar-height) - 2px);
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 /* Workspace travel: quiet menu-bar action, not a leftover native button. */
@@ -1866,17 +1884,16 @@ html[data-reading-layout='scroll']:has(
 }
 
 .lightink-tab-host :not(pre) > code {
-  background: var(--lightink-code-bg);
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 82%, transparent);
+  background: color-mix(in srgb, var(--lightink-code-bg) 88%, var(--lightink-accent-soft));
   border-radius: 4px;
-  padding: 0.08em 0.36em;
-  font-size: 0.92em;
+  padding: 0.12em 0.35em;
+  font-size: 0.875em;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .lightink-tab-host blockquote {
-  padding: 0.4em 1em;
+  padding: 0.35em 0.9em 0.35em 1em;
   border-left: 3px solid color-mix(in srgb, var(--lightink-accent) 52%, var(--lightink-border));
   color: color-mix(in srgb, var(--lightink-fg) 74%, var(--lightink-muted));
   background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, var(--lightink-accent-soft));
@@ -1996,7 +2013,7 @@ html[data-reading-layout='scroll']:has(
 .lightink-tab-host th,
 .lightink-tab-host td {
   border: 1px solid var(--lightink-border);
-  padding: 8px 12px;
+  padding: 6px 12px;
   text-align: left;
   vertical-align: top;
   box-sizing: border-box;

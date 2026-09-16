@@ -196,6 +196,21 @@ describe('prose.css 标题比例与节奏', () => {
   it('.lightink-prose > :first-child 的 margin-top 为 0', () => {
     expect(proseCss).toMatch(/\.lightink-prose\s*>\s*:first-child\s*\{[^}]*margin-top:\s*0/);
   });
+
+  it('blockquote / 单元格折叠首尾子块外边距，避免引用盒被段落间隙撑空', () => {
+    expect(proseCss).toMatch(
+      /\.lightink-prose :is\(blockquote, th, td\)\s*>\s*:first-child\s*\{[^}]*margin-top:\s*0/,
+    );
+    expect(proseCss).toMatch(
+      /\.lightink-prose :is\(blockquote, th, td\)\s*>\s*:last-child\s*\{[^}]*margin-bottom:\s*0/,
+    );
+    const cellP = declarationBlocks(proseCss).find(
+      (rule) => rule.selector === '.lightink-prose :is(th, td) > p',
+    );
+    expect(cellP).toBeDefined();
+    expect(cellP!.body).toMatch(/margin-top:\s*0/);
+    expect(cellP!.body).toMatch(/margin-bottom:\s*0/);
+  });
 });
 
 describe('prose.css CJK 作用域与复位', () => {
@@ -454,5 +469,12 @@ describe('theme.css Markdown 栏宽分档', () => {
     );
     expect(inlineCode).toBeDefined();
     expect(inlineCode!.body).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(inlineCode!.body).not.toMatch(/border\s*:/);
+    expect(inlineCode!.body).toMatch(/font-size:\s*0\.875em/);
+    const cell = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host th, .lightink-tab-host td',
+    );
+    expect(cell).toBeDefined();
+    expect(cell!.body).toMatch(/padding:\s*6px 12px/);
   });
 });

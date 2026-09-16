@@ -1387,7 +1387,13 @@ describe('chrome-shell five-bar inset and desktop density', () => {
       /\.lightink-reader-comic-topbar\s*\{[^}]*padding:[^;]*calc\(var\(--lightink-titlebar-leading, 0px\) \+ 8px\)/,
     );
     expect(themeCss).toMatch(
-      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-toolbar,\s*html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-right:\s*8px/,
+      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-toolbar\s*\{[^}]*padding-right:\s*8px/,
+    );
+    expect(themeCss).toMatch(
+      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-left:\s*4px[^}]*padding-right:\s*8px/,
+    );
+    expect(themeCss).toMatch(
+      /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-toolbar\s*\{[^}]*min-height:\s*var\(--lightink-titlebar-height\)/,
     );
     expect(libraryCss).toMatch(
       /html\[data-platform='mac'\] \.lightink-library-header\s*\{[^}]*padding-right:\s*8px/,

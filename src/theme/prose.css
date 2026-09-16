@@ -127,6 +127,29 @@
 }
 
 /*
+ * GitHub Primer / CommonMark reading CSS: a blockquote or table cell that
+ * wraps a single <p> must not stack the paragraph gap on top of the block
+ * padding, or the quote/card looks hollow. First/last-child collapse keeps
+ * multi-paragraph quotes readable.
+ */
+.lightink-prose :is(blockquote, th, td) > :first-child {
+  margin-top: 0;
+}
+
+.lightink-prose :is(blockquote, th, td) > :last-child {
+  margin-bottom: 0;
+}
+
+.lightink-prose :is(th, td) > p {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.lightink-prose :is(th, td) > p + p {
+  margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-list-item));
+}
+
+/*
  * KaTeX 正文公式（$…$ / $$…$$，ProseMirror decoration widget）：渲染成功后
  * 预览取代源码显示，源码留在 DOM（可选中/可复制）。选区所在段落由
  * ui/theme.css 的 .lightink-math-active 恢复源码显示；本文件同时进入导出

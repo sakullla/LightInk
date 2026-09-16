@@ -69,11 +69,11 @@ code {
 :not(pre) > code {
   background: var(--lightink-code-bg);
   border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 0.92em;
+  padding: 0.12em 0.35em;
+  font-size: 0.875em;
 }
 blockquote {
-  padding-left: 14px;
+  padding: 0.35em 0.9em 0.35em 1em;
   border-left: 3px solid var(--lightink-border);
   color: var(--lightink-muted);
 }
@@ -86,7 +86,7 @@ img[style*="width"] { max-width: none; }
    deselectNode，选中态可能保留，故用 !important 兜底隐藏（R12 导出无回归）。 */
 .lightink-image-handle, .lightink-image-alignbar { display: none !important; }
 table { border-collapse: collapse; }
-th, td { border: 1px solid var(--lightink-border); padding: 4px 10px; }
+th, td { border: 1px solid var(--lightink-border); padding: 6px 12px; }
 th { background: var(--lightink-bg-elevated); }
 .lightink-export-toc {
   margin: 0 0 1.5rem;
