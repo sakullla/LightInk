@@ -105,6 +105,20 @@ describe('image click intent（R4 / ADR-4）', () => {
     );
   });
 
+  it('URL 编码相对图单次解码后打开（外部工具产物）', () => {
+    const encoded = '%E4%B8%AD%E6%96%87%E8%B5%84%E6%96%99-assets/image-1.png';
+    expect(imageClickIntent({ ctrlKey: true, metaKey: false }, encoded, docPath)).toBe('open');
+    expect(resolveImageOpenHref(encoded, docPath)).toBe('中文资料-assets/image-1.png');
+  });
+
+  it('解码后越界/带 scheme 的路径仍拒绝打开', () => {
+    expect(resolveImageOpenHref('%2E%2E/secret.png', docPath)).toBe(null);
+    expect(resolveImageOpenHref('http%3A%2F%2Fexample.com/a.png', docPath)).toBe(null);
+    expect(imageClickIntent({ ctrlKey: true, metaKey: false }, '%2E%2E/secret.png', docPath)).toBe(
+      'select',
+    );
+  });
+
   it('远程图、未保存、../ 不打开', () => {
     expect(
       imageClickIntent({ ctrlKey: true, metaKey: false }, 'https://example.com/a.png', docPath),

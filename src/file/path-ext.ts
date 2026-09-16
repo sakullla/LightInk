@@ -48,7 +48,11 @@ const WINDOWS_1252_REVERSE: Readonly<Record<number, number>> = {
   0x0178: 0x9f,
 };
 
-function decodeOncePercent(value: string): string {
+/**
+ * 单次百分号解码（`%XX`）；无编码序列或编码非法时原样返回。
+ * 用于外部工具生成的 URL 编码路径（`%E3%80%90…`）映射回真实文件名。
+ */
+export function decodeOncePercent(value: string): string {
   if (!/%[0-9A-Fa-f]{2}/.test(value)) {
     return value;
   }

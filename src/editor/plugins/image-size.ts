@@ -27,6 +27,7 @@ import {
   sessionRemoteImagePolicy,
   type RemoteImagePolicy,
 } from '../../media/remote-image-policy.js';
+import { decodeOncePercent } from '../../file/path-ext.js';
 import { isModifiedClick } from '../link-navigation.js';
 import { isRelativeAssetSrc } from './image.js';
 
@@ -281,16 +282,22 @@ export function isDocumentDirSandboxedSrc(src: string): boolean {
 
 /**
  * 相对图打开 href：远程/绝对不自动打开；未保存无文档路径不能打开；
- * `../` / 盘符 / UNC 与 ADR-3 同一沙箱拒绝。返回值交给 confirm + onLinkNavigate。
+ * `../` / 盘符 / UNC 与 ADR-3 同一沙箱拒绝。URL 编码路径（外部工具产物）
+ * 先单次解码，解码后重新过沙箱检查再交给系统打开。返回值交给 confirm +
+ * onLinkNavigate。
  */
 export function resolveImageOpenHref(src: string, docPath: string | null): string | null {
   if (docPath === null || docPath === '') {
     return null;
   }
-  if (!isRelativeAssetSrc(src) || !isDocumentDirSandboxedSrc(src)) {
+  if (!isRelativeAssetSrc(src)) {
     return null;
   }
-  return src;
+  const decoded = decodeOncePercent(src);
+  if (!isRelativeAssetSrc(decoded) || !isDocumentDirSandboxedSrc(decoded)) {
+    return null;
+  }
+  return decoded;
 }
 
 export function imageClickIntent(

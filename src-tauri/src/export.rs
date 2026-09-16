@@ -10,6 +10,9 @@
 //!   - 文档未保存 → 相对应用数据目录下 `staging-assets/<session_id>/`
 //!     解析，此时相对路径必须位于 `assets/` 前缀之下（剥离前缀后即为
 //!     暂存目录内的文件名）。粘贴落盘仍只写 `assets/`。
+//!   - 外部工具生成的 Markdown 常把非 ASCII 资产名写成 URL 百分号编码
+//!     （`%E3%80%90…`）；字面路径不存在时按单次解码后的路径重试一次，
+//!     字面路径存在则优先（兼容名字里真的含 `%` 的文件）。
 //!
 //! 安全：相对路径逐段校验并在读取前 canonicalize，拒绝 `..`、盘符/UNC、
 //! 绝对路径与 symlink 越界；会话 id 验证规则与 asset.rs 一致。base64
@@ -84,6 +87,30 @@ fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf, String> 
     fs::canonicalize(path).map_err(|e| format!("无法解析{} {}: {}", description, path.display(), e))
 }
 
+/// 单次百分号解码（`%XX`）。无编码序列、格式非法或不是合法 UTF-8 时返回
+/// None，调用方沿用原路径。与 webdav_source 的同名逻辑同语义：路径语义，
+/// 不把 `+` 当空格。
+fn percent_decode_once(raw: &str) -> Option<String> {
+    if !raw.contains('%') {
+        return None;
+    }
+    let bytes = raw.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let pair = bytes.get(index + 1..index + 3)?;
+            let hex = std::str::from_utf8(pair).ok()?;
+            output.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(output).ok()
+}
+
 fn require_path_within(path: &Path, root: &Path, description: &str) -> Result<(), String> {
     if path == root || !path.starts_with(root) {
         return Err(format!(
@@ -105,20 +132,13 @@ fn require_assets_prefix(parts: &[String], rel_path: &str) -> Result<(), String>
     Ok(())
 }
 
-/// 读取相对路径图片并返回 base64。
-///
-/// - `doc_dir` 为 Some：`rel_path` 必须解析到文档目录之内的常规文件
-///   （`assets/…`、同级 `*-assets/…` 等）；
-/// - 为 None（文档未保存）：`rel_path` 必须以 `assets/` 开头，剥离后解析
-///   `<staging_root>/staging-assets/<session_id>/<name>`；`session_id`
-///   缺失时报错。
-pub fn read_image_base64_impl(
+/// 解析相对图片路径为允许目录内的常规文件（canonical 化并校验越界）。
+fn resolve_image_path(
     doc_dir: Option<&Path>,
     staging_root: &Path,
     session_id: Option<&str>,
     rel_path: &str,
-) -> Result<String, String> {
-    let session_id = session_id.map(validate_session_id).transpose()?;
+) -> Result<PathBuf, String> {
     let parts = sanitize_rel_path(rel_path)?;
 
     let (allowed_root, full): (PathBuf, PathBuf) = match doc_dir {
@@ -147,6 +167,37 @@ pub fn read_image_base64_impl(
     };
     let full = canonicalize_path(&full, "图片")?;
     require_path_within(&full, &allowed_root, "图片")?;
+    Ok(full)
+}
+
+/// 读取相对路径图片并返回 base64。
+///
+/// - `doc_dir` 为 Some：`rel_path` 必须解析到文档目录之内的常规文件
+///   （`assets/…`、同级 `*-assets/…` 等）；
+/// - 为 None（文档未保存）：`rel_path` 必须以 `assets/` 开头，剥离后解析
+///   `<staging_root>/staging-assets/<session_id>/<name>`；`session_id`
+///   缺失时报错；
+/// - 百分号编码的相对路径（外部工具产物）在字面路径不存在时按单次解码
+///   后的路径重试。
+pub fn read_image_base64_impl(
+    doc_dir: Option<&Path>,
+    staging_root: &Path,
+    session_id: Option<&str>,
+    rel_path: &str,
+) -> Result<String, String> {
+    let session_id = session_id.map(validate_session_id).transpose()?;
+    let full = match resolve_image_path(doc_dir, staging_root, session_id.as_deref(), rel_path) {
+        Ok(full) => full,
+        Err(literal_err) => match percent_decode_once(rel_path) {
+            Some(decoded) => {
+                match resolve_image_path(doc_dir, staging_root, session_id.as_deref(), &decoded) {
+                    Ok(full) => full,
+                    Err(_) => return Err(literal_err),
+                }
+            }
+            None => return Err(literal_err),
+        },
+    };
     let metadata =
         fs::metadata(&full).map_err(|e| format!("无法读取图片 {}: {}", full.display(), e))?;
     if !metadata.is_file() {
@@ -551,6 +602,63 @@ mod tests {
         )
         .expect("sibling folder inside document directory");
         assert_eq!(b64, encode_base64(b"sibling-img"));
+    }
+
+    #[test]
+    fn read_image_base64_percent_encoded_asset_path() {
+        let dir = temp_dir();
+        let doc_dir = dir.path().join("docs");
+        let assets = doc_dir.join("中文（示例）：目录-assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("image-1.png"), b"encoded-img").unwrap();
+        let encoded = "%E4%B8%AD%E6%96%87%EF%BC%88%E7%A4%BA%E4%BE%8B%EF%BC%89%EF%BC%9A%E7%9B%AE%E5%BD%95-assets/image-1.png";
+        let b64 = read_image_base64_impl(Some(&doc_dir), dir.path(), None, encoded)
+            .expect("decoded fallback resolves encoded asset path");
+        assert_eq!(b64, encode_base64(b"encoded-img"));
+    }
+
+    #[test]
+    fn read_image_base64_prefers_literal_percent_name() {
+        let dir = temp_dir();
+        let doc_dir = dir.path().join("docs");
+        fs::create_dir_all(doc_dir.join("assets")).unwrap();
+        fs::write(doc_dir.join("assets").join("a%20b.png"), b"literal").unwrap();
+        fs::write(doc_dir.join("assets").join("a b.png"), b"decoded").unwrap();
+        let b64 = read_image_base64_impl(Some(&doc_dir), dir.path(), None, "assets/a%20b.png")
+            .expect("literal path wins when it exists");
+        assert_eq!(b64, encode_base64(b"literal"));
+    }
+
+    #[test]
+    fn read_image_base64_rejects_percent_encoded_traversal() {
+        let dir = temp_dir();
+        let doc_dir = dir.path().join("docs");
+        fs::create_dir_all(doc_dir.join("assets")).unwrap();
+        fs::write(dir.path().join("secret.png"), b"secret").unwrap();
+        assert!(
+            read_image_base64_impl(Some(&doc_dir), dir.path(), None, "%2E%2E/secret.png").is_err()
+        );
+        assert!(read_image_base64_impl(
+            Some(&doc_dir),
+            dir.path(),
+            None,
+            "assets/%2E%2E%2Fsecret.png"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn percent_decode_once_handles_utf8_and_rejects_invalid() {
+        assert_eq!(
+            percent_decode_once("%E4%B8%AD%20a%2Fb.png").unwrap(),
+            "中 a/b.png"
+        );
+        assert_eq!(percent_decode_once("a+b%20c"), Some("a+b c".to_owned()));
+        assert_eq!(percent_decode_once("plain.png"), None);
+        assert_eq!(percent_decode_once("50%"), None);
+        assert_eq!(percent_decode_once("%ZZ"), None);
+        assert_eq!(percent_decode_once("%E4"), None);
+        assert_eq!(percent_decode_once("%FF"), None);
     }
 
     #[test]
