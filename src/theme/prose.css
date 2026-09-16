@@ -125,3 +125,20 @@
 .lightink-prose > :first-child {
   margin-top: 0;
 }
+
+/*
+ * KaTeX 正文公式（$…$ / $$…$$，ProseMirror decoration widget）：渲染成功后
+ * 预览取代源码显示，源码留在 DOM（可选中/可复制）。选区所在段落由
+ * ui/theme.css 的 .lightink-math-active 恢复源码显示；本文件同时进入导出
+ * CSS（export-css.ts ?raw），故导出件恒为渲染结果。
+ */
+.lightink-prose .lightink-math-inline-source,
+.lightink-prose .lightink-math-block-source {
+  display: none;
+}
+
+.lightink-prose .lightink-math-block {
+  display: block;
+  overflow-x: auto;
+  overflow-y: visible;
+}

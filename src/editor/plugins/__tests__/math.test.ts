@@ -22,9 +22,11 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { Schema } from '@milkdown/prose/model';
+import { NodeSelection, TextSelection } from '@milkdown/prose/state';
 import katex from 'katex';
 
 import {
+  activeTextblockPos,
   buildMathDecorations,
   createKatexLoader,
   escapeMathHtml,
@@ -557,6 +559,75 @@ describe('buildMathDecorations', () => {
     const rendered = found.filter((d) => decoClass(d) === 'lightink-math-inline-source');
     expect(rendered).toHaveLength(1);
     expect(doc.textBetween(rendered[0]!.from, rendered[0]!.to)).toBe('$b$');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 正文公式源码编辑态：选区所在段落（activeTextblockPos / .lightink-math-active）
+// ---------------------------------------------------------------------------
+
+describe('activeTextblockPos（光标所在段落）', () => {
+  it('返回选区 head 所在段落的文档位置', () => {
+    const doc = paraDoc('前文 $E=mc^2$ 后文');
+    expect(activeTextblockPos(TextSelection.create(doc, 3))).toBe(0);
+  });
+
+  it('多段落时返回各自段落起始位置', () => {
+    const p1 = testSchema.nodes['paragraph']!.create(null, testSchema.text('第一段'));
+    const p2 = testSchema.nodes['paragraph']!.create(null, testSchema.text('第二段 $x$'));
+    const doc = testSchema.nodes['doc']!.create(null, [p1, p2]);
+    expect(activeTextblockPos(TextSelection.create(doc, p1.nodeSize + 3))).toBe(p1.nodeSize);
+  });
+
+  it('顶层节点选区不在 textblock → null', () => {
+    const doc = paraDoc('只有文字');
+    expect(activeTextblockPos(NodeSelection.create(doc, 0))).toBe(null);
+  });
+});
+
+describe('buildMathDecorations：正文公式源码编辑态', () => {
+  it('活动段落打 .lightink-math-active，源码与预览 decoration 仍在（CSS 切换显示）', () => {
+    const doc = paraDoc('前文 $E=mc^2$ 后文');
+    const found = buildMathDecorations(doc, katex, { activeBlockPos: 0 }).find();
+    expect(found.some((d) => decoClass(d) === 'lightink-math-active')).toBe(true);
+    expect(found.some((d) => decoClass(d) === 'lightink-math-inline-source')).toBe(true);
+    expect(found.some((d) => decoClass(d) === '')).toBe(true);
+  });
+
+  it('块公式段落（$$…$$）同样进入活动态', () => {
+    const doc = paraDoc('$$\\int_0^1 x\\,dx$$');
+    const found = buildMathDecorations(doc, katex, { activeBlockPos: 0 }).find();
+    expect(found.some((d) => decoClass(d) === 'lightink-math-active')).toBe(true);
+    expect(found.some((d) => decoClass(d) === 'lightink-math-block-source')).toBe(true);
+  });
+
+  it('未命中的段落不加 active class', () => {
+    const doc = paraDoc('前文 $E=mc^2$ 后文');
+    const found = buildMathDecorations(doc, katex, { activeBlockPos: 42 }).find();
+    expect(found.some((d) => decoClass(d) === 'lightink-math-active')).toBe(false);
+  });
+
+  it('多段落时只有命中段落带 active class；无公式段落不标记', () => {
+    const p1 = testSchema.nodes['paragraph']!.create(null, testSchema.text('没有公式'));
+    const p2 = testSchema.nodes['paragraph']!.create(null, testSchema.text('有公式 $x$'));
+    const doc = testSchema.nodes['doc']!.create(null, [p1, p2]);
+
+    const onSecond = buildMathDecorations(doc, katex, { activeBlockPos: p1.nodeSize }).find();
+    const active = onSecond.filter((d) => decoClass(d) === 'lightink-math-active');
+    expect(active).toHaveLength(1);
+    expect(active[0]!.from).toBe(p1.nodeSize);
+    expect(onSecond.some((d) => decoClass(d) === 'lightink-math-inline-source')).toBe(true);
+
+    const onFirst = buildMathDecorations(doc, katex, { activeBlockPos: 0 }).find();
+    expect(onFirst.some((d) => decoClass(d) === 'lightink-math-active')).toBe(false);
+  });
+
+  it('活动段落里的坏公式仍只有 error class（无预览）', () => {
+    const doc = paraDoc('坏公式 $\\badcommand{$');
+    const found = buildMathDecorations(doc, katex, { activeBlockPos: 0 }).find();
+    expect(found.some((d) => decoClass(d) === 'lightink-math-error')).toBe(true);
+    expect(found.some((d) => decoClass(d) === '')).toBe(false);
+    expect(found.some((d) => decoClass(d) === 'lightink-math-active')).toBe(true);
   });
 });
 

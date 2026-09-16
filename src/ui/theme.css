@@ -1736,6 +1736,28 @@ html[data-reading-layout='scroll']:has(
   box-shadow: 0 0 0 2px var(--lightink-accent-soft);
 }
 
+/*
+ * 正文 $…$ / $$…$$（decoration widget，非 ```math 代码块）：源码隐藏由
+ * prose.css 负责；选区所在段落恢复源码、隐藏预览（编辑态）。导出 CSS 不含
+ * 本组覆盖，导出件始终是渲染结果。
+ */
+.lightink-prose .lightink-math-active .lightink-math-inline-source,
+.lightink-prose .lightink-math-active .lightink-math-block-source {
+  display: inline;
+}
+
+.lightink-prose .lightink-math-active .lightink-math-inline,
+.lightink-prose .lightink-math-active .lightink-math-block {
+  display: none;
+}
+
+.lightink-prose .lightink-math-error {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lightink-danger) 12%, transparent);
+  color: var(--lightink-danger);
+}
+
 /* Editing multi-line formula source: keep pre wrapping readable. */
 .lightink-code-block.lightink-math-editing > .lightink-code-pre,
 .lightink-code-block[data-math-fence='editing'] > .lightink-code-pre {

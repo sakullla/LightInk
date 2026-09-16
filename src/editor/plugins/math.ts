@@ -36,13 +36,17 @@
  *     / `lightink-math-block-source`, or `lightink-math-error` on failure —
  *     the error case gets NO rendered widget, so the source displays as-is,
  *     isolated to that node) plus, on success, a widget decoration right
- *     after the source carrying the rendered KaTeX HTML. Error isolation is
- *     per-segment: a bad formula never affects siblings or surrounding text.
+ *     after the source carrying the rendered KaTeX HTML. Visibility is
+ *     CSS-driven (prose.css hides the source, ui/theme.css restores it for
+ *     the textblock holding the selection), so decorations always carry both
+ *     source and preview and the exported HTML (prose.css only) keeps the
+ *     rendered form. Error isolation is per-segment: a bad formula never
+ *     affects siblings or surrounding text.
  */
 
 import { $prose } from '@milkdown/utils';
 import { appendPreviewEditButton } from './preview-edit-button.js';
-import { Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
+import { Plugin, PluginKey, TextSelection, type Selection } from '@milkdown/prose/state';
 import type { Node as PMNode } from '@milkdown/prose/model';
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/prose/view';
 
@@ -325,12 +329,46 @@ function tryRenderKatex(latex: string, displayMode: boolean, katex: KatexRendere
 }
 
 /**
+ * 渲染结果缓存（按渲染器 + displayMode + latex）。selection 变化会重建
+ * decorations，缓存避免同一公式被反复喂给 KaTeX。渲染器以 WeakMap 隔离，
+ * 测试替身之间不串味；FIFO 上限防止超长文档无限增长。
+ */
+const renderOutcomeCache = new WeakMap<KatexRenderer, Map<string, RenderOutcome>>();
+const RENDER_CACHE_LIMIT = 256;
+
+function renderOutcomeFor(
+  latex: string,
+  displayMode: boolean,
+  katex: KatexRenderer,
+): RenderOutcome {
+  let cache = renderOutcomeCache.get(katex);
+  if (cache === undefined) {
+    cache = new Map<string, RenderOutcome>();
+    renderOutcomeCache.set(katex, cache);
+  }
+  const key = `${displayMode ? 'block' : 'inline'}\n${latex}`;
+  const hit = cache.get(key);
+  if (hit !== undefined) {
+    return hit;
+  }
+  const outcome = tryRenderKatex(latex, displayMode, katex);
+  if (cache.size >= RENDER_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) {
+      cache.delete(oldest);
+    }
+  }
+  cache.set(key, outcome);
+  return outcome;
+}
+
+/**
  * 渲染单个公式为 HTML 字符串：成功 → KaTeX HTML；语法错误 →
  * `<code class="lightink-math-error">` 包裹的转义源码（错误被隔离在该
  * 片段内，不影响文档其他部分）。
  */
 export function renderMathHtml(latex: string, displayMode: boolean, katex: KatexRenderer): string {
-  const outcome = tryRenderKatex(latex, displayMode, katex);
+  const outcome = renderOutcomeFor(latex, displayMode, katex);
   if (outcome.error) {
     return `<code class="lightink-math-error">${escapeMathHtml(latex)}</code>`;
   }
@@ -381,6 +419,11 @@ export interface MathPluginState {
    * (double-click preview). null = successful math fences show preview only.
    */
   readonly editingPos: number | null;
+  /**
+   * 选区所在 textblock 的文档位置（正文 $ 公式的源码编辑态）；该段由
+   * `.lightink-math-active` 显示源码、隐藏预览。
+   */
+  readonly activeBlockPos: number | null;
   readonly decorations: DecorationSet;
 }
 
@@ -471,6 +514,19 @@ function docHasMath(doc: PMNode): boolean {
 }
 
 /**
+ * 选区 head 所在 textblock 的文档位置；不在 textblock 时（如顶层节点
+ * 选区、```math 代码块）返回 null。正文公式据「光标所在段落」决定源码
+ * 编辑态：命中段落由 decorations 打上 .lightink-math-active。
+ */
+export function activeTextblockPos(selection: Selection): number | null {
+  const { $head } = selection;
+  if ($head.depth === 0 || !$head.parent.isTextblock) {
+    return null;
+  }
+  return $head.start($head.depth) - 1;
+}
+
+/**
  * 在 textblock 内扫描公式段，排除 inline code（code mark）覆盖的区间。
  * 返回段的 from/to 为「textblock 内文本偏移」，由调用方加 pos+1 换算为
  * 文档位置。
@@ -515,10 +571,27 @@ function scanMathInTextblock(
   return segments;
 }
 
+/** `buildMathDecorations` 的可选行为注入。 */
+export interface MathDecorationOptions {
+  /** ```math / latex / katex 代码块的源码编辑位（双击预览进入）。 */
+  readonly editingPos?: number | null;
+  /** 选区所在 textblock 的文档位置（activeTextblockPos）；该段打上源码编辑态类。 */
+  readonly activeBlockPos?: number | null;
+  /** fence 预览的「编辑源码」请求（blockPos 为 code_block 起始位置）。 */
+  readonly onEditRequest?: (blockPos: number) => void;
+  /** 正文公式预览被点击：把选区放进源码（from 为起始 `$` 的文档位置）。 */
+  readonly onActivateSegment?: (from: number) => void;
+}
+
 /**
  * 为整篇文档构建公式 decorations。
  *
  *   A) 行内/块级 `$…$` / `$$…$$`（正文 textblock）
+ *        - 渲染成功 → 源码 inline decoration + KaTeX 预览 widget；显示切换
+ *          交给 CSS：prose.css 隐藏源码，选区所在段落的 .lightink-math-active
+ *          （theme.css）恢复源码并隐藏预览。decorations 本身始终含两者，
+ *          导出件（只带 prose.css）因此恒为渲染结果。
+ *        - 失败 → 仅 error class，源码原样可见
  *   B) 特殊代码块 ```math / latex / katex（对齐 mermaid 流程图 UX）：
  *        - 成功且未编辑 → 隐藏源码 + KaTeX 预览 widget（双击进入编辑）
  *        - 成功且 editingPos 命中 → 显示源码（lightink-math-editing）
@@ -529,8 +602,7 @@ function scanMathInTextblock(
 export function buildMathDecorations(
   doc: PMNode,
   katex: KatexRenderer | null,
-  editingPos: number | null = null,
-  onEditRequest?: (blockPos: number) => void,
+  options: MathDecorationOptions = {},
 ): DecorationSet {
   const decorations: Decoration[] = [];
   doc.descendants((node, pos) => {
@@ -540,7 +612,7 @@ export function buildMathDecorations(
         typeof node.attrs['language'] === 'string' ? (node.attrs['language'] as string) : '';
       if (!isMathBlock(lang)) return false;
       const def = mathFenceDefinitionOf(node);
-      const isEditing = editingPos === pos;
+      const isEditing = options.editingPos === pos;
       if (def === null || katex === null) {
         decorations.push(
           Decoration.node(pos, pos + node.nodeSize, {
@@ -550,7 +622,7 @@ export function buildMathDecorations(
         );
         return false;
       }
-      const outcome = tryRenderKatex(def, true, katex);
+      const outcome = renderOutcomeFor(def, true, katex);
       if (outcome.error) {
         decorations.push(
           Decoration.node(pos, pos + node.nodeSize, {
@@ -592,11 +664,11 @@ export function buildMathDecorations(
             el.setAttribute('data-math-preview', '');
             el.setAttribute('data-math-lines', String(lineCount));
             el.innerHTML = html;
-            appendPreviewEditButton(el, MATH_EDIT_TITLE, () => onEditRequest?.(blockPos));
+            appendPreviewEditButton(el, MATH_EDIT_TITLE, () => options.onEditRequest?.(blockPos));
             el.addEventListener('dblclick', (event) => {
               event.preventDefault();
               event.stopPropagation();
-              onEditRequest?.(blockPos);
+              options.onEditRequest?.(blockPos);
             });
             return el;
           },
@@ -614,9 +686,15 @@ export function buildMathDecorations(
       from: seg.from + pos + 1,
       to: seg.to + pos + 1,
     }));
+    if (segments.length === 0) return false;
+    if (options.activeBlockPos === pos) {
+      decorations.push(
+        Decoration.node(pos, pos + node.nodeSize, { class: 'lightink-math-active' }),
+      );
+    }
     for (const seg of segments) {
       const displayMode = seg.type === 'block';
-      const outcome = tryRenderKatex(seg.latex, displayMode, katex);
+      const outcome = renderOutcomeFor(seg.latex, displayMode, katex);
       if (outcome.error) {
         decorations.push(
           Decoration.inline(seg.from, seg.to, {
@@ -637,9 +715,17 @@ export function buildMathDecorations(
         Decoration.widget(
           seg.to,
           () => {
-            const el = document.createElement(displayMode ? 'div' : 'span');
+            // span（display:block 由 prose.css 提供）保证导出 HTML 里
+            // `<p><span class="lightink-math-block">…</span></p>` 仍合法。
+            const el = document.createElement('span');
             el.className = displayMode ? 'lightink-math-block' : 'lightink-math-inline';
             el.innerHTML = html;
+            el.addEventListener('mousedown', (event) => {
+              if (options.onActivateSegment === undefined) return;
+              event.preventDefault();
+              event.stopPropagation();
+              options.onActivateSegment(seg.from);
+            });
             return el;
           },
           { side: 1, key: `lightink-math-${seg.from}` },
@@ -682,20 +768,42 @@ export const mathPlugin = $prose(() => {
     editorView.focus();
   };
 
+  /** 点击正文公式预览：选区落入源码起点，段落随即进入源码编辑态。 */
+  const activateSegment = (from: number): void => {
+    if (editorView === null) return;
+    try {
+      const tr = editorView.state.tr.setSelection(
+        TextSelection.create(editorView.state.doc, from),
+      );
+      editorView.dispatch(tr.scrollIntoView());
+    } catch {
+      /* ignore */
+    }
+    editorView.focus();
+  };
+
   const rebuild = (
     doc: PMNode,
     katex: KatexRenderer | null,
     editingPos: number | null,
+    activeBlockPos: number | null,
   ): MathPluginState => ({
     katex,
     editingPos,
-    decorations: buildMathDecorations(doc, katex, editingPos, requestEdit),
+    activeBlockPos,
+    decorations: buildMathDecorations(doc, katex, {
+      editingPos,
+      activeBlockPos,
+      onEditRequest: requestEdit,
+      onActivateSegment: activateSegment,
+    }),
   });
 
   return new Plugin<MathPluginState>({
     key: mathPluginKey,
     state: {
-      init: (_config, state) => rebuild(state.doc, null, null),
+      init: (_config, state) =>
+        rebuild(state.doc, null, null, activeTextblockPos(state.selection)),
       apply: (tr, old, _oldState, newState) => {
         const meta = tr.getMeta(mathPluginKey) as MathPluginMeta | undefined;
         const katex = meta?.katex ?? old.katex;
@@ -735,12 +843,20 @@ export const mathPlugin = $prose(() => {
           }
         }
 
-        if (meta !== undefined || tr.docChanged || editingPos !== old.editingPos) {
-          return rebuild(newState.doc, katex, editingPos);
+        const activeBlockPos = activeTextblockPos(newState.selection);
+
+        if (
+          meta !== undefined ||
+          tr.docChanged ||
+          editingPos !== old.editingPos ||
+          activeBlockPos !== old.activeBlockPos
+        ) {
+          return rebuild(newState.doc, katex, editingPos, activeBlockPos);
         }
         return {
           katex,
           editingPos,
+          activeBlockPos,
           decorations: old.decorations.map(tr.mapping, tr.doc),
         };
       },
