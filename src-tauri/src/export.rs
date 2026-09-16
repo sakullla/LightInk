@@ -186,11 +186,11 @@ pub fn read_image_base64_impl(
     rel_path: &str,
 ) -> Result<String, String> {
     let session_id = session_id.map(validate_session_id).transpose()?;
-    let full = match resolve_image_path(doc_dir, staging_root, session_id.as_deref(), rel_path) {
+    let full = match resolve_image_path(doc_dir, staging_root, session_id, rel_path) {
         Ok(full) => full,
         Err(literal_err) => match percent_decode_once(rel_path) {
             Some(decoded) => {
-                match resolve_image_path(doc_dir, staging_root, session_id.as_deref(), &decoded) {
+                match resolve_image_path(doc_dir, staging_root, session_id, &decoded) {
                     Ok(full) => full,
                     Err(_) => return Err(literal_err),
                 }
