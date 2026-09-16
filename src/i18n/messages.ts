@@ -241,6 +241,11 @@ const en = {
   'reader.error.cancelled': 'The read operation was cancelled.',
   'reader.error.structuredUnknown': 'The reader could not complete this operation ({code}).',
   'reader.remoteImageLoad': 'Load remote image',
+  'editor.imagePreview': 'Image preview',
+  'editor.imagePreviewClose': 'Close',
+  'editor.imageAlignLeft': 'Align left',
+  'editor.imageAlignCenter': 'Align center',
+  'editor.imageAlignRight': 'Align right',
   // 统一融合标注搜索面板（annotation-panel）正文检索文案。
   'reader.search.empty': 'No results',
   'reader.search.document': 'Search in book',
@@ -840,6 +845,11 @@ const zhCN = {
   'reader.error.cancelled': '读取操作已取消。',
   'reader.error.structuredUnknown': '阅读器无法完成此操作（{code}）。',
   'reader.remoteImageLoad': '加载远程图片',
+  'editor.imagePreview': '图片预览',
+  'editor.imagePreviewClose': '关闭',
+  'editor.imageAlignLeft': '左对齐',
+  'editor.imageAlignCenter': '居中',
+  'editor.imageAlignRight': '右对齐',
   // 统一融合标注搜索面板（annotation-panel）正文检索文案。
   'reader.search.empty': '无结果',
   'reader.search.document': '搜索正文',

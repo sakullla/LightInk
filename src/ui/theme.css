@@ -3255,6 +3255,156 @@ html[data-reading-layout='scroll']:has(
   cursor: pointer;
 }
 
+/* Author display:inline-flex must not override the hidden attribute, or
+   local images that fail to resolve look like blocked remote images. */
+.lightink-remote-image-load[hidden] {
+  display: none !important;
+}
+
+.lightink-image-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+}
+
+.lightink-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  cursor: pointer;
+}
+
+.lightink-image-wrap.lightink-image-selected > .lightink-image {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.lightink-image-alignbar {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+}
+
+.lightink-image-alignbar[hidden] {
+  display: none !important;
+}
+
+.lightink-image-alignbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-fg);
+  cursor: pointer;
+}
+
+.lightink-image-alignbtn svg {
+  display: block;
+}
+
+.lightink-image-alignbtn:hover {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-image-alignbtn.is-active {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+.lightink-image-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid var(--lightink-bg-elevated);
+  border-radius: 2px;
+  background: var(--lightink-accent);
+  box-shadow: 0 0 0 1px var(--lightink-accent);
+  cursor: nwse-resize;
+  z-index: 5;
+}
+
+.lightink-image-handle[hidden] {
+  display: none !important;
+}
+
+.lightink-image-lightbox {
+  background: color-mix(in srgb, #111 78%, transparent);
+}
+
+.lightink-image-lightbox-dialog {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightink-image-lightbox-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.lightink-image-lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 16px 48px #00000066;
+  background: var(--lightink-bg);
+}
+
+.lightink-image-lightbox-close {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 50%, transparent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.lightink-image-lightbox-close:hover {
+  background: color-mix(in srgb, #000 70%, transparent);
+}
+
+.lightink-image-lightbox-close:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
 .lightink-remote-image-load:hover {
   border-style: solid;
   border-color: var(--lightink-accent);

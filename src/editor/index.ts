@@ -304,6 +304,9 @@ export async function mountEditor(
         editor.use(
           imageSizeNodeViewPlugin(options.imageSrcResolver, {
             remoteImageLoadLabel: options.remoteImageLoadLabel,
+            imagePreviewLabel: options.imagePreviewLabel,
+            imagePreviewCloseLabel: options.imagePreviewCloseLabel,
+            imageAlignLabels: options.imageAlignLabels,
             onLinkNavigate: options.onLinkNavigate,
             confirmOpen: options.confirmLinkOpen,
             getDocPath: options.getDocPath,

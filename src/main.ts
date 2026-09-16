@@ -1824,6 +1824,7 @@ interface ExportPipeline {
     doc: Document,
     html: string,
     invokeNative: (size: { readonly width: number; readonly height: number }) => Promise<void>,
+    options?: { readonly capture?: boolean; readonly win?: Window },
   ) => Promise<void>;
 }
 
@@ -1961,12 +1962,18 @@ function createExportDeps(
       return typeof selected === 'string' ? selected : null;
     },
     printPdfNative: (html, path) =>
-      pipeline.printPdfNative(document, html, (size) =>
-        invoke<void>('print_webview_to_pdf', {
-          path,
-          contentWidth: size.width,
-          contentHeight: size.height,
-        }),
+      pipeline.printPdfNative(
+        document,
+        html,
+        (size) =>
+          invoke<void>('print_webview_to_pdf', {
+            path,
+            contentWidth: size.width,
+            contentHeight: size.height,
+          }),
+        // macOS createPDF 拍屏幕，必须挂捕获面。Windows CDP 走 @media print，
+        // 屏幕捕获会把编辑区换成导出 HTML（含自动目录）直到原生调用返回。
+        { capture: isMac },
       ),
     // R1/T6：macOS 平台判断——原生 createPDF 失败时不回退 window.print。
     isMacOS: () => isMac,
@@ -2503,6 +2510,13 @@ manager = new TabManager({
   formatUntitledTitle: (n) => i18n.t('app.untitled', { n: String(n) }),
   formatUntitledRestoredTitle: (n) => i18n.t('app.untitledRestored', { n: String(n) }),
   remoteImageLoadLabel: i18n.t('reader.remoteImageLoad'),
+  imagePreviewLabel: i18n.t('editor.imagePreview'),
+  imagePreviewCloseLabel: i18n.t('editor.imagePreviewClose'),
+  imageAlignLabels: {
+    left: i18n.t('editor.imageAlignLeft'),
+    center: i18n.t('editor.imageAlignCenter'),
+    right: i18n.t('editor.imageAlignRight'),
+  },
   replaceExistingReader:
     isAndroidApp ||
     isTouchPrimary ||

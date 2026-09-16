@@ -8,8 +8,7 @@
  *     行内块（CommonMark 合法、对其它渲染器可读）。
  *   - 经 `htmlSchema.extendSchema` 改写 `parseMarkdown`：白名单 `<img>` HTML 还原为带
  *     width/align 的 image 节点，其余 html 仍透传为 html 节点——往返闭环。
- *   - nodeView 以 image 节点为宿主：点击 NodeSelection 后显示拖拽调宽柄 + 浮动对齐条；
- *     写回经 `setNodeMarkup`（不碰 index/HEAD，事务由编辑器走）。
+ *   - nodeView 以 image 节点为宿主：选中后图上方浮出 SVG 对齐条，右下角小方块拖宽。
  *
  * 纯逻辑 `serializeImageHtml` / `parseImageHtml` / `buildImageStyle` headless 可测；
  * schema 装配与 nodeView 属编辑器集成面（仅断言工厂形态 + tsc）。
@@ -30,6 +29,11 @@ import {
 import { decodeOncePercent } from '../../file/path-ext.js';
 import { isModifiedClick } from '../link-navigation.js';
 import { isRelativeAssetSrc } from './image.js';
+import {
+  closeImageLightbox,
+  imageDblclickIntent,
+  showImageLightbox,
+} from './image-preview.js';
 
 export type ImageAlign = 'left' | 'center' | 'right';
 
@@ -44,6 +48,60 @@ export interface ImageSizeAttrs {
 
 const MIN_WIDTH = 40;
 const MAX_WIDTH = 4000;
+const IMAGE_CHROME_GAP = 8;
+
+function strokeIcon(paths: string): string {
+  return (
+    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.5" stroke-linecap="round" aria-hidden="true">${paths}</svg>`
+  );
+}
+
+/** 对齐按钮图标（描边 SVG，随主题着色；不用 emoji）。 */
+export const IMAGE_ALIGN_ICONS: Readonly<Record<ImageAlign, string>> = {
+  left: strokeIcon('<path d="M2 3.5h12"/><path d="M2 8h8"/><path d="M2 12.5h12"/>'),
+  center: strokeIcon('<path d="M2 3.5h12"/><path d="M4 8h8"/><path d="M2 12.5h12"/>'),
+  right: strokeIcon('<path d="M2 3.5h12"/><path d="M6 8h8"/><path d="M2 12.5h12"/>'),
+};
+
+const DEFAULT_ALIGN_LABELS: Readonly<Record<ImageAlign, string>> = {
+  left: 'Align left',
+  center: 'Align center',
+  right: 'Align right',
+};
+
+export interface ImageChromeBox {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface ImageChromePlacement {
+  readonly top: number;
+  readonly left: number;
+}
+
+/**
+ * 对齐条放在图上方；上方不够则改到图下方。水平居中并夹在视口内，避免压住画面。
+ */
+export function placeImageChrome(
+  image: ImageChromeBox,
+  chrome: { readonly width: number; readonly height: number },
+  viewport: { readonly width: number; readonly height: number },
+  gap = IMAGE_CHROME_GAP,
+): ImageChromePlacement {
+  let top = image.top - chrome.height - gap;
+  if (top < gap) {
+    top = image.top + image.height + gap;
+  }
+  if (top + chrome.height > viewport.height - gap) {
+    top = Math.max(gap, viewport.height - chrome.height - gap);
+  }
+  const maxLeft = Math.max(gap, viewport.width - chrome.width - gap);
+  const left = Math.min(Math.max(gap, image.left + image.width / 2 - chrome.width / 2), maxLeft);
+  return { top, left };
+}
 
 function clampWidth(n: number): number {
   if (!Number.isFinite(n)) return MIN_WIDTH;
@@ -246,6 +304,9 @@ interface NodeViewArgs {
 export interface ImageNodeViewOptions {
   readonly remoteImagePolicy?: RemoteImagePolicy;
   readonly remoteImageLoadLabel?: string;
+  readonly imagePreviewLabel?: string;
+  readonly imagePreviewCloseLabel?: string;
+  readonly imageAlignLabels?: Partial<Record<ImageAlign, string>>;
   /**
    * Ctrl/Cmd+click 打开：复用链接的 confirm + onLinkNavigate（localFile /
    * open_path_default）。缺省时修饰键点击不打开。
@@ -367,8 +428,6 @@ function createResizableImageNodeView(
 
   const img = document.createElement('img');
   img.className = 'lightink-image';
-  img.style.display = 'block';
-  img.style.maxWidth = '100%';
   wrap.appendChild(img);
 
   const remoteLoad = document.createElement('button');
@@ -378,24 +437,21 @@ function createResizableImageNodeView(
   remoteLoad.hidden = true;
   wrap.appendChild(remoteLoad);
 
-  // 浮动对齐条（选中时显示）。
-  const bar = document.createElement('span');
+  const bar = document.createElement('div');
   bar.className = 'lightink-image-alignbar';
-  bar.style.position = 'absolute';
-  bar.style.top = '4px';
-  bar.style.left = '50%';
-  bar.style.transform = 'translateX(-50%)';
-  bar.style.display = 'none';
-  bar.style.zIndex = '5';
-  bar.style.lineHeight = '1';
+  bar.setAttribute('role', 'toolbar');
+  bar.hidden = true;
   const aligns: ImageAlign[] = ['left', 'center', 'right'];
+  const alignLabels = { ...DEFAULT_ALIGN_LABELS, ...options.imageAlignLabels };
   for (const a of aligns) {
     const btn = document.createElement('button');
     btn.type = 'button';
+    btn.className = 'lightink-image-alignbtn';
     btn.dataset.align = a;
-    btn.textContent = a === 'left' ? '⬅' : a === 'center' ? '⬌' : '➡';
-    btn.title = a;
-    btn.style.margin = '0 2px';
+    btn.title = alignLabels[a];
+    btn.setAttribute('aria-label', alignLabels[a]);
+    btn.setAttribute('aria-pressed', 'false');
+    btn.innerHTML = IMAGE_ALIGN_ICONS[a];
     btn.addEventListener('mousedown', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -403,21 +459,12 @@ function createResizableImageNodeView(
     });
     bar.appendChild(btn);
   }
-  wrap.appendChild(bar);
+  const chromeHost = wrap.ownerDocument.body;
+  (chromeHost ?? wrap).appendChild(bar);
 
-  // 右下拖拽柄（选中时显示）。
   const handle = document.createElement('span');
   handle.className = 'lightink-image-handle';
-  handle.textContent = '◢';
-  handle.style.position = 'absolute';
-  handle.style.right = '0';
-  handle.style.bottom = '0';
-  handle.style.cursor = 'nwse-resize';
-  handle.style.display = 'none';
-  handle.style.zIndex = '5';
-  handle.style.userSelect = 'none';
-  handle.style.fontSize = '14px';
-  handle.style.lineHeight = '1';
+  handle.hidden = true;
   wrap.appendChild(handle);
 
   let seq = 0;
@@ -437,6 +484,11 @@ function createResizableImageNodeView(
     img.style.display = align === null ? 'inline' : 'block';
     img.classList.toggle('lightink-image-sized', width !== null);
     wrap.dataset.align = align ?? '';
+    for (const btn of bar.querySelectorAll<HTMLButtonElement>('[data-align]')) {
+      const on = btn.dataset.align === (align ?? '');
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
   };
 
   const syncSrc = (n: PMNode): void => {
@@ -501,6 +553,28 @@ function createResizableImageNodeView(
   };
   remoteLoad.addEventListener('mousedown', keepEditorSelection);
   remoteLoad.addEventListener('click', loadRemoteImage);
+  const onImageDblClick = (event: MouseEvent): void => {
+    if (
+      event.target === handle ||
+      event.target === remoteLoad ||
+      bar.contains(event.target as Node)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const displaySrc = img.getAttribute('src') ?? '';
+    if (imageDblclickIntent(event, displaySrc) !== 'preview') {
+      return;
+    }
+    showImageLightbox(img.ownerDocument, {
+      src: displaySrc,
+      alt: img.alt,
+      title: options.imagePreviewLabel,
+      closeLabel: options.imagePreviewCloseLabel,
+    });
+  };
+  img.addEventListener('dblclick', onImageDblClick);
 
   const commit = (changes: { width?: number; align?: ImageAlign | null }): void => {
     const pos = args.getPos();
@@ -540,6 +614,20 @@ function createResizableImageNodeView(
     document.addEventListener('mouseup', onUp);
   });
 
+  let chromeSelected = false;
+  const repositionChrome = (): void => {
+    if (!chromeSelected || bar.hidden) return;
+    const image = wrap.getBoundingClientRect();
+    const chrome = bar.getBoundingClientRect();
+    const placed = placeImageChrome(
+      { top: image.top, left: image.left, width: image.width, height: image.height },
+      { width: chrome.width || 108, height: chrome.height || 34 },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    bar.style.top = `${placed.top}px`;
+    bar.style.left = `${placed.left}px`;
+  };
+
   // 让 ProseMirror 在点击 image 时自行建立 NodeSelection——此处不得 stopPropagation，
   // 否则 mousedown 不冒泡到 PM 根处理器，selectNode 永不触发，缩放柄/对齐条不可达。
   syncSrc(node);
@@ -553,21 +641,34 @@ function createResizableImageNodeView(
       current = incoming;
       syncSrc(incoming);
       applyAttrs(incoming);
+      repositionChrome();
       return true;
     },
     selectNode: () => {
+      chromeSelected = true;
       wrap.classList.add('lightink-image-selected');
-      bar.style.display = 'inline';
-      handle.style.display = 'inline';
+      bar.hidden = false;
+      handle.hidden = false;
+      window.addEventListener('scroll', repositionChrome, true);
+      window.addEventListener('resize', repositionChrome);
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(repositionChrome);
+      } else {
+        repositionChrome();
+      }
     },
     deselectNode: () => {
+      chromeSelected = false;
       wrap.classList.remove('lightink-image-selected');
-      bar.style.display = 'none';
-      handle.style.display = 'none';
+      bar.hidden = true;
+      handle.hidden = true;
+      window.removeEventListener('scroll', repositionChrome, true);
+      window.removeEventListener('resize', repositionChrome);
     },
     stopEvent: (event: Event) => {
-      // 拖拽与对齐按钮的事件由 nodeView 自处理，不交给编辑器。
+      // 拖拽、对齐按钮、双击预览由 nodeView 自处理，不交给编辑器。
       return (
+        event.type === 'dblclick' ||
         event.target === handle ||
         event.target === remoteLoad ||
         bar.contains(event.target as Node)
@@ -576,9 +677,15 @@ function createResizableImageNodeView(
     ignoreMutation: () => true,
     destroy: () => {
       seq += 1;
+      chromeSelected = false;
+      window.removeEventListener('scroll', repositionChrome, true);
+      window.removeEventListener('resize', repositionChrome);
       unsubscribeRemoteImages();
+      closeImageLightbox();
+      bar.remove();
       remoteLoad.removeEventListener('mousedown', keepEditorSelection);
       remoteLoad.removeEventListener('click', loadRemoteImage);
+      img.removeEventListener('dblclick', onImageDblClick);
     },
   };
 }
@@ -596,6 +703,13 @@ export function imageSizeNodeViewPlugin(
           nodeViews: {
             image: (node: PMNode, view: EditorView, getPos: () => number | undefined) =>
               createResizableImageNodeView(node, resolver, { view, getPos }, options),
+          },
+          handleDoubleClick(view, pos, event) {
+            if (imageSrcAtClickPos(view.state.doc, pos) === null) {
+              return false;
+            }
+            event.preventDefault();
+            return true;
           },
           handleClick(view, pos, event) {
             const src = imageSrcAtClickPos(view.state.doc, pos);

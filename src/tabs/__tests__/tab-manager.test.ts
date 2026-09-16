@@ -213,6 +213,33 @@ describe('打开与内容往返', () => {
     expect(customRoundtrip.readFile).toHaveBeenCalledWith('C:\\docs\\笔记.md');
   });
 
+  it('mount 期间就能用打开路径解析同级 *-assets 图片（tabs.push 之前）', async () => {
+    const encoded =
+      'note-%E4%B8%AD%E6%96%87-assets/image-1.png';
+    let docPathDuringMount: string | null | undefined;
+    let resolvedDuringMount: string | undefined;
+    const readImageBase64 = vi.fn(async () => 'QUJD');
+    const harness = makeHarness({
+      readImageBase64,
+      mountEditor: vi.fn(async (_host, options) => {
+        docPathDuringMount = options.getDocPath?.() ?? null;
+        resolvedDuringMount = await options.imageSrcResolver?.(encoded);
+        const editor = makeFakeEditor(options.initialMarkdown ?? '');
+        harness.editors.push(editor);
+        return editor;
+      }),
+    });
+    const tab = await harness.manager.openFile('C:\\docs\\归档 (2)\\笔记.md');
+    expect(tab).not.toBeNull();
+    expect(docPathDuringMount).toBe('C:\\docs\\归档 (2)\\笔记.md');
+    expect(resolvedDuringMount).toBe('data:image/png;base64,QUJD');
+    expect(readImageBase64).toHaveBeenCalledWith(
+      'C:\\docs\\归档 (2)\\笔记.md',
+      expect.any(String),
+      encoded,
+    );
+  });
+
   it('保存-重开往返无损（中文与特殊字符）', async () => {
     const harness = makeHarness();
     let disk = '';

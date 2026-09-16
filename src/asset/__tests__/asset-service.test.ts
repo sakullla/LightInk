@@ -207,4 +207,19 @@ describe('createImageSrcResolver', () => {
     expect(read).toHaveBeenCalledTimes(2);
     expect(read).toHaveBeenLastCalledWith('D:\\notes\\新文档.md', 's1', 'assets/a.png');
   });
+
+  it('does not cache a rejected read so a later retry can succeed', async () => {
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('missing'))
+      .mockResolvedValueOnce('QUJD');
+    const resolver = createImageSrcResolver({
+      readImageBase64: read,
+      getDocPath: () => 'C:\\docs\\note.md',
+      sessionId: 's1',
+    });
+    await expect(resolver('note-assets/a.png')).rejects.toThrow('missing');
+    await expect(resolver('note-assets/a.png')).resolves.toBe('data:image/png;base64,QUJD');
+    expect(read).toHaveBeenCalledTimes(2);
+  });
 });

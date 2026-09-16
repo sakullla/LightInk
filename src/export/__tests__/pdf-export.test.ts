@@ -6,6 +6,8 @@
  * 主窗口挂载路径用最小 fake Document（项目无 jsdom/happy-dom）。
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -308,13 +310,78 @@ describe('printToPdfFile', () => {
       },
     } as unknown as Window;
 
-    await printToPdfFile(doc, html, invokeNative, win);
+    await printToPdfFile(doc, html, invokeNative, { win, capture: true });
 
     expect(invokeNative).toHaveBeenCalledTimes(1);
     expect(invokeNative).toHaveBeenCalledWith({ width: 800, height: 2400 });
     expect(seenDuringInvoke).toBe(true);
     expect(byId.get(EXPORT_ROOT_ID)?.parent).toBeNull();
     expect(byId.get(PRINT_STYLE_ID)?.parent).toBeNull();
+  });
+
+  it('非捕获路径：导出根屏幕隐藏，导出 CSS 只进 @media print，不替换编辑区', async () => {
+    // 回归：Windows CDP Page.printToPDF 走打印媒体。若误用捕获面，
+    // 屏幕上应用壳层被 display:none，用户看到的「markdown」变成导出稿
+    // （含自动目录）直到原生调用返回。
+    const { doc, byId } = makeFakeDocument();
+    const html = buildPrintHtml({
+      title: 't',
+      theme: 'warm-light',
+      bodyHtml: '<nav class="lightink-export-toc"><ol><li>概述</li></ol></nav><h1>正文标题</h1>',
+      cssText: 'body { max-width: 860px; font-size: 14px; }',
+    });
+    let seenDuringInvoke = false;
+    const invokeNative = vi.fn(async () => {
+      const root = byId.get(EXPORT_ROOT_ID);
+      const style = byId.get(PRINT_STYLE_ID);
+      expect(root?.getAttribute('style') ?? '').toMatch(/width:\s*0/);
+      expect(root?.getAttribute('style') ?? '').toMatch(/opacity:\s*0/);
+      expect(root?.getAttribute('style') ?? '').not.toMatch(/width:\s*100%/);
+      const text = style?.textContent ?? '';
+      expect(text).toContain(MAIN_WINDOW_PRINT_CSS);
+      expect(text).not.toContain(CAPTURE_WINDOW_CSS);
+      const outsidePrint = text.replace(/@media print\s*\{[\s\S]*?\n\}/g, '');
+      expect(outsidePrint).not.toMatch(/\bbody\s*\{[^}]*max-width:\s*860px/);
+      expect(outsidePrint).not.toContain('display: none !important');
+      seenDuringInvoke = true;
+    });
+    const win = {
+      requestAnimationFrame: (cb: FrameRequestCallback): number => {
+        cb(0);
+        return 0;
+      },
+    } as unknown as Window;
+
+    await printToPdfFile(doc, html, invokeNative, { win, capture: false });
+
+    expect(invokeNative).toHaveBeenCalledTimes(1);
+    expect(seenDuringInvoke).toBe(true);
+    expect(byId.get(EXPORT_ROOT_ID)?.parent).toBeNull();
+    expect(byId.get(PRINT_STYLE_ID)?.parent).toBeNull();
+  });
+
+  it('默认不启用屏幕捕获（Windows / Linux 原生路径）', async () => {
+    const { doc, byId } = makeFakeDocument();
+    const html = buildPrintHtml({
+      title: 't',
+      theme: 'warm-light',
+      bodyHtml: '<p>x</p>',
+      cssText: '/* theme */',
+    });
+    const win = {
+      requestAnimationFrame: (cb: FrameRequestCallback): number => {
+        cb(0);
+        return 0;
+      },
+    } as unknown as Window;
+    const invokeNative = vi.fn(async () => {
+      const root = byId.get(EXPORT_ROOT_ID);
+      const style = byId.get(PRINT_STYLE_ID);
+      expect(root?.getAttribute('style') ?? '').toMatch(/opacity:\s*0/);
+      expect(style?.textContent ?? '').not.toContain(CAPTURE_WINDOW_CSS);
+    });
+    await printToPdfFile(doc, html, invokeNative, { win });
+    expect(invokeNative).toHaveBeenCalledTimes(1);
   });
 
   it('invoke 失败也卸根，不残留导出样式', async () => {
@@ -335,9 +402,17 @@ describe('printToPdfFile', () => {
     await expect(
       printToPdfFile(doc, html, async () => {
         throw new Error('createPDF failed');
-      }, win),
+      }, { win, capture: true }),
     ).rejects.toThrow('createPDF failed');
     expect(byId.get(EXPORT_ROOT_ID)?.parent).toBeNull();
     expect(byId.get(PRINT_STYLE_ID)?.parent).toBeNull();
+  });
+});
+
+describe('main.ts native PDF capture wiring', () => {
+  it('仅 macOS 打开屏幕捕获面', () => {
+    const main = readFileSync(resolve(process.cwd(), 'src/main.ts'), 'utf-8');
+    expect(main).toMatch(/\{ capture: isMac \}/);
+    expect(main).toMatch(/Windows CDP 走 @media print/);
   });
 });

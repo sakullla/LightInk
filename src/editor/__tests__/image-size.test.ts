@@ -7,9 +7,11 @@ import { describe, expect, it } from 'vitest';
 import {
   alignStyle,
   buildImageStyle,
+  IMAGE_ALIGN_ICONS,
   imageClickIntent,
   isDocumentDirSandboxedSrc,
   parseImageHtml,
+  placeImageChrome,
   resolveImageOpenHref,
   serializeImageHtml,
 } from '../plugins/image-size.js';
@@ -70,6 +72,34 @@ describe('image-size 序列化往返（R12）', () => {
     expect(html).toContain('src="a&quot;b.png"');
     expect(html).toContain('alt="x&lt;y&gt;"');
     expect(parseImageHtml(html)?.alt).toBe('x<y>');
+  });
+});
+
+describe('image chrome placement', () => {
+  it('uses SVG stroke icons, not emoji', () => {
+    expect(IMAGE_ALIGN_ICONS.left).toContain('<svg');
+    expect(IMAGE_ALIGN_ICONS.center).toContain('<path');
+    expect(IMAGE_ALIGN_ICONS.right).not.toMatch(/[⬅⬌➡◢]/);
+  });
+
+  it('places the toolbar above the image when there is room', () => {
+    expect(
+      placeImageChrome(
+        { top: 120, left: 40, width: 200, height: 80 },
+        { width: 100, height: 34 },
+        { width: 800, height: 600 },
+      ),
+    ).toEqual({ top: 78, left: 90 });
+  });
+
+  it('drops below when the top edge has no room, and clamps horizontally', () => {
+    expect(
+      placeImageChrome(
+        { top: 4, left: 0, width: 40, height: 40 },
+        { width: 120, height: 34 },
+        { width: 200, height: 400 },
+      ),
+    ).toEqual({ top: 52, left: 8 });
   });
 });
 

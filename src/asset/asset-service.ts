@@ -181,7 +181,11 @@ export function createImageSrcResolver(
       const ext = relPath.split('.').pop() ?? '';
       pending = deps
         .readImageBase64(deps.getDocPath(), deps.sessionId, relPath)
-        .then((base64) => `data:${mimeFromExt(ext)};base64,${base64}`);
+        .then((base64) => `data:${mimeFromExt(ext)};base64,${base64}`)
+        .catch((error: unknown) => {
+          cache.delete(key);
+          throw error;
+        });
       cache.set(key, pending);
     }
     return pending;

@@ -183,6 +183,9 @@ export interface TabManagerDeps {
   reportError?: (message: string, error: unknown) => void;
   /** Localized command shown in blocked remote-image placeholders. */
   remoteImageLoadLabel?: string;
+  imagePreviewLabel?: string;
+  imagePreviewCloseLabel?: string;
+  imageAlignLabels?: Partial<Record<'left' | 'center' | 'right', string>>;
   /** T4：图片落盘（生产为 asset-service 的 saveAsset）。 */
   saveAsset?: (
     docPath: string | null,
@@ -276,6 +279,13 @@ export class TabManager {
         console.error(`[lightink/tabs] ${message}`, error);
       },
       remoteImageLoadLabel: 'Load remote image',
+      imagePreviewLabel: 'Image preview',
+      imagePreviewCloseLabel: 'Close',
+      imageAlignLabels: {
+        left: 'Align left',
+        center: 'Align center',
+        right: 'Align right',
+      },
       formatUntitledTitle: (n) => `未命名-${n}`,
       formatUntitledRestoredTitle: (n) => `未命名-${n}（已恢复）`,
       ...deps,
@@ -993,6 +1003,8 @@ export class TabManager {
     const id = `tab-${this.counter}`;
     const host = this.deps.createHostElement(id);
     this.deps.attachHost(host);
+    const getDocPath = (): string | null =>
+      this.tabs.find((t) => t.id === id)?.filePath ?? args.filePath;
     let editor: EditorInstance | null = null;
     try {
       editor = await this.deps.mountEditor(host, {
@@ -1004,17 +1016,24 @@ export class TabManager {
         assetSaver: createAssetSaver({
           saveAsset: this.deps.saveAsset,
           sessionId: args.syntheticId,
-          getDocPath: () => this.tabs.find((t) => t.id === id)?.filePath ?? null,
+          getDocPath,
         }),
         // 图片显示：文档内 assets/… 相对引用经 Rust 解析为 data URL（按标签缓存，
         // 另存为后文档路径变化自动换键重解析）。
+        //
+        // 必须在 tabs.push 之前就能拿到打开路径：Milkdown Created 时就会
+        // 建 image nodeView 并调用 resolver。若此时只查 this.tabs，docPath
+        // 为 null，已保存文档的同级 `*-assets/` 会被当成暂存 `assets/` 读失败。
         imageSrcResolver: createImageSrcResolver({
           readImageBase64: this.deps.readImageBase64,
           sessionId: args.syntheticId,
-          getDocPath: () => this.tabs.find((t) => t.id === id)?.filePath ?? null,
+          getDocPath,
         }),
-        getDocPath: () => this.tabs.find((t) => t.id === id)?.filePath ?? null,
+        getDocPath,
         remoteImageLoadLabel: this.deps.remoteImageLoadLabel,
+        imagePreviewLabel: this.deps.imagePreviewLabel,
+        imagePreviewCloseLabel: this.deps.imagePreviewCloseLabel,
+        imageAlignLabels: this.deps.imageAlignLabels,
         onAssetError: (message, error) => this.deps.reportError(message, error),
         onLinkNavigate: this.deps.onLinkNavigate,
         confirmLinkOpen: this.deps.confirmLinkOpen,

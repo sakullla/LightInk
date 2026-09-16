@@ -37,6 +37,9 @@ export interface ImageAssetMountOptions {
   readonly imageSrcResolver?: ImageSrcResolver;
   /** Localized command shown while a remote image is blocked. */
   readonly remoteImageLoadLabel?: string;
+  readonly imagePreviewLabel?: string;
+  readonly imagePreviewCloseLabel?: string;
+  readonly imageAlignLabels?: Partial<Record<'left' | 'center' | 'right', string>>;
   /** 当前文档路径；未保存为 null。Ctrl/Cmd+点击打开相对图时需要已保存路径。 */
   readonly getDocPath?: () => string | null;
 }

@@ -180,8 +180,11 @@ export function mountPrintRoot(doc: Document, html: string): () => void {
 }
 
 /**
- * 原生 PDF 捕获面：装配文档作为屏幕可见内容，供 createPDF / PrintToPdf 拍摄。
+ * 原生 PDF 捕获面：装配文档作为屏幕可见内容，供 macOS WKWebView createPDF 拍摄。
  * 仍保留 MAIN_WINDOW_PRINT_CSS，Windows 打印媒体路径不被拆掉。
+ *
+ * 不可用于 Windows CDP Page.printToPDF：捕获面会把应用壳层 `display:none`，
+ * 屏幕上只剩导出 HTML（含自动目录）。原生调用返回前编辑区会一直停在导出稿。
  */
 export function mountCaptureRoot(doc: Document, html: string): () => void {
   return mountExportRoot(doc, html, { capture: true });
@@ -217,17 +220,30 @@ export function measureExportCaptureSize(doc: Document): PdfNativeCaptureSize {
   };
 }
 
+export interface PrintToPdfFileOptions {
+  /** rAF / 定时器所用 window；测试注入 fake。 */
+  readonly win?: Window;
+  /**
+   * true：屏幕可见捕获面（仅 macOS createPDF 需要）。
+   * false（默认）：根节点屏幕隐藏，导出 CSS 只进 @media print。
+   * Windows CDP Page.printToPDF 走打印媒体；若误开捕获，编辑区会被换成导出 HTML。
+   */
+  readonly capture?: boolean;
+}
+
 /**
- * 原生矢量 PDF 导出：挂载屏幕捕获面，按整份文档尺寸调用 `invokeNative`
+ * 原生矢量 PDF 导出：按平台挂载打印根或屏幕捕获面，再调用 `invokeNative`
  * （生产为 `invoke('print_webview_to_pdf')`）；成功或失败都立即卸根。
  */
 export async function printToPdfFile(
   doc: Document,
   html: string,
   invokeNative: (size: PdfNativeCaptureSize) => Promise<void>,
-  win: Window = window,
+  options: PrintToPdfFileOptions = {},
 ): Promise<void> {
-  const cleanup = mountCaptureRoot(doc, html);
+  const win = options.win ?? window;
+  const capture = options.capture === true;
+  const cleanup = mountExportRoot(doc, html, { capture });
   try {
     await new Promise<void>((resolve) =>
       typeof win.requestAnimationFrame === 'function'

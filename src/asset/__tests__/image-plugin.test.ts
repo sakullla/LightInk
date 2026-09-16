@@ -275,6 +275,11 @@ describe('isRelativeAssetSrc（图片显示解析判定）', () => {
     expect(isRelativeAssetSrc('note-jira-summary-assets/image.png')).toBe(true);
     expect(isRelativeAssetSrc('./note-assets/pic.webp')).toBe(true);
     expect(isRelativeAssetSrc('../secret.png')).toBe(true);
+    expect(
+      isRelativeAssetSrc(
+        'note-%E3%80%90%E7%AB%AF%E5%88%B0%E7%AB%AF%E3%80%91-assets/image-1.png',
+      ),
+    ).toBe(true);
   });
 
   it('外链/协议相对/data/blob/file/绝对路径不需要解析', () => {
