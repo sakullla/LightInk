@@ -1996,6 +1996,9 @@ html[data-reading-layout='scroll']:has(
 /* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。 */
 .lightink-tab-host .tableWrapper {
   overflow-x: auto;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   border-radius: 8px;
   border: 1px solid var(--lightink-border);
   background: var(--lightink-bg-elevated);
@@ -2003,11 +2006,11 @@ html[data-reading-layout='scroll']:has(
 
 .lightink-tab-host table {
   border-collapse: collapse;
-  table-layout: fixed;
-  width: 100%;
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
   margin: 0;
   font-size: 0.95em;
-  overflow: hidden;
 }
 
 .lightink-tab-host th,
@@ -2018,13 +2021,18 @@ html[data-reading-layout='scroll']:has(
   vertical-align: top;
   box-sizing: border-box;
   position: relative;
-  min-width: 48px;
+  min-width: 4.5em;
   background: var(--lightink-bg);
 }
 
 .lightink-tab-host th {
   background: color-mix(in srgb, var(--lightink-accent-soft) 55%, var(--lightink-bg-elevated));
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.lightink-tab-host td {
+  overflow-wrap: break-word;
 }
 
 .lightink-tab-host thead th {

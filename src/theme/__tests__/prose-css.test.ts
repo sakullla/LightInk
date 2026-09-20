@@ -459,11 +459,34 @@ describe('theme.css Markdown 栏宽分档', () => {
     expect(themeCss).toMatch(
       /\.lightink-tab-host pre[\s\S]*?\.lightink-tab-host \.lightink-code-block > pre\s*\{[^}]*overflow-x:\s*auto/,
     );
-    const table = declarationBlocks(themeCss).find(
+    const wrapper = declarationBlocks(themeCss).find(
       (rule) => rule.selector === '.lightink-tab-host .tableWrapper',
     );
+    expect(wrapper).toBeDefined();
+    expect(wrapper!.body).toMatch(/overflow-x:\s*auto/);
+    expect(wrapper!.body).toMatch(/width:\s*100%/);
+    expect(wrapper!.body).toMatch(/max-width:\s*100%/);
+    const table = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host table',
+    );
     expect(table).toBeDefined();
-    expect(table!.body).toMatch(/overflow-x:\s*auto/);
+    expect(table!.body).toMatch(/table-layout:\s*auto/);
+    expect(table!.body).toMatch(/width:\s*max-content/);
+    expect(table!.body).toMatch(/min-width:\s*100%/);
+    expect(table!.body).not.toMatch(/table-layout:\s*fixed/);
+    expect(table!.body).not.toMatch(/(?:^|[;\s])width:\s*100%/);
+    expect(table!.body).not.toMatch(/overflow:\s*hidden/);
+    const th = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host th',
+    );
+    expect(th).toBeDefined();
+    expect(th!.body).toMatch(/white-space:\s*nowrap/);
+    const td = declarationBlocks(themeCss).find(
+      (rule) => rule.selector === '.lightink-tab-host td',
+    );
+    expect(td).toBeDefined();
+    expect(td!.body).toMatch(/overflow-wrap:\s*break-word/);
+    expect(td!.body).not.toMatch(/word-break:\s*break-all/);
     const inlineCode = declarationBlocks(themeCss).find(
       (rule) => rule.selector === '.lightink-tab-host :not(pre) > code',
     );
@@ -476,5 +499,16 @@ describe('theme.css Markdown 栏宽分档', () => {
     );
     expect(cell).toBeDefined();
     expect(cell!.body).toMatch(/padding:\s*6px 12px/);
+    expect(cell!.body).toMatch(/text-align:\s*left/);
+    expect(cell!.body).not.toMatch(/text-align:\s*left\s*!important/);
+    expect(cell!.body).toMatch(/min-width:\s*4\.5em/);
+    expect(cell!.body).not.toMatch(/min-width:\s*48px/);
+    expect(
+      declarationBlocks(themeCss).some(
+        (rule) => rule.selector === '.lightink-tab-host tbody tr:nth-child(even) td',
+      ),
+    ).toBe(true);
+    expect(themeCss).toMatch(/\.lightink-tab-host \.ProseMirror \.selectedCell\s*\{/);
   });
+
 });

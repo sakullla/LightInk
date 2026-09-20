@@ -65,6 +65,7 @@ import { slashMenuPlugin } from './plugins/slash-menu.js';
 import { taskCheckboxPlugin } from './plugins/task-checkbox.js';
 import { runTableOp, type TableOpId } from './plugins/table-ops.js';
 import { tableOpsPlugin } from './plugins/table-ops.js';
+import { tableViewPlugin } from './plugins/table-view.js';
 import { tocPlugin } from './plugins/toc.js';
 import {
   collectHeadings,
@@ -288,6 +289,8 @@ export async function mountEditor(
       editor.use(taskCheckboxPlugin);
       // Table: insert/delete row-col, TSV paste, Typora-style shortcuts.
       editor.use(tableOpsPlugin);
+      // Table display: `.tableWrapper` for in-bar scroll; no columnResizing.
+      editor.use(tableViewPlugin);
       // T4：注入图片落盘回调时拦截粘贴/拖拽图片 → 落盘 → 插入相对引用。
       if (options.assetSaver !== undefined) {
         editor.use(
