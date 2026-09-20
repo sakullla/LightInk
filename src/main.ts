@@ -18,6 +18,7 @@ import {
 } from './editor/plugins/format-toolbar.js';
 import { setKeyboardFormatBarTitles } from './editor/plugins/keyboard-format-bar.js';
 import { setCodeChromeLabels } from './editor/plugins/code-highlight.js';
+import { closeFrontMatterDetails } from './editor/plugins/front-matter.js';
 import { setMathEditTitle } from './editor/plugins/math.js';
 import { setMermaidEditTitle } from './editor/plugins/mermaid.js';
 import { setTaskCheckboxLabels } from './editor/plugins/task-checkbox.js';
@@ -1894,6 +1895,7 @@ async function activeExportSnapshot(
  * 折叠态下导出的 HTML/PDF 仍含全部内容且无三角 widget 污染（R2 outcome「导出
  * HTML/PDF 含完整内容」）。导出管线读取渲染后 DOM innerHTML（非 getMarkdown），
  * 故必须在此清理折叠留下的内联 display:none / 折叠 class / widget 节点。
+ * T2/R5：同一克隆上去掉 .lightink-frontmatter 的 open，交付默认闭合且可展开。
  */
 function exportContentHtmlWithoutFold(host: HTMLElement): string {
   const pm = host.querySelector('.ProseMirror');
@@ -1913,6 +1915,7 @@ function exportContentHtmlWithoutFold(host: HTMLElement): string {
   clone.querySelectorAll('.lightink-heading-folded').forEach((el) => {
     el.classList.remove('lightink-heading-folded');
   });
+  closeFrontMatterDetails(clone);
   return clone.innerHTML;
 }
 

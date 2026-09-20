@@ -72,6 +72,42 @@ code {
   padding: 0.12em 0.35em;
   font-size: 0.875em;
 }
+/* 文件头元数据条（ADR-2）：与编辑器同构，内部 pre 压过通用代码块外观。 */
+.lightink-frontmatter {
+  display: block;
+  margin: 0 0 calc(var(--lightink-rhythm-unit, 1em) * var(--lightink-gap-paragraph, 0.5));
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 72%, var(--lightink-bg));
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: var(--lightink-font-size-ui, 13px);
+}
+.lightink-frontmatter > summary {
+  min-height: 32px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: var(--lightink-font-size-ui, 13px);
+  line-height: 1.3;
+}
+.lightink-frontmatter > pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding: 8px 12px 10px;
+  background: color-mix(in srgb, var(--lightink-code-bg) 42%, var(--lightink-bg));
+  color: var(--lightink-fg);
+  overflow-x: auto;
+  font-family: var(--lightink-font-mono);
+  font-size: calc(var(--lightink-font-size-code, 13.5px) * var(--lightink-font-scale, 1));
+  line-height: var(--lightink-line-height-code, 1.55);
+  font-variant-ligatures: none;
+  tab-size: 2;
+  white-space: pre;
+}
 blockquote {
   padding: 0.35em 0.9em 0.35em 1em;
   border-left: 3px solid var(--lightink-border);

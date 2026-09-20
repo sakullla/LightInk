@@ -52,6 +52,24 @@ describe('buildExportCss', () => {
     expect(buildExportCss()).toBe(buildExportCss(''));
   });
 
+  it('含 .lightink-frontmatter 规则且内部 pre 压过通用代码块', () => {
+    expect(EXPORT_BASE_CSS).toMatch(/\.lightink-frontmatter\s*\{/);
+    expect(EXPORT_BASE_CSS).toMatch(/\.lightink-frontmatter\s*>\s*summary\s*\{/);
+    expect(EXPORT_BASE_CSS).toMatch(/\.lightink-frontmatter\s*>\s*pre\s*\{/);
+    const fmPre =
+      EXPORT_BASE_CSS.match(/\.lightink-frontmatter\s*>\s*pre\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(fmPre).toMatch(/border:\s*none/);
+    expect(fmPre).toContain(
+      'color-mix(in srgb, var(--lightink-code-bg) 42%, var(--lightink-bg))',
+    );
+    expect(fmPre).not.toContain('padding: 12px 16px');
+    const genericPreIdx = EXPORT_BASE_CSS.search(/^pre\s*\{/m);
+    const fmPreIdx = EXPORT_BASE_CSS.search(/\.lightink-frontmatter\s*>\s*pre\s*\{/);
+    expect(genericPreIdx).toBeGreaterThanOrEqual(0);
+    expect(fmPreIdx).toBeGreaterThan(genericPreIdx);
+    expect(EXPORT_BASE_CSS).not.toContain('.lightink-tab-host');
+  });
+
   it('表格采用内容列宽、表头 nowrap 与包装横滚，且无 table-layout:fixed', () => {
     expect(EXPORT_BASE_CSS).toMatch(/\.tableWrapper\s*\{[^}]*overflow-x:\s*auto/);
     expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*table-layout:\s*auto/);
