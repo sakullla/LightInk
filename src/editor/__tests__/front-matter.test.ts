@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * Front matter tests (T1 / R5).
  *
@@ -10,10 +12,14 @@
  *     position and content survive parse → serialize unchanged.
  *   - `frontmatterNodeSchema` runners (driven with fake parser/serializer
  *     states) — the exact logic the Milkdown WYSIWYG stack executes.
+ *   - Default-closed details toDOM / parseDOM / NodeView chrome; export
+ *     helper strips `open` without touching YAML text.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { Node as PMNode, NodeType } from '@milkdown/prose/model';
+import { Schema } from '@milkdown/prose/model';
+import { DecorationSet } from '@milkdown/prose/view';
 import type {
   MarkdownNode,
   ParserState,
@@ -26,8 +32,15 @@ import {
   serializeMdastToMarkdown,
 } from '../parser.js';
 import {
+  closeFrontMatterDetails,
+  createFrontMatterNodeView,
   extractFrontMatter,
+  FRONTMATTER_CLASS,
+  FRONTMATTER_NODE_NAME,
+  frontMatterLineCount,
+  frontMatterSummaryLabel,
   frontmatterNodeSchema,
+  frontmatterViewPlugin,
   hasFrontMatter,
 } from '../plugins/front-matter.js';
 
@@ -153,16 +166,179 @@ describe('frontmatterNodeSchema runners', () => {
     expect(schema.toMarkdown.match(paragraph)).toBe(false);
   });
 
-  it('toDOM renders a pre.lightink-frontmatter with the raw value', () => {
+  it('toDOM renders a closed details.lightink-frontmatter with summary and raw pre', () => {
     const schema = frontmatterNodeSchema();
     const pmNode = {
       type: { name: 'frontmatter' },
       attrs: { value: 'title: x' },
     } as unknown as PMNode;
-    const dom = schema.toDOM!(pmNode) as unknown as [string, Record<string, string>, string];
-    expect(dom[0]).toBe('pre');
-    expect(dom[1]['data-type']).toBe('frontmatter');
-    expect(dom[1]['class']).toBe('lightink-frontmatter');
-    expect(dom[2]).toBe('title: x');
+    const spec = schema.toDOM!(pmNode) as unknown as [
+      string,
+      Record<string, string>,
+      [string, Record<string, string>, string],
+      [string, Record<string, string>, string],
+    ];
+    expect(spec[0]).toBe('details');
+    expect(spec[1]['data-type']).toBe(FRONTMATTER_NODE_NAME);
+    expect(spec[1]['class']).toBe(FRONTMATTER_CLASS);
+    expect(spec[1]['open']).toBeUndefined();
+    expect(spec[1]['contenteditable']).toBe('false');
+    expect(spec[2][0]).toBe('summary');
+    expect(spec[2][1]['contenteditable']).toBe('false');
+    expect(spec[2][2]).toBe(frontMatterSummaryLabel('title: x'));
+    expect(spec[3][0]).toBe('pre');
+    expect(spec[3][2]).toBe('title: x');
+  });
+
+  it('parseDOM reads raw value from details>pre and from legacy pre', () => {
+    const schema = frontmatterNodeSchema();
+    const parseDOM = schema.parseDOM ?? [];
+    const detailsRule = parseDOM.find((rule) =>
+      (rule.tag ?? '').includes('details'),
+    );
+    const preRule = parseDOM.find((rule) => (rule.tag ?? '').includes('pre'));
+    expect(detailsRule?.getAttrs).toBeTypeOf('function');
+    expect(preRule?.getAttrs).toBeTypeOf('function');
+
+    const details = document.createElement('details');
+    details.setAttribute('data-type', FRONTMATTER_NODE_NAME);
+    details.className = FRONTMATTER_CLASS;
+    const summary = document.createElement('summary');
+    summary.textContent = '文档属性 · 2 行';
+    const inner = document.createElement('pre');
+    inner.textContent = 'a: 1\n# keep';
+    details.append(summary, inner);
+    expect(detailsRule!.getAttrs!(details)).toEqual({ value: 'a: 1\n# keep' });
+
+    const legacy = document.createElement('pre');
+    legacy.setAttribute('data-type', FRONTMATTER_NODE_NAME);
+    legacy.className = FRONTMATTER_CLASS;
+    legacy.textContent = 'title: x';
+    expect(preRule!.getAttrs!(legacy)).toEqual({ value: 'title: x' });
+  });
+});
+
+describe('front matter summary volume', () => {
+  it('counts newline segments without parsing YAML', () => {
+    expect(frontMatterLineCount('')).toBe(1);
+    expect(frontMatterLineCount('title: hello\ntags:\n  - a\n  - b')).toBe(4);
+    expect(frontMatterLineCount('# comment\nnested:\n  - x')).toBe(3);
+  });
+
+  it('uses neutral i18n labels, not schema keys', () => {
+    const yaml = 'format: execution_plan\nsummary: secret\ntasks:\n  - id: T1';
+    expect(frontMatterSummaryLabel(yaml, 'en')).toBe('Properties · 4 lines');
+    expect(frontMatterSummaryLabel(yaml, 'zh-CN')).toBe('文档属性 · 4 行');
+    expect(frontMatterSummaryLabel(yaml, 'en')).not.toContain('execution_plan');
+    expect(frontMatterSummaryLabel(yaml, 'en')).not.toContain('secret');
+  });
+});
+
+describe('createFrontMatterNodeView', () => {
+  const viewSchema = new Schema({
+    nodes: {
+      doc: { content: 'frontmatter' },
+      frontmatter: {
+        atom: true,
+        attrs: { value: { default: '' } },
+        toDOM: () => ['details', 0],
+      },
+      paragraph: { content: 'text*', group: 'block', toDOM: () => ['p', 0] },
+      text: {},
+    },
+  });
+
+  function makeNode(value: string): PMNode {
+    return viewSchema.nodes['frontmatter']!.create({ value });
+  }
+
+  it('renders a default-closed details bar with original YAML in pre', () => {
+    const value = '# keep comment\nnested:\n  - a';
+    const nv = createFrontMatterNodeView(makeNode(value));
+    const dom = nv.dom as HTMLDetailsElement;
+    expect(dom.tagName).toBe('DETAILS');
+    expect(dom.className).toBe(FRONTMATTER_CLASS);
+    expect(dom.getAttribute('data-type')).toBe(FRONTMATTER_NODE_NAME);
+    expect(dom.hasAttribute('open')).toBe(false);
+    expect(dom.open).toBe(false);
+    expect(dom.getAttribute('contenteditable')).toBe('false');
+
+    const summary = dom.querySelector('summary');
+    expect(summary).not.toBeNull();
+    expect(summary!.getAttribute('contenteditable')).toBe('false');
+    expect(summary!.textContent).toBe(frontMatterSummaryLabel(value));
+
+    const pre = dom.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe(value);
+    expect(dom.querySelector('input, textarea, select')).toBeNull();
+  });
+
+  it('stopEvent lets summary clicks through to the browser', () => {
+    const nv = createFrontMatterNodeView(makeNode('title: x'));
+    const dom = nv.dom as HTMLDetailsElement;
+    const summary = dom.querySelector('summary')!;
+    const pre = dom.querySelector('pre')!;
+    const summaryClick = new MouseEvent('click', { bubbles: true });
+    Object.defineProperty(summaryClick, 'target', { value: summary });
+    expect(nv.stopEvent?.(summaryClick)).toBe(true);
+    const preClick = new MouseEvent('click', { bubbles: true });
+    Object.defineProperty(preClick, 'target', { value: pre });
+    expect(nv.stopEvent?.(preClick)).toBe(false);
+  });
+
+  it('update syncs raw value and ignores open mutations', () => {
+    const nv = createFrontMatterNodeView(makeNode('a: 1'));
+    const dom = nv.dom as HTMLDetailsElement;
+    expect(
+      nv.ignoreMutation?.({
+        type: 'attributes',
+        attributeName: 'open',
+        target: dom,
+      } as unknown as MutationRecord),
+    ).toBe(true);
+    const next = makeNode('# c\nb: 2');
+    expect(nv.update?.(next, [], DecorationSet.empty)).toBe(true);
+    expect(dom.querySelector('pre')!.textContent).toBe('# c\nb: 2');
+    expect(dom.querySelector('summary')!.textContent).toBe(frontMatterSummaryLabel('# c\nb: 2'));
+    expect(dom.open).toBe(false);
+    expect(nv.update?.(viewSchema.nodes['paragraph']!.create(), [], DecorationSet.empty)).toBe(
+      false,
+    );
+  });
+});
+
+describe('closeFrontMatterDetails', () => {
+  it('removes open on front matter details without rewriting YAML or other details', () => {
+    const root = document.createElement('div');
+    root.innerHTML = [
+      '<details class="lightink-frontmatter" data-type="frontmatter" open>',
+      '<summary>文档属性 · 2 行</summary>',
+      '<pre>title: x\n# keep</pre>',
+      '</details>',
+      '<details class="other" open><summary>note</summary><p>body</p></details>',
+    ].join('');
+    closeFrontMatterDetails(root);
+    const fm = root.querySelector('details.lightink-frontmatter') as HTMLDetailsElement;
+    const other = root.querySelector('details.other') as HTMLDetailsElement;
+    expect(fm.open).toBe(false);
+    expect(fm.hasAttribute('open')).toBe(false);
+    expect(fm.querySelector('pre')!.textContent).toBe('title: x\n# keep');
+    expect(other.open).toBe(true);
+    expect(other.hasAttribute('open')).toBe(true);
+  });
+});
+
+describe('frontmatterViewPlugin (Milkdown wiring)', () => {
+  it('exposes the Milkdown $prose plugin factory shape', () => {
+    expect(frontmatterViewPlugin).toBeDefined();
+    expect(typeof frontmatterViewPlugin).toBe('function');
+    const shaped = frontmatterViewPlugin as unknown as {
+      plugin: () => unknown;
+      key: () => unknown;
+    };
+    expect(typeof shaped.plugin).toBe('function');
+    expect(typeof shaped.key).toBe('function');
+    expect(shaped.plugin()).toBeUndefined();
   });
 });

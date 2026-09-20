@@ -120,6 +120,8 @@ const en = {
   'code.copied': 'Copied',
   'code.filterPlaceholder': 'Filter languages…',
   'code.emptyFilter': 'No matching language',
+  'frontmatter.label': 'Properties',
+  'frontmatter.lines': '{n} lines',
 
   'menu.loading': 'Loading…',
   'app.untitled': 'Untitled-{n}',
@@ -728,6 +730,8 @@ const zhCN = {
   'code.copied': '已复制',
   'code.filterPlaceholder': '筛选语言…',
   'code.emptyFilter': '无匹配语言',
+  'frontmatter.label': '文档属性',
+  'frontmatter.lines': '{n} 行',
 
   'menu.loading': '加载中…',
   'app.untitled': '未命名-{n}',
