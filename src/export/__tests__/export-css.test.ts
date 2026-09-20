@@ -51,4 +51,16 @@ describe('buildExportCss', () => {
   it('空附加 CSS 不产生多余分隔', () => {
     expect(buildExportCss()).toBe(buildExportCss(''));
   });
+
+  it('表格采用内容列宽、表头 nowrap 与包装横滚，且无 table-layout:fixed', () => {
+    expect(EXPORT_BASE_CSS).toMatch(/\.tableWrapper\s*\{[^}]*overflow-x:\s*auto/);
+    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*table-layout:\s*auto/);
+    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*width:\s*max-content/);
+    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*min-width:\s*100%/);
+    expect(EXPORT_BASE_CSS).toMatch(/th\s*\{[^}]*white-space:\s*nowrap/);
+    expect(EXPORT_BASE_CSS).toMatch(/td\s*\{[^}]*overflow-wrap:\s*break-word/);
+    expect(EXPORT_BASE_CSS).not.toMatch(/table-layout:\s*fixed/);
+    expect(EXPORT_BASE_CSS).not.toContain('.lightink-tab-host');
+    expect(EXPORT_BASE_CSS).not.toMatch(/word-break:\s*break-all/);
+  });
 });
