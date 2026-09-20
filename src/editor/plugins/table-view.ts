@@ -6,7 +6,7 @@
 import { $prose } from '@milkdown/utils';
 import type { Node as PMNode } from '@milkdown/prose/model';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
-import type { NodeView } from '@milkdown/prose/view';
+import type { Decoration, DecorationSource, NodeView } from '@milkdown/prose/view';
 
 const PLUGIN_KEY = new PluginKey('lightink-table-view');
 
@@ -30,7 +30,11 @@ export function createTableNodeView(initialNode: PMNode): NodeView {
   return {
     dom,
     contentDOM,
-    update(incoming: PMNode): boolean {
+    update(
+      incoming: PMNode,
+      _decorations: readonly Decoration[],
+      _innerDecorations: DecorationSource,
+    ): boolean {
       if (incoming.type !== node.type) {
         return false;
       }

@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { Schema } from '@milkdown/prose/model';
+import { DecorationSet } from '@milkdown/prose/view';
 
 import { mountEditor } from '../../index.js';
 import {
@@ -71,8 +72,10 @@ describe('createTableNodeView', () => {
   it('update accepts the same table type and rejects another', () => {
     const table = makeTableNode();
     const nv = createTableNodeView(table);
-    expect(nv.update?.(table)).toBe(true);
-    expect(nv.update?.(tableSchema.nodes['table_cell']!.create())).toBe(false);
+    expect(nv.update?.(table, [], DecorationSet.empty)).toBe(true);
+    expect(nv.update?.(tableSchema.nodes['table_cell']!.create(), [], DecorationSet.empty)).toBe(
+      false,
+    );
   });
 });
 
