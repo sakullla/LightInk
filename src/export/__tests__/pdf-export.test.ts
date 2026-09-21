@@ -56,6 +56,8 @@ describe('MAIN_WINDOW_PRINT_CSS', () => {
     expect(MAIN_WINDOW_PRINT_CSS).toMatch(/#lightink-export-print-root[^}]*height:\s*auto\s*!important/s);
     expect(MAIN_WINDOW_PRINT_CSS).toMatch(/#lightink-export-print-root[^}]*opacity:\s*1\s*!important/s);
     expect(MAIN_WINDOW_PRINT_CSS).toMatch(/#lightink-export-print-root[^}]*overflow:\s*visible\s*!important/s);
+    expect(MAIN_WINDOW_PRINT_CSS).toMatch(/#lightink-export-print-root[^}]*--lightink-page-pad-x:\s*0/s);
+    expect(CAPTURE_WINDOW_CSS).toMatch(/#lightink-export-print-root[^}]*--lightink-page-pad-x:\s*0/s);
   });
 });
 

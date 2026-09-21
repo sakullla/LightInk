@@ -73,6 +73,7 @@ const EXPORT_ROOT_LAYOUT_CSS = `body > *:not(#${EXPORT_ROOT_ID}) { display: none
   height: auto !important;
   margin: 0 !important;
   padding: 0 !important;
+  --lightink-page-pad-x: 0;
   background: #fff !important;
   color: var(--lightink-fg) !important;
   opacity: 1 !important;
