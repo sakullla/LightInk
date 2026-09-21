@@ -44,7 +44,7 @@ body.lightink-prose {
   line-height: var(--lightink-line-height-body);
   max-width: 860px;
   margin: 0 auto;
-  padding: 24px 32px 48px;
+  padding: 24px var(--lightink-page-pad-x, 28px) 48px;
 }
 /* PDF 主窗口根不是 body：同一组打印向令牌必须挂在 .lightink-prose 根上，
    否则 rhythm-unit 会落到 tokens.css 的 16px/1.75。 */

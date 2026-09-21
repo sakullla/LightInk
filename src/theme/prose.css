@@ -95,6 +95,7 @@
 .lightink-prose ol {
   margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
   margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
+  padding-inline-start: 2em;
 }
 
 .lightink-prose li {
@@ -115,6 +116,10 @@
 .lightink-prose .lightink-mermaid {
   margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-block));
   margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-block));
+}
+
+.lightink-prose blockquote {
+  margin-inline: 0;
 }
 
 .lightink-prose hr {
@@ -147,6 +152,17 @@
 
 .lightink-prose :is(th, td) > p + p {
   margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-list-item));
+}
+
+/*
+ * Top-level wide tables eat --lightink-page-pad-x so the scrollbar meets the
+ * host padding-box. Nested wrappers in blockquote/li do not match `>`.
+ */
+.lightink-prose > .tableWrapper {
+  width: calc(100% + 2 * var(--lightink-page-pad-x, 28px));
+  max-width: none;
+  margin-inline: calc(-1 * var(--lightink-page-pad-x, 28px));
+  overflow-x: auto;
 }
 
 /*

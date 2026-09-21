@@ -70,6 +70,20 @@ describe('buildExportCss', () => {
     expect(EXPORT_BASE_CSS).not.toContain('.lightink-tab-host');
   });
 
+  it('ul/ol 与编辑器共用 prose.css 的 2em，body 左右 padding 走 --lightink-page-pad-x', () => {
+    const prose = readFileSync(new URL('../../theme/prose.css', import.meta.url), 'utf-8');
+    expect(prose).toMatch(
+      /\.lightink-prose ul,\s*\.lightink-prose ol\s*\{[^}]*padding-inline-start:\s*2em/,
+    );
+    const bodyRule = EXPORT_BASE_CSS.match(/body\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(bodyRule).toContain('--lightink-page-pad-x');
+    expect(bodyRule).toMatch(
+      /padding:\s*24px\s+var\(--lightink-page-pad-x,\s*28px\)\s+48px/,
+    );
+    expect(EXPORT_BASE_CSS).not.toMatch(/^(ul|ol)\s*,/m);
+    expect(EXPORT_BASE_CSS).not.toMatch(/padding-inline-start:\s*2em/);
+  });
+
   it('表格采用内容列宽、表头 nowrap 与包装横滚，且无 table-layout:fixed', () => {
     expect(EXPORT_BASE_CSS).toMatch(/\.tableWrapper\s*\{[^}]*overflow-x:\s*auto/);
     expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*table-layout:\s*auto/);

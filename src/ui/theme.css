@@ -1946,12 +1946,6 @@ html[data-reading-layout='scroll']:has(
   border-radius: 0 6px 6px 0;
 }
 
-/* Lists: comfortable vertical rhythm for long-session reading. */
-.lightink-tab-host .ProseMirror ul,
-.lightink-tab-host .ProseMirror ol {
-  padding-left: 1.6em;
-}
-
 .lightink-tab-host .ProseMirror li {
   padding-left: 0.15em;
 }
@@ -2039,15 +2033,19 @@ html[data-reading-layout='scroll']:has(
   text-decoration-color: color-mix(in srgb, var(--lightink-muted) 65%, transparent);
 }
 
-/* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。 */
-.lightink-tab-host .tableWrapper {
-  overflow-x: auto;
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  border-radius: 8px;
-  border: 1px solid var(--lightink-border);
-  background: var(--lightink-bg-elevated);
+/* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。
+ * @layer：让更早的 prose.css 顶层 breakout 盖过本规则的 width/max-width 100%。
+ */
+@layer lightink-table-wrapper-chrome {
+  .lightink-tab-host .tableWrapper {
+    overflow-x: auto;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    border: 1px solid var(--lightink-border);
+    background: var(--lightink-bg-elevated);
+  }
 }
 
 .lightink-tab-host table {

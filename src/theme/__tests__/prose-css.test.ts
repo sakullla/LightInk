@@ -213,6 +213,57 @@ describe('prose.css 标题比例与节奏', () => {
   });
 });
 
+describe('prose.css 引用 / 列表 / 顶层表几何', () => {
+  it('blockquote 只复位 margin-inline，不写 margin: 0', () => {
+    const quote = declarationBlocks(proseCss).find(
+      (rule) => rule.selector === '.lightink-prose blockquote',
+    );
+    expect(quote).toBeDefined();
+    expect(quote!.body).toMatch(/margin-inline:\s*0/);
+    expect(quote!.body).not.toMatch(/(?:^|[;\s])margin\s*:/);
+    const shared = declarationBlocks(proseCss).find(
+      (rule) =>
+        rule.selector.includes('blockquote') &&
+        rule.selector.includes('.tableWrapper') &&
+        /margin-top\s*:/.test(rule.body),
+    );
+    expect(shared).toBeDefined();
+    expect(shared!.body).toContain('var(--lightink-gap-block)');
+  });
+
+  it('ul/ol 为 padding-inline-start: 2em；theme.css 不再写 1.6em', () => {
+    const lists = declarationBlocks(proseCss).find(
+      (rule) => rule.selector === '.lightink-prose ul, .lightink-prose ol',
+    );
+    expect(lists).toBeDefined();
+    expect(lists!.body).toMatch(/padding-inline-start:\s*2em/);
+    expect(themeCss).not.toMatch(/\.ProseMirror ul[\s\S]*?padding-left:\s*1\.6em/);
+  });
+
+  it('仅顶层 .lightink-prose > .tableWrapper 做 page-pad breakout', () => {
+    const breakout = declarationBlocks(proseCss).find(
+      (rule) => rule.selector === '.lightink-prose > .tableWrapper',
+    );
+    expect(breakout).toBeDefined();
+    expect(breakout!.body).toMatch(
+      /width:\s*calc\(100% \+ 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
+    );
+    expect(breakout!.body).toMatch(/max-width:\s*none/);
+    expect(breakout!.body).toMatch(
+      /margin-inline:\s*calc\(-1 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
+    );
+    expect(breakout!.body).toMatch(/overflow-x:\s*auto/);
+    expect(
+      declarationBlocks(proseCss).some(
+        (rule) =>
+          /blockquote|li\b/.test(rule.selector) &&
+          rule.selector.includes('.tableWrapper') &&
+          /margin-inline\s*:/.test(rule.body),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('prose.css CJK 作用域与复位', () => {
   it('.lightink-prose 声明 letter-spacing、text-autospace 与 text-spacing-trim', () => {
     const root = declarationBlocks(proseCss).find((rule) => rule.selector === '.lightink-prose');
