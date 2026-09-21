@@ -24,6 +24,7 @@ describe('buildExportCss', () => {
       EXPORT_BASE_CSS.match(/#lightink-export-print-root\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
     expect(bodyRule).toContain('--lightink-font-scale: 1');
     expect(printRootRule).toContain('--lightink-font-scale: 1');
+    expect(printRootRule).toMatch(/--lightink-page-pad-x:\s*0/);
     expect(EXPORT_BASE_CSS).not.toContain('Microsoft YaHei');
     expect(EXPORT_BASE_CSS).not.toContain('font-size: 13px');
     expect(EXPORT_BASE_CSS).toContain('table');
@@ -94,5 +95,18 @@ describe('buildExportCss', () => {
     expect(EXPORT_BASE_CSS).not.toMatch(/table-layout:\s*fixed/);
     expect(EXPORT_BASE_CSS).not.toContain('.lightink-tab-host');
     expect(EXPORT_BASE_CSS).not.toMatch(/word-break:\s*break-all/);
+  });
+
+  it('打印根 page-pad 为 0，顶层表 inset 由 prose.css 提供', () => {
+    const printRootRule =
+      EXPORT_BASE_CSS.match(/#lightink-export-print-root\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(printRootRule).toMatch(/--lightink-page-pad-x:\s*0/);
+    const prose = readFileSync(new URL('../../theme/prose.css', import.meta.url), 'utf-8');
+    expect(prose).toMatch(
+      /\.lightink-prose\s*>\s*\.tableWrapper\s*>\s*table\s*\{[^}]*min-width:\s*calc\(100% - 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
+    );
+    expect(prose).toMatch(
+      /\.lightink-prose\s*>\s*\.tableWrapper\s*>\s*table\s*\{[^}]*margin-inline:\s*var\(--lightink-page-pad-x,\s*28px\)/,
+    );
   });
 });

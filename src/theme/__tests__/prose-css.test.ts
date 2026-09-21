@@ -262,6 +262,28 @@ describe('prose.css 引用 / 列表 / 顶层表几何', () => {
       ),
     ).toBe(false);
   });
+
+  it('顶层 table 回退到正文栏宽，嵌套表仍 min-width 100%', () => {
+    const inset = declarationBlocks(proseCss).find(
+      (rule) => rule.selector === '.lightink-prose > .tableWrapper > table',
+    );
+    expect(inset).toBeDefined();
+    expect(inset!.body).toMatch(
+      /min-width:\s*calc\(100% - 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
+    );
+    expect(inset!.body).toMatch(/width:\s*max-content/);
+    expect(inset!.body).toMatch(
+      /margin-inline:\s*var\(--lightink-page-pad-x,\s*28px\)/,
+    );
+    expect(
+      declarationBlocks(proseCss).some(
+        (rule) =>
+          rule.selector.includes('.tableWrapper') &&
+          !rule.selector.includes('>') &&
+          /min-width\s*:/.test(rule.body),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('prose.css CJK 作用域与复位', () => {

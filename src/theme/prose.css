@@ -155,14 +155,23 @@
 }
 
 /*
- * Top-level wide tables eat --lightink-page-pad-x so the scrollbar meets the
- * host padding-box. Nested wrappers in blockquote/li do not match `>`.
+ * Top-level wrapper is the host-width scrollport so wide-table scrollbars meet
+ * `.lightink-tab-host` inner edges. The table itself is inset back to the
+ * content column so short tables align with adjacent paragraphs. Nested
+ * wrappers in blockquote/li do not match `>` and keep min-width: 100%.
+ * When --lightink-page-pad-x is 0 (PDF print root), breakout and inset collapse.
  */
 .lightink-prose > .tableWrapper {
   width: calc(100% + 2 * var(--lightink-page-pad-x, 28px));
   max-width: none;
   margin-inline: calc(-1 * var(--lightink-page-pad-x, 28px));
   overflow-x: auto;
+}
+
+.lightink-prose > .tableWrapper > table {
+  min-width: calc(100% - 2 * var(--lightink-page-pad-x, 28px));
+  width: max-content;
+  margin-inline: var(--lightink-page-pad-x, 28px);
 }
 
 /*

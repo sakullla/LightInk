@@ -52,6 +52,7 @@ body.lightink-prose {
   --lightink-font-size: 14px;
   --lightink-line-height-body: 1.7;
   --lightink-font-scale: 1;
+  --lightink-page-pad-x: 0;
   font-family: var(--lightink-font-body);
   font-size: var(--lightink-font-size);
   line-height: var(--lightink-line-height-body);
