@@ -122,18 +122,17 @@ img[style*="width"] { max-width: none; }
 /* nodeView 交互 chrome（缩放柄/对齐条）不得外泄到导出文档——PM 失焦不调
    deselectNode，选中态可能保留，故用 !important 兜底隐藏（R12 导出无回归）。 */
 .lightink-image-handle, .lightink-image-alignbar { display: none !important; }
-/* 与编辑器同等可读规则：列宽随内容、短表铺满、宽表包装内横滚（R6 / ADR-4）。 */
+/* 与编辑器同等可读规则：表铺满栏宽、列随内容分配可换行，仅极端宽表横滚。 */
 .tableWrapper { overflow-x: auto; }
 table {
   border-collapse: collapse;
   table-layout: auto;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
 }
 th, td { border: 1px solid var(--lightink-border); padding: 6px 12px; }
 th {
   background: var(--lightink-bg-elevated);
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 td { overflow-wrap: break-word; }
 .lightink-export-toc {

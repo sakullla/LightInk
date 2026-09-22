@@ -155,24 +155,10 @@
 }
 
 /*
- * Top-level wrapper is the host-width scrollport so wide-table scrollbars meet
- * `.lightink-tab-host` inner edges. The table itself is inset back to the
- * content column so short tables align with adjacent paragraphs. Nested
- * wrappers in blockquote/li do not match `>` and keep min-width: 100%.
- * When --lightink-page-pad-x is 0 (PDF print root), breakout and inset collapse.
+ * 表格与正文栏同宽：不再做 page-pad breakout / inset。外框（圆角边框 +
+ * 横滚裁剪）由 theme.css 的 .lightink-tab-host .tableWrapper 统一承担；
+ * 导出文档的表格样式见 export-css.ts。
  */
-.lightink-prose > .tableWrapper {
-  width: calc(100% + 2 * var(--lightink-page-pad-x, 28px));
-  max-width: none;
-  margin-inline: calc(-1 * var(--lightink-page-pad-x, 28px));
-  overflow-x: auto;
-}
-
-.lightink-prose > .tableWrapper > table {
-  min-width: calc(100% - 2 * var(--lightink-page-pad-x, 28px));
-  width: max-content;
-  margin-inline: var(--lightink-page-pad-x, 28px);
-}
 
 /*
  * KaTeX 正文公式（$…$ / $$…$$，ProseMirror decoration widget）：渲染成功后

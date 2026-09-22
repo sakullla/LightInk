@@ -2034,32 +2034,33 @@ html[data-reading-layout='scroll']:has(
 }
 
 /* 表格：GFM + prosemirror-tables（选中单元格 / 列宽拖拽）。
- * @layer：让更早的 prose.css 顶层 breakout 盖过本规则的 width/max-width 100%。
+ * 外框唯一化：圆角边框 + 裁剪由 .tableWrapper 承担，单元格只画内部线条，
+ * 避免 wrapper 外框与表格外圈边线叠出双层框。
  */
-@layer lightink-table-wrapper-chrome {
-  .lightink-tab-host .tableWrapper {
-    overflow-x: auto;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    border-radius: 8px;
-    border: 1px solid var(--lightink-border);
-    background: var(--lightink-bg-elevated);
-  }
+.lightink-tab-host .tableWrapper {
+  overflow-x: auto;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--lightink-border);
+  background: var(--lightink-bg-elevated);
 }
 
 .lightink-tab-host table {
   border-collapse: collapse;
   table-layout: auto;
-  width: max-content;
-  min-width: 100%;
+  /* 适配栏宽优先：表头/单元格可换行收缩，仅当列 min-width 累加仍超出时才横滚。 */
+  width: 100%;
   margin: 0;
   font-size: 0.95em;
 }
 
 .lightink-tab-host th,
 .lightink-tab-host td {
-  border: 1px solid var(--lightink-border);
+  border: none;
+  border-bottom: 1px solid var(--lightink-border);
+  border-right: 1px solid var(--lightink-border);
   padding: 6px 12px;
   text-align: left;
   vertical-align: top;
@@ -2069,10 +2070,20 @@ html[data-reading-layout='scroll']:has(
   background: var(--lightink-bg);
 }
 
+/* 末列 / 末行不画线，贴齐 wrapper 外框，避免与外层边框叠成 2px。 */
+.lightink-tab-host tr > th:last-child,
+.lightink-tab-host tr > td:last-child {
+  border-right: none;
+}
+
+.lightink-tab-host tbody tr:last-child > td {
+  border-bottom: none;
+}
+
 .lightink-tab-host th {
   background: color-mix(in srgb, var(--lightink-accent-soft) 55%, var(--lightink-bg-elevated));
   font-weight: 600;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .lightink-tab-host td {

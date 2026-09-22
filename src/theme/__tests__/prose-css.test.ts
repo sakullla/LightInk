@@ -240,41 +240,25 @@ describe('prose.css 引用 / 列表 / 顶层表几何', () => {
     expect(themeCss).not.toMatch(/\.ProseMirror ul[\s\S]*?padding-left:\s*1\.6em/);
   });
 
-  it('仅顶层 .lightink-prose > .tableWrapper 做 page-pad breakout', () => {
+  it('表格不做 page-pad breakout：与正文栏同宽，外框由 theme.css wrapper 承担', () => {
     const breakout = declarationBlocks(proseCss).find(
       (rule) => rule.selector === '.lightink-prose > .tableWrapper',
     );
-    expect(breakout).toBeDefined();
-    expect(breakout!.body).toMatch(
-      /width:\s*calc\(100% \+ 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
-    );
-    expect(breakout!.body).toMatch(/max-width:\s*none/);
-    expect(breakout!.body).toMatch(
-      /margin-inline:\s*calc\(-1 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
-    );
-    expect(breakout!.body).toMatch(/overflow-x:\s*auto/);
+    expect(breakout).toBeUndefined();
     expect(
       declarationBlocks(proseCss).some(
         (rule) =>
-          /blockquote|li\b/.test(rule.selector) &&
           rule.selector.includes('.tableWrapper') &&
           /margin-inline\s*:/.test(rule.body),
       ),
     ).toBe(false);
   });
 
-  it('顶层 table 回退到正文栏宽，嵌套表仍 min-width 100%', () => {
+  it('顶层 table 无 inset 规则，宽度 100% 由 theme.css 统一控制', () => {
     const inset = declarationBlocks(proseCss).find(
       (rule) => rule.selector === '.lightink-prose > .tableWrapper > table',
     );
-    expect(inset).toBeDefined();
-    expect(inset!.body).toMatch(
-      /min-width:\s*calc\(100% - 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
-    );
-    expect(inset!.body).toMatch(/width:\s*max-content/);
-    expect(inset!.body).toMatch(
-      /margin-inline:\s*var\(--lightink-page-pad-x,\s*28px\)/,
-    );
+    expect(inset).toBeUndefined();
     expect(
       declarationBlocks(proseCss).some(
         (rule) =>
@@ -544,16 +528,16 @@ describe('theme.css Markdown 栏宽分档', () => {
     );
     expect(table).toBeDefined();
     expect(table!.body).toMatch(/table-layout:\s*auto/);
-    expect(table!.body).toMatch(/width:\s*max-content/);
-    expect(table!.body).toMatch(/min-width:\s*100%/);
+    expect(table!.body).toMatch(/(?:^|[;\s])width:\s*100%/);
     expect(table!.body).not.toMatch(/table-layout:\s*fixed/);
-    expect(table!.body).not.toMatch(/(?:^|[;\s])width:\s*100%/);
+    expect(table!.body).not.toMatch(/width:\s*max-content/);
     expect(table!.body).not.toMatch(/overflow:\s*hidden/);
     const th = declarationBlocks(themeCss).find(
       (rule) => rule.selector === '.lightink-tab-host th',
     );
     expect(th).toBeDefined();
-    expect(th!.body).toMatch(/white-space:\s*nowrap/);
+    expect(th!.body).toMatch(/overflow-wrap:\s*break-word/);
+    expect(th!.body).not.toMatch(/white-space:\s*nowrap/);
     const td = declarationBlocks(themeCss).find(
       (rule) => rule.selector === '.lightink-tab-host td',
     );

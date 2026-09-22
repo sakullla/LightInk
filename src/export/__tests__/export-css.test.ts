@@ -85,28 +85,24 @@ describe('buildExportCss', () => {
     expect(EXPORT_BASE_CSS).not.toMatch(/padding-inline-start:\s*2em/);
   });
 
-  it('表格采用内容列宽、表头 nowrap 与包装横滚，且无 table-layout:fixed', () => {
+  it('表格铺满栏宽、表头可换行，仅极端宽表包装横滚，且无 table-layout:fixed', () => {
     expect(EXPORT_BASE_CSS).toMatch(/\.tableWrapper\s*\{[^}]*overflow-x:\s*auto/);
     expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*table-layout:\s*auto/);
-    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*width:\s*max-content/);
-    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*min-width:\s*100%/);
-    expect(EXPORT_BASE_CSS).toMatch(/th\s*\{[^}]*white-space:\s*nowrap/);
+    expect(EXPORT_BASE_CSS).toMatch(/table\s*\{[^}]*width:\s*100%/);
+    expect(EXPORT_BASE_CSS).not.toMatch(/table\s*\{[^}]*width:\s*max-content/);
+    expect(EXPORT_BASE_CSS).not.toMatch(/th\s*\{[^}]*white-space:\s*nowrap/);
+    expect(EXPORT_BASE_CSS).toMatch(/th\s*\{[^}]*overflow-wrap:\s*break-word/);
     expect(EXPORT_BASE_CSS).toMatch(/td\s*\{[^}]*overflow-wrap:\s*break-word/);
     expect(EXPORT_BASE_CSS).not.toMatch(/table-layout:\s*fixed/);
     expect(EXPORT_BASE_CSS).not.toContain('.lightink-tab-host');
     expect(EXPORT_BASE_CSS).not.toMatch(/word-break:\s*break-all/);
   });
 
-  it('打印根 page-pad 为 0，顶层表 inset 由 prose.css 提供', () => {
+  it('打印根 page-pad 为 0，prose.css 不再提供表格 breakout/inset', () => {
     const printRootRule =
       EXPORT_BASE_CSS.match(/#lightink-export-print-root\.lightink-prose\s*\{[^}]+\}/)?.[0] ?? '';
     expect(printRootRule).toMatch(/--lightink-page-pad-x:\s*0/);
     const prose = readFileSync(new URL('../../theme/prose.css', import.meta.url), 'utf-8');
-    expect(prose).toMatch(
-      /\.lightink-prose\s*>\s*\.tableWrapper\s*>\s*table\s*\{[^}]*min-width:\s*calc\(100% - 2 \* var\(--lightink-page-pad-x,\s*28px\)\)/,
-    );
-    expect(prose).toMatch(
-      /\.lightink-prose\s*>\s*\.tableWrapper\s*>\s*table\s*\{[^}]*margin-inline:\s*var\(--lightink-page-pad-x,\s*28px\)/,
-    );
+    expect(prose).not.toMatch(/\.lightink-prose\s*>\s*\.tableWrapper/);
   });
 });
