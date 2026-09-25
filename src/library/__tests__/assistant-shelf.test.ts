@@ -19,6 +19,7 @@ import {
 import {
   LIBRARY_ORGANIZE_TOOL_NAME,
   LIBRARY_SEARCH_TOOL_NAME,
+  LIBRARY_TOOL_DEFINITIONS,
   type LibraryToolChange,
   type LibraryToolDeps,
 } from '../../assistant/library-tools.js';
@@ -315,6 +316,20 @@ describe('createShelfAssistant library tools', () => {
     submitQuestion(panelElement()!, '书库里有三体吗?');
     await flushUntil(() => stream.calls.length >= 2);
     expect(stream.calls).toHaveLength(2);
+    // 模型侧可达：首轮请求携带全部 library_* schema 与书库系统提示（R4 首页链路）。
+    const firstTools = (stream.calls[0]?.tools ?? []) as { name: string }[];
+    expect(firstTools.map((tool) => tool.name)).toEqual(
+      LIBRARY_TOOL_DEFINITIONS.map((tool) => tool.name),
+    );
+    const firstSystem = ((stream.calls[0]?.messages ?? []) as {
+      role: string;
+      content: string;
+    }[])
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(firstSystem).toContain(LIBRARY_SEARCH_TOOL_NAME);
+    expect(firstSystem).not.toContain('save_to_book');
     // 第二轮请求必须携带第一轮工具结果。
     const second = JSON.stringify(stream.calls[1]?.messages ?? []);
     expect(second).toContain(LIBRARY_SEARCH_TOOL_NAME);

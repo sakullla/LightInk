@@ -5089,3 +5089,301 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   color: var(--lightink-muted);
 }
 
+
+/* ===== R7 通用书源管理面板：列表 + 编辑/导入/导出/自检/搜索 ===== */
+.lightink-modal-overlay.lightink-library-book-sources {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: grid;
+  place-items: center;
+  background: var(--lightink-overlay);
+}
+
+.lightink-modal-overlay.lightink-library-book-sources[hidden] {
+  display: none !important;
+}
+
+.lightink-library-book-sources-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(56rem, calc(100vw - 64px));
+  max-height: min(44rem, calc(100vh - 64px));
+  padding: 18px 18px 14px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-dialog);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+  color: var(--lightink-fg);
+}
+
+.lightink-library-book-sources-header,
+.lightink-library-book-sources-toolbar,
+.lightink-library-book-source-actions,
+.lightink-library-book-source-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lightink-library-book-sources-header {
+  justify-content: space-between;
+}
+
+.lightink-library-book-sources-header h2,
+.lightink-library-book-sources-list h3,
+.lightink-library-book-source-editor h3,
+.lightink-library-book-source-import h3,
+.lightink-library-book-source-export h3,
+.lightink-library-book-source-search h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.lightink-library-book-sources-toolbar {
+  flex-wrap: wrap;
+}
+
+.lightink-library-book-sources-status,
+.lightink-library-book-source-editor-status,
+.lightink-library-book-sources-hint,
+.lightink-library-book-source-import p,
+.lightink-library-book-source-export p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-book-sources-status[data-status='error'],
+.lightink-library-book-source-editor-status[data-status='error'] {
+  color: var(--lightink-danger);
+}
+
+.lightink-library-book-sources-status[data-status='success'],
+.lightink-library-book-source-editor-status[data-status='success'] {
+  color: var(--lightink-accent);
+}
+
+.lightink-library-book-sources-body {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lightink-library-book-sources-list,
+.lightink-library-book-sources-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.lightink-library-book-source-row,
+.lightink-library-book-source-builtin,
+.lightink-library-book-source-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
+}
+
+.lightink-library-book-source-row {
+  flex-wrap: wrap;
+}
+
+.lightink-library-book-source-builtin,
+.lightink-library-book-source-result {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.lightink-library-book-source-builtin {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lightink-library-book-source-builtin div,
+.lightink-library-book-source-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lightink-library-book-source-builtin span,
+.lightink-library-book-source-host,
+.lightink-library-book-source-result-source,
+.lightink-library-book-source-result code {
+  overflow: hidden;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-book-source-name {
+  flex: 1;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-library-book-source-name:hover:not(:active) {
+  color: var(--lightink-accent);
+}
+
+.lightink-library-book-source-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--lightink-muted);
+  font-size: 11px;
+}
+
+.lightink-library-book-sources button {
+  padding: 5px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lightink-library-book-sources button:hover:not(:active):not(:disabled) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+.lightink-library-book-sources button:focus-visible,
+.lightink-library-book-sources input:focus-visible,
+.lightink-library-book-sources textarea:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-library-book-sources button.lightink-library-primary {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+.lightink-library-book-sources button.lightink-library-danger {
+  color: var(--lightink-danger);
+}
+
+.lightink-library-book-sources input[type='text'],
+.lightink-library-book-sources input[type='search'],
+.lightink-library-book-sources textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font-size: 13px;
+}
+
+.lightink-library-book-sources textarea {
+  min-height: 10rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.lightink-library-book-source-editor,
+.lightink-library-book-source-import,
+.lightink-library-book-source-export,
+.lightink-library-book-source-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lightink-library-book-source-allow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-book-source-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lightink-library-book-source-issues li {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
+  color: var(--lightink-danger);
+  font-size: 12px;
+}
+
+.lightink-library-book-source-issues code {
+  color: var(--lightink-fg);
+  white-space: nowrap;
+}
+
+.lightink-library-book-source-issues span {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.lightink-library-book-source-search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.lightink-library-book-source-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.lightink-library-book-sources-empty {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-book-source-entry {
+  color: var(--lightink-muted);
+}
+
+@media (max-width: 760px) {
+  .lightink-library-book-sources-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .lightink-library-book-sources-body {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+}

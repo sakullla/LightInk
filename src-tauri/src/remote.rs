@@ -281,7 +281,7 @@ fn header_string(headers: &HeaderMap, name: reqwest::header::HeaderName) -> Opti
         .map(ToOwned::to_owned)
 }
 
-fn apply_credential(
+pub(crate) fn apply_credential(
     builder: RequestBuilder,
     credential: Option<&RemoteCredential>,
 ) -> RequestBuilder {
@@ -294,7 +294,7 @@ fn apply_credential(
     }
 }
 
-fn response_error(response: &Response) -> Option<RemoteError> {
+pub(crate) fn response_error(response: &Response) -> Option<RemoteError> {
     match response.status() {
         StatusCode::UNAUTHORIZED => Some(RemoteError::status(
             "REMOTE_AUTH_REQUIRED",
@@ -321,7 +321,7 @@ fn redirect_allowed_for_request(initial: &Url, from: &Url, to: &Url, authenticat
     redirect_allowed(from, to) && (!authenticated || same_origin(initial, to))
 }
 
-fn build_client(initial: &Url, authenticated: bool) -> Result<Client, RemoteError> {
+pub(crate) fn build_client(initial: &Url, authenticated: bool) -> Result<Client, RemoteError> {
     let first = initial.clone();
     let credential_origin = initial.clone();
     let policy = reqwest::redirect::Policy::custom(move |attempt| {

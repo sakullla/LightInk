@@ -7,8 +7,9 @@
  * - 上下文：注入当前活动 Markdown 全文（宿主读取；面板按上限截断并标注），
  *   标题进入上下文标签。文档变更只经宿主更新，本适配器不写文档。
  * - 只读：工具会话显式不含任何工具（`tools: []`）；执行器对任何调用只返回
- *   `read_only` 错误，不落任何内容（core 请求装配尚未消费 `session.tools` 时，
- *   请求仍广告内置工具，但同样不可执行、不产生内容变更）。
+ *   `read_only` 错误，不落任何内容。面板把 `session.tools`（空清单）放进每轮
+ *   请求，模型看不到任何可调用工具，也不产生内容变更。
+ * - 系统提示：注入编辑器专用提示（当前文档只读、无工具），不沿用阅读器文案。
  * - 文档身份变化时销毁面板：流式生成中的输出（若还有）随销毁中止，不会写进
  *   新文档的历史。下次打开按新键重建会话。
  *
@@ -129,6 +130,7 @@ export function createEditorAssistant(deps: EditorAssistantDeps): EditorAssistan
         return { kind: 'flow', title: doc.title, text: doc.text };
       },
       openSettings: deps.openSettings,
+      systemPrompt: () => deps.t('editor.assistant.systemPrompt'),
       // 只读：摘要不落标注、不写文档；有提示通道时告知用户未保存。
       saveAnnotation: (text) => {
         if (text.trim() === '') {

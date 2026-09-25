@@ -5,11 +5,12 @@
  * - 会话身份：固定命名空间键（16-hex，`fnv1a64Hex('assistant:shelf')`）。与按
  *   书（contentHash）、按文档（标注身份键）的会话互不串话，同一键使书库会话
  *   在重启后仍能恢复。
- * - 工具：注入库作用域 `library_*` 会话（执行器与工具定义同源；面板确认待确认
- *   建议后回调产生建议的同一 session）。工具读写全在 `defaultLibraryToolDeps`
- *   背后（生产走 `LibraryClient`），surface 只补阅读状态读取与写后刷新。
- *   注：core 请求装配当前仍只广告内置工具（`assistant-panel` 未消费
- *   `session.tools`），session 工具被模型看见需该 seam 落地。
+ * - 工具：注入库作用域 `library_*` 会话（执行器与工具定义同源；面板把
+ *   `session.tools` 放进每轮请求 ①，模型据此看到 library_* schema；面板确认
+ *   待确认建议后回调产生建议的同一 session）。工具读写全在
+ *   `defaultLibraryToolDeps` 背后（生产走 `LibraryClient`），surface 只补阅读
+ *   状态读取与写后刷新。
+ * - 系统提示：注入书库专用提示（工具名与确认语义），不沿用阅读器文案。
  * - 上下文：首页没有「当前文档」，`chapterContext` 恒 null。书库数据只经工具
  *   读取，避免把易过期的整库快照塞进每轮 prompt。
  * - 「前往配置」由宿主注入：回合架并打开 Manage 的 AI 分组。
@@ -77,6 +78,7 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
     host: deps.host,
     // 首页没有当前文档：书库数据只经 library_* 工具读取。
     chapterContext: () => null,
+    systemPrompt: () => deps.t('library.assistant.systemPrompt'),
     openSettings: deps.openSettings,
     // 首页没有当前书籍：摘要不落标注。
     saveAnnotation: () => undefined,

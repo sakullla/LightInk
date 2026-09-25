@@ -25,6 +25,7 @@ import {
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
+import type { BookSource } from '../book-source-client.js';
 import {
   adoptLibraryOverlayTheme,
   applyLibraryTheme,
@@ -81,6 +82,47 @@ function webdavSourceClient(
     removeSource: vi.fn(async () => undefined),
     browse: vi.fn(async () => feed({ title: webdav.title, sourceUrl: webdav.url })),
     test: vi.fn(async () => ({ ok: true, finalUrl: webdav.url })),
+    ...overrides,
+  };
+}
+
+function bookSourceFixture(overrides: Partial<BookSource> = {}): BookSource {
+  return {
+    id: 'book-source-1',
+    title: '公版示例',
+    rule: {
+      version: 1,
+      baseUrl: 'https://www.gutenberg.org',
+      search: {
+        url: '/ebooks/search/?query={{key}}',
+        item: '<li class="booklink">(?s)(.*?)</li>',
+        title: '<span class="title">(?s)(.*?)</span>',
+        link: '<a class="link" href="([^"]+)"',
+      },
+    },
+    enabled: true,
+    allowHttp: false,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function bookSourceClient(
+  overrides: Partial<NonNullable<LibraryViewDependencies['bookSources']>> = {},
+): NonNullable<LibraryViewDependencies['bookSources']> {
+  return {
+    listSources: vi.fn(async () => [bookSourceFixture()]),
+    upsertSource: vi.fn(async () => bookSourceFixture()),
+    removeSource: vi.fn(async () => undefined),
+    setSourceEnabled: vi.fn(async (_sourceId: string, enabled: boolean) =>
+      bookSourceFixture({ enabled }),
+    ),
+    importSources: vi.fn(async () => [bookSourceFixture()]),
+    exportSources: vi.fn(async () => '{"sources":[]}'),
+    selfCheck: vi.fn(async () => ({ ok: true, issues: [] as const })),
+    builtins: vi.fn(async () => []),
+    search: vi.fn(async () => []),
     ...overrides,
   };
 }
@@ -1304,6 +1346,42 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, dependencies({ onOpenAssistant: vi.fn() }));
     await view.show();
     expect(isShown(host.querySelector('.lightink-library-header-assistant'))).toBe(false);
+    view.destroy();
+  });
+
+  it('opens the book source panel from the sources pane when wired', async () => {
+    const bookSources = bookSourceClient();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ bookSources }));
+    await view.show();
+
+    const entry = host.querySelector<HTMLButtonElement>('.lightink-library-book-source-entry');
+    expect(entry).toBeInstanceOf(HTMLButtonElement);
+    expect(isShown(entry)).toBe(true);
+    expect(entry!.title).toBe('书源');
+    expect(entry!.getAttribute('aria-label')).toBe('书源');
+    entry!.click();
+    await settle();
+
+    const overlay = document.querySelector<HTMLElement>(
+      '.lightink-library-book-sources:not([hidden])',
+    );
+    expect(overlay).not.toBeNull();
+    expect(overlay?.parentElement).toBe(document.body);
+    expect(bookSources.listSources).toHaveBeenCalled();
+    expect(overlay?.textContent).toContain('公版示例');
+
+    view.destroy();
+    expect(overlay?.isConnected).toBe(false);
+  });
+
+  it('omits the book source entry when the host does not wire it', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    expect(host.querySelector('.lightink-library-book-source-entry')).toBeNull();
     view.destroy();
   });
 

@@ -164,9 +164,10 @@ describe('createEditorAssistant read-only document context', () => {
       .join('\n');
     expect(systemText).toContain('notes.md');
     expect(systemText).toContain('正文内容');
-    // 只读保证在执行器：编辑器 session 不提供任何可执行工具（下一个用例验证
-    // 任何工具调用只回 read_only）。core 请求装配尚未采纳 session.tools，
-    // 因此这里不断言广告列表。
+    // 只读：请求广告空工具清单，且使用编辑器专用系统提示；执行器对任何工具
+    // 调用只回 read_only（下一个用例验证）。
+    expect(payload.tools).toEqual([]);
+    expect(systemText).toContain('编辑器中的 AI 助手');
     expect(writeHistory).toHaveBeenCalledTimes(1);
     expect(readKeys[0]).toBe(DOC_A.key);
     assistant.destroy();

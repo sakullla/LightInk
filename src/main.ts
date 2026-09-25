@@ -242,6 +242,7 @@ import {
   remoteNeedsRangeWarning,
 } from './library/library-remote.js';
 import { webDavSourceClient } from './library/webdav-source-client.js';
+import { bookSourceClient } from './library/book-source-client.js';
 import { createSyncableStorage } from './storage/syncable-storage.js';
 import { documentClient } from './sync/document-client.js';
 import { syncRecordClient } from './sync/sync-client.js';
@@ -3033,6 +3034,8 @@ function ensureLibraryView(): LibraryView {
           onOpenAssistant: () => ensureShelfAssistant().open(),
         }),
     webdavSource: webDavSourceClient,
+    // R7：通用书源管理（添加/编辑/导入/导出/启停/自检/搜索），入口在 sources 分区。
+    bookSources: bookSourceClient,
     onOpenSyncPanel: openWebDavSyncPanel,
     themeStorage: syncableStorage,
     readerPrefsStorage: syncableStorage,

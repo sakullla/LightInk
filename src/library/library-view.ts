@@ -82,6 +82,8 @@ import { bindLongPress } from '../ui/touch/long-press.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 import type { WebDavSourceClient } from './webdav-source-client.js';
+import { createBookSourcePanel, type BookSourcePanel } from './book-source-panel.js';
+import type { BookSourceClient } from './book-source-client.js';
 import {
   applyLibraryTheme,
   loadLibraryTheme,
@@ -123,6 +125,8 @@ interface Labels {
   httpNotAllowed: string;
   importLocal: string;
   assistantEntry: string;
+  /** R7：通用书源（下载来源）管理入口。 */
+  bookSources: string;
   search: string;
   searchPlaceholder: string;
   searchCatalogPlaceholder: string;
@@ -311,6 +315,7 @@ const LABELS: Record<Locale, Labels> = {
     httpNotAllowed: 'HTTP addresses require Allow HTTP/LAN.',
     importLocal: 'Import local book',
     assistantEntry: 'AI assistant',
+    bookSources: 'Book sources',
     search: 'Search',
     searchPlaceholder: 'Search this library',
     searchCatalogPlaceholder: 'Search {name}',
@@ -497,6 +502,7 @@ const LABELS: Record<Locale, Labels> = {
     httpNotAllowed: 'HTTP 地址需要勾选允许 HTTP/LAN',
     importLocal: '导入本地书籍',
     assistantEntry: 'AI 助手',
+    bookSources: '书源',
     search: '搜索',
     searchPlaceholder: '搜索当前书库',
     searchCatalogPlaceholder: '搜索 {name}',
@@ -732,6 +738,22 @@ export interface LibraryViewDependencies {
    * 提供时在书架分区显示，点击交给宿主唤起书库助手。
    */
   readonly onOpenAssistant?: () => void;
+  /**
+   * R7：通用书源管理面板客户端。缺省（Android/测试/降级）不渲染入口，
+   * 面板逻辑全部收敛在 book-source-panel.ts。
+   */
+  readonly bookSources?: Pick<
+    BookSourceClient,
+    | 'listSources'
+    | 'upsertSource'
+    | 'removeSource'
+    | 'setSourceEnabled'
+    | 'importSources'
+    | 'exportSources'
+    | 'selfCheck'
+    | 'builtins'
+    | 'search'
+  >;
   readonly webdavSource?: Pick<
     WebDavSourceClient,
     'addSource' | 'listSources' | 'removeSource' | 'browse' | 'test'
@@ -1572,11 +1594,27 @@ export function createLibraryView(
     '+',
     'lightink-library-icon-button lightink-library-pane-action',
   );
+  // R7：通用书源（下载来源）入口；deps 缺省时不渲染，保持既有分区结构。
+  const bookSourcesButton =
+    deps.bookSources === undefined
+      ? null
+      : button(
+          doc,
+          '',
+          'lightink-library-icon-button lightink-library-pane-action lightink-library-book-source-entry',
+        );
+  if (bookSourcesButton !== null) {
+    bookSourcesButton.appendChild(createNavIcon(doc, NAV_ICON_PATHS.source));
+  }
   sourceHeader.append(
     sourceToggle,
     createNavIcon(doc, NAV_ICON_PATHS.source, 'lightink-library-section-icon'),
     sourceTitle,
-    paneActions(sourceFilter.toggle, addSourceButton),
+    paneActions(
+      sourceFilter.toggle,
+      ...(bookSourcesButton === null ? [] : [bookSourcesButton]),
+      addSourceButton,
+    ),
   );
   const sourceList = doc.createElement('nav');
   sourceList.className = 'lightink-library-source-list';
@@ -1902,6 +1940,21 @@ export function createLibraryView(
     filterSheet,
   );
   host.appendChild(root);
+
+  // R7：书源管理面板常驻挂载（overlay 由主题层接管到 body），入口点击时打开。
+  const bookSourcePanel: BookSourcePanel | null =
+    deps.bookSources === undefined
+      ? null
+      : createBookSourcePanel({
+          client: deps.bookSources,
+          getLocale: () => deps.getLocale(),
+        });
+  if (bookSourcePanel !== null) {
+    mountLibraryOverlay(bookSourcePanel.element, root);
+    bookSourcesButton?.addEventListener('click', () => {
+      void bookSourcePanel.show();
+    });
+  }
 
   let navRailCollapsed = loadNavCollapsed(deps.themeStorage);
   let navWidthPx = loadNavWidth(deps.themeStorage);
@@ -6063,6 +6116,11 @@ export function createLibraryView(
     navResize.setAttribute('aria-label', l.resizeNav);
     addSourceButton.title = l.addSource;
     addSourceButton.setAttribute('aria-label', l.addSource);
+    if (bookSourcesButton !== null) {
+      bookSourcesButton.title = l.bookSources;
+      bookSourcesButton.setAttribute('aria-label', l.bookSources);
+    }
+    bookSourcePanel?.retranslate();
     previousButton.textContent = l.prev;
     nextButton.textContent = l.next;
     setNavRailCollapsed(navRailCollapsed, false);
@@ -6641,6 +6699,7 @@ export function createLibraryView(
       tagOverlay.remove();
       groupOverlay.remove();
       sourceOverlay.remove();
+      bookSourcePanel?.destroy();
       groupsSheet.remove();
       filterSheet.remove();
       root.remove();

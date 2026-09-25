@@ -9,6 +9,7 @@ mod annotations;
 mod archive;
 mod asset;
 mod assistant;
+mod book_source;
 mod book_translation;
 mod cli;
 mod credential_store;
@@ -61,6 +62,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(cli::PendingFile(std::sync::Mutex::new(first_file)))
         .manage(remote::RemoteState::default())
+        .manage(book_source::BookSourceState::default())
         .manage(archive::ArchiveState::default())
         .manage(webdav::WebDavState::default())
         .manage(sync::SyncTaskState::default())
@@ -128,6 +130,17 @@ pub fn run() {
             tags::library_rename_tag,
             tags::library_delete_tag,
             tags::library_set_item_tags,
+            book_source::book_source_list,
+            book_source::book_source_upsert,
+            book_source::book_source_remove,
+            book_source::book_source_set_enabled,
+            book_source::book_source_import,
+            book_source::book_source_export,
+            book_source::book_source_self_check,
+            book_source::book_source_builtins,
+            book_source::book_source_search,
+            book_source::book_source_chapters,
+            book_source::book_source_chapter_text,
             managed::library_import_managed_book,
             managed::library_preview_managed_migration,
             managed::library_apply_managed_migration,

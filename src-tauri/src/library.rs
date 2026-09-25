@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 pub const DATABASE_FILE: &str = "library.sqlite3";
 pub const CACHE_DIRECTORY: &str = "remote-cache";
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-pub(crate) const SCHEMA_VERSION: i64 = 10;
+pub(crate) const SCHEMA_VERSION: i64 = 11;
 const CACHE_LIMIT_KEY: &str = "cache_limit_bytes";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -705,6 +705,51 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                            ON library_tag_members(item_id, tag_id);",
                     )
                     .map_err(|error| format!("无法创建书库标签表: {error}"))?;
+            }
+            11 => {
+                // R7/R8：通用书源与章节级下载作业。书源规则存 JSON；作业/章节状态
+                // 支撑断点续传与单章重试。书源不进入同步快照（R7 未要求）。
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS book_sources (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           title TEXT NOT NULL,
+                           rule_json TEXT NOT NULL,
+                           enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+                           allow_http INTEGER NOT NULL DEFAULT 0 CHECK(allow_http IN (0,1)),
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS book_sources_updated_idx
+                           ON book_sources(updated_at DESC);
+                         CREATE TABLE IF NOT EXISTS book_download_jobs (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           source_id TEXT REFERENCES book_sources(id) ON DELETE SET NULL,
+                           title TEXT NOT NULL,
+                           author TEXT,
+                           book_url TEXT NOT NULL,
+                           output_format TEXT NOT NULL,
+                           status TEXT NOT NULL,
+                           total_chapters INTEGER NOT NULL DEFAULT 0,
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS book_download_jobs_updated_idx
+                           ON book_download_jobs(updated_at DESC);
+                         CREATE TABLE IF NOT EXISTS book_download_chapters (
+                           job_id TEXT NOT NULL REFERENCES book_download_jobs(id) ON DELETE CASCADE,
+                           index_no INTEGER NOT NULL CHECK(index_no >= 0),
+                           title TEXT NOT NULL,
+                           url TEXT NOT NULL,
+                           status TEXT NOT NULL,
+                           content_path TEXT,
+                           bytes INTEGER,
+                           error TEXT,
+                           updated_at INTEGER NOT NULL,
+                           PRIMARY KEY(job_id, index_no)
+                         );",
+                    )
+                    .map_err(|error| format!("无法创建书源表: {error}"))?;
             }
             _ => return Err(format!("缺少书库数据库 v{target} 迁移实现")),
         }
@@ -2480,6 +2525,68 @@ mod tests {
             )
             .unwrap();
         assert_eq!(blob_count, 1);
+    }
+
+    #[test]
+    fn migrates_v10_to_book_sources_without_losing_existing_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '10');
+                INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', '2147483648');
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, blob_hash TEXT,
+                  availability TEXT NOT NULL DEFAULT 'external',
+                  offline_pinned INTEGER NOT NULL DEFAULT 0,
+                  subjects_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(id,source_kind,title,authors_json,blob_hash,availability,updated_at)
+                  VALUES ('managed:keep','managed','保留书','[]','abc','local',1);
+                CREATE TABLE library_tags (
+                  id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_tags(id,name,created_at,updated_at)
+                  VALUES ('tag-keep','保留标签',1,1);
+                CREATE TABLE library_groups (
+                  id TEXT PRIMARY KEY NOT NULL, parent_id TEXT, name TEXT NOT NULL,
+                  kind TEXT NOT NULL, rule_json TEXT, sort_order INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_group_members (
+                  group_id TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+                  PRIMARY KEY(group_id, item_id)
+                );
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_exists(&migrated, "book_sources"));
+        assert!(table_exists(&migrated, "book_download_jobs"));
+        assert!(table_exists(&migrated, "book_download_chapters"));
+        let item_title: String = migrated
+            .query_row(
+                "SELECT title FROM library_items WHERE id='managed:keep'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_title, "保留书");
+        let tag_name: String = migrated
+            .query_row(
+                "SELECT name FROM library_tags WHERE id='tag-keep'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_name, "保留标签");
     }
 
     #[test]
