@@ -1031,7 +1031,7 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector('.lightink-library-search')).not.toBeNull();
     const shelfTitle = host.querySelector<HTMLHeadingElement>('.lightink-library-header h1');
     expect(shelfTitle?.hidden).toBe(true);
-    expect(host.textContent).not.toContain('我的书');
+    expect(shelfTitle?.textContent ?? '').not.toContain('我的书');
     expect(host.querySelector('.lightink-library-brand')?.textContent).toBe('轻墨');
     expect(host.querySelector('.lightink-library-header')?.hasAttribute('data-tauri-drag-region')).toBe(
       true,
@@ -1543,6 +1543,222 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('lays out the discovery home with recent, smart groups, and the wall', async () => {
+    const reading = localItem({
+      id: 'local:/books/reading.epub',
+      title: '在读小说',
+      localPath: '/books/reading.epub',
+    });
+    const older = localItem({
+      id: 'local:/books/older.epub',
+      title: '较早打开',
+      localPath: '/books/older.epub',
+    });
+    const unread = localItem({
+      id: 'local:/books/unread.txt',
+      title: '没读的书',
+      localPath: '/books/unread.txt',
+      extension: 'txt',
+    });
+    const grouped = localItem({
+      id: 'local:/books/grouped.epub',
+      title: '资料书',
+      localPath: '/books/grouped.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === reading.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 3,
+          ratio: 0.2,
+          percent: 20,
+          updatedAt: 2000,
+        };
+      }
+      if (item.id === older.id) {
+        return {
+          status: 'finished' as const,
+          unit: 'chapter' as const,
+          index: 9,
+          ratio: 1,
+          updatedAt: 1000,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const { deps, library } = collectionDependencies({
+      items: [reading, older, unread, grouped],
+      getProgress,
+    });
+    const created = await library.createGroup!('研究资料');
+    await library.setGroupMember!(created.id, grouped.id, true);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+
+    const recent = host.querySelector<HTMLElement>('.lightink-library-home-recent')!;
+    expect(isShown(recent)).toBe(true);
+    expect(recent.textContent).toContain('最近打开');
+    const recentIds = Array.from(
+      recent.querySelectorAll<HTMLElement>('[data-home-item-id]'),
+    ).map((entry) => entry.dataset.homeItemId);
+    expect(recentIds).toEqual([reading.id, older.id]);
+    expect(recent.textContent).toContain('在读小说');
+    expect(recent.textContent).toContain('较早打开');
+    expect(recent.textContent).not.toContain('没读的书');
+
+    const smartModule = host.querySelector<HTMLElement>('.lightink-library-home-smart')!;
+    expect(isShown(smartModule)).toBe(true);
+    expect(smartModule.textContent).toContain('智能分组');
+    expect(smartModule.querySelector('[data-home-smart-group-id="smart:epub"]')).not.toBeNull();
+    expect(
+      smartModule.querySelector('[data-home-smart-group-id="smart:format:txt"]'),
+    ).not.toBeNull();
+    expect(smartModule.textContent).toContain('研究资料');
+    expect(smartModule.textContent).toContain('EPUB3');
+
+    const wallHeading = host.querySelector<HTMLElement>('.lightink-library-wall-heading')!;
+    expect(isShown(wallHeading)).toBe(true);
+    expect(wallHeading.textContent).toContain('我的书墙');
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(host, grouped.id)).toBeTruthy();
+    // 最近打开卡片不是墙面卡片：itemRow 仍命中书墙上的正式卡片。
+    expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
+
+    // 智能分组卡片筛选书墙：首页模块让位给结果墙。
+    const customChip = smartModule.querySelector<HTMLButtonElement>('[data-home-custom-group-id]')!;
+    customChip.click();
+    await settle();
+    expect(itemRow(host, grouped.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${reading.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-home-recent'))).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-wall-heading'))).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    view.destroy();
+  });
+
+  it('opens a recent book from the home module and hides the module without records', async () => {
+    const reading = localItem({
+      id: 'local:/books/recent.epub',
+      title: '最近在读',
+      localPath: '/books/recent.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === reading.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 2,
+            ratio: 0.1,
+            percent: 12,
+            updatedAt: 500,
+          }
+        : { status: 'not-started' as const },
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [reading]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const entry = host.querySelector<HTMLButtonElement>(`[data-home-item-id="${reading.id}"]`);
+    expect(entry).not.toBeNull();
+    entry!.click();
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ item: expect.objectContaining({ id: reading.id }) }),
+      expect.anything(),
+    );
+    view.destroy();
+
+    const emptyHost = document.createElement('div');
+    document.body.appendChild(emptyHost);
+    const emptyDeps = dependencies({
+      getProgress: () => ({ status: 'not-started' as const }),
+      library: { ...base.library, listItems: vi.fn(async () => [reading]) },
+    });
+    const emptyView = createLibraryView(emptyHost, emptyDeps);
+    await emptyView.show();
+    expect(isShown(emptyHost.querySelector('.lightink-library-home-recent'))).toBe(false);
+    emptyView.destroy();
+  });
+
+  it('guides an empty library to import local books and add a source', async () => {
+    const onImportLocal = vi.fn(async () => null);
+    const base = dependencies();
+    const deps = dependencies({
+      onImportLocal,
+      library: { ...base.library, listItems: vi.fn(async () => []) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = host.querySelector<HTMLElement>('.lightink-library-home-empty')!;
+    expect(isShown(card)).toBe(true);
+    expect(card.textContent).toContain('书库还是空的');
+    expect(card.textContent).toContain('导入本地书籍');
+    expect(card.textContent).toContain('添加书源');
+    // 既有快速导入磁贴仍在空书库上可达，且不出现空骨架模块。
+    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
+
+    shownButtonWithText(card, '导入本地书籍').click();
+    await settle();
+    expect(onImportLocal).toHaveBeenCalledTimes(1);
+
+    shownButtonWithText(card, '添加书源').click();
+    await settle();
+    await settle();
+    expect(libraryRoot(host).dataset.libraryNav).toBe('sources');
+    expect(isShown(sourceFormOf())).toBe(true);
+    view.destroy();
+  });
+
+  it('keeps the discovery modules off the mobile shelf', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const reading = localItem({
+      id: 'local:/books/mobile.epub',
+      title: '手机在读',
+      localPath: '/books/mobile.epub',
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: () => ({
+        status: 'in-progress' as const,
+        unit: 'chapter' as const,
+        index: 1,
+        ratio: 0.1,
+        percent: 10,
+        updatedAt: 1,
+      }),
+      library: { ...base.library, listItems: vi.fn(async () => [reading]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(host, reading.id)).toBeTruthy();
+    expect(host.querySelector('.lightink-library-tabbar')).not.toBeNull();
+    view.destroy();
+  });
+
   it('shows series on the cover card without opening a detail pane', async () => {
     const comic = comicItem({
       series: '墨色档案',
@@ -2050,6 +2266,52 @@ describe('LibraryView navigation', () => {
     // 默认选中「全部」（书库主页），内容区呈现封面墙
     expect(navItemActive(navButton(host, '全部'))).toBe(true);
     expect(host.querySelector('.lightink-library-item--cover')).not.toBeNull();
+    view.destroy();
+  });
+
+  it('keeps collections, sources, catalog, and manage reachable from the collapsed rail', async () => {
+    const novel = localItem();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    await library.createGroup!('研究资料');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const root = libraryRoot(host);
+    const collapse = host.querySelector<HTMLButtonElement>('.lightink-library-nav-collapse')!;
+    collapse.click();
+    expect(root.dataset.libraryNavCollapsed).toBe('true');
+
+    // 管理入口在窄轨上仍可见可点。
+    const manageEntry = host.querySelector<HTMLButtonElement>('.lightink-library-manage-entry')!;
+    expect(isShown(manageEntry)).toBe(true);
+
+    // 分组/来源分区标题仍可达：点标题先展开窄轨，再点展开分组树。
+    const groupHeading = host.querySelector<HTMLElement>(
+      '.lightink-library-groups .lightink-library-pane-heading',
+    )!;
+    groupHeading.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(root.dataset.libraryNavCollapsed).toBe('false');
+    groupHeading.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(isShown(host.querySelector('.lightink-library-group-body'))).toBe(true);
+    expect(collectionButton(host, '研究资料')).toBeTruthy();
+
+    const sourceHeading = host.querySelector<HTMLElement>(
+      '.lightink-library-sources .lightink-library-pane-heading',
+    )!;
+    sourceHeading.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(isShown(host.querySelector('.lightink-library-source-body'))).toBe(true);
+
+    // 目录：折叠态保留返回书架，展开后目录树与源列表可达。
+    await openCatalog(host);
+    collapse.click();
+    expect(root.dataset.libraryNavCollapsed).toBe('true');
+    expect(isShown(host.querySelector('.lightink-library-back-to-shelf'))).toBe(true);
+    collapse.click();
+    expect(root.dataset.libraryNavCollapsed).toBe('false');
+    expect(isShown(host.querySelector('.lightink-library-catalog-pane'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-catalog-tree'))).toBe(true);
     view.destroy();
   });
 

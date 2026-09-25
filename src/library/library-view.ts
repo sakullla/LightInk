@@ -56,6 +56,7 @@ import {
   coverProgressFillPercent,
   formatLibraryReadingDuration,
   libraryProgressReadingMs,
+  libraryProgressUpdatedAt,
   setLibraryProgressStatus,
   type LibraryProgress,
   type LibraryProgressQuery,
@@ -181,6 +182,11 @@ interface Labels {
   notStarted: string;
   continueReading: string;
   dismissContinue: string;
+  homeRecent: string;
+  homeWall: string;
+  homeEmptyTitle: string;
+  homeEmptyHint: string;
+  homeAddSource: string;
   addToGroup: string;
   markdownEditor: string;
   readPercent: string;
@@ -351,6 +357,11 @@ const LABELS: Record<Locale, Labels> = {
     notStarted: 'Not started',
     continueReading: 'Continue reading',
     dismissContinue: 'Dismiss',
+    homeRecent: 'Recently opened',
+    homeWall: 'My bookshelf',
+    homeEmptyTitle: 'Your library is empty',
+    homeEmptyHint: 'Import local books or add a library source to start building your shelf.',
+    homeAddSource: 'Add a library source',
     addToGroup: 'Add to group',
     markdownEditor: 'Markdown editor',
     readPercent: '{percent}% read',
@@ -519,6 +530,11 @@ const LABELS: Record<Locale, Labels> = {
     notStarted: '未开始',
     continueReading: '继续阅读',
     dismissContinue: '关闭',
+    homeRecent: '最近打开',
+    homeWall: '我的书墙',
+    homeEmptyTitle: '书库还是空的',
+    homeEmptyHint: '导入本地书籍，或添加书库源，开始建立你的书墙。',
+    homeAddSource: '添加书源',
     addToGroup: '加入分组',
     markdownEditor: 'Markdown 编辑',
     readPercent: '已读 {percent}%',
@@ -1141,6 +1157,11 @@ const SHELF_FILTER_SMART_IDS: ReadonlySet<string> = new Set([
   'smart:comic',
 ]);
 
+/** 首页「最近打开」最多展示的条目数；完整列表仍在「我的书墙」。 */
+const HOME_RECENT_LIMIT = 8;
+/** 首页「智能分组」最多展示的分组数，避免大书库把首页撑成目录页。 */
+const HOME_SMART_GROUP_LIMIT = 12;
+
 function libraryThemeLabel(labels: Labels, id: LibraryThemeId): string {
   switch (id) {
     case 'paper':
@@ -1540,6 +1561,37 @@ export function createLibraryView(
   const continueHost = doc.createElement('div');
   continueHost.className = 'lightink-library-continue';
   continueHost.hidden = true;
+  // 发现型首页模块（R1）：继续阅读 hero 下方依次是最近打开、智能分组，再到我的书墙。
+  // 模块整行挂在封面墙网格内（grid-column: 1 / -1），随书墙一起滚动；桌面专属，
+  // 移动端不渲染以免改变现有封面墙/底栏契约。
+  const homeModules = doc.createElement('div');
+  homeModules.className = 'lightink-library-home-modules';
+  homeModules.hidden = true;
+  const recentModule = doc.createElement('section');
+  recentModule.className = 'lightink-library-home-module lightink-library-home-recent';
+  recentModule.hidden = true;
+  recentModule.dataset.homeModule = 'recent';
+  const recentTitle = doc.createElement('h2');
+  recentTitle.className = 'lightink-library-home-module-title';
+  const recentList = doc.createElement('div');
+  recentList.className = 'lightink-library-recent-list';
+  recentModule.append(recentTitle, recentList);
+  const homeSmartModule = doc.createElement('section');
+  homeSmartModule.className = 'lightink-library-home-module lightink-library-home-smart';
+  homeSmartModule.hidden = true;
+  homeSmartModule.dataset.homeModule = 'smart';
+  const homeSmartTitle = doc.createElement('h2');
+  homeSmartTitle.className = 'lightink-library-home-module-title';
+  const homeSmartList = doc.createElement('div');
+  homeSmartList.className = 'lightink-library-home-group-list';
+  homeSmartModule.append(homeSmartTitle, homeSmartList);
+  const wallHeading = doc.createElement('div');
+  wallHeading.className = 'lightink-library-wall-heading';
+  wallHeading.hidden = true;
+  const wallHeadingTitle = doc.createElement('h2');
+  wallHeadingTitle.className = 'lightink-library-home-module-title';
+  wallHeading.appendChild(wallHeadingTitle);
+  homeModules.append(recentModule, homeSmartModule);
   const shelfToolbar = doc.createElement('div');
   shelfToolbar.className = 'lightink-library-shelf-toolbar';
   shelfToolbar.hidden = true;
@@ -3989,9 +4041,149 @@ export function createLibraryView(
     return tile;
   }
 
+  /** 桌面书架「全部 + 无搜索 + 无分组选择」即发现型首页；筛选/搜索后只留书墙。 */
+  function isShelfHome(): boolean {
+    return (
+      activeSection === 'shelf' &&
+      !catalogActive() &&
+      selectedGroup === 'all' &&
+      selectedCustomGroupId === null &&
+      selectedSmartGroupId === null &&
+      searchInput.value.trim() === '' &&
+      !isMobileLibraryChrome()
+    );
+  }
+
+  /**
+   * 最近打开：有阅读记录的条目（在读或读完）按 `ReadingProgress.updatedAt`
+   * 从新到旧；记录集合本身已受进度条数上限与淘汰规则约束，这里只截取首页
+   * 展示条数。无记录时模块整体隐藏，不外显空骨架。
+   */
+  function recentOpenedItems(): DisplayItem[] {
+    const entries: Array<{ readonly display: DisplayItem; readonly clock: number }> = [];
+    for (const display of items) {
+      const progress = progressFor(display);
+      if (progress === null || progress.status === 'not-started') continue;
+      entries.push({ display, clock: libraryProgressUpdatedAt(progress) });
+    }
+    entries.sort(
+      (left, right) => right.clock - left.clock || compareShelfItems(left.display, right.display),
+    );
+    return entries.slice(0, HOME_RECENT_LIMIT).map((entry) => entry.display);
+  }
+
+  /** 渲染「最近打开」与「智能分组」；无内容时对应模块隐藏。 */
+  function renderHomeModules(): void {
+    const l = labels();
+    recentTitle.textContent = l.homeRecent;
+    homeSmartTitle.textContent = l.smartGroups;
+    wallHeadingTitle.textContent = l.homeWall;
+
+    recentList.replaceChildren();
+    const recent = recentOpenedItems();
+    recentModule.hidden = recent.length === 0;
+    for (const display of recent) {
+      const entry = button(doc, '', 'lightink-library-recent-item');
+      // 与封面墙卡片区分：itemRow/长按等既有选择器仍只命中墙上的正式卡片。
+      entry.dataset.homeItemId = display.item.id;
+      const name = itemTitle(display.item);
+      entry.title = name;
+      entry.setAttribute('aria-label', name);
+      const cover = doc.createElement('div');
+      cover.className = 'lightink-library-cover';
+      appendCover(cover, display);
+      const text = doc.createElement('span');
+      text.className = 'lightink-library-recent-text';
+      const title = doc.createElement('strong');
+      title.textContent = name;
+      text.appendChild(title);
+      const progress = progressFor(display);
+      if (progress !== null && progress.status !== 'not-started') {
+        const meta = doc.createElement('span');
+        meta.className = 'lightink-library-item-progress';
+        meta.textContent = progressLabel(progress);
+        text.appendChild(meta);
+      }
+      entry.append(cover, text);
+      entry.addEventListener('click', () => void openSelected(display));
+      recentList.appendChild(entry);
+    }
+
+    homeSmartList.replaceChildren();
+    const smartEntries = smartGroups.slice(0, HOME_SMART_GROUP_LIMIT);
+    const customEntries = flattenedCustomGroups()
+      .map((entry) => ({
+        group: entry.group,
+        count: itemIdsForGroup(groups, memberships, entry.group.id).size,
+      }))
+      .filter((entry) => entry.count > 0);
+    homeSmartModule.hidden = smartEntries.length === 0 && customEntries.length === 0;
+    for (const group of smartEntries) {
+      const chip = button(doc, '', 'lightink-library-home-group');
+      chip.dataset.homeSmartGroupId = group.id;
+      chip.appendChild(createNavIcon(doc, NAV_ICON_PATHS.hash));
+      const name = doc.createElement('span');
+      name.textContent = smartGroupName(group);
+      const count = doc.createElement('span');
+      count.className = 'lightink-library-home-group-count';
+      count.textContent = String(
+        items.filter((display) => smartGroupMatches(display.item, group.rule, progressFor(display)))
+          .length,
+      );
+      chip.append(name, count);
+      chip.classList.toggle('is-active', selectedSmartGroupId === group.id);
+      chip.addEventListener('click', () => applySmartGroup(group.id));
+      homeSmartList.appendChild(chip);
+    }
+    for (const entry of customEntries) {
+      const chip = button(doc, '', 'lightink-library-home-group');
+      chip.dataset.homeCustomGroupId = entry.group.id;
+      chip.appendChild(createNavIcon(doc, NAV_ICON_PATHS.folder));
+      const name = doc.createElement('span');
+      name.textContent = entry.group.name;
+      const count = doc.createElement('span');
+      count.className = 'lightink-library-home-group-count';
+      count.textContent = String(entry.count);
+      chip.append(name, count);
+      chip.classList.toggle('is-active', selectedCustomGroupId === entry.group.id);
+      chip.addEventListener('click', () => applyCustomGroup(entry.group.id));
+      homeSmartList.appendChild(chip);
+    }
+  }
+
+  /** 空书库引导：导入本地书籍或添加书库源，不显示空骨架。 */
+  function renderHomeEmpty(): HTMLElement {
+    const card = doc.createElement('div');
+    card.className = 'lightink-library-home-empty';
+    const title = doc.createElement('h2');
+    title.textContent = labels().homeEmptyTitle;
+    const hint = doc.createElement('p');
+    hint.textContent = labels().homeEmptyHint;
+    const actions = doc.createElement('div');
+    actions.className = 'lightink-library-home-empty-actions';
+    const importButton = button(doc, labels().importLocal, 'lightink-library-primary');
+    importButton.dataset.libraryAction = 'empty-import';
+    importButton.addEventListener('click', () => void importLocalBook());
+    const sourceButton = button(doc, labels().homeAddSource);
+    sourceButton.dataset.libraryAction = 'empty-source';
+    sourceButton.addEventListener('click', () => {
+      void showSourcesList().then(() => openSourceForm());
+    });
+    actions.append(importButton, sourceButton);
+    card.append(title, hint, actions);
+    return card;
+  }
+
   function renderItems(): void {
     const shown = visibleItems();
     itemList.replaceChildren();
+    const home = isShelfHome() && shown.length > 0;
+    if (home) {
+      renderHomeModules();
+      itemList.append(homeModules, wallHeading);
+    }
+    homeModules.hidden = !home || (recentModule.hidden && homeSmartModule.hidden);
+    wallHeading.hidden = !home;
     if (!status.hidden && shown.length === 0) {
       return;
     }
@@ -4004,6 +4196,10 @@ export function createLibraryView(
         selectedCustomGroupId !== null ||
         selectedSmartGroupId !== null;
       if (!filtered && shouldShowImportTile()) {
+        // 空书库的发现引导（R1）：保留导入磁贴，并在桌面补一块导入/添加书源卡片。
+        if (items.length === 0 && !isMobileLibraryChrome()) {
+          itemList.appendChild(renderHomeEmpty());
+        }
         itemList.appendChild(renderImportTile());
         detail.hidden = true;
         return;
