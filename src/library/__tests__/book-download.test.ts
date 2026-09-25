@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildDownloadEpub,
   chapterFailed,
   chapterProgress,
   chapterSucceeded,
@@ -149,6 +150,39 @@ describe('download state machine (pure transitions)', () => {
     const done = composeSucceeded(state, 'managed:abc');
     expect(done.phase).toBe('done');
     expect(done.importedItemId).toBe('managed:abc');
+  });
+});
+
+describe('EPUB 合成确定性（跨作业 SHA-256 去重前提）', () => {
+  const doneJob = (): BookDownloadPersistedJob =>
+    persistedJob({
+      outputFormat: 'epub',
+      status: 'ready',
+      chapters: [
+        persistedChapter(0, 'done', { content: '甲' }),
+        persistedChapter(1, 'done', { content: '乙' }),
+        persistedChapter(2, 'done', { content: '丙' }),
+      ],
+    });
+
+  it('同内容两次合成产出完全相同的字节', async () => {
+    const state = runtimeFromPersisted(doneJob());
+    const first = await buildDownloadEpub(state, 'zh');
+    const second = await buildDownloadEpub(state, 'zh');
+    expect(Array.from(first)).toEqual(Array.from(second));
+  });
+
+  it('任一章节内容变化即产生不同字节（不同内容不同条目）', async () => {
+    const base = runtimeFromPersisted(doneJob());
+    const first = await buildDownloadEpub(base, 'zh');
+    const altered = {
+      ...base,
+      chapters: base.chapters.map((chapter, index) =>
+        index === 1 ? { ...chapter, content: '乙改' } : chapter,
+      ),
+    };
+    const second = await buildDownloadEpub(altered, 'zh');
+    expect(Array.from(first)).not.toEqual(Array.from(second));
   });
 });
 

@@ -1189,6 +1189,29 @@ pub fn book_source_set_enabled(
     })
 }
 
+/// 同名同站点（title + base_url）视为同一书源：重复导入原位更新规则，
+/// 不再生成新条目；保留既有 id、创建时间与用户启停状态。
+fn upsert_imported_sources_at(
+    transaction: &Connection,
+    sources: Vec<BookSource>,
+) -> Result<Vec<BookSource>, String> {
+    let existing = list_sources_at(transaction)?;
+    let mut resolved = Vec::with_capacity(sources.len());
+    for mut source in sources {
+        if let Some(prior) = existing.iter().find(|prior| {
+            prior.title.to_lowercase() == source.title.to_lowercase()
+                && prior.rule.base_url == source.rule.base_url
+        }) {
+            source.id = prior.id.clone();
+            source.created_at = prior.created_at;
+            source.enabled = prior.enabled;
+        }
+        write_source_at(transaction, &source)?;
+        resolved.push(source);
+    }
+    Ok(resolved)
+}
+
 #[tauri::command]
 pub fn book_source_import(app: AppHandle, json: String) -> Result<Vec<BookSource>, RemoteError> {
     let entries = parse_import(&json)?;
@@ -1197,13 +1220,11 @@ pub fn book_source_import(app: AppHandle, json: String) -> Result<Vec<BookSource
     let transaction = connection
         .transaction()
         .map_err(|error| storage_error(format!("无法开启书源导入事务: {error}")))?;
-    for source in &sources {
-        write_source_at(&transaction, source).map_err(storage_error)?;
-    }
+    let resolved = upsert_imported_sources_at(&transaction, sources).map_err(storage_error)?;
     transaction
         .commit()
         .map_err(|error| storage_error(format!("无法提交书源导入: {error}")))?;
-    Ok(sources)
+    Ok(resolved)
 }
 
 #[tauri::command]
@@ -1342,6 +1363,41 @@ pub async fn book_source_chapter_text(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn import_reuses_existing_source_with_same_title_and_base_url() {
+        let app_data = tempfile::tempdir().unwrap();
+        let mut connection = crate::library::open_database_at(app_data.path()).unwrap();
+        let first = validated_import_entries(vec![BookSourceExportEntry {
+            title: "示例源".to_string(),
+            allow_http: false,
+            rule: sample_rule_value(),
+        }])
+        .unwrap();
+        let transaction = connection.transaction().unwrap();
+        let inserted = upsert_imported_sources_at(&transaction, first).unwrap();
+        transaction.commit().unwrap();
+
+        // 停用后再次导入同名同站点（规则有更新）：原位更新而非新条目。
+        set_enabled_at(&connection, &inserted[0].id.clone(), false).unwrap();
+        let mut updated_rule = sample_rule_value();
+        updated_rule["rateLimitMs"] = json!(1000);
+        let second = validated_import_entries(vec![BookSourceExportEntry {
+            title: "示例源".to_string(),
+            allow_http: false,
+            rule: updated_rule,
+        }])
+        .unwrap();
+        let transaction = connection.transaction().unwrap();
+        let reimported = upsert_imported_sources_at(&transaction, second).unwrap();
+        transaction.commit().unwrap();
+
+        let all = list_sources_at(&connection).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(reimported[0].id, inserted[0].id);
+        assert!(!reimported[0].enabled, "重复导入保留用户启停状态");
+        assert_eq!(all[0].rule.rate_limit_ms, Some(1000), "规则按导入内容更新");
+    }
 
     fn sample_rule_value() -> Value {
         json!({

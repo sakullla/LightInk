@@ -304,7 +304,9 @@ describe('outline', () => {
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
-  it('CBZ 按自然序列出页目录', async () => {
+  it(
+    'CBZ 按自然序列出页目录',
+    async () => {
     const item = book({ id: 'cbz-1', title: '漫画', extension: 'cbz' });
     const close = vi.fn(async () => undefined);
     const openArchive = vi.fn(async () => ({
@@ -341,7 +343,10 @@ describe('outline', () => {
       { level: 1, text: '2', page: 2 },
     ]);
     expect(close).toHaveBeenCalledTimes(1);
-  });
+    },
+    // 全量并行下的 archive 装载偶发超过默认 5s（单跑恒绿），放宽时序容差。
+    15_000,
+  );
 });
 
 describe('chapter', () => {

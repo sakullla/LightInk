@@ -1453,14 +1453,15 @@ pub async fn book_download_chapter_fetch(
     let app_data_dir = library::app_data_dir(&app).map_err(download_storage)?;
     let (source_id, chapter_url) = {
         let connection = library::open_database_at(&app_data_dir).map_err(download_storage)?;
-        let existing =
-            load_download_job_at(&connection, &app_data_dir, &job_id, true).map_err(|message| {
+        let existing = load_download_job_at(&connection, &app_data_dir, &job_id, false).map_err(
+            |message| {
                 if message == "下载作业不存在" {
                     download_not_found()
                 } else {
                     download_storage(message)
                 }
-            })?;
+            },
+        )?;
         let source_id = existing
             .source_id
             .clone()

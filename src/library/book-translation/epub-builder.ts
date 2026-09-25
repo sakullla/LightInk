@@ -274,9 +274,29 @@ function tocNcx(input: FreshEpubInput, identifier: string): string {
 </ncx>`;
 }
 
+/**
+ * 内容级确定性标识：对标题、语言与全部章节正文做 SHA-256，格式化为 UUID v5
+ * 形态。同一内容两次合成产出相同字节，`store_blob_at` 的跨作业 SHA-256 去重
+ * 因此对 EPUB 同样生效（随机 UUID 会使同内容产生不同哈希、重复入库）。
+ */
+async function deterministicEpubIdentifier(input: FreshEpubInput): Promise<string> {
+  const material = [
+    input.title,
+    input.language,
+    ...input.units.flatMap((unit, index) => [unit.title, input.unitBodies[index] ?? '']),
+  ].join('\u0000');
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)),
+  );
+  digest[6] = (digest[6]! & 0x0f) | 0x50; // version 5（名称/哈希派生）
+  digest[8] = (digest[8]! & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `urn:uuid:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 /** 按已解析章节结构新组最小 EPUB 2 包。 */
 export async function buildTranslatedEpub(input: FreshEpubInput): Promise<Uint8Array> {
-  const identifier = `urn:uuid:${crypto.randomUUID()}`;
+  const identifier = await deterministicEpubIdentifier(input);
   const writer = new ZipWriter(new Uint8ArrayWriter(), { extendedTimestamp: false });
   await writer.add('mimetype', textEntry('application/epub+zip'), { level: 0 });
   await writer.add('META-INF/container.xml', textEntry(containerXml()));

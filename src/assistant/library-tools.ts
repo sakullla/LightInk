@@ -1064,11 +1064,13 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
           let groupId = plan.groupId;
           let createdGroupId: string | undefined;
           if (plan.createGroup) {
-            // 建议发出后分组可能已被别处创建：同名同层唯一时复用，不重复落盘。
+            // 建议发出后分组可能已被别处创建：计划按顶层创建，同名顶层唯一时
+            // 复用，不重复落盘（嵌套同名组不参与复用）。
             const existing = (await deps.listGroups()).filter(
               (group) =>
                 group.kind === 'custom' &&
-                normalizeName(group.name) === normalizeName(plan.groupName),
+                normalizeName(group.name) === normalizeName(plan.groupName) &&
+                group.parentId === undefined,
             );
             if (existing.length > 1) {
               return fail(tool, 'ambiguous_group', {
@@ -1463,13 +1465,19 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
       (group) => normalizeName(group.name) === normalizeName(groupName),
     );
     const custom = matches.filter((group) => group.kind === 'custom');
-    if (custom.length > 1) {
+    // 同名自定义组按顶层语义优先解析（与 executeCreateGroup 的同层唯一判定
+    // 一致）；顶层不存在时仅在唯一嵌套同名组时复用，多处并存不猜测。
+    const preferred =
+      custom.filter((group) => group.parentId === undefined).length > 0
+        ? custom.filter((group) => group.parentId === undefined)
+        : custom;
+    if (preferred.length > 1) {
       return fail(tool, 'ambiguous_group', {
         message: `有多个自定义分组叫「${groupName}」，请改用分组 id。`,
-        groups: custom.map(groupView),
+        groups: preferred.map(groupView),
       });
     }
-    if (custom.length === 0) {
+    if (preferred.length === 0) {
       if (matches.length > 0) {
         return fail(tool, 'smart_group_readonly', {
           message: `「${groupName}」是智能组，不能手动归入或移出。`,
@@ -1494,7 +1502,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
       kind: 'organize',
       mode: modeRaw,
       groupName,
-      groupId: custom[0]!.id,
+      groupId: preferred[0]!.id,
       createGroup: false,
       itemIds: items.map((item) => item.id),
       titles: items.map((item) => item.title),

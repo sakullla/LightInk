@@ -739,7 +739,8 @@ export interface LibraryViewDependencies {
    */
   readonly onOpenAssistant?: () => void;
   /**
-   * R7：通用书源管理面板客户端。缺省（Android/测试/降级）不渲染入口，
+   * R7：通用书源管理面板客户端。缺省（测试/降级未接线）不渲染入口；
+   * 书源是书架共享能力，桌面与移动 sources 分区均可达（命令同为 Tauri IPC），
    * 面板逻辑全部收敛在 book-source-panel.ts。
    */
   readonly bookSources?: Pick<

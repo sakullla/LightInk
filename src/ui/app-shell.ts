@@ -1211,7 +1211,6 @@ export function createAppShell(
   enterReaderHomeBtn.id = 'lightink-enter-reader-home';
   enterReaderHomeBtn.className = 'lightink-workspace-travel';
   enterReaderHomeBtn.hidden = true;
-  enterReaderHomeBtn.setAttribute('aria-hidden', 'true');
   enterReaderHomeBtn.addEventListener('click', () => enterReaderHomeWorkspace(actions));
 
   // R3：编辑器 chrome 助手入口。宿主未接线（Android/测试）时不渲染；有活动
@@ -1222,7 +1221,6 @@ export function createAppShell(
   editorAssistantBtn.id = 'lightink-editor-assistant';
   editorAssistantBtn.className = 'lightink-workspace-travel lightink-editor-assistant';
   editorAssistantBtn.hidden = true;
-  editorAssistantBtn.setAttribute('aria-hidden', 'true');
   if (editorAssistantEnabled) {
     editorAssistantBtn.addEventListener('click', () => actions.onOpenAssistant?.());
   }
@@ -1236,7 +1234,6 @@ export function createAppShell(
   enterEditorBtn.id = 'lightink-enter-editor';
   enterEditorBtn.className = 'lightink-workspace-travel';
   enterEditorBtn.hidden = true;
-  enterEditorBtn.setAttribute('aria-hidden', 'true');
   enterEditorBtn.addEventListener('click', () => enterEditorWorkspace(actions));
   // R6：Android 阅读侧裁剪——「编辑」travel 按钮不挂载（不渲染）。
   // enterEditorButton 仍由 shell 暴露（桌面 main 将其接线给书架 manage 面板）。

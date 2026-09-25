@@ -854,6 +854,42 @@ describe('同名多本与错误边界', () => {
     expect(h.writes.setGroupMember).not.toHaveBeenCalled();
   });
 
+  it('顶层与嵌套同名分组并存时按顶层语义解析', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [
+        { id: 'top', name: '科幻', kind: 'custom', sortOrder: 1 },
+        { id: 'nested', name: '科幻', kind: 'custom', sortOrder: 2, parentId: 'parent' },
+        { id: 'parent', name: '文集', kind: 'custom', sortOrder: 3 },
+      ],
+      userMessage: '把《三体》归到科幻',
+    });
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: true, tool: LIBRARY_ORGANIZE_TOOL_NAME });
+    expect(h.writes.setGroupMember).toHaveBeenCalledWith('top', 'a', true);
+    expect(h.changed).toHaveBeenCalled();
+  });
+
+  it('仅存在唯一嵌套同名分组时复用该分组', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [
+        { id: 'parent', name: '文集', kind: 'custom', sortOrder: 1 },
+        { id: 'nested', name: '科幻', kind: 'custom', sortOrder: 2, parentId: 'parent' },
+      ],
+      userMessage: '把《三体》归到科幻',
+    });
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: true, tool: LIBRARY_ORGANIZE_TOOL_NAME });
+    expect(h.writes.setGroupMember).toHaveBeenCalledWith('nested', 'a', true);
+  });
+
   it('智能组只读：归类与删除都被拒绝', async () => {
     const h = harness({
       items: [book({ id: 'a', title: '三体' })],
