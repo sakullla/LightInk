@@ -73,6 +73,18 @@ export interface LibraryGroupMembership {
   readonly itemId: string;
 }
 
+export interface LibraryTag {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export interface LibraryTagMembership {
+  readonly tagId: string;
+  readonly itemId: string;
+}
+
 export interface LibraryComicMetadata {
   readonly series?: string;
   readonly number?: string;
@@ -168,6 +180,33 @@ export class LibraryClient {
     return this.invoker.invoke<void>('library_set_item_groups', {
       itemId,
       groupIds: [...groupIds],
+    });
+  }
+
+  listTags(): Promise<LibraryTag[]> {
+    return this.invoker.invoke<LibraryTag[]>('library_list_tags');
+  }
+
+  listTagMemberships(): Promise<LibraryTagMembership[]> {
+    return this.invoker.invoke<LibraryTagMembership[]>('library_list_tag_memberships');
+  }
+
+  createTag(name: string): Promise<LibraryTag> {
+    return this.invoker.invoke<LibraryTag>('library_create_tag', { name });
+  }
+
+  renameTag(tagId: string, name: string): Promise<LibraryTag> {
+    return this.invoker.invoke<LibraryTag>('library_rename_tag', { tagId, name });
+  }
+
+  deleteTag(tagId: string): Promise<void> {
+    return this.invoker.invoke<void>('library_delete_tag', { tagId });
+  }
+
+  setItemTags(itemId: string, tagIds: readonly string[]): Promise<void> {
+    return this.invoker.invoke<void>('library_set_item_tags', {
+      itemId,
+      tagIds: [...tagIds],
     });
   }
 

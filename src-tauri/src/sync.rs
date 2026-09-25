@@ -233,6 +233,10 @@ const GROUP_OBJECT_PREFIX: &str = "library-group:";
 const GROUP_STATE_FIELD: &str = "state";
 const MEMBERSHIP_OBJECT_PREFIX: &str = "library-membership:";
 const MEMBERSHIP_STATE_FIELD: &str = "present";
+const TAG_OBJECT_PREFIX: &str = "library-tag:";
+const TAG_STATE_FIELD: &str = "state";
+const TAG_MEMBERSHIP_OBJECT_PREFIX: &str = "library-tag-membership:";
+const TAG_MEMBERSHIP_STATE_FIELD: &str = "present";
 const ITEM_OBJECT_PREFIX: &str = "library-item:";
 const ITEM_STATE_FIELD: &str = "present";
 const ITEM_OFFLINE_FIELD: &str = "offlinePinned";
@@ -242,6 +246,8 @@ const MAX_SNAPSHOT_RECORDS: usize = 100_000;
 const MAX_SNAPSHOT_ITEMS: usize = 100_000;
 const MAX_SNAPSHOT_GROUPS: usize = 10_000;
 const MAX_SNAPSHOT_MEMBERSHIPS: usize = 200_000;
+const MAX_SNAPSHOT_TAGS: usize = 10_000;
+const MAX_SNAPSHOT_TAG_MEMBERSHIPS: usize = 200_000;
 const MAX_SNAPSHOT_DOCUMENTS: usize = 100_000;
 const MAX_SNAPSHOT_ASSETS: usize = 200_000;
 const MAX_SNAPSHOT_VERSIONS: usize = 200_000;
@@ -781,6 +787,35 @@ pub(crate) fn write_membership_record_at(
     )
 }
 
+pub(crate) fn write_tag_state_record_at(
+    connection: &Connection,
+    tag_id: &str,
+    value: Option<Value>,
+) -> Result<SyncRecord, String> {
+    write_local_record_at(
+        connection,
+        format!("{TAG_OBJECT_PREFIX}{tag_id}"),
+        TAG_STATE_FIELD.to_string(),
+        value.clone(),
+        value.is_none(),
+    )
+}
+
+pub(crate) fn write_tag_membership_record_at(
+    connection: &Connection,
+    tag_id: &str,
+    item_id: &str,
+    present: bool,
+) -> Result<SyncRecord, String> {
+    write_local_record_at(
+        connection,
+        format!("{TAG_MEMBERSHIP_OBJECT_PREFIX}{tag_id}:{item_id}"),
+        TAG_MEMBERSHIP_STATE_FIELD.to_string(),
+        present.then_some(Value::Bool(true)),
+        !present,
+    )
+}
+
 pub(crate) fn write_library_item_record_at(
     connection: &Connection,
     item_id: &str,
@@ -986,6 +1021,20 @@ struct SnapshotMembership {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct SnapshotTag {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotTagMembership {
+    tag_id: String,
+    item_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct SnapshotDocument {
     id: String,
     content_hash: String,
@@ -1040,6 +1089,10 @@ struct SyncSnapshot {
     items: Vec<SnapshotItem>,
     groups: Vec<SnapshotGroup>,
     memberships: Vec<SnapshotMembership>,
+    #[serde(default)]
+    tags: Vec<SnapshotTag>,
+    #[serde(default)]
+    tag_memberships: Vec<SnapshotTagMembership>,
     #[serde(default)]
     documents: Vec<SnapshotDocument>,
     #[serde(default)]
@@ -1177,6 +1230,40 @@ fn local_memberships(connection: &Connection) -> Result<Vec<SnapshotMembership>,
     Ok(memberships)
 }
 
+fn local_tags(connection: &Connection) -> Result<Vec<SnapshotTag>, String> {
+    let mut statement = connection
+        .prepare("SELECT id,name FROM library_tags ORDER BY name COLLATE NOCASE,id")
+        .map_err(|error| format!("无法读取同步标签: {error}"))?;
+    let tags = statement
+        .query_map([], |row| {
+            Ok(SnapshotTag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })
+        .map_err(|error| format!("无法读取同步标签: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析同步标签: {error}"))?;
+    Ok(tags)
+}
+
+fn local_tag_memberships(connection: &Connection) -> Result<Vec<SnapshotTagMembership>, String> {
+    let mut statement = connection
+        .prepare("SELECT tag_id,item_id FROM library_tag_members ORDER BY tag_id,item_id")
+        .map_err(|error| format!("无法读取同步标签关系: {error}"))?;
+    let memberships = statement
+        .query_map([], |row| {
+            Ok(SnapshotTagMembership {
+                tag_id: row.get(0)?,
+                item_id: row.get(1)?,
+            })
+        })
+        .map_err(|error| format!("无法读取同步标签关系: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析同步标签关系: {error}"))?;
+    Ok(memberships)
+}
+
 fn local_documents(connection: &Connection) -> Result<Vec<SnapshotDocument>, String> {
     let mut statement = connection
         .prepare(
@@ -1286,6 +1373,8 @@ fn local_snapshot(connection: &Connection, device_id: String) -> Result<SyncSnap
         items: local_items(connection)?,
         groups: local_groups(connection)?,
         memberships: local_memberships(connection)?,
+        tags: local_tags(connection)?,
+        tag_memberships: local_tag_memberships(connection)?,
         documents: local_documents(connection)?,
         assets: local_assets(connection)?,
         document_versions: local_document_versions(connection)?,
@@ -1293,7 +1382,7 @@ fn local_snapshot(connection: &Connection, device_id: String) -> Result<SyncSnap
     })
 }
 
-fn backfill_group_records(connection: &Connection) -> Result<(), String> {
+fn backfill_library_records(connection: &Connection) -> Result<(), String> {
     let item_records =
         current_records_with_prefix(connection, ITEM_OBJECT_PREFIX, ITEM_STATE_FIELD)?
             .into_iter()
@@ -1354,6 +1443,47 @@ fn backfill_group_records(connection: &Connection) -> Result<(), String> {
             write_membership_record_at(
                 connection,
                 &membership.group_id,
+                &membership.item_id,
+                true,
+            )?;
+        }
+    }
+    for tag in local_tags(connection)? {
+        let object_id = format!("{TAG_OBJECT_PREFIX}{}", tag.id);
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sync_records WHERE object_id=?1 AND field=?2)",
+                params![object_id, TAG_STATE_FIELD],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("无法检查标签同步记录: {error}"))?;
+        if !exists {
+            write_tag_state_record_at(
+                connection,
+                &tag.id,
+                Some(
+                    serde_json::to_value(&tag)
+                        .map_err(|error| format!("无法序列化标签同步状态: {error}"))?,
+                ),
+            )?;
+        }
+    }
+    for membership in local_tag_memberships(connection)? {
+        let object_id = format!(
+            "{TAG_MEMBERSHIP_OBJECT_PREFIX}{}:{}",
+            membership.tag_id, membership.item_id
+        );
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sync_records WHERE object_id=?1 AND field=?2)",
+                params![object_id, TAG_MEMBERSHIP_STATE_FIELD],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("无法检查标签关系同步记录: {error}"))?;
+        if !exists {
+            write_tag_membership_record_at(
+                connection,
+                &membership.tag_id,
                 &membership.item_id,
                 true,
             )?;
@@ -1696,6 +1826,8 @@ async fn read_remote_snapshots(
             || snapshot.items.len() > MAX_SNAPSHOT_ITEMS
             || snapshot.groups.len() > MAX_SNAPSHOT_GROUPS
             || snapshot.memberships.len() > MAX_SNAPSHOT_MEMBERSHIPS
+            || snapshot.tags.len() > MAX_SNAPSHOT_TAGS
+            || snapshot.tag_memberships.len() > MAX_SNAPSHOT_TAG_MEMBERSHIPS
             || snapshot.documents.len() > MAX_SNAPSHOT_DOCUMENTS
             || snapshot.assets.len() > MAX_SNAPSHOT_ASSETS
             || snapshot.document_versions.len() > MAX_SNAPSHOT_VERSIONS
@@ -2145,6 +2277,151 @@ fn apply_current_group_records(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn apply_snapshot_tags(
+    connection: &Connection,
+    tags: &[SnapshotTag],
+    memberships: &[SnapshotTagMembership],
+) -> Result<(), String> {
+    for tag in tags {
+        validate_snapshot_tag(tag)?;
+        connection
+            .execute(
+                "INSERT INTO library_tags(id,name,created_at,updated_at)
+                 VALUES (?1,?2,?3,?3)
+                 ON CONFLICT(id) DO UPDATE SET name=?2,updated_at=?3",
+                params![tag.id, tag.name, library::now_ms()],
+            )
+            .map_err(|error| format!("无法合并远端标签: {error}"))?;
+    }
+    for member in memberships {
+        if Uuid::parse_str(&member.tag_id).is_err() || member.item_id.trim().is_empty() {
+            return Err("远端标签关系标识无效".to_string());
+        }
+        let valid: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM library_tags WHERE id=?1) AND EXISTS(SELECT 1 FROM library_items WHERE id=?2)",
+                params![member.tag_id, member.item_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if valid {
+            connection
+                .execute(
+                    "INSERT INTO library_tag_members(tag_id,item_id,created_at) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING",
+                    params![member.tag_id, member.item_id, library::now_ms()],
+                )
+                .map_err(|error| format!("无法合并远端标签关系: {error}"))?;
+        }
+    }
+    apply_current_tag_records(connection)?;
+    Ok(())
+}
+
+fn validate_snapshot_tag(tag: &SnapshotTag) -> Result<(), String> {
+    if Uuid::parse_str(&tag.id).is_err()
+        || tag.name.trim().is_empty()
+        || tag.name.chars().count() > 80
+        || tag.name.chars().any(char::is_control)
+    {
+        return Err("远端标签数据无效".to_string());
+    }
+    Ok(())
+}
+
+fn apply_current_tag_records(connection: &Connection) -> Result<(), String> {
+    let mut active = BTreeMap::<String, SnapshotTag>::new();
+    let mut deleted = BTreeSet::new();
+    for record in current_records_with_prefix(connection, TAG_OBJECT_PREFIX, TAG_STATE_FIELD)? {
+        let tag_id = record
+            .object_id
+            .strip_prefix(TAG_OBJECT_PREFIX)
+            .unwrap_or_default()
+            .to_string();
+        if Uuid::parse_str(&tag_id).is_err() {
+            return Err("同步标签记录标识无效".to_string());
+        }
+        if record.tombstone {
+            deleted.insert(tag_id);
+            continue;
+        }
+        let tag: SnapshotTag = serde_json::from_value(
+            record
+                .value
+                .clone()
+                .ok_or_else(|| "同步标签记录缺少状态".to_string())?,
+        )
+        .map_err(|error| format!("同步标签记录无效: {error}"))?;
+        validate_snapshot_tag(&tag)?;
+        if tag.id != tag_id {
+            return Err("同步标签记录与对象标识不匹配".to_string());
+        }
+        active.insert(tag_id, tag);
+    }
+
+    for (tag_id, tag) in &active {
+        connection
+            .execute(
+                "INSERT INTO library_tags(id,name,created_at,updated_at)
+                 VALUES (?1,?2,?3,?3)
+                 ON CONFLICT(id) DO UPDATE SET name=?2,updated_at=?3",
+                params![tag_id, tag.name, library::now_ms()],
+            )
+            .map_err(|error| format!("无法应用同步标签状态: {error}"))?;
+    }
+    for tag_id in deleted {
+        connection
+            .execute("DELETE FROM library_tags WHERE id=?1", params![tag_id])
+            .map_err(|error| format!("无法应用同步标签删除: {error}"))?;
+    }
+
+    for record in current_records_with_prefix(
+        connection,
+        TAG_MEMBERSHIP_OBJECT_PREFIX,
+        TAG_MEMBERSHIP_STATE_FIELD,
+    )? {
+        let suffix = record
+            .object_id
+            .strip_prefix(TAG_MEMBERSHIP_OBJECT_PREFIX)
+            .unwrap_or_default();
+        let (tag_id, item_id) = suffix
+            .split_once(':')
+            .ok_or_else(|| "同步标签关系记录标识无效".to_string())?;
+        if Uuid::parse_str(tag_id).is_err() || item_id.trim().is_empty() {
+            return Err("同步标签关系记录标识无效".to_string());
+        }
+        if record.tombstone {
+            connection
+                .execute(
+                    "DELETE FROM library_tag_members WHERE tag_id=?1 AND item_id=?2",
+                    params![tag_id, item_id],
+                )
+                .map_err(|error| format!("无法应用同步标签关系删除: {error}"))?;
+            continue;
+        }
+        if record.value != Some(Value::Bool(true)) {
+            return Err("同步标签关系记录值无效".to_string());
+        }
+        let valid: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM library_tags WHERE id=?1)
+                        AND EXISTS(SELECT 1 FROM library_items WHERE id=?2)",
+                params![tag_id, item_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("无法校验同步标签关系: {error}"))?;
+        if valid {
+            connection
+                .execute(
+                    "INSERT INTO library_tag_members(tag_id,item_id,created_at)
+                     VALUES (?1,?2,?3) ON CONFLICT DO NOTHING",
+                    params![tag_id, item_id, library::now_ms()],
+                )
+                .map_err(|error| format!("无法应用同步标签关系: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn apply_snapshot_documents(
     connection: &Connection,
     app_data_dir: &Path,
@@ -2471,6 +2748,7 @@ fn apply_remote_snapshot(
     let conflict_count = merge_remote_records_at(&transaction, snapshot.records.clone())?.len();
     apply_snapshot_items(&transaction, &snapshot.items)?;
     apply_snapshot_groups(&transaction, &snapshot.groups, &snapshot.memberships)?;
+    apply_snapshot_tags(&transaction, &snapshot.tags, &snapshot.tag_memberships)?;
     apply_snapshot_documents(
         &transaction,
         app_data_dir,
@@ -3019,7 +3297,7 @@ async fn sync_once(
                 .map_err(|error| WebDavError::new("SYNC_MERGE_ERROR", error))?,
         );
     }
-    backfill_group_records(&connection)
+    backfill_library_records(&connection)
         .map_err(|error| WebDavError::new("SYNC_STORAGE_ERROR", error))?;
     let downloaded_books =
         download_pinned_books(&mut connection, &app_data, &client, token, state, uploaded).await?;
@@ -3587,6 +3865,154 @@ mod tests {
     }
 
     #[test]
+    fn tag_records_merge_like_groups_and_a_tombstone_keeps_the_book() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = library::open_database_at(directory.path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_items(id,source_kind,title,authors_json,updated_at)
+                 VALUES ('managed:book','managed','Book','[]',1)",
+                [],
+            )
+            .unwrap();
+        let tag_id = "33333333-3333-4333-8333-333333333333";
+        let local_tag = SnapshotTag {
+            id: tag_id.into(),
+            name: "旧标签".into(),
+        };
+        let active_tag = write_tag_state_record_at(
+            &connection,
+            tag_id,
+            Some(serde_json::to_value(&local_tag).unwrap()),
+        )
+        .unwrap();
+        let active_member =
+            write_tag_membership_record_at(&connection, tag_id, "managed:book", true).unwrap();
+        let remote_device = "44444444-4444-4444-8444-444444444444";
+        let remote_tag = SnapshotTag {
+            id: tag_id.into(),
+            name: "新标签".into(),
+        };
+        merge_remote_records_at(
+            &connection,
+            vec![SyncRecord {
+                record_id: "remote-tag-rename".into(),
+                object_id: format!("{TAG_OBJECT_PREFIX}{tag_id}"),
+                field: TAG_STATE_FIELD.into(),
+                value: Some(serde_json::to_value(&remote_tag).unwrap()),
+                point: VersionPoint {
+                    device_id: remote_device.into(),
+                    version: 1,
+                    context: BTreeMap::from([(
+                        active_tag.point.device_id.clone(),
+                        active_tag.point.version,
+                    )]),
+                    modified_at: active_tag.point.modified_at + 1,
+                },
+                tombstone: false,
+            }],
+        )
+        .unwrap();
+        apply_snapshot_tags(
+            &connection,
+            std::slice::from_ref(&remote_tag),
+            &[SnapshotTagMembership {
+                tag_id: tag_id.into(),
+                item_id: "managed:book".into(),
+            }],
+        )
+        .unwrap();
+        let (name, members): (String, i64) = (
+            connection
+                .query_row(
+                    "SELECT name FROM library_tags WHERE id=?1",
+                    params![tag_id],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM library_tag_members WHERE tag_id=?1",
+                    params![tag_id],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+        );
+        assert_eq!((name.as_str(), members), ("新标签", 1));
+
+        let remote_device = "55555555-5555-4555-8555-555555555555";
+        let next_tag = write_tag_state_record_at(
+            &connection,
+            tag_id,
+            Some(serde_json::to_value(&remote_tag).unwrap()),
+        )
+        .unwrap();
+        merge_remote_records_at(
+            &connection,
+            vec![
+                SyncRecord {
+                    record_id: "remote-tag-delete".into(),
+                    object_id: format!("{TAG_OBJECT_PREFIX}{tag_id}"),
+                    field: TAG_STATE_FIELD.into(),
+                    value: None,
+                    point: VersionPoint {
+                        device_id: remote_device.into(),
+                        version: 2,
+                        context: BTreeMap::from([(
+                            next_tag.point.device_id.clone(),
+                            next_tag.point.version,
+                        )]),
+                        modified_at: next_tag.point.modified_at + 1,
+                    },
+                    tombstone: true,
+                },
+                SyncRecord {
+                    record_id: "remote-tag-member-delete".into(),
+                    object_id: format!("{TAG_MEMBERSHIP_OBJECT_PREFIX}{tag_id}:managed:book"),
+                    field: TAG_MEMBERSHIP_STATE_FIELD.into(),
+                    value: None,
+                    point: VersionPoint {
+                        device_id: remote_device.into(),
+                        version: 3,
+                        context: BTreeMap::from([(
+                            active_member.point.device_id.clone(),
+                            active_member.point.version,
+                        )]),
+                        modified_at: active_member.point.modified_at + 1,
+                    },
+                    tombstone: true,
+                },
+            ],
+        )
+        .unwrap();
+        // 过期快照仍携带标签与关系：墓碑记录必须覆盖快照数组。
+        apply_snapshot_tags(
+            &connection,
+            std::slice::from_ref(&remote_tag),
+            &[SnapshotTagMembership {
+                tag_id: tag_id.into(),
+                item_id: "managed:book".into(),
+            }],
+        )
+        .unwrap();
+
+        let (tags, members, books): (i64, i64, i64) = (
+            connection
+                .query_row("SELECT COUNT(*) FROM library_tags", [], |row| row.get(0))
+                .unwrap(),
+            connection
+                .query_row("SELECT COUNT(*) FROM library_tag_members", [], |row| {
+                    row.get(0)
+                })
+                .unwrap(),
+            connection
+                .query_row("SELECT COUNT(*) FROM library_items", [], |row| row.get(0))
+                .unwrap(),
+        );
+        assert_eq!((tags, members, books), (0, 0, 1));
+    }
+
+    #[test]
     fn invalid_remote_snapshot_rolls_back_records_and_library_rows() {
         let directory = tempfile::tempdir().unwrap();
         let mut connection = library::open_database_at(directory.path()).unwrap();
@@ -3636,6 +4062,8 @@ mod tests {
             }],
             groups: Vec::new(),
             memberships: Vec::new(),
+            tags: Vec::new(),
+            tag_memberships: Vec::new(),
             documents: vec![SnapshotDocument {
                 id: "11111111-1111-4111-8111-111111111111".into(),
                 content_hash: "not-a-sha256".into(),

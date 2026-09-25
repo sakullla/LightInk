@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 pub const DATABASE_FILE: &str = "library.sqlite3";
 pub const CACHE_DIRECTORY: &str = "remote-cache";
 pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-pub(crate) const SCHEMA_VERSION: i64 = 9;
+pub(crate) const SCHEMA_VERSION: i64 = 10;
 const CACHE_LIMIT_KEY: &str = "cache_limit_bytes";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -684,6 +684,28 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                     )
                     .map_err(|error| format!("无法创建 WebDAV 书库源表: {error}"))?;
             }
+            10 => {
+                transaction
+                    .execute_batch(
+                        "CREATE TABLE IF NOT EXISTS library_tags (
+                           id TEXT PRIMARY KEY NOT NULL,
+                           name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
+                           created_at INTEGER NOT NULL,
+                           updated_at INTEGER NOT NULL
+                         );
+                         CREATE INDEX IF NOT EXISTS library_tags_name_idx
+                           ON library_tags(name);
+                         CREATE TABLE IF NOT EXISTS library_tag_members (
+                           tag_id TEXT NOT NULL REFERENCES library_tags(id) ON DELETE CASCADE,
+                           item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                           created_at INTEGER NOT NULL,
+                           PRIMARY KEY(tag_id, item_id)
+                         );
+                         CREATE INDEX IF NOT EXISTS library_tag_members_item_idx
+                           ON library_tag_members(item_id, tag_id);",
+                    )
+                    .map_err(|error| format!("无法创建书库标签表: {error}"))?;
+            }
             _ => return Err(format!("缺少书库数据库 v{target} 迁移实现")),
         }
         transaction
@@ -1050,6 +1072,16 @@ pub fn library_remove_source(app: AppHandle, source_id: String) -> Result<(), St
             .map_err(|error| format!("无法读取 OPDS 源书籍分组: {error}"))?;
         for group_id in group_ids {
             sync::write_membership_record_at(&transaction, &group_id, item_id, false)?;
+        }
+        let tag_ids = transaction
+            .prepare("SELECT tag_id FROM library_tag_members WHERE item_id=?1 ORDER BY tag_id")
+            .and_then(|mut statement| {
+                let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|error| format!("无法读取 OPDS 源书籍标签: {error}"))?;
+        for tag_id in tag_ids {
+            sync::write_tag_membership_record_at(&transaction, &tag_id, item_id, false)?;
         }
         sync::write_library_item_record_at(&transaction, item_id, false)?;
     }
@@ -1436,9 +1468,19 @@ pub fn library_remove_item(app: AppHandle, item_id: String) -> Result<(), String
             rows.collect::<Result<Vec<_>, _>>()
         })
         .map_err(|error| format!("无法读取书籍分组: {error}"))?;
+    let tag_ids = transaction
+        .prepare("SELECT tag_id FROM library_tag_members WHERE item_id=?1 ORDER BY tag_id")
+        .and_then(|mut statement| {
+            let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| format!("无法读取书籍标签: {error}"))?;
     sync::write_library_item_record_at(&transaction, &item_id, false)?;
     for group_id in memberships {
         sync::write_membership_record_at(&transaction, &group_id, &item_id, false)?;
+    }
+    for tag_id in tag_ids {
+        sync::write_tag_membership_record_at(&transaction, &tag_id, &item_id, false)?;
     }
     transaction
         .execute("DELETE FROM library_items WHERE id = ?1", params![item_id])
@@ -2345,6 +2387,99 @@ mod tests {
             )
             .unwrap();
         assert_eq!(item_title, "旧书");
+    }
+
+    #[test]
+    fn migrates_v9_to_tags_without_losing_existing_library_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = Connection::open(directory.path().join(DATABASE_FILE)).unwrap();
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                INSERT INTO schema_meta(key, value) VALUES ('version', '9');
+                INSERT INTO schema_meta(key, value) VALUES ('cache_limit_bytes', '2147483648');
+                CREATE TABLE opds_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, allow_http INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE library_items (
+                  id TEXT PRIMARY KEY NOT NULL, source_id TEXT, source_kind TEXT NOT NULL,
+                  title TEXT NOT NULL, authors_json TEXT NOT NULL, cover_url TEXT,
+                  local_path TEXT, acquisition_url TEXT, media_type TEXT, extension TEXT,
+                  size INTEGER, etag TEXT, last_modified TEXT, series TEXT, number TEXT,
+                  volume TEXT, page_count INTEGER, reading_direction TEXT, cover_page INTEGER,
+                  blob_hash TEXT, availability TEXT NOT NULL DEFAULT 'external',
+                  offline_pinned INTEGER NOT NULL DEFAULT 0,
+                  subjects_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_items(
+                  id,source_kind,title,authors_json,blob_hash,availability,offline_pinned,updated_at
+                ) VALUES ('managed:abc','managed','旧书','[]','abc','local',1,1);
+                CREATE TABLE managed_blobs (
+                  hash TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+                  size INTEGER NOT NULL, created_at INTEGER NOT NULL,last_verified_at INTEGER NOT NULL
+                );
+                INSERT INTO managed_blobs(hash,relative_path,size,created_at,last_verified_at)
+                  VALUES ('abc','managed-books/abc.epub',3,1,1);
+                CREATE TABLE library_groups (
+                  id TEXT PRIMARY KEY NOT NULL, parent_id TEXT, name TEXT NOT NULL,
+                  kind TEXT NOT NULL, rule_json TEXT, sort_order INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                INSERT INTO library_groups(id,parent_id,name,kind,rule_json,sort_order,created_at,updated_at)
+                  VALUES ('11111111-1111-4111-8111-111111111111',NULL,'旧分组','custom',NULL,0,1,1);
+                CREATE TABLE library_group_members (
+                  group_id TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+                  PRIMARY KEY(group_id, item_id)
+                );
+                INSERT INTO library_group_members(group_id,item_id,created_at)
+                  VALUES ('11111111-1111-4111-8111-111111111111','managed:abc',1);
+                CREATE TABLE webdav_sources (
+                  id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                  credential_ref TEXT, allow_http INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = database_for_tests(directory.path()).unwrap();
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        assert!(table_exists(&migrated, "library_tags"));
+        assert!(table_exists(&migrated, "library_tag_members"));
+        let item: (String, Option<String>) = migrated
+            .query_row(
+                "SELECT title,blob_hash FROM library_items WHERE id='managed:abc'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(item, ("旧书".to_string(), Some("abc".to_string())));
+        let group_name: String = migrated
+            .query_row(
+                "SELECT name FROM library_groups WHERE id='11111111-1111-4111-8111-111111111111'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(group_name, "旧分组");
+        let member_count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM library_group_members", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(member_count, 1);
+        let blob_count: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM managed_blobs WHERE hash='abc'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(blob_count, 1);
     }
 
     #[test]

@@ -25,6 +25,7 @@ mod recents;
 mod remote;
 mod snapshot;
 mod sync;
+mod tags;
 mod webdav;
 mod webdav_source;
 mod window_chrome;
@@ -121,6 +122,12 @@ pub fn run() {
             groups::library_list_group_memberships,
             groups::library_set_group_member,
             groups::library_set_item_groups,
+            tags::library_list_tags,
+            tags::library_list_tag_memberships,
+            tags::library_create_tag,
+            tags::library_rename_tag,
+            tags::library_delete_tag,
+            tags::library_set_item_tags,
             managed::library_import_managed_book,
             managed::library_preview_managed_migration,
             managed::library_apply_managed_migration,

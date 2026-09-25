@@ -77,6 +77,35 @@ describe('LibraryClient groups', () => {
   });
 });
 
+describe('LibraryClient tags', () => {
+  it('maps tag commands and copies readonly tag ids', async () => {
+    const tag = { id: 'tag-a', name: '科幻', createdAt: 1, updatedAt: 1 };
+    const invoke = vi.fn(async () => tag);
+    const client = new LibraryClient({ invoke } as LibraryClientInvoker);
+    const tagIds = ['tag-a', 'tag-b'] as const;
+
+    await client.listTags();
+    await client.listTagMemberships();
+    await client.createTag('科幻');
+    await client.renameTag('tag-a', '太空');
+    await client.deleteTag('tag-a');
+    await client.setItemTags('book-a', tagIds);
+
+    expect(invoke).toHaveBeenCalledWith('library_list_tags');
+    expect(invoke).toHaveBeenCalledWith('library_list_tag_memberships');
+    expect(invoke).toHaveBeenCalledWith('library_create_tag', { name: '科幻' });
+    expect(invoke).toHaveBeenCalledWith('library_rename_tag', {
+      tagId: 'tag-a',
+      name: '太空',
+    });
+    expect(invoke).toHaveBeenCalledWith('library_delete_tag', { tagId: 'tag-a' });
+    expect(invoke).toHaveBeenCalledWith('library_set_item_tags', {
+      itemId: 'book-a',
+      tagIds: ['tag-a', 'tag-b'],
+    });
+  });
+});
+
 describe('LibraryClient offline retention', () => {
   it('delegates offline pinning without changing the item id', async () => {
     const invoke = vi.fn(async () => undefined);
