@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InsertElementId } from '../../editor/insert-commands.js';
 import { OPEN_FILTERS } from '../../file/file-dialog.js';
@@ -435,6 +435,41 @@ describe('createAppShell immersive chrome', () => {
     expect(shell.isChromePinned()).toBe(true);
     expect(shell.chrome.isRevealed('menu')).toBe(true);
     expect(shell.chrome.isRevealed('tabs')).toBe(true);
+  });
+
+  it('renders the editor assistant entry only when wired, following the active document', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const onOpenAssistant = vi.fn();
+    let hasDocument = false;
+    const shell = createAppShell(
+      root,
+      { ...stubActions(), onOpenAssistant, hasActiveDocument: () => hasDocument },
+      { shortcutBindings: () => [], storage: null, initialPinPrefs: { menu: true, tabs: true } },
+    );
+    const button = (root as unknown as FakeEl).querySelector('#lightink-editor-assistant');
+    expect(button).not.toBeNull();
+    expect(button?.hidden).toBe(true);
+    expect(button?.textContent).toBe('助手');
+    expect(button?.getAttribute('aria-label')).toBe('助手');
+    hasDocument = true;
+    shell.renderTabBar([{ id: 'tab-1', title: 'a.md', dirty: false }], 'tab-1', {
+      onSwitch: () => undefined,
+      onClose: () => undefined,
+    });
+    expect(button?.hidden).toBe(false);
+    button?.click();
+    expect(onOpenAssistant).toHaveBeenCalledTimes(1);
+    hasDocument = false;
+    shell.renderTabBar([], null, { onSwitch: () => undefined, onClose: () => undefined });
+    expect(button?.hidden).toBe(true);
+  });
+
+  it('omits the editor assistant entry when the host does not wire it', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    createAppShell(root, stubActions(), { shortcutBindings: () => [], storage: null });
+    expect((root as unknown as FakeEl).querySelector('#lightink-editor-assistant')).toBeNull();
   });
 
   it('hides editor menu and tab chrome on shelf and reader; shows them in the editor', () => {

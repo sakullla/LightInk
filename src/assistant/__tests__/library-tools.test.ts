@@ -110,6 +110,8 @@ interface HarnessOptions {
   readonly userMessage?: string;
   readonly isExplicitInstruction?: (message: string) => boolean;
   readonly readingStatusOf?: (itemId: string) => LibraryReadingStatus | null;
+  /** 指定成员关系读取在会话创建前注入 reject（验证「读取失败不落状态」）。 */
+  readonly rejectReads?: readonly ('listGroupMemberships' | 'listTagMemberships')[];
 }
 
 interface Harness {
@@ -211,9 +213,19 @@ function harness(options: HarnessOptions = {}): Harness {
   const deps: LibraryToolDeps = {
     listItems: async () => [...state.items],
     listGroups: async () => [...state.groups],
-    listGroupMemberships: async () => [...state.groupMembers],
+    listGroupMemberships: async () => {
+      if (options.rejectReads?.includes('listGroupMemberships') === true) {
+        throw new Error('数据库读取失败');
+      }
+      return [...state.groupMembers];
+    },
     listTags: async () => [...state.tags],
-    listTagMemberships: async () => [...state.tagMembers],
+    listTagMemberships: async () => {
+      if (options.rejectReads?.includes('listTagMemberships') === true) {
+        throw new Error('数据库读取失败');
+      }
+      return [...state.tagMembers];
+    },
     locate: async (query) => fakeLocate(state.items, query),
     userMessage: options.userMessage ?? '',
     ...(options.isExplicitInstruction !== undefined
@@ -1187,6 +1199,49 @@ describe('批量写失败补偿与报告', () => {
     const retried = await h.session.confirmPending(pending!.id);
     expect(retried).toMatchObject({ ok: true, action: 'remove-group' });
     expect(h.state.groups).toEqual([]);
+  });
+
+  it('归类读取成员快照失败时不建组，书库保持原状', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '把《三体》归到分组「科幻」',
+      rejectReads: ['listGroupMemberships'],
+    });
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(result.updated).toBeUndefined();
+    expect(result.message).toContain('数据库读取失败');
+    expect(h.writes.createGroup).not.toHaveBeenCalled();
+    expect(h.writes.deleteGroup).not.toHaveBeenCalled();
+    expect(h.writes.setGroupMember).not.toHaveBeenCalled();
+    expect(h.state.groups).toEqual([]);
+    expect(h.state.groupMembers).toEqual([]);
+    expect(h.changed).not.toHaveBeenCalled();
+  });
+
+  it('打标读取标签关系失败时不建标签，书库保持原状', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '给《三体》打上「科幻」标签',
+      rejectReads: ['listTagMemberships'],
+    });
+    const result = await h.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['三体'],
+      mode: 'add',
+      tags: ['科幻'],
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(result.updated).toBeUndefined();
+    expect(result.message).toContain('数据库读取失败');
+    expect(h.writes.createTag).not.toHaveBeenCalled();
+    expect(h.writes.deleteTag).not.toHaveBeenCalled();
+    expect(h.writes.setItemTags).not.toHaveBeenCalled();
+    expect(h.state.tags).toEqual([]);
+    expect(h.state.tagMembers).toEqual([]);
+    expect(h.changed).not.toHaveBeenCalled();
   });
 });
 

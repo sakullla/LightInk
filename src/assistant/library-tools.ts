@@ -21,7 +21,8 @@
  * - 删除书籍、删除分组、清空标签一律确认，即使当前轮是显式指令。
  * - 同名多本/同名分组返回候选，不猜测落盘；智能组只读。
  * - 批量写中途失败：可逆步骤（归类/打标，含新建分组/标签）逐项补偿回滚；
- *   不可逆的删除在失败结果列出已应用项并触发刷新通知，不静默留半状态。
+ *   成员关系快照先于任何新建读取，读取失败时不落状态；不可逆的删除在失败结果
+ *   列出已应用项并触发刷新通知，不静默留半状态。
  *
  * 读写在 `LibraryToolDeps` 背后（生产默认走 `LibraryClient`，定位复用
  * `library-content` 的同名语义），测试注入替身，不起 Tauri。
@@ -1057,6 +1058,9 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
     try {
       switch (plan.kind) {
         case 'organize': {
+          // 成员关系快照必须先于 createGroup 读取：读取失败时不落任何状态，
+          // 也不留新建分组（补偿只覆盖写步骤失败，不覆盖「新建后读取失败」）。
+          const memberships = await deps.listGroupMemberships();
           let groupId = plan.groupId;
           let createdGroupId: string | undefined;
           if (plan.createGroup) {
@@ -1086,7 +1090,6 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
             });
           }
           const targetGroupId = groupId;
-          const memberships = await deps.listGroupMemberships();
           const hadMember = (itemId: string): boolean =>
             memberships.some(
               (membership) =>
@@ -1156,6 +1159,9 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         }
         case 'tag': {
           const tags = await deps.listTags();
+          // 成员关系快照必须先于 createTag 读取：读取失败时不落任何状态，也不留
+          // 新建标签（补偿只覆盖写步骤失败，不覆盖「新建后读取失败」）。
+          const memberships = await deps.listTagMemberships();
           const byName = new Map(
             tags.map((tag) => [normalizeName(tag.name), tag] as const),
           );
@@ -1195,7 +1201,6 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
                   : errorMessage(error),
             });
           }
-          const memberships = await deps.listTagMemberships();
           const originalOf = (itemId: string): string[] =>
             memberships
               .filter((membership) => membership.itemId === itemId)
