@@ -507,6 +507,27 @@ fn migrate_item_at(
                 sync::write_membership_record_at(&transaction, &group_id, item_id, false)?;
                 sync::write_membership_record_at(&transaction, &group_id, &target_id, true)?;
             }
+            let tag_ids = transaction
+                .prepare("SELECT tag_id FROM library_tag_members WHERE item_id=?1 ORDER BY tag_id")
+                .and_then(|mut statement| {
+                    let rows =
+                        statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+                    rows.collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(|error| format!("无法读取待迁移书籍标签引用: {error}"))?;
+            transaction
+                .execute(
+                    "INSERT INTO library_tag_members(tag_id, item_id, created_at)
+                     SELECT tag_id, ?2, created_at
+                     FROM library_tag_members WHERE item_id=?1
+                     ON CONFLICT DO NOTHING",
+                    params![item_id, target_id],
+                )
+                .map_err(|error| format!("无法迁移书籍标签引用: {error}"))?;
+            for tag_id in tag_ids {
+                sync::write_tag_membership_record_at(&transaction, &tag_id, item_id, false)?;
+                sync::write_tag_membership_record_at(&transaction, &tag_id, &target_id, true)?;
+            }
             sync::write_library_item_record_at(&transaction, item_id, false)?;
             sync::write_library_item_record_at(&transaction, &target_id, true)?;
             transaction
@@ -915,6 +936,57 @@ mod tests {
             .any(|record| { record.object_id.ends_with(":local:book") && record.tombstone }));
         assert!(records.iter().any(|record| {
             record.object_id.ends_with(&format!(":{}", alias.item_id)) && !record.tombstone
+        }));
+    }
+
+    #[test]
+    fn migration_preserves_tags_and_tombstones_the_old_membership() {
+        let app_data = tempfile::tempdir().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("book.epub");
+        fs::write(&source, b"tagged book").unwrap();
+        let mut connection = library::open_database_at(app_data.path()).unwrap();
+        let tag_id = "22222222-2222-4222-8222-222222222222";
+        connection
+            .execute(
+                "INSERT INTO library_items(
+                   id,source_kind,title,authors_json,local_path,availability,subjects_json,updated_at
+                 ) VALUES ('local:tagged','local','Tagged','[]',?1,'external','[]',1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_tags(id,name,created_at,updated_at) VALUES (?1,'科幻',1,1)",
+                params![tag_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_tag_members(tag_id,item_id,created_at)
+                 VALUES (?1,'local:tagged',1)",
+                params![tag_id],
+            )
+            .unwrap();
+
+        let (alias, _) = migrate_item_at(&mut connection, app_data.path(), "local:tagged").unwrap();
+
+        let members: Vec<String> = connection
+            .prepare("SELECT item_id FROM library_tag_members WHERE tag_id=?1 ORDER BY item_id")
+            .unwrap()
+            .query_map(params![tag_id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(members, vec![alias.item_id.clone()]);
+        let records = sync::list_records_at(&connection).unwrap();
+        assert!(records.iter().any(|record| {
+            record.object_id == format!("library-tag-membership:{tag_id}:local:tagged")
+                && record.tombstone
+        }));
+        assert!(records.iter().any(|record| {
+            record.object_id == format!("library-tag-membership:{tag_id}:{}", alias.item_id)
+                && !record.tombstone
         }));
     }
 

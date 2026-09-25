@@ -382,7 +382,7 @@ fn delete_group_at(connection: &mut Connection, group_id: &str) -> Result<(), St
         .map_err(|error| format!("无法提交删除分组: {error}"))
 }
 
-fn resolve_item_id(connection: &Connection, item_id: &str) -> Result<String, String> {
+pub(crate) fn resolve_item_id(connection: &Connection, item_id: &str) -> Result<String, String> {
     let resolved = connection
         .query_row(
             "SELECT item_id FROM library_item_aliases WHERE alias_id=?1",
