@@ -560,8 +560,11 @@ export interface AssistantPanelDeps {
   currentSelection?: () => string;
   /** PDF 当前页码，只写入本轮用户消息。 */
   currentPage?: () => number | undefined;
-  /** 前端工具循环的执行会话；缺省则 tool_call 回失败结果。 */
-  createToolSession?: () => AssistantToolSession;
+  /**
+   * 前端工具循环的执行会话；缺省则 tool_call 回失败结果。入参为本轮用户消息
+   * （surface 据此判定“显式写指令直写、主动建议待确认”）。
+   */
+  createToolSession?: (userMessage: string) => AssistantToolSession;
   /** 回答中的章节/页码定位点击（用户操作，不由工具翻页）。 */
   jumpToLocator?: (target: { chapter?: number; page?: number; title?: string }) => void;
   /** 助手 Markdown 外链（沿用应用外部打开策略）。 */
@@ -1476,7 +1479,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     let visible = '';
     let contextTruncated = false;
     let toolLimitReached = false;
-    const session = deps.createToolSession?.() ?? null;
+    const session = deps.createToolSession?.(userMessage) ?? null;
     let toolRoundTrips = 0;
 
     const onDelta = (delta: string): void => {

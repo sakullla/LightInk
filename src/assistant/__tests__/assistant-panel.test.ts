@@ -1027,6 +1027,28 @@ describe('createAssistantPanel tools and locators', () => {
     panel.destroy();
   });
 
+  it('passes the current user message to createToolSession for write gating', async () => {
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute: vi.fn(async () => ({ ok: true })),
+    } as unknown as AssistantToolSession;
+    const createToolSession = vi.fn(() => session);
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        emit('好');
+        return { finish: 'stop', totalChars: 1 };
+      },
+      createToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把《三体》归到科幻');
+    await flush();
+    expect(createToolSession).toHaveBeenCalledWith('把《三体》归到科幻');
+    panel.destroy();
+  });
+
   it('jumps when a query-based answer locator is clicked', async () => {
     const { panel, deps } = mountPanel({
       script: async ({ emit }) => {

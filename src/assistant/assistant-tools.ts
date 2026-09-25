@@ -29,7 +29,11 @@ export type QueryBookAction =
   | 'book_info'
   | 'search';
 
-export type AssistantToolName = typeof QUERY_BOOK_TOOL_NAME | typeof SAVE_TO_BOOK_TOOL_NAME;
+/**
+ * 工具名。内置阅读器会话固定两项；书架/下载等扩展会话自带工具定义（ADR-3 /
+ * ADR-4），共用同一份 definition 形状，故类型在此保持开放。
+ */
+export type AssistantToolName = string;
 
 export interface AssistantToolDefinition {
   readonly type: 'function';
