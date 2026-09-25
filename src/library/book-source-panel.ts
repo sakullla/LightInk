@@ -6,6 +6,14 @@ import type {
   BookSourceIssue,
   BookSourceSearchResult,
 } from './book-source-client.js';
+import {
+  bookDownloadClient,
+  chapterProgress,
+  createBookDownloadController,
+  type BookDownloadChapterInput,
+  type BookDownloadFormat,
+  type BookDownloadPanelClient,
+} from './book-download.js';
 
 export type BookSourceLocale = 'en' | 'zh-CN';
 
@@ -25,6 +33,11 @@ export interface BookSourcePanelOptions {
   readonly client: BookSourcePanelClient;
   readonly getLocale: () => BookSourceLocale;
   readonly doc?: Document;
+  /**
+   * R8 下载管线客户端（目录确认/作业命令）。缺省用 Tauri 默认客户端；
+   * 测试注入 mock。下载编排状态机收敛在 book-download.ts。
+   */
+  readonly downloads?: BookDownloadPanelClient;
 }
 
 export interface BookSourcePanel {
@@ -78,6 +91,24 @@ interface BookSourcePanelLabels {
   imported: string;
   builtinAdded: string;
   duplicate: string;
+  download: string;
+  downloadChapters: string;
+  downloadFormat: string;
+  downloadStart: string;
+  downloadCancel: string;
+  downloadResume: string;
+  downloadRetry: string;
+  downloadRetryAll: string;
+  downloadRecompose: string;
+  downloadClose: string;
+  downloadImported: string;
+  downloadTocFailed: string;
+  downloadPreparing: string;
+  downloadDownloading: string;
+  downloadPaused: string;
+  downloadIncomplete: string;
+  downloadComposing: string;
+  downloadReady: string;
 }
 
 const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
@@ -123,6 +154,24 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     imported: 'Book sources imported',
     builtinAdded: 'Built-in example added',
     duplicate: 'This built-in example is already added',
+    download: 'Download',
+    downloadChapters: 'chapters',
+    downloadFormat: 'Format',
+    downloadStart: 'Start download',
+    downloadCancel: 'Cancel download',
+    downloadResume: 'Resume',
+    downloadRetry: 'Retry',
+    downloadRetryAll: 'Retry failed chapters',
+    downloadRecompose: 'Rebuild book',
+    downloadClose: 'Close',
+    downloadImported: 'Imported to the library; open it from the shelf',
+    downloadTocFailed: 'Failed to load the chapter list',
+    downloadPreparing: 'Preparing…',
+    downloadDownloading: 'Downloading…',
+    downloadPaused: 'Paused; resuming fills only missing chapters',
+    downloadIncomplete: 'Some chapters failed; retry is available',
+    downloadComposing: 'Building and importing…',
+    downloadReady: 'Waiting to build and import',
   },
   'zh-CN': {
     title: '书源',
@@ -166,6 +215,24 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     imported: '已导入书源',
     builtinAdded: '已添加内置书源',
     duplicate: '该内置书源已添加',
+    download: '下载',
+    downloadChapters: '章',
+    downloadFormat: '格式',
+    downloadStart: '开始下载',
+    downloadCancel: '取消下载',
+    downloadResume: '继续下载',
+    downloadRetry: '重试',
+    downloadRetryAll: '重试失败章节',
+    downloadRecompose: '重新合成',
+    downloadClose: '关闭',
+    downloadImported: '已入库，可在书架打开阅读',
+    downloadTocFailed: '无法读取目录',
+    downloadPreparing: '准备下载…',
+    downloadDownloading: '下载中…',
+    downloadPaused: '已暂停，继续时只补缺失章节',
+    downloadIncomplete: '有章节下载失败，可重试',
+    downloadComposing: '合成入库中…',
+    downloadReady: '等待合成入库',
   },
 };
 
@@ -393,7 +460,31 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   searchActions.append(searchClose);
   searchSection.append(searchTitle, searchRow, searchStatus, searchResults, searchActions);
 
-  detailPane.append(hint, editor, importSection, exportSection, searchSection);
+  // R8：搜索结果 → 确认目录 → 断点下载 → 合成入库。编排状态机在
+  // book-download.ts；面板只渲染阶段/章节状态与动作入口。
+  const downloadSection = doc.createElement('section');
+  downloadSection.className = 'lightink-library-book-source-download';
+  downloadSection.hidden = true;
+  const downloadTitle = doc.createElement('h3');
+  const downloadInfo = doc.createElement('p');
+  downloadInfo.className = 'lightink-library-book-source-download-info';
+  const downloadStatus = doc.createElement('p');
+  downloadStatus.className = 'lightink-library-book-source-editor-status';
+  downloadStatus.setAttribute('role', 'status');
+  downloadStatus.hidden = true;
+  const downloadChapterList = doc.createElement('div');
+  downloadChapterList.className = 'lightink-library-book-source-download-chapters';
+  const downloadActions = doc.createElement('div');
+  downloadActions.className = 'lightink-library-book-source-actions';
+  downloadSection.append(
+    downloadTitle,
+    downloadInfo,
+    downloadStatus,
+    downloadChapterList,
+    downloadActions,
+  );
+
+  detailPane.append(hint, editor, importSection, exportSection, searchSection, downloadSection);
   body.append(listPane, detailPane);
   dialog.append(header, toolbar, statusEl, body);
   overlay.appendChild(dialog);
@@ -402,6 +493,21 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   let builtins: BookSourceBuiltin[] = [];
   let mode: PanelMode = { kind: 'idle' };
   let editingSourceId: string | undefined;
+
+  const downloads = options.downloads ?? bookDownloadClient;
+  let downloadPrep:
+    | {
+        readonly result: BookSourceSearchResult;
+        readonly chapters: readonly BookDownloadChapterInput[];
+        format: BookDownloadFormat;
+      }
+    | undefined;
+  const downloadController = createBookDownloadController({
+    client: downloads,
+    onState: () => {
+      renderDownload();
+    },
+  });
 
   const labels = (): BookSourcePanelLabels => LABELS[options.getLocale()] ?? LABELS.en;
 
@@ -550,6 +656,7 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
     renderList();
     renderBuiltins();
     renderDetail();
+    renderDownload();
   }
 
   async function refresh(): Promise<void> {
@@ -783,7 +890,9 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
         source.textContent = result.sourceTitle;
         const url = doc.createElement('code');
         url.textContent = result.url;
-        row.append(name, author, source, url);
+        const download = createButton(doc, l.download);
+        download.addEventListener('click', () => void beginDownload(result));
+        row.append(name, author, source, url, download);
         searchResults.appendChild(row);
       }
     } catch (error) {
@@ -791,6 +900,174 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
       searchStatus.textContent = errorText(error, l.loadFailed);
       searchStatus.dataset.status = 'error';
       searchStatus.hidden = false;
+    }
+  }
+
+  function beginDownload(result: BookSourceSearchResult): void {
+    const l = labels();
+    downloadPrep = undefined;
+    downloadTitle.textContent = `${l.download}: ${result.title}`;
+    downloadInfo.textContent = '';
+    downloadStatus.textContent = l.downloadPreparing;
+    downloadStatus.dataset.status = '';
+    downloadStatus.hidden = false;
+    downloadChapterList.replaceChildren();
+    downloadActions.replaceChildren();
+    downloadSection.hidden = false;
+    void (async () => {
+      try {
+        const chapters = await downloads.chapters(result.sourceId, result.url);
+        downloadPrep = { result, chapters, format: 'txt' };
+        renderDownload();
+      } catch (error) {
+        downloadStatus.textContent = `${l.downloadTocFailed}: ${errorText(error, '')}`.trim();
+        downloadStatus.dataset.status = 'error';
+        downloadStatus.hidden = false;
+      }
+    })();
+  }
+
+  function confirmDownload(): void {
+    const prep = downloadPrep;
+    if (prep === undefined) return;
+    downloadPrep = undefined;
+    void downloadController.start({
+      sourceId: prep.result.sourceId,
+      title: prep.result.title,
+      author: prep.result.author,
+      bookUrl: prep.result.url,
+      format: prep.format,
+      chapters: prep.chapters,
+    });
+  }
+
+  function renderDownload(): void {
+    const l = labels();
+    const state = downloadController.state;
+    const phase = state.phase;
+    downloadSection.hidden = phase === 'idle' && downloadPrep === undefined;
+    if (downloadPrep !== undefined && phase === 'idle') {
+      downloadTitle.textContent = `${l.download}: ${downloadPrep.result.title}`;
+      downloadInfo.textContent = [
+        downloadPrep.result.author ?? '',
+        downloadPrep.result.sourceTitle,
+        `${downloadPrep.chapters.length} ${l.downloadChapters}`,
+      ]
+        .filter((part) => part !== '')
+        .join(' · ');
+    } else if (phase !== 'idle') {
+      downloadTitle.textContent = `${l.download}: ${state.title}`;
+      const progress = chapterProgress(state);
+      downloadInfo.textContent = `${progress.done}/${progress.total}`;
+    } else {
+      downloadTitle.textContent = '';
+      downloadInfo.textContent = '';
+    }
+    const phaseText: Partial<Record<typeof phase, string>> = {
+      starting: l.downloadPreparing,
+      downloading: l.downloadDownloading,
+      paused: l.downloadPaused,
+      incomplete: l.downloadIncomplete,
+      composing: l.downloadComposing,
+      ready: l.downloadReady,
+    };
+    const message = phase === 'done' ? l.downloadImported : (state.message ?? phaseText[phase]);
+    downloadStatus.textContent = message ?? '';
+    downloadStatus.hidden = message === undefined || message === '';
+    if (message === undefined || message === '') {
+      delete downloadStatus.dataset.status;
+    } else if (phase === 'done') {
+      downloadStatus.dataset.status = 'success';
+    } else if (phase === 'incomplete') {
+      downloadStatus.dataset.status = 'error';
+    } else {
+      delete downloadStatus.dataset.status;
+    }
+
+    downloadChapterList.replaceChildren();
+    if (downloadPrep !== undefined && phase === 'idle') {
+      for (const [index, chapter] of downloadPrep.chapters.entries()) {
+        const row = doc.createElement('div');
+        row.className = 'lightink-library-book-source-download-chapter';
+        row.dataset.indexNo = String(index);
+        row.dataset.status = 'pending';
+        const title = doc.createElement('span');
+        title.textContent = chapter.title;
+        row.append(title);
+        downloadChapterList.appendChild(row);
+      }
+    } else if (phase !== 'idle') {
+      for (const chapter of state.chapters) {
+        const row = doc.createElement('div');
+        row.className = 'lightink-library-book-source-download-chapter';
+        row.dataset.indexNo = String(chapter.indexNo);
+        row.dataset.status = chapter.status;
+        const title = doc.createElement('span');
+        title.textContent = chapter.title;
+        row.append(title);
+        if (chapter.status === 'failed') {
+          const retry = createButton(doc, l.downloadRetry);
+          retry.addEventListener('click', () => downloadController.retryChapter(chapter.indexNo));
+          row.append(retry);
+        }
+        downloadChapterList.appendChild(row);
+      }
+    }
+
+    downloadActions.replaceChildren();
+    if (downloadPrep !== undefined && phase === 'idle') {
+      const formatLabel = doc.createElement('label');
+      formatLabel.className = 'lightink-library-book-source-download-format';
+      const caption = doc.createElement('span');
+      caption.textContent = l.downloadFormat;
+      const select = doc.createElement('select');
+      for (const format of ['txt', 'epub'] as const) {
+        const option = doc.createElement('option');
+        option.value = format;
+        option.textContent = format.toUpperCase();
+        option.selected = downloadPrep.format === format;
+        select.append(option);
+      }
+      select.addEventListener('change', () => {
+        if (downloadPrep !== undefined) {
+          downloadPrep.format = select.value === 'epub' ? 'epub' : 'txt';
+        }
+      });
+      formatLabel.append(caption, select);
+      const start = createButton(doc, l.downloadStart, 'lightink-library-primary');
+      start.addEventListener('click', confirmDownload);
+      const close = createButton(doc, l.downloadClose);
+      close.addEventListener('click', () => {
+        downloadPrep = undefined;
+        renderDownload();
+      });
+      downloadActions.append(formatLabel, start, close);
+    } else if (phase === 'starting' || phase === 'downloading') {
+      const cancel = createButton(doc, l.downloadCancel);
+      cancel.addEventListener('click', () => downloadController.cancel());
+      downloadActions.append(cancel);
+    } else if (phase === 'paused' || phase === 'incomplete' || phase === 'ready' || phase === 'done') {
+      if (phase === 'paused') {
+        const resume = createButton(doc, l.downloadResume, 'lightink-library-primary');
+        resume.addEventListener('click', () => {
+          const jobId = downloadController.state.jobId;
+          if (jobId !== undefined) void downloadController.resume(jobId);
+        });
+        downloadActions.append(resume);
+      }
+      if (phase === 'incomplete') {
+        const retryAll = createButton(doc, l.downloadRetryAll, 'lightink-library-primary');
+        retryAll.addEventListener('click', () => downloadController.retryFailed());
+        downloadActions.append(retryAll);
+      }
+      if (phase === 'ready') {
+        const recompose = createButton(doc, l.downloadRecompose, 'lightink-library-primary');
+        recompose.addEventListener('click', () => downloadController.retryFinalize());
+        downloadActions.append(recompose);
+      }
+      const close = createButton(doc, l.downloadClose);
+      close.addEventListener('click', () => downloadController.dismiss());
+      downloadActions.append(close);
     }
   }
 
