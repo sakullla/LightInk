@@ -20,6 +20,8 @@ import {
   type LibraryGroup,
   type LibraryGroupMembership,
   type LibraryItem,
+  type LibraryTag,
+  type LibraryTagMembership,
 } from '../library-client.js';
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
@@ -661,6 +663,108 @@ function createGroupStore() {
       }
     },
   };
+}
+
+interface MutableTag {
+  id: string;
+  name: string;
+}
+
+function toLibraryTag(tag: MutableTag): LibraryTag {
+  return { id: tag.id, name: tag.name, createdAt: 1, updatedAt: 1 };
+}
+
+function createTagStore() {
+  const state: MutableTag[] = [];
+  const memberships: LibraryTagMembership[] = [];
+  let seq = 0;
+
+  const findIndex = (tagId: string): number => {
+    const index = state.findIndex((tag) => tag.id === tagId);
+    if (index < 0) throw new Error(`tag not found: ${tagId}`);
+    return index;
+  };
+
+  return {
+    async listTags(): Promise<LibraryTag[]> {
+      return state.map(toLibraryTag);
+    },
+    async listTagMemberships(): Promise<LibraryTagMembership[]> {
+      return memberships.map((entry) => ({ ...entry }));
+    },
+    async createTag(name: string): Promise<LibraryTag> {
+      const trimmed = name.trim();
+      const existing = state.find((tag) => tag.name === trimmed);
+      if (existing !== undefined) return toLibraryTag(existing);
+      seq += 1;
+      const tag: MutableTag = { id: `tag-${seq}`, name: trimmed };
+      state.push(tag);
+      return toLibraryTag(tag);
+    },
+    async renameTag(tagId: string, name: string): Promise<LibraryTag> {
+      const tag = state[findIndex(tagId)]!;
+      tag.name = name.trim();
+      return toLibraryTag(tag);
+    },
+    async deleteTag(tagId: string): Promise<void> {
+      state.splice(findIndex(tagId), 1);
+      for (let index = memberships.length - 1; index >= 0; index -= 1) {
+        if (memberships[index]?.tagId === tagId) memberships.splice(index, 1);
+      }
+    },
+    async setItemTags(itemId: string, tagIds: readonly string[]): Promise<void> {
+      for (let index = memberships.length - 1; index >= 0; index -= 1) {
+        if (memberships[index]?.itemId === itemId) memberships.splice(index, 1);
+      }
+      for (const tagId of tagIds) {
+        memberships.push({ tagId, itemId });
+      }
+    },
+  };
+}
+
+function tagDependencies(options: { items: LibraryItem[] }): {
+  deps: LibraryViewDependencies;
+  library: GroupLibrary;
+  tagStore: ReturnType<typeof createTagStore>;
+} {
+  const items = [...options.items];
+  const store = createTagStore();
+  const tag = {
+    listTags: vi.fn(() => store.listTags()),
+    listTagMemberships: vi.fn(() => store.listTagMemberships()),
+    createTag: vi.fn((name: string) => store.createTag(name)),
+    renameTag: vi.fn((tagId: string, name: string) => store.renameTag(tagId, name)),
+    deleteTag: vi.fn((tagId: string) => store.deleteTag(tagId)),
+    setItemTags: vi.fn((itemId: string, tagIds: readonly string[]) =>
+      store.setItemTags(itemId, tagIds),
+    ),
+  };
+  const base = dependencies({
+    library: {
+      ...dependencies().library,
+      listItems: vi.fn(async () => items),
+      ...tag,
+    },
+  });
+  return { deps: base, library: base.library, tagStore: store };
+}
+
+function tagNavButton(host: HTMLElement, name: string): HTMLButtonElement {
+  expandNavSectionIfPresent(host, 'tags');
+  const candidate = Array.from(
+    host.querySelectorAll<HTMLButtonElement>('.lightink-library-tag'),
+  ).find((button) => button.textContent?.trim() === name && isShown(button));
+  if (!(candidate instanceof HTMLButtonElement)) {
+    throw new Error(`tag nav item not found: ${name}`);
+  }
+  return candidate;
+}
+
+function tagDialogOf(): HTMLElement {
+  const dialog = document.querySelector<HTMLElement>('.lightink-library-tag-modal:not([hidden])');
+  if (!(dialog instanceof HTMLElement)) throw new Error('tag dialog not found');
+  return dialog;
 }
 
 function collectionDependencies(options: {
@@ -4470,6 +4574,227 @@ describe('LibraryView shelf collections', () => {
     await settle();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(() => collectionButton(host, seriesStem)).toThrow(/collection button not found/);
+    view.destroy();
+  });
+});
+
+describe('LibraryView book tags (R6)', () => {
+  it('filters the cover wall by tag from the nav and the home smart module', async () => {
+    const scifi = localItem({
+      id: 'local:/books/scifi.epub',
+      title: '科幻小说',
+      localPath: '/books/scifi.epub',
+    });
+    const space = localItem({
+      id: 'local:/books/space.epub',
+      title: '太空漫游',
+      localPath: '/books/space.epub',
+    });
+    const history = localItem({
+      id: 'local:/books/history.epub',
+      title: '历史研究',
+      localPath: '/books/history.epub',
+    });
+    const { deps, tagStore } = tagDependencies({ items: [scifi, space, history] });
+    const scifiTag = await tagStore.createTag('科幻');
+    const historyTag = await tagStore.createTag('历史');
+    await tagStore.setItemTags(scifi.id, [scifiTag.id]);
+    await tagStore.setItemTags(space.id, [scifiTag.id]);
+    await tagStore.setItemTags(history.id, [historyTag.id]);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    // 首页「智能分组」模块聚合标签并显示计数（R6）。
+    const smartModule = host.querySelector<HTMLElement>('.lightink-library-home-smart')!;
+    expect(isShown(smartModule)).toBe(true);
+    const scifiChip = smartModule.querySelector<HTMLButtonElement>(
+      `[data-home-tag-id="${scifiTag.id}"]`,
+    )!;
+    expect(scifiChip.textContent).toContain('科幻');
+    expect(scifiChip.querySelector('.lightink-library-home-group-count')?.textContent).toBe('2');
+    expect(
+      smartModule.querySelector(`[data-home-tag-id="${historyTag.id}"] .lightink-library-home-group-count`)
+        ?.textContent,
+    ).toBe('1');
+
+    // 首页标签 chip 点选即过滤书墙。
+    smartModule
+      .querySelector<HTMLButtonElement>(`[data-home-tag-id="${historyTag.id}"]`)!
+      .click();
+    await settle();
+    expect(itemRow(host, history.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${scifi.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-home-modules'))).toBe(false);
+
+    // 导航标签分区同源：再点同一标签取消，书目恢复。
+    const historyNav = tagNavButton(host, '历史');
+    expect(historyNav.dataset.tagId).toBe(historyTag.id);
+    expect(historyNav.classList.contains('is-active')).toBe(true);
+    historyNav.click();
+    await settle();
+    expect(itemRow(host, scifi.id)).toBeTruthy();
+    expect(itemRow(host, history.id)).toBeTruthy();
+    expect(tagNavButton(host, '历史').classList.contains('is-active')).toBe(false);
+
+    // 点选另一标签只保留命中书籍。
+    tagNavButton(host, '科幻').click();
+    await settle();
+    expect(itemRow(host, scifi.id)).toBeTruthy();
+    expect(itemRow(host, space.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${history.id}"]`)).toBeNull();
+    view.destroy();
+  });
+
+  it('shows up to three tag chips per card and folds the rest into +N', async () => {
+    const book = localItem({
+      id: 'local:/books/many-tags.epub',
+      title: '多标签',
+      localPath: '/books/many-tags.epub',
+    });
+    const { deps, tagStore } = tagDependencies({ items: [book] });
+    const assigned: string[] = [];
+    for (const name of ['科幻', '太空', '探险', '长篇']) {
+      const tag = await tagStore.createTag(name);
+      assigned.push(tag.id);
+      await tagStore.setItemTags(book.id, assigned);
+    }
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const card = itemRow(host, book.id);
+    const chips = Array.from(
+      card.querySelectorAll<HTMLElement>('.lightink-library-item-tags .lightink-library-tag-chip'),
+    );
+    expect(chips.map((chip) => chip.textContent)).toEqual(['科幻', '太空', '探险', '+1']);
+    const more = card.querySelector<HTMLElement>('[data-tag-overflow]')!;
+    expect(more.dataset.tagOverflow).toBe('1');
+    expect(more.getAttribute('title')).toContain('1');
+    view.destroy();
+  });
+
+  it('assigns, shows, and removes tags through the detail pane reached from the cover menu', async () => {
+    const book = localItem({
+      id: 'local:/books/assign.epub',
+      title: '赋标书',
+      localPath: '/books/assign.epub',
+    });
+    const { deps, library, tagStore } = tagDependencies({ items: [book] });
+    const scifi = await tagStore.createTag('科幻');
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const menu = await openItemMenu(host, book.id);
+    expect(menu.textContent).toContain('作品详情');
+    expect(menu.textContent).toContain('编辑标签');
+    contextMenuItem('编辑标签').click();
+    await settle();
+    const dialog = tagDialogOf();
+    const checkbox = dialog.querySelector<HTMLInputElement>(
+      `input[name="tag"][value="${scifi.id}"]`,
+    )!;
+    checkbox.checked = true;
+    dialog
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(library.setItemTags).toHaveBeenCalledWith(book.id, [scifi.id]);
+    expect(itemRow(host, book.id).querySelector('.lightink-library-tag-chip')?.textContent).toBe(
+      '科幻',
+    );
+
+    // 右键「作品详情」打开书架详情侧栏，标签可逐枚移除。
+    await openItemMenu(host, book.id);
+    contextMenuItem('作品详情').click();
+    await settle();
+    const detail = host.querySelector<HTMLElement>('.lightink-library-detail')!;
+    expect(isShown(detail)).toBe(true);
+    const chip = detail.querySelector<HTMLElement>('.lightink-library-tag-chip')!;
+    expect(chip.textContent).toContain('科幻');
+    chip.querySelector<HTMLButtonElement>('.lightink-library-tag-chip-remove')!.click();
+    await settle();
+    expect(library.setItemTags).toHaveBeenLastCalledWith(book.id, []);
+    expect(detail.querySelector('.lightink-library-tag-chip')).toBeNull();
+    expect(itemRow(host, book.id).querySelector('.lightink-library-item-tags')).toBeNull();
+    view.destroy();
+  });
+
+  it('creates tags inline while assigning, then renames and deletes them without removing books', async () => {
+    const book = localItem({
+      id: 'local:/books/tag-manage.epub',
+      title: '管理标签',
+      localPath: '/books/tag-manage.epub',
+    });
+    const { deps, library, tagStore } = tagDependencies({ items: [book] });
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    // 赋标弹层内联新建：创建后自动勾选，保存即写入关系。
+    await openItemMenu(host, book.id);
+    contextMenuItem('编辑标签').click();
+    await settle();
+    let dialog = tagDialogOf();
+    const createInput = dialog.querySelector<HTMLInputElement>('input[name="newTag"]')!;
+    createInput.value = '科幻';
+    dialog.querySelector<HTMLButtonElement>('.lightink-library-tag-create-add')!.click();
+    await settle();
+    expect(library.createTag).toHaveBeenCalledWith('科幻');
+    const created = dialog.querySelector<HTMLInputElement>('input[name="tag"]')!;
+    expect(created.checked).toBe(true);
+    dialog
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(library.setItemTags).toHaveBeenCalledWith(book.id, ['tag-1']);
+
+    // 导航分区右键重命名。
+    let navTag = tagNavButton(host, '科幻');
+    navTag.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+    );
+    await settle();
+    contextMenuItem('重命名标签').click();
+    await settle();
+    dialog = tagDialogOf();
+    const nameInput = dialog.querySelector<HTMLInputElement>('input[name="tagName"]')!;
+    expect(nameInput.value).toBe('科幻');
+    nameInput.value = '太空';
+    dialog
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(library.renameTag).toHaveBeenCalledWith('tag-1', '太空');
+    expect(tagNavButton(host, '太空').dataset.tagId).toBe('tag-1');
+
+    // 删除标签只移除关系：确认后书籍仍在，书卡标签条消失。
+    navTag = tagNavButton(host, '太空');
+    navTag.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+    );
+    await settle();
+    contextMenuItem('删除标签').click();
+    await settle();
+    dialog = tagDialogOf();
+    expect(dialog.textContent).toContain('书籍仍保留');
+    dialog.querySelector<HTMLButtonElement>('.lightink-library-danger')!.click();
+    await settle();
+    expect(library.deleteTag).toHaveBeenCalledWith('tag-1');
+    expect(library.removeItem).not.toHaveBeenCalled();
+    expect(() => tagNavButton(host, '太空')).toThrow(/tag nav item not found/);
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(host.querySelector('.lightink-library-item-tags')).toBeNull();
+    await expect(tagStore.listTagMemberships()).resolves.toEqual([]);
     view.destroy();
   });
 });

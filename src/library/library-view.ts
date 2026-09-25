@@ -4,6 +4,8 @@ import type {
   LibraryGroup,
   LibraryGroupMembership,
   LibraryItem,
+  LibraryTag,
+  LibraryTagMembership,
 } from './library-client.js';
 import {
   canPlaceGroup,
@@ -264,6 +266,18 @@ interface Labels {
   tabSources: string;
   backToSources: string;
   importShort: string;
+  tags: string;
+  filterTags: string;
+  newTag: string;
+  renameTag: string;
+  deleteTag: string;
+  deleteTagConfirm: string;
+  tagName: string;
+  saveTags: string;
+  manageTags: string;
+  removeTag: string;
+  noTags: string;
+  tagsOverflow: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
@@ -439,6 +453,18 @@ const LABELS: Record<Locale, Labels> = {
     tabSources: 'Sources',
     backToSources: 'Back to sources',
     importShort: 'Import',
+    tags: 'Tags',
+    filterTags: 'Filter tags…',
+    newTag: 'New tag',
+    renameTag: 'Rename tag',
+    deleteTag: 'Delete tag',
+    deleteTagConfirm: 'Delete “{name}”? Books stay in the library; only the tag links are removed.',
+    tagName: 'Tag name',
+    saveTags: 'Save tags',
+    manageTags: 'Edit tags',
+    removeTag: 'Remove tag',
+    noTags: 'No tags yet. Create one below.',
+    tagsOverflow: '{count} more tags',
   },
   'zh-CN': {
     library: '书库',
@@ -612,6 +638,18 @@ const LABELS: Record<Locale, Labels> = {
     tabSources: '书源',
     backToSources: '返回书源',
     importShort: '导入',
+    tags: '标签',
+    filterTags: '筛选标签…',
+    newTag: '新建标签',
+    renameTag: '重命名标签',
+    deleteTag: '删除标签',
+    deleteTagConfirm: '删除“{name}”？书籍仍保留在书库，仅移除标签关系。',
+    tagName: '标签名称',
+    saveTags: '保存标签',
+    manageTags: '编辑标签',
+    removeTag: '移除标签',
+    noTags: '还没有标签，可在下方新建。',
+    tagsOverflow: '另有 {count} 个标签',
   },
 };
 
@@ -654,6 +692,12 @@ export interface LibraryViewDependencies {
         | 'setGroupMember'
         | 'setItemGroups'
         | 'setOfflinePinned'
+        | 'listTags'
+        | 'listTagMemberships'
+        | 'createTag'
+        | 'renameTag'
+        | 'deleteTag'
+        | 'setItemTags'
       >
     >;
   readonly getLocale: () => Locale;
@@ -1161,6 +1205,8 @@ const SHELF_FILTER_SMART_IDS: ReadonlySet<string> = new Set([
 const HOME_RECENT_LIMIT = 8;
 /** 首页「智能分组」最多展示的分组数，避免大书库把首页撑成目录页。 */
 const HOME_SMART_GROUP_LIMIT = 12;
+/** 书卡标签条最多展示的标签数；超出折叠为 +N。 */
+const TAG_CHIP_LIMIT = 3;
 
 function libraryThemeLabel(labels: Labels, id: LibraryThemeId): string {
   switch (id) {
@@ -1234,6 +1280,10 @@ const NAV_ICON_PATHS = {
   ],
   comic: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
   hash: ['M4 9h16', 'M4 15h16', 'M10 3L8 21', 'M16 3l-2 18'],
+  tag: [
+    'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z',
+    'M7 7h.01',
+  ],
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
   plus: ['M12 5v14', 'M5 12h14'],
 } as const;
@@ -1421,6 +1471,28 @@ export function createLibraryView(
   const smartGroupBody = doc.createElement('div');
   smartGroupBody.className = 'lightink-library-smart-group-body';
   smartGroupBody.append(smartGroupFilter.wrap, smartGroupList);
+  // 标签分区（R6）：与分组/智能分组同构的导航分区，点选即按标签过滤书墙。
+  const tagHeader = doc.createElement('div');
+  tagHeader.className = 'lightink-library-pane-heading lightink-library-tags';
+  const tagToggle = createSectionToggle('tags');
+  const tagTitle = doc.createElement('h3');
+  const tagFilter = createSectionFilter('tag');
+  const addTagButton = button(
+    doc,
+    '+',
+    'lightink-library-icon-button lightink-library-tag-add lightink-library-pane-action',
+  );
+  tagHeader.append(
+    tagToggle,
+    createNavIcon(doc, NAV_ICON_PATHS.tag, 'lightink-library-section-icon'),
+    tagTitle,
+    paneActions(tagFilter.toggle, addTagButton),
+  );
+  const tagList = doc.createElement('nav');
+  tagList.className = 'lightink-library-tag-list';
+  const tagBody = doc.createElement('div');
+  tagBody.className = 'lightink-library-tag-body';
+  tagBody.append(tagFilter.wrap, tagList);
   groupPane.append(
     shelfHeading,
     filterList,
@@ -1428,6 +1500,8 @@ export function createLibraryView(
     groupBody,
     smartGroupHeader,
     smartGroupBody,
+    tagHeader,
+    tagBody,
   );
   const groupOverlay = doc.createElement('div');
   groupOverlay.className = 'lightink-modal-overlay lightink-library-group-modal';
@@ -1741,11 +1815,63 @@ export function createLibraryView(
   membershipActions.append(membershipSave, membershipCancel);
   membershipForm.append(membershipTitle, membershipOptions, membershipActions);
   membershipOverlay.appendChild(membershipForm);
+  // 标签编辑弹层（R6）：赋标（勾选 + 内联新建）与新建/重命名/删除共用同一对话框。
+  const tagOverlay = doc.createElement('div');
+  tagOverlay.className = 'lightink-modal-overlay lightink-library-tag-modal';
+  tagOverlay.hidden = true;
+  const tagDialog = doc.createElement('div');
+  tagDialog.className = 'lightink-modal-dialog';
+  tagDialog.setAttribute('role', 'dialog');
+  tagDialog.setAttribute('aria-modal', 'true');
+  const tagForm = doc.createElement('form');
+  tagForm.className = 'lightink-library-tag-form';
+  const tagDialogTitle = doc.createElement('h2');
+  const tagDialogMessage = doc.createElement('p');
+  tagDialogMessage.className = 'lightink-library-tag-confirm';
+  tagDialogMessage.hidden = true;
+  const tagNameLabel = doc.createElement('label');
+  tagNameLabel.className = 'lightink-library-field';
+  const tagNameLabelText = doc.createElement('span');
+  const tagNameInput = doc.createElement('input');
+  tagNameInput.name = 'tagName';
+  tagNameInput.maxLength = 60;
+  tagNameLabel.append(tagNameLabelText, tagNameInput);
+  const tagOptions = doc.createElement('div');
+  tagOptions.className = 'lightink-library-tag-options';
+  const tagCreateRow = doc.createElement('div');
+  tagCreateRow.className = 'lightink-library-tag-create';
+  const tagCreateInput = doc.createElement('input');
+  tagCreateInput.name = 'newTag';
+  tagCreateInput.maxLength = 60;
+  tagCreateInput.autocomplete = 'off';
+  const tagCreateButton = button(doc, '', 'lightink-library-tag-create-add');
+  tagCreateButton.type = 'button';
+  tagCreateRow.append(tagCreateInput, tagCreateButton);
+  const tagActions = doc.createElement('div');
+  tagActions.className = 'lightink-library-tag-actions';
+  const tagDeleteButton = button(doc, '', 'lightink-library-danger');
+  tagDeleteButton.type = 'button';
+  const tagSave = button(doc, '', 'lightink-library-primary');
+  tagSave.type = 'submit';
+  const tagCancel = button(doc, '');
+  tagCancel.type = 'button';
+  tagActions.append(tagDeleteButton, tagSave, tagCancel);
+  tagForm.append(
+    tagDialogTitle,
+    tagDialogMessage,
+    tagNameLabel,
+    tagOptions,
+    tagCreateRow,
+    tagActions,
+  );
+  tagDialog.appendChild(tagForm);
+  tagOverlay.appendChild(tagDialog);
   root.append(
     header,
     body,
     detailBackdrop,
     membershipOverlay,
+    tagOverlay,
     groupOverlay,
     sourceOverlay,
     groupsSheet,
@@ -1764,6 +1890,17 @@ export function createLibraryView(
   let memberships: LibraryGroupMembership[] = [];
   let smartGroups: SmartGroupDefinition[] = [...SMART_GROUP_DEFINITIONS];
   let selectedSmartGroupId: string | null = null;
+  let tags: LibraryTag[] = [];
+  let tagMemberships: LibraryTagMembership[] = [];
+  let selectedTagId: string | null = null;
+  let tagListCollapsed = true;
+  let tagFilterQuery = '';
+  let tagDialogMode:
+    | { readonly kind: 'assign'; readonly itemId: string }
+    | { readonly kind: 'create' }
+    | { readonly kind: 'rename'; readonly tagId: string }
+    | { readonly kind: 'delete'; readonly tagId: string }
+    | null = null;
   const expandedGroupIds = new Set<string>();
   let groupEditorMode:
     | { readonly kind: 'create'; readonly parentId?: string }
@@ -2255,6 +2392,257 @@ export function createLibraryView(
     closeGroupsSheet();
   }
 
+  function tagById(tagId: string): LibraryTag | undefined {
+    return tags.find((tag) => tag.id === tagId);
+  }
+
+  /** 按标签名的当前排序投影一本书的标签；无关系时为空数组。 */
+  function tagsForItem(itemId: string): LibraryTag[] {
+    const assigned = new Set(
+      tagMemberships.filter((entry) => entry.itemId === itemId).map((entry) => entry.tagId),
+    );
+    return tags.filter((tag) => assigned.has(tag.id));
+  }
+
+  function matchesTag(display: DisplayItem): boolean {
+    if (selectedTagId === null) return true;
+    return tagMemberships.some(
+      (entry) => entry.tagId === selectedTagId && entry.itemId === display.item.id,
+    );
+  }
+
+  function forgetMissingTag(): void {
+    if (selectedTagId === null) return;
+    if (tags.some((tag) => tag.id === selectedTagId)) return;
+    selectedTagId = null;
+  }
+
+  function mergeTag(tag: LibraryTag): void {
+    tags = [...tags.filter((candidate) => candidate.id !== tag.id), tag].sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
+    );
+  }
+
+  /** 点选标签过滤书墙：再点同一标签取消；与分组筛选叠加（AND）。 */
+  function applyTagFilter(tagId: string): void {
+    selectedTagId = selectedTagId === tagId ? null : tagId;
+    closeFilterSheet();
+    closeGroupsSheet();
+    void activateShelf();
+  }
+
+  function refreshTagSurfaces(): void {
+    renderGroups();
+    renderItems();
+    renderDetail();
+  }
+
+  function closeTagDialog(): void {
+    tagDialogMode = null;
+    tagOverlay.hidden = true;
+    header.removeAttribute('inert');
+    body.removeAttribute('inert');
+  }
+
+  function checkedTagIds(): Set<string> {
+    return new Set(
+      Array.from(
+        tagOptions.querySelectorAll<HTMLInputElement>('input[name="tag"]:checked'),
+      ).map((input) => input.value),
+    );
+  }
+
+  function renderTagOptions(checked: ReadonlySet<string>): void {
+    tagOptions.replaceChildren();
+    if (tags.length === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-library-tag-empty';
+      empty.textContent = labels().noTags;
+      tagOptions.appendChild(empty);
+      return;
+    }
+    for (const tag of tags) {
+      const label = doc.createElement('label');
+      const checkbox = doc.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = 'tag';
+      checkbox.value = tag.id;
+      checkbox.checked = checked.has(tag.id);
+      const text = doc.createElement('span');
+      text.textContent = tag.name;
+      label.append(checkbox, text);
+      tagOptions.appendChild(label);
+    }
+  }
+
+  function openTagDialog(mode: NonNullable<typeof tagDialogMode>): void {
+    tagDialogMode = mode;
+    tagDialogMessage.hidden = true;
+    tagNameLabel.hidden = true;
+    tagNameInput.required = false;
+    tagOptions.hidden = true;
+    tagCreateRow.hidden = true;
+    tagDeleteButton.hidden = true;
+    tagSave.hidden = false;
+    tagOptions.replaceChildren();
+    if (mode.kind === 'assign') {
+      const display = items.find((candidate) => candidate.item.id === mode.itemId);
+      const title = display === undefined ? '' : `: ${itemTitle(display.item)}`;
+      tagDialogTitle.textContent = `${labels().manageTags}${title}`;
+      tagOptions.hidden = false;
+      renderTagOptions(
+        new Set(
+          tagMemberships.filter((entry) => entry.itemId === mode.itemId).map((entry) => entry.tagId),
+        ),
+      );
+      tagCreateRow.hidden = deps.library.createTag === undefined;
+      tagCreateInput.placeholder = labels().newTag;
+      tagCreateButton.textContent = labels().newTag;
+      tagSave.textContent = labels().saveTags;
+      tagSave.hidden = deps.library.setItemTags === undefined;
+    } else if (mode.kind === 'create') {
+      tagDialogTitle.textContent = labels().newTag;
+      tagNameLabel.hidden = false;
+      tagNameLabelText.textContent = labels().tagName;
+      tagNameInput.value = '';
+      tagNameInput.required = true;
+      tagSave.textContent = labels().newTag;
+    } else if (mode.kind === 'rename') {
+      tagDialogTitle.textContent = labels().renameTag;
+      tagNameLabel.hidden = false;
+      tagNameLabelText.textContent = labels().tagName;
+      tagNameInput.value = tagById(mode.tagId)?.name ?? '';
+      tagNameInput.required = true;
+      tagSave.textContent = labels().save;
+    } else {
+      const name = tagById(mode.tagId)?.name ?? '';
+      tagDialogTitle.textContent = labels().deleteTag;
+      tagDialogMessage.hidden = false;
+      tagDialogMessage.textContent = labels().deleteTagConfirm.replace('{name}', name);
+      tagDeleteButton.hidden = false;
+      tagDeleteButton.textContent = labels().deleteTag;
+      tagSave.hidden = true;
+    }
+    tagCancel.textContent = labels().cancel;
+    mountLibraryOverlay(tagOverlay, root);
+    tagOverlay.hidden = false;
+    header.setAttribute('inert', '');
+    body.setAttribute('inert', '');
+    const focusTarget =
+      mode.kind === 'assign'
+        ? tagOptions.querySelector<HTMLInputElement>('input')
+        : mode.kind === 'create' || mode.kind === 'rename'
+          ? tagNameInput
+          : tagDeleteButton;
+    focusTarget?.focus();
+  }
+
+  async function createTagFromDialog(): Promise<void> {
+    const name = tagCreateInput.value.trim();
+    if (name === '' || deps.library.createTag === undefined) return;
+    try {
+      const created = await deps.library.createTag(name);
+      mergeTag(created);
+      const checked = checkedTagIds();
+      checked.add(created.id);
+      renderTagOptions(checked);
+      tagCreateInput.value = '';
+      renderGroups();
+      renderItems();
+      tagCreateInput.focus();
+      deps.onLocalChange?.();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+  }
+
+  function deleteTagLocally(tagId: string): void {
+    tags = tags.filter((tag) => tag.id !== tagId);
+    tagMemberships = tagMemberships.filter((entry) => entry.tagId !== tagId);
+    if (selectedTagId === tagId) selectedTagId = null;
+  }
+
+  async function submitTagDialog(): Promise<void> {
+    const mode = tagDialogMode;
+    if (mode === null) return;
+    if (mode.kind === 'assign') {
+      if (deps.library.setItemTags === undefined) {
+        closeTagDialog();
+        return;
+      }
+      const itemId = mode.itemId;
+      const checked = Array.from(checkedTagIds());
+      try {
+        await deps.library.setItemTags(itemId, checked);
+        tagMemberships = tagMemberships.filter((entry) => entry.itemId !== itemId);
+        tagMemberships.push(...checked.map((tagId) => ({ tagId, itemId })));
+        closeTagDialog();
+        refreshTagSurfaces();
+        deps.onLocalChange?.();
+      } catch (error) {
+        deps.notify(errorText(error, labels().offline), 'error');
+      }
+      return;
+    }
+    const name = tagNameInput.value.trim();
+    if (mode.kind === 'create') {
+      if (name === '' || deps.library.createTag === undefined) return;
+      try {
+        const created = await deps.library.createTag(name);
+        mergeTag(created);
+        closeTagDialog();
+        refreshTagSurfaces();
+        deps.onLocalChange?.();
+      } catch (error) {
+        deps.notify(errorText(error, labels().offline), 'error');
+      }
+      return;
+    }
+    if (mode.kind === 'rename') {
+      if (name === '' || deps.library.renameTag === undefined) return;
+      try {
+        const renamed = await deps.library.renameTag(mode.tagId, name);
+        mergeTag(renamed);
+        closeTagDialog();
+        refreshTagSurfaces();
+        deps.onLocalChange?.();
+      } catch (error) {
+        deps.notify(errorText(error, labels().offline), 'error');
+      }
+      return;
+    }
+    if (deps.library.deleteTag === undefined) {
+      closeTagDialog();
+      return;
+    }
+    try {
+      await deps.library.deleteTag(mode.tagId);
+      deleteTagLocally(mode.tagId);
+      closeTagDialog();
+      refreshTagSurfaces();
+      deps.onLocalChange?.();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+  }
+
+  async function removeItemTag(itemId: string, tagId: string): Promise<void> {
+    if (deps.library.setItemTags === undefined) return;
+    const remaining = tagMemberships
+      .filter((entry) => entry.itemId === itemId && entry.tagId !== tagId)
+      .map((entry) => entry.tagId);
+    try {
+      await deps.library.setItemTags(itemId, remaining);
+      tagMemberships = tagMemberships.filter(
+        (entry) => !(entry.itemId === itemId && entry.tagId === tagId),
+      );
+      refreshTagSurfaces();
+      deps.onLocalChange?.();
+    } catch (error) {
+      deps.notify(errorText(error, labels().offline), 'error');
+    }
+  }
+
   function progressFor(display: DisplayItem): LibraryProgress | null {
     const catalogEntry = display.entry !== undefined;
     try {
@@ -2412,7 +2800,10 @@ export function createLibraryView(
   }
 
   function visibleItems(): DisplayItem[] {
-    const filtered = activeSection === 'shelf' ? items.filter(matchesGroup) : items;
+    const filtered =
+      activeSection === 'shelf'
+        ? items.filter((item) => matchesGroup(item) && matchesTag(item))
+        : items;
     if (activeSection !== 'shelf') {
       return filtered;
     }
@@ -2511,7 +2902,8 @@ export function createLibraryView(
         closeFilterSheet();
         closeGroupsSheet();
         syncMobileGroupsChrome();
-        content.replaceChildren(continueHost, status, itemList);
+        // 桌面书架把书墙放回 workArea，使右键「作品详情」可打开详情侧栏（标签/R6）。
+        content.replaceChildren(continueHost, status, workArea);
       }
       detail.hidden = true;
       selected = null;
@@ -2982,10 +3374,12 @@ export function createLibraryView(
   }
 
   function currentFilterCaption(): string {
-    if (selectedCustomGroupId !== null || selectedSmartGroupId !== null) {
-      return groupLabel(labels(), 'all');
-    }
-    return groupLabel(labels(), selectedGroup);
+    const caption =
+      selectedCustomGroupId !== null || selectedSmartGroupId !== null
+        ? groupLabel(labels(), 'all')
+        : groupLabel(labels(), selectedGroup);
+    if (selectedTagId === null) return caption;
+    return `${caption} · ${tagById(selectedTagId)?.name ?? labels().tags}`;
   }
 
   function currentCollectionsCaption(): string {
@@ -3017,9 +3411,10 @@ export function createLibraryView(
     );
     filterToggle.classList.toggle(
       'is-active',
-      selectedCustomGroupId === null &&
-        selectedSmartGroupId === null &&
-        selectedGroup !== 'all',
+      selectedTagId !== null ||
+        (selectedCustomGroupId === null &&
+          selectedSmartGroupId === null &&
+          selectedGroup !== 'all'),
     );
     filterPanel.setAttribute('aria-label', labels().filter);
     filterSheetTitle.textContent = labels().filter;
@@ -3211,6 +3606,95 @@ export function createLibraryView(
       });
       filterPanel.appendChild(option);
     }
+    if (tags.length === 0) return;
+    const heading = doc.createElement('p');
+    heading.className = 'lightink-library-filter-sheet-heading';
+    heading.textContent = labels().tags;
+    filterPanel.appendChild(heading);
+    const tagGroup = doc.createElement('div');
+    tagGroup.className = 'lightink-library-filter-sheet-tags';
+    tagGroup.setAttribute('role', 'group');
+    tagGroup.setAttribute('aria-label', labels().tags);
+    for (const tag of tags) {
+      const active = selectedTagId === tag.id;
+      const option = button(doc, tag.name, 'lightink-library-groups-sheet-item');
+      option.classList.add('lightink-library-shelf-filter-option');
+      option.dataset.shelfTagId = tag.id;
+      option.setAttribute('aria-pressed', active ? 'true' : 'false');
+      option.classList.toggle('is-active', active);
+      option.style.minHeight = '48px';
+      option.style.width = '100%';
+      option.style.whiteSpace = 'normal';
+      option.style.textAlign = 'start';
+      option.addEventListener('click', () => {
+        applyTagFilter(tag.id);
+      });
+      tagGroup.appendChild(option);
+    }
+    filterPanel.appendChild(tagGroup);
+  }
+
+  /** 标签导航分区：空标签不占位；右键行可重命名/删除。 */
+  function renderTags(): void {
+    tagList.replaceChildren();
+    tagTitle.textContent = labels().tags;
+    setNavSectionCollapsed(
+      tagToggle,
+      tagBody,
+      desktopOnlyCollapsed(tagListCollapsed),
+      labels().tags,
+    );
+    syncSectionFilterLabels(tagFilter, labels().filterTags);
+    addTagButton.title = labels().newTag;
+    addTagButton.setAttribute('aria-label', labels().newTag);
+    const sectionEmpty = tags.length === 0;
+    tagHeader.hidden = sectionEmpty;
+    tagBody.hidden = sectionEmpty || desktopOnlyCollapsed(tagListCollapsed);
+    const query = tagFilterQuery.trim().toLowerCase();
+    const visible = tags.filter((tag) => query === '' || tag.name.toLowerCase().includes(query));
+    for (const tag of visible) {
+      const row = button(doc, tag.name, 'lightink-library-tag');
+      row.prepend(createNavIcon(doc, NAV_ICON_PATHS.tag));
+      row.dataset.tagId = tag.id;
+      row.title = tag.name;
+      const active = activeSection === 'shelf' && selectedTagId === tag.id;
+      row.classList.toggle('is-active', active);
+      if (active) row.setAttribute('aria-current', 'true');
+      row.addEventListener('click', () => {
+        applyTagFilter(tag.id);
+      });
+      row.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTagMenu(tag, { x: event.clientX, y: event.clientY });
+      });
+      tagList.appendChild(row);
+    }
+    if (!sectionEmpty && visible.length === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'lightink-library-nav-empty';
+      empty.textContent = labels().noMatch;
+      tagList.appendChild(empty);
+    }
+  }
+
+  function openTagMenu(tag: LibraryTag, position: { x: number; y: number }): void {
+    const menu: MenuItem[] = [];
+    if (deps.library.renameTag !== undefined) {
+      menu.push({
+        id: 'rename-tag',
+        label: labels().renameTag,
+        action: () => openTagDialog({ kind: 'rename', tagId: tag.id }),
+      });
+    }
+    if (deps.library.deleteTag !== undefined) {
+      menu.push({
+        id: 'delete-tag',
+        label: labels().deleteTag,
+        action: () => openTagDialog({ kind: 'delete', tagId: tag.id }),
+      });
+    }
+    if (menu.length > 0) createContextMenu(menu, position, doc);
   }
 
   function renderGroups(): void {
@@ -3273,6 +3757,7 @@ export function createLibraryView(
     );
     if (emptyCustom) groupBody.hidden = true;
     renderSmartGroups();
+    renderTags();
     renderGroupEditor();
     renderGroupsSheet();
     syncMobileGroupsChrome();
@@ -3762,6 +4247,16 @@ export function createLibraryView(
     // 进菜单（Apple HIG / NN/G：长列表用选择器而非扁平菜单）。
     const custom = flattenedCustomGroups();
     const items: MenuItem[] = [];
+    // 桌面书架单击直接开书；「作品详情」让详情侧栏（标签编辑、进度、元数据）可达。
+    if (!isMobileLibraryChrome()) {
+      items.push({
+        id: 'details',
+        label: labels().details,
+        action: () => {
+          void selectItem(display);
+        },
+      });
+    }
     const shelfProgress = progressFor(display);
     if (shelfProgress?.status === 'in-progress' || shelfProgress?.status === 'finished') {
       items.push({
@@ -3787,6 +4282,13 @@ export function createLibraryView(
           resumable ? 'library.translate.resume' : 'library.translate.entry',
         ),
         action: () => launchBookTranslation(display),
+      });
+    }
+    if (deps.library.setItemTags !== undefined) {
+      items.push({
+        id: 'tags',
+        label: labels().manageTags,
+        action: () => openTagDialog({ kind: 'assign', itemId: display.item.id }),
       });
     }
     if (items.length > 0) {
@@ -3929,6 +4431,30 @@ export function createLibraryView(
       text.appendChild(meta);
     }
     appendImportedProgress(row, text, display, { continueCue: false });
+    // 书卡标签：最多 TAG_CHIP_LIMIT 枚，超出折叠为 +N；目录/远程条目不属于本地标签面。
+    const assignedTags = catalogActive() ? [] : tagsForItem(display.item.id);
+    if (assignedTags.length > 0) {
+      const strip = doc.createElement('span');
+      strip.className = 'lightink-library-item-tags';
+      const shown = assignedTags.slice(0, TAG_CHIP_LIMIT);
+      for (const tag of shown) {
+        const chip = doc.createElement('span');
+        chip.className = 'lightink-library-tag-chip';
+        chip.dataset.tagId = tag.id;
+        chip.textContent = tag.name;
+        strip.appendChild(chip);
+      }
+      const overflowCount = assignedTags.length - shown.length;
+      if (overflowCount > 0) {
+        const more = doc.createElement('span');
+        more.className = 'lightink-library-tag-chip lightink-library-tag-chip--more';
+        more.dataset.tagOverflow = String(overflowCount);
+        more.textContent = `+${overflowCount}`;
+        more.title = labels().tagsOverflow.replace('{count}', String(overflowCount));
+        strip.appendChild(more);
+      }
+      text.appendChild(strip);
+    }
     row.append(cover, text);
     // 长按先于 click/contextmenu 绑定：触发后吞掉紧随的合成 click/原生
     // contextmenu（at-target 阶段按注册顺序派发），避免误打开书或菜单双开。
@@ -3975,6 +4501,7 @@ export function createLibraryView(
       selectedGroup !== 'all' ||
       selectedCustomGroupId !== null ||
       selectedSmartGroupId !== null ||
+      selectedTagId !== null ||
       searchInput.value.trim() !== ''
     ) {
       continueHost.hidden = true;
@@ -4041,7 +4568,7 @@ export function createLibraryView(
     return tile;
   }
 
-  /** 桌面书架「全部 + 无搜索 + 无分组选择」即发现型首页；筛选/搜索后只留书墙。 */
+  /** 桌面书架「全部 + 无搜索 + 无分组/标签选择」即发现型首页；筛选/搜索后只留书墙。 */
   function isShelfHome(): boolean {
     return (
       activeSection === 'shelf' &&
@@ -4049,6 +4576,7 @@ export function createLibraryView(
       selectedGroup === 'all' &&
       selectedCustomGroupId === null &&
       selectedSmartGroupId === null &&
+      selectedTagId === null &&
       searchInput.value.trim() === '' &&
       !isMobileLibraryChrome()
     );
@@ -4117,7 +4645,19 @@ export function createLibraryView(
         count: itemIdsForGroup(groups, memberships, entry.group.id).size,
       }))
       .filter((entry) => entry.count > 0);
-    homeSmartModule.hidden = smartEntries.length === 0 && customEntries.length === 0;
+    // 标签也被「智能分组」模块聚合展示（R6）：按现有书目计数，空标签不占位。
+    const shelfItemIds = new Set(items.map((display) => display.item.id));
+    const tagEntries = tags
+      .map((tag) => ({
+        tag,
+        count: tagMemberships.filter(
+          (entry) => entry.tagId === tag.id && shelfItemIds.has(entry.itemId),
+        ).length,
+      }))
+      .filter((entry) => entry.count > 0)
+      .slice(0, HOME_SMART_GROUP_LIMIT);
+    homeSmartModule.hidden =
+      smartEntries.length === 0 && customEntries.length === 0 && tagEntries.length === 0;
     for (const group of smartEntries) {
       const chip = button(doc, '', 'lightink-library-home-group');
       chip.dataset.homeSmartGroupId = group.id;
@@ -4147,6 +4687,20 @@ export function createLibraryView(
       chip.append(name, count);
       chip.classList.toggle('is-active', selectedCustomGroupId === entry.group.id);
       chip.addEventListener('click', () => applyCustomGroup(entry.group.id));
+      homeSmartList.appendChild(chip);
+    }
+    for (const entry of tagEntries) {
+      const chip = button(doc, '', 'lightink-library-home-group lightink-library-home-tag');
+      chip.dataset.homeTagId = entry.tag.id;
+      chip.appendChild(createNavIcon(doc, NAV_ICON_PATHS.tag));
+      const name = doc.createElement('span');
+      name.textContent = entry.tag.name;
+      const count = doc.createElement('span');
+      count.className = 'lightink-library-home-group-count';
+      count.textContent = String(entry.count);
+      chip.append(name, count);
+      chip.classList.toggle('is-active', selectedTagId === entry.tag.id);
+      chip.addEventListener('click', () => applyTagFilter(entry.tag.id));
       homeSmartList.appendChild(chip);
     }
   }
@@ -4194,7 +4748,8 @@ export function createLibraryView(
         query !== '' ||
         selectedGroup !== 'all' ||
         selectedCustomGroupId !== null ||
-        selectedSmartGroupId !== null;
+        selectedSmartGroupId !== null ||
+        selectedTagId !== null;
       if (!filtered && shouldShowImportTile()) {
         // 空书库的发现引导（R1）：保留导入磁贴，并在桌面补一块导入/添加书源卡片。
         if (items.length === 0 && !isMobileLibraryChrome()) {
@@ -4593,6 +5148,50 @@ export function createLibraryView(
         detail.appendChild(progressMeta);
       }
     }
+    // 详情标签（R6）：已赋标签逐枚可移除；「编辑标签」在同一弹层勾选/新建。
+    const detailItemId = selected.item.id;
+    const assignedTags = tagsForItem(detailItemId);
+    const canEditTags = deps.library.setItemTags !== undefined;
+    if (assignedTags.length > 0 || canEditTags) {
+      const tagBlock = doc.createElement('div');
+      tagBlock.className = 'lightink-library-detail-tags';
+      const tagHeading = doc.createElement('h2');
+      tagHeading.textContent = labels().tags;
+      const tagListEl = doc.createElement('div');
+      tagListEl.className = 'lightink-library-detail-tag-list';
+      for (const tag of assignedTags) {
+        const chip = doc.createElement('span');
+        chip.className = 'lightink-library-tag-chip';
+        chip.dataset.tagId = tag.id;
+        const chipName = doc.createElement('span');
+        chipName.textContent = tag.name;
+        chip.appendChild(chipName);
+        if (canEditTags) {
+          const remove = button(
+            doc,
+            '×',
+            'lightink-library-icon-button lightink-library-tag-chip-remove',
+          );
+          const removeLabel = `${labels().removeTag}: ${tag.name}`;
+          remove.title = removeLabel;
+          remove.setAttribute('aria-label', removeLabel);
+          remove.addEventListener('click', () => {
+            void removeItemTag(detailItemId, tag.id);
+          });
+          chip.appendChild(remove);
+        }
+        tagListEl.appendChild(chip);
+      }
+      tagBlock.append(tagHeading, tagListEl);
+      if (canEditTags) {
+        const manage = button(doc, labels().manageTags, 'lightink-library-detail-tags-edit');
+        manage.addEventListener('click', () => {
+          openTagDialog({ kind: 'assign', itemId: detailItemId });
+        });
+        tagBlock.appendChild(manage);
+      }
+      detail.appendChild(tagBlock);
+    }
     if (selected.entry?.summary !== undefined && selected.entry.summary !== '') {
       const summary = doc.createElement('p');
       summary.className = 'lightink-library-summary';
@@ -4796,18 +5395,24 @@ export function createLibraryView(
     beginBlockingLoad();
     lastAction = loadPersistedItems;
     try {
-      const [loaded, loadedGroups, loadedMemberships] = await Promise.all([
-        deps.library.listItems(),
-        deps.library.listGroups?.() ?? Promise.resolve([]),
-        deps.library.listGroupMemberships?.() ?? Promise.resolve([]),
-      ]);
+      const [loaded, loadedGroups, loadedMemberships, loadedTags, loadedTagMemberships] =
+        await Promise.all([
+          deps.library.listItems(),
+          deps.library.listGroups?.() ?? Promise.resolve([]),
+          deps.library.listGroupMemberships?.() ?? Promise.resolve([]),
+          deps.library.listTags?.() ?? Promise.resolve([]),
+          deps.library.listTagMemberships?.() ?? Promise.resolve([]),
+        ]);
       if (generation !== requestGeneration) return;
       rememberImportedItems(loaded);
       items = loaded.map(displayFromPersistedItem);
       shelfItems = items;
       groups = loadedGroups;
       memberships = loadedMemberships;
+      tags = loadedTags;
+      tagMemberships = loadedTagMemberships;
       forgetMissingCustomGroup();
+      forgetMissingTag();
       refreshSmartGroups();
       selected = null;
       feed = null;
@@ -5359,6 +5964,7 @@ export function createLibraryView(
       importedItemIds.delete(item.id);
       items = items.filter((candidate) => candidate.item.id !== item.id);
       shelfItems = shelfItems.filter((candidate) => candidate.item.id !== item.id);
+      tagMemberships = tagMemberships.filter((entry) => entry.itemId !== item.id);
       selected = null;
       renderItems();
       renderDetail();
@@ -5446,6 +6052,7 @@ export function createLibraryView(
       editingSourceKind,
     );
     if (membershipItemId !== null) openMembershipEditor(membershipItemId);
+    if (tagDialogMode?.kind === 'assign') openTagDialog(tagDialogMode);
   }
 
   function syncSearchClear(): void {
@@ -5563,6 +6170,18 @@ export function createLibraryView(
       labels().smartGroups,
     );
   });
+  tagToggle.addEventListener('click', () => {
+    tagListCollapsed = !tagListCollapsed;
+    setNavSectionCollapsed(
+      tagToggle,
+      tagBody,
+      desktopOnlyCollapsed(tagListCollapsed),
+      labels().tags,
+    );
+  });
+  addTagButton.addEventListener('click', () => {
+    openTagDialog({ kind: 'create' });
+  });
   sourceToggle.addEventListener('click', () => {
     sourceListCollapsed = !sourceListCollapsed;
     setNavSectionCollapsed(
@@ -5576,6 +6195,7 @@ export function createLibraryView(
   for (const [heading, toggle] of [
     [groupHeader, groupToggle],
     [smartGroupHeader, smartGroupToggle],
+    [tagHeader, tagToggle],
     [sourceHeader, sourceToggle],
   ] as const) {
     heading.addEventListener('click', (event) => {
@@ -5676,6 +6296,18 @@ export function createLibraryView(
       if (!sourceListCollapsed) return;
       sourceListCollapsed = false;
       setNavSectionCollapsed(sourceToggle, sourceBody, false, labels().sources);
+    },
+  );
+  attachSectionFilter(
+    tagFilter,
+    (query) => {
+      tagFilterQuery = query;
+      renderTags();
+    },
+    () => {
+      if (!tagListCollapsed) return;
+      tagListCollapsed = false;
+      setNavSectionCollapsed(tagToggle, tagBody, false, labels().tags);
     },
   );
   groupEditor.addEventListener('submit', async (event) => {
@@ -5798,6 +6430,16 @@ export function createLibraryView(
   membershipOverlay.addEventListener('pointerdown', (event) => {
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
+  tagForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitTagDialog();
+  });
+  tagCreateButton.addEventListener('click', () => void createTagFromDialog());
+  tagDeleteButton.addEventListener('click', () => void submitTagDialog());
+  tagCancel.addEventListener('click', () => closeTagDialog());
+  tagOverlay.addEventListener('pointerdown', (event) => {
+    if (event.target === tagOverlay) closeTagDialog();
+  });
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !filterSheet.hidden) {
       event.preventDefault();
@@ -5817,6 +6459,11 @@ export function createLibraryView(
     if (event.key === 'Escape' && !membershipOverlay.hidden) {
       event.preventDefault();
       closeMembershipEditor();
+      return;
+    }
+    if (event.key === 'Escape' && !tagOverlay.hidden) {
+      event.preventDefault();
+      closeTagDialog();
       return;
     }
     if (event.key === 'Escape' && !sourceOverlay.hidden) {
@@ -5923,6 +6570,7 @@ export function createLibraryView(
       selectedGroup = 'all';
       selectedSmartGroupId = null;
       selectedCustomGroupId = null;
+      selectedTagId = null;
       closeGroupsSheet();
       searchInput.value = '';
       syncSearchClear();
@@ -5960,6 +6608,7 @@ export function createLibraryView(
       unbindFilterSheetDrag();
       deps.workspaceTravel?.remove();
       membershipOverlay.remove();
+      tagOverlay.remove();
       groupOverlay.remove();
       sourceOverlay.remove();
       groupsSheet.remove();

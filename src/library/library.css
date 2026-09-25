@@ -565,6 +565,7 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-pane-heading .lightink-library-group-add,
+.lightink-library-pane-heading .lightink-library-tag-add,
 .lightink-library-sources .lightink-library-pane-actions > .lightink-library-pane-action:last-child {
   opacity: 0.55;
   width: 24px;
@@ -691,6 +692,7 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-group-body,
 .lightink-library-smart-group-body,
+.lightink-library-tag-body,
 .lightink-library-source-body {
   display: flex;
   flex-direction: column;
@@ -701,6 +703,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-filter-list,
 .lightink-library-group-list,
 .lightink-library-smart-group-list,
+.lightink-library-tag-list,
 .lightink-library-manage-nav {
   display: flex;
   flex-direction: column;
@@ -1022,6 +1025,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-pane-actions,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-group-body,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-smart-group-body,
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-tag-body,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-source-body,
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-catalog-tree {
   display: none;
@@ -1269,6 +1273,189 @@ html[data-touch-primary] .lightink-library-header {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+/* ===== 标签（R6）：导航分区、书卡标签条、详情编辑与标签对话框 =====
+   标签与智能分组同构：导航点选过滤书墙；书卡最多展示 3 枚标签，超出折叠为 +N。 */
+/* 标签行复用导航项外观；单独成规则，不改动既有导航选择器契约（app-shell 锁行高）。 */
+.lightink-library-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 8px;
+  overflow: hidden;
+  border: none !important;
+  border-radius: var(--lightink-radius-control);
+  background: transparent !important;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-library-tag .lightink-library-nav-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-tag:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent) !important;
+}
+
+.lightink-library-tag:hover .lightink-library-nav-icon,
+.lightink-library-tag.is-active .lightink-library-nav-icon {
+  color: currentColor;
+}
+
+.lightink-library-tag.is-active {
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-weight: 600;
+}
+
+.lightink-library-detail-tags {
+  margin-top: 12px;
+}
+
+.lightink-library-detail-tags h2 {
+  margin: 0 0 6px;
+}
+
+.lightink-library-detail-tag-list,
+.lightink-library-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lightink-library-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 卡片内的 chip 需压过 .lightink-library-item-text span 的弱化色。 */
+.lightink-library-item-text .lightink-library-tag-chip {
+  overflow: hidden;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.lightink-library-tag-chip--more {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-muted);
+}
+
+.lightink-library-tag-chip-remove {
+  width: 16px;
+  min-width: 16px !important;
+  height: 16px;
+  min-height: 16px !important;
+  padding: 0;
+  color: inherit;
+  font-size: 12px !important;
+}
+
+.lightink-library-detail-tags-edit {
+  margin-top: 8px;
+}
+
+.lightink-modal-overlay.lightink-library-tag-modal {
+  z-index: 200;
+}
+
+.lightink-modal-overlay.lightink-library-tag-modal[hidden] {
+  display: none !important;
+}
+
+.lightink-library-tag-modal .lightink-modal-dialog {
+  width: min(360px, calc(100% - 48px));
+  max-height: min(70vh, 520px);
+  padding: 18px 16px 14px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-dialog);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+}
+
+.lightink-library-tag-form {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.lightink-library-tag-form h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.lightink-library-tag-confirm {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lightink-library-tag-options {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.lightink-library-tag-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--lightink-fg);
+  font-size: 13px;
+}
+
+.lightink-library-tag-empty {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-tag-create {
+  display: flex;
+  gap: 6px;
+}
+
+.lightink-library-tag-create input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lightink-library-tag-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lightink-library-filter-sheet-heading {
+  margin: 8px 0 0;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
 }
 
 /* Right content area. */
@@ -2908,6 +3095,12 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-di
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* 桌面书架也经 workArea 渲染书墙：右键「作品详情」后详情侧栏占右列，
+   未选中时隐藏，布局与旧的直挂 itemList 一致。 */
+.lightink-library[data-library-nav='shelf'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
 }
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-workarea {
