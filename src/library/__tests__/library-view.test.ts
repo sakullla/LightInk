@@ -24,6 +24,11 @@ import {
 import type { OpdsEntry, OpdsFeed, OpdsSource } from '../opds-client.js';
 import type { WebDavSource } from '../webdav-source-client.js';
 import {
+  adoptLibraryOverlayTheme,
+  applyLibraryTheme,
+  LIBRARY_THEMES,
+} from '../library-theme.js';
+import {
   loadReadingProgress,
   readingProgressKey,
   saveReadingProgress,
@@ -6188,3 +6193,358 @@ describe('LibraryView mobile shelf', () => {
     view.destroy();
   });
 });
+
+describe('LibraryView home visual system (R2)', () => {
+  function ruleBodies(css: string, selector: RegExp): string[] {
+    const matcher = new RegExp(
+      `${selector.source}\\s*\\{([^}]*)\\}`,
+      selector.flags.includes('g') ? selector.flags : `${selector.flags}g`,
+    );
+    const bodies: string[] = [];
+    for (const match of css.matchAll(matcher)) {
+      bodies.push(match[1] ?? '');
+    }
+    return bodies;
+  }
+
+  function relativeLuminance(hex: string): number {
+    const channels = [1, 3, 5].map(
+      (offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255,
+    );
+    const [r, g, b] = channels.map((channel) =>
+      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+    ) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function contrastRatio(foreground: string, background: string): number {
+    const [high, low] = [relativeLuminance(foreground), relativeLuminance(background)].sort(
+      (left, right) => right - left,
+    ) as [number, number];
+    return (high + 0.05) / (low + 0.05);
+  }
+
+  function homeCss(): string {
+    return readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+  }
+
+  it('keeps ink, muted copy, and accent text readable in both theme families', () => {
+    expect(LIBRARY_THEMES.map((theme) => theme.id)).toEqual([
+      'gallery',
+      'paper',
+      'moss',
+      'walnut',
+      'ink',
+    ]);
+    expect(LIBRARY_THEMES.filter((theme) => theme.colorScheme === 'light').map((t) => t.id)).toEqual(
+      ['gallery', 'paper', 'moss'],
+    );
+    expect(LIBRARY_THEMES.filter((theme) => theme.colorScheme === 'dark').map((t) => t.id)).toEqual([
+      'walnut',
+      'ink',
+    ]);
+
+    for (const theme of LIBRARY_THEMES) {
+      // 正文与标题：AAA 正文对比度。
+      expect(contrastRatio(theme.ink, theme.page), `${theme.id} ink/page`).toBeGreaterThanOrEqual(7);
+      expect(
+        contrastRatio(theme.ink, theme.elevated),
+        `${theme.id} ink/elevated`,
+      ).toBeGreaterThanOrEqual(7);
+      // 次要文案（模块旁注、进度、作者）：至少 AA 小字号。
+      expect(
+        contrastRatio(theme.muted, theme.page),
+        `${theme.id} muted/page`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(theme.muted, theme.elevated),
+        `${theme.id} muted/elevated`,
+      ).toBeGreaterThanOrEqual(4.5);
+      // accentInk 是「可读的文字色」，也用作 hero 徽标的底色（其上放 page 色文字）。
+      expect(
+        contrastRatio(theme.accentInk, theme.page),
+        `${theme.id} accentInk/page`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(theme.accentInk, theme.elevated),
+        `${theme.id} accentInk/elevated`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(theme.accentInk, theme.accentSoft),
+        `${theme.id} accentInk/accentSoft`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(theme.page, theme.accentInk),
+        `${theme.id} page/accentInk`,
+      ).toBeGreaterThanOrEqual(4.5);
+      // 亮色 accent 只做填充/描边：非文字对比度至少 3:1。
+      expect(
+        contrastRatio(theme.accent, theme.page),
+        `${theme.id} accent/page`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('stamps accent-ink on the shelf host and copies it onto portaled overlays', () => {
+    const root = document.createElement('div');
+    applyLibraryTheme(root, 'gallery');
+    expect(root.style.getPropertyValue('--lightink-accent-ink')).toBe('#a8431a');
+
+    const overlay = document.createElement('div');
+    adoptLibraryOverlayTheme(overlay, root);
+    expect(overlay.style.getPropertyValue('--lightink-accent-ink')).toBe('#a8431a');
+  });
+
+  it('uses the same title-keyed jacket placeholder on the hero, recent row, and wall', async () => {
+    const reading = localItem({
+      id: 'local:/books/hero.epub',
+      title: '无封面在读',
+      localPath: '/books/hero.epub',
+      authors: ['占位作者'],
+    });
+    const plain = localItem({
+      id: 'local:/books/plain.epub',
+      title: '无封面未读',
+      localPath: '/books/plain.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === reading.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 1,
+            ratio: 0.1,
+            percent: 10,
+            updatedAt: 100,
+          }
+        : { status: 'not-started' as const },
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [reading, plain]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const heroCover = host.querySelector<HTMLElement>(
+      '.lightink-library-continue .lightink-library-cover',
+    )!;
+    const recentCover = host.querySelector<HTMLElement>(
+      '.lightink-library-home-recent .lightink-library-cover',
+    )!;
+    const wallCover = itemRow(host, plain.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    for (const cover of [heroCover, recentCover, wallCover]) {
+      expect(cover).not.toBeNull();
+      expect(cover.querySelector('img')).toBeNull();
+      expect(cover.classList.contains('lightink-library-cover--jacket')).toBe(true);
+    }
+    expect(heroCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
+      String(jacketHue('无封面在读')),
+    );
+    expect(recentCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
+      String(jacketHue('无封面在读')),
+    );
+    expect(wallCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
+      String(jacketHue('无封面未读')),
+    );
+    expect(heroCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
+      '无封面在读',
+    );
+    expect(recentCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
+      '无封面在读',
+    );
+    expect(wallCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
+      '无封面未读',
+    );
+    view.destroy();
+  });
+
+  it('reserves the cover ratio before artwork loads so images cannot shift the home layout', () => {
+    const css = homeCss();
+    const cover = ruleBodies(css, /^\.lightink-library-cover(?![\w-])/m)[0] ?? '';
+    expect(cover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
+    expect(cover).toMatch(/overflow:\s*hidden/);
+    const image = ruleBodies(css, /\.lightink-library-cover img/)[0] ?? '';
+    expect(image).toMatch(/display:\s*block/);
+    expect(image).toMatch(/width:\s*100%/);
+    expect(image).toMatch(/height:\s*100%/);
+    expect(image).toMatch(/object-fit:\s*cover/);
+    const recentCover =
+      ruleBodies(css, /\.lightink-library-recent-item \.lightink-library-cover(?![\w-])/)[0] ?? '';
+    expect(recentCover).toMatch(/min-width:\s*0/);
+    // 最近打开的轨道是固定宽度的横向网格，封面加载不改变列宽。
+    const recentList = ruleBodies(css, /\.lightink-library-recent-list/)[0] ?? '';
+    expect(recentList).toMatch(/grid-auto-columns:\s*minmax\(/);
+  });
+
+  it('lays out the desktop home as a magazine with editorial section heads', () => {
+    const css = homeCss();
+    const hero = ruleBodies(
+      css,
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue(?![\w-])/,
+    )[0];
+    expect(hero).toBeDefined();
+    expect(hero).toMatch(/max-width:\s*none/);
+    expect(hero).toMatch(/border-radius:\s*20px/);
+    expect(hero).toMatch(/background:\s*linear-gradient\(/);
+    const heroCover = ruleBodies(
+      css,
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\)\s+\.lightink-library-continue\s+\.lightink-library-cover(?![\w-])/,
+    )[0];
+    expect(heroCover).toMatch(/width:\s*64px/);
+    expect(heroCover).toMatch(/height:\s*96px/);
+    const heroTitle = ruleBodies(
+      css,
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\)\s+\.lightink-library-continue-text strong/,
+    )[0];
+    expect(heroTitle).toMatch(/font-size:\s*20px/);
+    expect(heroTitle).toMatch(/font-family:\s*var\(--lightink-font-serif/);
+    const cue = ruleBodies(
+      css,
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-cue/,
+    )[0];
+    expect(cue).toMatch(/background:\s*var\(--lightink-accent-ink/);
+    expect(cue).toMatch(/color:\s*var\(--lightink-bg\)/);
+
+    const titleRules = ruleBodies(css, /\.lightink-library-home-module-title(?![\w-])/).join('\n');
+    expect(titleRules).toMatch(/font-family:\s*var\(--lightink-font-serif/);
+    expect(titleRules).toMatch(/color:\s*var\(--lightink-fg\)/);
+    const titleRule = ruleBodies(css, /\.lightink-library-home-module-title::after/)[0];
+    expect(titleRule).toMatch(/content:\s*''/);
+    expect(titleRule).toMatch(/background:\s*color-mix\(in srgb, var\(--lightink-fg\)/);
+
+    // 模块文字只消费主题令牌，浅色/深色族自动跟随对比度。
+    const emptyHint = ruleBodies(css, /\.lightink-library-home-empty p/)[0] ?? '';
+    expect(emptyHint).toMatch(/color:\s*var\(--lightink-muted\)/);
+    const emptyTitle = ruleBodies(css, /\.lightink-library-home-empty h2/)[0] ?? '';
+    expect(emptyTitle).toMatch(/font-family:\s*var\(--lightink-font-serif/);
+  });
+
+  it('animates module entrance and hover with restrained motion, then drops it on request', () => {
+    const css = homeCss();
+    expect(css).toMatch(/@keyframes\s+lightink-library-home-enter\s*\{/);
+    const entrance = css.match(
+      /\.lightink-library-home-module,\s*\.lightink-library-wall-heading\s*\{([^}]*)\}/,
+    );
+    expect(entrance?.[1]).toMatch(
+      /animation:\s*lightink-library-home-enter 260ms ease-out both/,
+    );
+    const recentLift =
+      css.match(
+        /\.lightink-library-recent-item:hover \.lightink-library-cover,[\s\S]{0,120}?\{([^}]*)\}/,
+      )?.[1] ?? '';
+    expect(recentLift).toMatch(/transform:\s*translateY\(-3px\)/);
+
+    const reduceStart = css.indexOf('@media (prefers-reduced-motion: reduce)');
+    expect(reduceStart).toBeGreaterThanOrEqual(0);
+    const reduceEnd = css.indexOf('/* ===== 360dp', reduceStart);
+    const reduce = css.slice(reduceStart, reduceEnd === -1 ? undefined : reduceEnd);
+    expect(reduce).toMatch(/\.lightink-library-home-module[\s\S]*?animation:\s*none\s*!important/);
+    expect(reduce).toMatch(
+      /\.lightink-library-continue-open[\s\S]*?transition:\s*none\s*!important/,
+    );
+    expect(reduce).toMatch(
+      /\.lightink-library-recent-item \.lightink-library-cover[\s\S]*?transition:\s*none\s*!important/,
+    );
+    expect(reduce).toMatch(/scroll-behavior:\s*auto\s*!important/);
+  });
+
+  it('keeps the whole home reachable by keyboard and returns home after opening a book', async () => {
+    const reading = localItem({
+      id: 'local:/books/kb-read.epub',
+      title: '键盘续读',
+      localPath: '/books/kb-read.epub',
+    });
+    const unread = localItem({
+      id: 'local:/books/kb-new.epub',
+      title: '键盘选书',
+      localPath: '/books/kb-new.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === reading.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 1,
+            ratio: 0.1,
+            percent: 10,
+            updatedAt: 300,
+          }
+        : { status: 'not-started' as const },
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [reading, unread]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    // 进入首页：展示后焦点落在书架搜索框，键盘可直接开始操作。
+    expect(document.activeElement).toBe(host.querySelector('.lightink-library-search input'));
+
+    // 首页全部交互控件都是可聚焦按钮，且带可见焦点态。
+    const focusables: HTMLElement[] = [
+      host.querySelector('.lightink-library-continue-open')!,
+      host.querySelector('.lightink-library-continue-dismiss')!,
+      ...Array.from(host.querySelectorAll<HTMLElement>('.lightink-library-recent-item')),
+      ...Array.from(host.querySelectorAll<HTMLElement>('.lightink-library-home-group')),
+      ...Array.from(
+        host.querySelectorAll<HTMLElement>('.lightink-library-cover-wall .lightink-library-item--cover'),
+      ),
+    ];
+    expect(focusables.length).toBeGreaterThanOrEqual(5);
+    for (const control of focusables) {
+      expect(control).toBeInstanceOf(HTMLButtonElement);
+      expect((control as HTMLButtonElement).tabIndex).toBe(0);
+    }
+    const css = homeCss();
+    expect(css).toMatch(
+      /\.lightink-library button:focus-visible,[\s\S]{0,400}?outline:\s*2px solid var\(--lightink-accent\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-recent-item:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightink-accent\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-library-home-group:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightink-accent\)/,
+    );
+
+    // 续读：hero 通过焦点 + 激活完成。
+    const hero = host.querySelector<HTMLButtonElement>('.lightink-library-continue-open')!;
+    hero.focus();
+    expect(document.activeElement).toBe(hero);
+    hero.click();
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ item: expect.objectContaining({ id: reading.id }) }),
+      expect.anything(),
+    );
+    expect(view.visible).toBe(false);
+
+    // 返回首页。
+    await view.show();
+    expect(view.visible).toBe(true);
+    expect(host.querySelector('.lightink-library-home-modules')).not.toBeNull();
+
+    // 选择书籍：焦点在封面卡片上，Enter 打开。
+    const card = itemRow(host, unread.id);
+    card.focus();
+    expect(document.activeElement).toBe(card);
+    host.querySelector<HTMLElement>('.lightink-library-items')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ item: expect.objectContaining({ id: unread.id }) }),
+      expect.anything(),
+    );
+    expect(view.visible).toBe(false);
+    view.destroy();
+  });
+});
+

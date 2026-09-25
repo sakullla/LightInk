@@ -76,7 +76,7 @@
 .lightink-library button:hover:not(:disabled),
 .lightink-library button:focus-visible {
   background: var(--lightink-accent-soft);
-  color: var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
 }
 
 .lightink-library button:focus-visible,
@@ -823,7 +823,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-group.is-active,
 .lightink-library-smart-group.is-active {
   background: var(--lightink-accent-soft) !important;
-  color: var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
   font-weight: 600;
 }
 
@@ -1651,7 +1651,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-home-modules {
   display: grid;
   grid-column: 1 / -1;
-  gap: 16px;
+  gap: 24px;
   width: 100%;
   min-width: 0;
 }
@@ -1665,24 +1665,42 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-home-module {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
+/* 编辑式模块标题：衬线标题 + 右侧细分割线，构成杂志栏目头。 */
 .lightink-library-home-module-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin: 0;
   color: var(--lightink-fg);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: 16.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.lightink-library-home-module-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  min-width: 20px;
+  background: color-mix(in srgb, var(--lightink-fg) 15%, transparent);
 }
 
 .lightink-library-wall-heading {
   display: flex;
   grid-column: 1 / -1;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
+  margin-top: 6px;
+}
+
+.lightink-library-wall-heading .lightink-library-home-module-title {
+  flex: 1 1 auto;
 }
 
 .lightink-library-recent-list {
@@ -1694,6 +1712,8 @@ html[data-touch-primary] .lightink-library-header {
   min-width: 0;
   overflow-x: auto;
   padding-bottom: 4px;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
 }
@@ -1709,11 +1729,28 @@ html[data-touch-primary] .lightink-library-header {
   color: inherit;
   text-align: left;
   cursor: pointer;
+  scroll-snap-align: start;
 }
 
 .lightink-library-recent-item .lightink-library-cover {
   width: 100%;
   min-width: 0;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.lightink-library-recent-item:hover .lightink-library-cover,
+.lightink-library-recent-item:focus-visible .lightink-library-cover {
+  transform: translateY(-3px);
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    0 2px 4px color-mix(in srgb, var(--lightink-fg) 14%, transparent),
+    0 16px 32px color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+}
+
+.lightink-library-recent-item:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 3px;
+  border-radius: 10px;
 }
 
 .lightink-library-recent-text {
@@ -1759,6 +1796,7 @@ html[data-touch-primary] .lightink-library-header {
   color: var(--lightink-fg);
   font-size: 13px;
   cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
 }
 
 .lightink-library-home-group .lightink-library-nav-icon {
@@ -1785,6 +1823,11 @@ html[data-touch-primary] .lightink-library-header {
   border-color: var(--lightink-accent);
 }
 
+.lightink-library-home-group:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
 .lightink-library-home-empty {
   display: flex;
   grid-column: 1 / -1;
@@ -1800,8 +1843,10 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-home-empty h2 {
   margin: 0;
   color: var(--lightink-fg);
-  font-size: 18px;
-  font-weight: 650;
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .lightink-library-home-empty p {
@@ -1809,7 +1854,7 @@ html[data-touch-primary] .lightink-library-header {
   margin: 0;
   color: var(--lightink-muted);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .lightink-library-home-empty-actions {
@@ -1818,6 +1863,93 @@ html[data-touch-primary] .lightink-library-header {
   justify-content: center;
   gap: 10px;
   margin-top: 4px;
+}
+
+/* ===== 沉浸杂志风（R2）：模块入场细动效（减少动态效果下关闭，见文件末尾） ===== */
+@keyframes lightink-library-home-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lightink-library-home-module,
+.lightink-library-wall-heading {
+  animation: lightink-library-home-enter 260ms ease-out both;
+}
+
+.lightink-library-home-module:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+.lightink-library-wall-heading {
+  animation-delay: 80ms;
+}
+
+/* ===== 沉浸杂志风（R2）：桌面继续阅读 hero =====
+   触屏/手机壳沿用文件后半段的紧凑条（≤760px 与 :is(html[data-android]…) 规则），
+   这里只在桌面 chrome 上放大封面与标题，形成首页的杂志头图。 */
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue {
+  max-width: none;
+  margin: 6px var(--lightink-library-pad-x) 2px;
+  padding: 12px 16px 12px 12px;
+  border-radius: 20px;
+  background: linear-gradient(
+    112deg,
+    color-mix(in srgb, var(--lightink-accent) 13%, var(--lightink-bg-elevated)),
+    var(--lightink-bg-elevated) 62%
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--lightink-fg) 7%, transparent),
+    0 12px 30px color-mix(in srgb, var(--lightink-fg) 9%, transparent);
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open {
+  gap: 16px;
+  min-height: 96px !important;
+  padding: 0 10px 0 0 !important;
+  transition: transform 180ms ease;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open:hover {
+  transform: translateY(-2px);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-continue
+  .lightink-library-cover {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 96px;
+  border-radius: 4px 10px 10px 4px;
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    0 8px 20px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-continue-text strong {
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cue {
+  background: var(--lightink-accent-ink, var(--lightink-accent));
+  color: var(--lightink-bg);
+  letter-spacing: 0.08em;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open:focus-visible,
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-dismiss:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 3px;
+  border-radius: 14px;
 }
 
 .lightink-library-item {
@@ -1874,6 +2006,7 @@ html[data-touch-primary] .lightink-library-header {
 }
 
 .lightink-library-cover img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2013,7 +2146,7 @@ html[data-touch-primary] .lightink-library-header {
 .lightink-library-item--import:hover .lightink-library-cover--import,
 .lightink-library-item--import:focus-visible .lightink-library-cover--import {
   background: var(--lightink-accent-soft);
-  color: var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
 }
 
 .lightink-library-import-plus {
@@ -2039,7 +2172,7 @@ html[data-touch-primary] .lightink-library-header {
 
 /* 读完：进度文案改为主题色徽标，封面进度条保持满格（fill=100）。 */
 .lightink-library-item[data-progress-status='finished'] .lightink-library-item-progress {
-  color: var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
   font-weight: 600;
 }
 
@@ -3050,6 +3183,26 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 @media (prefers-reduced-motion: reduce) {
   .lightink-library-body {
     transition: none;
+  }
+
+  /* R2：系统「减少动态效果」下首页退化为无动画——模块入场、hero 悬浮、
+     最近打开与书墙封面抬升、智能分组过渡一律取消，滚动也不启用平滑。 */
+  .lightink-library-home-modules,
+  .lightink-library-home-module,
+  .lightink-library-wall-heading,
+  .lightink-library-home-group,
+  .lightink-library-recent-item,
+  .lightink-library-recent-item .lightink-library-cover,
+  .lightink-library-continue,
+  .lightink-library-continue-open,
+  .lightink-library-continue .lightink-library-cover,
+  .lightink-library-cover-wall,
+  .lightink-library-cover-wall .lightink-library-item,
+  .lightink-library-cover-wall .lightink-library-cover,
+  .lightink-library-cover-wall .lightink-library-cover img {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }
 

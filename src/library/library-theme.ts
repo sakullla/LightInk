@@ -18,6 +18,12 @@ export interface LibraryThemeTokens {
   readonly page: string;
   readonly elevated: string;
   readonly ink: string;
+  /**
+   * Text-safe accent. `accent` is a fill/outline hue and can fall below 4.5:1
+   * on light pages; home typography and hover text must use this token so the
+   * magazine chrome stays readable in every theme.
+   */
+  readonly accentInk: string;
   readonly muted: string;
   readonly border: string;
   readonly accent: string;
@@ -34,7 +40,8 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     page: '#f2efe8',
     elevated: '#fffcf8',
     ink: '#2a261f',
-    muted: '#7a7368',
+    accentInk: '#a8431a',
+    muted: '#6b6459',
     border: '#e5dfd4',
     accent: '#c45a28',
     accentSoft: '#f3e2d4',
@@ -48,7 +55,8 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     page: '#f6eadc',
     elevated: '#fff8ef',
     ink: '#3a2f24',
-    muted: '#8a7a68',
+    accentInk: '#8a4318',
+    muted: '#756454',
     border: '#e4d5c2',
     accent: '#a35a2b',
     accentSoft: '#f0dfcc',
@@ -62,7 +70,8 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     page: '#eef3ea',
     elevated: '#f8fbf6',
     ink: '#243028',
-    muted: '#667266',
+    accentInk: '#3f6d48',
+    muted: '#59635a',
     border: '#d4ddd0',
     accent: '#3f6d48',
     accentSoft: '#dce8dc',
@@ -76,6 +85,7 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     page: '#241c17',
     elevated: '#322820',
     ink: '#eadcc8',
+    accentInk: '#d4a06a',
     muted: '#a8947c',
     border: '#4a3c32',
     accent: '#d4a06a',
@@ -90,6 +100,7 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     page: '#14161a',
     elevated: '#1e2228',
     ink: '#d5dae2',
+    accentInk: '#7ba3c9',
     muted: '#8b93a0',
     border: '#2c323c',
     accent: '#7ba3c9',
@@ -184,6 +195,7 @@ export function applyLibraryTheme(root: LibraryThemeRoot, theme: LibraryThemeId)
   root.style.setProperty('--lightink-bg', tokens.page);
   root.style.setProperty('--lightink-bg-elevated', tokens.elevated);
   root.style.setProperty('--lightink-fg', tokens.ink);
+  root.style.setProperty('--lightink-accent-ink', tokens.accentInk);
   root.style.setProperty('--lightink-muted', tokens.muted);
   root.style.setProperty('--lightink-border', tokens.border);
   root.style.setProperty('--lightink-accent', tokens.accent);
@@ -201,6 +213,7 @@ const LIBRARY_OVERLAY_THEME_VARS = [
   '--lightink-bg',
   '--lightink-bg-elevated',
   '--lightink-fg',
+  '--lightink-accent-ink',
   '--lightink-muted',
   '--lightink-border',
   '--lightink-accent',
