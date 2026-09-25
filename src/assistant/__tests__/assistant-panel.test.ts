@@ -263,6 +263,7 @@ interface MountOptions {
   readonly currentSelection?: string | (() => string);
   readonly currentPage?: number;
   readonly createToolSession?: () => AssistantToolSession;
+  readonly systemPrompt?: () => string;
   readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
 }
 
@@ -311,6 +312,7 @@ function mountPanel(options: MountOptions = {}): {
         : (options.currentSelection ?? ''),
     currentPage: () => options.currentPage,
     createToolSession: options.createToolSession,
+    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
     jumpToLocator: calls.jumpToLocator,
   };
   const panel = createAssistantPanel(deps);
@@ -1047,6 +1049,57 @@ describe('createAssistantPanel tools and locators', () => {
     submitQuestion(panel, '把《三体》归到科幻');
     await flush();
     expect(createToolSession).toHaveBeenCalledWith('把《三体》归到科幻');
+    panel.destroy();
+  });
+
+  it('advertises session tools and lets the surface override the system prompt', async () => {
+    const sessionTools = [
+      {
+        type: 'function' as const,
+        name: 'library_search',
+        description: '查询书库',
+        parameters: {
+          type: 'object' as const,
+          properties: {},
+          required: [] as readonly string[],
+          additionalProperties: false as const,
+        },
+      },
+      {
+        type: 'function' as const,
+        name: 'library_tag',
+        description: '打标签',
+        parameters: {
+          type: 'object' as const,
+          properties: {},
+          required: [] as readonly string[],
+          additionalProperties: false as const,
+        },
+      },
+    ];
+    const session = {
+      tools: sessionTools,
+      specifiedChapterCount: () => 0,
+      execute: vi.fn(async () => ({ ok: true })),
+    } as unknown as AssistantToolSession;
+    const { panel, invoke } = mountPanel({
+      script: async ({ emit }) => {
+        emit('好');
+        return { finish: 'stop', totalChars: 1 };
+      },
+      createToolSession: () => session,
+      systemPrompt: () => '你是书架助手。',
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '有哪些书?');
+    await flush();
+    const payload = invoke.mock.calls[0]?.[1] as {
+      messages: { role: string; content: string }[];
+      tools: { name: string }[];
+    };
+    expect(payload.tools.map((tool) => tool.name)).toEqual(['library_search', 'library_tag']);
+    expect(payload.messages[0]).toEqual({ role: 'system', content: '你是书架助手。' });
     panel.destroy();
   });
 

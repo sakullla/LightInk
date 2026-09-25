@@ -565,6 +565,11 @@ export interface AssistantPanelDeps {
   host: () => HTMLElement;
   /** 当前上下文；无可用上下文格式返回 null。 */
   chapterContext: () => AssistantChapterContext | null;
+  /**
+   * surface 覆盖系统提示；缺省 `reader.assistant.systemPrompt`。首页（书库）
+   * 与编辑器按各自上下文注入，避免沿用阅读器工具说明（ADR-3 / ADR-4）。
+   */
+  systemPrompt?: () => string;
   /** Surface 挂载/钉位/触屏注入；缺省 body portal + 不钉位。 */
   surface?: AssistantSurfaceDeps;
   /** 未配置引导「前往配置」（宿主：回书架并打开 Manage 的 AI 分组）。 */
@@ -1555,11 +1560,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           break;
         }
         const request = buildAssistantChatRequest({
-          systemPrompt: t('reader.assistant.systemPrompt'),
+          systemPrompt: deps.systemPrompt?.() ?? t('reader.assistant.systemPrompt'),
           chapter: chapterSource(),
           history: [...prior, ...loopTurns],
           userMessage,
           page: currentPageNumber(),
+          // 会话工具清单进 ①：书架会话广告 library_*，编辑器只读会话为空，
+          // 无会话时保持内置 query_book/save_to_book（阅读器旧行为）。
+          ...(session !== null ? { tools: session.tools } : {}),
         });
         contextTruncated = request.truncated;
         const done = await streamAssistantChat(

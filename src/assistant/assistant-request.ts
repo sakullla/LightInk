@@ -1,13 +1,13 @@
 /**
  * `assistant-request` — 助手一轮模型请求的分层组装（ADR-3 / R4 / R5）。
  *
- * 固定顺序：① 两个内置工具（查询当前书、保存到当前书）② 系统提示（不含章）
- * ③ 当前章/当前页正文 ④ 本会话近期 messages（含 tool 结果）⑤ 本轮用户消息。
- * 同章追问必须使 ①②③ 字节级相同；PDF 页码只写入 ⑤，不进 ③。
- * 本模块不依赖任何 surface 实例，上下文全部由调用方传入。
+ * 固定顺序：① 工具清单（缺省为内置查询当前书、保存到当前书；surface 可传会话
+ * 工具）② 系统提示（不含章）③ 当前章/当前页正文 ④ 本会话近期 messages（含
+ * tool 结果）⑤ 本轮用户消息。同章追问必须使 ①②③ 字节级相同；PDF 页码只写入
+ * ⑤，不进 ③。本模块不依赖任何 surface 实例，上下文全部由调用方传入。
  */
 
-import { ASSISTANT_TOOL_DEFINITIONS } from './assistant-tools.js';
+import { ASSISTANT_TOOL_DEFINITIONS, type AssistantToolDefinition } from './assistant-tools.js';
 import { READER_LIMITS } from '../reader/reader-limits.js';
 
 /** 单次请求携带的历史条数上限（ai.rs MAX_MESSAGES=200 的安全余量）。 */
@@ -30,8 +30,8 @@ export interface AssistantToolCall {
   readonly arguments: string;
 }
 
-/** ① 发给模型的工具项：与 `assistant-tools` 执行器同一份 JSON。 */
-export type AssistantToolDefinition = (typeof ASSISTANT_TOOL_DEFINITIONS)[number];
+/** ① 发给模型的工具项：与工具执行器同一份 JSON（内置与 surface 会话同形）。 */
+export type { AssistantToolDefinition };
 
 /** 发给 `ai_chat_stream` 的消息（camelCase 与 ai.rs AiChatMessage 对齐）。 */
 export interface AssistantChatMessage {
@@ -58,6 +58,8 @@ export interface AssistantChatRequestInput {
   readonly userMessage: string;
   /** PDF 当前页码，只写入 ⑤。 */
   readonly page?: number;
+  /** ① 本轮模型可见的工具清单；缺省为内置 query_book/save_to_book。 */
+  readonly tools?: readonly AssistantToolDefinition[];
   readonly maxTurns?: number;
   readonly charBudget?: number;
 }
@@ -203,7 +205,7 @@ export function buildAssistantChatRequest(
   messages.push({ role: 'user', content: userContent });
 
   return {
-    tools: ASSISTANT_BUILTIN_TOOLS,
+    tools: input.tools ?? ASSISTANT_BUILTIN_TOOLS,
     messages,
     truncated: chapter.truncated,
   };

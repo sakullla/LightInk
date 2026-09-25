@@ -129,6 +129,49 @@ describe('buildAssistantChatRequest', () => {
     expect(request.truncated).toBe(false);
   });
 
+  it('advertises the session tool list when provided, empty list included', () => {
+    const customTools = [
+      {
+        type: 'function' as const,
+        name: 'library_search',
+        description: '查询书库',
+        parameters: {
+          type: 'object' as const,
+          properties: {},
+          required: [] as readonly string[],
+          additionalProperties: false as const,
+        },
+      },
+    ];
+    const custom = buildAssistantChatRequest({
+      systemPrompt,
+      chapter,
+      userMessage: '有哪些书?',
+      tools: customTools,
+    });
+    expect(custom.tools).toBe(customTools);
+    expect(custom.tools.map((tool) => tool.name)).toEqual(['library_search']);
+    expect(assistantRequestPrefixBytes(custom)).toContain('library_search');
+
+    // 编辑器只读会话：显式空清单必须原样广告，不回退内置工具。
+    const empty = buildAssistantChatRequest({
+      systemPrompt,
+      chapter,
+      userMessage: '只读',
+      tools: [],
+    });
+    expect(empty.tools).toEqual([]);
+    expect(assistantRequestPrefixBytes(empty)).not.toContain('query_book');
+
+    // 缺省（无会话或阅读器旧路径）仍为内置 query_book/save_to_book。
+    const fallback = buildAssistantChatRequest({
+      systemPrompt,
+      chapter,
+      userMessage: '默认',
+    });
+    expect(fallback.tools).toBe(ASSISTANT_BUILTIN_TOOLS);
+  });
+
   it('keeps ①②③ bytes identical across two asks in the same chapter', () => {
     const first = buildAssistantChatRequest({
       systemPrompt,
