@@ -11,6 +11,11 @@
  * 事件接线（页码回写/档位映射/触底钳制/文本层护栏安装）、fit-width 计算、搜索/大纲
  * （面向 PDFDocumentProxy）、目录缩略图按需预览与对称作废。
  *
+ * `openPdfTextDocument` 是同一打开链上的无头只读分支（R5 跨书读取）：不装配 viewer，
+ * 逐页 `getTextContent({ disableNormalization: true })` 取与文本层同口径的拼接文本，
+ * 供库作用域助手在未打开书籍时读取指定页正文。加密 PDF 在两路都抛
+ * `PdfEncryptedError`，与「损坏或无法解析」的通用 ParseError 区分。
+ *
  * canvas/文本层真实渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
 
@@ -437,9 +442,38 @@ function pageHostContentWidth(host: HTMLElement): number {
 }
 
 type PdfjsComponents = Awaited<ReturnType<typeof loadPdfjsComponents>>;
+type PdfjsMainModule = PdfjsComponents['pdfjs'];
 type PdfViewerModule = PdfjsComponents['viewer'];
 type PdfViewerInstance = InstanceType<PdfViewerModule['PDFViewer']>;
 type PdfEventBusInstance = InstanceType<PdfViewerModule['EventBus']>;
+
+/** PDF 已加密（需密码）：区别于「损坏或无法解析」的明确不可读错误。 */
+export class PdfEncryptedError extends ParseError {
+  constructor() {
+    super('PDF 已加密，需要密码后才能读取');
+    this.name = 'PdfEncryptedError';
+  }
+}
+
+/** pdfjs 对加密文档抛 PasswordException；跨版本/跨 realm 用结构化判定。 */
+function isPdfPasswordFailure(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as { name?: unknown; message?: unknown; details?: unknown };
+  if (candidate.name === 'PasswordException') {
+    return true;
+  }
+  return [candidate.message, candidate.details].some(
+    (value) => typeof value === 'string' && /password/i.test(value),
+  );
+}
+
+/** 已打开的 PDF 文档会话：doc + 幂等释放（range 中止/destroy/源关闭各恰一次）。 */
+interface OpenedPdfSession {
+  readonly doc: Awaited<ReturnType<PdfjsMainModule['getDocument']>['promise']>;
+  dispose(): Promise<void>;
+}
 
 /** 官方 viewer 事件载荷（组件层 dispatch 的对象形状，类型未随包导出）。 */
 interface ViewerPageEvent {
@@ -464,15 +498,14 @@ interface ViewerTextLayerEvent {
  *
  * 真实 canvas/滚动渲染留手工验证（无 jsdom/pdf 样本的 node 测试）。
  */
-export async function renderPdfInto(
+async function openPdfSession(
   input: Uint8Array | RandomAccessSource,
-  container: HTMLElement,
   signal?: AbortSignal,
-): Promise<PdfRenderHandle> {
+): Promise<OpenedPdfSession> {
   throwIfReaderLoadCancelled(signal);
   // 引导（polyfill → 主库 → 幂等挂 globalThis.pdfjsLib → 同源 boot worker →
   // 组件层）一次拿到主库与 viewer 组件；渲染内核只经 pdfjs-boot 取 pdfjs。
-  const { pdfjs, viewer: viewerModule } = await loadPdfjsComponents();
+  const { pdfjs } = await loadPdfjsComponents();
   throwIfReaderLoadCancelled(signal);
 
   const randomSource = isRandomAccessSource(input) ? input : null;
@@ -541,7 +574,7 @@ export async function renderPdfInto(
       ...pdfOpenOptions,
     });
   }
-  let doc: Awaited<typeof loadingTask.promise>;
+  let doc: OpenedPdfSession['doc'];
   const cancelInitialLoad = (): void => {
     rangeController?.abort();
     void loadingTask.destroy();
@@ -558,6 +591,9 @@ export async function renderPdfInto(
     if (rangeFailure !== null) {
       throw rangeFailure;
     }
+    if (isPdfPasswordFailure(error)) {
+      throw new PdfEncryptedError();
+    }
     // 兜底信息面向用户；原始原因必须落日志，否则打开失败无法定位。
     console.error('[lightink/reader] PDF open failed', error);
     throw new ParseError('PDF 文件损坏或无法解析');
@@ -571,6 +607,31 @@ export async function renderPdfInto(
     await randomSource?.close().catch(() => undefined);
     throw error;
   }
+  let disposed = false;
+  return {
+    doc,
+    dispose: async () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      rangeController?.abort();
+      await loadingTask.destroy().catch(() => undefined);
+      await randomSource?.close().catch(() => undefined);
+    },
+  };
+}
+
+export async function renderPdfInto(
+  input: Uint8Array | RandomAccessSource,
+  container: HTMLElement,
+  signal?: AbortSignal,
+): Promise<PdfRenderHandle> {
+  throwIfReaderLoadCancelled(signal);
+  // 渲染内核与无头文本共用同一条打开链（引导/range/加密/损坏/页数限额）。
+  const session = await openPdfSession(input, signal);
+  const doc = session.doc;
+  const { viewer: viewerModule } = await loadPdfjsComponents();
   const controller = createPdfPageController(doc.numPages);
   const total = controller.totalPages;
   let destroyed = false;
@@ -618,8 +679,7 @@ export async function renderPdfInto(
     pdfViewer = new viewerModule.PDFViewer(viewerOptions);
   } catch (error) {
     teardown.abort();
-    await loadingTask.destroy().catch(() => undefined);
-    await randomSource?.close().catch(() => undefined);
+    await session.dispose();
     viewerDiv.remove();
     throw error;
   }
@@ -849,9 +909,7 @@ export async function renderPdfInto(
     } catch {
       // 官方清空路径只触实例字段与 viewer DOM；极端抛错不阻断其余清理。
     }
-    rangeController?.abort();
-    void loadingTask.destroy();
-    void randomSource?.close().catch(() => undefined);
+    void session.dispose();
   };
   signal?.addEventListener('abort', onAbort, { once: true });
   throwIfReaderLoadCancelled(signal);
@@ -1000,16 +1058,83 @@ export async function renderPdfInto(
       // 先官方清空再 cleanup/destroy（贴官方 setDocument 卸载序）：释放
       // cleanup 覆盖不到的 FINISHED 页 canvas、页视图对象图与 document 级
       // copy 监听，否则随会话内开关书次数无界累积。置于 try 内：清空极端
-      // 抛错时 finally 仍保证 range abort/源关闭/DOM 移除。
+      // 抛错时 finally 仍保证源关闭/DOM 移除。
       try {
         clearViewerDocument();
         pdfViewer.cleanup();
-        await loadingTask.destroy();
+        await session.dispose();
       } finally {
-        rangeController?.abort();
-        await randomSource?.close().catch(() => undefined);
         viewerDiv.remove();
       }
+    },
+  };
+}
+
+/** PDF 无头文本句柄（ADR-5 / R5）：不依赖渲染宿主，只读不写盘。 */
+export interface PdfTextDocument {
+  readonly pageCount: number;
+  /** 书签大纲（无书签为空）；复用 outlineFromPdf。 */
+  outline(): Promise<OutlineItem[]>;
+  /** 1-based 页拼接文本（与搜索/文本层同口径，disableNormalization）。 */
+  pageText(page: number): Promise<string>;
+  /** 幂等释放 pdfjs 文档与字节源。 */
+  destroy(): Promise<void>;
+}
+
+/**
+ * 无头打开 PDF 读取文本：`getDocument` + 逐页 `getTextContent()`，不创建
+ * 渲染宿主、不栅格化。打开链（browserLocal 整读 / 有界 range、useWasm 与
+ * useWorkerFetch 关闭、页数限额）与 `renderPdfInto` 共用 `openPdfSession`；
+ * 加密 PDF 抛 `PdfEncryptedError`，损坏 PDF 抛 `ParseError`。只读，不写盘。
+ */
+export async function openPdfTextDocument(
+  input: Uint8Array | RandomAccessSource,
+  signal?: AbortSignal,
+): Promise<PdfTextDocument> {
+  throwIfReaderLoadCancelled(signal);
+  const session = await openPdfSession(input, signal);
+  const { doc } = session;
+  let destroyed = false;
+  const pageTexts = new Map<number, string>();
+
+  const textForPage = async (page: number): Promise<string> => {
+    if (!Number.isFinite(page)) {
+      throw new ParseError('PDF 页码无效');
+    }
+    const index = Math.min(doc.numPages, Math.max(1, Math.floor(page)));
+    const cached = pageTexts.get(index);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const pdfPage = await doc.getPage(index);
+    const content = await pdfPage.getTextContent({ disableNormalization: true });
+    const text = content.items.map((item) => ('str' in item ? item.str : '')).join('');
+    pageTexts.set(index, text);
+    return text;
+  };
+
+  return {
+    pageCount: doc.numPages,
+    async outline() {
+      if (destroyed || signal?.aborted === true) {
+        return [];
+      }
+      return outlineFromPdf(doc);
+    },
+    async pageText(page) {
+      throwIfReaderLoadCancelled(signal);
+      if (destroyed) {
+        throw new ParseError('PDF 文本会话已关闭');
+      }
+      return textForPage(page);
+    },
+    async destroy() {
+      if (destroyed) {
+        return;
+      }
+      destroyed = true;
+      pageTexts.clear();
+      await session.dispose();
     },
   };
 }

@@ -21,14 +21,23 @@ import {
 import {
   cancelPdfThumb,
   createPdfPageController,
+  openPdfTextDocument,
   PDF_SCALE_STEPS,
   PDF_THUMB_MAX_EDGE,
+  PdfEncryptedError,
   pdfCssScale,
   pdfFitWidthScale,
   pdfHostFitContentWidth,
   renderPdfThumb,
 } from '../formats/pdf.js';
 import { ReaderLimitError } from '../formats/types.js';
+
+/** 无头文本测试只 mock 引导层：openPdfTextDocument 自身的打开链走真代码。 */
+const pdfBootRuntime = vi.hoisted(() => ({ loadPdfjsComponents: vi.fn() }));
+
+vi.mock('../formats/pdfjs-boot.js', () => ({
+  loadPdfjsComponents: pdfBootRuntime.loadPdfjsComponents,
+}));
 
 describe('CBZ listImageEntries', () => {
   it('只保留图片扩展名，过滤目录项与非图片', () => {
@@ -320,6 +329,116 @@ describe('reader page limits', () => {
       restore();
     }
     expect(() => enforcePageCount('pdf', 3)).not.toThrow();
+  });
+});
+
+describe('openPdfTextDocument（PDF 无头文本，R5）', () => {
+  afterEach(() => {
+    pdfBootRuntime.loadPdfjsComponents.mockReset();
+  });
+
+  function mockTextPdf(options: { pages: readonly (readonly string[])[] }) {
+    const textOptions: Array<{ disableNormalization?: boolean }> = [];
+    const getPage = vi.fn(async (page: number) => ({
+      getTextContent: async (params: { disableNormalization?: boolean }) => {
+        textOptions.push(params);
+        return {
+          items: (options.pages[page - 1] ?? []).map((str) => ({ str })),
+          styles: {},
+        };
+      },
+    }));
+    const destroy = vi.fn(async () => undefined);
+    const doc = {
+      numPages: options.pages.length,
+      getPage,
+      getOutline: vi.fn(async () => [{ title: '前言', dest: [null] }]),
+      getDestination: vi.fn(async () => null),
+      getPageIndex: vi.fn(async () => 0),
+    };
+    const getDocument = vi.fn(() => ({ promise: Promise.resolve(doc), destroy }));
+    pdfBootRuntime.loadPdfjsComponents.mockResolvedValue({
+      pdfjs: { getDocument },
+      viewer: {},
+    });
+    return { getDocument, destroy, getPage, textOptions };
+  }
+
+  it('按页取原始字形文本（disableNormalization）并缓存，destroy 幂等', async () => {
+    const runtime = mockTextPdf({ pages: [['第', '一', '页'], ['第', '二', '页']] });
+    const handle = await openPdfTextDocument(new Uint8Array([1, 2, 3]));
+    expect(handle.pageCount).toBe(2);
+    await expect(handle.pageText(1)).resolves.toBe('第一页');
+    await expect(handle.pageText(2)).resolves.toBe('第二页');
+    await expect(handle.pageText(1)).resolves.toBe('第一页');
+    expect(runtime.getPage).toHaveBeenCalledTimes(2); // 缓存命中不重复取页
+    // 与渲染文本层/搜索同口径：不 normalize，命中 offset 才能对齐。
+    expect(runtime.textOptions).toEqual([
+      { disableNormalization: true },
+      { disableNormalization: true },
+    ]);
+    await expect(handle.pageText(99)).resolves.toBe('第二页'); // 越界钳制
+    const outline = await handle.outline();
+    expect(outline.map((item) => ({ level: item.level, text: item.text }))).toEqual([
+      { level: 1, text: '前言' },
+    ]);
+    await handle.destroy();
+    expect(runtime.destroy).toHaveBeenCalledTimes(1);
+    await handle.destroy();
+    expect(runtime.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('加密 PDF 抛 PdfEncryptedError，损坏 PDF 仍抛通用 ParseError', async () => {
+    const passwordError = Object.assign(new Error('No password given'), {
+      name: 'PasswordException',
+      code: 1,
+    });
+    pdfBootRuntime.loadPdfjsComponents.mockResolvedValue({
+      pdfjs: {
+        getDocument: vi.fn(() => ({
+          promise: Promise.reject(passwordError),
+          destroy: vi.fn(async () => undefined),
+        })),
+      },
+      viewer: {},
+    });
+    await expect(openPdfTextDocument(new Uint8Array([1]))).rejects.toBeInstanceOf(
+      PdfEncryptedError,
+    );
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      pdfBootRuntime.loadPdfjsComponents.mockResolvedValue({
+        pdfjs: {
+          getDocument: vi.fn(() => ({
+            promise: Promise.reject(new Error('boom')),
+            destroy: vi.fn(async () => undefined),
+          })),
+        },
+        viewer: {},
+      });
+      await expect(openPdfTextDocument(new Uint8Array([1]))).rejects.toThrow(
+        'PDF 文件损坏或无法解析',
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('页数超限按限额注册表抛 ReaderLimitError 并释放文档', async () => {
+    const runtime = mockTextPdf({ pages: [['a'], ['b'], ['c']] });
+    const restore = injectReaderLimit('maxPdfPages', 2);
+    try {
+      await expect(openPdfTextDocument(new Uint8Array([1]))).rejects.toMatchObject({
+        name: 'ReaderLimitError',
+        kind: 'pdfPages',
+        actual: 3,
+        limit: 2,
+      });
+    } finally {
+      restore();
+    }
+    expect(runtime.destroy).toHaveBeenCalledTimes(1);
   });
 });
 

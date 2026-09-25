@@ -35,6 +35,8 @@ interface ManifestItem {
   id: string;
   href: string;
   mediaType: string;
+  /** EPUB3 manifest properties（空格分隔）；`nav` 标记导航文档。 */
+  properties: string;
 }
 
 const EPUB_EAGER_CHAPTER_LIMIT = 64;
@@ -416,7 +418,7 @@ export async function parseEpub(
       const href = attr(tag, 'href');
       const mediaType = attr(tag, 'media-type') ?? '';
       if (id !== null && href !== null) {
-        items.set(id, { id, href, mediaType });
+        items.set(id, { id, href, mediaType, properties: attr(tag, 'properties') ?? '' });
       }
     }
 
@@ -611,6 +613,45 @@ export async function parseEpub(
         const title = decodeXmlEntities((point[1] ?? '').replace(/<[^>]*>/g, '')).trim();
         if (reference !== null && title !== '') {
           navigationTitles.set(reference.path, title);
+        }
+      }
+    }
+
+    // EPUB3：没有 NCX（或 NCX 无可用条目）时解析 nav 文档补目录（R5）。
+    // NCX 优先，nav 只补缺口；目录在章节创建前可用，大型懒加载书不因此多读正文。
+    if (navigationTitles.size === 0) {
+      const navItem = [...items.values()].find(
+        (item) =>
+          /(?:^|\s)nav(?:\s|$)/.test(item.properties) && /x?html/i.test(item.mediaType),
+      );
+      const navReference =
+        navItem === undefined ? null : resolveArchiveReference(opfPath, navItem.href);
+      const navFile = navReference === null ? null : archive.file(navReference.path);
+      if (navReference !== null && navFile !== null) {
+        const navHtml = decodeReaderText(await navFile.readBytes(signal));
+        throwIfReaderLoadCancelled(signal);
+        const navDocument = new DOMParser().parseFromString(navHtml, 'text/html');
+        const navs = [...navDocument.querySelectorAll('nav')];
+        const navRoot =
+          navs.find(
+            (nav) =>
+              nav.getAttribute('epub:type') === 'toc' ||
+              nav.getAttribute('type') === 'toc' ||
+              nav.getAttribute('role') === 'doc-toc',
+          ) ??
+          navs[0] ??
+          null;
+        if (navRoot !== null) {
+          for (const anchor of navRoot.querySelectorAll('a[href]')) {
+            const reference = resolveArchiveReference(
+              navReference.path,
+              anchor.getAttribute('href') ?? '',
+            );
+            const title = (anchor.textContent ?? '').replace(/\s+/g, ' ').trim();
+            if (reference !== null && title !== '' && !navigationTitles.has(reference.path)) {
+              navigationTitles.set(reference.path, title);
+            }
+          }
         }
       }
     }

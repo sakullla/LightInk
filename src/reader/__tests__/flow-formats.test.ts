@@ -1085,6 +1085,124 @@ describe('parseEpub', () => {
     expect(content.chapters[0]!.html).not.toContain('ccdqxkhp');
   });
 
+  /** EPUB3 无 NCX、只有 properties="nav" 导航文档的最小包（R5）。 */
+  async function buildNavOnlyEpub(): Promise<Uint8Array> {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>' +
+            '</rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">' +
+            '<metadata><dc:title>导航书</dc:title></metadata>' +
+            '<manifest>' +
+            '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '<item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>' +
+            '</manifest>' +
+            '<spine><itemref idref="ch1"/><itemref idref="ch2"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/nav.xhtml',
+      new Uint8ArrayReader(
+        enc(
+          '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">' +
+            '<body><nav epub:type="toc" id="toc"><ol>' +
+            '<li><a href="ch1.xhtml">第一章 导航标题</a></li>' +
+            '<li><a href="ch2.xhtml#top">第二章 导航标题</a></li>' +
+            '</ol></nav></body></html>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(enc('<html><body><p>甲</p></body></html>')),
+    );
+    await zip.add(
+      'OEBPS/ch2.xhtml',
+      new Uint8ArrayReader(enc('<html><body><p>乙</p></body></html>')),
+    );
+    return zip.close();
+  }
+
+  it('无 NCX 的 EPUB3 用 nav 文档补目录，且懒章节在物化后保留导航标题', async () => {
+    const content = await parseEpub(await buildNavOnlyEpub());
+    expect(content.chapters.map((chapter) => chapter.title)).toEqual([
+      '第一章 导航标题',
+      '第二章 导航标题',
+    ]);
+    // 章节正文没有可用 <title>/标题：load 后仍保留 nav 目录标题。
+    await content.chapters[0]!.load?.();
+    await content.chapters[1]!.load?.();
+    expect(content.chapters.map((chapter) => chapter.title)).toEqual([
+      '第一章 导航标题',
+      '第二章 导航标题',
+    ]);
+    expect(content.chapters[0]!.html).toContain('甲');
+    expect(content.chapters[1]!.html).toContain('乙');
+    content.dispose?.();
+  });
+
+  it('NCX 与 EPUB3 nav 同时存在时 NCX 标题优先', async () => {
+    const zip = new ZipWriter(new Uint8ArrayWriter());
+    await zip.add(
+      'META-INF/container.xml',
+      new Uint8ArrayReader(
+        enc(
+          '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/content.opf',
+      new Uint8ArrayReader(
+        enc(
+          '<package version="3.0"><manifest>' +
+            '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>' +
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>' +
+            '</manifest><spine><itemref idref="ch1"/></spine></package>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/toc.ncx',
+      new Uint8ArrayReader(
+        enc(
+          '<ncx><navMap><navPoint><navLabel><text>NCX 标题</text></navLabel>' +
+            '<content src="ch1.xhtml"/></navPoint></navMap></ncx>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/nav.xhtml',
+      new Uint8ArrayReader(
+        enc(
+          '<html><body><nav epub:type="toc"><ol>' +
+            '<li><a href="ch1.xhtml">nav 标题</a></li></ol></nav></body></html>',
+        ),
+      ),
+    );
+    await zip.add(
+      'OEBPS/ch1.xhtml',
+      new Uint8ArrayReader(enc('<html><body><p>正文</p></body></html>')),
+    );
+    const content = await parseEpub(await zip.close());
+    expect(content.chapters[0]!.title).toBe('NCX 标题');
+    content.dispose?.();
+  });
+
   it('通过带有界预读的随机源解析 EPUB，并合并相邻 ZIP 读取', async () => {
     const bytes = await buildEpub(true, true);
     const reads: Array<{ offset: number; length: number }> = [];

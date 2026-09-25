@@ -190,7 +190,7 @@ vi.mock('../text-layer-selection.js', () => ({
 }));
 
 import { createReaderView } from '../reader-view.js';
-import { renderPdfInto } from '../formats/pdf.js';
+import { PdfEncryptedError, renderPdfInto } from '../formats/pdf.js';
 
 beforeEach(() => {
   viewerRuntime.eventBuses.length = 0;
@@ -376,6 +376,33 @@ describe('PDF open chain (official kernel, unchanged contract)', () => {
     expect(options.useWasm).toBe(false);
     expect(options.useWorkerFetch).toBe(false);
     await handle.destroy();
+  });
+
+  it('maps a password-protected PDF to PdfEncryptedError, keeping corrupt files on the generic ParseError', async () => {
+    const passwordError = Object.assign(new Error('No password given'), {
+      name: 'PasswordException',
+      code: 1,
+    });
+    pdfRuntime.getDocument.mockReturnValue({
+      promise: Promise.reject(passwordError),
+      destroy: vi.fn(async () => undefined),
+    });
+    await expect(
+      renderPdfInto(new Uint8Array([1]), document.createElement('div')),
+    ).rejects.toBeInstanceOf(PdfEncryptedError);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      pdfRuntime.getDocument.mockReturnValue({
+        promise: Promise.reject(new Error('broken bytes')),
+        destroy: vi.fn(async () => undefined),
+      });
+      await expect(
+        renderPdfInto(new Uint8Array([1]), document.createElement('div')),
+      ).rejects.toThrow('PDF 文件损坏或无法解析');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
