@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * Contract for `src/reader/assistant-markdown.ts` (R3 / ADR-5):
+ * Contract for `src/assistant/assistant-markdown.ts` (R3 / ADR-5):
  *
  * Assistant replies render as sanitized GFM HTML. User messages stay plain
  * (this helper only covers assistant markdown). Unclosed fences must not

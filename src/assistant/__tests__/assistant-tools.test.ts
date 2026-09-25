@@ -1,17 +1,18 @@
 /**
- * Contract for `src/reader/assistant-tools.ts` (ADR-3 / R6):
+ * Contract for `src/assistant/assistant-tools.ts` (ADR-3 / ADR-4 / R6):
  *
  * - 模型可见工具只有 query_book 与 save_to_book。
  * - toc / search / chapter 返回摘录或正文并标明截断；search 只走 run/hitViews，
  *   不调用 activateKey。
  * - 同一会话指定章最多 12 次，再请求则工具结果报上限。
  * - 无选区高亮失败；书签不需选区；拒绝确认不写入。
+ * - pending_confirmation 随结果返回（供面板确认后回调同一执行器）。
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OutlineItem } from '../../outline/outline-model.js';
-import type { Locator } from '../annotations.js';
+import type { Locator } from '../../reader/annotations.js';
 import {
   ASSISTANT_MAX_SPECIFIED_CHAPTERS,
   ASSISTANT_TOOL_DEFINITIONS,
@@ -28,8 +29,8 @@ import {
   type AssistantToolSearch,
   type AssistantToolSelection,
 } from '../assistant-tools.js';
-import { READER_LIMITS } from '../reader-limits.js';
-import { SEARCH_HIT_CAP } from '../search-panel.js';
+import { READER_LIMITS } from '../../reader/reader-limits.js';
+import { SEARCH_HIT_CAP } from '../../reader/search-panel.js';
 
 const FLOW_LOCATOR: Locator = {
   format: 'flow',

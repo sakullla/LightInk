@@ -22,6 +22,7 @@ import {
   lookupTargetLangLabel,
   normalizeLookupTargetLang,
 } from './ai-target-lang.js';
+import { aiErrorRaw, assistantAiErrorMessage } from '../assistant/assistant-error.js';
 
 export {
   AI_TARGET_LANG_VALUES,
@@ -35,8 +36,15 @@ export const LOOKUP_MAX_CODE_UNITS = 40;
 export const LOOKUP_MAX_TOKENS = 4;
 export const TRANSLATE_MAX_CODE_UNITS = 5000;
 
-/** 与 Manage 页 AI 分组广播的事件同源（`ai-config-ui`），reader 侧自持常量。 */
-export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
+/**
+ * 兼容导出：配置事件、配置读取与 AI 错误映射现由 `assistant-error` 单点持有
+ * （surface 无关），reader 侧消费方继续经本模块导入，不产生第二份实现。
+ */
+export { ASSISTANT_AI_CONFIGURED_EVENT as READER_AI_CONFIGURED_EVENT } from '../assistant/assistant-error.js';
+export { parseAiTranslateConfig } from '../assistant/assistant-error.js';
+export { invokeAiTranslateConfig } from '../assistant/assistant-error.js';
+export { assistantAiErrorMessage as readerAiErrorMessage } from '../assistant/assistant-error.js';
+export type { AiTranslateConfig } from '../assistant/assistant-error.js';
 
 export interface LookupEntry {
   readonly partOfSpeech?: string;
@@ -124,49 +132,7 @@ export function lookupTooLongCopy(t: (key: MessageKey) => string, translateEnabl
   return t(translateEnabled ? 'reader.lookup.tooLongUseTranslate' : 'reader.lookup.tooLong');
 }
 
-// ── AI 翻译（R3）：错误码映射与段规划 ─────────────────────────────────
-
-const AI_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
-  AI_NETWORK_ERROR: 'reader.ai.error.network',
-  AI_CLIENT_ERROR: 'reader.ai.error.network',
-  AI_TIMEOUT: 'reader.ai.error.timeout',
-  AI_RESPONSE_TOO_LARGE: 'reader.ai.error.tooLarge',
-  AI_REQUEST_TOO_LARGE: 'reader.ai.error.tooLarge',
-  AI_KEY_INVALID: 'reader.ai.error.keyInvalid',
-  AI_MODEL_NOT_FOUND: 'reader.ai.error.modelNotFound',
-  AI_QUOTA_EXCEEDED: 'reader.ai.error.quota',
-  AI_NOT_CONFIGURED: 'reader.ai.error.unconfigured',
-  AI_HTTP_NOT_ALLOWED: 'reader.ai.error.httpNotAllowed',
-  AI_URL_INVALID: 'reader.ai.error.urlInvalid',
-  AI_CONFIG_INVALID: 'reader.ai.error.configInvalid',
-  AI_STORAGE_ERROR: 'reader.ai.error.storage',
-  AI_TARGET_LANG_INVALID: 'reader.ai.error.configInvalid',
-  AI_KEY_STORE_FAILED: 'reader.ai.error.keyStore',
-  AI_TEXT_INVALID: 'reader.ai.error.textInvalid',
-  AI_TEXT_EMPTY: 'reader.ai.error.textEmpty',
-  AI_REQUEST_INVALID: 'reader.ai.error.requestInvalid',
-  AI_RESPONSE_INVALID: 'reader.ai.error.responseInvalid',
-};
-
-/** AI 命令错误码族 → 本地化文案；未知码回退通用失败。missing 填充未配置缺口。 */
-export function readerAiErrorMessage(
-  t: (key: MessageKey) => string,
-  error: unknown,
-  missing: readonly string[] = [],
-): string {
-  // aidErrorCode 是 Wiktionary 语义的子串匹配;AI 错误取原始 `AI_*` 码精确对表。
-  const code = aidErrorRaw(error).match(/\bAI_[A-Z_]+\b/)?.[0] ?? '';
-  const key = AI_ERROR_KEYS[code];
-  if (key === undefined) {
-    return t('reader.ai.error.failed');
-  }
-  if (key === 'reader.ai.error.unconfigured') {
-    return missing.length > 0
-      ? t(key).split('{missing}').join(missing.join(', '))
-      : t('reader.ai.unconfigured');
-  }
-  return t(key);
-}
+// ── AI 翻译（R3）：错误码映射与段规划（实现单点见 assistant-error） ──────
 
 /**
  * 译文段初始规划：已配置则 loading，未配置（配置态竞态）以单段错误呈现，
@@ -183,7 +149,7 @@ export function initialTranslateSections(
     {
       source: 'ai',
       status: 'error',
-      message: readerAiErrorMessage(t, { code: 'AI_NOT_CONFIGURED' }),
+      message: assistantAiErrorMessage(t, { code: 'AI_NOT_CONFIGURED' }),
     },
   ];
 }
@@ -281,34 +247,6 @@ export async function invokeWiktionaryLookup(term: string, locale: LocaleId): Pr
   return parseLookupEntries(await invoke<unknown>('reader_wiktionary_lookup', { term, locale }));
 }
 
-/** `ai_get_config` 的 reader 侧投影：显隐判定 + 目标语言覆盖项（无密钥材料）。 */
-export interface AiTranslateConfig {
-  readonly configured: boolean;
-  readonly targetLang?: string;
-  readonly missing: readonly string[];
-}
-
-/** 防御解析 `ai_get_config` 返回；形态不对时视为未配置（永不抛出）。 */
-export function parseAiTranslateConfig(raw: unknown): AiTranslateConfig {
-  if (raw === null || typeof raw !== 'object') {
-    return { configured: false, missing: [] };
-  }
-  const obj = raw as { configured?: unknown; missing?: unknown; targetLang?: unknown };
-  const missingRaw = obj.missing;
-  const missing = Array.isArray(missingRaw)
-    ? missingRaw.filter((gap): gap is string => typeof gap === 'string')
-    : [];
-  const targetLang =
-    typeof obj.targetLang === 'string' && obj.targetLang.trim() !== ''
-      ? obj.targetLang.trim()
-      : undefined;
-  return {
-    configured: obj.configured === true || (Array.isArray(missingRaw) && missing.length === 0),
-    targetLang,
-    missing,
-  };
-}
-
 /** `ai_translate_selection` 的返回形态（截断标志 → 段内提示）。 */
 export interface AiTranslateResultView {
   readonly text: string;
@@ -328,10 +266,6 @@ export function parseAiTranslateResult(raw: unknown): AiTranslateResultView {
   return { text: '', targetLang: '', truncated: false };
 }
 
-export async function invokeAiTranslateConfig(): Promise<AiTranslateConfig> {
-  return parseAiTranslateConfig(await invoke<unknown>('ai_get_config'));
-}
-
 /** 选区 AI 翻译：超长输入由后端截断至 5000 并置 truncated。 */
 export async function invokeAiTranslateSelection(
   text: string,
@@ -347,7 +281,7 @@ export async function invokeAiTranslateSelection(
 }
 
 function aidErrorCode(error: unknown): keyof typeof AID_ERROR_KEYS {
-  const raw = aidErrorRaw(error);
+  const raw = aiErrorRaw(error);
   const lowered = raw.toLowerCase();
   if (lowered.includes('reader_network') || lowered.includes('network')) return 'network';
   if (lowered.includes('reader_timeout') || lowered.includes('timeout')) return 'timeout';
@@ -386,35 +320,6 @@ function aidErrorCode(error: unknown): keyof typeof AID_ERROR_KEYS {
   if (lowered.includes('empty') || lowered.includes('reader_term_empty')) return 'empty';
   const known = Object.keys(AID_ERROR_KEYS).find((code) => lowered === code);
   return (known as keyof typeof AID_ERROR_KEYS | undefined) ?? 'failed';
-}
-
-function aidErrorRaw(error: unknown): string {
-  if (typeof error === 'string') {
-    return unwrapAidErrorText(error);
-  }
-  if (error === null || typeof error !== 'object') {
-    return '';
-  }
-  const obj = error as { code?: unknown; error?: unknown; message?: unknown };
-  const parts = [obj.code, obj.error, obj.message]
-    .filter((value) => typeof value === 'string' && value !== '')
-    .map((value) => unwrapAidErrorText(value as string));
-  return parts.join(' ');
-}
-
-function unwrapAidErrorText(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(trimmed) as { code?: unknown; message?: unknown };
-      const code = typeof parsed.code === 'string' ? parsed.code : '';
-      const message = typeof parsed.message === 'string' ? parsed.message : '';
-      return `${code} ${message}`.trim();
-    } catch {
-      return trimmed;
-    }
-  }
-  return trimmed;
 }
 
 const LOOKUP_MARGIN_PX = 8;

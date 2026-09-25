@@ -1,15 +1,19 @@
 /**
- * `assistant-tools` — 阅读器助手两个内置工具（ADR-3 / R6）。
+ * `assistant-tools` — surface 无关的助手工具会话（ADR-3 / ADR-4 / R6）。
  *
- * 模型只声明 query_book 与 save_to_book。查询接 outline / 章文本 / 搜索
+ * 模型只声明 query_book 与 save_to_book；工具依赖全部经 `AssistantToolDeps`
+ * 注入，session 不持有阅读器实例。查询接 outline / 章文本 / 搜索
  * run+hitViews，不调用 activateKey、不改阅读位置。指定章正文计入每问 12
  * 次上限。保存经 confirm 后走 appendAnnotation；拒绝不写盘。
+ *
+ * AI 主动建议的写操作以 `AssistantPendingConfirmation` 随结果返回，由面板
+ * 渲染待确认列表并在确认后回调同一 session.execute；未确认不得落盘。
  */
 
 import type { OutlineItem } from '../outline/outline-model.js';
-import type { AnnotationKind, Locator } from './annotations.js';
-import { READER_LIMITS } from './reader-limits.js';
-import { SEARCH_HIT_CAP } from './search-panel.js';
+import type { AnnotationKind, Locator } from '../reader/annotations.js';
+import { READER_LIMITS } from '../reader/reader-limits.js';
+import { SEARCH_HIT_CAP } from '../reader/search-panel.js';
 
 export const QUERY_BOOK_TOOL_NAME = 'query_book';
 export const SAVE_TO_BOOK_TOOL_NAME = 'save_to_book';
@@ -123,6 +127,22 @@ export interface AssistantTocItem {
   readonly page?: number;
 }
 
+/**
+ * AI 主动建议且需用户确认的写操作：工具结果随 `pending_confirmation` 返回，
+ * 面板渲染待确认列表；确认后由面板用同一 `session.execute(tool, arguments)`
+ * 落盘（执行器与建议同源）。拒绝或未确认前不得有任何落盘副作用。
+ */
+export interface AssistantPendingConfirmation {
+  /** 同一建议内的稳定 id（面板去重/定位用）。 */
+  readonly id: string;
+  /** 用户可见摘要（含目标书/分组/标签与动作）。 */
+  readonly summary: string;
+  /** 确认后回调的工具名（与当前会话工具定义同源）。 */
+  readonly tool: string;
+  /** 确认后回调的参数；写操作本身不在建议阶段执行。 */
+  readonly arguments: unknown;
+}
+
 export interface AssistantToolResult {
   readonly ok: boolean;
   readonly tool?: string;
@@ -146,6 +166,8 @@ export interface AssistantToolResult {
   readonly reason?: string;
   readonly message?: string;
   readonly limit?: number;
+  /** AI 主动建议的待确认写操作（确认后回调同一执行器）。 */
+  readonly pending_confirmation?: readonly AssistantPendingConfirmation[];
 }
 
 export interface AssistantToolSession {

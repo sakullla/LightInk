@@ -15,9 +15,9 @@ import {
   type ReaderChromeLabels,
 } from '../reader-chrome.js';
 import {
+  ASSISTANT_AI_CONFIGURED_EVENT,
   invokeAiTranslateConfig,
-  READER_AI_CONFIGURED_EVENT,
-} from '../lookup-panel.js';
+} from '../../assistant/assistant-error.js';
 import { syncReaderTitlebarReveal } from '../../ui/window-titlebar.js';
 import {
   activateReaderTocPanel,
@@ -25,6 +25,7 @@ import {
   fillReaderTocPanel,
   fillReaderTypographyPanel,
   mountReaderOverlay,
+  pinFixedOverlay,
   positionReaderChromePanel,
   unpinFixedOverlay,
   type ReaderChromePanelCopy,
@@ -72,14 +73,14 @@ import {
   createAssistantPanel,
   type AssistantChapterContext,
   type AssistantPanel,
-} from '../assistant-panel.js';
+} from '../../assistant/assistant-panel.js';
 import {
   createAssistantToolSession,
   resolveAssistantLocatorJump,
   type AssistantChapterBody,
   type AssistantChapterTarget,
   type AssistantToolSelection,
-} from '../assistant-tools.js';
+} from '../../assistant/assistant-tools.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
 
 function readerChromeCopy(
@@ -532,6 +533,23 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     assistantPanel = createAssistantPanel({
       t: ctx.t,
       host: () => ctx.root,
+      // Surface 注入：阅读器接管 portal 挂载/主题采纳与右栏钉位、触屏 sheet 判定。
+      surface: {
+        mount: (panel, host) => {
+          mountReaderOverlay(panel, host);
+        },
+        pin: (panel, host) => {
+          const pane =
+            typeof host.closest === 'function'
+              ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
+              : host;
+          pinFixedOverlay(panel, pane);
+        },
+        unpin: (panel) => {
+          unpinFixedOverlay(panel);
+        },
+        touchMode: readerChromeTouchMode,
+      },
       chapterContext: assistantChapterContext,
       // 未配置引导：回合架并打开 Manage（main.ts 监听 lightink:open-manage）。
       openSettings: () => {
@@ -714,7 +732,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
   };
 
   if (typeof document !== 'undefined') {
-    document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfigured);
+    document.addEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfigured);
   }
   void refreshAiConfigured();
 
@@ -1118,7 +1136,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       assistantAvailable: () => aiConfigured,
       onDestroy: () => {
         if (typeof document !== 'undefined') {
-          document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfigured);
+          document.removeEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfigured);
         }
       },
       returnToShelf,

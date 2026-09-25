@@ -702,6 +702,104 @@
   outline-offset: 1px;
 }
 
+/* ===== 待确认列表（AI 主动建议；确认后回调执行器，未确认不落盘） ===== */
+
+.lightink-reader-assistant-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
+.lightink-reader-assistant-pending[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-pending-title {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lightink-reader-assistant-pending-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  font-size: 0.76rem;
+}
+
+.lightink-reader-assistant-pending-item[data-status='confirmed'] {
+  opacity: 0.75;
+}
+
+.lightink-reader-assistant-pending-item[data-status='rejected'] {
+  opacity: 0.6;
+}
+
+.lightink-reader-assistant-pending-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lightink-reader-assistant-pending-error {
+  margin: 0;
+  color: #c0392b;
+  font-size: 0.72rem;
+}
+
+.lightink-reader-assistant-pending-status {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 0.7rem;
+}
+
+.lightink-reader-assistant-pending-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.lightink-reader-assistant-pending-confirm,
+.lightink-reader-assistant-pending-reject {
+  padding: 0.22rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-pending-confirm {
+  font-weight: 600;
+}
+
+.lightink-reader-assistant-pending-confirm:hover,
+.lightink-reader-assistant-pending-reject:hover {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-assistant-pending-confirm:focus-visible,
+.lightink-reader-assistant-pending-reject:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
 /* ===== 触屏底部 sheet（几何/键盘让位由 pinFixedOverlay 内联提供） ===== */
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-panel.is-touch-sheet {
@@ -737,7 +835,11 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-quote:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-stop:not(:disabled):active {
+  .lightink-reader-assistant-stop:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-pending-confirm:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-pending-reject:not(:disabled):active {
   background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
   transition: background-color 100ms ease;
 }
@@ -790,7 +892,11 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-save:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-stop:hover:not(:disabled):not(:active) {
+  .lightink-reader-assistant-stop:hover:not(:disabled):not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-pending-confirm:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-pending-reject:hover:not(:active) {
   background: transparent;
 }
 

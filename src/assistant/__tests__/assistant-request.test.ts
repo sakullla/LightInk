@@ -1,5 +1,5 @@
 /**
- * Contract for `src/reader/assistant-request.ts` (ADR-1 / R4 / R5):
+ * Contract for `src/assistant/assistant-request.ts` (ADR-3 / R4 / R5):
  *
  * - 请求按 ① tools ② system ③ chapter ④ history ⑤ user 组装。
  * - 同章两问 ①②③ 字节一致；换章只改 ③。
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { READER_LIMITS } from '../reader-limits.js';
+import { READER_LIMITS } from '../../reader/reader-limits.js';
 import {
   ASSISTANT_BUILTIN_TOOLS,
   assistantRequestPrefixBytes,

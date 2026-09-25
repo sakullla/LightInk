@@ -21,7 +21,7 @@ import {
   isHighlightLanguageLoaded,
   resolveHighlightLanguage,
 } from '../editor/plugins/code-languages.js';
-import { escapeHtml } from './html-escape.js';
+import { escapeHtml } from '../reader/html-escape.js';
 
 const ASSISTANT_TAGS = [
   'a',

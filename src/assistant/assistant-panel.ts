@@ -1,30 +1,24 @@
 /**
- * `assistant-panel` — AI 助手面板（ADR-6 / R1）。
+ * `assistant-panel` — surface 无关的 AI 助手面板核心（ADR-3 / R3）。
  *
- * 复用面板框架：桌面钉阅读区右侧（mountReaderOverlay + pinFixedOverlay），
- * 触屏是底部 sheet。对话编排（工具循环、停止、历史入口、Markdown）在本文件；
- * 历史 schema、请求分层、工具执行与消毒渲染分别交给 sibling 模块。
+ * 面板生命周期、流式、工具循环、历史装载与待确认列表都在本文件；surface
+ * 适配（portal 宿主、钉位、触屏 sheet 策略）全部经 `AssistantPanelDeps.surface`
+ * 注入，core 不持有阅读器实例。历史 schema、请求分层、工具执行与消毒渲染
+ * 分别交给 sibling 模块；错误/配置单点在 `assistant-error`。
  */
 
 import './assistant-panel.css';
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { MessageKey } from '../i18n/messages.js';
-import {
-  adoptReaderOverlayTheme,
-  mountReaderOverlay,
-  pinFixedOverlay,
-  unpinFixedOverlay,
-} from './reader-chrome-panels.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
+import { READER_LIMITS } from '../reader/reader-limits.js';
 import {
+  ASSISTANT_AI_CONFIGURED_EVENT,
+  assistantAiErrorMessage,
   invokeAiTranslateConfig,
-  readerAiErrorMessage,
-  READER_AI_CONFIGURED_EVENT,
   type AiTranslateConfig,
-} from './lookup-panel.js';
-import { READER_LIMITS } from './reader-limits.js';
-import { readerChromeTouchMode } from './view/reader-dom.js';
+} from './assistant-error.js';
 import {
   AssistantHistoryTooLargeError,
   activeAssistantConversation,
@@ -58,6 +52,7 @@ import {
 import {
   QUERY_BOOK_TOOL_NAME,
   SAVE_TO_BOOK_TOOL_NAME,
+  type AssistantPendingConfirmation,
   type AssistantToolSession,
 } from './assistant-tools.js';
 
@@ -315,6 +310,74 @@ function isAbortError(error: unknown): boolean {
   return code.includes('AI_STREAM_ABORTED');
 }
 
+// ── Surface 缺省与待确认结果解析 ─────────────────────────────────────
+
+/** 缺省触屏判定：与 CSS 触屏门控同一组 `<html>` 属性。 */
+function defaultAssistantTouchMode(): boolean {
+  const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
+  if (rootEl === null || typeof rootEl.hasAttribute !== 'function') {
+    return false;
+  }
+  return rootEl.hasAttribute('data-android') || rootEl.hasAttribute('data-touch-primary');
+}
+
+/** 缺省 portal 挂载：body 直挂（宿主钩子通常覆盖为带主题采纳的挂载）。 */
+function defaultAssistantMount(panel: HTMLElement, host: HTMLElement): void {
+  const layer =
+    host.ownerDocument?.body ?? (typeof document !== 'undefined' ? document.body : null);
+  if (layer !== null && panel.parentNode !== layer) {
+    layer.appendChild(panel);
+  }
+}
+
+/** 从工具结果 JSON 提取待确认写操作；坏形态忽略，不抛出。 */
+export function parseAssistantPendingConfirmations(
+  result: string | undefined,
+): readonly AssistantPendingConfirmation[] {
+  if (result === undefined || result === '') {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return [];
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    return [];
+  }
+  const raw = (parsed as { pending_confirmation?: unknown }).pending_confirmation;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const items: AssistantPendingConfirmation[] = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== 'object') {
+      continue;
+    }
+    const obj = entry as { id?: unknown; summary?: unknown; tool?: unknown; arguments?: unknown };
+    if (typeof obj.id !== 'string' || obj.id === '') continue;
+    if (typeof obj.summary !== 'string' || obj.summary.trim() === '') continue;
+    if (typeof obj.tool !== 'string' || obj.tool === '') continue;
+    items.push({
+      id: obj.id,
+      summary: obj.summary.trim(),
+      tool: obj.tool,
+      arguments: obj.arguments,
+    });
+  }
+  return items;
+}
+
+/** 待确认条目：确认后沿用产生建议的同一 `session.execute` 落盘。 */
+interface PendingConfirmationEntry {
+  readonly key: string;
+  readonly item: AssistantPendingConfirmation;
+  readonly session: AssistantToolSession;
+  status: 'pending' | 'confirmed' | 'rejected';
+  error?: string;
+}
+
 // ── 流式通道（Tauri IPC Channel；注入面供测试） ──────────────────────
 
 export type AssistantInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -453,12 +516,30 @@ export interface AssistantChapterContext {
   readonly text: string;
 }
 
+/**
+ * Surface 适配注入面：portal 宿主层、桌面钉位与触屏 sheet 策略都由宿主提供，
+ * core 只按钩子调用。缺省挂到 host 所在 document.body、不钉位、触屏判定读
+ * `<html>` 的 `data-android` / `data-touch-primary`（与 CSS 触屏门控同源）。
+ */
+export interface AssistantSurfaceDeps {
+  /** portal 挂载（可同时采纳宿主主题令牌）。 */
+  mount?: (panel: HTMLElement, host: HTMLElement) => void;
+  /** 钉位（桌面右栏 / 触屏底栏）；缺省不钉。 */
+  pin?: (panel: HTMLElement, host: HTMLElement) => void;
+  /** 解除钉位与内联几何；缺省无操作。 */
+  unpin?: (panel: HTMLElement) => void;
+  /** 触屏触摸优先：sheet 过渡与打开时的聚焦策略。 */
+  touchMode?: () => boolean;
+}
+
 export interface AssistantPanelDeps {
   t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string;
-  /** 阅读根（主题采纳与 portal 宿主）。 */
+  /** 宿主根（主题采纳与 portal 宿主；不要求是阅读器实例）。 */
   host: () => HTMLElement;
-  /** 当前章节上下文；无文本层格式返回 null。 */
+  /** 当前上下文；无可用上下文格式返回 null。 */
   chapterContext: () => AssistantChapterContext | null;
+  /** Surface 挂载/钉位/触屏注入；缺省 body portal + 不钉位。 */
+  surface?: AssistantSurfaceDeps;
   /** 未配置引导「前往配置」（宿主：回书架并打开 Manage 的 AI 分组）。 */
   openSettings: () => void;
   /** 摘要保存为标注（章节级锚点由宿主实现）。 */
@@ -475,7 +556,7 @@ export interface AssistantPanelDeps {
   historyKey?: () => string | null;
   /** 流式通道注入（测试）。 */
   stream?: AssistantStreamDeps;
-  /** 阅读器当前选区（引用选区 / 工具 selection）。 */
+  /** 当前 surface 选区（引用选区 / 工具 selection）。 */
   currentSelection?: () => string;
   /** PDF 当前页码，只写入本轮用户消息。 */
   currentPage?: () => number | undefined;
@@ -545,7 +626,17 @@ function toolLabelKey(name: string): MessageKey {
 export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const t = deps.t;
   const streamDeps = deps.stream ?? {};
+  const surface = deps.surface ?? {};
   const disposed = { value: false };
+
+  /** 触屏策略：宿主注入优先，缺省与 CSS 门控同源读 html 属性。 */
+  const surfaceTouchMode = (): boolean => {
+    try {
+      return surface.touchMode?.() ?? defaultAssistantTouchMode();
+    } catch {
+      return defaultAssistantTouchMode();
+    }
+  };
 
   const root = document.createElement('aside');
   root.className = 'lightink-reader-assistant-panel';
@@ -622,6 +713,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   persistNotice.className = 'lightink-reader-assistant-notice';
   persistNotice.hidden = true;
 
+  const pendingSection = document.createElement('section');
+  pendingSection.className = 'lightink-reader-assistant-pending';
+  pendingSection.hidden = true;
+  const pendingTitle = document.createElement('p');
+  pendingTitle.className = 'lightink-reader-assistant-pending-title';
+  pendingTitle.textContent = t('reader.assistant.pendingTitle');
+  const pendingList = document.createElement('ul');
+  pendingList.className = 'lightink-reader-assistant-pending-list';
+  pendingSection.append(pendingTitle, pendingList);
+
   const actions = document.createElement('div');
   actions.className = 'lightink-reader-assistant-actions';
   actions.setAttribute('role', 'group');
@@ -690,7 +791,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   composerHint.className = 'lightink-reader-assistant-composer-hint';
   composerHint.textContent = t('reader.assistant.composerHint');
   composer.append(composerBox, composerHint);
-  main.append(contextHint, messagesWrap, persistNotice, actions, composer);
+  main.append(contextHint, messagesWrap, persistNotice, pendingSection, actions, composer);
   root.append(head, historyPane, guide, main);
 
   root.addEventListener(
@@ -722,6 +823,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let stickToBottom = true;
   let persistError: string | null = null;
   let attachedQuote = '';
+  /** 待确认写操作队列：未确认前不落盘；确认后回调产生建议的同一执行器。 */
+  const pendingQueue: PendingConfirmationEntry[] = [];
 
   const chapterContextOrNull = (): AssistantChapterContext | null => {
     try {
@@ -929,6 +1032,124 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     scrollMessagesBottom();
   };
 
+  // ── 待确认列表：面板渲染 + 确认后回调同一执行器 ─────────────────────
+
+  const renderPendingItem = (entry: PendingConfirmationEntry): HTMLElement => {
+    const item = document.createElement('li');
+    item.className = 'lightink-reader-assistant-pending-item';
+    item.dataset.assistantPendingId = entry.item.id;
+    item.dataset.status = entry.status;
+    const summary = document.createElement('p');
+    summary.className = 'lightink-reader-assistant-pending-summary';
+    summary.textContent = entry.item.summary;
+    item.appendChild(summary);
+    if (entry.error !== undefined && entry.error !== '') {
+      const error = document.createElement('p');
+      error.className = 'lightink-reader-assistant-pending-error';
+      error.textContent = entry.error;
+      item.appendChild(error);
+    }
+    if (entry.status === 'pending') {
+      const actions = document.createElement('div');
+      actions.className = 'lightink-reader-assistant-pending-actions';
+      const confirmButton = document.createElement('button');
+      confirmButton.type = 'button';
+      confirmButton.className = 'lightink-reader-assistant-pending-confirm';
+      confirmButton.dataset.assistantPendingConfirm = entry.item.id;
+      confirmButton.textContent = t('reader.assistant.pendingConfirm');
+      confirmButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void resolvePending(entry, true);
+      });
+      const rejectButton = document.createElement('button');
+      rejectButton.type = 'button';
+      rejectButton.className = 'lightink-reader-assistant-pending-reject';
+      rejectButton.dataset.assistantPendingReject = entry.item.id;
+      rejectButton.textContent = t('reader.assistant.pendingReject');
+      rejectButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void resolvePending(entry, false);
+      });
+      actions.append(confirmButton, rejectButton);
+      item.appendChild(actions);
+      return item;
+    }
+    const status = document.createElement('p');
+    status.className = 'lightink-reader-assistant-pending-status';
+    status.dataset.assistantPendingStatus = entry.status;
+    status.textContent =
+      entry.status === 'confirmed'
+        ? t('reader.assistant.pendingConfirmed')
+        : t('reader.assistant.pendingRejected');
+    item.appendChild(status);
+    return item;
+  };
+
+  const renderPendingConfirmations = (): void => {
+    pendingSection.hidden = pendingQueue.length === 0;
+    pendingList.replaceChildren(...pendingQueue.map((entry) => renderPendingItem(entry)));
+  };
+
+  /**
+   * 确认 → 用产生建议的同一 `session.execute` 落盘；失败回到待确认并显示原因。
+   * 拒绝 → 只标记该条，不调用执行器、不落盘。
+   */
+  const resolvePending = async (
+    entry: PendingConfirmationEntry,
+    confirmed: boolean,
+  ): Promise<void> => {
+    if (entry.status !== 'pending') {
+      return;
+    }
+    if (!confirmed) {
+      entry.status = 'rejected';
+      entry.error = undefined;
+      renderPendingConfirmations();
+      return;
+    }
+    // 执行期间标记为已确认，重复点击不会触发第二次落盘。
+    entry.status = 'confirmed';
+    entry.error = undefined;
+    renderPendingConfirmations();
+    try {
+      const result = await entry.session.execute(entry.item.tool, entry.item.arguments);
+      if (result.ok !== true) {
+        entry.status = 'pending';
+        entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
+      }
+    } catch (error) {
+      entry.status = 'pending';
+      entry.error = assistantAiErrorMessage(t, error, aiMissing);
+    }
+    renderPendingConfirmations();
+  };
+
+  /** 工具执行结果里的待确认建议入队；按 tool+id 去重，不落盘。 */
+  const enqueuePendingConfirmations = (
+    session: AssistantToolSession | null,
+    blocks: readonly AssistantToolBlock[],
+  ): void => {
+    if (session === null) {
+      return;
+    }
+    let added = false;
+    for (const block of blocks) {
+      for (const item of parseAssistantPendingConfirmations(block.result)) {
+        const key = `${item.tool}:${item.id}`;
+        if (pendingQueue.some((entry) => entry.key === key)) {
+          continue;
+        }
+        pendingQueue.push({ key, item, session, status: 'pending' });
+        added = true;
+      }
+    }
+    if (added) {
+      renderPendingConfirmations();
+    }
+  };
+
   const historyLocale = (): string =>
     typeof document !== 'undefined' && document.documentElement.lang.trim() !== ''
       ? document.documentElement.lang
@@ -1133,7 +1354,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     void refreshConfig();
   };
   if (typeof document !== 'undefined') {
-    document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
+    document.addEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
   }
 
   let historyEpoch = 0;
@@ -1200,8 +1421,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       messages = [];
       savedAnswers.clear();
       historyEpoch = 0;
+      // 待确认建议属于上一上下文：切换身份即清空，避免跨书确认落错目标。
+      pendingQueue.length = 0;
       renderMessages();
       renderHistoryList();
+      renderPendingConfirmations();
       syncComposer();
     }
     loadedKey = key;
@@ -1348,6 +1572,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
             name: block.name,
           });
         }
+        enqueuePendingConfirmations(session, executed);
         const entry = messages[targetIndex];
         if (entry !== undefined) {
           messages[targetIndex] = { ...entry, toolBlocks: toolBlocks.slice(), content: visible };
@@ -1378,7 +1603,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           toolLimitReached,
           error: stopRequested || isAbortError(error)
             ? t('reader.assistant.stopped')
-            : readerAiErrorMessage(t, error, aiMissing),
+            : assistantAiErrorMessage(t, error, aiMissing),
         };
       }
     } finally {
@@ -1644,15 +1869,23 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     deps.openSettings();
   });
 
-  const positionPanel = (): void => {
+  const mountPanel = (): void => {
     const host = deps.host();
-    mountReaderOverlay(root, host);
-    adoptReaderOverlayTheme(root, host);
-    const pane =
-      typeof host.closest === 'function'
-        ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
-        : host;
-    pinFixedOverlay(root, pane);
+    (surface.mount ?? defaultAssistantMount)(root, host);
+  };
+
+  const pinPanel = (): void => {
+    const host = deps.host();
+    surface.pin?.(root, host);
+  };
+
+  const unpinPanel = (): void => {
+    surface.unpin?.(root);
+  };
+
+  const positionPanel = (): void => {
+    mountPanel();
+    pinPanel();
   };
 
   const openPanel = (): void => {
@@ -1663,9 +1896,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     applyConfiguredView();
     renderMessages();
     renderHistoryList();
+    renderPendingConfirmations();
     resizeInput();
     revealSheet(root);
-    if (!readerChromeTouchMode()) {
+    if (!surfaceTouchMode()) {
       try {
         input.focus({ preventScroll: true });
       } catch {
@@ -1677,16 +1911,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const closePanel = (): void => {
     historyPane.hidden = true;
     historyToggle.setAttribute('aria-expanded', 'false');
-    if (readerChromeTouchMode()) {
+    if (surfaceTouchMode()) {
       concealSheet(root, () => {
         root.hidden = true;
-        unpinFixedOverlay(root);
+        unpinPanel();
       });
       return;
     }
     delete root.dataset.open;
     root.hidden = true;
-    unpinFixedOverlay(root);
+    unpinPanel();
   };
 
   void refreshConfig();
@@ -1712,12 +1946,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       abortActive = null;
       streamingText = null;
       if (typeof document !== 'undefined') {
-        document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
+        document.removeEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
         document.removeEventListener('selectionchange', onSelectionChange);
       }
       delete root.dataset.open;
       root.hidden = true;
-      unpinFixedOverlay(root);
+      unpinPanel();
       root.remove();
     },
   };

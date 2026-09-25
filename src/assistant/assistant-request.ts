@@ -1,13 +1,14 @@
 /**
- * `assistant-request` — 助手一轮模型请求的分层组装（ADR-1 / R4 / R5）。
+ * `assistant-request` — 助手一轮模型请求的分层组装（ADR-3 / R4 / R5）。
  *
  * 固定顺序：① 两个内置工具（查询当前书、保存到当前书）② 系统提示（不含章）
  * ③ 当前章/当前页正文 ④ 本会话近期 messages（含 tool 结果）⑤ 本轮用户消息。
  * 同章追问必须使 ①②③ 字节级相同；PDF 页码只写入 ⑤，不进 ③。
+ * 本模块不依赖任何 surface 实例，上下文全部由调用方传入。
  */
 
 import { ASSISTANT_TOOL_DEFINITIONS } from './assistant-tools.js';
-import { READER_LIMITS } from './reader-limits.js';
+import { READER_LIMITS } from '../reader/reader-limits.js';
 
 /** 单次请求携带的历史条数上限（ai.rs MAX_MESSAGES=200 的安全余量）。 */
 export const ASSISTANT_REQUEST_MAX_TURNS = 30;

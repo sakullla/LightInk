@@ -1,5 +1,5 @@
 /**
- * Contract for `src/reader/assistant-history.ts` (ADR-4 / R2):
+ * Contract for `src/assistant/assistant-history.ts` (ADR-4 / R2):
  *
  * - v1 `{messages}` 读成一段会话；v2 多段互不串扰（忽略顶层 leftover messages）。
  * - 可新建、切换、删除单段；序列化后 activeId 仍指向上次会话。
