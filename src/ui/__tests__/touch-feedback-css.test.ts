@@ -11,7 +11,7 @@ const annotationCss = readFileSync(
 );
 const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
 const assistantCss = readFileSync(
-  new URL('../../reader/assistant-panel.css', import.meta.url),
+  new URL('../../assistant/assistant-panel.css', import.meta.url),
   'utf-8',
 );
 const lookupCss = readFileSync(new URL('../../reader/lookup-panel.css', import.meta.url), 'utf-8');

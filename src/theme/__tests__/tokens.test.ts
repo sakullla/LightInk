@@ -328,7 +328,7 @@ describe('tokens.css hljs 类映射', () => {
 describe('chrome-shell radius token consumers', () => {
   const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
   const assistantCss = readFileSync(
-    new URL('../../reader/assistant-panel.css', import.meta.url),
+    new URL('../../assistant/assistant-panel.css', import.meta.url),
     'utf-8',
   );
   const annotationCss = readFileSync(
