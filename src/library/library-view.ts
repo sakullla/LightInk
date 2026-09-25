@@ -122,6 +122,7 @@ interface Labels {
   testConnectionOk: string;
   httpNotAllowed: string;
   importLocal: string;
+  assistantEntry: string;
   search: string;
   searchPlaceholder: string;
   searchCatalogPlaceholder: string;
@@ -309,6 +310,7 @@ const LABELS: Record<Locale, Labels> = {
     testConnectionOk: 'Connection succeeded',
     httpNotAllowed: 'HTTP addresses require Allow HTTP/LAN.',
     importLocal: 'Import local book',
+    assistantEntry: 'AI assistant',
     search: 'Search',
     searchPlaceholder: 'Search this library',
     searchCatalogPlaceholder: 'Search {name}',
@@ -494,6 +496,7 @@ const LABELS: Record<Locale, Labels> = {
     testConnectionOk: '连接成功',
     httpNotAllowed: 'HTTP 地址需要勾选允许 HTTP/LAN',
     importLocal: '导入本地书籍',
+    assistantEntry: 'AI 助手',
     search: '搜索',
     searchPlaceholder: '搜索当前书库',
     searchCatalogPlaceholder: '搜索 {name}',
@@ -724,6 +727,11 @@ export interface LibraryViewDependencies {
   readonly progressStorage?: ProgressStorage | null;
   /** Open the Markdown editor from Manage. */
   readonly onEnterEditor?: () => void;
+  /**
+   * 首页 header 助手入口（R3）。缺省（Android/测试/降级）不渲染按钮；
+   * 提供时在书架分区显示，点击交给宿主唤起书库助手。
+   */
+  readonly onOpenAssistant?: () => void;
   readonly webdavSource?: Pick<
     WebDavSourceClient,
     'addSource' | 'listSources' | 'removeSource' | 'browse' | 'test'
@@ -1366,7 +1374,23 @@ export function createLibraryView(
   manageNavButton.dataset.libraryNavItem = 'manage';
   const headerImport = button(doc, '', 'lightink-library-header-import lightink-library-icon-button');
   headerImport.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus));
-  headerMain.append(heading, searchForm, headerImport, toolbar);
+  // R3：首页 header 助手入口。deps 缺省（Android/测试）不渲染；仅在书架分区显示，
+  // 未配置 provider 时仍可打开以显示配置引导。
+  const headerAssistant = button(
+    doc,
+    '',
+    'lightink-library-header-assistant lightink-library-icon-button',
+  );
+  headerAssistant.type = 'button';
+  headerAssistant.hidden = true;
+  headerAssistant.appendChild(createNavIcon(doc, NAV_ICON_PATHS.sparkles));
+  if (deps.onOpenAssistant !== undefined) {
+    headerAssistant.addEventListener('click', (event) => {
+      event.preventDefault();
+      deps.onOpenAssistant?.();
+    });
+  }
+  headerMain.append(heading, searchForm, headerImport, headerAssistant, toolbar);
   header.append(brand, headerMain);
 
   const body = doc.createElement('div');
@@ -2883,6 +2907,10 @@ export function createLibraryView(
     searchForm.hidden = activeSection !== 'shelf' && !inCatalog;
     // 顶栏 + 只负责书架导入；书源有自己的分区 +，管理页走「导入本地书籍」。
     headerImport.hidden = currentTab !== 'shelf';
+    // R3/R12：助手入口仅桌面书架 chrome；移动壳（Android/触屏优先）不新增入口，
+    // 不改变既有 header grid 契约。
+    headerAssistant.hidden =
+      deps.onOpenAssistant === undefined || currentTab !== 'shelf' || isMobileLibraryChrome();
     parkWorkspaceTravel();
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
     groupPane.hidden = inCatalog;
@@ -6026,6 +6054,8 @@ export function createLibraryView(
     tabbar?.setLabels(tabbarLabels());
     headerImport.title = l.importLocal;
     headerImport.setAttribute('aria-label', l.importLocal);
+    headerAssistant.title = l.assistantEntry;
+    headerAssistant.setAttribute('aria-label', l.assistantEntry);
     searchClear.title = l.clear;
     searchClear.setAttribute('aria-label', l.clear);
     searchButton.textContent = l.search;

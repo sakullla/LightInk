@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save } from '@tauri-apps/plugin-dialog';
 
 import { mountEditor } from './editor/index.js';
+import { createEditorAssistant, type EditorAssistant } from './editor/assistant-editor.js';
 import { classifyLink } from './editor/link-navigation.js';
 import { imageMarkdownSnippet } from './editor/plugins/image.js';
 import {
@@ -100,6 +101,13 @@ import {
 import { type RemoteOpenResult } from './reader/sources/remote-source.js';
 import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js';
 import { readerLoadErrorDetail } from './reader/error-message.js';
+import { markdownAnnotationKey } from './reader/document-hash.js';
+import {
+  mountReaderOverlay,
+  pinFixedOverlay,
+  unpinFixedOverlay,
+} from './reader/reader-chrome-panels.js';
+import type { AssistantSurfaceDeps } from './assistant/assistant-panel.js';
 import {
   applyReaderTheme,
   COMIC_NATIVE_WINDOW_CHROME,
@@ -218,6 +226,10 @@ import {
   type LibraryOpenRequest,
   type LibraryView,
 } from './library/library-view.js';
+import {
+  createShelfAssistant,
+  type ShelfAssistant,
+} from './library/assistant-shelf.js';
 import {
   acquisitionFileName,
   createBrowserOpdsClient,
@@ -511,6 +523,9 @@ let autosave: AutosaveController;
 // 书架按需创建（见 ensureLibraryView）：关联/CLI 打开 Markdown 的进程可能自始至终
 // 没有书架，所有引用点都必须容忍 undefined。
 let libraryView: LibraryView | undefined;
+// R3：首页 / 编辑器助手 surface（懒创建；会话按书库键 / 文档键持久化）。
+let shelfAssistant: ShelfAssistant | undefined;
+let editorAssistant: EditorAssistant | undefined;
 // 冷启动表面要等 bootstrap 取出首个待打开文件后才落定；此前 shelf 表面不得
 // 创建/加载书架，否则双击 .md 会先跑一遍封面墙再切编辑器。
 let startupShelfDeferred = true;
@@ -972,6 +987,13 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
         applyMarkdownDocumentLayout(document.documentElement, readingLayout);
         syncReadingColumns();
       }
+    }
+    // R3：离开 surface 即收起对应助手面板（面板 portal 到 body，不随宿主隐藏）。
+    if (state.surface !== 'shelf') {
+      shelfAssistant?.close();
+    }
+    if (state.surface !== 'editor') {
+      editorAssistant?.close();
     }
     // Unseal before restore: hidden hosts have no layout, so scroll/column
     // restore would measure display:none and land on the wrong page.
@@ -1510,7 +1532,7 @@ async function openViaDialog(): Promise<void> {
 function saveActiveAs(): void {
   const id = manager.activeTabId;
   if (id !== null) {
-    void manager.saveTabAs(id);
+    void manager.saveTabAs(id).then(() => editorAssistant?.syncDocument());
   }
 }
 
@@ -2046,6 +2068,8 @@ shell = createAppShell(
     onSetWorkspaceMode,
     onEnterEditor: () => workspace.enterEditor(),
     isEditorEntrySuppressed: () => isAndroidApp,
+    // R3：编辑器 chrome 助手入口（Android 编辑器被裁剪，不接线）。
+    ...(isAndroidApp ? {} : { onOpenAssistant: () => openEditorAssistant() }),
     onEnterReaderHome: () => {
       workspace.enterReaderHome();
       if (isAndroidApp || isTouchPrimary) {
@@ -2672,6 +2696,8 @@ manager = new TabManager({
   // T3/R3：切换完成后恢复目标 markdown 标签的滚动位置（reader 自有分页跳过）。
   onTabSwitched: () => {
     const tab = manager?.activeTab ?? null;
+    // R3：文档身份变化即销毁编辑器助手会话（含流式中止，不跨文档写历史）。
+    editorAssistant?.syncDocument();
     editorScroller.dataset.surface = tab?.kind === 'reader' ? 'reader' : 'markdown';
     // reader 覆盖层（侧栏/搜索面板）portal 到共享 chrome，不随标签宿主隐藏——
     // 逐个 reader 标签同步可见性，防止残留在别的标签上。
@@ -2998,11 +3024,13 @@ function ensureLibraryView(): LibraryView {
     getProgress: bindLibraryProgress(syncableStorage),
     // R6：Android 不接线编辑器入口——书架 manage 面板「编辑」按钮与
     // travel 按钮迁移同时缺席（library-view 以 deps 缺省抑制渲染）。
+    // R3：同一裁剪面也抑制首页助手入口；桌面由 header 入口唤起书库助手。
     ...(isAndroidApp
       ? {}
       : {
           workspaceTravel: shell.enterEditorButton,
           onEnterEditor: () => workspace.enterEditor(),
+          onOpenAssistant: () => ensureShelfAssistant().open(),
         }),
     webdavSource: webDavSourceClient,
     onOpenSyncPanel: openWebDavSyncPanel,
@@ -3047,6 +3075,111 @@ function ensureLibraryView(): LibraryView {
     libraryView?.retranslate();
   });
   return libraryView;
+}
+
+// ── R3：首页 / 编辑器助手 surface（ADR-3）────────────────────────────
+// 两处入口与阅读器助手共用同一面板 core；会话按上下文键持久化（书库固定键 /
+// 文档标注身份键），互不串话。surface 几何复用阅读器浮层范式（portal 到 body +
+// 钉编辑区右缘）。
+const assistantOverlaySurface: AssistantSurfaceDeps = {
+  mount: (panel, host) => mountReaderOverlay(panel, host),
+  pin: (panel, host) => {
+    const pane =
+      typeof host.closest === 'function'
+        ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
+        : host;
+    pinFixedOverlay(panel, pane);
+  },
+  unpin: (panel) => unpinFixedOverlay(panel),
+};
+
+const assistantHistoryIo = {
+  readHistory: (key: string) =>
+    invoke<string>('assistant_read_history', { contentHash: key }).catch(() => ''),
+  writeHistory: (key: string, json: string) =>
+    invoke<void>('assistant_write_history', { contentHash: key, json }).catch(
+      () => undefined,
+    ),
+  clearHistory: (key: string) =>
+    invoke<void>('assistant_clear_history', { contentHash: key }).catch(() => undefined),
+};
+
+function openAssistantSettings(): void {
+  document.dispatchEvent(new CustomEvent('lightink:open-manage'));
+}
+
+function openExternalAssistantLink(href: string): void {
+  void invoke('open_in_browser', { url: href }).catch(() => undefined);
+}
+
+function ensureShelfAssistant(): ShelfAssistant {
+  if (shelfAssistant !== undefined) {
+    return shelfAssistant;
+  }
+  shelfAssistant = createShelfAssistant({
+    t: (key, vars) => i18n.t(key, vars),
+    host: () => ensureLibraryView().element,
+    openSettings: openAssistantSettings,
+    ...assistantHistoryIo,
+    readingStatusOf: (itemId) =>
+      bindLibraryProgress(syncableStorage)({ id: itemId })?.status ?? null,
+    onLibraryChanged: () => {
+      // 工具写入绕过 LibraryView 的 onLocalChange：刷新封面墙并调度同步。
+      void libraryView?.refresh();
+      applicationStateSync?.schedule();
+    },
+    surface: assistantOverlaySurface,
+    openExternalLink: openExternalAssistantLink,
+  });
+  return shelfAssistant;
+}
+
+function ensureEditorAssistant(): EditorAssistant {
+  if (editorAssistant !== undefined) {
+    return editorAssistant;
+  }
+  editorAssistant = createEditorAssistant({
+    t: (key, vars) => i18n.t(key, vars),
+    host: () => shell.editorArea,
+    openSettings: openAssistantSettings,
+    getLocale: () => i18n.locale,
+    notify: (message) => {
+      void showAppAlert(message);
+    },
+    getDocument: () => {
+      const tab = activeMarkdownTab();
+      if (tab === null) {
+        return null;
+      }
+      let text = '';
+      try {
+        // 源码模式优先读 textarea（与状态栏同源），只读、不提交回编辑器。
+        const source = sourceViews.get(tab.id);
+        const textarea =
+          source?.isSourceMode === true
+            ? tab.hostElement.querySelector<HTMLTextAreaElement>(
+                'textarea.lightink-source-editor',
+              )
+            : null;
+        text = textarea?.value ?? tab.editor.getMarkdown();
+      } catch {
+        return null;
+      }
+      return {
+        key: markdownAnnotationKey(tab.filePath, tab.syntheticId),
+        title: tab.title,
+        text,
+      };
+    },
+    ...assistantHistoryIo,
+    surface: assistantOverlaySurface,
+    openExternalLink: openExternalAssistantLink,
+  });
+  return editorAssistant;
+}
+
+function openEditorAssistant(): void {
+  ensureEditorAssistant().open();
 }
 
 // R5：阅读器助手面板「前往配置」——回合架并打开 Manage 页的 AI 分组。

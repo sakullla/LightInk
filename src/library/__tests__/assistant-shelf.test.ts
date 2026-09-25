@@ -1,0 +1,413 @@
+// @vitest-environment jsdom
+
+/**
+ * Contract for `src/library/assistant-shelf.ts` (ADR-3 / R3 / R4):
+ *
+ * - 首页助手用固定命名空间键（16-hex）持久化：与按书/按文档会话隔离，重启恢复。
+ * - 面板工具循环消费库作用域 session：模型调用 `library_search` 读出书库；
+ *   显式指令直接落盘并通知 surface 刷新；AI 主动建议进待确认列表，确认才写。
+ * - 未配置 provider 时显示配置引导且不发起请求。
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  createShelfAssistant,
+  SHELF_ASSISTANT_HISTORY_KEY,
+  type ShelfAssistantDeps,
+} from '../assistant-shelf.js';
+import {
+  LIBRARY_ORGANIZE_TOOL_NAME,
+  LIBRARY_SEARCH_TOOL_NAME,
+  type LibraryToolChange,
+  type LibraryToolDeps,
+} from '../../assistant/library-tools.js';
+import type {
+  LibraryBookLookup,
+  LibraryBookLookupResult,
+  LibraryContentFailure,
+} from '../../assistant/library-content.js';
+import type {
+  LibraryGroup,
+  LibraryGroupMembership,
+  LibraryItem,
+  LibraryTag,
+  LibraryTagMembership,
+} from '../library-client.js';
+import { translate, type MessageKey } from '../../i18n/messages.js';
+import type { AiStreamDoneView, AssistantStreamDeps } from '../../assistant/assistant-panel.js';
+
+const t = (key: MessageKey, vars?: Readonly<Record<string, string>>): string =>
+  translate('zh-CN', key, vars);
+
+const flush = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+const flushUntil = async (predicate: () => boolean, tries = 80): Promise<void> => {
+  for (let index = 0; index < tries; index += 1) {
+    if (predicate()) return;
+    await flush();
+  }
+};
+
+afterEach(() => {
+  document.body.replaceChildren();
+  document.documentElement.removeAttribute('data-touch-primary');
+  document.documentElement.removeAttribute('data-android');
+});
+
+function book(overrides: Partial<LibraryItem> & { id: string; title: string }): LibraryItem {
+  return {
+    sourceKind: 'local',
+    authors: [],
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function normalize(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function fakeLocate(
+  items: readonly LibraryItem[],
+  query: LibraryBookLookup,
+): LibraryBookLookupResult | LibraryContentFailure {
+  const title = normalize(query.title ?? '');
+  const author = normalize(query.author ?? '');
+  if (title === '' && author === '') {
+    return { ok: false, error: 'invalid_query', message: '需要书名或作者才能查找书籍。' };
+  }
+  let matches = [...items];
+  if (title !== '') {
+    const exact = matches.filter((item) => normalize(item.title) === title);
+    matches =
+      exact.length > 0
+        ? exact
+        : matches.filter((item) => normalize(item.title).includes(title));
+  }
+  if (author !== '') {
+    matches = matches.filter((item) =>
+      item.authors.some((name) => normalize(name).includes(author)),
+    );
+  }
+  return {
+    ok: true,
+    candidates: matches.map((item) => ({
+      itemId: item.id,
+      title: item.title,
+      authors: [...item.authors],
+      format: item.extension ?? '',
+    })),
+  };
+}
+
+interface LibraryFixture {
+  readonly state: {
+    items: LibraryItem[];
+    groups: LibraryGroup[];
+    groupMembers: LibraryGroupMembership[];
+    tags: LibraryTag[];
+    tagMembers: LibraryTagMembership[];
+  };
+  readonly deps: Partial<LibraryToolDeps>;
+  readonly createGroup: ReturnType<typeof vi.fn>;
+  readonly setGroupMember: ReturnType<typeof vi.fn>;
+}
+
+function libraryFixture(items: readonly LibraryItem[]): LibraryFixture {
+  const state = {
+    items: [...items],
+    groups: [] as LibraryGroup[],
+    groupMembers: [] as LibraryGroupMembership[],
+    tags: [] as LibraryTag[],
+    tagMembers: [] as LibraryTagMembership[],
+  };
+  let seq = 0;
+  const createGroup = vi.fn(async (name: string): Promise<LibraryGroup> => {
+    seq += 1;
+    const group: LibraryGroup = { id: `g${seq}`, name, kind: 'custom', sortOrder: seq };
+    state.groups.push(group);
+    return group;
+  });
+  const setGroupMember = vi.fn(
+    async (groupId: string, itemId: string, present: boolean): Promise<void> => {
+      state.groupMembers = state.groupMembers.filter(
+        (membership) => !(membership.groupId === groupId && membership.itemId === itemId),
+      );
+      if (present) {
+        state.groupMembers.push({ groupId, itemId });
+      }
+    },
+  );
+  const deps: Partial<LibraryToolDeps> = {
+    listItems: async () => state.items,
+    listGroups: async () => state.groups,
+    listGroupMemberships: async () => state.groupMembers,
+    listTags: async () => state.tags,
+    listTagMemberships: async () => state.tagMembers,
+    createGroup,
+    setGroupMember,
+    createTag: async (name) => {
+      seq += 1;
+      const tag: LibraryTag = { id: `t${seq}`, name, createdAt: 1, updatedAt: 1 };
+      state.tags.push(tag);
+      return tag;
+    },
+    setItemTags: async () => undefined,
+    removeItem: async () => undefined,
+    deleteGroup: async () => undefined,
+    locate: async (query) => fakeLocate(state.items, query),
+  };
+  return { state, deps, createGroup, setGroupMember };
+}
+
+interface StreamScript {
+  readonly messages: readonly { role: string; content: string }[];
+  readonly tools: readonly { name: string }[];
+  readonly round: number;
+  readonly emit: (text: string) => void;
+}
+
+interface StreamHarness {
+  readonly deps: AssistantStreamDeps;
+  readonly calls: ReadonlyArray<Record<string, unknown>>;
+}
+
+function scriptedStream(
+  script: (context: StreamScript) => AiStreamDoneView | Promise<AiStreamDoneView>,
+): StreamHarness {
+  const calls: Record<string, unknown>[] = [];
+  let round = 0;
+  const deps: AssistantStreamDeps = {
+    invoke: async (_command, args) => {
+      const payload = (args ?? {}) as Record<string, unknown>;
+      calls.push(payload);
+      const channel = payload.onEvent as { onmessage: (event: unknown) => void };
+      round += 1;
+      return await script({
+        messages: (payload.messages as { role: string; content: string }[]) ?? [],
+        tools: (payload.tools as { name: string }[]) ?? [],
+        round,
+        emit: (text) => channel.onmessage({ type: 'delta', text }),
+      });
+    },
+    createChannel: () => ({ onmessage: () => undefined }),
+  };
+  return { deps, calls };
+}
+
+interface MountOptions {
+  readonly configured?: boolean;
+  readonly library?: Partial<LibraryToolDeps>;
+  readonly script?: (context: StreamScript) => AiStreamDoneView | Promise<AiStreamDoneView>;
+  readonly readingStatusOf?: ShelfAssistantDeps['readingStatusOf'];
+  readonly onLibraryChanged?: (change: LibraryToolChange) => void;
+}
+
+function mountShelf(options: MountOptions = {}) {
+  const host = document.createElement('section');
+  host.className = 'lightink-library';
+  document.body.appendChild(host);
+  const stream = scriptedStream(
+    options.script ??
+      (({ emit }) => {
+        emit('回答');
+        return { finish: 'stop', totalChars: 3, toolCalls: [] };
+      }),
+  );
+  const readKeys: string[] = [];
+  const assistant = createShelfAssistant({
+    t,
+    host: () => host,
+    openSettings: vi.fn(),
+    fetchConfig: async () => ({ configured: options.configured ?? true, missing: [] }),
+    readHistory: async (key) => {
+      readKeys.push(key);
+      return '';
+    },
+    writeHistory: vi.fn(async () => undefined),
+    clearHistory: vi.fn(async () => undefined),
+    library: options.library,
+    readingStatusOf: options.readingStatusOf,
+    onLibraryChanged: options.onLibraryChanged,
+    stream: stream.deps,
+  });
+  return { assistant, stream, readKeys };
+}
+
+function panelElement(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.lightink-reader-assistant-panel');
+}
+
+function submitQuestion(panel: HTMLElement, question: string): void {
+  const input = panel.querySelector<HTMLTextAreaElement>('.lightink-reader-assistant-input');
+  expect(input).not.toBeNull();
+  input!.value = question;
+  panel
+    .querySelector('.lightink-reader-assistant-composer')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
+describe('createShelfAssistant session identity', () => {
+  it('uses a fixed 16-hex namespace key and reuses it across opens', async () => {
+    expect(SHELF_ASSISTANT_HISTORY_KEY).toMatch(/^[0-9a-f]{16}$/);
+    const { assistant, readKeys } = mountShelf();
+    assistant.open();
+    await flush();
+    expect(assistant.isVisible()).toBe(true);
+    expect(readKeys).toContain(SHELF_ASSISTANT_HISTORY_KEY);
+    assistant.close();
+    assistant.open();
+    await flush();
+    expect(new Set(readKeys)).toEqual(new Set([SHELF_ASSISTANT_HISTORY_KEY]));
+    assistant.destroy();
+    expect(panelElement()?.isConnected ?? false).toBe(false);
+  });
+
+  it('shows the provider guide and sends nothing when unconfigured', async () => {
+    const { assistant, stream } = mountShelf({ configured: false });
+    assistant.open();
+    await flush();
+    const panel = panelElement();
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector<HTMLElement>('.lightink-reader-assistant-guide')?.hidden).toBe(
+      false,
+    );
+    expect(panel!.querySelector<HTMLElement>('.lightink-reader-assistant-main')?.hidden).toBe(
+      true,
+    );
+    submitQuestion(panel!, '有哪些书?');
+    await flush();
+    expect(stream.calls).toHaveLength(0);
+    assistant.destroy();
+  });
+});
+
+describe('createShelfAssistant library tools', () => {
+  it('executes library_search through the shelf session and feeds the result back', async () => {
+    const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
+    const { assistant, stream } = mountShelf({
+      library: fixture.deps,
+      script: ({ round, emit }) => {
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: LIBRARY_SEARCH_TOOL_NAME,
+                arguments: JSON.stringify({ action: 'books', title: '三体' }),
+              },
+            ],
+          };
+        }
+        emit('书库里有《三体》。');
+        return { finish: 'stop', totalChars: 9, toolCalls: [] };
+      },
+    });
+    assistant.open();
+    await flush();
+    submitQuestion(panelElement()!, '书库里有三体吗?');
+    await flushUntil(() => stream.calls.length >= 2);
+    expect(stream.calls).toHaveLength(2);
+    // 第二轮请求必须携带第一轮工具结果。
+    const second = JSON.stringify(stream.calls[1]?.messages ?? []);
+    expect(second).toContain(LIBRARY_SEARCH_TOOL_NAME);
+    expect(second).toContain('三体');
+    expect(
+      panelElement()!.querySelectorAll(
+        '.lightink-reader-assistant-message[data-role="assistant"]',
+      ).length,
+    ).toBe(1);
+    assistant.destroy();
+  });
+
+  it('writes directly on an explicit instruction and notifies the surface', async () => {
+    const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
+    const changed = vi.fn();
+    const { assistant } = mountShelf({
+      library: fixture.deps,
+      onLibraryChanged: changed,
+      script: ({ round, emit }) => {
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: LIBRARY_ORGANIZE_TOOL_NAME,
+                arguments: JSON.stringify({ books: ['三体'], group: '科幻', mode: 'assign' }),
+              },
+            ],
+          };
+        }
+        emit('已归类。');
+        return { finish: 'stop', totalChars: 4, toolCalls: [] };
+      },
+    });
+    assistant.open();
+    await flush();
+    submitQuestion(panelElement()!, '把《三体》归到科幻');
+    await flushUntil(() => fixture.createGroup.mock.calls.length > 0);
+    expect(fixture.state.groups.map((group) => group.name)).toEqual(['科幻']);
+    expect(fixture.setGroupMember).toHaveBeenCalledWith('g1', 'local:/a.epub', true);
+    expect(changed).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'organize', itemIds: ['local:/a.epub'] }),
+    );
+    assistant.destroy();
+  });
+
+  it('keeps an AI suggestion pending until the user confirms it once', async () => {
+    const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
+    const changed = vi.fn();
+    const { assistant } = mountShelf({
+      library: fixture.deps,
+      onLibraryChanged: changed,
+      script: ({ round, emit }) => {
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: LIBRARY_ORGANIZE_TOOL_NAME,
+                arguments: JSON.stringify({ books: ['三体'], group: '科幻', mode: 'assign' }),
+              },
+            ],
+          };
+        }
+        emit('要我把《三体》归到科幻吗？');
+        return { finish: 'stop', totalChars: 12, toolCalls: [] };
+      },
+    });
+    assistant.open();
+    await flush();
+    submitQuestion(panelElement()!, '帮我整理一下书库');
+    await flushUntil(
+      () => panelElement()?.querySelector('.lightink-reader-assistant-pending-confirm') != null,
+    );
+    // 建议阶段零落盘。
+    expect(fixture.createGroup).not.toHaveBeenCalled();
+    expect(fixture.setGroupMember).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+    const confirm = panelElement()!.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-pending-confirm',
+    );
+    expect(confirm).not.toBeNull();
+    confirm!.click();
+    await flushUntil(() => fixture.setGroupMember.mock.calls.length > 0);
+    expect(fixture.setGroupMember).toHaveBeenCalledTimes(1);
+    // 重复点击不二次落盘。
+    confirm!.click();
+    await flush();
+    expect(fixture.setGroupMember).toHaveBeenCalledTimes(1);
+    assistant.destroy();
+  });
+});

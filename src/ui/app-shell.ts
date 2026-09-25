@@ -218,6 +218,11 @@ export interface AppShellActions {
   isEditorEntrySuppressed?(): boolean;
   /** Editor labeled「阅读/书架」: always land on the shelf cover wall. */
   onEnterReaderHome?(): void;
+  /**
+   * R3：编辑器 chrome 助手入口。缺省（Android/未接线）不渲染按钮；提供时
+   * 点击唤起编辑器助手（无活动文档由宿主空操作，按钮同时随活动文档显隐）。
+   */
+  onOpenAssistant?(): void;
   /** True when reader workspace is showing an open book, not the shelf. */
   isReaderBookOpen?(): boolean;
   /** R12：列出最近打开文件路径（MRU 序）。 */
@@ -1209,6 +1214,19 @@ export function createAppShell(
   enterReaderHomeBtn.setAttribute('aria-hidden', 'true');
   enterReaderHomeBtn.addEventListener('click', () => enterReaderHomeWorkspace(actions));
 
+  // R3：编辑器 chrome 助手入口。宿主未接线（Android/测试）时不渲染；有活动
+  // Markdown 文档时显示（renderTabBar 随标签变化刷新）。
+  const editorAssistantEnabled = actions.onOpenAssistant !== undefined;
+  const editorAssistantBtn = document.createElement('button');
+  editorAssistantBtn.type = 'button';
+  editorAssistantBtn.id = 'lightink-editor-assistant';
+  editorAssistantBtn.className = 'lightink-workspace-travel lightink-editor-assistant';
+  editorAssistantBtn.hidden = true;
+  editorAssistantBtn.setAttribute('aria-hidden', 'true');
+  if (editorAssistantEnabled) {
+    editorAssistantBtn.addEventListener('click', () => actions.onOpenAssistant?.());
+  }
+
   const readerShell = document.createElement('div');
   readerShell.id = 'lightink-reader-shell';
   readerShell.className = 'lightink-reader-shell';
@@ -1246,6 +1264,12 @@ export function createAppShell(
     mobileBackToShelf.textContent = backToShelfLabel;
     mobileBackToShelf.title = backToShelfLabel;
     mobileBackToShelf.setAttribute('aria-label', backToShelfLabel);
+    if (editorAssistantEnabled) {
+      const assistantLabel = locale === 'en' ? 'Assistant' : '助手';
+      editorAssistantBtn.textContent = assistantLabel;
+      editorAssistantBtn.title = assistantLabel;
+      editorAssistantBtn.setAttribute('aria-label', assistantLabel);
+    }
   }
   syncTravelLabels();
 
@@ -1297,6 +1321,9 @@ export function createAppShell(
   tabsDrag.setAttribute('data-tauri-drag-region', '');
   tabsDrag.setAttribute('aria-hidden', 'true');
   toolbar.append(menuBar.element, chromeDrag, enterReaderHomeBtn);
+  if (editorAssistantEnabled) {
+    toolbar.append(editorAssistantBtn);
+  }
 
   function rebuildMenus(): void {
     const next = buildMenus(menuActions);
@@ -1552,6 +1579,10 @@ export function createAppShell(
     activeId: string | null,
     callbacks: TabBarCallbacks,
   ): void {
+    if (editorAssistantEnabled) {
+      // 无活动 Markdown 文档时入口不出现（宿主 hasActiveDocument 缺省视为可用）。
+      editorAssistantBtn.hidden = actions.hasActiveDocument?.() === false;
+    }
     // Always render the full open-tab list; visibility is chrome pin/reveal CSS only.
     tabBar.replaceChildren(
       ...tabs.map((tab) => {

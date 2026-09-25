@@ -1265,6 +1265,48 @@ describe('LibraryView my-books home', () => {
     expect(travel.isConnected).toBe(false);
   });
 
+  it('shows the home assistant entry on the shelf when wired and hides it elsewhere', async () => {
+    const openAssistant = vi.fn();
+    const deps = dependencies({ onOpenAssistant: openAssistant });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const entry = host.querySelector<HTMLButtonElement>('.lightink-library-header-assistant');
+    expect(entry).toBeInstanceOf(HTMLButtonElement);
+    expect(isShown(entry)).toBe(true);
+    expect(entry!.title).toBe('AI 助手');
+    expect(entry!.getAttribute('aria-label')).toBe('AI 助手');
+    entry!.click();
+    expect(openAssistant).toHaveBeenCalledTimes(1);
+
+    await openManage(host);
+    expect(isShown(entry)).toBe(false);
+    view.destroy();
+  });
+
+  it('keeps the home assistant entry hidden when the host does not wire it', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    const entry = host.querySelector<HTMLButtonElement>('.lightink-library-header-assistant');
+    expect(entry).toBeInstanceOf(HTMLButtonElement);
+    expect(isShown(entry)).toBe(false);
+    view.destroy();
+  });
+
+  it('hides the home assistant entry under mobile library chrome', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ onOpenAssistant: vi.fn() }));
+    await view.show();
+    expect(isShown(host.querySelector('.lightink-library-header-assistant'))).toBe(false);
+    view.destroy();
+  });
+
   it('renders imported items when title or comic metadata is null', async () => {
     const broken = {
       ...localItem({ id: 'local:/books/null.epub' }),
