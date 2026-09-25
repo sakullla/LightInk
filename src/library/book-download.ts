@@ -122,7 +122,19 @@ export function createBookDownloadClient(invoker: {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }): BookDownloadPanelClient {
   return {
-    createJob: (input) => invoker.invoke<BookDownloadPersistedJob>('book_download_job_create', { input }),
+    // Rust `BookDownloadJobInput` 以 camelCase 反序列化（`outputFormat`），
+    // 前端在 client 单侧收口映射；`format`/`language` 是前端编排字段，不下发。
+    createJob: (input) =>
+      invoker.invoke<BookDownloadPersistedJob>('book_download_job_create', {
+        input: {
+          sourceId: input.sourceId,
+          title: input.title,
+          author: input.author,
+          bookUrl: input.bookUrl,
+          outputFormat: input.format,
+          chapters: input.chapters,
+        },
+      }),
     fetchChapter: (jobId, indexNo) =>
       invoker.invoke<BookDownloadPersistedChapter>('book_download_chapter_fetch', {
         jobId,

@@ -8,6 +8,7 @@ import {
   chapterSucceeded,
   composeFailed,
   composeSucceeded,
+  createBookDownloadClient,
   createBookDownloadController,
   downloadPaused,
   INITIAL_DOWNLOAD_STATE,
@@ -295,6 +296,55 @@ describe('download controller (orchestration)', () => {
     );
     controller.dismiss();
     expect(controller.state).toEqual(INITIAL_DOWNLOAD_STATE);
+  });
+});
+
+// ── 真实 client 的 invoke 载荷契约（与 managed.rs 反序列化结构对齐） ────
+
+describe('createBookDownloadClient command payloads (Rust contract)', () => {
+  it('sends camelCase keys matching the Rust command signatures', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const invoker = {
+      async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+        calls.push({ command, args });
+        if (command === 'book_download_job_create') return persistedJob() as T;
+        if (command === 'book_download_chapter_fetch') {
+          return persistedChapter(0, 'done') as T;
+        }
+        if (command === 'book_source_chapters') return [] as unknown as T;
+        return undefined as T;
+      },
+    };
+    const client = createBookDownloadClient(invoker);
+
+    await client.createJob(startInput({ format: 'epub', language: 'en' }));
+    await client.fetchChapter('job-1', 2);
+    await client.getJob('job-1');
+    await client.finalize('job-1', 'QUJD');
+    await client.removeJob('job-1');
+
+    expect(calls.map((call) => call.command)).toEqual([
+      'book_download_job_create',
+      'book_download_chapter_fetch',
+      'book_download_job_get',
+      'book_download_finalize',
+      'book_download_job_remove',
+    ]);
+    // `BookDownloadJobInput` 期望 camelCase 键，格式字段名为 `outputFormat`。
+    const createInput = calls[0].args?.input as Record<string, unknown>;
+    expect(Object.keys(createInput).sort()).toEqual([
+      'author',
+      'bookUrl',
+      'chapters',
+      'outputFormat',
+      'sourceId',
+      'title',
+    ]);
+    expect(createInput.outputFormat).toBe('epub');
+    expect(calls[1].args).toEqual({ jobId: 'job-1', indexNo: 2 });
+    expect(calls[2].args).toEqual({ jobId: 'job-1', includeContent: true });
+    expect(calls[3].args).toEqual({ jobId: 'job-1', epubBase64: 'QUJD' });
+    expect(calls[4].args).toEqual({ jobId: 'job-1' });
   });
 });
 
