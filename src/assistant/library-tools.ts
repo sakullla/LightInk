@@ -15,10 +15,13 @@
  *   （分组名/标签名）确实出现在该消息里，两个条件都满足才直写。这样模型在
  *   显式轮次里夹带未被要求写入时仍会降级为待确认建议。
  * - AI 主动建议：返回 `pending_confirmation`（沿用 `assistant-tools` 契约），
- *   面板确认后用同一 session 重放；建议阶段不产生任何写调用。建议的
- *   `arguments` 只携带待确认引用，真实计划留在 session 内的一次性表里。
+ *   面板确认后走同一 session 的 `confirmPending(id)`；建议阶段不产生任何写
+ *   调用，真实计划留在 session 内的待确认表里。模型可调用的 `execute` 拒绝
+ *   任何携带 `pending_ref` 的调用，面板回传模型的结果也会剥除该引用。
  * - 删除书籍、删除分组、清空标签一律确认，即使当前轮是显式指令。
  * - 同名多本/同名分组返回候选，不猜测落盘；智能组只读。
+ * - 批量写中途失败：可逆步骤（归类/打标，含新建分组/标签）逐项补偿回滚；
+ *   不可逆的删除在失败结果列出已应用项并触发刷新通知，不静默留半状态。
  *
  * 读写在 `LibraryToolDeps` 背后（生产默认走 `LibraryClient`，定位复用
  * `library-content` 的同名语义），测试注入替身，不起 Tauri。
@@ -147,6 +150,8 @@ export interface LibraryToolDeps {
   ) => Promise<void>;
   readonly createTag: (name: string) => Promise<LibraryTag>;
   readonly setItemTags: (itemId: string, tagIds: readonly string[]) => Promise<void>;
+  /** 回滚本次新建的标签（批量写失败补偿；删除只移除关系，不动书）。 */
+  readonly deleteTag: (tagId: string) => Promise<void>;
   readonly removeItem: (itemId: string) => Promise<void>;
   readonly deleteGroup: (groupId: string) => Promise<void>;
   /** 按书名/作者定位（生产默认 `library-content`，语义同名多本返回全部候选）。 */
@@ -166,6 +171,11 @@ export interface LibraryToolDeps {
 export interface LibraryToolSession extends AssistantToolSession {
   readonly tools: readonly LibraryToolDefinition[];
   execute(name: string, args?: unknown): Promise<LibraryToolResult>;
+  /**
+   * 用户确认入口（面板专用；模型路径不可达）。执行成功后条目失效，失败保留
+   * 条目以支持重试。
+   */
+  confirmPending(id: string): Promise<LibraryToolResult>;
 }
 
 const BOOK_REF_SCHEMA = {
@@ -933,11 +943,92 @@ export function defaultLibraryToolDeps(
       libraryClient.setGroupMember(groupId, itemId, present),
     createTag: (name) => libraryClient.createTag(name),
     setItemTags: (itemId, tagIds) => libraryClient.setItemTags(itemId, tagIds),
+    deleteTag: (tagId) => libraryClient.deleteTag(tagId),
     removeItem: (itemId) => libraryClient.removeItem(itemId),
     deleteGroup: (groupId) => libraryClient.deleteGroup(groupId),
     locate: (query) => locate.locate(query),
     ...overrides,
   };
+}
+
+// ── 批量写补偿 ───────────────────────────────────────────────────────
+
+interface WriteStep {
+  readonly run: () => Promise<void>;
+  readonly undo: () => Promise<void>;
+}
+
+interface WriteOutcome {
+  /** 已生效步骤数（步骤与计划顺序一致）。 */
+  readonly applied: number;
+  readonly failure: unknown;
+  /** 失败后补偿是否全部成功；无失败时为 false。 */
+  readonly rolledBack: boolean;
+}
+
+/** 顺序执行写步骤；任一步失败按逆序补偿已生效步骤，补偿失败标记未回滚。 */
+async function runWriteSteps(steps: readonly WriteStep[]): Promise<WriteOutcome> {
+  let applied = 0;
+  let failure: unknown;
+  for (const step of steps) {
+    try {
+      await step.run();
+      applied += 1;
+    } catch (error) {
+      failure = error;
+      break;
+    }
+  }
+  if (failure === undefined) {
+    return { applied, failure: undefined, rolledBack: false };
+  }
+  let rolledBack = true;
+  for (let index = applied - 1; index >= 0; index -= 1) {
+    try {
+      await steps[index]!.undo();
+    } catch {
+      rolledBack = false;
+    }
+  }
+  return { applied, failure, rolledBack };
+}
+
+/** 补偿本次新建的标签；返回是否全部删除成功（删除只移除关系，不动书）。 */
+async function removeCreatedTags(
+  deps: LibraryToolDeps,
+  tagIds: readonly string[],
+): Promise<boolean> {
+  let cleaned = true;
+  for (const tagId of tagIds) {
+    try {
+      await deps.deleteTag(tagId);
+    } catch {
+      cleaned = false;
+    }
+  }
+  return cleaned;
+}
+
+/** 写失败结果：已回滚则说明保持原状；未回滚则列出已应用项供刷新与核验。 */
+function writeFailure(
+  tool: string,
+  error: unknown,
+  applied: { readonly ids: readonly string[]; readonly summary: string },
+  rolledBack: boolean,
+): LibraryToolResult {
+  const reason = errorMessage(error);
+  if (applied.ids.length === 0) {
+    return fail(tool, 'write_failed', { message: reason });
+  }
+  if (rolledBack) {
+    return fail(tool, 'write_failed', {
+      message: `${reason}（本次批量写入已回滚，书库保持原状）`,
+    });
+  }
+  return fail(tool, 'write_failed', {
+    message: `${reason}（已生效 ${applied.ids.length} 项：${applied.summary}；未能全部回滚，请刷新后确认）`,
+    updated: applied.ids,
+  });
 }
 
 export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSession {
@@ -958,7 +1049,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
     }
   };
 
-  /** 执行已确认的计划：所有写调用只在此处发生。 */
+  /** 执行已确认的计划：所有写调用只在此处发生；中途失败按能力补偿或报告。 */
   const executePlan = async (
     tool: string,
     plan: LibraryWritePlan,
@@ -967,6 +1058,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
       switch (plan.kind) {
         case 'organize': {
           let groupId = plan.groupId;
+          let createdGroupId: string | undefined;
           if (plan.createGroup) {
             // 建议发出后分组可能已被别处创建：同名同层唯一时复用，不重复落盘。
             const existing = (await deps.listGroups()).filter(
@@ -985,6 +1077,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
             } else {
               const created = await deps.createGroup(plan.groupName);
               groupId = created.id;
+              createdGroupId = created.id;
             }
           }
           if (groupId === undefined) {
@@ -992,13 +1085,62 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
               message: '缺少目标分组，未写入。',
             });
           }
-          for (const itemId of plan.itemIds) {
-            await deps.setGroupMember(groupId, itemId, plan.mode === 'assign');
+          const targetGroupId = groupId;
+          const memberships = await deps.listGroupMemberships();
+          const hadMember = (itemId: string): boolean =>
+            memberships.some(
+              (membership) =>
+                membership.groupId === targetGroupId && membership.itemId === itemId,
+            );
+          const outcome = await runWriteSteps(
+            plan.itemIds.map((itemId) => ({
+              run: () =>
+                deps.setGroupMember(targetGroupId, itemId, plan.mode === 'assign'),
+              undo: () => deps.setGroupMember(targetGroupId, itemId, hadMember(itemId)),
+            })),
+          );
+          if (outcome.failure !== undefined) {
+            let rolledBack = outcome.rolledBack;
+            let leftoverCreatedGroup = false;
+            if (rolledBack && createdGroupId !== undefined) {
+              try {
+                await deps.deleteGroup(createdGroupId);
+              } catch {
+                leftoverCreatedGroup = true;
+                rolledBack = false;
+              }
+            }
+            const appliedIds = plan.itemIds.slice(0, outcome.applied);
+            if (!rolledBack && (appliedIds.length > 0 || leftoverCreatedGroup)) {
+              notify({
+                kind: 'organize',
+                itemIds: appliedIds,
+                groupIds: leftoverCreatedGroup ? [createdGroupId!] : [targetGroupId],
+                tagIds: [],
+              });
+            }
+            if (appliedIds.length === 0) {
+              return fail(tool, 'write_failed', {
+                message: leftoverCreatedGroup
+                  ? `${errorMessage(outcome.failure)}（新建的分组「${plan.groupName}」未能回滚，请刷新后确认）`
+                  : errorMessage(outcome.failure),
+                ...(leftoverCreatedGroup ? { updated: [createdGroupId!] } : {}),
+              });
+            }
+            return writeFailure(
+              tool,
+              outcome.failure,
+              {
+                ids: appliedIds,
+                summary: `${plan.mode === 'assign' ? '已归入' : '已移出'}分组「${plan.groupName}」：${bookList(plan.titles.slice(0, outcome.applied))}`,
+              },
+              rolledBack,
+            );
           }
           notify({
             kind: 'organize',
             itemIds: plan.itemIds,
-            groupIds: [groupId],
+            groupIds: [targetGroupId],
             tagIds: [],
           });
           return {
@@ -1018,28 +1160,48 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
             tags.map((tag) => [normalizeName(tag.name), tag] as const),
           );
           const tagIds = new Set<string>();
-          for (const name of plan.tagNames) {
-            const existing = byName.get(normalizeName(name));
-            if (existing !== undefined) {
-              tagIds.add(existing.id);
-              continue;
+          const createdTagIds: string[] = [];
+          try {
+            for (const name of plan.tagNames) {
+              const existing = byName.get(normalizeName(name));
+              if (existing !== undefined) {
+                tagIds.add(existing.id);
+                continue;
+              }
+              if (plan.mode !== 'add') {
+                return fail(tool, 'tag_not_found', {
+                  message: `标签「${name}」不存在。`,
+                });
+              }
+              const created = await deps.createTag(name);
+              byName.set(normalizeName(created.name), created);
+              tagIds.add(created.id);
+              createdTagIds.push(created.id);
             }
-            if (plan.mode !== 'add') {
-              return fail(tool, 'tag_not_found', {
-                message: `标签「${name}」不存在。`,
+          } catch (error) {
+            // 标签创建是写入前的中途失败：补偿本次新建的标签，保持原状。
+            const cleaned = await removeCreatedTags(deps, createdTagIds);
+            if (!cleaned && createdTagIds.length > 0) {
+              notify({ kind: 'tag', itemIds: [], groupIds: [], tagIds: [...createdTagIds] });
+              return fail(tool, 'write_failed', {
+                message: `${errorMessage(error)}（新建的 ${createdTagIds.length} 个标签未能回滚，请刷新后确认）`,
+                updated: [...createdTagIds],
               });
             }
-            const created = await deps.createTag(name);
-            byName.set(normalizeName(created.name), created);
-            tagIds.add(created.id);
+            return fail(tool, 'write_failed', {
+              message:
+                createdTagIds.length > 0
+                  ? `${errorMessage(error)}（本次批量写入已回滚）`
+                  : errorMessage(error),
+            });
           }
           const memberships = await deps.listTagMemberships();
-          for (const itemId of plan.itemIds) {
-            const current = new Set(
-              memberships
-                .filter((membership) => membership.itemId === itemId)
-                .map((membership) => membership.tagId),
-            );
+          const originalOf = (itemId: string): string[] =>
+            memberships
+              .filter((membership) => membership.itemId === itemId)
+              .map((membership) => membership.tagId);
+          const nextOf = (before: readonly string[]): string[] => {
+            const current = new Set(before);
             if (plan.mode === 'add') {
               for (const tagId of tagIds) {
                 current.add(tagId);
@@ -1051,7 +1213,47 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
             } else {
               current.clear();
             }
-            await deps.setItemTags(itemId, [...current]);
+            return [...current];
+          };
+          const outcome = await runWriteSteps(
+            plan.itemIds.map((itemId) => ({
+              run: () => deps.setItemTags(itemId, nextOf(originalOf(itemId))),
+              undo: () => deps.setItemTags(itemId, originalOf(itemId)),
+            })),
+          );
+          if (outcome.failure !== undefined) {
+            let rolledBack = outcome.rolledBack;
+            if (createdTagIds.length > 0) {
+              const cleaned = await removeCreatedTags(deps, createdTagIds);
+              rolledBack = rolledBack && cleaned;
+            }
+            const appliedIds = plan.itemIds.slice(0, outcome.applied);
+            if (!rolledBack && (appliedIds.length > 0 || createdTagIds.length > 0)) {
+              notify({
+                kind: 'tag',
+                itemIds: appliedIds,
+                groupIds: [],
+                tagIds: [...tagIds],
+              });
+            }
+            if (appliedIds.length === 0) {
+              const leftover = createdTagIds.length > 0 && !rolledBack;
+              return fail(tool, 'write_failed', {
+                message: leftover
+                  ? `${errorMessage(outcome.failure)}（新建标签未能完全回滚，请刷新后确认）`
+                  : errorMessage(outcome.failure),
+                ...(leftover ? { updated: [...createdTagIds] } : {}),
+              });
+            }
+            return writeFailure(
+              tool,
+              outcome.failure,
+              {
+                ids: appliedIds,
+                summary: `${plan.mode === 'clear' ? '已清空标签' : plan.mode === 'remove' ? '已移除标签' : '已打上标签'}：${bookList(plan.titles.slice(0, outcome.applied))}`,
+              },
+              rolledBack,
+            );
           }
           notify({
             kind: 'tag',
@@ -1085,8 +1287,35 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
           };
         }
         case 'remove-books': {
-          for (const itemId of plan.itemIds) {
-            await deps.removeItem(itemId);
+          // 删除不可回滚：中途失败时报告已删除项并触发刷新；已被删除的目标视为
+          // 已达成并跳过，使确认失败后的重试能收敛。
+          const known = new Set((await deps.listItems()).map((item) => item.id));
+          const applied: string[] = [];
+          const appliedTitles: string[] = [];
+          for (let index = 0; index < plan.itemIds.length; index += 1) {
+            const itemId = plan.itemIds[index]!;
+            if (!known.has(itemId)) {
+              continue;
+            }
+            try {
+              await deps.removeItem(itemId);
+              applied.push(itemId);
+              appliedTitles.push(plan.titles[index] ?? itemId);
+            } catch (error) {
+              if (applied.length > 0) {
+                notify({
+                  kind: 'remove-book',
+                  itemIds: [...applied],
+                  groupIds: [],
+                  tagIds: [],
+                });
+                return fail(tool, 'write_failed', {
+                  message: `${errorMessage(error)}（已删除 ${applied.length}/${plan.itemIds.length}：${bookList(appliedTitles)}；其余未删除，请刷新后确认）`,
+                  updated: [...applied],
+                });
+              }
+              return fail(tool, 'write_failed', { message: errorMessage(error) });
+            }
           }
           notify({
             kind: 'remove-book',
@@ -1103,8 +1332,35 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
           };
         }
         case 'remove-groups': {
-          for (const groupId of plan.groupIds) {
-            await deps.deleteGroup(groupId);
+          // 删除不可回滚：中途失败时报告已删除项并触发刷新；已被删除的目标视为
+          // 已达成并跳过，使确认失败后的重试能收敛。
+          const known = new Set((await deps.listGroups()).map((group) => group.id));
+          const applied: string[] = [];
+          const appliedNames: string[] = [];
+          for (let index = 0; index < plan.groupIds.length; index += 1) {
+            const groupId = plan.groupIds[index]!;
+            if (!known.has(groupId)) {
+              continue;
+            }
+            try {
+              await deps.deleteGroup(groupId);
+              applied.push(groupId);
+              appliedNames.push(plan.names[index] ?? groupId);
+            } catch (error) {
+              if (applied.length > 0) {
+                notify({
+                  kind: 'remove-group',
+                  itemIds: [],
+                  groupIds: [...applied],
+                  tagIds: [],
+                });
+                return fail(tool, 'write_failed', {
+                  message: `${errorMessage(error)}（已删除 ${applied.length}/${plan.groupIds.length}：${nameList(appliedNames)}；其余未删除，请刷新后确认）`,
+                  updated: [...applied],
+                });
+              }
+              return fail(tool, 'write_failed', { message: errorMessage(error) });
+            }
           }
           notify({
             kind: 'remove-group',
@@ -1126,6 +1382,10 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
     }
   };
 
+  /**
+   * 建议入队：只登记计划并返回待确认结构，不写书库。`arguments` 里的 ref 仅
+   * 供不支持 `confirmPending` 的旧面板回退；`execute` 不再接受该引用。
+   */
   const issuePending = (
     tool: string,
     plan: LibraryWritePlan,
@@ -1435,26 +1695,39 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
     });
   };
 
+  /** 用户确认入口：面板按 id 调用；成功后条目失效，失败保留以支持重试。 */
+  const confirmPending = async (id: string): Promise<LibraryToolResult> => {
+    const pending = pendingWrites.get(id);
+    if (pending === undefined) {
+      return {
+        ok: false,
+        error: 'confirmation_expired',
+        message: '待确认建议已失效，请重新发起。',
+      };
+    }
+    const result = await executePlan(pending.tool, pending.plan);
+    if (result.ok) {
+      pendingWrites.delete(id);
+    }
+    return result;
+  };
+
   return {
     tools: LIBRARY_TOOL_DEFINITIONS,
     // 库作用域没有阅读器的「指定章读取」限额，固定 0。
     specifiedChapterCount: () => 0,
+    confirmPending,
     async execute(name, args) {
       try {
         const parsed = parseArgs(args);
         if (!parsed.ok) {
           return fail(name, 'invalid_args', { message: '工具参数不是对象。' });
         }
-        const pendingRef = readString(parsed.value.pending_ref)?.trim() ?? '';
-        if (pendingRef !== '') {
-          const pending = pendingWrites.get(pendingRef);
-          if (pending === undefined || pending.tool !== name) {
-            return fail(name, 'confirmation_expired', {
-              message: '待确认建议已失效，请重新发起。',
-            });
-          }
-          pendingWrites.delete(pendingRef);
-          return await executePlan(name, pending.plan);
+        // 模型可调用路径：待确认引用一律拒绝，确认只能由面板走 confirmPending。
+        if (parsed.value.pending_ref !== undefined) {
+          return fail(name, 'invalid_args', {
+            message: '待确认建议只能由用户在面板确认后执行。',
+          });
         }
         if (name === LIBRARY_SEARCH_TOOL_NAME) {
           return await executeSearch(deps, name, parsed.value);

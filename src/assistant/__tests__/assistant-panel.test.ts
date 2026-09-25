@@ -7,8 +7,8 @@
  * - 面板管理多段历史；工具调用显示为块；查询定位可点跳转。
  * - 一次发送内工具往返满 24 轮后停止并提示。
  * - 用户消息纯文本；助手消息 Markdown。流式停止丢掉 Channel。
- * - 待确认列表渲染工具返回的 pending_confirmation，确认后回调同一执行器；
- *   未确认前不执行落盘。
+ * - 待确认列表渲染工具返回的 pending_confirmation，确认后优先回调会话专用
+ *   confirmPending(id)，未确认前不执行落盘；回传模型的工具结果剥除待确认引用。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,7 @@ import {
   createAssistantPanel,
   parseAssistantPendingConfirmations,
   streamAssistantChat,
+  stripAssistantPendingConfirmations,
   type AssistantInvoke,
   type AssistantPanelDeps,
 } from '../assistant-panel.js';
@@ -1148,6 +1149,24 @@ describe('createAssistantPanel lifecycle hygiene', () => {
 });
 
 describe('parseAssistantPendingConfirmations', () => {
+  it('strips pending confirmations and refs from the model-visible result', () => {
+    expect(stripAssistantPendingConfirmations(undefined)).toBe('');
+    expect(stripAssistantPendingConfirmations('not json')).toBe('not json');
+    expect(stripAssistantPendingConfirmations('{"ok":true}')).toBe('{"ok":true}');
+    const stripped = stripAssistantPendingConfirmations(
+      JSON.stringify({
+        ok: true,
+        pending: true,
+        pending_confirmation: [
+          { id: 'p1', summary: '归入', tool: 'classify_book', arguments: { pending_ref: 'p1' } },
+        ],
+      }),
+    );
+    expect(stripped).not.toContain('pending_confirmation');
+    expect(stripped).not.toContain('pending_ref');
+    expect(JSON.parse(stripped)).toEqual({ ok: true, pending: true });
+  });
+
   it('ignores malformed payloads and keeps well-formed items', () => {
     expect(parseAssistantPendingConfirmations(undefined)).toEqual([]);
     expect(parseAssistantPendingConfirmations('not json')).toEqual([]);
@@ -1303,6 +1322,140 @@ describe('createAssistantPanel pending confirmations', () => {
     expect(failed?.dataset.status).toBe('pending');
     expect(failed?.querySelector('[data-assistant-pending-confirm]')).not.toBeNull();
     expect(execute).toHaveBeenCalledTimes(2);
+    panel.destroy();
+  });
+
+  it('prefers the dedicated confirmPending entry over re-executing the tool', async () => {
+    const execute = vi.fn(async () => pendingReply);
+    const confirmPending = vi.fn(async () => ({ ok: true, tool: 'classify_book' }));
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 1) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit('已处理');
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+      confirmPending,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把示例书归入旧书');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+    panel.element
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm="p1"]')
+      ?.click();
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-status="confirmed"]') !== null,
+    );
+    expect(confirmPending).toHaveBeenCalledWith('p1');
+    expect(execute).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('re-enqueues a rejected suggestion as pending when it appears again', async () => {
+    const execute = vi.fn(async () => pendingReply);
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 1 || round === 3) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: `c${round}`, name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit('已处理');
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把示例书归入旧书');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+    panel.element
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-reject="p1"]')
+      ?.click();
+    await flush();
+    expect(
+      panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')?.dataset.status,
+    ).toBe('rejected');
+
+    submitQuestion(panel, '再整理一次');
+    await flushUntil(
+      () =>
+        panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')
+          ?.dataset.status === 'pending',
+    );
+    expect(panel.element.querySelector('[data-assistant-pending-confirm="p1"]')).not.toBeNull();
+    panel.destroy();
+  });
+
+  it('keeps pending refs out of the tool results sent back to the model', async () => {
+    const libraryReply = {
+      ok: true,
+      tool: 'library_organize',
+      pending: true,
+      pending_confirmation: [
+        {
+          id: 'p1',
+          summary: '将《示例书》归入「旧书」',
+          tool: 'library_organize',
+          arguments: { pending_ref: 'p1' },
+        },
+      ],
+    };
+    const execute = vi.fn(async () => libraryReply);
+    const roundMessages: string[] = [];
+    let round = 0;
+    const script: Script = async ({ emit, messages }) => {
+      round += 1;
+      if (round === 1) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'library_organize', arguments: '{}' }],
+        };
+      }
+      roundMessages.push(JSON.stringify(messages));
+      emit('已处理');
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '整理一下');
+    await flushUntil(() => roundMessages.length > 0);
+    expect(roundMessages.join('\n')).not.toContain('pending_ref');
+    expect(roundMessages.join('\n')).not.toContain('pending_confirmation');
+    // 面板仍拿到完整结果并渲染待确认条目。
+    expect(
+      panel.element.querySelector('[data-assistant-pending-id="p1"]'),
+    ).not.toBeNull();
     panel.destroy();
   });
 });

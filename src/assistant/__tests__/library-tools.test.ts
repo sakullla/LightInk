@@ -6,9 +6,11 @@
  * - 五类工具定义与执行同源；session 可被面板当 `AssistantToolSession` 消费。
  * - 查询：按书名/作者/分组/标签/格式/阅读状态过滤，只读不写。
  * - 显式指令（祈使 + 目标被点名）直写；主动建议进 `pending_confirmation`，
- *   确认前书库零变化，确认后用同一 session 重放且只写一次。
+ *   确认前书库零变化，确认只走面板专用 `confirmPending(id)` 且只写一次；
+ *   `execute` 携带 `pending_ref` 一律拒绝，模型无法自执行确认。
  * - 删除书籍、删除分组、清空标签一律确认。
- * - 同名多本/同名分组返回候选不猜测；智能组只读；写失败报错不落半状态。
+ * - 同名多本/同名分组返回候选不猜测；智能组只读。
+ * - 批量写失败：归类/打标逐项补偿回滚，删除不可逆时列出已应用项并通知刷新。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -125,6 +127,7 @@ interface Harness {
     setGroupMember: ReturnType<typeof vi.fn>;
     createTag: ReturnType<typeof vi.fn>;
     setItemTags: ReturnType<typeof vi.fn>;
+    deleteTag: ReturnType<typeof vi.fn>;
     removeItem: ReturnType<typeof vi.fn>;
     deleteGroup: ReturnType<typeof vi.fn>;
   };
@@ -187,6 +190,12 @@ function harness(options: HarnessOptions = {}): Harness {
       for (const tagId of tagIds) {
         state.tagMembers.push({ tagId, itemId });
       }
+    }),
+    deleteTag: vi.fn(async (tagId: string): Promise<void> => {
+      state.tags = state.tags.filter((tag) => tag.id !== tagId);
+      state.tagMembers = state.tagMembers.filter(
+        (membership) => membership.tagId !== tagId,
+      );
     }),
     removeItem: vi.fn(async (itemId: string): Promise<void> => {
       state.items = state.items.filter((item) => item.id !== itemId);
@@ -591,7 +600,7 @@ describe('AI 主动建议待确认', () => {
     expect(h.changed).not.toHaveBeenCalled();
   });
 
-  it('确认后用同一 session 重放才写入，且只执行一次', async () => {
+  it('确认后用同一 session 的 confirmPending 才写入，且只执行一次', async () => {
     const h = harness({
       items: [book({ id: 'a', title: '三体' })],
       groups: [{ id: 'g1', name: '科幻', kind: 'custom', sortOrder: 1 }],
@@ -603,14 +612,55 @@ describe('AI 主动建议待确认', () => {
     });
     const pending = suggested.pending_confirmation?.[0];
     expect(pending).toBeDefined();
-    const confirmed = await h.session.execute(pending!.tool, pending!.arguments);
+    const confirmed = await h.session.confirmPending(pending!.id);
     expect(confirmed).toMatchObject({ ok: true, action: 'organize' });
     expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
     expect(h.changed).toHaveBeenCalledTimes(1);
 
-    const replay = await h.session.execute(pending!.tool, pending!.arguments);
+    const replay = await h.session.confirmPending(pending!.id);
     expect(replay).toMatchObject({ ok: false, error: 'confirmation_expired' });
     expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('模型路径携带 pending_ref 被拒绝，不能绕过用户确认', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [{ id: 'g1', name: '科幻', kind: 'custom', sortOrder: 1 }],
+      userMessage: '帮我整理一下书库',
+    });
+    const suggested = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    const pending = suggested.pending_confirmation?.[0];
+    expect(pending).toBeDefined();
+    const bypass = await h.session.execute(pending!.tool, pending!.arguments);
+    expect(bypass).toMatchObject({ ok: false, error: 'invalid_args' });
+    expect(h.writes.setGroupMember).not.toHaveBeenCalled();
+    expect(h.changed).not.toHaveBeenCalled();
+
+    const confirmed = await h.session.confirmPending(pending!.id);
+    expect(confirmed).toMatchObject({ ok: true, action: 'organize' });
+    expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('确认失败保留条目，重试可再次确认直到成功', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [{ id: 'g1', name: '科幻', kind: 'custom', sortOrder: 1 }],
+      userMessage: '',
+    });
+    const suggested = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    const pending = suggested.pending_confirmation?.[0];
+    h.writes.setGroupMember.mockRejectedValueOnce(new Error('数据库写入失败'));
+    const failed = await h.session.confirmPending(pending!.id);
+    expect(failed).toMatchObject({ ok: false, error: 'write_failed' });
+    const retried = await h.session.confirmPending(pending!.id);
+    expect(retried).toMatchObject({ ok: true, action: 'organize' });
+    expect(h.writes.setGroupMember).toHaveBeenCalledTimes(2);
   });
 
   it('同一建议重复出现时 id 稳定，便于面板去重', async () => {
@@ -662,7 +712,7 @@ describe('AI 主动建议待确认', () => {
     });
     h.state.groups.push({ id: 'g9', name: '科幻', kind: 'custom', sortOrder: 9 });
     const pending = suggested.pending_confirmation?.[0];
-    const confirmed = await h.session.execute(pending!.tool, pending!.arguments);
+    const confirmed = await h.session.confirmPending(pending!.id);
     expect(confirmed.ok).toBe(true);
     expect(h.writes.createGroup).not.toHaveBeenCalled();
     expect(h.writes.setGroupMember).toHaveBeenCalledWith('g9', 'a', true);
@@ -676,7 +726,7 @@ describe('AI 主动建议待确认', () => {
     expect(suggested.pending).toBe(true);
     expect(h.writes.createGroup).not.toHaveBeenCalled();
     const pending = suggested.pending_confirmation?.[0];
-    const confirmed = await h.session.execute(pending!.tool, pending!.arguments);
+    const confirmed = await h.session.confirmPending(pending!.id);
     expect(confirmed.ok).toBe(true);
     expect(h.writes.createGroup).toHaveBeenCalledWith('科幻', undefined);
   });
@@ -697,7 +747,7 @@ describe('破坏性操作逐次确认', () => {
     expect(h.writes.removeItem).not.toHaveBeenCalled();
 
     const pending = suggested.pending_confirmation?.[0];
-    const confirmed = await h.session.execute(pending!.tool, pending!.arguments);
+    const confirmed = await h.session.confirmPending(pending!.id);
     expect(confirmed.ok).toBe(true);
     expect(h.writes.removeItem).toHaveBeenCalledWith('a');
     expect(h.changed).toHaveBeenCalledWith({
@@ -720,7 +770,7 @@ describe('破坏性操作逐次确认', () => {
     expect(suggested.pending).toBe(true);
     expect(h.writes.deleteGroup).not.toHaveBeenCalled();
     const pending = suggested.pending_confirmation?.[0];
-    await h.session.execute(pending!.tool, pending!.arguments);
+    await h.session.confirmPending(pending!.id);
     expect(h.writes.deleteGroup).toHaveBeenCalledWith('g1');
   });
 
@@ -745,7 +795,7 @@ describe('破坏性操作逐次确认', () => {
     expect(suggested.pending).toBe(true);
     expect(h.writes.setItemTags).not.toHaveBeenCalled();
     const pending = suggested.pending_confirmation?.[0];
-    const confirmed = await h.session.execute(pending!.tool, pending!.arguments);
+    const confirmed = await h.session.confirmPending(pending!.id);
     expect(confirmed.ok).toBe(true);
     expect(h.writes.setItemTags.mock.calls[0]?.[1]).toEqual([]);
     expect(
@@ -851,6 +901,292 @@ describe('同名多本与错误边界', () => {
       await h.session.execute(LIBRARY_TAG_TOOL_NAME, { books: ['三体'], mode: 'clear' }),
     ).toMatchObject({ ok: true, pending: true });
     expect(h.writes.setItemTags).not.toHaveBeenCalled();
+  });
+});
+
+describe('批量写失败补偿与报告', () => {
+  it('归类批量中途失败时逐项回滚并保持原状', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' }), book({ id: 'b', title: '活着' })],
+      groups: [{ id: 'g1', name: '科幻', kind: 'custom', sortOrder: 1 }],
+      userMessage: '把《三体》和《活着》归到科幻',
+    });
+    let calls = 0;
+    h.writes.setGroupMember.mockImplementation(
+      async (groupId: string, itemId: string, present: boolean): Promise<void> => {
+        calls += 1;
+        if (calls === 2) {
+          throw new Error('数据库写入失败');
+        }
+        h.state.groupMembers = h.state.groupMembers.filter(
+          (membership) =>
+            !(membership.groupId === groupId && membership.itemId === itemId),
+        );
+        if (present) {
+          h.state.groupMembers.push({ groupId, itemId });
+        }
+      },
+    );
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(result.message).toContain('已回滚');
+    expect(h.state.groupMembers).toEqual([]);
+    expect(h.changed).not.toHaveBeenCalled();
+  });
+
+  it('归类回滚失败时列出已生效项并通知刷新', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' }), book({ id: 'b', title: '活着' })],
+      groups: [{ id: 'g1', name: '科幻', kind: 'custom', sortOrder: 1 }],
+      userMessage: '把《三体》和《活着》归到科幻',
+    });
+    let calls = 0;
+    h.writes.setGroupMember.mockImplementation(
+      async (groupId: string, itemId: string, present: boolean): Promise<void> => {
+        calls += 1;
+        if (calls === 2) {
+          throw new Error('数据库写入失败');
+        }
+        if (calls === 3) {
+          throw new Error('回滚失败');
+        }
+        h.state.groupMembers = h.state.groupMembers.filter(
+          (membership) =>
+            !(membership.groupId === groupId && membership.itemId === itemId),
+        );
+        if (present) {
+          h.state.groupMembers.push({ groupId, itemId });
+        }
+      },
+    );
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed', updated: ['a'] });
+    expect(result.message).toContain('未能全部回滚');
+    expect(h.state.groupMembers).toEqual([{ groupId: 'g1', itemId: 'a' }]);
+    expect(h.changed).toHaveBeenCalledWith({
+      kind: 'organize',
+      itemIds: ['a'],
+      groupIds: ['g1'],
+      tagIds: [],
+    });
+  });
+
+  it('归类新建分组后中途失败时删除新建分组', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' }), book({ id: 'b', title: '活着' })],
+      userMessage: '把《三体》和《活着》归到分组「科幻」',
+    });
+    let calls = 0;
+    h.writes.setGroupMember.mockImplementation(
+      async (groupId: string, itemId: string, present: boolean): Promise<void> => {
+        calls += 1;
+        if (calls === 2) {
+          throw new Error('数据库写入失败');
+        }
+        h.state.groupMembers = h.state.groupMembers.filter(
+          (membership) =>
+            !(membership.groupId === groupId && membership.itemId === itemId),
+        );
+        if (present) {
+          h.state.groupMembers.push({ groupId, itemId });
+        }
+      },
+    );
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着'],
+      group: '科幻',
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(result.message).toContain('已回滚');
+    expect(h.writes.createGroup).toHaveBeenCalledTimes(1);
+    expect(h.writes.deleteGroup).toHaveBeenCalledTimes(1);
+    expect(h.state.groups).toEqual([]);
+    expect(h.state.groupMembers).toEqual([]);
+    expect(h.changed).not.toHaveBeenCalled();
+  });
+
+  it('新建分组未能回滚时报告分组并通知刷新', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '把《三体》归到分组「科幻」',
+    });
+    h.writes.setGroupMember.mockRejectedValueOnce(new Error('数据库写入失败'));
+    h.writes.deleteGroup.mockRejectedValueOnce(new Error('回滚失败'));
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    const createdGroupId = h.state.groups[0]!.id;
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'write_failed',
+      updated: [createdGroupId],
+    });
+    expect(result.message).toContain('未能回滚');
+    expect(h.changed).toHaveBeenCalledWith({
+      kind: 'organize',
+      itemIds: [],
+      groupIds: [createdGroupId],
+      tagIds: [],
+    });
+    expect(h.state.groups.map((group) => group.id)).toEqual([createdGroupId]);
+  });
+
+  it('打标中途新建标签失败时删除已建标签', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '给我把《三体》打上「科幻」和「太空」标签',
+    });
+    let calls = 0;
+    h.writes.createTag.mockImplementation(async (name: string): Promise<LibraryTag> => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error('数据库写入失败');
+      }
+      const trimmed = name.trim();
+      const existing = h.state.tags.find((tag) => tag.name === trimmed);
+      if (existing !== undefined) {
+        return existing;
+      }
+      h.state.seq += 1;
+      const tag: LibraryTag = {
+        id: `t${h.state.seq}`,
+        name: trimmed,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      h.state.tags.push(tag);
+      return tag;
+    });
+    const result = await h.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['三体'],
+      mode: 'add',
+      tags: ['科幻', '太空'],
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(h.writes.deleteTag).toHaveBeenCalledTimes(1);
+    expect(h.state.tags).toEqual([]);
+    expect(h.writes.setItemTags).not.toHaveBeenCalled();
+    expect(h.changed).not.toHaveBeenCalled();
+  });
+
+  it('打标批量中途失败回滚已写项并删除新建标签', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' }), book({ id: 'b', title: '活着' })],
+      tags: [{ id: 't1', name: '刘慈欣', createdAt: 1, updatedAt: 1 }],
+      tagMembers: [{ tagId: 't1', itemId: 'a' }],
+      userMessage: '把《三体》和《活着》打上「科幻」标签',
+    });
+    let calls = 0;
+    h.writes.setItemTags.mockImplementation(
+      async (itemId: string, tagIds: readonly string[]): Promise<void> => {
+        calls += 1;
+        if (calls === 2) {
+          throw new Error('数据库写入失败');
+        }
+        h.state.tagMembers = h.state.tagMembers.filter(
+          (membership) => membership.itemId !== itemId,
+        );
+        for (const tagId of tagIds) {
+          h.state.tagMembers.push({ tagId, itemId });
+        }
+      },
+    );
+    const result = await h.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['三体', '活着'],
+      mode: 'add',
+      tags: ['科幻'],
+    });
+    expect(result).toMatchObject({ ok: false, error: 'write_failed' });
+    expect(result.message).toContain('已回滚');
+    expect(h.writes.deleteTag).toHaveBeenCalledTimes(1);
+    expect(h.state.tags.map((tag) => tag.name)).toEqual(['刘慈欣']);
+    expect(
+      h.state.tagMembers.filter((membership) => membership.itemId === 'a').map((m) => m.tagId),
+    ).toEqual(['t1']);
+    expect(h.state.tagMembers.some((membership) => membership.itemId === 'b')).toBe(false);
+    expect(h.changed).not.toHaveBeenCalled();
+  });
+
+  it('删除书籍中途失败报告已删除项并通知刷新', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' }), book({ id: 'b', title: '活着' })],
+      userMessage: '删除《三体》和《活着》',
+    });
+    const suggested = await h.session.execute(LIBRARY_REMOVE_TOOL_NAME, {
+      kind: 'book',
+      books: ['三体', '活着'],
+    });
+    const pending = suggested.pending_confirmation?.[0];
+    expect(pending).toBeDefined();
+    let calls = 0;
+    h.writes.removeItem.mockImplementation(async (itemId: string): Promise<void> => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error('数据库写入失败');
+      }
+      h.state.items = h.state.items.filter((item) => item.id !== itemId);
+    });
+    const result = await h.session.confirmPending(pending!.id);
+    expect(result).toMatchObject({ ok: false, error: 'write_failed', updated: ['a'] });
+    expect(result.message).toContain('已删除 1/2');
+    expect(h.state.items.map((item) => item.id)).toEqual(['b']);
+    expect(h.changed).toHaveBeenCalledWith({
+      kind: 'remove-book',
+      itemIds: ['a'],
+      groupIds: [],
+      tagIds: [],
+    });
+
+    // 保留的条目可重试：已删除的目标被跳过，剩余目标继续删除并收敛。
+    const retried = await h.session.confirmPending(pending!.id);
+    expect(retried).toMatchObject({ ok: true, action: 'remove-book' });
+    expect(h.state.items).toEqual([]);
+  });
+
+  it('删除分组中途失败报告已删除项并通知刷新', async () => {
+    const h = harness({
+      groups: [
+        { id: 'g1', name: '旧书', kind: 'custom', sortOrder: 1 },
+        { id: 'g2', name: '待读', kind: 'custom', sortOrder: 2 },
+      ],
+      userMessage: '删除分组「旧书」和「待读」',
+    });
+    const suggested = await h.session.execute(LIBRARY_REMOVE_TOOL_NAME, {
+      kind: 'group',
+      groups: ['旧书', '待读'],
+    });
+    const pending = suggested.pending_confirmation?.[0];
+    expect(pending).toBeDefined();
+    let calls = 0;
+    h.writes.deleteGroup.mockImplementation(async (groupId: string): Promise<void> => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error('数据库写入失败');
+      }
+      h.state.groups = h.state.groups.filter((group) => group.id !== groupId);
+    });
+    const result = await h.session.confirmPending(pending!.id);
+    expect(result).toMatchObject({ ok: false, error: 'write_failed', updated: ['g1'] });
+    expect(result.message).toContain('已删除 1/2');
+    expect(h.state.groups.map((group) => group.id)).toEqual(['g2']);
+    expect(h.changed).toHaveBeenCalledWith({
+      kind: 'remove-group',
+      itemIds: [],
+      groupIds: ['g1'],
+      tagIds: [],
+    });
+
+    // 保留的条目可重试：已删除的目标被跳过，剩余目标继续删除并收敛。
+    const retried = await h.session.confirmPending(pending!.id);
+    expect(retried).toMatchObject({ ok: true, action: 'remove-group' });
+    expect(h.state.groups).toEqual([]);
   });
 });
 

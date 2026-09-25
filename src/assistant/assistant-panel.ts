@@ -239,7 +239,7 @@ function historyTurns(list: readonly PanelMessage[], end: number): AssistantRequ
       for (const block of blocks) {
         turns.push({
           role: 'tool',
-          content: block.result ?? '',
+          content: stripAssistantPendingConfirmations(block.result),
           toolCallId: block.id,
           name: block.name,
         });
@@ -369,7 +369,34 @@ export function parseAssistantPendingConfirmations(
   return items;
 }
 
-/** 待确认条目：确认后沿用产生建议的同一 `session.execute` 落盘。 */
+/**
+ * 模型可见的工具结果：剥除 `pending_confirmation`（含其 arguments 里的待确认
+ * 引用）。面板仍用完整结果渲染与入队；确认入口是 `session.confirmPending(id)`，
+ * 模型无法从结果里拿到可执行的引用（ADR-4 / R4）。
+ */
+export function stripAssistantPendingConfirmations(result: string | undefined): string {
+  if (result === undefined || result === '') {
+    return result ?? '';
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return result;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return result;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj['pending_confirmation'] === undefined) {
+    return result;
+  }
+  const rest = { ...obj };
+  delete rest['pending_confirmation'];
+  return JSON.stringify(rest);
+}
+
+/** 待确认条目：确认后走产生建议的同一 session（优先专用 `confirmPending`）。 */
 interface PendingConfirmationEntry {
   readonly key: string;
   readonly item: AssistantPendingConfirmation;
@@ -1096,8 +1123,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   /**
-   * 确认 → 用产生建议的同一 `session.execute` 落盘；失败回到待确认并显示原因。
-   * 拒绝 → 只标记该条，不调用执行器、不落盘。
+   * 确认 → 走产生建议的同一 session：优先专用 `confirmPending(id)`（模型路径
+   * 不可达），会话未实现时回退 `execute(tool, arguments)`；失败回到待确认并
+   * 显示原因。拒绝 → 只标记该条，不调用执行器、不落盘。
    */
   const resolvePending = async (
     entry: PendingConfirmationEntry,
@@ -1117,7 +1145,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     entry.error = undefined;
     renderPendingConfirmations();
     try {
-      const result = await entry.session.execute(entry.item.tool, entry.item.arguments);
+      const result =
+        entry.session.confirmPending !== undefined
+          ? await entry.session.confirmPending(entry.item.id)
+          : await entry.session.execute(entry.item.tool, entry.item.arguments);
       if (result.ok !== true) {
         entry.status = 'pending';
         entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
@@ -1129,7 +1160,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     renderPendingConfirmations();
   };
 
-  /** 工具执行结果里的待确认建议入队；按 tool+id 去重，不落盘。 */
+  /**
+   * 工具执行结果里的待确认建议入队；按 tool+id 去重，不落盘。已确认或已拒绝
+   * 的同 id 建议重新出现时重置为待确认（失败后的重试与重提都可再次确认）。
+   */
   const enqueuePendingConfirmations = (
     session: AssistantToolSession | null,
     blocks: readonly AssistantToolBlock[],
@@ -1141,7 +1175,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     for (const block of blocks) {
       for (const item of parseAssistantPendingConfirmations(block.result)) {
         const key = `${item.tool}:${item.id}`;
-        if (pendingQueue.some((entry) => entry.key === key)) {
+        const index = pendingQueue.findIndex((entry) => entry.key === key);
+        if (index >= 0) {
+          if (pendingQueue[index]!.status === 'pending') {
+            continue;
+          }
+          pendingQueue[index] = { key, item, session, status: 'pending' };
+          added = true;
           continue;
         }
         pendingQueue.push({ key, item, session, status: 'pending' });
@@ -1570,7 +1610,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           toolBlocks.push(block);
           loopTurns.push({
             role: 'tool',
-            content: block.result ?? '',
+            content: stripAssistantPendingConfirmations(block.result),
             toolCallId: block.id,
             name: block.name,
           });

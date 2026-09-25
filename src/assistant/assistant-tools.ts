@@ -7,7 +7,9 @@
  * 次上限。保存经 confirm 后走 appendAnnotation；拒绝不写盘。
  *
  * AI 主动建议的写操作以 `AssistantPendingConfirmation` 随结果返回，由面板
- * 渲染待确认列表并在确认后回调同一 session.execute；未确认不得落盘。
+ * 渲染待确认列表并在用户确认后回调 `session.confirmPending(id)`（缺省回退
+ * `session.execute`），未确认不得落盘。`execute` 是模型可调用路径，携带待确认
+ * 引用的调用必须被拒绝；工具结果回传模型前剥除待确认引用。
  */
 
 import type { OutlineItem } from '../outline/outline-model.js';
@@ -133,8 +135,10 @@ export interface AssistantTocItem {
 
 /**
  * AI 主动建议且需用户确认的写操作：工具结果随 `pending_confirmation` 返回，
- * 面板渲染待确认列表；确认后由面板用同一 `session.execute(tool, arguments)`
- * 落盘（执行器与建议同源）。拒绝或未确认前不得有任何落盘副作用。
+ * 面板渲染待确认列表；确认后由面板调用 `session.confirmPending(id)` 落盘
+ * （执行器与建议同源；会话未实现时回退 `session.execute(tool, arguments)`）。
+ * 拒绝或未确认前不得有任何落盘副作用。待确认条目只供用户界面消费：面板把
+ * 工具结果回传模型前必须剥除 `pending_confirmation`，模型不能凭引用自行落盘。
  */
 export interface AssistantPendingConfirmation {
   /** 同一建议内的稳定 id（面板去重/定位用）。 */
@@ -143,7 +147,7 @@ export interface AssistantPendingConfirmation {
   readonly summary: string;
   /** 确认后回调的工具名（与当前会话工具定义同源）。 */
   readonly tool: string;
-  /** 确认后回调的参数；写操作本身不在建议阶段执行。 */
+  /** 回退执行器的参数；写操作本身不在建议阶段执行。 */
   readonly arguments: unknown;
 }
 
@@ -177,7 +181,13 @@ export interface AssistantToolResult {
 export interface AssistantToolSession {
   readonly tools: readonly AssistantToolDefinition[];
   specifiedChapterCount(): number;
+  /** 模型可调用路径：只接受工具 schema 内的参数，不得借待确认引用直接执行。 */
   execute(name: string, args?: unknown): Promise<AssistantToolResult>;
+  /**
+   * 用户确认入口：只由面板在用户点击确认后按建议 id 调用；模型路径不可达。
+   * 失败时保留条目以支持重试。缺省 = 该会话无待确认写入，面板回退 `execute`。
+   */
+  confirmPending?(id: string): Promise<AssistantToolResult>;
 }
 
 const QUERY_BOOK_DEFINITION: AssistantToolDefinition = {
