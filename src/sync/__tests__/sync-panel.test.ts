@@ -258,8 +258,8 @@ describe('sync panel', () => {
     showSyncPanel({ ...createDeps(), themeStorage: storage });
     const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
     expect(overlay!.dataset.libraryTheme).toBe('walnut');
-    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#241c17');
-    expect(overlay!.style.getPropertyValue('--lightink-fg')).toBe('#eadcc8');
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('');
+    expect(overlay!.style.backgroundColor).toBe('');
   });
 
   it('shows a progress dialog for an in-flight sync and cancels from the dialog', async () => {

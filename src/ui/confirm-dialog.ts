@@ -14,6 +14,7 @@
  * `showConfirmDialog` 属挂载态 DOM（同 menus.ts，仅断言工厂形态）。
  */
 
+import { adoptLibraryOverlayTheme } from '../library/library-theme.js';
 import { labelModal, mountModalFocus } from './modal-focus.js';
 
 const SURFACE_THEME_VARS = [
@@ -39,6 +40,10 @@ export function inferDialogThemeHost(doc: Document): HTMLElement | null {
 
 /** Stamp shelf/reader tokens onto a body-mounted overlay (not editor cream/brown). */
 export function adoptDialogSurfaceTheme(overlay: HTMLElement, host: HTMLElement): void {
+  if (host.dataset.libraryTheme !== undefined && host.dataset.libraryTheme !== '') {
+    adoptLibraryOverlayTheme(overlay, host);
+    return;
+  }
   if (typeof getComputedStyle !== 'function') return;
   const style = getComputedStyle(host);
   for (const name of SURFACE_THEME_VARS) {

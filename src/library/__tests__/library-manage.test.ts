@@ -401,7 +401,7 @@ describe('createLibraryManage grouped settings page', () => {
     ink.click();
 
     expect(themeRoot.dataset.libraryTheme).toBe('ink');
-    expect(themeRoot.style.getPropertyValue('--lightink-bg')).toBe('#14161a');
+    expect(themeRoot.style.getPropertyValue('--lightink-bg')).toBe('');
     expect(themeStorage.store['lightink.library.theme']).toBe('ink');
     expect(themeStorage.store['lightink.theme']).toBeUndefined();
     expect(themeStorage.store['lightink.reader.theme']).toBeUndefined();

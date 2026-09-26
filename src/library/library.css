@@ -1,8 +1,89 @@
 /*
  * Bookshelf chrome. Kindle / Apple Books: the shelf is its own surface.
- * Colors still consume --lightink-* names; applyLibraryTheme stamps a
- * shelf-only palette onto .lightink-library so the editor theme is unused.
+ * Preset colors are [data-library-theme] rules below, not inline styles,
+ * so #lightink-custom-theme can override the same --lightink-* tokens.
+ * The shelf does not follow the editor's data-theme.
  */
+
+[data-library-theme='gallery'] {
+  --lightink-bg: #f2efe8;
+  --lightink-bg-elevated: #fffcf8;
+  --lightink-fg: #2a261f;
+  --lightink-accent-ink: #a8431a;
+  --lightink-muted: #6b6459;
+  --lightink-border: #e5dfd4;
+  --lightink-accent: #c45a28;
+  --lightink-accent-soft: #f3e2d4;
+  --lightink-overlay: #2a261f48;
+  --lightink-shadow: 0 12px 32px #2a261f1c;
+  --lightink-danger: #b42318;
+  color: var(--lightink-fg);
+  color-scheme: light;
+}
+
+[data-library-theme='paper'] {
+  --lightink-bg: #f6eadc;
+  --lightink-bg-elevated: #fff8ef;
+  --lightink-fg: #3a2f24;
+  --lightink-accent-ink: #8a4318;
+  --lightink-muted: #756454;
+  --lightink-border: #e4d5c2;
+  --lightink-accent: #a35a2b;
+  --lightink-accent-soft: #f0dfcc;
+  --lightink-overlay: #3a2f2448;
+  --lightink-shadow: 0 12px 32px #3a2f241c;
+  --lightink-danger: #b42318;
+  color: var(--lightink-fg);
+  color-scheme: light;
+}
+
+[data-library-theme='moss'] {
+  --lightink-bg: #eef3ea;
+  --lightink-bg-elevated: #f8fbf6;
+  --lightink-fg: #243028;
+  --lightink-accent-ink: #3f6d48;
+  --lightink-muted: #59635a;
+  --lightink-border: #d4ddd0;
+  --lightink-accent: #3f6d48;
+  --lightink-accent-soft: #dce8dc;
+  --lightink-overlay: #24302848;
+  --lightink-shadow: 0 12px 32px #2430281c;
+  --lightink-danger: #b42318;
+  color: var(--lightink-fg);
+  color-scheme: light;
+}
+
+[data-library-theme='walnut'] {
+  --lightink-bg: #241c17;
+  --lightink-bg-elevated: #322820;
+  --lightink-fg: #eadcc8;
+  --lightink-accent-ink: #d4a06a;
+  --lightink-muted: #a8947c;
+  --lightink-border: #4a3c32;
+  --lightink-accent: #d4a06a;
+  --lightink-accent-soft: #3d2f24;
+  --lightink-overlay: #100c0a73;
+  --lightink-shadow: 0 12px 32px #100c0a59;
+  --lightink-danger: #f97066;
+  color: var(--lightink-fg);
+  color-scheme: dark;
+}
+
+[data-library-theme='ink'] {
+  --lightink-bg: #14161a;
+  --lightink-bg-elevated: #1e2228;
+  --lightink-fg: #d5dae2;
+  --lightink-accent-ink: #7ba3c9;
+  --lightink-muted: #8b93a0;
+  --lightink-border: #2c323c;
+  --lightink-accent: #7ba3c9;
+  --lightink-accent-soft: #243040;
+  --lightink-overlay: #0a0c0f73;
+  --lightink-shadow: 0 12px 32px #0a0c0f59;
+  --lightink-danger: #f97066;
+  color: var(--lightink-fg);
+  color-scheme: dark;
+}
 
 .lightink-library {
   --lightink-library-pad-x: 32px;
@@ -277,6 +358,25 @@ html[data-touch-primary] .lightink-library-header {
   color: var(--lightink-muted);
   font-size: 18px !important;
   line-height: 1;
+}
+
+/* Desktop search is a pill on the elevated surface. Touch rules below keep
+   the 44px field; this selector does not match android or touch-primary. */
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
+  flex-basis: min(28rem, 42vw);
+  width: min(28rem, 42vw);
+  max-width: min(28rem, 42vw);
+  height: 36px;
+  min-height: 36px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: none;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focus-within {
+  border-color: var(--lightink-accent);
+  box-shadow: 0 0 0 3px var(--lightink-accent-soft);
 }
 
 .lightink-library-toolbar {
@@ -1375,22 +1475,32 @@ html[data-touch-primary] .lightink-library-header {
   margin-top: 8px;
 }
 
-.lightink-modal-overlay.lightink-library-tag-modal {
+.lightink-library-tag-editor {
+  position: fixed;
+  inset: 0;
   z-index: 200;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 32px 24px;
+  background: var(--lightink-overlay);
 }
 
-.lightink-modal-overlay.lightink-library-tag-modal[hidden] {
+.lightink-library-tag-editor[hidden] {
   display: none !important;
 }
 
-.lightink-library-tag-modal .lightink-modal-dialog {
-  width: min(360px, calc(100% - 48px));
-  max-height: min(70vh, 520px);
-  padding: 18px 16px 14px;
+.lightink-library-tag-editor-page {
+  display: flex;
+  flex-direction: column;
+  width: min(40rem, 100%);
+  max-height: 100%;
+  padding: 22px 22px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-dialog);
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg-elevated);
-  box-shadow: var(--lightink-shadow-strong);
+  color: var(--lightink-fg);
+  box-shadow: var(--lightink-shadow);
 }
 
 .lightink-library-tag-form {
@@ -1414,18 +1524,34 @@ html[data-touch-primary] .lightink-library-header {
 
 .lightink-library-tag-options {
   display: grid;
-  gap: 4px;
-  max-height: 260px;
+  gap: 6px;
+  min-height: 0;
+  max-height: min(52vh, 28rem);
   overflow-y: auto;
 }
 
-.lightink-library-tag-options label {
+.lightink-library-tag-option {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 32px;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
   color: var(--lightink-fg);
   font-size: 13px;
+}
+
+.lightink-library-tag-option:has(input:checked) {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-fg));
+}
+
+.lightink-library-tag-option:focus-within {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
 }
 
 .lightink-library-tag-empty {

@@ -121,6 +121,7 @@ export interface LibraryThemeRoot {
   dataset: DOMStringMap;
   style: {
     setProperty?(name: string, value: string, priority?: string): void;
+    removeProperty?(name: string): string;
     colorScheme?: string;
     color?: string;
     backgroundColor?: string;
@@ -185,28 +186,52 @@ export function saveLibraryTheme(
   return next;
 }
 
+/**
+ * Preset colors live on `[data-library-theme]` in library.css, not inline.
+ * Inline variables would beat `#lightink-custom-theme`. Clearing leftovers
+ * from older sessions lets that stylesheet (and a later custom sheet) win.
+ */
 export function applyLibraryTheme(root: LibraryThemeRoot, theme: LibraryThemeId): LibraryThemeId {
   const next = parseLibraryTheme(theme);
-  const tokens = libraryThemeTokens(next);
   root.dataset.libraryTheme = next;
-  if (typeof root.style.setProperty !== 'function') {
-    return next;
+  const style = root.style;
+  if (typeof style.removeProperty === 'function') {
+    for (const name of LIBRARY_OVERLAY_THEME_VARS) style.removeProperty(name);
   }
-  root.style.setProperty('--lightink-bg', tokens.page);
-  root.style.setProperty('--lightink-bg-elevated', tokens.elevated);
-  root.style.setProperty('--lightink-fg', tokens.ink);
-  root.style.setProperty('--lightink-accent-ink', tokens.accentInk);
-  root.style.setProperty('--lightink-muted', tokens.muted);
-  root.style.setProperty('--lightink-border', tokens.border);
-  root.style.setProperty('--lightink-accent', tokens.accent);
-  root.style.setProperty('--lightink-accent-soft', tokens.accentSoft);
-  root.style.setProperty('--lightink-overlay', tokens.overlay);
-  root.style.setProperty('--lightink-shadow', tokens.shadow);
-  root.style.setProperty('--lightink-danger', tokens.danger);
-  root.style.colorScheme = tokens.colorScheme;
-  root.style.color = tokens.ink;
-  root.style.backgroundColor = tokens.page;
+  style.colorScheme = '';
+  style.color = '';
+  style.backgroundColor = '';
   return next;
+}
+
+function libraryThemeVariable(theme: LibraryThemeId, name: string): string {
+  const tokens = libraryThemeTokens(theme);
+  switch (name) {
+    case '--lightink-bg':
+      return tokens.page;
+    case '--lightink-bg-elevated':
+      return tokens.elevated;
+    case '--lightink-fg':
+      return tokens.ink;
+    case '--lightink-accent-ink':
+      return tokens.accentInk;
+    case '--lightink-muted':
+      return tokens.muted;
+    case '--lightink-border':
+      return tokens.border;
+    case '--lightink-accent':
+      return tokens.accent;
+    case '--lightink-accent-soft':
+      return tokens.accentSoft;
+    case '--lightink-overlay':
+      return tokens.overlay;
+    case '--lightink-shadow':
+      return tokens.shadow;
+    case '--lightink-danger':
+      return tokens.danger;
+    default:
+      return '';
+  }
 }
 
 const LIBRARY_OVERLAY_THEME_VARS = [
@@ -231,11 +256,25 @@ export function adoptLibraryOverlayTheme(overlay: HTMLElement, host: HTMLElement
     return;
   }
   const style = getComputedStyle(host);
+  const parent = host.parentElement;
+  const parentStyle = parent === null ? null : getComputedStyle(parent);
+  const theme = host.dataset.libraryTheme;
   for (const name of LIBRARY_OVERLAY_THEME_VARS) {
-    const value = style.getPropertyValue(name).trim();
+    const inline = host.style.getPropertyValue(name).trim();
+    const computed = style.getPropertyValue(name).trim();
+    const inherited = parentStyle?.getPropertyValue(name).trim() ?? '';
+    // Inherited values are the editor/page underneath the shelf. A preset or a
+    // custom rule that actually targets the host differs from that parent.
+    const value =
+      inline !== ''
+        ? inline
+        : computed !== '' && computed !== inherited
+          ? computed
+          : isLibraryThemeId(theme)
+            ? libraryThemeVariable(theme, name)
+            : computed;
     if (value !== '') overlay.style.setProperty(name, value);
   }
-  const theme = host.dataset.libraryTheme;
   if (theme !== undefined && theme !== '') overlay.dataset.libraryTheme = theme;
   if (style.color !== '') overlay.style.color = style.color;
 }

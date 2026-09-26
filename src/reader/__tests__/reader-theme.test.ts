@@ -117,13 +117,13 @@ describe('library shelf themes', () => {
     expect(store[READER_THEME_STORAGE_KEY]).toBeUndefined();
   });
 
-  it('stamps shelf tokens on the library host only', () => {
+  it('selects a shelf preset without stamping inline tokens', () => {
     const root = document.createElement('div');
     applyLibraryTheme(root, 'walnut');
     expect(root.dataset.libraryTheme).toBe('walnut');
-    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#241c17');
-    expect(root.style.getPropertyValue('--lightink-accent')).toBe('#d4a06a');
-    expect(root.style.colorScheme).toBe('dark');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('');
+    expect(root.style.getPropertyValue('--lightink-accent')).toBe('');
+    expect(root.style.colorScheme).toBe('');
   });
 
   it('maps shelf themes onto native caption colors', () => {

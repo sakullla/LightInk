@@ -24,6 +24,8 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { LIBRARY_THEMES } from '../../library/library-theme.js';
+
 const css = readFileSync(new URL('../tokens.css', import.meta.url), 'utf-8');
 
 const BUILTIN_THEMES = ['warm-light', 'cool-light', 'dark', 'midnight'] as const;
@@ -322,6 +324,31 @@ describe('tokens.css hljs 类映射', () => {
     expect(css).toMatch(/\.hljs-meta\s*\{[^}]*var\(--lightink-syntax-comment\)/);
     expect(css).toMatch(/\.hljs-addition[^{]*\{[^}]*var\(--lightink-syntax-string\)/);
     expect(css).toMatch(/\.hljs-deletion[^{]*\{[^}]*var\(--lightink-danger\)/);
+  });
+});
+
+describe('library shelf preset tokens', () => {
+  const libraryCss = readFileSync(new URL('../../library/library.css', import.meta.url), 'utf-8');
+
+  it('publishes each preset on [data-library-theme] so a later sheet can override it', () => {
+    for (const theme of LIBRARY_THEMES) {
+      const match = new RegExp(
+        `\\[data-library-theme=['"]${theme.id}['"]\\][^{]*\\{([^}]*)\\}`,
+      ).exec(libraryCss);
+      expect(match, theme.id).not.toBeNull();
+      const block = match?.[1] ?? '';
+      expect(block).toContain(`--lightink-bg: ${theme.page}`);
+      expect(block).toContain(`--lightink-bg-elevated: ${theme.elevated}`);
+      expect(block).toContain(`--lightink-fg: ${theme.ink}`);
+      expect(block).toContain(`--lightink-accent-ink: ${theme.accentInk}`);
+      expect(block).toContain(`--lightink-muted: ${theme.muted}`);
+      expect(block).toContain(`--lightink-border: ${theme.border}`);
+      expect(block).toContain(`--lightink-accent: ${theme.accent}`);
+      expect(block).toContain(`--lightink-accent-soft: ${theme.accentSoft}`);
+      expect(block).toContain(`--lightink-danger: ${theme.danger}`);
+      expect(block).toContain(`color-scheme: ${theme.colorScheme}`);
+      expect(block).not.toMatch(/--lightink-[\w-]+\s*:[^;]*!important/);
+    }
   });
 });
 

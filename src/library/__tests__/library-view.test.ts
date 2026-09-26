@@ -804,8 +804,10 @@ function tagNavButton(host: HTMLElement, name: string): HTMLButtonElement {
 }
 
 function tagDialogOf(): HTMLElement {
-  const dialog = document.querySelector<HTMLElement>('.lightink-library-tag-modal:not([hidden])');
+  const dialog = document.querySelector<HTMLElement>('.lightink-library-tag-editor:not([hidden])');
   if (!(dialog instanceof HTMLElement)) throw new Error('tag dialog not found');
+  expect(dialog.dataset.tagEditor).toBe('page');
+  expect(document.querySelector('.lightink-library-tag-modal')).toBeNull();
   return dialog;
 }
 
@@ -1232,6 +1234,70 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector<HTMLButtonElement>('.lightink-library-search-clear')?.hidden).toBe(
       true,
     );
+    view.destroy();
+  });
+
+  it('does not change the local shelf while an IME composition is unfinished', async () => {
+    const novel = localItem({ title: '续读小说' });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '河山记',
+      localPath: '/books/other.epub',
+    });
+    const deps = dependencies({
+      library: { ...dependencies().library, listItems: vi.fn(async () => [novel, other]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.dispatchEvent(new CompositionEvent('compositionstart'));
+    input.value = 'heshan';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'heshan', isComposing: true }));
+    await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(itemRow(host, other.id)).toBeTruthy();
+
+    input.value = '河山';
+    input.dispatchEvent(new CompositionEvent('compositionend', { data: '河山' }));
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('keeps the current group and tag filter when a local search is cleared', async () => {
+    const novel = localItem({ title: '续读小说' });
+    const comic = comicItem({ title: '河山漫画' });
+    const { deps, tagStore } = tagDependencies({ items: [novel, comic] });
+    const tag = await tagStore.createTag('漫画');
+    await tagStore.setItemTags(comic.id, [tag.id]);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    groupButton(host, '漫画').click();
+    await settle();
+    tagNavButton(host, '漫画').click();
+    await settle();
+    expect(itemRow(host, comic.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '没有这本书';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+
+    shownControl(host, '清除').click();
+    await settle();
+    expect(groupButton(host, '漫画').classList.contains('is-active')).toBe(true);
+    expect(tagNavButton(host, '漫画').classList.contains('is-active')).toBe(true);
+    expect(itemRow(host, comic.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     view.destroy();
   });
 
@@ -3502,6 +3568,68 @@ describe('LibraryView sources, manage, and catalog', () => {
     view.destroy();
   });
 
+  it('returns a cleared OPDS search to the directory that was open before it', async () => {
+    const folder = navigationEntry({
+      id: 'nav-fiction',
+      itemId: 'nav-fiction-item',
+      title: '小说分类',
+      navigationUrl: 'https://books.example/opds/fiction',
+    });
+    const nested: OpdsEntry = {
+      ...entry,
+      id: 'nested',
+      itemId: 'nested-item',
+      title: '分类小说',
+    };
+    const browse = vi.fn(async (_sourceId: string, url?: string) => {
+      if (url === folder.navigationUrl) {
+        return feed({
+          title: '小说分类',
+          sourceUrl: folder.navigationUrl,
+          entries: [nested],
+        });
+      }
+      return feed({ entries: [folder] });
+    });
+    const search = vi.fn(async () =>
+      feed({
+        title: '搜索结果',
+        sourceUrl: 'https://books.example/search?q=漫',
+        entries: [entry],
+      }),
+    );
+    const base = dependencies();
+    const deps = dependencies({ opds: { ...base.opds, browse, search } });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await openCatalog(host);
+
+    catalogTreeNode(host, '小说分类').click();
+    await settle();
+    expect(host.textContent).toContain('分类小说');
+    const browseCalls = browse.mock.calls.length;
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '漫';
+    host.querySelector<HTMLFormElement>('.lightink-library-search')!.dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(search).toHaveBeenCalled();
+    expect(host.textContent).toContain('远程漫画');
+    expect(host.textContent).not.toContain('分类小说');
+
+    shownControl(host, '清除').click();
+    await settle();
+    expect(browse.mock.calls.length).toBeGreaterThan(browseCalls);
+    expect(browse).toHaveBeenLastCalledWith('source-1', folder.navigationUrl);
+    expect(host.textContent).toContain('分类小说');
+    expect(host.textContent).not.toContain('远程漫画');
+    view.destroy();
+  });
+
   it('appends the next catalog page from the load-more control without replacing the first page', async () => {
     const pageTwo: OpdsEntry = {
       ...entry,
@@ -3854,7 +3982,7 @@ describe('LibraryView sources, manage, and catalog', () => {
 
     const root = libraryRoot(host);
     expect(root.dataset.libraryTheme).toBe('gallery');
-    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#f2efe8');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('');
     expect(host.querySelector('.lightink-library-header .lightink-library-theme-swatches')).toBeNull();
     expect(host.querySelector('.lightink-library-manage-panel .lightink-library-appearance')).toBeTruthy();
     expect(host.querySelector('.lightink-library-appearance-hint')?.textContent).toContain('书架');
@@ -3866,7 +3994,7 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(ink).toBeTruthy();
     ink!.click();
     expect(root.dataset.libraryTheme).toBe('ink');
-    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#14161a');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('');
     expect(store['lightink.library.theme']).toBe('ink');
     expect(store['lightink.theme']).toBeUndefined();
     expect(store['lightink.reader.theme']).toBeUndefined();
@@ -6730,14 +6858,28 @@ describe('LibraryView home visual system (R2)', () => {
     }
   });
 
-  it('stamps accent-ink on the shelf host and copies it onto portaled overlays', () => {
+  it('keeps shelf tokens out of inline style so a custom sheet can override them', () => {
     const root = document.createElement('div');
+    root.className = 'lightink-library';
+    document.body.appendChild(root);
     applyLibraryTheme(root, 'gallery');
-    expect(root.style.getPropertyValue('--lightink-accent-ink')).toBe('#a8431a');
+    expect(root.dataset.libraryTheme).toBe('gallery');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('');
+    expect(root.style.getPropertyValue('--lightink-accent-ink')).toBe('');
+
+    const custom = document.createElement('style');
+    custom.id = 'lightink-custom-theme';
+    custom.textContent = '.lightink-library { --lightink-bg: #123456; }';
+    document.head.appendChild(custom);
+    const painted = getComputedStyle(root).getPropertyValue('--lightink-bg').trim().toLowerCase();
+    if (painted !== '') expect(painted).toBe('#123456');
 
     const overlay = document.createElement('div');
     adoptLibraryOverlayTheme(overlay, root);
-    expect(overlay.style.getPropertyValue('--lightink-accent-ink')).toBe('#a8431a');
+    expect(overlay.dataset.libraryTheme).toBe('gallery');
+    expect(overlay.style.getPropertyValue('--lightink-accent-ink').toLowerCase()).toBe('#a8431a');
+    custom.remove();
+    root.remove();
   });
 
   it('uses the same title-keyed jacket placeholder on the hero, recent row, and wall', async () => {

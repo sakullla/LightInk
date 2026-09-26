@@ -91,6 +91,7 @@ import {
   type LibraryThemeId,
   type LibraryThemeStorage,
 } from './library-theme.js';
+import { createTagEditor, type TagEditor } from './tag-editor.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibrarySection = 'shelf' | 'sources' | 'manage';
@@ -1878,63 +1879,14 @@ export function createLibraryView(
   membershipActions.append(membershipSave, membershipCancel);
   membershipForm.append(membershipTitle, membershipOptions, membershipActions);
   membershipOverlay.appendChild(membershipForm);
-  // 标签编辑弹层（R6）：赋标（勾选 + 内联新建）与新建/重命名/删除共用同一对话框。
-  const tagOverlay = doc.createElement('div');
-  tagOverlay.className = 'lightink-modal-overlay lightink-library-tag-modal';
-  tagOverlay.hidden = true;
-  const tagDialog = doc.createElement('div');
-  tagDialog.className = 'lightink-modal-dialog';
-  tagDialog.setAttribute('role', 'dialog');
-  tagDialog.setAttribute('aria-modal', 'true');
-  const tagForm = doc.createElement('form');
-  tagForm.className = 'lightink-library-tag-form';
-  const tagDialogTitle = doc.createElement('h2');
-  const tagDialogMessage = doc.createElement('p');
-  tagDialogMessage.className = 'lightink-library-tag-confirm';
-  tagDialogMessage.hidden = true;
-  const tagNameLabel = doc.createElement('label');
-  tagNameLabel.className = 'lightink-library-field';
-  const tagNameLabelText = doc.createElement('span');
-  const tagNameInput = doc.createElement('input');
-  tagNameInput.name = 'tagName';
-  tagNameInput.maxLength = 60;
-  tagNameLabel.append(tagNameLabelText, tagNameInput);
-  const tagOptions = doc.createElement('div');
-  tagOptions.className = 'lightink-library-tag-options';
-  const tagCreateRow = doc.createElement('div');
-  tagCreateRow.className = 'lightink-library-tag-create';
-  const tagCreateInput = doc.createElement('input');
-  tagCreateInput.name = 'newTag';
-  tagCreateInput.maxLength = 60;
-  tagCreateInput.autocomplete = 'off';
-  const tagCreateButton = button(doc, '', 'lightink-library-tag-create-add');
-  tagCreateButton.type = 'button';
-  tagCreateRow.append(tagCreateInput, tagCreateButton);
-  const tagActions = doc.createElement('div');
-  tagActions.className = 'lightink-library-tag-actions';
-  const tagDeleteButton = button(doc, '', 'lightink-library-danger');
-  tagDeleteButton.type = 'button';
-  const tagSave = button(doc, '', 'lightink-library-primary');
-  tagSave.type = 'submit';
-  const tagCancel = button(doc, '');
-  tagCancel.type = 'button';
-  tagActions.append(tagDeleteButton, tagSave, tagCancel);
-  tagForm.append(
-    tagDialogTitle,
-    tagDialogMessage,
-    tagNameLabel,
-    tagOptions,
-    tagCreateRow,
-    tagActions,
-  );
-  tagDialog.appendChild(tagForm);
-  tagOverlay.appendChild(tagDialog);
+  // 标签编辑页：侧栏、详情和书籍右键共用这一页，不再使用勾选弹层。
+  const tagEditor: TagEditor = createTagEditor(doc);
   root.append(
     header,
     body,
     detailBackdrop,
     membershipOverlay,
-    tagOverlay,
+    tagEditor.element,
     groupOverlay,
     sourceOverlay,
     groupsSheet,
@@ -2004,6 +1956,8 @@ export function createLibraryView(
   let requestGeneration = 0;
   let catalogSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let catalogComposing = false;
+  /** OPDS directory to restore when the search field is cleared. WebDAV does not use this. */
+  let catalogSearchSnapshot: { url: string | undefined; catalogKey: string } | null = null;
   let catalogSearchAbort: AbortController | null = null;
   let catalogLoadingMore = false;
   /** Invalidates in-flight `rel=next` fetches when search/browse replaces the feed. */
@@ -2517,106 +2471,136 @@ export function createLibraryView(
 
   function closeTagDialog(): void {
     tagDialogMode = null;
-    tagOverlay.hidden = true;
+    tagEditor.close();
     header.removeAttribute('inert');
     body.removeAttribute('inert');
   }
 
   function checkedTagIds(): Set<string> {
-    return new Set(
-      Array.from(
-        tagOptions.querySelectorAll<HTMLInputElement>('input[name="tag"]:checked'),
-      ).map((input) => input.value),
-    );
+    return new Set(tagEditor.checkedTagIds());
   }
 
   function renderTagOptions(checked: ReadonlySet<string>): void {
-    tagOptions.replaceChildren();
-    if (tags.length === 0) {
-      const empty = doc.createElement('p');
-      empty.className = 'lightink-library-tag-empty';
-      empty.textContent = labels().noTags;
-      tagOptions.appendChild(empty);
-      return;
-    }
-    for (const tag of tags) {
-      const label = doc.createElement('label');
-      const checkbox = doc.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.name = 'tag';
-      checkbox.value = tag.id;
-      checkbox.checked = checked.has(tag.id);
-      const text = doc.createElement('span');
-      text.textContent = tag.name;
-      label.append(checkbox, text);
-      tagOptions.appendChild(label);
-    }
+    tagEditor.setOptions(tags, checked, labels().noTags);
   }
 
   function openTagDialog(mode: NonNullable<typeof tagDialogMode>): void {
     tagDialogMode = mode;
-    tagDialogMessage.hidden = true;
-    tagNameLabel.hidden = true;
-    tagNameInput.required = false;
-    tagOptions.hidden = true;
-    tagCreateRow.hidden = true;
-    tagDeleteButton.hidden = true;
-    tagSave.hidden = false;
-    tagOptions.replaceChildren();
+    const l = labels();
+    const assigned =
+      mode.kind === 'assign'
+        ? new Set(
+            tagMemberships
+              .filter((entry) => entry.itemId === mode.itemId)
+              .map((entry) => entry.tagId),
+          )
+        : new Set<string>();
     if (mode.kind === 'assign') {
       const display = items.find((candidate) => candidate.item.id === mode.itemId);
       const title = display === undefined ? '' : `: ${itemTitle(display.item)}`;
-      tagDialogTitle.textContent = `${labels().manageTags}${title}`;
-      tagOptions.hidden = false;
-      renderTagOptions(
-        new Set(
-          tagMemberships.filter((entry) => entry.itemId === mode.itemId).map((entry) => entry.tagId),
-        ),
-      );
-      tagCreateRow.hidden = deps.library.createTag === undefined;
-      tagCreateInput.placeholder = labels().newTag;
-      tagCreateButton.textContent = labels().newTag;
-      tagSave.textContent = labels().saveTags;
-      tagSave.hidden = deps.library.setItemTags === undefined;
+      tagEditor.open({
+        title: `${l.manageTags}${title}`,
+        message: '',
+        showMessage: false,
+        showName: false,
+        nameLabel: l.tagName,
+        name: '',
+        nameRequired: false,
+        showOptions: true,
+        tags,
+        checked: assigned,
+        emptyLabel: l.noTags,
+        showCreate: deps.library.createTag !== undefined,
+        createPlaceholder: l.newTag,
+        createLabel: l.newTag,
+        showDelete: false,
+        deleteLabel: l.deleteTag,
+        showSave: deps.library.setItemTags !== undefined,
+        saveLabel: l.saveTags,
+        cancelLabel: l.cancel,
+        focus: 'assign',
+      });
     } else if (mode.kind === 'create') {
-      tagDialogTitle.textContent = labels().newTag;
-      tagNameLabel.hidden = false;
-      tagNameLabelText.textContent = labels().tagName;
-      tagNameInput.value = '';
-      tagNameInput.required = true;
-      tagSave.textContent = labels().newTag;
+      tagEditor.open({
+        title: l.newTag,
+        message: '',
+        showMessage: false,
+        showName: true,
+        nameLabel: l.tagName,
+        name: '',
+        nameRequired: true,
+        showOptions: false,
+        tags: [],
+        checked: assigned,
+        emptyLabel: l.noTags,
+        showCreate: false,
+        createPlaceholder: '',
+        createLabel: '',
+        showDelete: false,
+        deleteLabel: l.deleteTag,
+        showSave: true,
+        saveLabel: l.newTag,
+        cancelLabel: l.cancel,
+        focus: 'name',
+      });
     } else if (mode.kind === 'rename') {
-      tagDialogTitle.textContent = labels().renameTag;
-      tagNameLabel.hidden = false;
-      tagNameLabelText.textContent = labels().tagName;
-      tagNameInput.value = tagById(mode.tagId)?.name ?? '';
-      tagNameInput.required = true;
-      tagSave.textContent = labels().save;
+      tagEditor.open({
+        title: l.renameTag,
+        message: '',
+        showMessage: false,
+        showName: true,
+        nameLabel: l.tagName,
+        name: tagById(mode.tagId)?.name ?? '',
+        nameRequired: true,
+        showOptions: false,
+        tags: [],
+        checked: assigned,
+        emptyLabel: l.noTags,
+        showCreate: false,
+        createPlaceholder: '',
+        createLabel: '',
+        showDelete: false,
+        deleteLabel: l.deleteTag,
+        showSave: true,
+        saveLabel: l.save,
+        cancelLabel: l.cancel,
+        focus: 'name',
+      });
     } else {
       const name = tagById(mode.tagId)?.name ?? '';
-      tagDialogTitle.textContent = labels().deleteTag;
-      tagDialogMessage.hidden = false;
-      tagDialogMessage.textContent = labels().deleteTagConfirm.replace('{name}', name);
-      tagDeleteButton.hidden = false;
-      tagDeleteButton.textContent = labels().deleteTag;
-      tagSave.hidden = true;
+      tagEditor.open({
+        title: l.deleteTag,
+        message: l.deleteTagConfirm.replace('{name}', name),
+        showMessage: true,
+        showName: false,
+        nameLabel: l.tagName,
+        name: '',
+        nameRequired: false,
+        showOptions: false,
+        tags: [],
+        checked: assigned,
+        emptyLabel: l.noTags,
+        showCreate: false,
+        createPlaceholder: '',
+        createLabel: '',
+        showDelete: true,
+        deleteLabel: l.deleteTag,
+        showSave: false,
+        saveLabel: '',
+        cancelLabel: l.cancel,
+        focus: 'delete',
+      });
     }
-    tagCancel.textContent = labels().cancel;
-    mountLibraryOverlay(tagOverlay, root);
-    tagOverlay.hidden = false;
+    mountLibraryOverlay(tagEditor.element, root);
     header.setAttribute('inert', '');
     body.setAttribute('inert', '');
-    const focusTarget =
-      mode.kind === 'assign'
-        ? tagOptions.querySelector<HTMLInputElement>('input')
-        : mode.kind === 'create' || mode.kind === 'rename'
-          ? tagNameInput
-          : tagDeleteButton;
-    focusTarget?.focus();
+    tagEditor.focusField(
+      mode.kind === 'assign' ? 'assign' : mode.kind === 'delete' ? 'delete' : 'name',
+    );
   }
 
   async function createTagFromDialog(): Promise<void> {
-    const name = tagCreateInput.value.trim();
+    const name = tagEditor.createDraft().trim();
     if (name === '' || deps.library.createTag === undefined) return;
     try {
       const created = await deps.library.createTag(name);
@@ -2624,10 +2608,10 @@ export function createLibraryView(
       const checked = checkedTagIds();
       checked.add(created.id);
       renderTagOptions(checked);
-      tagCreateInput.value = '';
+      tagEditor.setCreateDraft('');
       renderGroups();
       renderItems();
-      tagCreateInput.focus();
+      tagEditor.focusField('create');
       deps.onLocalChange?.();
     } catch (error) {
       deps.notify(errorText(error, labels().offline), 'error');
@@ -2662,7 +2646,7 @@ export function createLibraryView(
       }
       return;
     }
-    const name = tagNameInput.value.trim();
+    const name = tagEditor.nameValue().trim();
     if (mode.kind === 'create') {
       if (name === '' || deps.library.createTag === undefined) return;
       try {
@@ -4138,6 +4122,7 @@ export function createLibraryView(
   }
 
   async function selectCatalogNode(node: CatalogTreeNode): Promise<void> {
+    catalogSearchSnapshot = null;
     if (!node.loaded) {
       await loadFeed(node.url);
       return;
@@ -5230,7 +5215,7 @@ export function createLibraryView(
         detail.appendChild(progressMeta);
       }
     }
-    // 详情标签（R6）：已赋标签逐枚可移除；「编辑标签」在同一弹层勾选/新建。
+    // 详情标签：已赋标签逐枚可移除；「编辑标签」打开同一套标签编辑页。
     const detailItemId = selected.item.id;
     const assignedTags = tagsForItem(detailItemId);
     const canEditTags = deps.library.setItemTags !== undefined;
@@ -5515,6 +5500,7 @@ export function createLibraryView(
   }
 
   async function loadFeed(url?: string): Promise<void> {
+    catalogSearchSnapshot = null;
     const source = selectedSource();
     if (source === undefined) return;
     const generation = ++requestGeneration;
@@ -5677,17 +5663,31 @@ export function createLibraryView(
     await showSourcesList();
   }
 
+  function noteCatalogSearchOrigin(): void {
+    if (catalogSearchSnapshot !== null) return;
+    if (!catalogActive() || selectedSource()?.kind === 'webdav') return;
+    catalogSearchSnapshot = { url: currentUrl, catalogKey: selectedCatalogKey };
+  }
+
   async function search(): Promise<void> {
     const query = searchInput.value.trim();
     if (query === '') {
       if (catalogActive() && selectedSourceId !== null) {
         if (selectedSource()?.kind === 'webdav') {
+          catalogSearchSnapshot = null;
           const node = findCatalogNode(selectedCatalogKey);
           items = node?.publications ?? items;
           selected = null;
           setStatus('');
           renderItems();
           renderDetail();
+          return;
+        }
+        const snapshot = catalogSearchSnapshot;
+        catalogSearchSnapshot = null;
+        if (snapshot !== null) {
+          selectedCatalogKey = snapshot.catalogKey;
+          await loadFeed(snapshot.url);
           return;
         }
         await openCatalog(selectedSourceId);
@@ -5721,6 +5721,7 @@ export function createLibraryView(
       renderDetail();
       return;
     }
+    noteCatalogSearchOrigin();
     const generation = ++requestGeneration;
     catalogFeedEpoch += 1;
     catalogAwaitingSearch = true;
@@ -6180,11 +6181,13 @@ export function createLibraryView(
     catalogComposing = false;
     syncSearchClear();
     if (catalogActive()) scheduleCatalogLiveSearch(false);
+    else void search();
   });
   searchInput.addEventListener('input', (event) => {
     syncSearchClear();
+    if (catalogComposing || (event instanceof InputEvent && event.isComposing)) return;
     if (catalogActive()) {
-      if (catalogComposing || (event instanceof InputEvent && event.isComposing)) return;
+      if (searchInput.value.trim() !== '') noteCatalogSearchOrigin();
       scheduleCatalogLiveSearch(false);
       return;
     }
@@ -6519,15 +6522,26 @@ export function createLibraryView(
   membershipOverlay.addEventListener('pointerdown', (event) => {
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
-  tagForm.addEventListener('submit', (event) => {
+  tagEditor.form.addEventListener('submit', (event) => {
     event.preventDefault();
     void submitTagDialog();
   });
-  tagCreateButton.addEventListener('click', () => void createTagFromDialog());
-  tagDeleteButton.addEventListener('click', () => void submitTagDialog());
-  tagCancel.addEventListener('click', () => closeTagDialog());
-  tagOverlay.addEventListener('pointerdown', (event) => {
-    if (event.target === tagOverlay) closeTagDialog();
+  tagEditor.form
+    .querySelector<HTMLButtonElement>('[data-tag-editor-action="create"]')
+    ?.addEventListener('click', () => void createTagFromDialog());
+  tagEditor.form
+    .querySelector<HTMLButtonElement>('[data-tag-editor-action="delete"]')
+    ?.addEventListener('click', () => void submitTagDialog());
+  tagEditor.form
+    .querySelector<HTMLButtonElement>('[data-tag-editor-action="cancel"]')
+    ?.addEventListener('click', () => closeTagDialog());
+  tagEditor.element.addEventListener('pointerdown', (event) => {
+    if (event.target === tagEditor.element) closeTagDialog();
+  });
+  tagEditor.element.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || tagEditor.element.hidden) return;
+    event.preventDefault();
+    closeTagDialog();
   });
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !filterSheet.hidden) {
@@ -6550,7 +6564,7 @@ export function createLibraryView(
       closeMembershipEditor();
       return;
     }
-    if (event.key === 'Escape' && !tagOverlay.hidden) {
+    if (event.key === 'Escape' && !tagEditor.element.hidden) {
       event.preventDefault();
       closeTagDialog();
       return;
@@ -6697,7 +6711,7 @@ export function createLibraryView(
       unbindFilterSheetDrag();
       deps.workspaceTravel?.remove();
       membershipOverlay.remove();
-      tagOverlay.remove();
+      tagEditor.element.remove();
       groupOverlay.remove();
       sourceOverlay.remove();
       bookSourcePanel?.destroy();
