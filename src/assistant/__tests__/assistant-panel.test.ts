@@ -1145,6 +1145,258 @@ describe('createAssistantPanel tools and locators', () => {
     });
     panel.destroy();
   });
+
+  it('renders library tool calls as collapsed chips with localized name and summary', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({
+      ok: true,
+      tool: 'library_search',
+      groups: Array.from({ length: 7 }, (_, index) => ({ id: `g${index}` })),
+    }));
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'library_search', arguments: '{"query":"科幻"}' }],
+          };
+        }
+        emit('找到这些分组');
+        return { finish: 'stop', totalChars: 6 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '找科幻分组');
+    await flushUntil(() => round >= 2);
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="library_search"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.dataset.toolState).toBe('done');
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-name')?.textContent).toBe(
+      t('reader.assistant.toolLibrarySearch'),
+    );
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      t('reader.assistant.toolSummary.groups', { n: '7' }),
+    );
+    const body = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-body');
+    const head = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-head');
+    expect(body).not.toBeNull();
+    expect(head).not.toBeNull();
+    // 默认折叠：原始 JSON 不可见，点击头部才展开。
+    expect(body!.hidden).toBe(true);
+    expect(head!.getAttribute('aria-expanded')).toBe('false');
+    head!.click();
+    expect(body!.hidden).toBe(false);
+    expect(head!.getAttribute('aria-expanded')).toBe('true');
+    expect(chip!.classList.contains('is-open')).toBe(true);
+    expect(body!.textContent).toContain('"groups"');
+    expect(body!.textContent).toContain('{"query":"科幻"}');
+    head!.click();
+    expect(body!.hidden).toBe(true);
+    expect(head!.getAttribute('aria-expanded')).toBe('false');
+    expect(chip!.classList.contains('is-open')).toBe(false);
+    panel.destroy();
+  });
+
+  it('shows a running chip while the tool executes and updates it in place', async () => {
+    let round = 0;
+    let resolveExecute: (value: unknown) => void = () => undefined;
+    const execute = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveExecute = resolve;
+        }),
+    );
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'library_tag', arguments: '{}' }],
+          };
+        }
+        emit('打好了');
+        return { finish: 'stop', totalChars: 3 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '给三体打科幻标签');
+    await flushUntil(() => execute.mock.calls.length > 0);
+    const runningChip = panel.element.querySelector<HTMLElement>('[data-tool="library_tag"]');
+    expect(runningChip).not.toBeNull();
+    expect(runningChip!.dataset.toolState).toBe('running');
+    expect(
+      runningChip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent,
+    ).toBe(t('reader.assistant.toolStatusRunning'));
+    expect(runningChip!.querySelector('.lightink-reader-assistant-tool-status.is-running'))
+      .not.toBeNull();
+    resolveExecute({ ok: true, updated: ['a', 'b'] });
+    await flushUntil(() => round >= 2);
+    await flush();
+    const doneChip = panel.element.querySelector<HTMLElement>('[data-tool="library_tag"]');
+    expect(doneChip).not.toBeNull();
+    expect(doneChip!.dataset.toolState).toBe('done');
+    expect(doneChip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      t('reader.assistant.toolSummary.updated', { n: '2' }),
+    );
+    panel.destroy();
+  });
+
+  it('renders failed tool calls with a failure state and error in the details', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({
+      ok: false,
+      error: 'library_error',
+      message: '书库不可用。',
+    }));
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'library_remove', arguments: '{}' }],
+          };
+        }
+        emit('没能删除');
+        return { finish: 'stop', totalChars: 4 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '删掉三体');
+    await flushUntil(() => round >= 2);
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="library_remove"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.dataset.toolState).toBe('failed');
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-status.is-failed'))
+      .not.toBeNull();
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-name')?.textContent).toBe(
+      t('reader.assistant.toolLibraryRemove'),
+    );
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      '书库不可用。',
+    );
+    const body = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-body');
+    expect(body!.hidden).toBe(true);
+    chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-head')!.click();
+    expect(body!.hidden).toBe(false);
+    expect(body!.textContent).toContain('library_error');
+    panel.destroy();
+  });
+
+  it('falls back to a generic done summary when no result fields map', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({ ok: true }));
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'query_book', arguments: '{"action":"toc"}' }],
+          };
+        }
+        emit('目录如上');
+        return { finish: 'stop', totalChars: 4 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '目录');
+    await flushUntil(() => round >= 2);
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="query_book"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.dataset.toolState).toBe('done');
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      t('reader.assistant.toolStatusDone'),
+    );
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-name')?.textContent).toBe(
+      t('reader.assistant.toolQuery'),
+    );
+    panel.destroy();
+  });
+
+  it('summarizes pending write results without falling back to toolUnknown', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({
+      ok: true,
+      pending: true,
+      pending_confirmation: [
+        { id: 'p1', summary: '把《三体》归到科幻', tool: 'library_organize', arguments: {} },
+      ],
+    }));
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'library_organize', arguments: '{}' }],
+          };
+        }
+        emit('已加入待确认');
+        return { finish: 'stop', totalChars: 6 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+          confirmPending: async () => ({ ok: true }),
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把《三体》归到科幻');
+    await flushUntil(() => round >= 2);
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="library_organize"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.dataset.toolState).toBe('done');
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-name')?.textContent).toBe(
+      t('reader.assistant.toolLibraryOrganize'),
+    );
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      t('reader.assistant.toolSummary.pending', { n: '1' }),
+    );
+    panel.destroy();
+  });
 });
 
 describe('createAssistantPanel lifecycle hygiene', () => {

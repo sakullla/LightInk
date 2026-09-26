@@ -433,22 +433,74 @@
 }
 
 .lightink-reader-assistant-tool {
-  margin: 0 0 0.45rem;
-  padding: 0.4rem 0.5rem;
-  border: 1px dashed color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: var(--lightink-radius-control);
-  background: color-mix(in srgb, var(--lightink-fg) 4%, transparent);
+  margin: 0 0 0.25rem;
   font-size: 0.72rem;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-tool-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.15rem 0.2rem;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-tool-head:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+}
+
+.lightink-reader-assistant-tool-arrow {
+  flex: none;
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+
+.lightink-reader-assistant-tool.is-open .lightink-reader-assistant-tool-arrow {
+  transform: rotate(90deg);
+}
+
+.lightink-reader-assistant-tool-status {
+  flex: none;
+}
+
+.lightink-reader-assistant-tool-status.is-done {
+  color: var(--lightink-accent);
+}
+
+.lightink-reader-assistant-tool-status.is-failed {
+  color: var(--lightink-danger);
 }
 
 .lightink-reader-assistant-tool-name {
+  flex: none;
   font-weight: 650;
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-tool-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lightink-reader-assistant-tool-body {
-  margin: 0.25rem 0 0;
+  margin: 0.15rem 0 0.2rem 1.3rem;
+  max-height: 12rem;
+  overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  font-size: 0.68rem;
   color: var(--lightink-muted);
 }
 

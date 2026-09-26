@@ -743,13 +743,119 @@ function assistantPromptKey(action: AssistantQuickAction): MessageKey {
 }
 
 function toolLabelKey(name: string): MessageKey {
-  if (name === QUERY_BOOK_TOOL_NAME) {
-    return 'reader.assistant.toolQuery';
+  switch (name) {
+    case QUERY_BOOK_TOOL_NAME:
+      return 'reader.assistant.toolQuery';
+    case SAVE_TO_BOOK_TOOL_NAME:
+      return 'reader.assistant.toolSave';
+    case 'library_search':
+      return 'reader.assistant.toolLibrarySearch';
+    case 'library_organize':
+      return 'reader.assistant.toolLibraryOrganize';
+    case 'library_tag':
+      return 'reader.assistant.toolLibraryTag';
+    case 'library_create_group':
+      return 'reader.assistant.toolLibraryCreateGroup';
+    case 'library_remove':
+      return 'reader.assistant.toolLibraryRemove';
+    default:
+      return 'reader.assistant.toolUnknown';
   }
-  if (name === SAVE_TO_BOOK_TOOL_NAME) {
-    return 'reader.assistant.toolSave';
+}
+
+/** 工具 chip 三态：无结果 = 运行中；结果 ok:false = 失败；其余 = 完成。 */
+type AssistantToolState = 'running' | 'done' | 'failed';
+
+function tryParseToolResult(result: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // 非 JSON 结果按无字段处理，摘要回退通用文案。
   }
-  return 'reader.assistant.toolUnknown';
+  return null;
+}
+
+function toolBlockState(block: AssistantToolBlock): AssistantToolState {
+  if (block.result === undefined || block.result === '') {
+    return 'running';
+  }
+  const result = tryParseToolResult(block.result);
+  return result !== null && result.ok === false ? 'failed' : 'done';
+}
+
+function toolStatusKey(state: AssistantToolState): MessageKey {
+  switch (state) {
+    case 'running':
+      return 'reader.assistant.toolStatusRunning';
+    case 'failed':
+      return 'reader.assistant.toolStatusFailed';
+    case 'done':
+      return 'reader.assistant.toolStatusDone';
+  }
+}
+
+function toolResultArrayCount(result: Record<string, unknown>, key: string): number | null {
+  const value = result[key];
+  return Array.isArray(value) ? value.length : null;
+}
+
+/**
+ * 人话摘要：按工具结果 JSON 字段映射（待确认数 / 候选数 / 更新数 / 分组·书·标签
+ * 计数）；失败优先用工具自带 message/error；全部映射失败回退通用完成/失败文案。
+ */
+function toolBlockSummary(
+  block: AssistantToolBlock,
+  translate: AssistantPanelDeps['t'],
+): string {
+  const state = toolBlockState(block);
+  if (state === 'running') {
+    return translate('reader.assistant.toolStatusRunning');
+  }
+  const result = tryParseToolResult(block.result ?? '');
+  if (result === null) {
+    return translate(toolStatusKey(state));
+  }
+  if (result.ok === false) {
+    const reason = result.message ?? result.error;
+    return typeof reason === 'string' && reason.trim() !== ''
+      ? reason
+      : translate('reader.assistant.toolStatusFailed');
+  }
+  const pendingCount = toolResultArrayCount(result, 'pending_confirmation');
+  if (pendingCount !== null && pendingCount > 0) {
+    return translate('reader.assistant.toolSummary.pending', { n: String(pendingCount) });
+  }
+  if (result.pending === true) {
+    return translate('reader.assistant.toolSummary.pending', { n: '1' });
+  }
+  const candidates = toolResultArrayCount(result, 'book_candidates');
+  if (candidates !== null && candidates > 0) {
+    return translate('reader.assistant.toolSummary.candidates', { n: String(candidates) });
+  }
+  const updated = toolResultArrayCount(result, 'updated');
+  if (updated !== null && updated > 0) {
+    return translate('reader.assistant.toolSummary.updated', { n: String(updated) });
+  }
+  const groups = toolResultArrayCount(result, 'groups');
+  if (groups !== null && groups > 0) {
+    return translate('reader.assistant.toolSummary.groups', { n: String(groups) });
+  }
+  const books = toolResultArrayCount(result, 'books');
+  if (books !== null && books > 0) {
+    return translate('reader.assistant.toolSummary.books', { n: String(books) });
+  }
+  const tags = toolResultArrayCount(result, 'tags');
+  if (tags !== null && tags > 0) {
+    return translate('reader.assistant.toolSummary.tags', { n: String(tags) });
+  }
+  const message = result.message;
+  if (typeof message === 'string' && message.trim() !== '') {
+    return message;
+  }
+  return translate('reader.assistant.toolStatusDone');
 }
 
 /**
@@ -1110,20 +1216,54 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     messages[index - 1]?.action === 'chapterSummary';
 
   const renderToolBlock = (block: AssistantToolBlock): HTMLElement => {
+    const state = toolBlockState(block);
     const el = document.createElement('div');
     el.className = 'lightink-reader-assistant-tool';
     el.dataset.tool = block.name;
-    const name = document.createElement('div');
+    el.dataset.toolState = state;
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'lightink-reader-assistant-tool-head';
+    head.setAttribute('aria-expanded', 'false');
+    head.setAttribute('aria-label', t('reader.assistant.toolToggleDetails'));
+
+    const arrow = document.createElement('span');
+    arrow.className = 'lightink-reader-assistant-tool-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = '▸';
+
+    const status = document.createElement('span');
+    status.className = `lightink-reader-assistant-tool-status is-${state}`;
+    status.textContent = state === 'running' ? '…' : state === 'failed' ? '✕' : '✓';
+    status.title = t(toolStatusKey(state));
+
+    const name = document.createElement('span');
     name.className = 'lightink-reader-assistant-tool-name';
     name.textContent = t(toolLabelKey(block.name));
+
+    const summary = document.createElement('span');
+    summary.className = 'lightink-reader-assistant-tool-summary';
+    summary.textContent = toolBlockSummary(block, t);
+
     const body = document.createElement('pre');
     body.className = 'lightink-reader-assistant-tool-body';
+    body.hidden = true;
     const parts = [block.arguments];
     if (block.result !== undefined && block.result !== '') {
       parts.push(block.result);
     }
     body.textContent = parts.filter((part) => part !== '').join('\n');
-    el.append(name, body);
+
+    head.addEventListener('click', () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      head.setAttribute('aria-expanded', String(open));
+      el.classList.toggle('is-open', open);
+    });
+
+    head.append(arrow, status, name, summary);
+    el.append(head, body);
     return el;
   };
 
@@ -1821,6 +1961,19 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           content: '',
           toolCalls: calls,
         });
+        // 先渲染运行中 chip，执行结束后按 id 原位更新为完成/失败。
+        for (const call of calls) {
+          toolBlocks.push({ id: call.id, name: call.name, arguments: call.arguments });
+        }
+        const runningEntry = messages[targetIndex];
+        if (runningEntry !== undefined) {
+          messages[targetIndex] = {
+            ...runningEntry,
+            toolBlocks: toolBlocks.slice(),
+            content: visible,
+          };
+          renderMessages();
+        }
         const executed =
           session === null
             ? calls.map((call) => ({
@@ -1838,7 +1991,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           break;
         }
         for (const block of executed) {
-          toolBlocks.push(block);
+          const at = toolBlocks.findIndex((existing) => existing.id === block.id);
+          if (at >= 0) {
+            toolBlocks[at] = block;
+          } else {
+            toolBlocks.push(block);
+          }
           loopTurns.push({
             role: 'tool',
             content: stripAssistantPendingConfirmations(block.result),
