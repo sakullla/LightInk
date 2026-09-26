@@ -1483,10 +1483,14 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   inset: 0;
   z-index: 200;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
   padding: 32px 24px;
   background: var(--lightink-overlay);
+}
+
+.lightink-library-tag-editor [hidden] {
+  display: none !important;
 }
 
 .lightink-library-tag-editor[hidden] {
@@ -1496,7 +1500,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-tag-editor-page {
   display: flex;
   flex-direction: column;
+  align-self: center;
   width: min(40rem, 100%);
+  height: auto;
   max-height: 100%;
   padding: 22px 22px 16px;
   border: 1px solid var(--lightink-border);
@@ -1948,6 +1954,79 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 
 .lightink-library-catalog-folder .lightink-library-collapse-chevron {
   color: var(--lightink-muted);
+}
+
+.lightink-library-cover-wall > .lightink-library-item-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: var(--lightink-library-cover-max);
+}
+
+.lightink-library-item-shell > .lightink-library-item--cover {
+  width: 100%;
+}
+
+.lightink-library-tag-filter-banner,
+.lightink-library-tag-index {
+  grid-column: 1 / -1;
+}
+
+.lightink-library-tag-filter-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.lightink-library-tag-index {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  background: var(--lightink-overlay);
+}
+
+.lightink-library-tag-index[hidden] {
+  display: none !important;
+}
+
+.lightink-library-tag-index-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(32rem, 100%);
+  max-height: 100%;
+  padding: 22px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-elevated);
+}
+
+.lightink-library-tag-index-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  max-height: min(52vh, 28rem);
+  overflow-y: auto;
+}
+
+.lightink-library-tag-index-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lightink-library-tag-index-row > button:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: start;
 }
 
 .lightink-library-cover-wall > .lightink-library-item:not(.lightink-library-catalog-folder) {

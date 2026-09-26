@@ -796,7 +796,10 @@ function tagNavButton(host: HTMLElement, name: string): HTMLButtonElement {
   expandNavSectionIfPresent(host, 'tags');
   const candidate = Array.from(
     host.querySelectorAll<HTMLButtonElement>('.lightink-library-tag'),
-  ).find((button) => button.textContent?.trim() === name && isShown(button));
+  ).find((button) => {
+    const label = button.querySelector('.lightink-library-tag-name')?.textContent?.trim();
+    return (label ?? button.textContent?.trim()) === name && isShown(button);
+  });
   if (!(candidate instanceof HTMLButtonElement)) {
     throw new Error(`tag nav item not found: ${name}`);
   }
@@ -1906,15 +1909,10 @@ describe('LibraryView my-books home', () => {
     expect(recent.textContent).toContain('较早打开');
     expect(recent.textContent).not.toContain('没读的书');
 
-    const smartModule = host.querySelector<HTMLElement>('.lightink-library-home-smart')!;
-    expect(isShown(smartModule)).toBe(true);
-    expect(smartModule.textContent).toContain('智能分组');
-    expect(smartModule.querySelector('[data-home-smart-group-id="smart:epub"]')).not.toBeNull();
-    expect(
-      smartModule.querySelector('[data-home-smart-group-id="smart:format:txt"]'),
-    ).not.toBeNull();
-    expect(smartModule.textContent).toContain('研究资料');
-    expect(smartModule.textContent).toContain('EPUB3');
+    expect(host.querySelector('.lightink-library-home-smart')?.hidden).not.toBe(false);
+    expandSmartGroupTypes(host);
+    expect(host.textContent).toContain('智能分组');
+    expect(host.querySelector('[data-smart-group-id="smart:epub"]')).not.toBeNull();
 
     const wallHeading = host.querySelector<HTMLElement>('.lightink-library-wall-heading')!;
     expect(isShown(wallHeading)).toBe(true);
@@ -1924,8 +1922,11 @@ describe('LibraryView my-books home', () => {
     // 最近打开卡片不是墙面卡片：itemRow 仍命中书墙上的正式卡片。
     expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
 
-    // 智能分组卡片筛选书墙：首页模块让位给结果墙。
-    const customChip = smartModule.querySelector<HTMLButtonElement>('[data-home-custom-group-id]')!;
+    // 自定义分组仍从侧栏筛选书墙：首页模块让位给结果墙。
+    expandNavSection(host, 'groups');
+    const customChip = host.querySelector<HTMLButtonElement>(
+      `.lightink-library-group[data-custom-group-id="${created.id}"]`,
+    )!;
     customChip.click();
     await settle();
     expect(itemRow(host, grouped.id)).toBeTruthy();
@@ -2018,6 +2019,57 @@ describe('LibraryView my-books home', () => {
     expect(libraryRoot(host).dataset.libraryNav).toBe('sources');
     expect(isShown(sourceFormOf())).toBe(true);
     view.destroy();
+  });
+
+  it('offers import and add source on an empty phone shelf', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const onImportLocal = vi.fn(async () => null);
+    const base = dependencies();
+    const deps = dependencies({
+      onImportLocal,
+      library: { ...base.library, listItems: vi.fn(async () => []) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    const card = host.querySelector<HTMLElement>('.lightink-library-home-empty')!;
+    expect(isShown(card)).toBe(true);
+    expect(card.textContent).toContain('导入本地书籍');
+    expect(card.textContent).toContain('添加书源');
+    view.destroy();
+  });
+
+  it('keeps the desktop home when a phone flag is set on a wide viewport', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    document.documentElement.setAttribute('data-android', '');
+    const book = localItem({
+      id: 'local:/books/wide.epub',
+      title: '宽屏',
+      localPath: '/books/wide.epub',
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [book]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    expect(host.querySelector('.lightink-library-home-modules')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
+    view.destroy();
+    window.matchMedia = original;
   });
 
   it('keeps the discovery modules off the mobile shelf', async () => {
@@ -4916,9 +4968,11 @@ describe('LibraryView book tags (R6)', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    const card = itemRow(host, book.id);
+    const card = itemCard(host, book.id);
     const chips = Array.from(
-      card.querySelectorAll<HTMLElement>('.lightink-library-item-tags .lightink-library-tag-chip'),
+      card.querySelectorAll<HTMLElement>(
+        '.lightink-library-item-tags > .lightink-library-tag-chip',
+      ),
     );
     expect(chips.map((chip) => chip.textContent)).toEqual(['科幻', '太空', '探险', '+1']);
     const more = card.querySelector<HTMLElement>('[data-tag-overflow]')!;
@@ -4956,7 +5010,7 @@ describe('LibraryView book tags (R6)', () => {
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
     expect(library.setItemTags).toHaveBeenCalledWith(book.id, [scifi.id]);
-    expect(itemRow(host, book.id).querySelector('.lightink-library-tag-chip')?.textContent).toBe(
+    expect(itemCard(host, book.id).querySelector('.lightink-library-tag-chip')?.textContent).toBe(
       '科幻',
     );
 
@@ -4972,7 +5026,7 @@ describe('LibraryView book tags (R6)', () => {
     await settle();
     expect(library.setItemTags).toHaveBeenLastCalledWith(book.id, []);
     expect(detail.querySelector('.lightink-library-tag-chip')).toBeNull();
-    expect(itemRow(host, book.id).querySelector('.lightink-library-item-tags')).toBeNull();
+    expect(itemCard(host, book.id).querySelector('.lightink-library-item-tags')).toBeNull();
     view.destroy();
   });
 
@@ -5036,6 +5090,11 @@ describe('LibraryView book tags (R6)', () => {
     await settle();
     dialog = tagDialogOf();
     expect(dialog.textContent).toContain('书籍仍保留');
+    expect(dialog.querySelector('input[name="tagName"]')).toBeNull();
+    expect(dialog.querySelector('input[name="tag"]')).toBeNull();
+    expect(dialog.querySelector('.lightink-library-tag-editor-page')?.getAttribute('style') ?? '').not.toContain(
+      'height: 100%',
+    );
     dialog.querySelector<HTMLButtonElement>('.lightink-library-danger')!.click();
     await settle();
     expect(library.deleteTag).toHaveBeenCalledWith('tag-1');
@@ -5044,6 +5103,89 @@ describe('LibraryView book tags (R6)', () => {
     expect(itemRow(host, book.id)).toBeTruthy();
     expect(host.querySelector('.lightink-library-item-tags')).toBeNull();
     await expect(tagStore.listTagMemberships()).resolves.toEqual([]);
+    view.destroy();
+  });
+
+  it('filters from a cover chip without opening the book and reveals folded tags', async () => {
+    const book = localItem({
+      id: 'local:/books/chips.epub',
+      title: '芯片书',
+      localPath: '/books/chips.epub',
+    });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '另一本',
+      localPath: '/books/other.epub',
+    });
+    const { deps, tagStore } = tagDependencies({ items: [book, other] });
+    const names = ['科幻', '太空', '探险', '长篇'];
+    const ids: string[] = [];
+    for (const name of names) ids.push((await tagStore.createTag(name)).id);
+    await tagStore.setItemTags(book.id, ids);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    const card = itemCard(host, book.id);
+    card.querySelector<HTMLButtonElement>('.lightink-library-tag-chip')!.click();
+    await settle();
+    expect(deps.onOpen).not.toHaveBeenCalled();
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
+    expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('科幻');
+    host.querySelector<HTMLButtonElement>('.lightink-library-tag-filter-clear')!.click();
+    await settle();
+    const more = itemCard(host, book.id).querySelector<HTMLButtonElement>('[data-tag-overflow]')!;
+    more.click();
+    const folded = itemCard(host, book.id).querySelector<HTMLButtonElement>(
+      '.lightink-library-tag-chip-rest .lightink-library-tag-chip',
+    )!;
+    expect(folded.textContent).toBe('长篇');
+    folded.click();
+    await settle();
+    expect(deps.onOpen).not.toHaveBeenCalled();
+    expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('长篇');
+    view.destroy();
+  });
+
+  it('keeps hundreds of tags behind a searchable index ordered by book count', async () => {
+    const books = Array.from({ length: 3 }, (_, index) =>
+      localItem({
+        id: `local:/books/many-${index}.epub`,
+        title: `书${index}`,
+        localPath: `/books/many-${index}.epub`,
+      }),
+    );
+    const { deps, tagStore } = tagDependencies({ items: books });
+    const popular = await tagStore.createTag('热门');
+    const second = await tagStore.createTag('次热');
+    for (const book of books) await tagStore.setItemTags(book.id, [popular.id]);
+    await tagStore.setItemTags(books[0]!.id, [popular.id, second.id]);
+    for (let index = 0; index < 40; index += 1) await tagStore.createTag(`冷门${index}`);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    const navTags = Array.from(host.querySelectorAll<HTMLButtonElement>('.lightink-library-tag'));
+    expect(navTags.map((button) => button.querySelector('.lightink-library-tag-name')?.textContent)).toEqual([
+      '热门',
+      '次热',
+    ]);
+    expandNavSection(host, 'tags');
+    shownButtonWithText(host, '全部标签').click();
+    const index = document.querySelector<HTMLElement>('[data-tag-index="page"]')!;
+    expect(isShown(index)).toBe(true);
+    const search = index.querySelector('input')!;
+    search.value = '冷门7';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    const names = Array.from(index.querySelectorAll('.lightink-library-tag-name')).map(
+      (node) => node.textContent,
+    );
+    expect(names).toEqual(['冷门7']);
+    index.querySelector('button')!.click();
+    await settle();
+    expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('冷门7');
+    expect(host.querySelector('[data-item-id]')).toBeNull();
     view.destroy();
   });
 });

@@ -80,9 +80,14 @@ export function createTagEditor(doc: Document): TagEditor {
   const nameLabelText = doc.createElement('span');
   const nameInput = doc.createElement('input');
   nameInput.name = 'tagName';
-  nameInput.maxLength = 60;
+  nameInput.maxLength = 80;
   nameInput.autocomplete = 'off';
   nameLabel.append(nameLabelText, nameInput);
+
+  const searchInput = doc.createElement('input');
+  searchInput.name = 'tagSearch';
+  searchInput.autocomplete = 'off';
+  searchInput.className = 'lightink-library-tag-search';
 
   const options = doc.createElement('div');
   options.className = 'lightink-library-tag-options';
@@ -91,7 +96,7 @@ export function createTagEditor(doc: Document): TagEditor {
   createRow.className = 'lightink-library-tag-create';
   const createInput = doc.createElement('input');
   createInput.name = 'newTag';
-  createInput.maxLength = 60;
+  createInput.maxLength = 80;
   createInput.autocomplete = 'off';
   const createButton = button(doc, 'lightink-library-tag-create-add');
   createButton.dataset.tagEditorAction = 'create';
@@ -137,7 +142,20 @@ export function createTagEditor(doc: Document): TagEditor {
       label.append(checkbox, text);
       options.appendChild(label);
     }
+    applySearch();
   }
+
+  function applySearch(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    for (const label of options.querySelectorAll<HTMLLabelElement>('label')) {
+      const name = label.textContent?.toLowerCase() ?? '';
+      label.hidden = query !== '' && !name.includes(query);
+    }
+  }
+
+  searchInput.addEventListener('input', () => {
+    applySearch();
+  });
 
   function focusField(focus: TagEditorFocus): void {
     const target =
@@ -156,23 +174,30 @@ export function createTagEditor(doc: Document): TagEditor {
     form,
     open(view: TagEditorView): void {
       title.textContent = view.title;
-      message.hidden = !view.showMessage;
       message.textContent = view.message;
-      nameLabel.hidden = !view.showName;
       nameLabelText.textContent = view.nameLabel;
       nameInput.value = view.name;
       nameInput.required = view.nameRequired;
-      options.hidden = !view.showOptions;
-      if (view.showOptions) setOptions(view.tags, view.checked, view.emptyLabel);
-      else options.replaceChildren();
-      createRow.hidden = !view.showCreate;
       createInput.placeholder = view.createPlaceholder;
       createButton.textContent = view.createLabel;
-      deleteButton.hidden = !view.showDelete;
       deleteButton.textContent = view.deleteLabel;
-      saveButton.hidden = !view.showSave;
       saveButton.textContent = view.saveLabel;
       cancelButton.textContent = view.cancelLabel;
+      searchInput.value = '';
+      if (view.showOptions) setOptions(view.tags, view.checked, view.emptyLabel);
+      else options.replaceChildren();
+      const nodes: Node[] = [title];
+      if (view.showMessage) nodes.push(message);
+      if (view.showName) nodes.push(nameLabel);
+      if (view.showOptions) nodes.push(searchInput, options);
+      if (view.showCreate) nodes.push(createRow);
+      const actionNodes: Node[] = [];
+      if (view.showDelete) actionNodes.push(deleteButton);
+      if (view.showSave) actionNodes.push(saveButton);
+      actionNodes.push(cancelButton);
+      actions.replaceChildren(...actionNodes);
+      nodes.push(actions);
+      form.replaceChildren(...nodes);
       element.hidden = false;
       focusField(view.focus);
     },
@@ -180,6 +205,7 @@ export function createTagEditor(doc: Document): TagEditor {
       element.hidden = true;
       nameInput.required = false;
       createInput.value = '';
+      searchInput.value = '';
     },
     checkedTagIds(): string[] {
       return Array.from(

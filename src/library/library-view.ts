@@ -273,6 +273,7 @@ interface Labels {
   backToSources: string;
   importShort: string;
   tags: string;
+  allTags: string;
   filterTags: string;
   newTag: string;
   renameTag: string;
@@ -462,6 +463,7 @@ const LABELS: Record<Locale, Labels> = {
     backToSources: 'Back to sources',
     importShort: 'Import',
     tags: 'Tags',
+    allTags: 'All tags',
     filterTags: 'Filter tags…',
     newTag: 'New tag',
     renameTag: 'Rename tag',
@@ -649,6 +651,7 @@ const LABELS: Record<Locale, Labels> = {
     backToSources: '返回书源',
     importShort: '导入',
     tags: '标签',
+    allTags: '全部标签',
     filterTags: '筛选标签…',
     newTag: '新建标签',
     renameTag: '重命名标签',
@@ -2050,12 +2053,21 @@ export function createLibraryView(
 
   const labels = (): Labels => LABELS[deps.getLocale()];
 
+  function libraryViewportIsNarrow(): boolean {
+    const view = doc.defaultView;
+    if (view === null || typeof view.matchMedia !== 'function') return true;
+    try {
+      return view.matchMedia('(max-width: 760px)').matches;
+    } catch {
+      return true;
+    }
+  }
+
   const isMobileLibraryChrome = (): boolean => {
-    const rootEl = typeof document !== 'undefined' ? document.documentElement : null;
-    return (
-      rootEl?.hasAttribute('data-android') === true ||
-      rootEl?.hasAttribute('data-touch-primary') === true
-    );
+    const rootEl = doc.documentElement;
+    const flagged =
+      rootEl.hasAttribute('data-android') || rootEl.hasAttribute('data-touch-primary');
+    return flagged && libraryViewportIsNarrow();
   };
 
   const tabbarLabels = (): LibraryTabbarLabels => ({
@@ -2441,6 +2453,28 @@ export function createLibraryView(
     return tagMemberships.some(
       (entry) => entry.tagId === selectedTagId && entry.itemId === display.item.id,
     );
+  }
+
+  function tagBookCount(tagId: string): number {
+    const shelfIds = new Set(items.map((display) => display.item.id));
+    return tagMemberships.filter(
+      (entry) => entry.tagId === tagId && shelfIds.has(entry.itemId),
+    ).length;
+  }
+
+  function compareTagName(left: LibraryTag, right: LibraryTag): number {
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  }
+
+  function tagsRankedByBooks(): Array<{ tag: LibraryTag; count: number }> {
+    return tags
+      .map((tag) => ({ tag, count: tagBookCount(tag.id) }))
+      .filter((entry) => entry.count > 0)
+      .sort((left, right) => right.count - left.count || compareTagName(left.tag, right.tag));
+  }
+
+  function tagPreview(): Array<{ tag: LibraryTag; count: number }> {
+    return tagsRankedByBooks().slice(0, HOME_SMART_GROUP_LIMIT);
   }
 
   function forgetMissingTag(): void {
@@ -3681,26 +3715,136 @@ export function createLibraryView(
     tagGroup.className = 'lightink-library-filter-sheet-tags';
     tagGroup.setAttribute('role', 'group');
     tagGroup.setAttribute('aria-label', labels().tags);
-    for (const tag of tags) {
-      const active = selectedTagId === tag.id;
-      const option = button(doc, tag.name, 'lightink-library-groups-sheet-item');
+    for (const entry of tagPreview()) {
+      const active = selectedTagId === entry.tag.id;
+      const option = button(doc, '', 'lightink-library-groups-sheet-item');
       option.classList.add('lightink-library-shelf-filter-option');
-      option.dataset.shelfTagId = tag.id;
+      option.dataset.shelfTagId = entry.tag.id;
       option.setAttribute('aria-pressed', active ? 'true' : 'false');
       option.classList.toggle('is-active', active);
       option.style.minHeight = '48px';
       option.style.width = '100%';
       option.style.whiteSpace = 'normal';
       option.style.textAlign = 'start';
+      const name = doc.createElement('span');
+      name.className = 'lightink-library-tag-name';
+      name.textContent = entry.tag.name;
+      const count = doc.createElement('span');
+      count.className = 'lightink-library-home-group-count';
+      count.textContent = String(entry.count);
+      option.append(name, count);
       option.addEventListener('click', () => {
-        applyTagFilter(tag.id);
+        applyTagFilter(entry.tag.id);
       });
       tagGroup.appendChild(option);
+    }
+    if (tags.length > 0) {
+      const all = button(doc, labels().allTags, 'lightink-library-tag-index-open');
+      all.style.minHeight = '48px';
+      all.style.width = '100%';
+      all.addEventListener('click', () => {
+        closeFilterSheet();
+        openTagIndex();
+      });
+      tagGroup.appendChild(all);
     }
     filterPanel.appendChild(tagGroup);
   }
 
-  /** 标签导航分区：空标签不占位；右键行可重命名/删除。 */
+  let tagIndex: HTMLElement | null = null;
+
+  function closeTagIndex(): void {
+    if (tagIndex === null) return;
+    tagIndex.remove();
+    tagIndex = null;
+  }
+
+  function openTagIndex(): void {
+    closeTagIndex();
+    const overlay = doc.createElement('div');
+    overlay.className = 'lightink-library-tag-index';
+    overlay.dataset.tagIndex = 'page';
+    const page = doc.createElement('div');
+    page.className = 'lightink-library-tag-index-page';
+    page.setAttribute('role', 'dialog');
+    page.setAttribute('aria-modal', 'true');
+    const title = doc.createElement('h2');
+    title.textContent = labels().allTags;
+    const search = doc.createElement('input');
+    search.className = 'lightink-library-tag-search';
+    search.placeholder = labels().filterTags;
+    const list = doc.createElement('div');
+    list.className = 'lightink-library-tag-index-list';
+    const close = button(doc, labels().cancel);
+    close.addEventListener('click', () => {
+      closeTagIndex();
+    });
+    page.append(title, search, list, close);
+    overlay.appendChild(page);
+    overlay.addEventListener('pointerdown', (event) => {
+      if (event.target === overlay) closeTagIndex();
+    });
+    const render = (): void => {
+      const query = search.value.trim().toLowerCase();
+      const rows = tags
+        .map((tag) => ({ tag, count: tagBookCount(tag.id) }))
+        .filter((entry) => query === '' || entry.tag.name.toLowerCase().includes(query))
+        .sort((left, right) => compareTagName(left.tag, right.tag));
+      list.replaceChildren();
+      if (rows.length === 0) {
+        const empty = doc.createElement('p');
+        empty.className = 'lightink-library-nav-empty';
+        empty.textContent = labels().noMatch;
+        list.appendChild(empty);
+        return;
+      }
+      for (const entry of rows) {
+        const row = doc.createElement('div');
+        row.className = 'lightink-library-tag-index-row';
+        const pick = button(doc, '', 'lightink-library-tag');
+        pick.dataset.tagId = entry.tag.id;
+        const name = doc.createElement('span');
+        name.className = 'lightink-library-tag-name';
+        name.textContent = entry.tag.name;
+        const count = doc.createElement('span');
+        count.className = 'lightink-library-home-group-count';
+        count.textContent = String(entry.count);
+        pick.append(name, count);
+        pick.classList.toggle('is-active', selectedTagId === entry.tag.id);
+        pick.addEventListener('click', () => {
+          closeTagIndex();
+          applyTagFilter(entry.tag.id);
+        });
+        row.appendChild(pick);
+        if (deps.library.renameTag !== undefined) {
+          const rename = button(doc, labels().renameTag);
+          rename.addEventListener('click', () => {
+            closeTagIndex();
+            openTagDialog({ kind: 'rename', tagId: entry.tag.id });
+          });
+          row.appendChild(rename);
+        }
+        if (deps.library.deleteTag !== undefined) {
+          const remove = button(doc, labels().deleteTag, 'lightink-library-danger');
+          remove.addEventListener('click', () => {
+            closeTagIndex();
+            openTagDialog({ kind: 'delete', tagId: entry.tag.id });
+          });
+          row.appendChild(remove);
+        }
+        list.appendChild(row);
+      }
+    };
+    search.addEventListener('input', () => {
+      render();
+    });
+    render();
+    tagIndex = overlay;
+    mountLibraryOverlay(overlay, root);
+    search.focus();
+  }
+
+  /** 标签导航分区：空标签不占位；常驻只显示书数最高的若干项。 */
   function renderTags(): void {
     tagList.replaceChildren();
     tagTitle.textContent = labels().tags;
@@ -3717,26 +3861,42 @@ export function createLibraryView(
     tagHeader.hidden = sectionEmpty;
     tagBody.hidden = sectionEmpty || desktopOnlyCollapsed(tagListCollapsed);
     const query = tagFilterQuery.trim().toLowerCase();
-    const visible = tags.filter((tag) => query === '' || tag.name.toLowerCase().includes(query));
-    for (const tag of visible) {
-      const row = button(doc, tag.name, 'lightink-library-tag');
+    const visible = tagPreview().filter(
+      (entry) => query === '' || entry.tag.name.toLowerCase().includes(query),
+    );
+    for (const entry of visible) {
+      const row = button(doc, '', 'lightink-library-tag');
       row.prepend(createNavIcon(doc, NAV_ICON_PATHS.tag));
-      row.dataset.tagId = tag.id;
-      row.title = tag.name;
-      const active = activeSection === 'shelf' && selectedTagId === tag.id;
+      row.dataset.tagId = entry.tag.id;
+      row.title = entry.tag.name;
+      const name = doc.createElement('span');
+      name.className = 'lightink-library-tag-name';
+      name.textContent = entry.tag.name;
+      const count = doc.createElement('span');
+      count.className = 'lightink-library-home-group-count';
+      count.textContent = String(entry.count);
+      row.append(name, count);
+      const active = activeSection === 'shelf' && selectedTagId === entry.tag.id;
       row.classList.toggle('is-active', active);
       if (active) row.setAttribute('aria-current', 'true');
       row.addEventListener('click', () => {
-        applyTagFilter(tag.id);
+        applyTagFilter(entry.tag.id);
       });
       row.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openTagMenu(tag, { x: event.clientX, y: event.clientY });
+        openTagMenu(entry.tag, { x: event.clientX, y: event.clientY });
       });
       tagList.appendChild(row);
     }
-    if (!sectionEmpty && visible.length === 0) {
+    if (tags.length > 0) {
+      const all = button(doc, labels().allTags, 'lightink-library-tag-index-open');
+      all.addEventListener('click', () => {
+        openTagIndex();
+      });
+      tagList.appendChild(all);
+    }
+    if (!sectionEmpty && visible.length === 0 && query !== '') {
       const empty = doc.createElement('p');
       empty.className = 'lightink-library-nav-empty';
       empty.textContent = labels().noMatch;
@@ -4468,10 +4628,36 @@ export function createLibraryView(
     membershipOptions.querySelector<HTMLInputElement>('input')?.focus();
   }
 
+  function renderTagFilterBanner(): HTMLElement {
+    const bar = doc.createElement('div');
+    bar.className = 'lightink-library-tag-filter-banner';
+    const label = doc.createElement('span');
+    label.textContent = currentFilterCaption();
+    const clear = button(doc, labels().clear);
+    clear.className = 'lightink-library-tag-filter-clear';
+    clear.addEventListener('click', () => {
+      selectedTagId = null;
+      void activateShelf();
+    });
+    bar.append(label, clear);
+    return bar;
+  }
+
+  function tagFilterChip(tag: LibraryTag): HTMLButtonElement {
+    const chip = button(doc, tag.name, 'lightink-library-tag-chip');
+    chip.dataset.tagId = tag.id;
+    chip.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyTagFilter(tag.id);
+    });
+    return chip;
+  }
+
   function renderCoverCard(
     display: DisplayItem,
     options: { readonly selectOnClick?: boolean } = {},
-  ): HTMLButtonElement {
+  ): HTMLElement {
     const row = button(doc, '', 'lightink-library-item lightink-library-item--cover');
     row.dataset.itemId = display.item.id;
     row.dataset.bookKind = classifyLibraryKind(display.item);
@@ -4498,31 +4684,51 @@ export function createLibraryView(
       text.appendChild(meta);
     }
     appendImportedProgress(row, text, display, { continueCue: false });
-    // 书卡标签：最多 TAG_CHIP_LIMIT 枚，超出折叠为 +N；目录/远程条目不属于本地标签面。
+    row.append(cover, text);
+    const shell = doc.createElement('div');
+    shell.className = 'lightink-library-item-shell';
+    shell.dataset.itemId = display.item.id;
+    shell.appendChild(row);
+    shell.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openItemCollectionMenu(display, { x: event.clientX, y: event.clientY });
+    });
+    shell.addEventListener('keydown', (event) => {
+      if (event.key.toLocaleLowerCase() === 'g' && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        openMembershipEditor(display.item.id);
+      }
+    });
     const assignedTags = catalogActive() ? [] : tagsForItem(display.item.id);
     if (assignedTags.length > 0) {
-      const strip = doc.createElement('span');
+      const strip = doc.createElement('div');
       strip.className = 'lightink-library-item-tags';
       const shown = assignedTags.slice(0, TAG_CHIP_LIMIT);
-      for (const tag of shown) {
-        const chip = doc.createElement('span');
-        chip.className = 'lightink-library-tag-chip';
-        chip.dataset.tagId = tag.id;
-        chip.textContent = tag.name;
-        strip.appendChild(chip);
+      for (const tag of shown) strip.appendChild(tagFilterChip(tag));
+      const hiddenTags = assignedTags.slice(TAG_CHIP_LIMIT);
+      if (hiddenTags.length > 0) {
+        const more = button(
+          doc,
+          `+${hiddenTags.length}`,
+          'lightink-library-tag-chip lightink-library-tag-chip--more',
+        );
+        more.dataset.tagOverflow = String(hiddenTags.length);
+        more.title = labels().tagsOverflow.replace('{count}', String(hiddenTags.length));
+        const rest = doc.createElement('span');
+        rest.className = 'lightink-library-tag-chip-rest';
+        rest.hidden = true;
+        for (const tag of hiddenTags) rest.appendChild(tagFilterChip(tag));
+        more.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          rest.hidden = !rest.hidden;
+        });
+        strip.append(more, rest);
       }
-      const overflowCount = assignedTags.length - shown.length;
-      if (overflowCount > 0) {
-        const more = doc.createElement('span');
-        more.className = 'lightink-library-tag-chip lightink-library-tag-chip--more';
-        more.dataset.tagOverflow = String(overflowCount);
-        more.textContent = `+${overflowCount}`;
-        more.title = labels().tagsOverflow.replace('{count}', String(overflowCount));
-        strip.appendChild(more);
-      }
-      text.appendChild(strip);
+      shell.appendChild(strip);
     }
-    row.append(cover, text);
     // 长按先于 click/contextmenu 绑定：触发后吞掉紧随的合成 click/原生
     // contextmenu（at-target 阶段按注册顺序派发），避免误打开书或菜单双开。
     // 按住期间 .is-pressing 洗色反馈（onPressStart/Cancel，T3）。
@@ -4558,7 +4764,7 @@ export function createLibraryView(
       event.dataTransfer?.setData('text/plain', display.item.title);
       if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'copy';
     });
-    return row;
+    return shell;
   }
 
   function renderContinueBar(): void {
@@ -4671,7 +4877,7 @@ export function createLibraryView(
   function renderHomeModules(): void {
     const l = labels();
     recentTitle.textContent = l.homeRecent;
-    homeSmartTitle.textContent = l.smartGroups;
+    homeSmartTitle.textContent = l.tags;
     wallHeadingTitle.textContent = l.homeWall;
 
     recentList.replaceChildren();
@@ -4705,57 +4911,8 @@ export function createLibraryView(
     }
 
     homeSmartList.replaceChildren();
-    const smartEntries = smartGroups.slice(0, HOME_SMART_GROUP_LIMIT);
-    const customEntries = flattenedCustomGroups()
-      .map((entry) => ({
-        group: entry.group,
-        count: itemIdsForGroup(groups, memberships, entry.group.id).size,
-      }))
-      .filter((entry) => entry.count > 0);
-    // 标签也被「智能分组」模块聚合展示（R6）：按现有书目计数，空标签不占位。
-    const shelfItemIds = new Set(items.map((display) => display.item.id));
-    const tagEntries = tags
-      .map((tag) => ({
-        tag,
-        count: tagMemberships.filter(
-          (entry) => entry.tagId === tag.id && shelfItemIds.has(entry.itemId),
-        ).length,
-      }))
-      .filter((entry) => entry.count > 0)
-      .slice(0, HOME_SMART_GROUP_LIMIT);
-    homeSmartModule.hidden =
-      smartEntries.length === 0 && customEntries.length === 0 && tagEntries.length === 0;
-    for (const group of smartEntries) {
-      const chip = button(doc, '', 'lightink-library-home-group');
-      chip.dataset.homeSmartGroupId = group.id;
-      chip.appendChild(createNavIcon(doc, NAV_ICON_PATHS.hash));
-      const name = doc.createElement('span');
-      name.textContent = smartGroupName(group);
-      const count = doc.createElement('span');
-      count.className = 'lightink-library-home-group-count';
-      count.textContent = String(
-        items.filter((display) => smartGroupMatches(display.item, group.rule, progressFor(display)))
-          .length,
-      );
-      chip.append(name, count);
-      chip.classList.toggle('is-active', selectedSmartGroupId === group.id);
-      chip.addEventListener('click', () => applySmartGroup(group.id));
-      homeSmartList.appendChild(chip);
-    }
-    for (const entry of customEntries) {
-      const chip = button(doc, '', 'lightink-library-home-group');
-      chip.dataset.homeCustomGroupId = entry.group.id;
-      chip.appendChild(createNavIcon(doc, NAV_ICON_PATHS.folder));
-      const name = doc.createElement('span');
-      name.textContent = entry.group.name;
-      const count = doc.createElement('span');
-      count.className = 'lightink-library-home-group-count';
-      count.textContent = String(entry.count);
-      chip.append(name, count);
-      chip.classList.toggle('is-active', selectedCustomGroupId === entry.group.id);
-      chip.addEventListener('click', () => applyCustomGroup(entry.group.id));
-      homeSmartList.appendChild(chip);
-    }
+    const tagEntries = tagPreview();
+    homeSmartModule.hidden = tagEntries.length === 0;
     for (const entry of tagEntries) {
       const chip = button(doc, '', 'lightink-library-home-group lightink-library-home-tag');
       chip.dataset.homeTagId = entry.tag.id;
@@ -4798,6 +4955,9 @@ export function createLibraryView(
   function renderItems(): void {
     const shown = visibleItems();
     itemList.replaceChildren();
+    if (selectedTagId !== null && activeSection === 'shelf' && !catalogActive()) {
+      itemList.appendChild(renderTagFilterBanner());
+    }
     const home = isShelfHome() && shown.length > 0;
     if (home) {
       renderHomeModules();
@@ -4818,10 +4978,7 @@ export function createLibraryView(
         selectedSmartGroupId !== null ||
         selectedTagId !== null;
       if (!filtered && shouldShowImportTile()) {
-        // 空书库的发现引导（R1）：保留导入磁贴，并在桌面补一块导入/添加书源卡片。
-        if (items.length === 0 && !isMobileLibraryChrome()) {
-          itemList.appendChild(renderHomeEmpty());
-        }
+        if (items.length === 0) itemList.appendChild(renderHomeEmpty());
         itemList.appendChild(renderImportTile());
         detail.hidden = true;
         return;
