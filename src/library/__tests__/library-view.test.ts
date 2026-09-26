@@ -5188,6 +5188,49 @@ describe('LibraryView book tags (R6)', () => {
     expect(host.querySelector('[data-item-id]')).toBeNull();
     view.destroy();
   });
+
+  it('explains a blank tag name and shows a string rename rejection', async () => {
+    const book = localItem({
+      id: 'local:/books/name.epub',
+      title: '命名',
+      localPath: '/books/name.epub',
+    });
+    const { deps, library, tagStore } = tagDependencies({ items: [book] });
+    const scifi = await tagStore.createTag('科幻');
+    await tagStore.setItemTags(book.id, [scifi.id]);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    host.querySelector<HTMLButtonElement>('.lightink-library-tag-add')!.click();
+    await settle();
+    let dialog = tagDialogOf();
+    dialog.querySelector<HTMLInputElement>('input[name="tagName"]')!.value = '   ';
+    dialog
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(deps.notify).toHaveBeenCalledWith('标签名称长度必须为 1 至 80 个字符', 'error');
+    expect(library.createTag).not.toHaveBeenCalled();
+    dialog.querySelector<HTMLButtonElement>('[data-tag-editor-action="cancel"]')!.click();
+    await settle();
+
+    vi.mocked(library.renameTag!).mockRejectedValueOnce('标签名称已存在');
+    expandNavSection(host, 'tags');
+    shownButtonWithText(host, '全部标签').click();
+    const index = document.querySelector<HTMLElement>('[data-tag-index="page"]')!;
+    shownButtonWithText(index, '重命名标签').click();
+    await settle();
+    dialog = tagDialogOf();
+    dialog.querySelector<HTMLInputElement>('input[name="tagName"]')!.value = '历史';
+    dialog
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(deps.notify).toHaveBeenCalledWith('标签名称已存在', 'error');
+    expect(tagNavButton(host, '科幻')).toBeTruthy();
+    view.destroy();
+  });
 });
 
 describe('LibraryView remove from library', () => {

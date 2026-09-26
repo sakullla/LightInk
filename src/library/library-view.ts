@@ -280,6 +280,7 @@ interface Labels {
   deleteTag: string;
   deleteTagConfirm: string;
   tagName: string;
+  tagNameInvalid: string;
   saveTags: string;
   manageTags: string;
   removeTag: string;
@@ -470,6 +471,7 @@ const LABELS: Record<Locale, Labels> = {
     deleteTag: 'Delete tag',
     deleteTagConfirm: 'Delete “{name}”? Books stay in the library; only the tag links are removed.',
     tagName: 'Tag name',
+    tagNameInvalid: 'Tag names must be 1 to 80 characters.',
     saveTags: 'Save tags',
     manageTags: 'Edit tags',
     removeTag: 'Remove tag',
@@ -658,6 +660,7 @@ const LABELS: Record<Locale, Labels> = {
     deleteTag: '删除标签',
     deleteTagConfirm: '删除“{name}”？书籍仍保留在书库，仅移除标签关系。',
     tagName: '标签名称',
+    tagNameInvalid: '标签名称长度必须为 1 至 80 个字符',
     saveTags: '保存标签',
     manageTags: '编辑标签',
     removeTag: '移除标签',
@@ -1015,6 +1018,9 @@ function formatReadingClock(clock: number, locale: Locale): string {
 }
 
 function errorText(error: unknown, fallback: string): string {
+  if (typeof error === 'string' && error.trim() !== '') {
+    return isTransportError(error) ? fallback : error;
+  }
   let message = '';
   if (error !== null && typeof error === 'object') {
     const value = error as Record<string, unknown>;
@@ -2635,7 +2641,11 @@ export function createLibraryView(
 
   async function createTagFromDialog(): Promise<void> {
     const name = tagEditor.createDraft().trim();
-    if (name === '' || deps.library.createTag === undefined) return;
+    if (deps.library.createTag === undefined) return;
+    if (name === '') {
+      deps.notify(labels().tagNameInvalid, 'error');
+      return;
+    }
     try {
       const created = await deps.library.createTag(name);
       mergeTag(created);
@@ -2682,7 +2692,11 @@ export function createLibraryView(
     }
     const name = tagEditor.nameValue().trim();
     if (mode.kind === 'create') {
-      if (name === '' || deps.library.createTag === undefined) return;
+      if (deps.library.createTag === undefined) return;
+      if (name === '') {
+        deps.notify(labels().tagNameInvalid, 'error');
+        return;
+      }
       try {
         const created = await deps.library.createTag(name);
         mergeTag(created);
@@ -2695,7 +2709,11 @@ export function createLibraryView(
       return;
     }
     if (mode.kind === 'rename') {
-      if (name === '' || deps.library.renameTag === undefined) return;
+      if (deps.library.renameTag === undefined) return;
+      if (name === '') {
+        deps.notify(labels().tagNameInvalid, 'error');
+        return;
+      }
       try {
         const renamed = await deps.library.renameTag(mode.tagId, name);
         mergeTag(renamed);
