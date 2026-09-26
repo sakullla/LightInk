@@ -1090,6 +1090,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     const setModeMenuOpen = (open: boolean): void => {
       modeMenu.hidden = !open;
       modeTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        modeButtons.get(permissionMode)?.focus();
+      }
     };
     const modeButtons = new Map<AssistantPermissionMode, HTMLButtonElement>();
     const paintMode = (): void => {
@@ -1104,6 +1107,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       }
       modeTriggerLabel.textContent = t(permissionModeLabel(permissionMode));
     };
+    const selectMode = (mode: AssistantPermissionMode, focus = false): void => {
+      if (permissionMode !== mode) {
+        permissionMode = mode;
+        saveAssistantPermissionMode(permissionStorage(), mode);
+      }
+      paintMode();
+      if (focus) {
+        modeButtons.get(mode)?.focus();
+      }
+    };
     for (const mode of ASSISTANT_PERMISSION_MODES) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1114,11 +1127,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       button.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (permissionMode !== mode) {
-          permissionMode = mode;
-          saveAssistantPermissionMode(permissionStorage(), mode);
-          paintMode();
-        }
+        selectMode(mode);
         setModeMenuOpen(false);
       });
       modeButtons.set(mode, button);
@@ -1129,11 +1138,34 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       event.stopPropagation();
       setModeMenuOpen(modeMenu.hidden);
     });
+    // ARIA radiogroup 键盘契约:方向键在选项间移动并选中(环绕),Home/End 跳首尾。
     modeMenu.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         setModeMenuOpen(false);
         modeTrigger.focus();
+        return;
       }
+      const modes = ASSISTANT_PERMISSION_MODES;
+      const current = modes.findIndex((mode) => modeButtons.get(mode) === document.activeElement);
+      if (current < 0) {
+        return;
+      }
+      let next = -1;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+        next = (current + 1) % modes.length;
+      } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+        next = (current + modes.length - 1) % modes.length;
+      } else if (event.key === 'Home') {
+        next = 0;
+      } else if (event.key === 'End') {
+        next = modes.length - 1;
+      }
+      if (next < 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      selectMode(modes[next]!, true);
     });
     // 点击菜单外即收起:挂在 document 捕获阶段——面板 root 的 pointerdown
     // stopPropagation 只挡冒泡,捕获监听照样收到面板内外的按下;destroy 时移除。

@@ -814,6 +814,47 @@ describe('createAssistantPanel composer redesign (R4/R5)', () => {
     expect(panel.element.querySelectorAll('[data-assistant-mode]').length).toBe(0);
     panel.destroy();
   });
+
+  it('navigates the permission menu with arrow keys, wrapping and selecting', async () => {
+    const storage = memoryStorage();
+    const { panel } = mountPanel({ showPermissionMode: true, permissionStorage: storage });
+    panel.open();
+    await flush();
+    const trigger = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-mode-trigger',
+    )!;
+    const menu = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-mode-menu',
+    )!;
+    const options = [
+      ...panel.element.querySelectorAll<HTMLButtonElement>('[data-assistant-mode]'),
+    ];
+    const press = (key: string): void => {
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    };
+
+    trigger.click();
+    expect(document.activeElement).toBe(options[0]);
+    press('ArrowDown');
+    expect(document.activeElement).toBe(options[1]);
+    expect(storage.getItem(ASSISTANT_PERMISSION_MODE_KEY)).toBe('auto');
+    expect(options[1]?.getAttribute('aria-checked')).toBe('true');
+    press('ArrowDown');
+    press('ArrowDown');
+    expect(document.activeElement).toBe(options[0]);
+    expect(storage.getItem(ASSISTANT_PERMISSION_MODE_KEY)).toBe('review');
+    press('ArrowUp');
+    expect(document.activeElement).toBe(options[2]);
+    expect(storage.getItem(ASSISTANT_PERMISSION_MODE_KEY)).toBe('yolo');
+    press('Home');
+    expect(document.activeElement).toBe(options[0]);
+    press('End');
+    expect(document.activeElement).toBe(options[2]);
+    press('Escape');
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(trigger);
+    panel.destroy();
+  });
 });
 
 describe('createAssistantPanel minimal typographic flow (T4)', () => {
