@@ -103,11 +103,13 @@ import type { ReaderTarget, RemoteReaderTarget } from './reader/sources/types.js
 import { readerLoadErrorDetail } from './reader/error-message.js';
 import { markdownAnnotationKey } from './reader/document-hash.js';
 import {
-  mountReaderOverlay,
   pinFixedOverlay,
   unpinFixedOverlay,
 } from './reader/reader-chrome-panels.js';
-import type { AssistantSurfaceDeps } from './assistant/assistant-panel.js';
+import {
+  syncAssistantHostTheme,
+  type AssistantSurfaceDeps,
+} from './assistant/assistant-panel.js';
 import {
   applyReaderTheme,
   COMIC_NATIVE_WINDOW_CHROME,
@@ -122,7 +124,12 @@ import {
   applyReaderDocumentLayout,
   loadReaderLayout,
 } from './reader/reader-layout.js';
-import { applyLibraryTheme, libraryNativeWindowChrome, loadLibraryTheme } from './library/library-theme.js';
+import {
+  adoptLibraryOverlayTheme,
+  applyLibraryTheme,
+  libraryNativeWindowChrome,
+  loadLibraryTheme,
+} from './library/library-theme.js';
 import { resetWindowTitlebarTheme } from './ui/window-titlebar.js';
 import { loadReaderTypography, nextReaderFontScaleStep } from './reader/reader-typography.js';
 import { TabManager, isMarkdownTab } from './tabs/tab-manager.js';
@@ -3084,17 +3091,33 @@ function ensureLibraryView(): LibraryView {
 // 两处入口与阅读器助手共用同一面板 core；会话按上下文键持久化（书库固定键 /
 // 文档标注身份键），互不串话。surface 几何复用阅读器浮层范式（portal 到 body +
 // 钉编辑区右缘）。
-const assistantOverlaySurface: AssistantSurfaceDeps = {
-  mount: (panel, host) => mountReaderOverlay(panel, host),
-  pin: (panel, host) => {
-    const pane =
-      typeof host.closest === 'function'
-        ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
-        : host;
-    pinFixedOverlay(panel, pane);
-  },
-  unpin: (panel) => unpinFixedOverlay(panel),
-};
+function mountAssistantOverlay(
+  panel: HTMLElement,
+  host: HTMLElement,
+  adopt: (panel: HTMLElement, host: HTMLElement) => void,
+): void {
+  adopt(panel, host);
+  const layer = host.ownerDocument?.body ?? document.body;
+  if (panel.parentNode !== layer) {
+    layer.appendChild(panel);
+  }
+}
+
+function assistantOverlaySurface(
+  adopt: (panel: HTMLElement, host: HTMLElement) => void,
+): AssistantSurfaceDeps {
+  return {
+    mount: (panel, host) => mountAssistantOverlay(panel, host, adopt),
+    pin: (panel, host) => {
+      const pane =
+        typeof host.closest === 'function'
+          ? (host.closest<HTMLElement>('#lightink-editor-area') ?? host)
+          : host;
+      pinFixedOverlay(panel, pane);
+    },
+    unpin: (panel) => unpinFixedOverlay(panel),
+  };
+}
 
 const assistantHistoryIo = {
   readHistory: (key: string) =>
@@ -3131,7 +3154,7 @@ function ensureShelfAssistant(): ShelfAssistant {
       void libraryView?.refresh();
       applicationStateSync?.schedule();
     },
-    surface: assistantOverlaySurface,
+    surface: assistantOverlaySurface(adoptLibraryOverlayTheme),
     openExternalLink: openExternalAssistantLink,
   });
   return shelfAssistant;
@@ -3175,7 +3198,7 @@ function ensureEditorAssistant(): EditorAssistant {
       };
     },
     ...assistantHistoryIo,
-    surface: assistantOverlaySurface,
+    surface: assistantOverlaySurface(syncAssistantHostTheme),
     openExternalLink: openExternalAssistantLink,
   });
   return editorAssistant;

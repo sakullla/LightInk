@@ -355,50 +355,55 @@ describe('save_to_book', () => {
     expect(appendAnnotation).not.toHaveBeenCalled();
   });
 
-  it('saves a highlight from live selection after confirm', async () => {
+  it('keeps a highlight pending in review until confirmPending, without the dialog', async () => {
     const appendAnnotation = vi.fn();
+    const confirm = vi.fn(async () => true);
     const locator: Locator = { ...FLOW_LOCATOR, start: 4, end: 8, quote: '选区' };
-    const result = await createAssistantToolSession(
+    const session = createAssistantToolSession(
       deps({
         appendAnnotation,
+        confirm,
         selection: () => ({ quote: '选区', locator }),
+        permissionMode: 'review',
       }),
-    ).execute('save_to_book', { kind: 'highlight' });
-    expect(result).toMatchObject({ ok: true, saved: true, kind: 'highlight', quote: '选区' });
+    );
+    const result = await session.execute('save_to_book', { kind: 'highlight' });
+    expect(result.pending_confirmation).toHaveLength(1);
+    expect(result.pending_confirmation?.[0]?.summary).toContain('选区');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(appendAnnotation).not.toHaveBeenCalled();
+    const saved = await session.confirmPending!(result.pending_confirmation![0]!.id);
+    expect(saved).toMatchObject({ ok: true, saved: true, kind: 'highlight', quote: '选区' });
     expect(appendAnnotation).toHaveBeenCalledWith('highlight', locator, '选区', undefined);
   });
 
-  it('saves a bookmark without a selection', async () => {
+  it('writes a bookmark immediately in yolo and does not open a card', async () => {
     const appendAnnotation = vi.fn();
+    const confirm = vi.fn();
     const result = await createAssistantToolSession(
-      deps({ appendAnnotation, selection: () => null }),
+      deps({ appendAnnotation, confirm, selection: () => null, permissionMode: 'yolo' }),
     ).execute('save_to_book', { kind: 'bookmark' });
     expect(result).toMatchObject({ ok: true, saved: true, kind: 'bookmark' });
+    expect(result.pending_confirmation).toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
     expect(appendAnnotation).toHaveBeenCalledWith('bookmark', FLOW_LOCATOR, undefined, undefined);
   });
 
-  it('does not write when confirm is rejected', async () => {
+  it('does not write a note in auto until the card is confirmed', async () => {
     const appendAnnotation = vi.fn();
     const confirm = vi.fn(async () => false);
-    const result = await createAssistantToolSession(deps({ appendAnnotation, confirm })).execute(
-      'save_to_book',
-      { kind: 'note', note: '旁注' },
+    const session = createAssistantToolSession(
+      deps({ appendAnnotation, confirm, permissionMode: 'auto' }),
     );
-    expect(result.ok).toBe(false);
-    expect(result.rejected).toBe(true);
-    expect(result.error).toBe('rejected');
-    expect(confirm).toHaveBeenCalledWith({ kind: 'note', note: '旁注' });
+    const result = await session.execute('save_to_book', { kind: 'note', note: '旁注' });
+    expect(result.pending).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
     expect(appendAnnotation).not.toHaveBeenCalled();
-  });
-
-  it('writes a note after confirm using the current locator', async () => {
-    const appendAnnotation = vi.fn();
-    const result = await createAssistantToolSession(deps({ appendAnnotation })).execute(
-      'save_to_book',
-      JSON.stringify({ kind: 'note', note: '摘要' }),
-    );
-    expect(result).toMatchObject({ ok: true, saved: true, kind: 'note', note: '摘要' });
-    expect(appendAnnotation).toHaveBeenCalledWith('note', FLOW_LOCATOR, undefined, '摘要');
+    const bypass = await session.execute('save_to_book', result.pending_confirmation?.[0]?.arguments);
+    expect(bypass).toMatchObject({ ok: false, error: 'invalid_args' });
+    const saved = await session.confirmPending!(result.pending_confirmation![0]!.id);
+    expect(saved).toMatchObject({ ok: true, saved: true, kind: 'note', note: '旁注' });
+    expect(appendAnnotation).toHaveBeenCalledWith('note', FLOW_LOCATOR, undefined, '旁注');
   });
 });
 

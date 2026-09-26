@@ -5,8 +5,9 @@
  *
  * - 五类工具定义与执行同源；session 可被面板当 `AssistantToolSession` 消费。
  * - 查询：按书名/作者/分组/标签/格式/阅读状态过滤，只读不写。
- * - 显式指令（祈使 + 目标被点名）直写；主动建议进 `pending_confirmation`，
+ * - 自动模式：显式指令（祈使 + 目标被点名）直写；主动建议进 `pending_confirmation`，
  *   确认前书库零变化，确认只走面板专用 `confirmPending(id)` 且只写一次；
+ *   测试夹具缺省 `permissionMode: 'auto'`，以保住这条门。生产缺省是审阅。
  *   `execute` 携带 `pending_ref` 一律拒绝，模型无法自执行确认。
  * - 删除书籍、删除分组、清空标签一律确认。
  * - 同名多本/同名分组返回候选不猜测；智能组只读。
@@ -15,6 +16,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AssistantPermissionMode } from '../assistant-permission.js';
 import type { AssistantToolSession } from '../assistant-tools.js';
 import type {
   LibraryBookCandidate,
@@ -108,6 +110,9 @@ interface HarnessOptions {
   readonly tags?: readonly LibraryTag[];
   readonly tagMembers?: readonly LibraryTagMembership[];
   readonly userMessage?: string;
+  /** 缺省 auto，对应「显式可逆写入直写」的旧门。生产缺省是 review。 */
+  readonly permissionMode?: AssistantPermissionMode;
+  readonly suggestionTurn?: boolean;
   readonly isExplicitInstruction?: (message: string) => boolean;
   readonly readingStatusOf?: (itemId: string) => LibraryReadingStatus | null;
   /** 指定成员关系读取在会话创建前注入 reject（验证「读取失败不落状态」）。 */
@@ -228,6 +233,8 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     locate: async (query) => fakeLocate(state.items, query),
     userMessage: options.userMessage ?? '',
+    permissionMode: options.permissionMode ?? 'auto',
+    suggestionTurn: options.suggestionTurn === true,
     ...(options.isExplicitInstruction !== undefined
       ? { isExplicitInstruction: options.isExplicitInstruction }
       : {}),
@@ -1278,6 +1285,183 @@ describe('批量写失败补偿与报告', () => {
     expect(h.state.tags).toEqual([]);
     expect(h.state.tagMembers).toEqual([]);
     expect(h.changed).not.toHaveBeenCalled();
+  });
+});
+
+describe('权限模式与未处理新书', () => {
+  const sciFi = { id: 'g1', name: '科幻', kind: 'custom' as const, sortOrder: 1 };
+
+  it('审阅模式下点名归类也只进待确认，确认前不写', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [sciFi],
+      userMessage: '把《三体》归到科幻',
+      permissionMode: 'review',
+    });
+    const result = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(result.pending).toBe(true);
+    expect(h.writes.setGroupMember).not.toHaveBeenCalled();
+    const pending = result.pending_confirmation?.[0];
+    const confirmed = await h.session.confirmPending(pending!.id);
+    expect(confirmed.ok).toBe(true);
+    expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('自动模式只直写当前句点名的归类，夹带的标签仍待确认', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      groups: [sciFi],
+      userMessage: '把《三体》归到科幻',
+      permissionMode: 'auto',
+    });
+    const organized = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(organized.pending_confirmation).toBeUndefined();
+    expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
+    const tagged = await h.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['三体'],
+      mode: 'add',
+      tags: ['经典'],
+    });
+    expect(tagged.pending).toBe(true);
+    expect(h.writes.setItemTags).not.toHaveBeenCalled();
+  });
+
+  it('自动模式下删除和主动建议仍待确认', async () => {
+    const removed = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '删掉《三体》',
+      permissionMode: 'auto',
+    });
+    const deletion = await removed.session.execute(LIBRARY_REMOVE_TOOL_NAME, {
+      kind: 'book',
+      books: ['三体'],
+    });
+    expect(deletion.pending).toBe(true);
+    expect(removed.writes.removeItem).not.toHaveBeenCalled();
+
+    const suggested = harness({
+      items: [book({ id: 'b', title: '活着' })],
+      groups: [sciFi],
+      userMessage: '帮我看看书库',
+      permissionMode: 'auto',
+      suggestionTurn: true,
+    });
+    const suggestion = await suggested.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['活着'],
+      group: '科幻',
+    });
+    expect(suggestion.pending).toBe(true);
+    expect(suggested.writes.setGroupMember).not.toHaveBeenCalled();
+  });
+
+  it('YOLO 直接删除，且不出现待确认', async () => {
+    const h = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      userMessage: '删掉《三体》',
+      permissionMode: 'yolo',
+    });
+    const result = await h.session.execute(LIBRARY_REMOVE_TOOL_NAME, {
+      kind: 'book',
+      books: ['三体'],
+    });
+    expect(result.pending_confirmation).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(h.writes.removeItem).toHaveBeenCalledWith('a');
+  });
+
+  it('主动整理跳过已分组或已打标的书；重新整理或点名后才纳入', async () => {
+    const grouped = book({ id: 'a', title: '三体' });
+    const tagged = book({ id: 'b', title: '活着' });
+    const fresh = book({ id: 'c', title: '流浪地球' });
+    const base = {
+      items: [grouped, tagged, fresh],
+      groups: [sciFi, { id: 's1', name: '最近阅读', kind: 'smart' as const, sortOrder: 2 }],
+      groupMembers: [
+        { groupId: 'g1', itemId: 'a' },
+        { groupId: 's1', itemId: 'c' },
+      ],
+      tags: [{ id: 't1', name: '文学', createdAt: 1, updatedAt: 1 }],
+      tagMembers: [{ tagId: 't1', itemId: 'b' }],
+      permissionMode: 'auto' as const,
+    };
+    const skipped = harness({ ...base, userMessage: '帮我整理一下书库' });
+    const skippedResult = await skipped.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着', '流浪地球'],
+      group: '科幻',
+    });
+    expect(skippedResult.pending).toBe(true);
+    expect(skippedResult.pending_confirmation?.[0]?.summary).toContain('《流浪地球》');
+    expect(skippedResult.pending_confirmation?.[0]?.summary).not.toContain('《三体》');
+    expect(skippedResult.pending_confirmation?.[0]?.summary).not.toContain('《活着》');
+
+    const none = harness({
+      ...base,
+      items: [grouped, tagged],
+      userMessage: '帮我整理一下书库',
+    });
+    const empty = await none.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着'],
+      group: '新组',
+    });
+    expect(empty).toMatchObject({ ok: true, message: '没有新书需要处理。' });
+    expect(empty.pending_confirmation).toBeUndefined();
+    expect(none.writes.createGroup).not.toHaveBeenCalled();
+    expect(none.writes.setGroupMember).not.toHaveBeenCalled();
+
+    const named = harness({ ...base, userMessage: '把《三体》归到科幻' });
+    const namedResult = await named.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体'],
+      group: '科幻',
+    });
+    expect(namedResult.pending_confirmation).toBeUndefined();
+    expect(named.writes.setGroupMember).toHaveBeenCalledWith('g1', 'a', true);
+
+    const again = harness({ ...base, userMessage: '请重新整理这些书' });
+    const againResult = await again.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['三体', '活着'],
+      group: '科幻',
+    });
+    expect(againResult.pending).toBe(true);
+    expect(againResult.pending_confirmation?.[0]?.summary).toContain('《三体》');
+    expect(againResult.pending_confirmation?.[0]?.summary).toContain('《活着》');
+  });
+
+  it('清空标签和超过 50 本不走新书过滤，超限不写盘', async () => {
+    const cleared = harness({
+      items: [book({ id: 'a', title: '三体' })],
+      tags: [{ id: 't1', name: '科幻', createdAt: 1, updatedAt: 1 }],
+      tagMembers: [{ tagId: 't1', itemId: 'a' }],
+      userMessage: '清空这些书的标签',
+      permissionMode: 'auto',
+    });
+    const clearResult = await cleared.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['三体'],
+      mode: 'clear',
+    });
+    expect(clearResult.pending).toBe(true);
+    expect(clearResult.message).not.toBe('没有新书需要处理。');
+
+    const books = Array.from({ length: 51 }, (_, index) =>
+      book({ id: `b${index}`, title: `书${index}` }),
+    );
+    const huge = harness({
+      items: books,
+      userMessage: '把这些书归到科幻',
+      permissionMode: 'yolo',
+    });
+    const tooMany = await huge.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: books.map((item) => item.title),
+      group: '科幻',
+    });
+    expect(tooMany).toMatchObject({ ok: false, error: 'batch_too_large' });
+    expect(huge.writes.createGroup).not.toHaveBeenCalled();
+    expect(huge.writes.setGroupMember).not.toHaveBeenCalled();
   });
 });
 

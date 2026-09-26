@@ -12,6 +12,13 @@ import './assistant-panel.css';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { MessageKey } from '../i18n/messages.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
+import {
+  ASSISTANT_PERMISSION_MODES,
+  loadAssistantPermissionMode,
+  saveAssistantPermissionMode,
+  type AssistantPermissionMode,
+  type AssistantPermissionStorage,
+} from './assistant-permission.js';
 import { READER_LIMITS } from '../reader/reader-limits.js';
 import {
   ASSISTANT_AI_CONFIGURED_EVENT,
@@ -61,12 +68,78 @@ import {
 /** 快捷动作（选区解释/总结由工具栏触发；其余是面板动作区按钮）。 */
 export type AssistantQuickAction = AssistantHistoryAction;
 
-/** 面板内动作区按钮（以当前章为上下文）。 */
+/** 面板内动作区按钮（以当前章为上下文）。阅读器与编辑器的缺省动作。 */
 export const ASSISTANT_PANEL_ACTIONS: readonly AssistantQuickAction[] = [
   'chapterSummary',
   'vocabulary',
   'quiz',
 ];
+
+/** 某一表面传入的快捷动作。书架用整理/打标/查找，且不依赖当前章。 */
+export interface AssistantPanelAction {
+  readonly id: string;
+  readonly label: string;
+  readonly prompt: string;
+  /** 没有章节或文档正文时禁用。 */
+  readonly requiresContext: boolean;
+  /** 这一轮是主动建议，不按显式写指令直写。 */
+  readonly suggestion?: boolean;
+  /** 写入历史的动作；书架动作不进历史枚举。 */
+  readonly historyAction?: AssistantQuickAction;
+}
+
+/** 本轮工具会话的额外语义（主动建议 vs 用户原句）。 */
+export interface AssistantToolTurn {
+  readonly suggestion: boolean;
+}
+
+const ASSISTANT_THEME_VARS = [
+  '--lightink-bg',
+  '--lightink-bg-elevated',
+  '--lightink-fg',
+  '--lightink-accent-ink',
+  '--lightink-muted',
+  '--lightink-border',
+  '--lightink-accent',
+  '--lightink-accent-soft',
+  '--lightink-overlay',
+  '--lightink-shadow',
+  '--lightink-danger',
+] as const;
+
+/**
+ * 把当前宿主的表面令牌抄到浮层上。不把强调色改写成正文色：宿主没有强调色时
+ * 保留其计算值，而不是改成 `--lightink-fg`。
+ */
+export function syncAssistantHostTheme(overlay: HTMLElement, host: HTMLElement): void {
+  if (typeof getComputedStyle !== 'function') {
+    return;
+  }
+  const style = getComputedStyle(host);
+  for (const name of ASSISTANT_THEME_VARS) {
+    const value = style.getPropertyValue(name).trim();
+    if (value !== '') {
+      overlay.style.setProperty(name, value);
+    }
+  }
+  if (host.dataset.libraryTheme !== undefined && host.dataset.libraryTheme !== '') {
+    overlay.dataset.libraryTheme = host.dataset.libraryTheme;
+  } else {
+    delete overlay.dataset.libraryTheme;
+  }
+  if (host.dataset.readerTheme !== undefined && host.dataset.readerTheme !== '') {
+    overlay.dataset.readerTheme = host.dataset.readerTheme;
+  } else {
+    delete overlay.dataset.readerTheme;
+  }
+  if (style.color !== '') {
+    overlay.style.color = style.color;
+  }
+  const colorScheme = style.colorScheme?.trim() ?? '';
+  if (colorScheme !== '') {
+    overlay.style.colorScheme = colorScheme;
+  }
+}
 
 /** 同一条用户发送内的工具往返上限（ADR-2 / R6）。 */
 export const ASSISTANT_MAX_TOOL_ROUNDS = 24;
@@ -83,6 +156,8 @@ interface AssistantToolBlock {
 interface PanelMessage extends AssistantHistoryMessage {
   readonly toolBlocks?: readonly AssistantToolBlock[];
   readonly toolLimitReached?: boolean;
+  /** 主动建议轮：不按显式写指令直写。不写入历史 schema。 */
+  readonly suggestionTurn?: boolean;
 }
 
 /** `ai_chat_stream` 经 Channel 推送的事件（snake_case tag 与 ai.rs 钉死）。 */
@@ -402,6 +477,8 @@ interface PendingConfirmationEntry {
   readonly item: AssistantPendingConfirmation;
   readonly session: AssistantToolSession;
   status: 'pending' | 'confirmed' | 'rejected';
+  /** 全部确认时仍勾选才执行；去掉的条目标成拒绝。 */
+  included: boolean;
   error?: string;
 }
 
@@ -594,9 +671,19 @@ export interface AssistantPanelDeps {
   currentPage?: () => number | undefined;
   /**
    * 前端工具循环的执行会话；缺省则 tool_call 回失败结果。入参为本轮用户消息
-   * （surface 据此判定“显式写指令直写、主动建议待确认”）。
+   * 与是否为主动建议（surface 据此选择权限门）。
    */
-  createToolSession?: (userMessage: string) => AssistantToolSession;
+  createToolSession?: (userMessage: string, turn?: AssistantToolTurn) => AssistantToolSession;
+  /** 快捷动作。缺省是本章摘要、生词卡、章节测验。 */
+  actions?: readonly AssistantPanelAction[];
+  /** 动作区的无障碍名称。缺省 `reader.assistant.actions`。 */
+  actionsLabel?: string;
+  /** 书架和阅读器显示审阅/自动/YOLO。编辑器不显示。 */
+  showPermissionMode?: boolean;
+  /** 权限模式存储。缺省在显示开关时读 `localStorage`。 */
+  permissionStorage?: AssistantPermissionStorage | null;
+  /** 引用选区。书架没有选区，传 false。缺省显示。 */
+  showQuote?: boolean;
   /** 回答中的章节/页码定位点击（用户操作，不由工具翻页）。 */
   jumpToLocator?: (target: { chapter?: number; page?: number; title?: string }) => void;
   /** 助手 Markdown 外链（沿用应用外部打开策略）。 */
@@ -612,6 +699,17 @@ export interface AssistantPanel {
   /** 选区快捷动作入口（工具栏「解释/总结」）：打开面板并发起。 */
   askWithSelection(action: 'explain' | 'summarize', quote: string): void;
   destroy(): void;
+}
+
+function permissionModeLabel(mode: AssistantPermissionMode): MessageKey {
+  switch (mode) {
+    case 'review':
+      return 'reader.assistant.permissionMode.review';
+    case 'auto':
+      return 'reader.assistant.permissionMode.auto';
+    case 'yolo':
+      return 'reader.assistant.permissionMode.yolo';
+  }
 }
 
 function assistantActionLabelKey(action: AssistantQuickAction): MessageKey {
@@ -699,6 +797,60 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   historyToggle.setAttribute('aria-expanded', 'false');
   head.prepend(historyToggle);
   head.append(title, close);
+  const permissionStorage = (): AssistantPermissionStorage | null => {
+    if (deps.permissionStorage !== undefined) {
+      return deps.permissionStorage;
+    }
+    if (deps.showPermissionMode !== true) {
+      return null;
+    }
+    try {
+      return globalThis.localStorage;
+    } catch {
+      return null;
+    }
+  };
+  let permissionMode: AssistantPermissionMode = loadAssistantPermissionMode(permissionStorage());
+  if (deps.showPermissionMode === true) {
+    const modeGroup = document.createElement('div');
+    modeGroup.className = 'lightink-reader-assistant-modes';
+    modeGroup.setAttribute('role', 'radiogroup');
+    modeGroup.setAttribute('aria-label', t('reader.assistant.permissionMode'));
+    const modeButtons = new Map<AssistantPermissionMode, HTMLButtonElement>();
+    const paintMode = (): void => {
+      for (const mode of ASSISTANT_PERMISSION_MODES) {
+        const button = modeButtons.get(mode);
+        if (button === undefined) {
+          continue;
+        }
+        const selected = mode === permissionMode;
+        button.setAttribute('aria-checked', selected ? 'true' : 'false');
+        button.tabIndex = selected ? 0 : -1;
+      }
+    };
+    for (const mode of ASSISTANT_PERMISSION_MODES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'lightink-reader-assistant-mode';
+      button.dataset.assistantMode = mode;
+      button.setAttribute('role', 'radio');
+      button.textContent = t(permissionModeLabel(mode));
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (permissionMode === mode) {
+          return;
+        }
+        permissionMode = mode;
+        saveAssistantPermissionMode(permissionStorage(), mode);
+        paintMode();
+      });
+      modeButtons.set(mode, button);
+      modeGroup.appendChild(button);
+    }
+    paintMode();
+    head.insertBefore(modeGroup, close);
+  }
 
   const historyPane = document.createElement('div');
   historyPane.className = 'lightink-reader-assistant-history';
@@ -756,26 +908,48 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   pendingTitle.textContent = t('reader.assistant.pendingTitle');
   const pendingList = document.createElement('ul');
   pendingList.className = 'lightink-reader-assistant-pending-list';
-  pendingSection.append(pendingTitle, pendingList);
+  const pendingBar = document.createElement('div');
+  pendingBar.className = 'lightink-reader-assistant-pending-bar';
+  const confirmAllButton = document.createElement('button');
+  confirmAllButton.type = 'button';
+  confirmAllButton.className = 'lightink-reader-assistant-pending-confirm';
+  confirmAllButton.dataset.assistantPendingConfirmAll = 'true';
+  confirmAllButton.textContent = t('reader.assistant.pendingConfirmAll');
+  const rejectAllButton = document.createElement('button');
+  rejectAllButton.type = 'button';
+  rejectAllButton.className = 'lightink-reader-assistant-pending-reject';
+  rejectAllButton.dataset.assistantPendingRejectAll = 'true';
+  rejectAllButton.textContent = t('reader.assistant.pendingRejectAll');
+  pendingBar.append(confirmAllButton, rejectAllButton);
+  pendingSection.append(pendingTitle, pendingList, pendingBar);
 
+  const panelActions: readonly AssistantPanelAction[] =
+    deps.actions ??
+    ASSISTANT_PANEL_ACTIONS.map((action) => ({
+      id: action,
+      label: t(assistantActionLabelKey(action)),
+      prompt: t(assistantPromptKey(action)),
+      requiresContext: true,
+      historyAction: action,
+    }));
   const actions = document.createElement('div');
   actions.className = 'lightink-reader-assistant-actions';
   actions.setAttribute('role', 'group');
-  actions.setAttribute('aria-label', t('reader.assistant.actions'));
-  const actionButtons = new Map<AssistantQuickAction, HTMLButtonElement>();
-  for (const action of ASSISTANT_PANEL_ACTIONS) {
+  actions.setAttribute('aria-label', deps.actionsLabel ?? t('reader.assistant.actions'));
+  const actionButtons = new Map<string, HTMLButtonElement>();
+  for (const action of panelActions) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'lightink-reader-assistant-action';
-    button.dataset.assistantAction = action;
-    button.textContent = t(assistantActionLabelKey(action));
+    button.dataset.assistantAction = action.id;
+    button.textContent = action.label;
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      runQuickAction(action);
+      runPanelAction(action);
     });
     actions.appendChild(button);
-    actionButtons.set(action, button);
+    actionButtons.set(action.id, button);
   }
 
   const composer = document.createElement('form');
@@ -820,6 +994,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   quoteChipClear.setAttribute('aria-label', t('reader.assistant.quoteRemove'));
   quoteChipClear.setAttribute('title', t('reader.assistant.quoteRemove'));
   quoteChip.append(quoteChipLabel, quoteChipText, quoteChipClear);
+  if (deps.showQuote === false) {
+    quoteButton.hidden = true;
+  }
   composerBar.append(quoteButton, send, stop);
   composerBox.append(quoteChip, input, composerBar);
   const composerHint = document.createElement('p');
@@ -860,6 +1037,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let attachedQuote = '';
   /** 待确认写操作队列：未确认前不落盘；确认后回调产生建议的同一执行器。 */
   const pendingQueue: PendingConfirmationEntry[] = [];
+  let pendingBusy = false;
 
   const chapterContextOrNull = (): AssistantChapterContext | null => {
     try {
@@ -1074,57 +1252,54 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     item.className = 'lightink-reader-assistant-pending-item';
     item.dataset.assistantPendingId = entry.item.id;
     item.dataset.status = entry.status;
-    const summary = document.createElement('p');
-    summary.className = 'lightink-reader-assistant-pending-summary';
-    summary.textContent = entry.item.summary;
-    item.appendChild(summary);
+    if (entry.status === 'pending') {
+      const row = document.createElement('label');
+      row.className = 'lightink-reader-assistant-pending-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'lightink-reader-assistant-pending-check';
+      checkbox.dataset.assistantPendingCheck = entry.item.id;
+      checkbox.checked = entry.included;
+      checkbox.setAttribute('aria-label', t('reader.assistant.pendingInclude'));
+      checkbox.addEventListener('change', () => {
+        entry.included = checkbox.checked;
+      });
+      const summary = document.createElement('span');
+      summary.className = 'lightink-reader-assistant-pending-summary';
+      summary.textContent = entry.item.summary;
+      row.append(checkbox, summary);
+      item.appendChild(row);
+    } else {
+      const summary = document.createElement('p');
+      summary.className = 'lightink-reader-assistant-pending-summary';
+      summary.textContent = entry.item.summary;
+      item.appendChild(summary);
+      const status = document.createElement('p');
+      status.className = 'lightink-reader-assistant-pending-status';
+      status.dataset.assistantPendingStatus = entry.status;
+      status.textContent =
+        entry.status === 'confirmed'
+          ? t('reader.assistant.pendingConfirmed')
+          : t('reader.assistant.pendingRejected');
+      item.appendChild(status);
+    }
     if (entry.error !== undefined && entry.error !== '') {
       const error = document.createElement('p');
       error.className = 'lightink-reader-assistant-pending-error';
       error.textContent = entry.error;
       item.appendChild(error);
     }
-    if (entry.status === 'pending') {
-      const actions = document.createElement('div');
-      actions.className = 'lightink-reader-assistant-pending-actions';
-      const confirmButton = document.createElement('button');
-      confirmButton.type = 'button';
-      confirmButton.className = 'lightink-reader-assistant-pending-confirm';
-      confirmButton.dataset.assistantPendingConfirm = entry.item.id;
-      confirmButton.textContent = t('reader.assistant.pendingConfirm');
-      confirmButton.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void resolvePending(entry, true);
-      });
-      const rejectButton = document.createElement('button');
-      rejectButton.type = 'button';
-      rejectButton.className = 'lightink-reader-assistant-pending-reject';
-      rejectButton.dataset.assistantPendingReject = entry.item.id;
-      rejectButton.textContent = t('reader.assistant.pendingReject');
-      rejectButton.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void resolvePending(entry, false);
-      });
-      actions.append(confirmButton, rejectButton);
-      item.appendChild(actions);
-      return item;
-    }
-    const status = document.createElement('p');
-    status.className = 'lightink-reader-assistant-pending-status';
-    status.dataset.assistantPendingStatus = entry.status;
-    status.textContent =
-      entry.status === 'confirmed'
-        ? t('reader.assistant.pendingConfirmed')
-        : t('reader.assistant.pendingRejected');
-    item.appendChild(status);
     return item;
   };
 
   const renderPendingConfirmations = (): void => {
+    const waiting = pendingQueue.filter((entry) => entry.status === 'pending').length;
+    pendingTitle.textContent = t('reader.assistant.pendingCount', { n: String(waiting) });
     pendingSection.hidden = pendingQueue.length === 0;
     pendingList.replaceChildren(...pendingQueue.map((entry) => renderPendingItem(entry)));
+    const busy = pendingBusy;
+    confirmAllButton.disabled = busy || waiting === 0;
+    rejectAllButton.disabled = busy || waiting === 0;
   };
 
   /**
@@ -1132,20 +1307,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
    * 不可达），会话未实现时回退 `execute(tool, arguments)`；失败回到待确认并
    * 显示原因。拒绝 → 只标记该条，不调用执行器、不落盘。
    */
-  const resolvePending = async (
-    entry: PendingConfirmationEntry,
-    confirmed: boolean,
-  ): Promise<void> => {
+  const resolvePending = async (entry: PendingConfirmationEntry): Promise<void> => {
     if (entry.status !== 'pending') {
       return;
     }
-    if (!confirmed) {
-      entry.status = 'rejected';
-      entry.error = undefined;
-      renderPendingConfirmations();
-      return;
-    }
-    // 执行期间标记为已确认，重复点击不会触发第二次落盘。
     entry.status = 'confirmed';
     entry.error = undefined;
     renderPendingConfirmations();
@@ -1164,6 +1329,50 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     renderPendingConfirmations();
   };
+
+  const confirmSelected = async (): Promise<void> => {
+    if (pendingBusy) {
+      return;
+    }
+    pendingBusy = true;
+    renderPendingConfirmations();
+    const batch = pendingQueue.filter((entry) => entry.status === 'pending');
+    for (const entry of batch) {
+      if (!entry.included) {
+        entry.status = 'rejected';
+        entry.error = undefined;
+        renderPendingConfirmations();
+        continue;
+      }
+      await resolvePending(entry);
+    }
+    pendingBusy = false;
+    renderPendingConfirmations();
+  };
+
+  const rejectSelected = (): void => {
+    if (pendingBusy) {
+      return;
+    }
+    for (const entry of pendingQueue) {
+      if (entry.status !== 'pending') {
+        continue;
+      }
+      entry.status = 'rejected';
+      entry.error = undefined;
+    }
+    renderPendingConfirmations();
+  };
+  confirmAllButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void confirmSelected();
+  });
+  rejectAllButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    rejectSelected();
+  });
 
   /**
    * 工具执行结果里的待确认建议入队；按 tool+id 去重，不落盘。已确认或已拒绝
@@ -1185,11 +1394,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           if (pendingQueue[index]!.status === 'pending') {
             continue;
           }
-          pendingQueue[index] = { key, item, session, status: 'pending' };
+          pendingQueue[index] = { key, item, session, status: 'pending', included: true };
           added = true;
           continue;
         }
-        pendingQueue.push({ key, item, session, status: 'pending' });
+        pendingQueue.push({ key, item, session, status: 'pending', included: true });
         added = true;
       }
     }
@@ -1300,6 +1509,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const syncQuoteButton = (): void => {
+    if (deps.showQuote === false) {
+      quoteButton.hidden = true;
+      quoteChip.hidden = true;
+      return;
+    }
     const live = currentSelectionText();
     quoteButton.disabled = live === '' && attachedQuote.trim() === '';
     quoteButton.classList.toggle('is-ready', live !== '' && live !== attachedQuote);
@@ -1359,8 +1573,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const syncActionButtons = (): void => {
     const chapterAvailable = chapterContextOrNull() !== null;
-    for (const [action, button] of actionButtons) {
-      const noContext = action !== 'explain' && action !== 'summarize' && !chapterAvailable;
+    for (const action of panelActions) {
+      const button = actionButtons.get(action.id);
+      if (button === undefined) {
+        continue;
+      }
+      const noContext = action.requiresContext && !chapterAvailable;
       button.disabled = streaming || noContext;
       button.title = noContext ? t('reader.assistant.noChapterContext') : '';
     }
@@ -1524,7 +1742,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     let visible = '';
     let contextTruncated = false;
     let toolLimitReached = false;
-    const session = deps.createToolSession?.(userMessage) ?? null;
+    const suggestion =
+      user?.suggestionTurn === true ||
+      panelActions.some(
+        (action) => action.suggestion === true && action.prompt === userMessage.trim(),
+      );
+    const session = deps.createToolSession?.(userMessage, { suggestion }) ?? null;
     let toolRoundTrips = 0;
 
     const onDelta = (delta: string): void => {
@@ -1688,7 +1911,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   let sendGate = false;
 
-  const ask = (content: string, action?: AssistantQuickAction): boolean => {
+  const ask = (
+    content: string,
+    action?: AssistantQuickAction,
+    suggestionTurn = false,
+  ): boolean => {
     const question = content.trim();
     const quote = attachedQuote.trim();
     if ((question === '' && quote === '') || !aiConfigured || streaming || sendGate) {
@@ -1705,12 +1932,31 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         attachedQuote = '';
         renderQuoteChip();
         syncQuoteButton();
-        appendExchange({ role: 'user', content: payload, createdAt: Date.now(), action });
+        appendExchange({
+          role: 'user',
+          content: payload,
+          createdAt: Date.now(),
+          ...(action !== undefined ? { action } : {}),
+          ...(suggestionTurn ? { suggestionTurn: true } : {}),
+        });
       } finally {
         sendGate = false;
       }
     })();
     return true;
+  };
+
+  const runPanelAction = (action: AssistantPanelAction): void => {
+    if (!aiConfigured || streaming || sendGate) {
+      return;
+    }
+    if (action.requiresContext) {
+      const chapter = chapterContextOrNull();
+      if (chapter === null || chapter.text.trim() === '') {
+        return;
+      }
+    }
+    ask(action.prompt, action.historyAction, action.suggestion === true);
   };
 
   const runQuickAction = (action: AssistantQuickAction, quote?: string): void => {
@@ -1934,14 +2180,49 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     surface.unpin?.(root);
   };
 
+  let themeObserver: MutationObserver | null = null;
+
+  const syncTheme = (): void => {
+    try {
+      syncAssistantHostTheme(root, deps.host());
+    } catch {
+      // 宿主已拆掉时保留上一次抄到的令牌。
+    }
+  };
+
+  const watchTheme = (): void => {
+    themeObserver?.disconnect();
+    if (typeof MutationObserver !== 'function') {
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      if (!disposed.value && !root.hidden) {
+        syncTheme();
+      }
+    });
+    themeObserver = observer;
+    const options: MutationObserverInit = {
+      attributes: true,
+      attributeFilter: ['style', 'data-library-theme', 'data-reader-theme', 'data-theme'],
+    };
+    try {
+      observer.observe(deps.host(), options);
+    } catch {
+      // 宿主不可观察时，打开时的一次抄写仍然有效。
+    }
+    observer.observe(document.documentElement, options);
+  };
+
   const positionPanel = (): void => {
     mountPanel();
+    syncTheme();
     pinPanel();
   };
 
   const openPanel = (): void => {
     root.hidden = false;
     positionPanel();
+    watchTheme();
     void ensureHistory();
     void refreshConfig();
     applyConfiguredView();
@@ -1963,6 +2244,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     historyPane.hidden = true;
     historyToggle.setAttribute('aria-expanded', 'false');
     if (surfaceTouchMode()) {
+      themeObserver?.disconnect();
+      themeObserver = null;
       concealSheet(root, () => {
         root.hidden = true;
         unpinPanel();
@@ -1971,6 +2254,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     delete root.dataset.open;
     root.hidden = true;
+    themeObserver?.disconnect();
+    themeObserver = null;
     unpinPanel();
   };
 
@@ -2002,6 +2287,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       }
       delete root.dataset.open;
       root.hidden = true;
+      themeObserver?.disconnect();
+      themeObserver = null;
       unpinPanel();
       root.remove();
     },

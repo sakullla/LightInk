@@ -4,8 +4,9 @@
  * 桌面：portal 到 body 后经 pinFixedOverlay 钉阅读区右缘全高（几何由 JS
  * 内联 fixed 提供，此处只给宽度/层级/内部布局）。触屏：is-touch-sheet 底部
  * sheet（键盘弹起时 pinFixedOverlay 双锚定，输入区不被键盘盖住）。
- * 主题令牌由 adoptReaderOverlayTheme 从阅读根复制（--lightink-*）。
- * 颜色不写死：纸色为底、elevated 只做凸起控件，与标注侧栏同一语言。
+ * 主题令牌由 syncAssistantHostTheme 从当前宿主复制（--lightink-*），
+ * 不把强调色改写成正文色。颜色不写死：错误用 --lightink-danger，阴影用
+ * --lightink-shadow。
  */
 
 /* ===== 容器（钉位几何由 JS 内联提供） ===== */
@@ -27,8 +28,7 @@
   border-radius: var(--lightink-radius-panel);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
-    0 4px 12px rgba(0, 0, 0, 0.08),
-    0 20px 48px rgba(0, 0, 0, 0.18);
+    var(--lightink-shadow);
   font-family: var(--lightink-font-ui);
   font-size: var(--lightink-font-size-ui, 0.8rem);
   line-height: 1.45;
@@ -55,6 +55,40 @@
   font-size: 0.82rem;
   font-weight: 650;
   letter-spacing: 0.01em;
+}
+
+.lightink-reader-assistant-modes {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.lightink-reader-assistant-mode {
+  min-height: 28px;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-mode[aria-checked='true'] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-mode:hover {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-assistant-mode:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-reader-assistant-close {
@@ -286,6 +320,7 @@
   flex-direction: column;
   min-height: 0;
   flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .lightink-reader-assistant-main[hidden] {
@@ -336,7 +371,7 @@
   color: var(--lightink-fg);
   font: inherit;
   font-size: 0.72rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--lightink-shadow);
   cursor: pointer;
 }
 
@@ -425,14 +460,14 @@
   margin: 0 0 0.4rem;
   padding: 0.25rem 0.45rem;
   border-radius: var(--lightink-radius-control);
-  background: color-mix(in srgb, #d9a441 16%, transparent);
+  background: color-mix(in srgb, var(--lightink-accent) 16%, transparent);
   font-size: 0.72rem;
   color: var(--lightink-fg);
 }
 
 .lightink-reader-assistant-error {
   margin: 0.4rem 0 0;
-  color: #c0392b;
+  color: var(--lightink-danger);
   font-size: 0.74rem;
 }
 
@@ -469,6 +504,7 @@
 
 .lightink-reader-assistant-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.5rem 0.75rem 0.25rem;
@@ -504,6 +540,7 @@
 
 .lightink-reader-assistant-composer {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.45rem 0.75rem 0.7rem;
@@ -706,9 +743,13 @@
 
 .lightink-reader-assistant-pending {
   display: flex;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 0.35rem;
+  min-height: 0;
+  max-height: min(42%, 16rem);
   padding: 0.5rem 0.75rem 0;
+  overflow: hidden;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
@@ -725,11 +766,33 @@
 
 .lightink-reader-assistant-pending-list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.3rem;
+  min-height: 0;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
+}
+
+.lightink-reader-assistant-pending-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.lightink-reader-assistant-pending-check {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+
+.lightink-reader-assistant-pending-bar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+  padding-bottom: 0.15rem;
 }
 
 .lightink-reader-assistant-pending-item {
@@ -758,7 +821,7 @@
 
 .lightink-reader-assistant-pending-error {
   margin: 0;
-  color: #c0392b;
+  color: var(--lightink-danger);
   font-size: 0.72rem;
 }
 
@@ -798,6 +861,21 @@
 .lightink-reader-assistant-pending-reject:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 1px;
+}
+
+/* 窄窗口仍是列布局：列表自己滚，确认条和输入区留在面板里。 */
+@media (max-width: 720px) {
+  .lightink-reader-assistant-panel {
+    max-height: 100dvh;
+  }
+
+  .lightink-reader-assistant-head {
+    flex-wrap: wrap;
+  }
+
+  .lightink-reader-assistant-messages {
+    min-height: 0;
+  }
 }
 
 /* ===== 触屏底部 sheet（几何/键盘让位由 pinFixedOverlay 内联提供） ===== */

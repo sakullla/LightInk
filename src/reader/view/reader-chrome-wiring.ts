@@ -68,12 +68,13 @@ import {
 } from './reader-dom.js';
 import { htmlToSearchText } from '../search-panel.js';
 import { invoke } from '@tauri-apps/api/core';
-import { showConfirmDialog } from '../../ui/confirm-dialog.js';
 import {
   createAssistantPanel,
+  syncAssistantHostTheme,
   type AssistantChapterContext,
   type AssistantPanel,
 } from '../../assistant/assistant-panel.js';
+import { loadAssistantPermissionMode } from '../../assistant/assistant-permission.js';
 import {
   createAssistantToolSession,
   resolveAssistantLocatorJump,
@@ -536,7 +537,12 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       // Surface 注入：阅读器接管 portal 挂载/主题采纳与右栏钉位、触屏 sheet 判定。
       surface: {
         mount: (panel, host) => {
-          mountReaderOverlay(panel, host);
+          // 阅读器令牌原样抄入，不把强调色改写成正文色。
+          syncAssistantHostTheme(panel, host);
+          const layer = host.ownerDocument?.body ?? document.body;
+          if (panel.parentNode !== layer) {
+            layer.appendChild(panel);
+          }
         },
         pin: (panel, host) => {
           const pane =
@@ -551,6 +557,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
         touchMode: readerChromeTouchMode,
       },
       chapterContext: assistantChapterContext,
+      showPermissionMode: true,
       // 未配置引导：回合架并打开 Manage（main.ts 监听 lightink:open-manage）。
       openSettings: () => {
         closeAssistantPanel();
@@ -619,29 +626,9 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
           appendAnnotation: (kind, locator, quote, note) => {
             ctx.annotation.appendAnnotation(kind, locator, quote, note);
           },
-          confirm: async (request) => {
-            const kindKey =
-              request.kind === 'highlight'
-                ? 'annotation.kind.highlight'
-                : request.kind === 'bookmark'
-                  ? 'annotation.kind.bookmark'
-                  : 'annotation.kind.note';
-            const choice = await showConfirmDialog(document, {
-              title: ctx.t('reader.assistant.saveConfirmTitle'),
-              message: ctx.t('reader.assistant.saveConfirmMessage', { kind: ctx.t(kindKey) }),
-              buttons: [
-                {
-                  id: 'save',
-                  label: ctx.t('reader.assistant.saveConfirmAccept'),
-                  kind: 'primary',
-                },
-                { id: 'cancel', label: ctx.t('reader.assistant.saveConfirmReject') },
-              ],
-              cancelId: 'cancel',
-              themeHost: ctx.root,
-            });
-            return choice === 'save';
-          },
+          permissionMode: loadAssistantPermissionMode(
+            typeof localStorage === 'undefined' ? null : localStorage,
+          ),
         }),
       jumpToLocator: (target) => {
         const resolved = resolveAssistantLocatorJump(ctx.readerOutline, target);

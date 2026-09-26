@@ -36,6 +36,10 @@ import type {
   LibraryTagMembership,
 } from '../library-client.js';
 import { translate, type MessageKey } from '../../i18n/messages.js';
+import {
+  ASSISTANT_PERMISSION_MODE_KEY,
+  type AssistantPermissionStorage,
+} from '../../assistant/assistant-permission.js';
 import type { AiStreamDoneView, AssistantStreamDeps } from '../../assistant/assistant-panel.js';
 
 const t = (key: MessageKey, vars?: Readonly<Record<string, string>>): string =>
@@ -58,6 +62,7 @@ afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-touch-primary');
   document.documentElement.removeAttribute('data-android');
+  localStorage.clear();
 });
 
 function book(overrides: Partial<LibraryItem> & { id: string; title: string }): LibraryItem {
@@ -207,6 +212,7 @@ interface MountOptions {
   readonly script?: (context: StreamScript) => AiStreamDoneView | Promise<AiStreamDoneView>;
   readonly readingStatusOf?: ShelfAssistantDeps['readingStatusOf'];
   readonly onLibraryChanged?: (change: LibraryToolChange) => void;
+  readonly permissionStorage?: AssistantPermissionStorage | null;
 }
 
 function mountShelf(options: MountOptions = {}) {
@@ -235,6 +241,7 @@ function mountShelf(options: MountOptions = {}) {
     library: options.library,
     readingStatusOf: options.readingStatusOf,
     onLibraryChanged: options.onLibraryChanged,
+    permissionStorage: options.permissionStorage,
     stream: stream.deps,
   });
   return { assistant, stream, readKeys };
@@ -345,9 +352,12 @@ describe('createShelfAssistant library tools', () => {
   it('writes directly on an explicit instruction and notifies the surface', async () => {
     const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
     const changed = vi.fn();
+    const storage = memoryStorage();
+    storage.setItem(ASSISTANT_PERMISSION_MODE_KEY, 'auto');
     const { assistant } = mountShelf({
       library: fixture.deps,
       onLibraryChanged: changed,
+      permissionStorage: storage,
       script: ({ round, emit }) => {
         if (round === 1) {
           return {
@@ -406,7 +416,7 @@ describe('createShelfAssistant library tools', () => {
     await flush();
     submitQuestion(panelElement()!, '帮我整理一下书库');
     await flushUntil(
-      () => panelElement()?.querySelector('.lightink-reader-assistant-pending-confirm') != null,
+      () => panelElement()?.querySelector('[data-assistant-pending-check]') != null,
     );
     // 建议阶段零落盘。
     expect(fixture.createGroup).not.toHaveBeenCalled();
@@ -425,4 +435,86 @@ describe('createShelfAssistant library tools', () => {
     expect(fixture.setGroupMember).toHaveBeenCalledTimes(1);
     assistant.destroy();
   });
+
+  it('shows shelf actions and a review/auto/yolo switch, not reader chapter actions', async () => {
+    const { assistant } = mountShelf();
+    assistant.open();
+    await flush();
+    const labels = [
+      ...panelElement()!.querySelectorAll<HTMLButtonElement>('[data-assistant-action]'),
+    ].map((button) => button.textContent);
+    expect(labels).toEqual(['整理建议', '打标建议', '查找']);
+    expect(panelElement()!.textContent).not.toContain('本章摘要');
+    expect(panelElement()!.textContent).not.toContain('生词卡');
+    expect(panelElement()!.textContent).not.toContain('章节测验');
+    expect(
+      panelElement()!.querySelector<HTMLButtonElement>('[data-assistant-quote]')?.hidden,
+    ).toBe(true);
+    const modes = [
+      ...panelElement()!.querySelectorAll<HTMLButtonElement>('[data-assistant-mode]'),
+    ].map((button) => button.dataset.assistantMode);
+    expect(modes).toEqual(['review', 'auto', 'yolo']);
+    expect(panelElement()!.textContent?.toLowerCase()).not.toContain('bypass');
+    expect(
+      panelElement()!.querySelector<HTMLButtonElement>('[data-assistant-mode="review"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('true');
+    assistant.destroy();
+  });
+
+  it('keeps an organize suggestion on the card in review and writes it in yolo', async () => {
+    const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
+    const organizeCall = {
+      id: 'c1',
+      name: LIBRARY_ORGANIZE_TOOL_NAME,
+      arguments: JSON.stringify({ books: ['三体'], group: '科幻', mode: 'assign' }),
+    };
+    const script = ({ round, emit }: StreamScript): AiStreamDoneView => {
+      if (round === 1) {
+        return { finish: 'tool_calls', totalChars: 0, toolCalls: [organizeCall] };
+      }
+      emit('好的。');
+      return { finish: 'stop', totalChars: 3, toolCalls: [] };
+    };
+    const review = mountShelf({ library: fixture.deps, script });
+    review.assistant.open();
+    await flush();
+    panelElement()!
+      .querySelector<HTMLButtonElement>('[data-assistant-action="organizeSuggestion"]')!
+      .click();
+    await flushUntil(
+      () => panelElement()?.querySelector('[data-assistant-pending-check]') != null,
+    );
+    expect(fixture.createGroup).not.toHaveBeenCalled();
+    review.assistant.destroy();
+
+    fixture.createGroup.mockClear();
+    const storage = memoryStorage();
+    storage.setItem(ASSISTANT_PERMISSION_MODE_KEY, 'yolo');
+    const yolo = mountShelf({
+      library: fixture.deps,
+      permissionStorage: storage,
+      script,
+    });
+    yolo.assistant.open();
+    await flush();
+    panelElement()!
+      .querySelector<HTMLButtonElement>('[data-assistant-action="organizeSuggestion"]')!
+      .click();
+    await flushUntil(() => fixture.createGroup.mock.calls.length > 0);
+    expect(panelElement()?.querySelector('.lightink-reader-assistant-pending-list')?.childElementCount ?? 0).toBe(
+      0,
+    );
+    yolo.assistant.destroy();
+  });
 });
+
+function memoryStorage(): AssistantPermissionStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+}

@@ -428,7 +428,17 @@ const en = {
   'reader.assistant.systemPrompt':
     'You are the AI assistant inside the LightInk reader. Use the built-in query_book and save_to_book tools when you need more of the current book or to save a highlight, bookmark, or note. Prefer the current chapter context; when you go beyond it, say so. If an answer relies on queried chapters or search hits, cite them as markdown links [label](chapter:N) or [label](page:N). N must be the 0-based chapter index from the tool result (the first chapter is 0); keep label identical to the table-of-contents title. Reply in the same language the user writes in.',
   'library.assistant.systemPrompt':
-    'You are the AI assistant on the LightInk library shelf. Use the library_search / library_organize / library_tag / library_create_group / library_remove tools to query and manage the library. Follow explicit user instructions directly; proactive changes are only suggestions and take effect after the user confirms them. When several books share a title, list the candidates and let the user choose rather than guessing. Deleting books or groups and clearing tags always require confirmation. Reply in the same language the user writes in.',
+    'You are the AI assistant on the LightInk library shelf. Use the library_search / library_organize / library_tag / library_create_group / library_remove tools to query and manage the library. The app chooses the permission mode: in review, writes wait on the confirmation card; in auto, only the reversible organize, tag add/remove, and new-group actions named in the user’s current sentence run immediately; deletes, clearing tags, and your own suggestions wait for confirmation; YOLO is applied by the app, not by you. Do not claim a write finished before it is confirmed. When several books share a title, list the candidates and do not guess. Leave out books that already belong to a custom group or already have a tag unless the user asks to reorganize them or names those books. Reply in the same language the user writes in.',
+  'library.assistant.actions': 'Library quick actions',
+  'library.assistant.action.organize': 'Organize suggestions',
+  'library.assistant.action.tag': 'Tag suggestions',
+  'library.assistant.action.search': 'Find',
+  'library.assistant.prompt.organize':
+    'Suggest how to organize books that are not in any custom group and have no tags, and submit that with library_organize. Do not include books that are already grouped or tagged. If there are no such books, say there are no new books to process and do not change existing groups or tags.',
+  'library.assistant.prompt.tag':
+    'Suggest tags for books that are not in any custom group and have no tags, and submit that with library_tag. Do not include books that are already grouped or tagged. If there are no such books, say there are no new books to process and do not change existing groups or tags.',
+  'library.assistant.prompt.search':
+    'Search the library with library_search by title, author, group, or tag. If I have not given a keyword yet, list some books and say the search can be narrowed. If nothing matches, say so and do not invent books.',
   'editor.assistant.systemPrompt':
     'You are the AI assistant inside the LightInk editor. The current document is provided as context and is read-only: you have no tools and cannot modify it. Answer questions about the document; if the user asks you to change it, explain that the editor assistant will not modify content. Reply in the same language the user writes in.',
   'reader.assistant.prompt.explain':
@@ -473,6 +483,14 @@ const en = {
   'reader.assistant.pendingConfirmed': 'Confirmed',
   'reader.assistant.pendingRejected': 'Rejected',
   'reader.assistant.pendingFailed': 'Confirmation failed.',
+  'reader.assistant.pendingCount': '{n} pending',
+  'reader.assistant.pendingConfirmAll': 'Confirm all',
+  'reader.assistant.pendingRejectAll': 'Reject all',
+  'reader.assistant.pendingInclude': 'Include this change',
+  'reader.assistant.permissionMode': 'Permission mode',
+  'reader.assistant.permissionMode.review': 'Review',
+  'reader.assistant.permissionMode.auto': 'Auto',
+  'reader.assistant.permissionMode.yolo': 'YOLO',
   'library.translate.entry': 'Translate whole book',
   'library.translate.resume': 'Resume translation',
   'library.translate.parsing': 'Parsing the book…',
@@ -1040,7 +1058,17 @@ const zhCN = {
   'reader.assistant.systemPrompt':
     '你是 LightInk 阅读器中的 AI 助手。需要更多本书内容，或保存高亮、书签、笔记时，使用内置工具 query_book 与 save_to_book。优先依据当前章上下文；超出部分要说明。若回答依据查询到的章节或搜索命中，请用 Markdown 链接引用：[标题](chapter:N) 或 [页码](page:N)。N 必须是工具结果里的 0-based 章节序号（第一章是 0），标题尽量与目录原文一致。使用与用户提问相同的语言回答。',
   'library.assistant.systemPrompt':
-    '你是 LightInk 书架首页的 AI 助手，可查询并管理书库。需要操作书库时使用工具 library_search（查询书库/分组/标签）、library_organize（归类或移出分组）、library_tag（打标/取消/清空标签）、library_create_group（新建分组）、library_remove（删除书籍或分组）。用户显式指令可直接执行；主动建议只进入待确认列表，确认后才写入。同名多本先列出候选让用户选择，不猜测落盘；删除书籍、删除分组、清空标签必须逐次确认。使用与用户提问相同的语言回答。',
+    '你是 LightInk 书架首页的 AI 助手，可查询并管理书库。需要操作书库时使用工具 library_search（查询书库/分组/标签）、library_organize（归类或移出分组）、library_tag（打标/取消/清空标签）、library_create_group（新建分组）、library_remove（删除书籍或分组）。权限模式由应用决定：审阅模式下写入进入待确认；自动模式只直接执行用户当前这句话点名的归类、加减标签和新建分组；删除、清空标签和你主动提出的建议进入待确认；YOLO 由应用执行，不要自己声称已跳过确认。确认完成前不要说书库已经改好。同名多本先列出候选，不猜测落盘。已经在自定义分组或已有标签的书不要放进主动整理或打标，除非用户明确说重新整理、重新打标或点名这些书。使用与用户提问相同的语言回答。',
+  'library.assistant.actions': '书架快捷动作',
+  'library.assistant.action.organize': '整理建议',
+  'library.assistant.action.tag': '打标建议',
+  'library.assistant.action.search': '查找',
+  'library.assistant.prompt.organize':
+    '请只为尚未进入任何自定义分组、且还没有任何标签的新书提出整理建议，并调用 library_organize 提交。不要包含已整理或已打标的书。如果没有这样的新书，说明没有新书需要处理，不要修改已有分组和标签。',
+  'library.assistant.prompt.tag':
+    '请只为尚未进入任何自定义分组、且还没有任何标签的新书提出打标建议，并调用 library_tag 提交。不要包含已整理或已打标的书。如果没有这样的新书，说明没有新书需要处理，不要修改已有分组和标签。',
+  'library.assistant.prompt.search':
+    '请用 library_search 按书名、作者、分组或标签查找书库。如果我还没给出关键词，先列出一部分书并说明可以继续缩小范围。没有匹配时说明没有匹配，不要编造书目。',
   'editor.assistant.systemPrompt':
     '你是 LightInk 编辑器中的 AI 助手。当前文档作为上下文提供，只读：你没有可用工具，也不能修改文档。请围绕文档内容回答问题；如果用户要求修改文档，说明编辑器内助手不会修改内容。使用与用户提问相同的语言回答。',
   'reader.assistant.prompt.explain': '请解释下面选中文本的含义，包括难词难句与它在上下文中的作用：',
@@ -1079,6 +1107,14 @@ const zhCN = {
   'reader.assistant.pendingConfirmed': '已确认',
   'reader.assistant.pendingRejected': '已拒绝',
   'reader.assistant.pendingFailed': '确认执行失败。',
+  'reader.assistant.pendingCount': '待确认 {n}',
+  'reader.assistant.pendingConfirmAll': '全部确认',
+  'reader.assistant.pendingRejectAll': '全部拒绝',
+  'reader.assistant.pendingInclude': '包含这条更改',
+  'reader.assistant.permissionMode': '权限模式',
+  'reader.assistant.permissionMode.review': '审阅',
+  'reader.assistant.permissionMode.auto': '自动',
+  'reader.assistant.permissionMode.yolo': 'YOLO',
   'library.translate.entry': '整本翻译',
   'library.translate.resume': '继续翻译',
   'library.translate.parsing': '正在解析本书…',

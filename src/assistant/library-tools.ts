@@ -10,16 +10,18 @@
  * - `library_create_group`：单独新建分组（可带父分组）。
  * - `library_remove`：删除书籍或删除分组（破坏性）。
  *
- * 写入确认语义（ADR-4）：
- * - 显式用户指令直接执行：当前轮 `userMessage` 通过显式指令判定，且操作目标
- *   （分组名/标签名）确实出现在该消息里，两个条件都满足才直写。这样模型在
- *   显式轮次里夹带未被要求写入时仍会降级为待确认建议。
- * - AI 主动建议：返回 `pending_confirmation`（沿用 `assistant-tools` 契约），
- *   面板确认后走同一 session 的 `confirmPending(id)`；建议阶段不产生任何写
- *   调用，真实计划留在 session 内的待确认表里。模型可调用的 `execute` 拒绝
- *   任何携带 `pending_ref` 的调用，面板回传模型的结果也会剥除该引用。
- * - 删除书籍、删除分组、清空标签一律确认，即使当前轮是显式指令。
- * - 同名多本/同名分组返回候选，不猜测落盘；智能组只读。
+ * 写入确认语义（ADR-4 / ADR-5）：
+ * - `review`（缺省）：一律 `pending_confirmation`，包括当前句点名的可逆写入。
+ * - `auto`：保持原先的门。祈使写指令、分组名或每个标签名出现在这句话里、且
+ *   不是删书、删组、清空标签，才 `executePlan`。主动建议（`suggestionTurn`）
+ *   即使句子像显式指令也进待确认。
+ * - `yolo`：`gate` 直接 `executePlan`，删除、清空和主动建议也不进卡片。
+ * - 三种模式都不放宽同名候选、分组层级/循环和 50 本上限。
+ * - 归类和打标（不含清空、删除）在进门前去掉已在自定义分组或已有标签的书。
+ *   智能组不算已整理。用户说重新整理/重新打标，或点名这些书并要求写入时，
+ *   这些书才留下。没有可处理的新书时只返回说明，不改书库。
+ * - 面板确认后走同一 session 的 `confirmPending(id)`；建议阶段不产生任何写
+ *   调用。模型可调用的 `execute` 拒绝任何携带 `pending_ref` 的调用。
  * - 批量写中途失败：可逆步骤（归类/打标，含新建分组/标签）逐项补偿回滚；
  *   成员关系快照先于任何新建读取，读取失败时不落状态；不可逆的删除在失败结果
  *   列出已应用项并触发刷新通知，不静默留半状态。
@@ -38,6 +40,7 @@ import type {
   LibraryTagMembership,
 } from '../library/library-client.js';
 import { fnv1a64Hex } from '../reader/document-hash.js';
+import type { AssistantPermissionMode } from './assistant-permission.js';
 import type {
   AssistantPendingConfirmation,
   AssistantToolDefinition,
@@ -163,6 +166,16 @@ export interface LibraryToolDeps {
   readonly readingStatusOf?: (itemId: string) => LibraryReadingStatus | null;
   /** 当前用户轮消息原文（面板经 `createToolSession` 注入），用于显式指令判定。 */
   readonly userMessage?: string;
+  /**
+   * 权限模式。缺省 `review`：新的写入都进待确认。`auto` 只直写当前句点名的
+   * 可逆整理。`yolo` 连删除和主动建议也直写。
+   */
+  readonly permissionMode?: AssistantPermissionMode;
+  /**
+   * 这一轮是书架整理/打标建议，不是用户显式写指令。审阅和自动都进待确认；
+   * YOLO 仍直接落盘。已整理书籍的过滤仍然生效。
+   */
+  readonly suggestionTurn?: boolean;
   /** 覆盖默认显式指令判定；缺省 `isExplicitLibraryWriteInstruction`。 */
   readonly isExplicitInstruction?: (message: string) => boolean;
   /** 写操作成功后的变更通知（surface 刷新首页模块；回调异常不影响工具结果）。 */
@@ -870,6 +883,80 @@ function requiresConfirmation(plan: LibraryWritePlan): boolean {
   return plan.kind === 'tag' && plan.mode === 'clear';
 }
 
+const REPROCESS_REQUEST = /重新整理|重新打标/;
+
+/** 当前句在要求写入（疑问句除外），用于「点名已处理的书才纳入」。 */
+function userRequestsLibraryWrite(message: string): boolean {
+  const text = message.replace(/\s+/g, ' ').trim();
+  if (text === '' || QUESTION_PREFIX.test(text)) {
+    return false;
+  }
+  return WRITE_VERB.test(text);
+}
+
+function bookNamedInMessage(item: LibraryItem, message: string): boolean {
+  const haystack = message.toLowerCase();
+  const title = normalizeName(item.title);
+  if (title !== '' && haystack.includes(title)) {
+    return true;
+  }
+  const id = item.id.trim().toLowerCase();
+  return id !== '' && haystack.includes(id);
+}
+
+/**
+ * 主动归类/打标只留未进自定义分组且无标签的书。读取失败时不写，交回调用方。
+ * 重新整理/重新打标，或点名且要求写入的已处理书，保留。
+ */
+async function selectActionableBooks(
+  deps: LibraryToolDeps,
+  tool: string,
+  items: readonly LibraryItem[],
+): Promise<LibraryItem[] | LibraryToolResult> {
+  const message = deps.userMessage ?? '';
+  if (REPROCESS_REQUEST.test(message)) {
+    return [...items];
+  }
+  let groups: readonly LibraryGroup[];
+  let memberships: readonly LibraryGroupMembership[];
+  let tagMemberships: readonly LibraryTagMembership[];
+  try {
+    [groups, memberships, tagMemberships] = await Promise.all([
+      deps.listGroups(),
+      deps.listGroupMemberships(),
+      deps.listTagMemberships(),
+    ]);
+  } catch (error) {
+    return fail(tool, 'write_failed', { message: errorMessage(error) });
+  }
+  const customIds = new Set(
+    groups.filter((group) => group.kind === 'custom').map((group) => group.id),
+  );
+  const grouped = new Set(
+    memberships
+      .filter((membership) => customIds.has(membership.groupId))
+      .map((membership) => membership.itemId),
+  );
+  const tagged = new Set(tagMemberships.map((membership) => membership.itemId));
+  const writeAsked = userRequestsLibraryWrite(message);
+  const kept: LibraryItem[] = [];
+  for (const item of items) {
+    const processed = grouped.has(item.id) || tagged.has(item.id);
+    if (!processed || (writeAsked && bookNamedInMessage(item, message))) {
+      kept.push(item);
+    }
+  }
+  return kept;
+}
+
+function noNewBooks(tool: string): LibraryToolResult {
+  return {
+    ok: true,
+    tool,
+    message: '没有新书需要处理。',
+  };
+}
+
 /** 操作目标名必须出现在显式消息里，防止显式轮次夹带未被要求的写入。 */
 function planMatchesUserMessage(plan: LibraryWritePlan, message: string): boolean {
   const haystack = message.toLowerCase();
@@ -1037,6 +1124,8 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
   const userMessage = deps.userMessage ?? '';
   const classify = deps.isExplicitInstruction ?? isExplicitLibraryWriteInstruction;
   const explicitTurn = classify(userMessage);
+  const permissionMode = deps.permissionMode ?? 'review';
+  const suggestionTurn = deps.suggestionTurn === true;
 
   const notify = (change: LibraryToolChange): void => {
     const callback = deps.onLibraryChanged;
@@ -1415,13 +1504,21 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
     };
   };
 
-  /** 显式直写门：破坏性操作一律待确认；否则要求显式消息且目标被点名。 */
+  /**
+   * 写门：YOLO 直接落盘。审阅、主动建议、破坏性操作，以及自动模式下没被
+   * 当前句点名的写入，都进待确认。切换模式不追溯已发出的计划。
+   */
   const gate = (
     tool: string,
     plan: LibraryWritePlan,
     summary: string,
   ): Promise<LibraryToolResult> => {
+    if (permissionMode === 'yolo') {
+      return executePlan(tool, plan);
+    }
     if (
+      permissionMode === 'auto' &&
+      !suggestionTurn &&
       !requiresConfirmation(plan) &&
       explicitTurn &&
       planMatchesUserMessage(plan, userMessage)
@@ -1456,9 +1553,9 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         message: 'mode 必须是 assign 或 remove。',
       });
     }
-    const items = await resolveBookRefs(deps, tool, refs);
-    if (!Array.isArray(items)) {
-      return items;
+    const resolved = await resolveBookRefs(deps, tool, refs);
+    if (!Array.isArray(resolved)) {
+      return resolved;
     }
     const groups = await deps.listGroups();
     const matches = groups.filter(
@@ -1488,13 +1585,22 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
           message: `找不到分组「${groupName}」。`,
         });
       }
+    }
+    const actionable = await selectActionableBooks(deps, tool, resolved);
+    if (!Array.isArray(actionable)) {
+      return actionable;
+    }
+    if (actionable.length === 0) {
+      return noNewBooks(tool);
+    }
+    if (preferred.length === 0) {
       const plan: OrganizePlan = {
         kind: 'organize',
         mode: 'assign',
         groupName,
         createGroup: true,
-        itemIds: items.map((item) => item.id),
-        titles: items.map((item) => item.title),
+        itemIds: actionable.map((item) => item.id),
+        titles: actionable.map((item) => item.title),
       };
       return gate(tool, plan, organizeSummary(plan));
     }
@@ -1504,8 +1610,8 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
       groupName,
       groupId: preferred[0]!.id,
       createGroup: false,
-      itemIds: items.map((item) => item.id),
-      titles: items.map((item) => item.title),
+      itemIds: actionable.map((item) => item.id),
+      titles: actionable.map((item) => item.title),
     };
     return gate(tool, plan, organizeSummary(plan));
   };
@@ -1537,19 +1643,17 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         message: 'tags 需要至少一个标签名。',
       });
     }
-    const items = await resolveBookRefs(deps, tool, refs);
-    if (!Array.isArray(items)) {
-      return items;
+    const resolved = await resolveBookRefs(deps, tool, refs);
+    if (!Array.isArray(resolved)) {
+      return resolved;
     }
-    const itemIds = items.map((item) => item.id);
-    const titles = items.map((item) => item.title);
     if (modeRaw === 'clear') {
       const plan: TagPlan = {
         kind: 'tag',
         mode: 'clear',
         tagNames: [],
-        itemIds,
-        titles,
+        itemIds: resolved.map((item) => item.id),
+        titles: resolved.map((item) => item.title),
       };
       return gate(tool, plan, tagSummary(plan));
     }
@@ -1564,7 +1668,20 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         });
       }
     }
-    const plan: TagPlan = { kind: 'tag', mode: modeRaw, tagNames, itemIds, titles };
+    const actionable = await selectActionableBooks(deps, tool, resolved);
+    if (!Array.isArray(actionable)) {
+      return actionable;
+    }
+    if (actionable.length === 0) {
+      return noNewBooks(tool);
+    }
+    const plan: TagPlan = {
+      kind: 'tag',
+      mode: modeRaw,
+      tagNames,
+      itemIds: actionable.map((item) => item.id),
+      titles: actionable.map((item) => item.title),
+    };
     return gate(tool, plan, tagSummary(plan));
   };
 

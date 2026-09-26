@@ -1048,7 +1048,7 @@ describe('createAssistantPanel tools and locators', () => {
     await flush();
     submitQuestion(panel, '把《三体》归到科幻');
     await flush();
-    expect(createToolSession).toHaveBeenCalledWith('把《三体》归到科幻');
+    expect(createToolSession).toHaveBeenCalledWith('把《三体》归到科幻', { suggestion: false });
     panel.destroy();
   });
 
@@ -1311,7 +1311,7 @@ describe('createAssistantPanel pending confirmations', () => {
     expect(panel.element.querySelector('[data-assistant-pending-status]')).toBeNull();
 
     panel.element
-      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm="p1"]')
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
       ?.click();
     await flushUntil(
       () => panel.element.querySelector('[data-assistant-pending-status="confirmed"]') !== null,
@@ -1337,7 +1337,7 @@ describe('createAssistantPanel pending confirmations', () => {
       () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
     );
     panel.element
-      .querySelector<HTMLButtonElement>('[data-assistant-pending-reject="p1"]')
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-reject-all]')
       ?.click();
     await flush();
     expect(execute).toHaveBeenCalledTimes(1);
@@ -1346,7 +1346,7 @@ describe('createAssistantPanel pending confirmations', () => {
     expect(panel.element.querySelector('[data-assistant-pending-status]')?.textContent).toBe(
       t('reader.assistant.pendingRejected'),
     );
-    expect(panel.element.querySelector('[data-assistant-pending-confirm]')).toBeNull();
+    expect(rejected?.querySelector('[data-assistant-pending-check]')).toBeNull();
     panel.destroy();
   });
 
@@ -1364,7 +1364,7 @@ describe('createAssistantPanel pending confirmations', () => {
       () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
     );
     panel.element
-      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm="p1"]')
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
       ?.click();
     await flushUntil(
       () =>
@@ -1373,7 +1373,7 @@ describe('createAssistantPanel pending confirmations', () => {
     );
     const failed = panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]');
     expect(failed?.dataset.status).toBe('pending');
-    expect(failed?.querySelector('[data-assistant-pending-confirm]')).not.toBeNull();
+    expect(failed?.querySelector('[data-assistant-pending-check]')).not.toBeNull();
     expect(execute).toHaveBeenCalledTimes(2);
     panel.destroy();
   });
@@ -1408,7 +1408,7 @@ describe('createAssistantPanel pending confirmations', () => {
       () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
     );
     panel.element
-      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm="p1"]')
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
       ?.click();
     await flushUntil(
       () => panel.element.querySelector('[data-assistant-pending-status="confirmed"]') !== null,
@@ -1446,7 +1446,7 @@ describe('createAssistantPanel pending confirmations', () => {
       () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
     );
     panel.element
-      .querySelector<HTMLButtonElement>('[data-assistant-pending-reject="p1"]')
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-reject-all]')
       ?.click();
     await flush();
     expect(
@@ -1459,7 +1459,7 @@ describe('createAssistantPanel pending confirmations', () => {
         panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')
           ?.dataset.status === 'pending',
     );
-    expect(panel.element.querySelector('[data-assistant-pending-confirm="p1"]')).not.toBeNull();
+    expect(panel.element.querySelector('[data-assistant-pending-check="p1"]')).not.toBeNull();
     panel.destroy();
   });
 
@@ -1509,6 +1509,65 @@ describe('createAssistantPanel pending confirmations', () => {
     expect(
       panel.element.querySelector('[data-assistant-pending-id="p1"]'),
     ).not.toBeNull();
+    expect(panel.element.querySelectorAll('.lightink-reader-assistant-pending')).toHaveLength(1);
+    panel.destroy();
+  });
+
+  it('confirms only checked rows and rejects the removed one without a second card', async () => {
+    const confirmPending = vi.fn(async () => ({ ok: true, tool: 'classify_book' }));
+    const pending = {
+      ok: true,
+      tool: 'classify_book',
+      pending_confirmation: [
+        { id: 'p1', summary: '归入甲', tool: 'classify_book', arguments: { a: 1 } },
+        { id: 'p2', summary: '归入乙', tool: 'classify_book', arguments: { a: 2 } },
+      ],
+    };
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 1) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit('已处理');
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute: vi.fn(async () => pending),
+      confirmPending,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '整理两本');
+    await flushUntil(
+      () => panel.element.querySelectorAll('[data-assistant-pending-check]').length === 2,
+    );
+    expect(panel.element.querySelectorAll('.lightink-reader-assistant-pending')).toHaveLength(1);
+    const second = panel.element.querySelector<HTMLInputElement>(
+      '[data-assistant-pending-check="p2"]',
+    );
+    second!.checked = false;
+    second!.dispatchEvent(new Event('change', { bubbles: true }));
+    panel.element
+      .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
+      ?.click();
+    await flushUntil(
+      () =>
+        panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p2"]')?.dataset
+          .status === 'rejected',
+    );
+    expect(confirmPending).toHaveBeenCalledWith('p1');
+    expect(confirmPending).not.toHaveBeenCalledWith('p2');
+    expect(
+      panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p2"]')?.dataset.status,
+    ).toBe('rejected');
     panel.destroy();
   });
 });

@@ -22,9 +22,14 @@
 import type { AiTranslateConfig } from '../assistant/assistant-error.js';
 import {
   createAssistantPanel,
+  type AssistantPanelAction,
   type AssistantSurfaceDeps,
   type AssistantStreamDeps,
 } from '../assistant/assistant-panel.js';
+import {
+  loadAssistantPermissionMode,
+  type AssistantPermissionStorage,
+} from '../assistant/assistant-permission.js';
 import {
   createLibraryToolSession,
   defaultLibraryToolDeps,
@@ -62,6 +67,8 @@ export interface ShelfAssistantDeps {
   readonly stream?: AssistantStreamDeps;
   /** 助手 Markdown 外链（沿用应用外部打开策略）。 */
   readonly openExternalLink?: (href: string) => void;
+  /** 权限模式存储。缺省 `localStorage`，键 `lightink.assistant.permissionMode`。 */
+  readonly permissionStorage?: AssistantPermissionStorage | null;
 }
 
 export interface ShelfAssistant {
@@ -72,7 +79,44 @@ export interface ShelfAssistant {
   destroy(): void;
 }
 
+function shelfQuickActions(
+  t: ShelfAssistantDeps['t'],
+): readonly AssistantPanelAction[] {
+  return [
+    {
+      id: 'organizeSuggestion',
+      label: t('library.assistant.action.organize'),
+      prompt: t('library.assistant.prompt.organize'),
+      requiresContext: false,
+      suggestion: true,
+    },
+    {
+      id: 'tagSuggestion',
+      label: t('library.assistant.action.tag'),
+      prompt: t('library.assistant.prompt.tag'),
+      requiresContext: false,
+      suggestion: true,
+    },
+    {
+      id: 'librarySearch',
+      label: t('library.assistant.action.search'),
+      prompt: t('library.assistant.prompt.search'),
+      requiresContext: false,
+    },
+  ];
+}
+
 export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
+  const permissionStorage = (): AssistantPermissionStorage | null => {
+    if (deps.permissionStorage !== undefined) {
+      return deps.permissionStorage;
+    }
+    try {
+      return globalThis.localStorage;
+    } catch {
+      return null;
+    }
+  };
   const panel = createAssistantPanel({
     t: deps.t,
     host: deps.host,
@@ -80,18 +124,25 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
     chapterContext: () => null,
     systemPrompt: () => deps.t('library.assistant.systemPrompt'),
     openSettings: deps.openSettings,
-    // 首页没有当前书籍：摘要不落标注。
+    // 首页没有当前书籍：摘要不落标注。书架不提供引用选区和章节动作。
     saveAnnotation: () => undefined,
+    showQuote: false,
+    showPermissionMode: true,
+    permissionStorage: deps.permissionStorage,
+    actions: shelfQuickActions(deps.t),
+    actionsLabel: deps.t('library.assistant.actions'),
     ...(deps.fetchConfig !== undefined ? { fetchConfig: deps.fetchConfig } : {}),
     ...(deps.readHistory !== undefined ? { readHistory: deps.readHistory } : {}),
     ...(deps.writeHistory !== undefined ? { writeHistory: deps.writeHistory } : {}),
     ...(deps.clearHistory !== undefined ? { clearHistory: deps.clearHistory } : {}),
     historyKey: () => SHELF_ASSISTANT_HISTORY_KEY,
-    createToolSession: (userMessage) =>
+    createToolSession: (userMessage, turn) =>
       createLibraryToolSession(
         defaultLibraryToolDeps({
           ...deps.library,
           userMessage,
+          permissionMode: loadAssistantPermissionMode(permissionStorage()),
+          suggestionTurn: turn?.suggestion === true,
           ...(deps.readingStatusOf !== undefined
             ? { readingStatusOf: deps.readingStatusOf }
             : {}),

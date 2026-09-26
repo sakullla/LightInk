@@ -4,7 +4,8 @@
  * 模型只声明 query_book 与 save_to_book；工具依赖全部经 `AssistantToolDeps`
  * 注入，session 不持有阅读器实例。查询接 outline / 章文本 / 搜索
  * run+hitViews，不调用 activateKey、不改阅读位置。指定章正文计入每问 12
- * 次上限。保存经 confirm 后走 appendAnnotation；拒绝不写盘。
+ * 次上限。保存标注在审阅和自动模式下返回 `pending_confirmation`，确认后才
+ * `appendAnnotation`；YOLO 直接写入。不再弹出居中确认框。
  *
  * AI 主动建议的写操作以 `AssistantPendingConfirmation` 随结果返回，由面板
  * 渲染待确认列表并在用户确认后回调 `session.confirmPending(id)`（缺省回退
@@ -14,8 +15,10 @@
 
 import type { OutlineItem } from '../outline/outline-model.js';
 import type { AnnotationKind, Locator } from '../reader/annotations.js';
+import { fnv1a64Hex } from '../reader/document-hash.js';
 import { READER_LIMITS } from '../reader/reader-limits.js';
 import { SEARCH_HIT_CAP } from '../reader/search-panel.js';
+import type { AssistantPermissionMode } from './assistant-permission.js';
 
 export const QUERY_BOOK_TOOL_NAME = 'query_book';
 export const SAVE_TO_BOOK_TOOL_NAME = 'save_to_book';
@@ -123,7 +126,13 @@ export interface AssistantToolDeps {
     quote: string | undefined,
     note: string | undefined,
   ) => void;
-  readonly confirm: (request: AssistantSaveConfirmRequest) => Promise<boolean>;
+  /**
+   * 旧的居中确认回调。保存标注已改走待确认卡，会话不再调用它。
+   * 保留字段以免既有装配在迁移完成前类型失败。
+   */
+  readonly confirm?: (request: AssistantSaveConfirmRequest) => Promise<boolean>;
+  /** 缺省审阅：保存标注进待确认。`yolo` 直接写入。 */
+  readonly permissionMode?: AssistantPermissionMode;
 }
 
 export interface AssistantTocItem {
@@ -170,6 +179,8 @@ export interface AssistantToolResult {
   readonly page?: number;
   readonly saved?: boolean;
   readonly rejected?: boolean;
+  /** 已进入待确认，确认前没有写入。 */
+  readonly pending?: boolean;
   readonly error?: string;
   readonly reason?: string;
   readonly message?: string;
@@ -767,80 +778,139 @@ async function executeQueryBook(
   });
 }
 
-async function executeSaveToBook(
-  deps: AssistantToolDeps,
-  args: Record<string, unknown>,
-): Promise<AssistantToolResult> {
-  const kindRaw = readString(args.kind);
-  if (kindRaw === undefined || !SAVE_KINDS.has(kindRaw as AnnotationKind)) {
-    return fail(SAVE_TO_BOOK_TOOL_NAME, 'invalid_kind', {
-      message: 'kind 必须是 highlight、bookmark 或 note。',
-    });
-  }
-  const kind = kindRaw as AnnotationKind;
-  const selected = deps.selection();
-  const quoteArg = readString(args.quote)?.trim() ?? '';
-  const selectedQuote = selected?.quote.trim() ?? '';
-  const quote = quoteArg !== '' ? quoteArg : selectedQuote;
-  const note = readString(args.note)?.trim() || undefined;
+interface PendingSave {
+  readonly kind: AnnotationKind;
+  readonly locator: Locator;
+  readonly quote: string;
+  readonly note?: string;
+}
 
-  if (kind === 'highlight' && quote === '') {
-    return fail(SAVE_TO_BOOK_TOOL_NAME, 'highlight_requires_selection', {
-      kind,
-      message: '保存高亮需要选区或引文。',
-    });
+function saveKindLabel(kind: AnnotationKind): string {
+  if (kind === 'highlight') {
+    return '高亮';
   }
-
-  const confirmed = await deps.confirm({
-    kind,
-    ...(quote !== '' ? { quote } : {}),
-    ...(note !== undefined ? { note } : {}),
-  });
-  if (!confirmed) {
-    return fail(SAVE_TO_BOOK_TOOL_NAME, 'rejected', {
-      kind,
-      rejected: true,
-      message: '用户拒绝保存。',
-    });
+  if (kind === 'bookmark') {
+    return '书签';
   }
+  return '笔记';
+}
 
-  const locator =
-    kind === 'bookmark'
-      ? deps.currentLocator()
-      : selected?.locator !== undefined && (kind !== 'highlight' || selectedQuote !== '')
-        ? selected.locator
-        : deps.currentLocator();
+function saveSummary(kind: AnnotationKind, quote: string, note: string | undefined): string {
+  const detail = quote !== '' ? `「${quote}」` : note !== undefined ? `「${note}」` : '';
+  return detail === '' ? `保存${saveKindLabel(kind)}` : `保存${saveKindLabel(kind)}${detail}`;
+}
+
+function applySave(deps: AssistantToolDeps, plan: PendingSave): AssistantToolResult {
   deps.appendAnnotation(
-    kind,
-    locator,
-    quote === '' ? undefined : quote,
-    note,
+    plan.kind,
+    plan.locator,
+    plan.quote === '' ? undefined : plan.quote,
+    plan.note,
   );
   return {
     ok: true,
     tool: SAVE_TO_BOOK_TOOL_NAME,
-    kind,
+    kind: plan.kind,
     saved: true,
-    ...(quote !== '' ? { quote } : {}),
-    ...(note !== undefined ? { note } : {}),
+    ...(plan.quote !== '' ? { quote: plan.quote } : {}),
+    ...(plan.note !== undefined ? { note: plan.note } : {}),
   };
 }
 
 export function createAssistantToolSession(deps: AssistantToolDeps): AssistantToolSession {
   const chapterReads = { count: 0 };
+  const pendingSaves = new Map<string, PendingSave>();
+  const permissionMode = deps.permissionMode ?? 'review';
+
+  const executeSaveToBook = (args: Record<string, unknown>): AssistantToolResult => {
+    const kindRaw = readString(args.kind);
+    if (kindRaw === undefined || !SAVE_KINDS.has(kindRaw as AnnotationKind)) {
+      return fail(SAVE_TO_BOOK_TOOL_NAME, 'invalid_kind', {
+        message: 'kind 必须是 highlight、bookmark 或 note。',
+      });
+    }
+    const kind = kindRaw as AnnotationKind;
+    const selected = deps.selection();
+    const quoteArg = readString(args.quote)?.trim() ?? '';
+    const selectedQuote = selected?.quote.trim() ?? '';
+    const quote = quoteArg !== '' ? quoteArg : selectedQuote;
+    const note = readString(args.note)?.trim() || undefined;
+
+    if (kind === 'highlight' && quote === '') {
+      return fail(SAVE_TO_BOOK_TOOL_NAME, 'highlight_requires_selection', {
+        kind,
+        message: '保存高亮需要选区或引文。',
+      });
+    }
+
+    const locator =
+      kind === 'bookmark'
+        ? deps.currentLocator()
+        : selected?.locator !== undefined && (kind !== 'highlight' || selectedQuote !== '')
+          ? selected.locator
+          : deps.currentLocator();
+    const plan: PendingSave = {
+      kind,
+      locator,
+      quote,
+      ...(note !== undefined ? { note } : {}),
+    };
+    if (permissionMode === 'yolo') {
+      return applySave(deps, plan);
+    }
+    const id = `${SAVE_TO_BOOK_TOOL_NAME}:${fnv1a64Hex(JSON.stringify(plan))}`;
+    pendingSaves.set(id, plan);
+    return {
+      ok: true,
+      tool: SAVE_TO_BOOK_TOOL_NAME,
+      kind,
+      pending: true,
+      message: '已加入待确认列表，确认后才会保存标注。',
+      pending_confirmation: [
+        {
+          id,
+          summary: saveSummary(kind, quote, note),
+          tool: SAVE_TO_BOOK_TOOL_NAME,
+          arguments: { pending_ref: id },
+        },
+      ],
+    };
+  };
+
   return {
     tools: ASSISTANT_TOOL_DEFINITIONS,
     specifiedChapterCount: () => chapterReads.count,
+    async confirmPending(id) {
+      const plan = pendingSaves.get(id);
+      if (plan === undefined) {
+        return {
+          ok: false,
+          error: 'confirmation_expired',
+          message: '待确认建议已失效，请重新发起。',
+        };
+      }
+      const result = applySave(deps, plan);
+      if (result.ok) {
+        pendingSaves.delete(id);
+      }
+      return result;
+    },
     async execute(name, args) {
       const parsed = parseArgs(args);
       if ('error' in parsed && parsed.error === 'invalid_args') {
         return fail(name, 'invalid_args', { message: '工具参数不是对象。' });
       }
+      const argsRecord = parsed as Record<string, unknown>;
+      if (argsRecord.pending_ref !== undefined) {
+        return fail(name, 'invalid_args', {
+          message: '待确认建议只能由用户在面板确认后执行。',
+        });
+      }
       if (name === QUERY_BOOK_TOOL_NAME) {
-        return executeQueryBook(deps, parsed, chapterReads);
+        return executeQueryBook(deps, argsRecord, chapterReads);
       }
       if (name === SAVE_TO_BOOK_TOOL_NAME) {
-        return executeSaveToBook(deps, parsed);
+        return executeSaveToBook(argsRecord);
       }
       return fail(name, 'unknown_tool', { message: '未知工具。' });
     },

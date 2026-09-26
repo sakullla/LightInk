@@ -168,6 +168,8 @@ describe('createEditorAssistant read-only document context', () => {
     // 调用只回 read_only（下一个用例验证）。
     expect(payload.tools).toEqual([]);
     expect(systemText).toContain('编辑器中的 AI 助手');
+    expect(panelElement()?.querySelector('.lightink-reader-assistant-modes')).toBeNull();
+    expect(panelElement()?.textContent?.toLowerCase()).not.toContain('bypass');
     expect(writeHistory).toHaveBeenCalledTimes(1);
     expect(readKeys[0]).toBe(DOC_A.key);
     assistant.destroy();

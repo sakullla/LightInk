@@ -143,6 +143,7 @@ export function createEditorAssistant(deps: EditorAssistantDeps): EditorAssistan
       ...(deps.writeHistory !== undefined ? { writeHistory: deps.writeHistory } : {}),
       ...(deps.clearHistory !== undefined ? { clearHistory: deps.clearHistory } : {}),
       historyKey: () => documentOrNull()?.key ?? null,
+      showPermissionMode: false,
       createToolSession: () => readOnlySession(),
       ...(deps.surface !== undefined ? { surface: deps.surface } : {}),
       ...(deps.stream !== undefined ? { stream: deps.stream } : {}),
