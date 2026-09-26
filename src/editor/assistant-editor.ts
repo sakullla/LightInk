@@ -131,6 +131,7 @@ export function createEditorAssistant(deps: EditorAssistantDeps): EditorAssistan
       },
       openSettings: deps.openSettings,
       systemPrompt: () => deps.t('editor.assistant.systemPrompt'),
+      placeholder: deps.t('editor.assistant.placeholder'),
       // 只读：摘要不落标注、不写文档；有提示通道时告知用户未保存。
       saveAnnotation: (text) => {
         if (text.trim() === '') {

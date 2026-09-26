@@ -57,40 +57,6 @@
   letter-spacing: 0.01em;
 }
 
-.lightink-reader-assistant-modes {
-  display: flex;
-  flex: 0 1 auto;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.lightink-reader-assistant-mode {
-  min-height: 28px;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--lightink-muted);
-  font: inherit;
-  font-size: 0.7rem;
-  cursor: pointer;
-}
-
-.lightink-reader-assistant-mode[aria-checked='true'] {
-  background: var(--lightink-accent-soft);
-  color: var(--lightink-fg);
-  font-weight: 650;
-}
-
-.lightink-reader-assistant-mode:hover {
-  background: var(--lightink-accent-soft);
-}
-
-.lightink-reader-assistant-mode:focus-visible {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 1px;
-}
-
 .lightink-reader-assistant-close {
   flex: 0 0 auto;
   min-width: 28px;
@@ -693,7 +659,6 @@
 
 .lightink-reader-assistant-quote {
   flex: 0 0 auto;
-  margin-right: auto;
   min-height: 28px;
   padding: 0.15rem 0.45rem;
   border: 0;
@@ -752,15 +717,113 @@
   font-size: 0.68rem;
 }
 
+/* 权限模式：composer 工具栏左侧紧凑触发器 + 上弹菜单（ADR-5 / R5）。 */
+.lightink-reader-assistant-mode-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.lightink-reader-assistant-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 28px;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-mode-trigger:hover,
+.lightink-reader-assistant-mode-trigger[aria-expanded='true'] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-mode-trigger:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-reader-assistant-mode-chevron {
+  font-size: 0.6rem;
+}
+
+.lightink-reader-assistant-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 7rem;
+  margin: 0;
+  padding: 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow);
+}
+
+.lightink-reader-assistant-mode-menu[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-mode-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 0.2rem 0.55rem;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.74rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-mode-option:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-assistant-mode-option[aria-checked='true'] {
+  background: var(--lightink-accent-soft);
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-mode-option:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+/* 发送/停止：内嵌输入框右下的图标按钮，同一位置互换。 */
 .lightink-reader-assistant-send,
 .lightink-reader-assistant-stop {
   flex: 0 0 auto;
-  min-height: 1.9rem;
-  padding: 0.28rem 0.85rem;
-  border-radius: 999px;
-  font: inherit;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  margin-inline-start: auto;
+  padding: 0;
+  border-radius: 50%;
   cursor: pointer;
+}
+
+.lightink-reader-assistant-send[hidden],
+.lightink-reader-assistant-stop[hidden] {
+  display: none;
 }
 
 .lightink-reader-assistant-send {

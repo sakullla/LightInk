@@ -436,6 +436,18 @@ describe('createShelfAssistant library tools', () => {
     assistant.destroy();
   });
 
+  it('injects the shelf placeholder instead of the reader chapter wording', async () => {
+    const { assistant } = mountShelf();
+    assistant.open();
+    await flush();
+    const input = panelElement()!.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.placeholder).toBe(t('library.assistant.placeholder'));
+    expect(input?.placeholder).not.toBe(t('reader.assistant.placeholder'));
+    assistant.destroy();
+  });
+
   it('shows shelf actions and a review/auto/yolo switch, not reader chapter actions', async () => {
     const { assistant } = mountShelf();
     assistant.open();
@@ -459,6 +471,18 @@ describe('createShelfAssistant library tools', () => {
       panelElement()!.querySelector<HTMLButtonElement>('[data-assistant-mode="review"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true');
+    // 权限选择已迁入 composer 工具栏触发器：头部只剩历史/标题/关闭。
+    const head = panelElement()!.querySelector('.lightink-reader-assistant-head');
+    expect(head?.querySelector('[data-assistant-mode]')).toBeNull();
+    expect(head?.querySelector('.lightink-reader-assistant-modes')).toBeNull();
+    const trigger = panelElement()!.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-mode-trigger',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).toContain('审阅');
+    expect(
+      panelElement()!.querySelector('.lightink-reader-assistant-composer-bar')?.contains(trigger!),
+    ).toBe(true);
     assistant.destroy();
   });
 

@@ -144,6 +144,14 @@ export function syncAssistantHostTheme(overlay: HTMLElement, host: HTMLElement):
 /** 同一条用户发送内的工具往返上限（ADR-2 / R6）。 */
 export const ASSISTANT_MAX_TOOL_ROUNDS = 24;
 
+/** 发送图标（上箭头）：内嵌输入框右下的图标按钮（ADR-4 / R4）。 */
+const ASSISTANT_SEND_ICON =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5v-9"/><path d="M3.9 7.6 8 3.5l4.1 4.1"/></svg>';
+
+/** 停止图标（方块）：流式期间与发送按钮在同一位置互换。 */
+const ASSISTANT_STOP_ICON =
+  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.6"/></svg>';
+
 export type { AssistantHistoryMessage };
 
 interface AssistantToolBlock {
@@ -647,6 +655,12 @@ export interface AssistantPanelDeps {
    * 与编辑器按各自上下文注入，避免沿用阅读器工具说明（ADR-3 / ADR-4）。
    */
   systemPrompt?: () => string;
+  /**
+   * composer 占位文案（解析后的字符串，非 key；core 不新增 i18n 耦合）。
+   * 缺省 `reader.assistant.placeholder`（阅读器章内语境）；书库与编辑器按
+   * 各自场景注入（ADR-4 / R4）。
+   */
+  placeholder?: string;
   /** Surface 挂载/钉位/触屏注入；缺省 body portal + 不钉位。 */
   surface?: AssistantSurfaceDeps;
   /** 未配置引导「前往配置」（宿主：回书架并打开 Manage 的 AI 分组）。 */
@@ -917,46 +931,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
   let permissionMode: AssistantPermissionMode = loadAssistantPermissionMode(permissionStorage());
-  if (deps.showPermissionMode === true) {
-    const modeGroup = document.createElement('div');
-    modeGroup.className = 'lightink-reader-assistant-modes';
-    modeGroup.setAttribute('role', 'radiogroup');
-    modeGroup.setAttribute('aria-label', t('reader.assistant.permissionMode'));
-    const modeButtons = new Map<AssistantPermissionMode, HTMLButtonElement>();
-    const paintMode = (): void => {
-      for (const mode of ASSISTANT_PERMISSION_MODES) {
-        const button = modeButtons.get(mode);
-        if (button === undefined) {
-          continue;
-        }
-        const selected = mode === permissionMode;
-        button.setAttribute('aria-checked', selected ? 'true' : 'false');
-        button.tabIndex = selected ? 0 : -1;
-      }
-    };
-    for (const mode of ASSISTANT_PERMISSION_MODES) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'lightink-reader-assistant-mode';
-      button.dataset.assistantMode = mode;
-      button.setAttribute('role', 'radio');
-      button.textContent = t(permissionModeLabel(mode));
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (permissionMode === mode) {
-          return;
-        }
-        permissionMode = mode;
-        saveAssistantPermissionMode(permissionStorage(), mode);
-        paintMode();
-      });
-      modeButtons.set(mode, button);
-      modeGroup.appendChild(button);
-    }
-    paintMode();
-    head.insertBefore(modeGroup, close);
-  }
 
   const historyPane = document.createElement('div');
   historyPane.className = 'lightink-reader-assistant-history';
@@ -1068,10 +1042,101 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const input = document.createElement('textarea');
   input.className = 'lightink-reader-assistant-input';
   input.rows = 2;
-  input.setAttribute('placeholder', t('reader.assistant.placeholder'));
-  input.setAttribute('aria-label', t('reader.assistant.placeholder'));
+  const placeholderText = deps.placeholder ?? t('reader.assistant.placeholder');
+  input.setAttribute('placeholder', placeholderText);
+  input.setAttribute('aria-label', placeholderText);
   const composerBar = document.createElement('div');
   composerBar.className = 'lightink-reader-assistant-composer-bar';
+
+  // 权限模式选择：composer 工具栏左侧紧凑触发器 + 上弹三选项菜单（ADR-5 / R5）。
+  // 保留 role=radio/radiogroup 语义、data-assistant-mode 与 localStorage 持久化；
+  // showPermissionMode=false（编辑器）时触发器与菜单都不渲染。
+  if (deps.showPermissionMode === true) {
+    const modeWrap = document.createElement('div');
+    modeWrap.className = 'lightink-reader-assistant-mode-wrap';
+    const modeTrigger = document.createElement('button');
+    modeTrigger.type = 'button';
+    modeTrigger.className = 'lightink-reader-assistant-mode-trigger';
+    modeTrigger.setAttribute('aria-haspopup', 'true');
+    modeTrigger.setAttribute('aria-expanded', 'false');
+    modeTrigger.setAttribute('title', t('reader.assistant.permissionMode'));
+    const modeTriggerLabel = document.createElement('span');
+    modeTriggerLabel.className = 'lightink-reader-assistant-mode-trigger-label';
+    const modeChevron = document.createElement('span');
+    modeChevron.className = 'lightink-reader-assistant-mode-chevron';
+    modeChevron.setAttribute('aria-hidden', 'true');
+    modeChevron.textContent = '▾';
+    modeTrigger.append(modeTriggerLabel, modeChevron);
+    const modeMenu = document.createElement('div');
+    modeMenu.className = 'lightink-reader-assistant-mode-menu';
+    modeMenu.setAttribute('role', 'radiogroup');
+    modeMenu.setAttribute('aria-label', t('reader.assistant.permissionMode'));
+    modeMenu.hidden = true;
+    const setModeMenuOpen = (open: boolean): void => {
+      modeMenu.hidden = !open;
+      modeTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    const modeButtons = new Map<AssistantPermissionMode, HTMLButtonElement>();
+    const paintMode = (): void => {
+      for (const mode of ASSISTANT_PERMISSION_MODES) {
+        const button = modeButtons.get(mode);
+        if (button === undefined) {
+          continue;
+        }
+        const selected = mode === permissionMode;
+        button.setAttribute('aria-checked', selected ? 'true' : 'false');
+        button.tabIndex = selected ? 0 : -1;
+      }
+      modeTriggerLabel.textContent = t(permissionModeLabel(permissionMode));
+    };
+    for (const mode of ASSISTANT_PERMISSION_MODES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'lightink-reader-assistant-mode-option';
+      button.dataset.assistantMode = mode;
+      button.setAttribute('role', 'radio');
+      button.textContent = t(permissionModeLabel(mode));
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (permissionMode !== mode) {
+          permissionMode = mode;
+          saveAssistantPermissionMode(permissionStorage(), mode);
+          paintMode();
+        }
+        setModeMenuOpen(false);
+      });
+      modeButtons.set(mode, button);
+      modeMenu.appendChild(button);
+    }
+    modeTrigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setModeMenuOpen(modeMenu.hidden);
+    });
+    modeMenu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        setModeMenuOpen(false);
+        modeTrigger.focus();
+      }
+    });
+    // 面板自身的 click/pointerdown 都 stopPropagation：点击面板内菜单外的
+    // 区域收起菜单，靠挂在 root 上的这个监听（面板外点击不处理，菜单随下次
+    // 交互自然收起）。
+    root.addEventListener('pointerdown', (event) => {
+      if (
+        !modeMenu.hidden &&
+        event.target instanceof Node &&
+        !modeWrap.contains(event.target)
+      ) {
+        setModeMenuOpen(false);
+      }
+    });
+    paintMode();
+    modeWrap.append(modeTrigger, modeMenu);
+    composerBar.appendChild(modeWrap);
+  }
+
   const quoteButton = document.createElement('button');
   quoteButton.type = 'button';
   quoteButton.className = 'lightink-reader-assistant-quote';
@@ -1080,12 +1145,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const send = document.createElement('button');
   send.type = 'submit';
   send.className = 'lightink-reader-assistant-send';
-  send.textContent = t('reader.assistant.send');
+  send.setAttribute('aria-label', t('reader.assistant.send'));
+  send.setAttribute('title', t('reader.assistant.send'));
+  send.innerHTML = ASSISTANT_SEND_ICON;
   const stop = document.createElement('button');
   stop.type = 'button';
   stop.className = 'lightink-reader-assistant-stop';
   stop.dataset.assistantStop = 'true';
-  stop.textContent = t('reader.assistant.stop');
+  stop.setAttribute('aria-label', t('reader.assistant.stop'));
+  stop.setAttribute('title', t('reader.assistant.stop'));
+  stop.innerHTML = ASSISTANT_STOP_ICON;
   stop.hidden = true;
   stop.disabled = true;
   const quoteChip = document.createElement('div');

@@ -12,6 +12,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   ASSISTANT_MAX_TOOL_ROUNDS,
@@ -32,6 +33,10 @@ import {
 } from '../assistant-history.js';
 import { READER_LIMITS } from '../../reader/reader-limits.js';
 import { translate, type MessageKey } from '../../i18n/messages.js';
+import {
+  ASSISTANT_PERMISSION_MODE_KEY,
+  type AssistantPermissionStorage,
+} from '../assistant-permission.js';
 import type { AssistantToolSession } from '../assistant-tools.js';
 
 const t = (key: MessageKey, vars?: Readonly<Record<string, string>>): string =>
@@ -264,6 +269,9 @@ interface MountOptions {
   readonly currentPage?: number;
   readonly createToolSession?: () => AssistantToolSession;
   readonly systemPrompt?: () => string;
+  readonly placeholder?: string;
+  readonly showPermissionMode?: boolean;
+  readonly permissionStorage?: AssistantPermissionStorage | null;
   readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
 }
 
@@ -313,6 +321,13 @@ function mountPanel(options: MountOptions = {}): {
     currentPage: () => options.currentPage,
     createToolSession: options.createToolSession,
     ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: options.placeholder } : {}),
+    ...(options.showPermissionMode !== undefined
+      ? { showPermissionMode: options.showPermissionMode }
+      : {}),
+    ...(options.permissionStorage !== undefined
+      ? { permissionStorage: options.permissionStorage }
+      : {}),
     jumpToLocator: calls.jumpToLocator,
   };
   const panel = createAssistantPanel(deps);
@@ -647,6 +662,156 @@ describe('createAssistantPanel composer (R1)', () => {
     await flush();
     expect(invoke.mock.calls.length).toBeGreaterThan(1);
     expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
+    panel.destroy();
+  });
+});
+
+function memoryStorage(): AssistantPermissionStorage & { readonly data: Map<string, string> } {
+  const data = new Map<string, string>();
+  return {
+    data,
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => {
+      data.set(key, value);
+    },
+  };
+}
+
+describe('createAssistantPanel composer redesign (R4/R5)', () => {
+  it('uses the reader placeholder by default and honours a surface-injected placeholder', async () => {
+    const fallback = mountPanel();
+    fallback.panel.open();
+    await flush();
+    let input = fallback.panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.placeholder).toBe(t('reader.assistant.placeholder'));
+    expect(input?.getAttribute('aria-label')).toBe(t('reader.assistant.placeholder'));
+    fallback.panel.destroy();
+
+    const injected = mountPanel({ placeholder: '查询或整理书库…' });
+    injected.panel.open();
+    await flush();
+    input = injected.panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.placeholder).toBe('查询或整理书库…');
+    expect(input?.getAttribute('aria-label')).toBe('查询或整理书库…');
+    injected.panel.destroy();
+  });
+
+  it('caps the input height with internal scrolling via CSS', () => {
+    const css = readFileSync('src/assistant/assistant-panel.css', 'utf-8');
+    const rule = /\.lightink-reader-assistant-input\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/max-height:/);
+    expect(rule).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('renders send/stop as icon buttons at the composer bar end and swaps them in place', async () => {
+    const { panel } = mountPanel();
+    panel.open();
+    await flush();
+    const bar = panel.element.querySelector('.lightink-reader-assistant-composer-bar');
+    const send = bar?.querySelector<HTMLButtonElement>('.lightink-reader-assistant-send');
+    const stop = bar?.querySelector<HTMLButtonElement>('.lightink-reader-assistant-stop');
+    expect(send?.getAttribute('aria-label')).toBe(t('reader.assistant.send'));
+    expect(send?.querySelector('svg')).not.toBeNull();
+    expect(stop?.getAttribute('aria-label')).toBe(t('reader.assistant.stop'));
+    expect(stop?.querySelector('svg')).not.toBeNull();
+    // 同一位置互换：两枚图标按钮都是工具栏最末尾的邻居。
+    expect(send?.nextElementSibling).toBe(stop);
+    expect(stop?.nextElementSibling).toBeNull();
+    expect(send?.hidden).toBe(false);
+    expect(stop?.hidden).toBe(true);
+    panel.destroy();
+  });
+
+  it('sends on Enter and keeps Shift+Enter as a newline', async () => {
+    const { panel, invoke } = mountPanel();
+    panel.open();
+    await flush();
+    const input = panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    )!;
+    input.value = '回车发送';
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('');
+
+    input.value = '换行不发送';
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('换行不发送');
+    panel.destroy();
+  });
+
+  it('moves the permission switch into a composer trigger with a popup radio menu', async () => {
+    const storage = memoryStorage();
+    const { panel } = mountPanel({ showPermissionMode: true, permissionStorage: storage });
+    panel.open();
+    await flush();
+    const head = panel.element.querySelector('.lightink-reader-assistant-head');
+    expect(head?.querySelector('.lightink-reader-assistant-modes')).toBeNull();
+    expect(head?.querySelector('[data-assistant-mode]')).toBeNull();
+
+    const bar = panel.element.querySelector('.lightink-reader-assistant-composer-bar');
+    const trigger = bar?.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-mode-trigger',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).toContain(t('reader.assistant.permissionMode.review'));
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+
+    const menu = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-mode-menu',
+    );
+    expect(menu?.getAttribute('role')).toBe('radiogroup');
+    expect(menu?.hidden).toBe(true);
+    const options = [
+      ...panel.element.querySelectorAll<HTMLButtonElement>('[data-assistant-mode]'),
+    ];
+    expect(options.map((option) => option.dataset.assistantMode)).toEqual([
+      'review',
+      'auto',
+      'yolo',
+    ]);
+    expect(options.map((option) => option.getAttribute('role'))).toEqual([
+      'radio',
+      'radio',
+      'radio',
+    ]);
+    expect(options[0]?.getAttribute('aria-checked')).toBe('true');
+
+    trigger!.click();
+    expect(menu?.hidden).toBe(false);
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+    options[1]!.click();
+    expect(storage.getItem(ASSISTANT_PERMISSION_MODE_KEY)).toBe('auto');
+    expect(trigger?.textContent).toContain(t('reader.assistant.permissionMode.auto'));
+    expect(menu?.hidden).toBe(true);
+    expect(options[0]?.getAttribute('aria-checked')).toBe('false');
+    expect(options[1]?.getAttribute('aria-checked')).toBe('true');
+    panel.destroy();
+  });
+
+  it('renders no permission control when the surface disables it', async () => {
+    const { panel } = mountPanel();
+    panel.open();
+    await flush();
+    expect(panel.element.querySelector('.lightink-reader-assistant-mode-trigger')).toBeNull();
+    expect(panel.element.querySelector('.lightink-reader-assistant-mode-menu')).toBeNull();
+    expect(panel.element.querySelectorAll('[data-assistant-mode]').length).toBe(0);
     panel.destroy();
   });
 });

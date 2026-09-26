@@ -123,6 +123,7 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
     // 首页没有当前文档：书库数据只经 library_* 工具读取。
     chapterContext: () => null,
     systemPrompt: () => deps.t('library.assistant.systemPrompt'),
+    placeholder: deps.t('library.assistant.placeholder'),
     openSettings: deps.openSettings,
     // 首页没有当前书籍：摘要不落标注。书架不提供引用选区和章节动作。
     saveAnnotation: () => undefined,

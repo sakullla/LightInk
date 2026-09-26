@@ -430,6 +430,7 @@ const en = {
   'library.assistant.systemPrompt':
     'You are the AI assistant on the LightInk library shelf. Use the library_search / library_organize / library_tag / library_create_group / library_remove tools to query and manage the library. The app chooses the permission mode: in review, writes wait on the confirmation card; in auto, only the reversible organize, tag add/remove, and new-group actions named in the user’s current sentence run immediately; deletes, clearing tags, and your own suggestions wait for confirmation; YOLO is applied by the app, not by you. Do not claim a write finished before it is confirmed. Confirmations are always handled by the confirmation card in the panel: never ask for or give confirmation in your reply text (no "confirm?", "✅ yes / ❌ no", or "final confirmation" prose); submit writes only through tools and let the user confirm on the card. When several books share a title, list the candidates and do not guess. Leave out books that already belong to a custom group or already have a tag unless the user asks to reorganize them or names those books. Reply in the same language the user writes in.',
   'library.assistant.actions': 'Library quick actions',
+  'library.assistant.placeholder': 'Ask about your library…',
   'library.assistant.action.organize': 'Organize suggestions',
   'library.assistant.action.tag': 'Tag suggestions',
   'library.assistant.action.search': 'Find',
@@ -441,6 +442,7 @@ const en = {
     'Search the library with library_search by title, author, group, or tag. If I have not given a keyword yet, list some books and say the search can be narrowed. If nothing matches, say so and do not invent books.',
   'editor.assistant.systemPrompt':
     'You are the AI assistant inside the LightInk editor. The current document is provided as context and is read-only: you have no tools and cannot modify it. Answer questions about the document; if the user asks you to change it, explain that the editor assistant will not modify content. Reply in the same language the user writes in.',
+  'editor.assistant.placeholder': 'Ask about this document…',
   'reader.assistant.prompt.explain':
     'Explain the meaning of the selected text below, covering difficult words and how it fits the surrounding story:',
   'reader.assistant.prompt.summarize':
@@ -1075,6 +1077,7 @@ const zhCN = {
   'library.assistant.systemPrompt':
     '你是 LightInk 书架首页的 AI 助手，可查询并管理书库。需要操作书库时使用工具 library_search（查询书库/分组/标签）、library_organize（归类或移出分组）、library_tag（打标/取消/清空标签）、library_create_group（新建分组）、library_remove（删除书籍或分组）。权限模式由应用决定：审阅模式下写入进入待确认；自动模式只直接执行用户当前这句话点名的归类、加减标签和新建分组；删除、清空标签和你主动提出的建议进入待确认；YOLO 由应用执行，不要自己声称已跳过确认。确认完成前不要说书库已经改好。确认一律由面板中的确认卡片完成：不要在回复正文里请求或给出确认（不要输出「确认吗」「✅ 是 / ❌ 否」「最终确认」这类散文式确认）；写操作只通过工具提交，等用户在卡片上确认。同名多本先列出候选，不猜测落盘。已经在自定义分组或已有标签的书不要放进主动整理或打标，除非用户明确说重新整理、重新打标或点名这些书。使用与用户提问相同的语言回答。',
   'library.assistant.actions': '书架快捷动作',
+  'library.assistant.placeholder': '查询或整理书库…',
   'library.assistant.action.organize': '整理建议',
   'library.assistant.action.tag': '打标建议',
   'library.assistant.action.search': '查找',
@@ -1086,6 +1089,7 @@ const zhCN = {
     '请用 library_search 按书名、作者、分组或标签查找书库。如果我还没给出关键词，先列出一部分书并说明可以继续缩小范围。没有匹配时说明没有匹配，不要编造书目。',
   'editor.assistant.systemPrompt':
     '你是 LightInk 编辑器中的 AI 助手。当前文档作为上下文提供，只读：你没有可用工具，也不能修改文档。请围绕文档内容回答问题；如果用户要求修改文档，说明编辑器内助手不会修改内容。使用与用户提问相同的语言回答。',
+  'editor.assistant.placeholder': '就当前文档提问…',
   'reader.assistant.prompt.explain': '请解释下面选中文本的含义，包括难词难句与它在上下文中的作用：',
   'reader.assistant.prompt.summarize': '请用简明的要点总结下面选中的文本：',
   'reader.assistant.prompt.chapterSummary': '请用要点总结当前章节的主要内容。',

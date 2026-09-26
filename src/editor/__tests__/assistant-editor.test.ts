@@ -169,9 +169,24 @@ describe('createEditorAssistant read-only document context', () => {
     expect(payload.tools).toEqual([]);
     expect(systemText).toContain('编辑器中的 AI 助手');
     expect(panelElement()?.querySelector('.lightink-reader-assistant-modes')).toBeNull();
+    // 编辑器不渲染权限控件（含 composer 触发器与菜单）。
+    expect(panelElement()?.querySelector('.lightink-reader-assistant-mode-trigger')).toBeNull();
+    expect(panelElement()?.querySelectorAll('[data-assistant-mode]').length).toBe(0);
     expect(panelElement()?.textContent?.toLowerCase()).not.toContain('bypass');
     expect(writeHistory).toHaveBeenCalledTimes(1);
     expect(readKeys[0]).toBe(DOC_A.key);
+    assistant.destroy();
+  });
+
+  it('injects the editor document placeholder into the composer', async () => {
+    const { assistant } = mountEditor();
+    assistant.open();
+    await flush();
+    const input = panelElement()!.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input?.placeholder).toBe(t('editor.assistant.placeholder'));
+    expect(input?.placeholder).not.toBe(t('reader.assistant.placeholder'));
     assistant.destroy();
   });
 
