@@ -1822,6 +1822,68 @@ describe('createAssistantPanel pending confirmations', () => {
     ).toBe('rejected');
     panel.destroy();
   });
+
+  it('mounts the pending card inline as the last element of the message flow', async () => {
+    const execute = vi.fn(async () => pendingReply);
+    const { panel } = mountPanel(toolCallsRounds(execute));
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把示例书归入旧书');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+
+    const messagesHost = panel.element.querySelector('.lightink-reader-assistant-messages');
+    const card = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending');
+    expect(card).not.toBeNull();
+    // 内联进消息流：卡片的父节点是消息列表，且不再是主列的底部固定兄弟。
+    expect(card?.parentElement).toBe(messagesHost);
+    expect(messagesHost?.lastElementChild).toBe(card);
+    expect(
+      panel.element.querySelector('.lightink-reader-assistant-main > .lightink-reader-assistant-pending'),
+    ).toBeNull();
+    panel.destroy();
+  });
+
+  it('keeps the inline card in place while new messages arrive', async () => {
+    const execute = vi.fn(async () => pendingReply);
+    const { panel } = mountPanel(toolCallsRounds(execute));
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把示例书归入旧书');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+
+    submitQuestion(panel, '再问一句');
+    await flushUntil(() => bubbleTexts(panel, 'assistant').length >= 2);
+
+    const messagesHost = panel.element.querySelector('.lightink-reader-assistant-messages');
+    const card = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending');
+    expect(card?.parentElement).toBe(messagesHost);
+    expect(messagesHost?.lastElementChild).toBe(card);
+    expect(
+      panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')?.dataset.status,
+    ).toBe('pending');
+    expect(panel.element.querySelectorAll('.lightink-reader-assistant-pending')).toHaveLength(1);
+    panel.destroy();
+  });
+
+  it('forbids prose confirmation in the reader and library system prompts', () => {
+    for (const locale of ['zh-CN', 'en'] as const) {
+      for (const key of [
+        'reader.assistant.systemPrompt',
+        'library.assistant.systemPrompt',
+      ] as const) {
+        const prompt = translate(locale, key);
+        expect(prompt).toContain(locale === 'zh-CN' ? '确认卡片' : 'confirmation card');
+        expect(prompt).toContain('✅');
+        expect(prompt).toContain('❌');
+        expect(prompt).toContain(locale === 'zh-CN' ? '最终确认' : 'final confirmation');
+        expect(prompt).toContain(locale === 'zh-CN' ? '只通过工具提交' : 'only through tools');
+      }
+    }
+  });
 });
 
 describe('createAssistantPanel surface injection', () => {

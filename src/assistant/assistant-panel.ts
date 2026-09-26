@@ -1028,6 +1028,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   rejectAllButton.textContent = t('reader.assistant.pendingRejectAll');
   pendingBar.append(confirmAllButton, rejectAllButton);
   pendingSection.append(pendingTitle, pendingList, pendingBar);
+  // 待确认是消息流末尾的内联卡片（单例）：随消息流上滚、原位更新；
+  // renderMessages 每次重建消息节点后都把它放回末尾。
+  messagesHost.appendChild(pendingSection);
 
   const panelActions: readonly AssistantPanelAction[] =
     deps.actions ??
@@ -1109,7 +1112,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   composerHint.className = 'lightink-reader-assistant-composer-hint';
   composerHint.textContent = t('reader.assistant.composerHint');
   composer.append(composerBox, composerHint);
-  main.append(contextHint, messagesWrap, persistNotice, pendingSection, actions, composer);
+  main.append(contextHint, messagesWrap, persistNotice, actions, composer);
   root.append(head, historyPane, guide, main);
 
   root.addEventListener(
@@ -1369,18 +1372,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const renderMessages = (): void => {
     streamingText = null;
     if (messages.length === 0) {
-      messagesHost.replaceChildren();
+      messagesHost.replaceChildren(pendingSection);
       scrollMessagesBottom(true);
       return;
     }
     const nodes = messages.map((message, index) => renderMessage(message, index));
-    messagesHost.replaceChildren(...nodes);
+    messagesHost.replaceChildren(...nodes, pendingSection);
     const last = messages[messages.length - 1]!;
     if (streaming && last.role === 'assistant' && last.error === undefined) {
       streamingText =
-        messagesHost.children[messagesHost.children.length - 1]?.querySelector(
-          '.lightink-reader-assistant-message-text',
-        ) ?? null;
+        nodes[nodes.length - 1]?.querySelector('.lightink-reader-assistant-message-text') ?? null;
     }
     scrollMessagesBottom();
   };
@@ -1433,6 +1434,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const renderPendingConfirmations = (): void => {
+    const wasHidden = pendingSection.hidden;
     const waiting = pendingQueue.filter((entry) => entry.status === 'pending').length;
     pendingTitle.textContent = t('reader.assistant.pendingCount', { n: String(waiting) });
     pendingSection.hidden = pendingQueue.length === 0;
@@ -1440,6 +1442,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     const busy = pendingBusy;
     confirmAllButton.disabled = busy || waiting === 0;
     rejectAllButton.disabled = busy || waiting === 0;
+    // 卡片在消息流内新出现时滚到它，避免被流出的正文顶出视口。
+    if (wasHidden && !pendingSection.hidden) {
+      scrollMessagesBottom(true);
+    }
   };
 
   /**

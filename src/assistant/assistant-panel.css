@@ -791,18 +791,17 @@
   outline-offset: 1px;
 }
 
-/* ===== 待确认列表（AI 主动建议；确认后回调执行器，未确认不落盘） ===== */
+/* ===== 待确认卡片（消息流内联单例；确认后回调执行器，未确认不落盘） ===== */
 
 .lightink-reader-assistant-pending {
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
-  gap: 0.35rem;
-  min-height: 0;
-  max-height: min(42%, 16rem);
-  padding: 0.5rem 0.75rem 0;
-  overflow: hidden;
-  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-elevated);
 }
 
 .lightink-reader-assistant-pending[hidden] {
@@ -818,10 +817,9 @@
 
 .lightink-reader-assistant-pending-list {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.3rem;
-  min-height: 0;
+  max-height: 12rem;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -844,17 +842,13 @@
   display: flex;
   flex: 0 0 auto;
   gap: 0.35rem;
-  padding-bottom: 0.15rem;
 }
 
 .lightink-reader-assistant-pending-item {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.45rem 0.55rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
-  border-radius: var(--lightink-radius-control);
-  background: var(--lightink-bg-elevated);
+  gap: 0.2rem;
+  padding: 0.15rem 0;
   font-size: 0.76rem;
 }
 
@@ -915,7 +909,7 @@
   outline-offset: 1px;
 }
 
-/* 窄窗口仍是列布局：列表自己滚，确认条和输入区留在面板里。 */
+/* 窄窗口仍是列布局：消息区（含内联确认卡片）自己滚，输入区留在面板里。 */
 @media (max-width: 720px) {
   .lightink-reader-assistant-panel {
     max-height: 100dvh;

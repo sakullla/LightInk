@@ -507,6 +507,52 @@ describe('createShelfAssistant library tools', () => {
     );
     yolo.assistant.destroy();
   });
+
+  it('renders the pending card inline inside the message flow', async () => {
+    const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
+    const { assistant } = mountShelf({
+      library: fixture.deps,
+      script: ({ round, emit }) => {
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: LIBRARY_ORGANIZE_TOOL_NAME,
+                arguments: JSON.stringify({ books: ['三体'], group: '科幻', mode: 'assign' }),
+              },
+            ],
+          };
+        }
+        emit('建议在卡片里确认。');
+        return { finish: 'stop', totalChars: 8, toolCalls: [] };
+      },
+    });
+    assistant.open();
+    await flush();
+    submitQuestion(panelElement()!, '帮我整理一下书库');
+    await flushUntil(
+      () => panelElement()?.querySelector('[data-assistant-pending-check]') != null,
+    );
+    const messagesHost = panelElement()!.querySelector('.lightink-reader-assistant-messages');
+    const card = panelElement()!.querySelector('.lightink-reader-assistant-pending');
+    expect(card?.parentElement).toBe(messagesHost);
+    expect(messagesHost?.lastElementChild).toBe(card);
+    assistant.destroy();
+  });
+
+  it('forbids prose confirmation in the shelf system prompt', () => {
+    for (const locale of ['zh-CN', 'en'] as const) {
+      const prompt = translate(locale, 'library.assistant.systemPrompt');
+      expect(prompt).toContain(locale === 'zh-CN' ? '确认卡片' : 'confirmation card');
+      expect(prompt).toContain('✅');
+      expect(prompt).toContain('❌');
+      expect(prompt).toContain(locale === 'zh-CN' ? '最终确认' : 'final confirmation');
+      expect(prompt).toContain(locale === 'zh-CN' ? '只通过工具提交' : 'only through tools');
+    }
+  });
 });
 
 function memoryStorage(): AssistantPermissionStorage {
