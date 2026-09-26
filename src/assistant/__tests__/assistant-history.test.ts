@@ -218,6 +218,45 @@ describe('create / switch / delete / restore activeId', () => {
     expect(created.conversations[2]!.updatedAt).toBe(50);
   });
 
+  it('round-trips tool calls so a restarted chat still has the download target', () => {
+    const store: AssistantHistoryStore = {
+      version: 2,
+      activeId: 'a',
+      conversations: [
+        {
+          id: 'a',
+          title: '下载',
+          updatedAt: 3,
+          messages: [
+            user('下载这本书', 1),
+            {
+              role: 'assistant',
+              content: '',
+              createdAt: 2,
+              toolBlocks: [
+                {
+                  id: 'call-1',
+                  name: 'book_source_download',
+                  arguments: '{"title":"紅樓夢（程甲本）","bookUrl":"https://example.test/book"}',
+                  result: '{"ok":false,"message":"目录选择器没有匹配到章节"}',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const restored = parseAssistantHistoryStore(serializeAssistantHistoryStore(store));
+    expect(restored.conversations[0]!.messages[1]?.toolBlocks).toEqual([
+      {
+        id: 'call-1',
+        name: 'book_source_download',
+        arguments: '{"title":"紅樓夢（程甲本）","bookUrl":"https://example.test/book"}',
+        result: '{"ok":false,"message":"目录选择器没有匹配到章节"}',
+      },
+    ]);
+  });
+
   it('switches activeId and round-trips it so reopen restores the last session', () => {
     const switched = switchAssistantConversation(twoSessions(), 'a');
     expect(switched.activeId).toBe('a');

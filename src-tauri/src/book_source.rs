@@ -113,8 +113,8 @@ pub struct BookSourceTocRule {
 pub struct BookSourceContentRule {
     /// 正文正则，第 1 个捕获组为正文 HTML。
     pub text: String,
-    /// 依次作用于捕获内容的清理正则（替换为空）。
-    #[serde(default)]
+    /// 依次作用于捕获内容的清理正则（替换为空）。字符串或数组都可以。
+    #[serde(default, deserialize_with = "string_or_vec")]
     pub cleanup: Vec<String>,
     #[serde(default)]
     pub next_page: Option<String>,
@@ -292,11 +292,60 @@ fn issue(field: impl Into<String>, message: impl Into<String>) -> BookSourceIssu
     }
 }
 
+/// `class="名称"` 按 token 匹配。页面写成 `class="其他 名称"` 时仍能命中。
+fn loosen_class_attributes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut rest = pattern;
+    while let Some(at) = rest.find("class=") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + "class=".len()..];
+        let quote = after.chars().next();
+        if quote != Some('"') && quote != Some('\'') {
+            out.push_str("class=");
+            rest = after;
+            continue;
+        }
+        let quote = quote.unwrap();
+        let body = &after[quote.len_utf8()..];
+        let Some(end) = body.find(quote) else {
+            out.push_str("class=");
+            rest = after;
+            continue;
+        };
+        let value = &body[..end];
+        let plain = !value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+        if plain {
+            let open = if quote == '"' { '"' } else { '\'' };
+            out.push_str("class=");
+            out.push(open);
+            out.push_str("[^");
+            out.push(open);
+            out.push_str("]*");
+            out.push_str(value);
+            out.push_str("[^");
+            out.push(open);
+            out.push_str("]*");
+            out.push(open);
+        } else {
+            out.push_str(
+                &rest[at..at + "class=".len() + quote.len_utf8() + end + quote.len_utf8()],
+            );
+        }
+        rest = &body[end + quote.len_utf8()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn compile_regex(pattern: &str) -> Result<Regex, String> {
     if pattern.trim().is_empty() {
         return Err("正则不能为空".to_string());
     }
-    Regex::new(pattern).map_err(|error| {
+    let pattern = loosen_class_attributes(pattern);
+    Regex::new(&pattern).map_err(|error| {
         let reason = error
             .to_string()
             .lines()
@@ -314,6 +363,9 @@ fn check_regex(pattern: &str, field: &str, issues: &mut Vec<BookSourceIssue>) {
 }
 
 fn check_selector(pattern: &str, field: &str, issues: &mut Vec<BookSourceIssue>) {
+    if pattern.trim() == "text" || parse_node_selector(pattern).is_some() {
+        return;
+    }
     match compile_regex(pattern) {
         Ok(regex) => {
             if regex.captures_len() < 2 {
@@ -329,8 +381,38 @@ fn check_optional_selector(
     field: &str,
     issues: &mut Vec<BookSourceIssue>,
 ) {
-    if let Some(pattern) = pattern.as_deref() {
+    if let Some(pattern) = pattern
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         check_selector(pattern, field, issues);
+    }
+}
+
+fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![text.to_string()])
+            }
+        }
+        Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                Value::String(text) => Ok(text),
+                _ => Err(serde::de::Error::custom("清理规则必须是字符串")),
+            })
+            .collect(),
+        _ => Err(serde::de::Error::custom("清理规则必须是字符串或字符串数组")),
     }
 }
 
@@ -552,15 +634,729 @@ fn clean_content(raw: &str) -> String {
     lines.join("\n")
 }
 
+/// 取第一个非空捕获组。`a|b` 两边各自有括号时，命中的那一侧才有内容。
+fn first_capture<'a>(captures: &regex::Captures<'a>) -> Option<&'a str> {
+    captures
+        .iter()
+        .skip(1)
+        .flatten()
+        .map(|value| value.as_str())
+        .find(|value| !value.is_empty())
+}
+
 fn selector_capture<'a>(regex: &Regex, text: &'a str) -> Option<&'a str> {
     regex
         .captures(text)
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str())
+        .and_then(|captures| first_capture(&captures))
+}
+
+#[derive(Clone)]
+enum AttrOp {
+    Present,
+    Equal,
+    Prefix,
+    Suffix,
+    Contains,
+}
+
+#[derive(Clone)]
+struct AttrPred {
+    name: String,
+    op: AttrOp,
+    value: String,
+}
+
+#[derive(Clone)]
+struct NodeStep {
+    tag: Option<String>,
+    class_name: Option<String>,
+    id: Option<String>,
+    attrs: Vec<AttrPred>,
+}
+
+struct FoundNode<'a> {
+    tag: &'a str,
+    attrs: &'a str,
+    inner: &'a str,
+    href: Option<&'a str>,
+    src: Option<&'a str>,
+}
+
+/// `.类名`、`标签.类名`、`#id`、`标签`，以及 `[attr]`、`[attr=值]`、`[attr^=值]`、`[attr$=值]`、`[attr*=值]`。
+/// `>` 和空格都表示后代，逗号表示或。最外层一对括号会去掉。含 `<`、内部括号或反斜杠时仍是正则。
+fn parse_node_selector(pattern: &str) -> Option<Vec<Vec<NodeStep>>> {
+    let trimmed = pattern.trim();
+    let candidate = if wrapping_parens(trimmed) {
+        trimmed[1..trimmed.len() - 1].trim()
+    } else {
+        trimmed
+    };
+    if candidate.is_empty() || candidate.contains(['<', '(', ')', '\\']) {
+        return None;
+    }
+    let loosened = loosen_child_combinator(candidate);
+    let mut alternatives = Vec::new();
+    for alternative in split_selector_list(&loosened, ',') {
+        let mut steps = Vec::new();
+        for part in split_selector_ws(alternative) {
+            steps.push(parse_node_step(part)?);
+        }
+        if steps.is_empty() {
+            return None;
+        }
+        alternatives.push(steps);
+    }
+    if alternatives.is_empty() {
+        None
+    } else {
+        Some(alternatives)
+    }
+}
+
+fn wrapping_parens(pattern: &str) -> bool {
+    let mut chars = pattern.chars();
+    if chars.next() != Some('(') || chars.next_back() != Some(')') {
+        return false;
+    }
+    let mut depth = 0;
+    for (index, ch) in pattern.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 && index + ch.len_utf8() != pattern.len() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+fn loosen_child_combinator(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut depth: usize = 0;
+    let mut quote: Option<char> = None;
+    for ch in pattern.chars() {
+        if let Some(current) = quote {
+            out.push(ch);
+            if ch == current {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                out.push(ch);
+            }
+            '[' => {
+                depth += 1;
+                out.push(ch);
+            }
+            ']' => {
+                depth = depth.saturating_sub(1);
+                out.push(ch);
+            }
+            '>' if depth == 0 => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn split_selector_list(pattern: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth: usize = 0;
+    let mut quote: Option<char> = None;
+    for (index, ch) in pattern.char_indices() {
+        if let Some(current) = quote {
+            if ch == current {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            found if found == sep && depth == 0 => {
+                parts.push(&pattern[start..index]);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&pattern[start..]);
+    parts
+}
+
+fn split_selector_ws(pattern: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut depth: usize = 0;
+    let mut quote: Option<char> = None;
+    for (index, ch) in pattern.char_indices() {
+        if let Some(current) = quote {
+            if ch == current {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                if start.is_none() {
+                    start = Some(index);
+                }
+            }
+            '[' => {
+                depth += 1;
+                if start.is_none() {
+                    start = Some(index);
+                }
+            }
+            ']' => depth = depth.saturating_sub(1),
+            ch if ch.is_whitespace() && depth == 0 => {
+                if let Some(from) = start.take() {
+                    parts.push(&pattern[from..index]);
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(index);
+                }
+            }
+        }
+    }
+    if let Some(from) = start {
+        parts.push(&pattern[from..]);
+    }
+    parts
+}
+
+fn find_any<'a>(html: &'a str, alternatives: &[Vec<NodeStep>]) -> Vec<FoundNode<'a>> {
+    let mut found = Vec::new();
+    for steps in alternatives {
+        found.extend(find_nodes(html, steps));
+    }
+    found
+}
+
+fn parse_node_step(part: &str) -> Option<NodeStep> {
+    let (head, attr_sources) = split_attrs(part)?;
+    let attrs = attr_sources
+        .into_iter()
+        .map(parse_attr_pred)
+        .collect::<Option<Vec<_>>>()?;
+    if head.is_empty() {
+        if attrs.is_empty() {
+            return None;
+        }
+        return Some(NodeStep {
+            tag: None,
+            class_name: None,
+            id: None,
+            attrs,
+        });
+    }
+    if let Some(class_name) = head.strip_prefix('.') {
+        if !is_css_ident(class_name) {
+            return None;
+        }
+        return Some(NodeStep {
+            tag: None,
+            class_name: Some(class_name.to_string()),
+            id: None,
+            attrs,
+        });
+    }
+    if let Some(id) = head.strip_prefix('#') {
+        if !is_css_ident(id) {
+            return None;
+        }
+        return Some(NodeStep {
+            tag: None,
+            class_name: None,
+            id: Some(id.to_string()),
+            attrs,
+        });
+    }
+    let (tag, class_name, id) = if let Some((tag, id)) = head.split_once('#') {
+        (Some(tag), None, Some(id))
+    } else if let Some((tag, class_name)) = head.split_once('.') {
+        (Some(tag), Some(class_name), None)
+    } else {
+        (Some(head), None, None)
+    };
+    if let Some(tag) = tag {
+        if tag.is_empty() || !tag.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            return None;
+        }
+    }
+    if let Some(class_name) = class_name {
+        if !is_css_ident(class_name) {
+            return None;
+        }
+    }
+    if let Some(id) = id {
+        if !is_css_ident(id) {
+            return None;
+        }
+    }
+    Some(NodeStep {
+        tag: tag.map(|value| value.to_ascii_lowercase()),
+        class_name: class_name.map(str::to_string),
+        id: id.map(str::to_string),
+        attrs,
+    })
+}
+
+fn split_attrs(part: &str) -> Option<(&str, Vec<&str>)> {
+    let Some(open) = part.find('[') else {
+        return Some((part, Vec::new()));
+    };
+    let head = &part[..open];
+    let mut attrs = Vec::new();
+    let mut rest = &part[open..];
+    while rest.starts_with('[') {
+        let end = rest.find(']')?;
+        let inner = &rest[1..end];
+        if inner.trim().is_empty() {
+            return None;
+        }
+        attrs.push(inner);
+        rest = &rest[end + 1..];
+    }
+    if rest.is_empty() {
+        Some((head, attrs))
+    } else {
+        None
+    }
+}
+
+fn parse_attr_pred(source: &str) -> Option<AttrPred> {
+    let source = source.trim();
+    let name_end = source
+        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+        .unwrap_or(source.len());
+    let name = &source[..name_end];
+    if !is_css_ident(name) {
+        return None;
+    }
+    let rest = source[name_end..].trim();
+    if rest.is_empty() {
+        return Some(AttrPred {
+            name: name.to_ascii_lowercase(),
+            op: AttrOp::Present,
+            value: String::new(),
+        });
+    }
+    let (op, value_source) = if let Some(value) = rest.strip_prefix("^=") {
+        (AttrOp::Prefix, value)
+    } else if let Some(value) = rest.strip_prefix("$=") {
+        (AttrOp::Suffix, value)
+    } else if let Some(value) = rest.strip_prefix("*=") {
+        (AttrOp::Contains, value)
+    } else if let Some(value) = rest.strip_prefix('=') {
+        (AttrOp::Equal, value)
+    } else {
+        return None;
+    };
+    Some(AttrPred {
+        name: name.to_ascii_lowercase(),
+        op,
+        value: parse_attr_value(value_source.trim())?,
+    })
+}
+
+fn parse_attr_value(source: &str) -> Option<String> {
+    let mut chars = source.chars();
+    let quote = chars.next()?;
+    if quote == '"' || quote == '\'' {
+        let body = chars.as_str();
+        let end = body.find(quote)?;
+        if body[end + quote.len_utf8()..].trim().is_empty() {
+            Some(body[..end].to_string())
+        } else {
+            None
+        }
+    } else if !source.contains(char::is_whitespace) {
+        Some(source.to_string())
+    } else {
+        None
+    }
+}
+
+fn attr_pred_matches(attrs: &str, pred: &AttrPred) -> bool {
+    let Some(value) = attr_value(attrs, &pred.name) else {
+        return false;
+    };
+    match pred.op {
+        AttrOp::Present => true,
+        AttrOp::Equal => value == pred.value,
+        AttrOp::Prefix => value.starts_with(&pred.value),
+        AttrOp::Suffix => value.ends_with(&pred.value),
+        AttrOp::Contains => value.contains(&pred.value),
+    }
+}
+
+fn step_matches_element(step: &NodeStep, tag: &str, attrs: &str) -> bool {
+    let constrained = step.tag.is_some()
+        || step.class_name.is_some()
+        || step.id.is_some()
+        || !step.attrs.is_empty();
+    if !constrained {
+        return false;
+    }
+    let tag_ok = step
+        .tag
+        .as_ref()
+        .map(|want| want.eq_ignore_ascii_case(tag))
+        .unwrap_or(true);
+    let class_ok = step
+        .class_name
+        .as_ref()
+        .map(|class_name| class_list_has(attrs, class_name))
+        .unwrap_or(true);
+    let id_ok = step
+        .id
+        .as_ref()
+        .map(|id| attr_value(attrs, "id") == Some(id.as_str()))
+        .unwrap_or(true);
+    tag_ok && class_ok && id_ok && step.attrs.iter().all(|pred| attr_pred_matches(attrs, pred))
+}
+
+fn is_css_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+fn class_list_has(attrs: &str, class_name: &str) -> bool {
+    let Some(value) = attr_value(attrs, "class") else {
+        return false;
+    };
+    value.split_whitespace().any(|token| token == class_name)
+}
+
+fn attr_value<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
+    let lower = attrs.to_ascii_lowercase();
+    let key = format!("{name}=");
+    let mut offset = 0;
+    while let Some(pos) = lower[offset..].find(&key) {
+        let at = offset + pos;
+        let boundary_ok = at == 0
+            || lower.as_bytes()[at - 1].is_ascii_whitespace()
+            || lower.as_bytes()[at - 1] == b'/';
+        if !boundary_ok {
+            offset = at + key.len();
+            continue;
+        }
+        let value_at = at + key.len();
+        let rest = attrs.get(value_at..)?;
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let body = rest.get(quote.len_utf8()..)?;
+        let end = body.find(quote)?;
+        return Some(&body[..end]);
+    }
+    None
+}
+
+fn find_inner_end(html: &str, from: usize, tag: &str) -> Option<usize> {
+    let mut depth = 1;
+    let mut index = from;
+    while index < html.len() {
+        let relative = html[index..].find('<')?;
+        index += relative;
+        if html[index..].starts_with("<!--") {
+            index = html[index + 4..]
+                .find("-->")
+                .map(|end| index + 4 + end + 3)
+                .unwrap_or(html.len());
+            continue;
+        }
+        if html[index..].starts_with("</") {
+            if let Some(name) = tag_name_at(&html[index + 2..]) {
+                if name.eq_ignore_ascii_case(tag) {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+            }
+        } else if let Some(name) = tag_name_at(&html[index + 1..]) {
+            if name.eq_ignore_ascii_case(tag) && !opening_is_self_closing(&html[index..]) {
+                depth += 1;
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn tag_name_at(html: &str) -> Option<&str> {
+    let end = html
+        .find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
+        .unwrap_or(html.len());
+    let name = &html[..end];
+    if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn opening_is_self_closing(html: &str) -> bool {
+    let Some(end) = html.find('>') else {
+        return false;
+    };
+    html[..end].trim_end().ends_with('/')
+}
+
+fn find_step<'a>(html: &'a str, step: &NodeStep) -> Vec<FoundNode<'a>> {
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < html.len() {
+        let Some(relative) = html[index..].find('<') else {
+            break;
+        };
+        index += relative;
+        if html[index..].starts_with("</")
+            || html[index..].starts_with("<!")
+            || html[index..].starts_with("<?")
+        {
+            index += 1;
+            continue;
+        }
+        let Some(tag) = tag_name_at(&html[index + 1..]) else {
+            index += 1;
+            continue;
+        };
+        let tag_len = tag.len();
+        let after_tag = index + 1 + tag_len;
+        let Some(gt) = html[after_tag..].find('>') else {
+            break;
+        };
+        let attr_end = after_tag + gt;
+        let attrs = &html[after_tag..attr_end];
+        let tag_ok = step
+            .tag
+            .as_ref()
+            .map(|want| want.eq_ignore_ascii_case(tag))
+            .unwrap_or(true);
+        let class_ok = step
+            .class_name
+            .as_ref()
+            .map(|class_name| class_list_has(attrs, class_name))
+            .unwrap_or(true);
+        let id_ok = step
+            .id
+            .as_ref()
+            .map(|id| attr_value(attrs, "id") == Some(id.as_str()))
+            .unwrap_or(true);
+        let attr_ok = step.attrs.iter().all(|pred| attr_pred_matches(attrs, pred));
+        let matched = tag_ok && class_ok && id_ok && attr_ok;
+        let self_closing = opening_is_self_closing(&html[index..]);
+        if matched {
+            let href = attr_value(attrs, "href");
+            let src = attr_value(attrs, "src");
+            if self_closing {
+                found.push(FoundNode {
+                    tag,
+                    attrs,
+                    inner: "",
+                    href,
+                    src,
+                });
+            } else if let Some(inner_end) = find_inner_end(html, attr_end + 1, tag) {
+                found.push(FoundNode {
+                    tag,
+                    attrs,
+                    inner: &html[attr_end + 1..inner_end],
+                    href,
+                    src,
+                });
+                index = inner_end;
+                continue;
+            }
+        }
+        index = attr_end + 1;
+    }
+    found
+}
+
+fn find_nodes<'a>(html: &'a str, steps: &[NodeStep]) -> Vec<FoundNode<'a>> {
+    let Some(first) = steps.first() else {
+        return Vec::new();
+    };
+    let mut level = find_step(html, first);
+    for step in &steps[1..] {
+        let mut next = Vec::new();
+        for node in &level {
+            next.extend(find_step(node.inner, step));
+        }
+        level = next;
+    }
+    level
+}
+
+enum Matcher {
+    Node(Vec<Vec<NodeStep>>),
+    Regex(Regex),
+    /// 字段写成 `text` 时，取当前片段的可见文字。
+    Text,
+}
+
+fn compile_matcher(pattern: &str) -> Result<Matcher, String> {
+    if pattern.trim() == "text" {
+        return Ok(Matcher::Text);
+    }
+    if let Some(steps) = parse_node_selector(pattern) {
+        Ok(Matcher::Node(steps))
+    } else {
+        compile_regex(pattern).map(Matcher::Regex)
+    }
+}
+
+struct ItemHit<'a> {
+    block: &'a str,
+    tag: Option<&'a str>,
+    attrs: Option<&'a str>,
+    href: Option<&'a str>,
+}
+
+fn matcher_hits<'a>(matcher: &Matcher, html: &'a str) -> Vec<ItemHit<'a>> {
+    match matcher {
+        Matcher::Text => vec![ItemHit {
+            block: html,
+            tag: None,
+            attrs: None,
+            href: None,
+        }],
+        Matcher::Node(steps) => find_any(html, steps)
+            .into_iter()
+            .map(|node| ItemHit {
+                block: node.inner,
+                tag: Some(node.tag),
+                attrs: Some(node.attrs),
+                href: node.href,
+            })
+            .collect(),
+        Matcher::Regex(regex) => regex
+            .captures_iter(html)
+            .filter_map(|captures| first_capture(&captures))
+            .map(|block| ItemHit {
+                block,
+                tag: None,
+                attrs: None,
+                href: None,
+            })
+            .collect(),
+    }
+}
+
+fn matcher_blocks<'a>(matcher: &Matcher, html: &'a str) -> Vec<&'a str> {
+    matcher_hits(matcher, html)
+        .into_iter()
+        .map(|hit| hit.block)
+        .collect()
+}
+
+fn selector_matches_self(matcher: &Matcher, tag: &str, attrs: &str) -> bool {
+    let Matcher::Node(alternatives) = matcher else {
+        return false;
+    };
+    alternatives
+        .iter()
+        .any(|steps| steps.len() == 1 && step_matches_element(&steps[0], tag, attrs))
+}
+
+fn hit_title(title: &Matcher, hit: &ItemHit<'_>) -> Option<String> {
+    if let Some(text) = matcher_text(title, hit.block) {
+        return Some(text);
+    }
+    let (Some(tag), Some(attrs)) = (hit.tag, hit.attrs) else {
+        return None;
+    };
+    if !selector_matches_self(title, tag, attrs) {
+        return None;
+    }
+    let text = clean_text(hit.block);
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn hit_href(link: &Option<Matcher>, hit: &ItemHit<'_>) -> Option<String> {
+    if let Some(link) = link {
+        if let Some(href) = matcher_attr(link, hit.block, "href") {
+            return Some(href);
+        }
+        if let (Some(tag), Some(attrs), Some(href)) = (hit.tag, hit.attrs, hit.href) {
+            if selector_matches_self(link, tag, attrs) {
+                return Some(href.to_string());
+            }
+        }
+        return None;
+    }
+    if let Some(href) = hit.href {
+        return Some(href.to_string());
+    }
+    selector_capture(default_link_regex(), hit.block).map(str::to_string)
+}
+
+fn matcher_text(matcher: &Matcher, block: &str) -> Option<String> {
+    let raw = match matcher {
+        Matcher::Text => block,
+        Matcher::Node(steps) => find_any(block, steps).first().map(|node| node.inner)?,
+        Matcher::Regex(regex) => selector_capture(regex, block)?,
+    };
+    let text = clean_text(raw);
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn matcher_attr(matcher: &Matcher, block: &str, name: &str) -> Option<String> {
+    match matcher {
+        Matcher::Text => None,
+        Matcher::Node(steps) => {
+            let node = find_any(block, steps).into_iter().next()?;
+            let direct = if name.eq_ignore_ascii_case("href") {
+                node.href
+            } else {
+                node.src
+            };
+            direct
+                .or_else(|| attr_value(node.inner, name))
+                .map(str::to_string)
+        }
+        Matcher::Regex(regex) => selector_capture(regex, block).map(str::to_string),
+    }
 }
 
 fn resolve_url(base: &Url, candidate: &str) -> Result<Url, RemoteError> {
-    base.join(candidate.trim())
+    let candidate = candidate.trim();
+    // 已经是绝对地址时直接采用。否则 `base.join("https://...")` 会按相对路径再拼一次。
+    if let Ok(absolute) = Url::parse(candidate) {
+        if absolute.scheme() == "http" || absolute.scheme() == "https" {
+            return Ok(absolute);
+        }
+    }
+    base.join(candidate)
         .map_err(|error| RemoteError::new("BOOK_SOURCE_URL_INVALID", format!("地址无效: {error}")))
 }
 
@@ -591,44 +1387,34 @@ pub fn extract_search_entries(
     html: &str,
     base: &Url,
 ) -> Result<Vec<BookSourceSearchEntry>, RemoteError> {
-    let item = compile_regex(&rule.item).map_err(|message| rule_error("search.item", message))?;
+    let item = compile_matcher(&rule.item).map_err(|message| rule_error("search.item", message))?;
     let title =
-        compile_regex(&rule.title).map_err(|message| rule_error("search.title", message))?;
+        compile_matcher(&rule.title).map_err(|message| rule_error("search.title", message))?;
     let author = rule
         .author
         .as_deref()
-        .map(compile_regex)
+        .map(compile_matcher)
         .transpose()
         .map_err(|message| rule_error("search.author", message))?;
     let link = rule
         .link
         .as_deref()
-        .map(compile_regex)
+        .map(compile_matcher)
         .transpose()
         .map_err(|message| rule_error("search.link", message))?;
     let cover = rule
         .cover
         .as_deref()
-        .map(compile_regex)
+        .map(compile_matcher)
         .transpose()
         .map_err(|message| rule_error("search.cover", message))?;
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
-    for captures in item.captures_iter(html) {
-        let Some(block) = captures.get(1).map(|value| value.as_str()) else {
+    for hit in matcher_hits(&item, html) {
+        let Some(title_text) = hit_title(&title, &hit).filter(|value| !value.is_empty()) else {
             continue;
         };
-        let Some(title_text) = selector_capture(&title, block)
-            .map(clean_text)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let href = match &link {
-            Some(link) => selector_capture(link, block).map(str::to_string),
-            None => selector_capture(default_link_regex(), block).map(str::to_string),
-        };
-        let Some(href) = href else {
+        let Some(href) = hit_href(&link, &hit) else {
             continue;
         };
         let Ok(url) = resolve_url(base, &href) else {
@@ -639,13 +1425,12 @@ pub fn extract_search_entries(
         }
         let author = author
             .as_ref()
-            .and_then(|regex| selector_capture(regex, block))
-            .map(clean_text)
+            .and_then(|matcher| matcher_text(matcher, hit.block))
             .filter(|value| !value.is_empty());
         let cover_url = cover
             .as_ref()
-            .and_then(|regex| selector_capture(regex, block))
-            .and_then(|href| resolve_url(base, href).ok())
+            .and_then(|matcher| matcher_attr(matcher, hit.block, "src"))
+            .and_then(|href| resolve_url(base, &href).ok())
             .map(|url| url.to_string());
         entries.push(BookSourceSearchEntry {
             title: title_text,
@@ -665,31 +1450,21 @@ pub fn extract_chapters(
     html: &str,
     base: &Url,
 ) -> Result<Vec<BookSourceChapter>, RemoteError> {
-    let item = compile_regex(&rule.item).map_err(|message| rule_error("toc.item", message))?;
-    let title = compile_regex(&rule.title).map_err(|message| rule_error("toc.title", message))?;
+    let item = compile_matcher(&rule.item).map_err(|message| rule_error("toc.item", message))?;
+    let title = compile_matcher(&rule.title).map_err(|message| rule_error("toc.title", message))?;
     let link = rule
         .link
         .as_deref()
-        .map(compile_regex)
+        .map(compile_matcher)
         .transpose()
         .map_err(|message| rule_error("toc.link", message))?;
     let mut chapters = Vec::new();
     let mut seen = HashSet::new();
-    for captures in item.captures_iter(html) {
-        let Some(block) = captures.get(1).map(|value| value.as_str()) else {
+    for hit in matcher_hits(&item, html) {
+        let Some(title_text) = hit_title(&title, &hit).filter(|value| !value.is_empty()) else {
             continue;
         };
-        let Some(title_text) = selector_capture(&title, block)
-            .map(clean_text)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let href = match &link {
-            Some(link) => selector_capture(link, block).map(str::to_string),
-            None => selector_capture(default_link_regex(), block).map(str::to_string),
-        };
-        let Some(href) = href else {
+        let Some(href) = hit_href(&link, &hit) else {
             continue;
         };
         let Ok(url) = resolve_url(base, &href) else {
@@ -707,8 +1482,9 @@ pub fn extract_chapters(
 }
 
 pub fn extract_content(rule: &BookSourceContentRule, html: &str) -> Result<String, RemoteError> {
-    let text = compile_regex(&rule.text).map_err(|message| rule_error("content.text", message))?;
-    let Some(raw) = selector_capture(&text, html) else {
+    let text =
+        compile_matcher(&rule.text).map_err(|message| rule_error("content.text", message))?;
+    let Some(raw) = matcher_blocks(&text, html).into_iter().next() else {
         return Err(RemoteError::new(
             "BOOK_SOURCE_CONTENT_MISSING",
             "正文规则未匹配到内容",
@@ -738,7 +1514,8 @@ fn decode_body(bytes: &[u8], charset: Option<&str>) -> Result<String, RemoteErro
 async fn fetch_text_once(
     rule: &BookSourceRule,
     url: &Url,
-) -> Result<(Url, String), (RemoteError, bool)> {
+    keep_error_page: bool,
+) -> Result<(Url, u16, String), (RemoteError, bool)> {
     let client = build_client(url, false).map_err(|error| (error, false))?;
     let mut request = client.get(url.clone());
     for header in &rule.headers {
@@ -757,19 +1534,21 @@ async fn fetch_text_once(
             true,
         )
     })?;
-    if let Some(error) = response_error(&response) {
-        let transient = transient_status(response.status());
-        return Err((error, transient));
+    let status_code = response.status();
+    if !keep_error_page {
+        if let Some(error) = response_error(&response) {
+            let transient = transient_status(response.status());
+            return Err((error, transient));
+        }
     }
-    if !response.status().is_success() {
-        let status = response.status();
+    if !status_code.is_success() && !keep_error_page {
         return Err((
             RemoteError::status(
                 "BOOK_SOURCE_HTTP_ERROR",
-                format!("书源返回 HTTP {}", status.as_u16()),
-                status,
+                format!("书源返回 HTTP {}", status_code.as_u16()),
+                status_code,
             ),
-            transient_status(status),
+            transient_status(status_code),
         ));
     }
     if response
@@ -803,7 +1582,7 @@ async fn fetch_text_once(
         bytes.extend_from_slice(&chunk);
     }
     let text = decode_body(&bytes, rule.charset.as_deref()).map_err(|error| (error, false))?;
-    Ok((final_url, text))
+    Ok((final_url, status_code.as_u16(), text))
 }
 
 async fn fetch_source_text(
@@ -821,8 +1600,8 @@ async fn fetch_source_text(
     let mut last_error = RemoteError::new("BOOK_SOURCE_NETWORK_ERROR", "书源请求失败");
     for attempt in 0..MAX_ATTEMPTS {
         wait_for_rate_limit(state, source_id, min_interval).await;
-        match fetch_text_once(rule, url).await {
-            Ok(result) => return Ok(result),
+        match fetch_text_once(rule, url, false).await {
+            Ok((final_url, _status, text)) => return Ok((final_url, text)),
             Err((error, transient)) => {
                 let exhausted = attempt + 1 >= MAX_ATTEMPTS;
                 last_error = error;
@@ -834,6 +1613,29 @@ async fn fetch_source_text(
         }
     }
     Err(last_error)
+}
+
+async fn fetch_source_preview(
+    state: &BookSourceState,
+    source_id: &str,
+    rule: &BookSourceRule,
+    url: &Url,
+) -> Result<(Url, u16, String), RemoteError> {
+    let slot = request_slot(state, source_id);
+    let _permit = slot
+        .acquire()
+        .await
+        .map_err(|_| RemoteError::new("BOOK_SOURCE_STATE_UNAVAILABLE", "书源请求通道暂时不可用"))?;
+    wait_for_rate_limit(
+        state,
+        source_id,
+        Duration::from_millis(rule.rate_limit_ms.unwrap_or(DEFAULT_RATE_LIMIT_MS)),
+    )
+    .await;
+    match fetch_text_once(rule, url, true).await {
+        Ok(result) => Ok(result),
+        Err((error, _)) => Err(error),
+    }
 }
 
 // ── 持久化 ──────────────────────────────────────────────────────────
@@ -1189,23 +1991,13 @@ pub fn book_source_set_enabled(
     })
 }
 
-/// 同名同站点（title + base_url）视为同一书源：重复导入原位更新规则，
-/// 不再生成新条目；保留既有 id、创建时间与用户启停状态。
+/// 同名、同站点也各存一条。更新必须由调用方带上已有 id。
 fn upsert_imported_sources_at(
     transaction: &Connection,
     sources: Vec<BookSource>,
 ) -> Result<Vec<BookSource>, String> {
-    let existing = list_sources_at(transaction)?;
     let mut resolved = Vec::with_capacity(sources.len());
-    for mut source in sources {
-        if let Some(prior) = existing.iter().find(|prior| {
-            prior.title.to_lowercase() == source.title.to_lowercase()
-                && prior.rule.base_url == source.rule.base_url
-        }) {
-            source.id = prior.id.clone();
-            source.created_at = prior.created_at;
-            source.enabled = prior.enabled;
-        }
+    for source in sources {
         write_source_at(transaction, &source)?;
         resolved.push(source);
     }
@@ -1254,6 +2046,133 @@ pub fn book_source_self_check(rule: Value, allow_http: Option<bool>) -> BookSour
 #[tauri::command]
 pub fn book_source_builtins() -> Vec<BookSourceBuiltin> {
     builtin_sources()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookSourceFetch {
+    pub final_url: String,
+    pub status: u16,
+    pub length: usize,
+    pub snippet: String,
+}
+
+#[tauri::command]
+pub async fn book_source_fetch(
+    app: AppHandle,
+    state: State<'_, BookSourceState>,
+    source_id: String,
+    query: Option<String>,
+    url: Option<String>,
+) -> Result<BookSourceFetch, RemoteError> {
+    let source = load_ready_source(&app, &source_id)?;
+    let target = if let Some(query) = query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        search_target(&source.rule, source.allow_http, query)?
+    } else if let Some(url) = url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let base = validate_remote_url(&source.rule.base_url, source.allow_http)?;
+        let resolved = resolve_url(&base, url)?;
+        validate_remote_url(resolved.as_str(), source.allow_http)?
+    } else {
+        return Err(RemoteError::new(
+            "BOOK_SOURCE_FETCH_TARGET",
+            "需要 query 或 url",
+        ));
+    };
+    let (final_url, status, html) =
+        fetch_source_preview(&state, &source.id, &source.rule, &target).await?;
+    Ok(BookSourceFetch {
+        final_url: final_url.to_string(),
+        status,
+        length: html.chars().count(),
+        snippet: preview_snippet(&html),
+    })
+}
+
+/// 片段给模型看标签。只看正文容器内部，并截链接最密集的一段，避开网页头部和页脚。
+fn preview_snippet(html: &str) -> String {
+    const LIMIT: usize = 4000;
+    let region = content_inner(html);
+    let Some(link_at) = densest_href(region, 2200) else {
+        return region.chars().take(LIMIT).collect();
+    };
+    let from = floor_char_boundary(region, link_at.saturating_sub(220));
+    region[from..].chars().take(LIMIT).collect()
+}
+
+fn content_inner(html: &str) -> &str {
+    let start = content_anchor(html);
+    let Some(tag) = tag_name_at(html.get(start + 1..).unwrap_or("")) else {
+        return html.get(start..).unwrap_or(html);
+    };
+    let after_name = start + 1 + tag.len();
+    let Some(gt) = html[after_name..].find('>') else {
+        return html.get(start..).unwrap_or(html);
+    };
+    let inner_from = after_name + gt + 1;
+    match find_inner_end(html, inner_from, tag) {
+        Some(inner_end) => &html[inner_from..inner_end],
+        None => html.get(start..).unwrap_or(html),
+    }
+}
+
+fn densest_href(region: &str, width: usize) -> Option<usize> {
+    let mut positions = Vec::new();
+    let mut offset = 0;
+    while let Some(at) = region[offset..].find("href=") {
+        positions.push(offset + at);
+        offset += at + 5;
+        if positions.len() == 4000 {
+            break;
+        }
+    }
+    let first = *positions.first()?;
+    let mut best_at = first;
+    let mut best_count = 1usize;
+    let mut right = 0usize;
+    for left in 0..positions.len() {
+        let start = positions[left];
+        while right < positions.len() && positions[right] < start + width {
+            right += 1;
+        }
+        let count = right - left;
+        if count > best_count {
+            best_count = count;
+            best_at = start;
+        }
+    }
+    Some(best_at)
+}
+
+fn content_anchor(html: &str) -> usize {
+    const MARKERS: [&str; 4] = [
+        "mw-parser-output",
+        "id=\"mw-content-text\"",
+        "id='mw-content-text'",
+        "<body",
+    ];
+    for marker in MARKERS {
+        let Some(at) = html.find(marker) else {
+            continue;
+        };
+        return html[..at].rfind('<').unwrap_or(at);
+    }
+    0
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut at = index.min(text.len());
+    while at > 0 && !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
 }
 
 #[tauri::command]
@@ -1339,7 +2258,17 @@ pub async fn book_source_chapters(
         .ok_or_else(|| RemoteError::new("BOOK_SOURCE_TOC_MISSING", "书源规则未配置目录提取"))?;
     let target = document_target(&source, toc.url.as_deref(), &book_url)?;
     let (final_url, html) = fetch_source_text(&state, &source.id, &source.rule, &target).await?;
-    extract_chapters(toc, &html, &final_url)
+    let chapters = extract_chapters(toc, &html, &final_url)?;
+    if chapters.is_empty() {
+        return Err(RemoteError::new(
+            "BOOK_SOURCE_TOC_EMPTY",
+            format!(
+                "目录选择器没有匹配到章节。下面是正文里链接最集中的一段，请按这里的标签改 toc.item。\n{}",
+                preview_snippet(&html)
+            ),
+        ));
+    }
+    Ok(chapters)
 }
 
 #[tauri::command]
@@ -1365,7 +2294,118 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn import_reuses_existing_source_with_same_title_and_base_url() {
+    fn content_regex_matches_when_the_class_attribute_has_other_tokens() {
+        let html = r#"<div id="mw-content-text"><div class="mw-content-ltr mw-parser-output"><p>甄士隐梦幻识通灵</p></div> <!-- NewPP"#;
+        let rule = BookSourceContentRule {
+            text: r#"<div[^>]*class="mw-parser-output"[^>]*>([\s\S]*?)</div>\s*<!--\s*NewPP"#
+                .to_string(),
+            cleanup: Vec::new(),
+            next_page: None,
+        };
+        let text = extract_content(&rule, html).unwrap();
+        assert!(text.contains("甄士隐梦幻识通灵"), "{text}");
+    }
+
+    #[test]
+    fn preview_snippet_starts_at_the_content_and_includes_the_first_link() {
+        let head = "h".repeat(5000);
+        let preamble = "a".repeat(5000);
+        let html = format!(
+            "<html><head><script>{head}</script></head><body><div class=\"mw-parser-output\">{preamble}<a href=\"/wiki/Book/1\">第一回</a></div></body></html>"
+        );
+        let snippet = preview_snippet(&html);
+        assert!(snippet.contains("href=\"/wiki/Book/1\""));
+        assert!(snippet.contains("第一回"));
+        assert!(!snippet.contains("<script>"));
+        assert!(snippet.chars().count() <= 4000);
+    }
+
+    #[test]
+    fn preview_snippet_prefers_the_chapter_cluster_over_the_footer() {
+        let mut chapters = String::new();
+        for index in 1..=12 {
+            chapters.push_str(&format!("<a href=\"/wiki/Book/{index}\">第{index}回</a>"));
+        }
+        let html = format!(
+            "<div class=\"mw-parser-output\"><p><a href=\"/wiki/Help\">帮助</a></p><div class=\"poem\"><p>{chapters}</p></div></div><footer>{}</footer>",
+            (0..30)
+                .map(|index| format!("<a href=\"/footer/{index}\">页脚</a>"))
+                .collect::<String>()
+        );
+        let snippet = preview_snippet(&html);
+        assert!(snippet.contains("class=\"poem\"") || snippet.contains("href=\"/wiki/Book/1\""));
+        assert!(snippet.contains("第1回"));
+        assert!(!snippet.contains("/footer/"));
+    }
+
+    #[test]
+    fn attribute_selector_uses_the_link_itself_for_title_and_href() {
+        let html = r##"<div id="mw-parser-output"><ul><li><a href="/wiki/Book/1">第一回</a></li><li><a href="/wiki/Book/2"><span>第二回</span></a></li><li><a href="https://example.test/out">外链</a></li><li><a href="#top">顶部</a></li></ul><p><a href="/wiki/Help">帮助</a></p></div>"##;
+        let item = r#"(#mw-parser-output ul li a[href^="/wiki/"])"#;
+        assert!(parse_node_selector(item).is_some());
+        assert!(parse_node_selector("(<li>(.*?)</li>)").is_none());
+        let rule = BookSourceTocRule {
+            url: None,
+            item: item.to_string(),
+            title: "a".to_string(),
+            link: None,
+            next_page: None,
+        };
+        let chapters = extract_chapters(
+            &rule,
+            html,
+            &Url::parse("https://example.test/wiki/Book").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            chapters
+                .iter()
+                .map(|chapter| (chapter.title.as_str(), chapter.url.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("第一回", "https://example.test/wiki/Book/1"),
+                ("第二回", "https://example.test/wiki/Book/2"),
+            ]
+        );
+
+        let mut value = sample_rule_value();
+        value["baseUrl"] = json!("https://example.test");
+        value["toc"] = json!({
+            "url": null,
+            "item": item,
+            "title": "a",
+            "link": null,
+            "nextPage": null
+        });
+        value["content"] = json!({
+            "text": "<div[^>]*class=\"mw-parser-output\"[^>]*>([\\s\\S]*?)</div>",
+            "cleanup": ["\\[\\s*\\[[^\\]]*?\\]\\s*\\]", "\\{\\{[^}]*\\}\\}"],
+            "nextPage": null
+        });
+        let check = check_rule_value(&value, false);
+        assert!(check.ok, "{:?}", check.issues);
+    }
+
+    #[test]
+    fn class_selector_matches_when_the_element_has_extra_classes() {
+        let html = r#"<ul><li class="result extra"><div class="heading"><a href="/book/1">书名</a></div></li></ul>"#;
+        let items = find_any(html, &parse_node_selector("li.result").unwrap());
+        assert_eq!(items.len(), 1);
+        let title = matcher_text(&compile_matcher(".heading").unwrap(), items[0].inner);
+        assert_eq!(title.as_deref(), Some("书名"));
+        let href = matcher_attr(&compile_matcher("a").unwrap(), items[0].inner, "href");
+        assert_eq!(href.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn selector_uses_the_alternative_that_actually_matched() {
+        let regex = Regex::new(r#"<a class="x">([^<]+)</a>|<a[^>]*>([^<]+)</a>"#).unwrap();
+        let text = r#"<a href="/wiki/A" data-serp-pos="0">物种起源</a>"#;
+        assert_eq!(selector_capture(&regex, text), Some("物种起源"));
+    }
+
+    #[test]
+    fn import_keeps_another_row_when_title_and_base_url_match() {
         let app_data = tempfile::tempdir().unwrap();
         let mut connection = crate::library::open_database_at(app_data.path()).unwrap();
         let first = validated_import_entries(vec![BookSourceExportEntry {
@@ -1378,7 +2418,6 @@ mod tests {
         let inserted = upsert_imported_sources_at(&transaction, first).unwrap();
         transaction.commit().unwrap();
 
-        // 停用后再次导入同名同站点（规则有更新）：原位更新而非新条目。
         set_enabled_at(&connection, &inserted[0].id.clone(), false).unwrap();
         let mut updated_rule = sample_rule_value();
         updated_rule["rateLimitMs"] = json!(1000);
@@ -1393,10 +2432,19 @@ mod tests {
         transaction.commit().unwrap();
 
         let all = list_sources_at(&connection).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(reimported[0].id, inserted[0].id);
-        assert!(!reimported[0].enabled, "重复导入保留用户启停状态");
-        assert_eq!(all[0].rule.rate_limit_ms, Some(1000), "规则按导入内容更新");
+        assert_eq!(all.len(), 2);
+        assert_ne!(reimported[0].id, inserted[0].id);
+        assert!(
+            all.iter()
+                .any(|source| source.id == inserted[0].id && !source.enabled),
+            "先保存的那条保持停用"
+        );
+        assert!(
+            all.iter()
+                .any(|source| source.id == reimported[0].id
+                    && source.rule.rate_limit_ms == Some(1000)),
+            "后保存的是另一条"
+        );
     }
 
     fn sample_rule_value() -> Value {

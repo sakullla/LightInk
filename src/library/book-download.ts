@@ -200,6 +200,17 @@ export function chapterProgress(state: BookDownloadState): {
   };
 }
 
+/** 进度文案：`12/120 · 失败1 · 章节名`。面板和助手芯片共用。 */
+export function formatDownloadProgress(state: BookDownloadState): string {
+  const { done, failed, total } = chapterProgress(state);
+  if (total === 0) return '';
+  const active = state.chapters.find((chapter) => chapter.status === 'active');
+  const parts = [`${done}/${total}`];
+  if (failed > 0) parts.push(`失败${failed}`);
+  if (active !== undefined && state.phase === 'downloading') parts.push(active.title);
+  return parts.join(' · ');
+}
+
 export function runtimeFromPersisted(job: BookDownloadPersistedJob): BookDownloadState {
   const format: BookDownloadFormat = job.outputFormat === 'epub' ? 'epub' : 'txt';
   return {
@@ -336,9 +347,30 @@ export interface BookDownloadController {
   dismiss(): void;
 }
 
+/** 同一章在标记失败前的抓取次数。Rust 侧每次抓取还会再试瞬时网络错误。 */
+const CHAPTER_FETCH_ATTEMPTS = 3;
+
+let activeDownloadCancel: (() => void) | undefined;
+
+/** 当前下载可被助手的停止键打断。后一次下载覆盖前一次。 */
+export function bindActiveDownloadCancel(cancel: () => void): () => void {
+  activeDownloadCancel = cancel;
+  return () => {
+    if (activeDownloadCancel === cancel) {
+      activeDownloadCancel = undefined;
+    }
+  };
+}
+
+export function cancelActiveDownload(): void {
+  activeDownloadCancel?.();
+}
+
 export interface BookDownloadControllerOptions {
   readonly client: BookDownloadClient;
   readonly onState?: (state: BookDownloadState) => void;
+  /** 章内重试间隔。测试可传 0。 */
+  readonly retryDelayMs?: number;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -385,6 +417,29 @@ export function createBookDownloadController(
     }
   }
 
+  async function fetchChapterWithRetry(jobId: string, indexNo: number): Promise<void> {
+    let lastError = '章节下载失败';
+    for (let attempt = 0; attempt < CHAPTER_FETCH_ATTEMPTS; attempt += 1) {
+      if (cancelRequested) return;
+      if (attempt > 0) {
+        const delay = options.retryDelayMs ?? 400;
+        await new Promise<void>((resolve) => setTimeout(resolve, delay * attempt));
+        if (cancelRequested) return;
+      }
+      setState(chapterStarted(state, indexNo));
+      try {
+        const chapter = await client.fetchChapter(jobId, indexNo);
+        setState(chapterSucceeded(state, indexNo, chapter.content));
+        return;
+      } catch (error) {
+        lastError = errorMessage(error, '章节下载失败');
+      }
+    }
+    if (!cancelRequested) {
+      setState(chapterFailed(state, indexNo, lastError));
+    }
+  }
+
   async function runLoop(): Promise<void> {
     if (running) return;
     running = true;
@@ -399,22 +454,21 @@ export function createBookDownloadController(
         if (indexNo === undefined) break;
         const jobId = state.jobId;
         if (jobId === undefined) return;
-        setState(chapterStarted(state, indexNo));
-        try {
-          const chapter = await client.fetchChapter(jobId, indexNo);
-          setState(chapterSucceeded(state, indexNo, chapter.content));
-        } catch (error) {
-          // 单章失败不阻断其余章节；失败章保留可重试状态。
-          setState(chapterFailed(state, indexNo, errorMessage(error, '章节下载失败')));
+        await fetchChapterWithRetry(jobId, indexNo);
+        if (cancelRequested) {
+          setState(downloadPaused(state));
+          return;
         }
       }
       if (cancelRequested) {
         setState(downloadPaused(state));
         return;
       }
-      const { failed } = chapterProgress(state);
+      const { done, failed, total } = chapterProgress(state);
       if (failed > 0) {
-        setState(downloadIncomplete(state, `${failed} 个章节下载失败，可重试`));
+        setState(
+          downloadIncomplete(state, `${done}/${total}，${failed} 章失败。已完成的不会重下，可重试失败章。`),
+        );
         return;
       }
       await finalize();

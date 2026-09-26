@@ -142,6 +142,13 @@ export class BookSourceClient {
     return this.invoker.invoke<BookSourceBuiltin[]>('book_source_builtins');
   }
 
+  fetchPage(
+    sourceId: string,
+    input: { readonly query?: string; readonly url?: string },
+  ): Promise<{ finalUrl: string; status: number; length: number; snippet: string }> {
+    return this.invoker.invoke('book_source_fetch', { sourceId, ...input });
+  }
+
   search(sourceId: string, query: string): Promise<BookSourceSearchResult[]> {
     return this.invoker.invoke<BookSourceSearchResult[]>('book_source_search', {
       sourceId,

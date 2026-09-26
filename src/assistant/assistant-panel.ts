@@ -19,6 +19,7 @@ import {
   type AssistantPermissionMode,
   type AssistantPermissionStorage,
 } from './assistant-permission.js';
+import { cancelActiveDownload } from '../library/book-download.js';
 import { READER_LIMITS } from '../reader/reader-limits.js';
 import {
   ASSISTANT_AI_CONFIGURED_EVENT,
@@ -163,6 +164,8 @@ interface AssistantToolBlock {
   readonly name: string;
   readonly arguments: string;
   readonly result?: string;
+  /** 下载进行中的进度，例如 `12/120 · 第二回`。 */
+  readonly progressLabel?: string;
   /** 停止/中断时仍无结果的块:定格为已停止,不永远显示运行中。 */
   readonly stopped?: boolean;
 }
@@ -251,8 +254,52 @@ export function assistantActionContent(
   return instruction;
 }
 
+const TOOL_ARGUMENT_LIMIT = 8000;
+const TOOL_RESULT_LIMIT = 2000;
+
+function clipStoredText(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  let cut = value.slice(0, limit);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    cut = cut.slice(0, -1);
+  }
+  return `${cut}…`;
+}
+
+/** 页面片段会撑爆历史文件。参数保留书名和地址，结果只留简短结论。 */
+function compactStoredToolResult(result: string): string {
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>;
+    const page = parsed.page;
+    if (page !== null && typeof page === 'object' && !Array.isArray(page)) {
+      const next = { ...(page as Record<string, unknown>) };
+      if (typeof next.snippet === 'string') {
+        next.snippet = clipStoredText(next.snippet, 240);
+      }
+      parsed.page = next;
+    }
+    return clipStoredText(JSON.stringify(parsed), TOOL_RESULT_LIMIT);
+  } catch {
+    return clipStoredText(result, TOOL_RESULT_LIMIT);
+  }
+}
+
 function persistableMessages(list: readonly PanelMessage[]): AssistantHistoryMessage[] {
   return list.map((message) => {
+    const toolBlocks = (message.toolBlocks ?? [])
+      .filter((block) => block.id !== '' && block.name !== '')
+      .map((block) => ({
+        id: block.id,
+        name: block.name,
+        arguments: clipStoredText(block.arguments, TOOL_ARGUMENT_LIMIT),
+        ...(block.result !== undefined && block.result !== ''
+          ? { result: compactStoredToolResult(block.result) }
+          : {}),
+        ...(block.stopped === true ? { stopped: true } : {}),
+      }));
     const entry: AssistantHistoryMessage = {
       role: message.role,
       content: message.content,
@@ -263,6 +310,7 @@ function persistableMessages(list: readonly PanelMessage[]): AssistantHistoryMes
       ...(message.action !== undefined ? { action: message.action } : {}),
       ...(message.contextTruncated === true ? { contextTruncated: true } : {}),
       ...(message.error !== undefined ? { error: message.error } : {}),
+      ...(toolBlocks.length > 0 ? { toolBlocks } : {}),
     };
   });
 }
@@ -340,6 +388,165 @@ function historyTurns(list: readonly PanelMessage[], end: number): AssistantRequ
     turns.push({ role: 'assistant', content: message.content });
   }
   return turns;
+}
+
+const BOOK_SOURCE_TOOL_NUDGE =
+  '你刚才没有调用工具。请立刻调用对应的 book_source_* 工具。下载时调用 book_source_download，并带上用户给出的书名和地址。不要只用文字描述。';
+
+function bookSourceDownloadShouldStop(blocks: readonly AssistantToolBlock[]): boolean {
+  return blocks.some((block) => {
+    if (block.name !== 'book_source_download' || block.result === undefined || block.result === '') {
+      return false;
+    }
+    const result = tryParseToolResult(block.result);
+    if (result === null || result.ok !== false) {
+      return false;
+    }
+    const message = typeof result.message === 'string' ? result.message : '';
+    return message.includes('需要 sourceId') || message.includes('请改用 id') || message.includes('没有名为');
+  });
+}
+
+function bookSourceSearchShouldStop(blocks: readonly AssistantToolBlock[]): boolean {
+  return blocks.some((block) => {
+    if (block.name !== 'book_source_search' || block.result === undefined || block.result === '') {
+      return false;
+    }
+    const result = tryParseToolResult(block.result);
+    if (result === null) {
+      return false;
+    }
+    if (result.ok === false) {
+      return true;
+    }
+    const hits = result.results;
+    return Array.isArray(hits) && hits.length === 0;
+  });
+}
+
+function fetchFinalUrl(block: AssistantToolBlock): string | null {
+  if (block.result === undefined || block.result === '') {
+    return null;
+  }
+  const result = tryParseToolResult(block.result);
+  const page = result?.page;
+  if (page === null || typeof page !== 'object' || Array.isArray(page)) {
+    return null;
+  }
+  const finalUrl = (page as { finalUrl?: unknown }).finalUrl;
+  if (typeof finalUrl !== 'string' || finalUrl.trim() === '') {
+    return null;
+  }
+  try {
+    return decodeURI(finalUrl);
+  } catch {
+    return finalUrl;
+  }
+}
+
+/**
+ * 读到页面后要让模型继续改规则或下载。同一个地址再抓、或本轮已经抓过两次，就停。
+ */
+export function bookSourceFetchShouldStop(
+  blocks: readonly AssistantToolBlock[],
+  seenUrls: ReadonlySet<string>,
+  priorFetchCount: number,
+): boolean {
+  const fetches = blocks.filter((block) => block.name === 'book_source_fetch');
+  if (fetches.length === 0) {
+    return false;
+  }
+  const urls = fetches
+    .map((block) => fetchFinalUrl(block))
+    .filter((url): url is string => url !== null);
+  if (urls.some((url) => seenUrls.has(url))) {
+    return true;
+  }
+  return priorFetchCount >= 2;
+}
+
+const MINIMAX_TOOL_MARK = /\]<\]minimax\[>\[/gi;
+
+interface EmbeddedXml {
+  readonly name: string;
+  readonly text: string;
+  readonly children: readonly EmbeddedXml[];
+}
+
+/** MiniMax 把工具调用写成正文里的 invoke XML 时，拆成真正的 tool call。 */
+export function extractEmbeddedToolCalls(text: string): {
+  calls: AssistantToolCall[];
+  cleaned: string;
+} {
+  const normalized = text.replace(MINIMAX_TOOL_MARK, '');
+  const calls: AssistantToolCall[] = [];
+  const invokeRe = /<invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/invoke\s*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = invokeRe.exec(normalized)) !== null) {
+    const name = match[1]?.trim() ?? '';
+    if (name === '') continue;
+    const args = elementsToObject(parseEmbeddedElements(match[2] ?? ''));
+    calls.push({
+      id: `embedded-${calls.length + 1}`,
+      name,
+      arguments: JSON.stringify(args),
+    });
+  }
+  if (calls.length === 0) {
+    return { calls, cleaned: text };
+  }
+  const cleaned = normalized
+    .replace(/<\/?tool_call\s*>/gi, '')
+    .replace(/<invoke\s+name="[^"]+"\s*>[\s\S]*?<\/invoke\s*>/gi, '')
+    .trim();
+  return { calls, cleaned };
+}
+
+function parseEmbeddedElements(xml: string): EmbeddedXml[] {
+  const elements: EmbeddedXml[] = [];
+  const re = /<([A-Za-z_][\w-]*)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(xml)) !== null) {
+    const inner = match[2] ?? '';
+    const children = parseEmbeddedElements(inner);
+    elements.push({
+      name: match[1] ?? '',
+      text: children.length === 0 ? inner.trim() : '',
+      children,
+    });
+  }
+  return elements;
+}
+
+function elementsToObject(elements: readonly EmbeddedXml[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const element of elements) {
+    const value =
+      element.children.length > 0 ? elementsToObject(element.children) : element.text;
+    const current = result[element.name];
+    if (current === undefined) {
+      result[element.name] = value;
+    } else if (Array.isArray(current)) {
+      current.push(value);
+    } else {
+      result[element.name] = [current, value];
+    }
+  }
+  return result;
+}
+
+function shouldNudgeToolCall(userMessage: string, reply: string): boolean {
+  if (
+    /确认卡|确认卡片|提交上去|重新提交|再发一张|直接动手|就会落盘|进入待确认|要下载哪一本|立刻调用|调用下载|调用工具/.test(
+      reply,
+    )
+  ) {
+    return true;
+  }
+  if (/book_source_[a-z_]+/.test(userMessage)) {
+    return true;
+  }
+  return /下载/.test(userMessage) && /https?:\/\//.test(userMessage);
 }
 
 function serializeChatMessage(message: AssistantChatMessage): Record<string, unknown> {
@@ -482,6 +689,14 @@ export function stripAssistantPendingConfirmations(result: string | undefined): 
   }
   const rest = { ...obj };
   delete rest['pending_confirmation'];
+  delete rest['pending'];
+  rest['ok'] = true;
+  rest['status'] = 'awaiting_user_confirmation';
+  const prior = typeof rest['message'] === 'string' ? rest['message'] : '';
+  rest['message'] =
+    prior === ''
+      ? '已提交到确认卡片，等待用户确认或拒绝。这不是失败，不要再次调用该工具。'
+      : `${prior} 已提交到确认卡片，等待用户确认或拒绝。这不是失败，不要再次调用该工具。`;
   return JSON.stringify(rest);
 }
 
@@ -494,6 +709,8 @@ interface PendingConfirmationEntry {
   /** 全部确认时仍勾选才执行；去掉的条目标成拒绝。 */
   included: boolean;
   error?: string;
+  /** 产生这条待确认的工具调用，确认成功后用真实结果替换「待确认」反馈。 */
+  toolCallId?: string;
 }
 
 // ── 流式通道（Tauri IPC Channel；注入面供测试） ──────────────────────
@@ -600,6 +817,25 @@ export async function streamAssistantChat(
   }
 }
 
+function toolFailurePayload(error: unknown): string {
+  let message = '';
+  if (typeof error === 'string') {
+    message = error.trim();
+  } else if (error instanceof Error) {
+    message = error.message.trim();
+  } else if (error !== null && typeof error === 'object' && 'message' in error) {
+    const value = (error as { message?: unknown }).message;
+    if (typeof value === 'string') {
+      message = value.trim();
+    }
+  }
+  return JSON.stringify({
+    ok: false,
+    error: 'tool_failed',
+    message: message === '' ? '工具执行失败。' : message,
+  });
+}
+
 async function executeToolCalls(
   session: AssistantToolSession,
   calls: readonly AssistantToolCall[],
@@ -609,13 +845,21 @@ async function executeToolCalls(
   const rest = calls.filter((call) => call.name !== QUERY_BOOK_TOOL_NAME);
   await Promise.all(
     queries.map(async (call) => {
-      const result = await session.execute(call.name, call.arguments);
-      results.set(call.id, JSON.stringify(result));
+      try {
+        const result = await session.execute(call.name, call.arguments);
+        results.set(call.id, JSON.stringify(result));
+      } catch (error) {
+        results.set(call.id, toolFailurePayload(error));
+      }
     }),
   );
   for (const call of rest) {
-    const result = await session.execute(call.name, call.arguments);
-    results.set(call.id, JSON.stringify(result));
+    try {
+      const result = await session.execute(call.name, call.arguments);
+      results.set(call.id, JSON.stringify(result));
+    } catch (error) {
+      results.set(call.id, toolFailurePayload(error));
+    }
   }
   return calls.map((call) => ({
     id: call.id,
@@ -780,8 +1024,18 @@ function toolLabelKey(name: string): MessageKey {
       return 'reader.assistant.toolLibraryRemove';
     case 'book_source_list':
       return 'reader.assistant.toolBookSourceList';
+    case 'book_source_get':
+      return 'reader.assistant.toolBookSourceGet';
     case 'book_source_search':
       return 'reader.assistant.toolBookSourceSearch';
+    case 'book_source_fetch':
+      return 'reader.assistant.toolBookSourceFetch';
+    case 'book_source_save':
+      return 'reader.assistant.toolBookSourceSave';
+    case 'book_source_import':
+      return 'reader.assistant.toolBookSourceImport';
+    case 'book_source_remove':
+      return 'reader.assistant.toolBookSourceRemove';
     case 'book_source_download':
       return 'reader.assistant.toolBookSourceDownload';
     default:
@@ -842,6 +1096,9 @@ function toolBlockSummary(
   translate: AssistantPanelDeps['t'],
 ): string {
   const state = toolBlockState(block);
+  if (state === 'running' && block.progressLabel !== undefined && block.progressLabel !== '') {
+    return block.progressLabel;
+  }
   if (state === 'running' || state === 'stopped') {
     return translate(toolStatusKey(state));
   }
@@ -1023,8 +1280,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   rejectAllButton.textContent = t('reader.assistant.pendingRejectAll');
   pendingBar.append(confirmAllButton, rejectAllButton);
   pendingSection.append(pendingTitle, pendingList, pendingBar);
-  // 待确认是消息流末尾的内联卡片：renderMessages 重建消息后把它放回末尾。
-  messagesHost.appendChild(pendingSection);
 
   const panelActions: readonly AssistantPanelAction[] =
     deps.actions ??
@@ -1243,7 +1498,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   composerHint.className = 'lightink-reader-assistant-composer-hint';
   composerHint.textContent = t('reader.assistant.composerHint');
   composer.append(composerBox, composerHint);
-  main.append(contextHint, messagesWrap, persistNotice, actions, composer);
+  main.append(contextHint, messagesWrap, pendingSection, persistNotice, actions, composer);
   root.append(head, historyPane, guide, main);
 
   root.addEventListener(
@@ -1349,6 +1604,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     messages[index]!.error === undefined &&
     messages[index - 1]?.action === 'chapterSummary';
 
+  const downloadCancels = new Map<string, () => void>();
+
   const renderToolBlock = (block: AssistantToolBlock): HTMLElement => {
     const state = toolBlockState(block);
     const el = document.createElement('div');
@@ -1398,7 +1655,21 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     });
 
     head.append(arrow, status, name, summary);
-    el.append(head, body);
+    el.append(head);
+    if (state === 'running' && downloadCancels.has(block.id)) {
+      const stop = document.createElement('button');
+      stop.type = 'button';
+      stop.className = 'lightink-reader-assistant-tool-stop';
+      stop.textContent = t('reader.assistant.stopDownload');
+      stop.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stop.disabled = true;
+        downloadCancels.get(block.id)?.();
+      });
+      el.append(stop);
+    }
+    el.append(body);
     return el;
   };
 
@@ -1504,12 +1775,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const renderMessages = (): void => {
     streamingText = null;
     if (messages.length === 0) {
-      messagesHost.replaceChildren(pendingSection);
+      messagesHost.replaceChildren();
       scrollMessagesBottom(true);
       return;
     }
     const nodes = messages.map((message, index) => renderMessage(message, index));
-    messagesHost.replaceChildren(...nodes, pendingSection);
+    messagesHost.replaceChildren(...nodes);
     const last = messages[messages.length - 1]!;
     if (streaming && last.role === 'assistant' && last.error === undefined) {
       streamingText =
@@ -1585,13 +1856,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
    * 不可达），会话未实现时回退 `execute(tool, arguments)`；失败回到待确认并
    * 显示原因。拒绝 → 只标记该条，不调用执行器、不落盘。
    */
-  const resolvePending = async (entry: PendingConfirmationEntry): Promise<void> => {
+  const resolvePending = async (
+    entry: PendingConfirmationEntry,
+  ): Promise<Record<string, unknown> | null> => {
     if (entry.status !== 'pending') {
-      return;
+      return null;
     }
     entry.status = 'confirmed';
     entry.error = undefined;
-    renderPendingConfirmations();
     try {
       const result =
         entry.session.confirmPending !== undefined
@@ -1600,12 +1872,96 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (result.ok !== true) {
         entry.status = 'pending';
         entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
+        return null;
       }
+      return result as Record<string, unknown>;
     } catch (error) {
       entry.status = 'pending';
       entry.error = assistantAiErrorMessage(t, error, aiMissing);
+      return null;
     }
-    renderPendingConfirmations();
+  };
+
+  let progressFrame = 0;
+
+  const setToolProgress = (toolCallId: string | undefined, label: string): void => {
+    if (toolCallId === undefined || label === '') return;
+    let changed = false;
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      const blocks = message?.toolBlocks;
+      if (blocks === undefined) continue;
+      const at = blocks.findIndex((block) => block.id === toolCallId);
+      if (at < 0 || blocks[at]?.progressLabel === label) continue;
+      const next = blocks.slice();
+      next[at] = { ...next[at]!, progressLabel: label };
+      messages[index] = { ...message!, toolBlocks: next };
+      changed = true;
+    }
+    if (!changed || disposed.value) return;
+    if (progressFrame !== 0) return;
+    progressFrame = requestAnimationFrame(() => {
+      progressFrame = 0;
+      if (!disposed.value) renderMessages();
+    });
+  };
+
+  const markToolRunning = (toolCallId: string | undefined): void => {
+    if (toolCallId === undefined) {
+      return;
+    }
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      const blocks = message?.toolBlocks;
+      if (blocks === undefined) {
+        continue;
+      }
+      const at = blocks.findIndex((block) => block.id === toolCallId);
+      if (at < 0) {
+        continue;
+      }
+      const next = blocks.slice();
+      next[at] = { ...next[at]!, result: '' };
+      messages[index] = { ...message!, toolBlocks: next };
+    }
+  };
+
+  const applyConfirmedToolResult = (toolCallId: string, result: Record<string, unknown>): void => {
+    const payload = JSON.stringify(result);
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      const blocks = message?.toolBlocks;
+      if (blocks === undefined) {
+        continue;
+      }
+      const at = blocks.findIndex((block) => block.id === toolCallId);
+      if (at < 0) {
+        continue;
+      }
+      const next = blocks.slice();
+      next[at] = { ...next[at]!, result: payload };
+      messages[index] = { ...message!, toolBlocks: next };
+    }
+  };
+
+  const continueAfterConfirmation = (details: readonly string[], failed: boolean): void => {
+    const detail = details.filter((line) => line.trim() !== '').join('；');
+    if (detail === '' || disposed.value) {
+      return;
+    }
+    ensureActiveConversation();
+    const now = Date.now();
+    messages.push({
+      role: 'user',
+      content: t(
+        failed ? 'reader.assistant.confirmFailedContinue' : 'reader.assistant.confirmedContinue',
+        { detail },
+      ),
+      createdAt: now,
+    });
+    messages.push({ role: 'assistant', content: '', createdAt: now + 1 });
+    renderMessages();
+    void runStream(messages.length - 1);
   };
 
   const confirmSelected = async (): Promise<void> => {
@@ -1615,17 +1971,97 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     pendingBusy = true;
     renderPendingConfirmations();
     const batch = pendingQueue.filter((entry) => entry.status === 'pending');
+    const jobs = batch.filter((entry) => entry.included);
+    const confirmed: { toolCallId?: string; result: Record<string, unknown> }[] = [];
+    const failed: { toolCallId?: string; message: string; cancelled: boolean }[] = [];
     for (const entry of batch) {
       if (!entry.included) {
         entry.status = 'rejected';
-        entry.error = undefined;
-        renderPendingConfirmations();
-        continue;
       }
-      await resolvePending(entry);
+      const index = pendingQueue.indexOf(entry);
+      if (index >= 0) {
+        pendingQueue.splice(index, 1);
+      }
     }
     pendingBusy = false;
     renderPendingConfirmations();
+    for (const entry of jobs) {
+      markToolRunning(entry.toolCallId);
+    }
+    renderMessages();
+    for (const entry of jobs) {
+      try {
+        const result =
+          entry.session.confirmPending !== undefined
+            ? await entry.session.confirmPending(
+                entry.item.id,
+                (message) => {
+                  setToolProgress(entry.toolCallId, message);
+                },
+                (cancel) => {
+                  if (entry.toolCallId === undefined) return;
+                  downloadCancels.set(entry.toolCallId, cancel);
+                  renderMessages();
+                },
+              )
+            : await entry.session.execute(entry.item.tool, entry.item.arguments);
+        if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
+        if (result.ok === true) {
+          confirmed.push({ toolCallId: entry.toolCallId, result: result as Record<string, unknown> });
+        } else {
+          failed.push({
+            toolCallId: entry.toolCallId,
+            message: result.message ?? result.error ?? t('reader.assistant.pendingFailed'),
+            cancelled: result.error === 'download_cancelled',
+          });
+        }
+      } catch (error) {
+        if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
+        failed.push({
+          toolCallId: entry.toolCallId,
+          message: assistantAiErrorMessage(t, error, aiMissing),
+          cancelled: false,
+        });
+      }
+    }
+    for (const item of confirmed) {
+      if (item.toolCallId !== undefined) {
+        applyConfirmedToolResult(item.toolCallId, item.result);
+      }
+    }
+    for (const item of failed) {
+      if (item.toolCallId !== undefined) {
+        applyConfirmedToolResult(item.toolCallId, { ok: false, message: item.message });
+      }
+    }
+    renderPendingConfirmations();
+    renderMessages();
+    if (failed.length > 0) {
+      if (failed.every((item) => item.cancelled)) {
+        return;
+      }
+      continueAfterConfirmation(
+        failed.map((item) => item.message),
+        true,
+      );
+      return;
+    }
+    const details = confirmed.map((item) =>
+      typeof item.result.message === 'string' ? item.result.message : item.result.tool,
+    );
+    continueAfterConfirmation(
+      details.filter((line): line is string => typeof line === 'string'),
+      false,
+    );
+  };
+
+  const dropSettledPending = (): void => {
+    for (let index = pendingQueue.length - 1; index >= 0; index -= 1) {
+      const status = pendingQueue[index]?.status;
+      if (status === 'confirmed' || status === 'rejected') {
+        pendingQueue.splice(index, 1);
+      }
+    }
   };
 
   const rejectSelected = (): void => {
@@ -1639,6 +2075,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       entry.status = 'rejected';
       entry.error = undefined;
     }
+    dropSettledPending();
     renderPendingConfirmations();
   };
   confirmAllButton.addEventListener('click', (event) => {
@@ -1659,9 +2096,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const enqueuePendingConfirmations = (
     session: AssistantToolSession | null,
     blocks: readonly AssistantToolBlock[],
-  ): void => {
+  ): boolean => {
     if (session === null) {
-      return;
+      return false;
     }
     let added = false;
     for (const block of blocks) {
@@ -1672,22 +2109,37 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           if (pendingQueue[index]!.status === 'pending') {
             continue;
           }
-          pendingQueue[index] = { key, item, session, status: 'pending', included: true };
+          pendingQueue[index] = {
+            key,
+            item,
+            session,
+            status: 'pending',
+            included: true,
+            toolCallId: block.id,
+          };
           added = true;
           continue;
         }
-        pendingQueue.push({ key, item, session, status: 'pending', included: true });
+        pendingQueue.push({
+          key,
+          item,
+          session,
+          status: 'pending',
+          included: true,
+          toolCallId: block.id,
+        });
         added = true;
       }
     }
     if (!added) {
-      return;
+      return false;
     }
     if (permissionMode === 'yolo') {
       void confirmYoloQueue();
-      return;
+      return true;
     }
     renderPendingConfirmations();
+    return true;
   };
 
   /** YOLO 不展示确认卡片，直接执行待确认写入。失败的条目才留在卡片上。 */
@@ -1701,15 +2153,35 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       try {
         const result =
           entry.session.confirmPending !== undefined
-            ? await entry.session.confirmPending(entry.item.id)
+            ? await entry.session.confirmPending(
+                entry.item.id,
+                (message) => {
+                  setToolProgress(entry.toolCallId, message);
+                },
+                (cancel) => {
+                  if (entry.toolCallId === undefined) return;
+                  downloadCancels.set(entry.toolCallId, cancel);
+                  renderMessages();
+                },
+              )
             : await entry.session.execute(entry.item.tool, entry.item.arguments);
+        if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
         if (result.ok === true) {
           const index = pendingQueue.indexOf(entry);
           if (index >= 0) {
             pendingQueue.splice(index, 1);
           }
+          if (entry.toolCallId !== undefined) {
+            applyConfirmedToolResult(entry.toolCallId, result as Record<string, unknown>);
+          }
         } else {
           entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
+          if (entry.toolCallId !== undefined) {
+            applyConfirmedToolResult(entry.toolCallId, {
+              ok: false,
+              message: entry.error,
+            });
+          }
         }
       } catch (error) {
         entry.error = assistantAiErrorMessage(t, error, aiMissing);
@@ -2047,6 +2519,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     const generation = sessionGeneration;
     const user = messages[targetIndex - 1];
     const userMessage = user?.role === 'user' ? user.content : '';
+    let userMessageForRequest = userMessage;
+    let nudgedTool = false;
+    let fetchCount = 0;
+    const seenFetchUrls = new Set<string>();
     const prior = historyTurns(messages, Math.max(0, targetIndex - 1));
     const loopTurns: AssistantRequestTurn[] = [];
     const toolBlocks: AssistantToolBlock[] = [];
@@ -2098,7 +2574,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           systemPrompt: deps.systemPrompt?.() ?? t('reader.assistant.systemPrompt'),
           chapter: chapterSource(),
           history: [...prior, ...loopTurns],
-          userMessage,
+          userMessage: userMessageForRequest,
           page: currentPageNumber(),
           // 会话工具清单进 ①：书架会话广告 library_*，编辑器只读会话为空，
           // 无会话时保持内置 query_book/save_to_book（阅读器旧行为）。
@@ -2120,8 +2596,44 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         if (disposed.value || generation !== sessionGeneration || stopRequested) {
           break;
         }
-        const calls = done.toolCalls;
+        let calls = [...done.toolCalls];
+        if (calls.length === 0 && session !== null && session.tools.length > 0) {
+          const embedded = extractEmbeddedToolCalls(visible);
+          const known = embedded.calls.filter((call) =>
+            session.tools.some((tool) => tool.name === call.name),
+          );
+          if (known.length > 0) {
+            calls = known;
+            visible = embedded.cleaned;
+            const entry = messages[targetIndex];
+            if (entry !== undefined) {
+              messages[targetIndex] = { ...entry, content: visible };
+            }
+          }
+        }
         if (calls.length === 0) {
+          if (
+            !nudgedTool &&
+            session !== null &&
+            session.tools.length > 0 &&
+            shouldNudgeToolCall(userMessage, visible)
+          ) {
+            nudgedTool = true;
+            loopTurns.push({ role: 'assistant', content: visible });
+            loopTurns.push({
+              role: 'user',
+              content: userMessage,
+            });
+            visible = '';
+            markdownStream = createAssistantMarkdownStream();
+            const entry = messages[targetIndex];
+            if (entry !== undefined) {
+              messages[targetIndex] = { ...entry, content: '' };
+            }
+            // 下一轮把纠正放在末尾用户消息里，模型才会真正调用工具。
+            userMessageForRequest = BOOK_SOURCE_TOOL_NUDGE;
+            continue;
+          }
           break;
         }
         if (toolRoundTrips >= ASSISTANT_MAX_TOOL_ROUNDS) {
@@ -2176,13 +2688,39 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
             name: block.name,
           });
         }
-        enqueuePendingConfirmations(session, executed);
+        const queuedConfirmation = enqueuePendingConfirmations(session, executed);
         const entry = messages[targetIndex];
         if (entry !== undefined) {
           messages[targetIndex] = { ...entry, toolBlocks: toolBlocks.slice(), content: visible };
           renderMessages();
         }
         toolRoundTrips += 1;
+        // 确认卡片已经在等用户。再让模型继续，它会把「待确认」当成失败并重复调用。
+        if (queuedConfirmation && permissionMode !== 'yolo') {
+          break;
+        }
+        // 搜索失败或没有命中就停。否则模型会反复改规则、再保存、再搜索。
+        if (bookSourceSearchShouldStop(executed)) {
+          break;
+        }
+        // 下载缺参数或书源对不上时，再叫也补不出书名和地址。
+        if (bookSourceDownloadShouldStop(executed)) {
+          break;
+        }
+        // 同一地址再抓，或已经抓过两次，就停。第一次读完要继续，模型才能下载或改规则。
+        if (bookSourceFetchShouldStop(executed, seenFetchUrls, fetchCount)) {
+          break;
+        }
+        for (const block of executed) {
+          if (block.name !== 'book_source_fetch') {
+            continue;
+          }
+          fetchCount += 1;
+          const url = fetchFinalUrl(block);
+          if (url !== null) {
+            seenFetchUrls.add(url);
+          }
+        }
       }
       const entry = messages[targetIndex];
       if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
@@ -2454,7 +2992,34 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (!streaming) {
       return;
     }
-    abortStream();
+    stopRequested = true;
+    abortActive?.();
+    for (const cancel of downloadCancels.values()) {
+      cancel();
+    }
+    downloadCancels.clear();
+    cancelActiveDownload();
+    const lastIndex = messages.length - 1;
+    const last = messages[lastIndex];
+    if (last?.role === 'assistant') {
+      const toolBlocks = (last.toolBlocks ?? []).map((block) =>
+        block.stopped === true || (block.result !== undefined && block.result !== '')
+          ? block
+          : { ...block, stopped: true },
+      );
+      messages[lastIndex] = {
+        ...last,
+        error: last.error ?? t('reader.assistant.stopped'),
+        ...(toolBlocks.length > 0 ? { toolBlocks } : {}),
+      };
+    }
+    sessionGeneration += 1;
+    streaming = false;
+    abortActive = null;
+    streamingText = null;
+    renderMessages();
+    syncComposer();
+    persistHistory();
   });
   jumpBottom.addEventListener('click', (event) => {
     event.preventDefault();

@@ -190,6 +190,7 @@ export interface AssistantToolResult {
   /** 通用书源列表或下载影响的条目。 */
   readonly sources?: readonly unknown[];
   readonly results?: readonly unknown[];
+  readonly page?: { finalUrl: string; status: number; length: number; snippet: string };
   readonly updated?: readonly string[];
 }
 
@@ -202,7 +203,11 @@ export interface AssistantToolSession {
    * 用户确认入口：只由面板在用户点击确认后按建议 id 调用；模型路径不可达。
    * 失败时保留条目以支持重试。缺省 = 该会话无待确认写入，面板回退 `execute`。
    */
-  confirmPending?(id: string): Promise<AssistantToolResult>;
+  confirmPending?(
+    id: string,
+    report?: (message: string) => void,
+    bindCancel?: (cancel: () => void) => void,
+  ): Promise<AssistantToolResult>;
 }
 
 const QUERY_BOOK_DEFINITION: AssistantToolDefinition = {

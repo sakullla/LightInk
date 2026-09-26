@@ -139,6 +139,7 @@ pub fn run() {
             book_source::book_source_self_check,
             book_source::book_source_builtins,
             book_source::book_source_search,
+            book_source::book_source_fetch,
             book_source::book_source_chapters,
             book_source::book_source_chapter_text,
             managed::library_import_managed_book,

@@ -505,6 +505,9 @@
 }
 
 .lightink-reader-assistant-tool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   margin: 0 0 0.25rem;
   font-size: 0.72rem;
   color: var(--lightink-muted);
@@ -514,7 +517,9 @@
   display: flex;
   align-items: baseline;
   gap: 0.35rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  width: auto;
   margin: 0;
   padding: 0.15rem 0.2rem;
   border: 0;
@@ -570,7 +575,26 @@
   white-space: nowrap;
 }
 
+.lightink-reader-assistant-tool-stop {
+  flex: none;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-danger) 55%, var(--lightink-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-danger);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-tool-stop:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .lightink-reader-assistant-tool-body {
+  flex: 1 0 100%;
   margin: 0.15rem 0 0.2rem 1.3rem;
   max-height: 12rem;
   overflow: auto;
@@ -967,14 +991,14 @@
   outline-offset: 1px;
 }
 
-/* ===== 待确认卡片(消息流内联单例;流中唯一带边框的强调元素,R1/R3) ===== */
+/* ===== 待确认卡片：固定在快捷按钮上方，不跟消息一起滚出屏幕 ===== */
 
 .lightink-reader-assistant-pending {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
   gap: 0.4rem;
-  margin: 0 0.85rem 0.45rem;
+  margin: 0.35rem 0.85rem 0.15rem;
   padding: 0.55rem 0.7rem;
   border: 1px solid color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-border));
   border-radius: var(--lightink-radius-panel);

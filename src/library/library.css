@@ -5847,6 +5847,68 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   gap: 8px;
 }
 
+.lightink-library-book-source-download {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lightink-library-book-source-download-info {
+  margin: 0;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-library-book-source-download-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-library-book-source-download-progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+}
+
+.lightink-library-book-source-download-progress[data-status='error'] .lightink-library-book-source-download-progress-bar {
+  background: var(--lightink-danger);
+}
+
+.lightink-library-book-source-download-chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.lightink-library-book-source-download-chapter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-book-source-download-chapter[data-status='active'] {
+  color: var(--lightink-fg);
+  font-weight: 650;
+}
+
+.lightink-library-book-source-download-chapter[data-status='done'] {
+  color: var(--lightink-fg);
+}
+
+.lightink-library-book-source-download-chapter[data-status='failed'] {
+  color: var(--lightink-danger);
+}
+
 .lightink-library-book-source-results {
   display: flex;
   flex-direction: column;

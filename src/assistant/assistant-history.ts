@@ -26,6 +26,15 @@ const ASSISTANT_HISTORY_ACTIONS = [
 
 export type AssistantHistoryAction = (typeof ASSISTANT_HISTORY_ACTIONS)[number];
 
+/** 工具调用会随会话保存，重启后模型仍能看到书名、地址和结果。 */
+export interface AssistantHistoryToolBlock {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+  readonly result?: string;
+  readonly stopped?: boolean;
+}
+
 /** 一段会话里的一条消息（与现网 v1 条目字段兼容）。 */
 export interface AssistantHistoryMessage {
   readonly role: 'user' | 'assistant';
@@ -34,6 +43,7 @@ export interface AssistantHistoryMessage {
   readonly action?: AssistantHistoryAction;
   readonly contextTruncated?: boolean;
   readonly error?: string;
+  readonly toolBlocks?: readonly AssistantHistoryToolBlock[];
 }
 
 export interface AssistantConversation {
@@ -342,6 +352,7 @@ function parseMessages(list: readonly unknown[]): AssistantHistoryMessage[] {
         ? (obj.action as AssistantHistoryAction)
         : undefined;
     const error = typeof obj.error === 'string' && obj.error !== '' ? obj.error : undefined;
+    const toolBlocks = parseToolBlocks(obj.toolBlocks);
     messages.push({
       role,
       content,
@@ -349,6 +360,7 @@ function parseMessages(list: readonly unknown[]): AssistantHistoryMessage[] {
       ...(action !== undefined ? { action } : {}),
       ...(obj.contextTruncated === true ? { contextTruncated: true } : {}),
       ...(error !== undefined ? { error } : {}),
+      ...(toolBlocks !== undefined ? { toolBlocks } : {}),
     });
     if (messages.length >= ASSISTANT_HISTORY_MAX_MESSAGES) {
       break;
@@ -357,12 +369,46 @@ function parseMessages(list: readonly unknown[]): AssistantHistoryMessage[] {
   return messages;
 }
 
+function parseToolBlocks(value: unknown): AssistantHistoryToolBlock[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const blocks: AssistantHistoryToolBlock[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') {
+      continue;
+    }
+    const obj = item as Record<string, unknown>;
+    if (typeof obj.id !== 'string' || typeof obj.name !== 'string' || typeof obj.arguments !== 'string') {
+      continue;
+    }
+    const result = typeof obj.result === 'string' && obj.result !== '' ? obj.result : undefined;
+    blocks.push({
+      id: obj.id,
+      name: obj.name,
+      arguments: obj.arguments,
+      ...(result !== undefined ? { result } : {}),
+      ...(obj.stopped === true ? { stopped: true } : {}),
+    });
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
 function serializeMessage(message: AssistantHistoryMessage): Record<string, unknown> {
   const entry: Record<string, unknown> = {
     role: message.role,
     content: message.content,
     createdAt: message.createdAt,
   };
+  if (message.toolBlocks !== undefined && message.toolBlocks.length > 0) {
+    entry.toolBlocks = message.toolBlocks.map((block) => ({
+      id: block.id,
+      name: block.name,
+      arguments: block.arguments,
+      ...(block.result !== undefined && block.result !== '' ? { result: block.result } : {}),
+      ...(block.stopped === true ? { stopped: true } : {}),
+    }));
+  }
   if (message.action !== undefined) {
     entry.action = message.action;
   }

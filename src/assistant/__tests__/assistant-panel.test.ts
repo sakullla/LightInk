@@ -20,6 +20,8 @@ import {
   assistantActionContent,
   clipAssistantContext,
   createAssistantPanel,
+  bookSourceFetchShouldStop,
+  extractEmbeddedToolCalls,
   parseAssistantPendingConfirmations,
   streamAssistantChat,
   stripAssistantPendingConfirmations,
@@ -61,6 +63,57 @@ afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-touch-primary');
   document.documentElement.removeAttribute('data-android');
+});
+
+describe('bookSourceFetchShouldStop', () => {
+  const fetchBlock = (result: string) => ({
+    id: 'fetch-1',
+    name: 'book_source_fetch',
+    arguments: '{}',
+    result,
+  });
+
+  it('lets the model continue after the first page and stops a repeated url', () => {
+    const ok = fetchBlock(
+      JSON.stringify({ ok: true, page: { finalUrl: 'https://example.test/a', status: 200, length: 10, snippet: '<p>a</p>' } }),
+    );
+    const missing = fetchBlock(
+      JSON.stringify({ ok: true, page: { finalUrl: 'https://example.test/missing', status: 404, length: 20, snippet: 'missing' } }),
+    );
+    const encoded = fetchBlock(
+      JSON.stringify({
+        ok: true,
+        page: { finalUrl: 'https://example.test/%E4%B9%A6', status: 200, length: 8, snippet: '<p>书</p>' },
+      }),
+    );
+    expect(bookSourceFetchShouldStop([ok], new Set(), 0)).toBe(false);
+    expect(bookSourceFetchShouldStop([ok], new Set(['https://example.test/a']), 1)).toBe(true);
+    expect(bookSourceFetchShouldStop([missing], new Set(), 0)).toBe(false);
+    expect(bookSourceFetchShouldStop([encoded], new Set(['https://example.test/书']), 1)).toBe(true);
+    expect(bookSourceFetchShouldStop([missing], new Set(['https://example.test/a']), 2)).toBe(true);
+    expect(
+      bookSourceFetchShouldStop(
+        [{ id: 's', name: 'book_source_search', arguments: '{}', result: '{"ok":true}' }],
+        new Set(),
+        0,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('extractEmbeddedToolCalls', () => {
+  it('turns a minimax invoke dump into a book_source_save call', () => {
+    const raw =
+      '<tool_call> ]<]minimax[>[<invoke name="book_source_save">]<]minimax[>[<rule>]<]minimax[>[<baseUrl>https://example.test]<]minimax[>[</baseUrl>]<]minimax[>[<search>]<]minimax[>[<item>.result]<]minimax[>[</item>]<]minimax[>[</search>]<]minimax[>[</rule>]<]minimax[>[<title>示例]<]minimax[>[</title>]<]minimax[>[</invoke> ]<]minimax[>[</tool_call>';
+    const extracted = extractEmbeddedToolCalls(raw);
+    expect(extracted.calls).toHaveLength(1);
+    expect(extracted.calls[0]?.name).toBe('book_source_save');
+    expect(JSON.parse(extracted.calls[0]?.arguments ?? '{}')).toEqual({
+      rule: { baseUrl: 'https://example.test', search: { item: '.result' } },
+      title: '示例',
+    });
+    expect(extracted.cleaned).not.toContain('invoke');
+  });
 });
 
 describe('clipAssistantContext', () => {
@@ -1508,6 +1561,110 @@ describe('createAssistantPanel tools and locators', () => {
     panel.destroy();
   });
 
+  it('calls the book source tool after a reply that only promises a confirmation card', async () => {
+    let round = 0;
+    const execute = vi.fn(async () => ({
+      ok: true,
+      pending: true,
+      tool: 'book_source_save',
+      message: '添加书源需要确认后才会写入',
+      pending_confirmation: [
+        {
+          id: 'bs-1',
+          summary: '保存书源「Chinese Text Project」',
+          tool: 'book_source_save',
+          arguments: { title: 'Chinese Text Project' },
+        },
+      ],
+    }));
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('我直接再发一张新的确认卡。');
+          return { finish: 'stop', totalChars: 12 };
+        }
+        if (round === 2) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: 'book_source_save',
+                arguments: '{"title":"Chinese Text Project"}',
+              },
+            ],
+          };
+        }
+        return { finish: 'stop', totalChars: 0 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [
+            {
+              type: 'function',
+              name: 'book_source_save',
+              description: 'save',
+              parameters: { type: 'object', properties: {} },
+            },
+          ],
+          specifiedChapterCount: () => 0,
+          execute,
+          confirmPending: async () => ({ ok: true }),
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '你再重新添加下');
+    await flushUntil(() => round >= 2 && execute.mock.calls.length >= 1);
+    await flush();
+    expect(execute).toHaveBeenCalledWith('book_source_save', '{"title":"Chinese Text Project"}');
+    expect(panel.element.textContent).toContain('保存书源「Chinese Text Project」');
+    panel.destroy();
+  });
+
+  it('keeps a thrown tool error on the chip instead of failing the whole reply', async () => {
+    let round = 0;
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'book_source_search', arguments: '{"source":"示例","query":"红楼梦"}' }],
+          };
+        }
+        emit('搜索没有完成');
+        return { finish: 'stop', totalChars: 6 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [
+            {
+              type: 'function',
+              name: 'book_source_search',
+              description: 'search',
+              parameters: { type: 'object', properties: {} },
+            },
+          ],
+          specifiedChapterCount: () => 0,
+          execute: async () => {
+            throw { message: '远程服务器返回 HTTP 404' };
+          },
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '搜索红楼梦');
+    await flushUntil(() => panel.element.textContent?.includes('远程服务器返回 HTTP 404') === true);
+    expect(panel.element.textContent).toContain('远程服务器返回 HTTP 404');
+    expect(panel.element.textContent).not.toContain('AI 请求失败');
+    expect(panel.element.textContent).not.toContain('已停止');
+    panel.destroy();
+  });
+
   it('renders library tool calls as collapsed chips with localized name and summary', async () => {
     let round = 0;
     const execute = vi.fn(async () => ({
@@ -1831,7 +1988,11 @@ describe('parseAssistantPendingConfirmations', () => {
     );
     expect(stripped).not.toContain('pending_confirmation');
     expect(stripped).not.toContain('pending_ref');
-    expect(JSON.parse(stripped)).toEqual({ ok: true, pending: true });
+    expect(JSON.parse(stripped)).toMatchObject({
+      ok: true,
+      status: 'awaiting_user_confirmation',
+    });
+    expect(stripped).not.toContain('"pending":true');
   });
 
   it('ignores malformed payloads and keeps well-formed items', () => {
@@ -1928,16 +2089,16 @@ describe('createAssistantPanel pending confirmations', () => {
       .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
       ?.click();
     await flushUntil(
-      () => panel.element.querySelector('[data-assistant-pending-status="confirmed"]') !== null,
+      () =>
+        panel.element.querySelector('.lightink-reader-assistant-pending')?.hasAttribute('hidden') ===
+          true && execute.mock.calls.length >= 2,
     );
     expect(execute).toHaveBeenCalledTimes(2);
     expect(execute).toHaveBeenLastCalledWith('classify_book', {
       book: '示例书',
       group: '旧书',
     });
-    const confirmed = panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]');
-    expect(confirmed?.dataset.status).toBe('confirmed');
-    expect(confirmed?.querySelector('[data-assistant-pending-confirm]')).toBeNull();
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
     panel.destroy();
   });
 
@@ -1955,12 +2116,10 @@ describe('createAssistantPanel pending confirmations', () => {
       ?.click();
     await flush();
     expect(execute).toHaveBeenCalledTimes(1);
-    const rejected = panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]');
-    expect(rejected?.dataset.status).toBe('rejected');
-    expect(panel.element.querySelector('[data-assistant-pending-status]')?.textContent).toBe(
-      t('reader.assistant.pendingRejected'),
-    );
-    expect(rejected?.querySelector('[data-assistant-pending-check]')).toBeNull();
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden,
+    ).toBe(true);
     panel.destroy();
   });
 
@@ -1982,12 +2141,11 @@ describe('createAssistantPanel pending confirmations', () => {
       ?.click();
     await flushUntil(
       () =>
-        panel.element.querySelector('.lightink-reader-assistant-pending-error')?.textContent ===
-        '分组不存在',
+        panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden ===
+          true && panel.element.textContent?.includes('分组不存在') === true,
     );
-    const failed = panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]');
-    expect(failed?.dataset.status).toBe('pending');
-    expect(failed?.querySelector('[data-assistant-pending-check]')).not.toBeNull();
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
+    expect(panel.element.textContent).toContain('但写入失败');
     expect(execute).toHaveBeenCalledTimes(2);
     panel.destroy();
   });
@@ -2025,9 +2183,11 @@ describe('createAssistantPanel pending confirmations', () => {
       .querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]')
       ?.click();
     await flushUntil(
-      () => panel.element.querySelector('[data-assistant-pending-status="confirmed"]') !== null,
+      () =>
+        panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden ===
+          true && confirmPending.mock.calls.length >= 1,
     );
-    expect(confirmPending).toHaveBeenCalledWith('p1');
+    expect(confirmPending).toHaveBeenCalledWith('p1', expect.any(Function), expect.any(Function));
     expect(execute).toHaveBeenCalledTimes(1);
     panel.destroy();
   });
@@ -2035,17 +2195,13 @@ describe('createAssistantPanel pending confirmations', () => {
   it('re-enqueues a rejected suggestion as pending when it appears again', async () => {
     const execute = vi.fn(async () => pendingReply);
     let round = 0;
-    const script: Script = async ({ emit }) => {
+    const script: Script = async () => {
       round += 1;
-      if (round === 1 || round === 3) {
-        return {
-          finish: 'tool_calls',
-          totalChars: 0,
-          toolCalls: [{ id: `c${round}`, name: 'classify_book', arguments: '{}' }],
-        };
-      }
-      emit('已处理');
-      return { finish: 'stop', totalChars: 3 };
+      return {
+        finish: 'tool_calls',
+        totalChars: 0,
+        toolCalls: [{ id: `c${round}`, name: 'classify_book', arguments: '{}' }],
+      };
     };
     const session = {
       tools: [],
@@ -2063,9 +2219,10 @@ describe('createAssistantPanel pending confirmations', () => {
       .querySelector<HTMLButtonElement>('[data-assistant-pending-reject-all]')
       ?.click();
     await flush();
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
     expect(
-      panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')?.dataset.status,
-    ).toBe('rejected');
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden,
+    ).toBe(true);
 
     submitQuestion(panel, '再整理一次');
     await flushUntil(
@@ -2092,20 +2249,14 @@ describe('createAssistantPanel pending confirmations', () => {
       ],
     };
     const execute = vi.fn(async () => libraryReply);
-    const roundMessages: string[] = [];
     let round = 0;
-    const script: Script = async ({ emit, messages }) => {
+    const script: Script = async () => {
       round += 1;
-      if (round === 1) {
-        return {
-          finish: 'tool_calls',
-          totalChars: 0,
-          toolCalls: [{ id: 'c1', name: 'library_organize', arguments: '{}' }],
-        };
-      }
-      roundMessages.push(JSON.stringify(messages));
-      emit('已处理');
-      return { finish: 'stop', totalChars: 3 };
+      return {
+        finish: 'tool_calls',
+        totalChars: 0,
+        toolCalls: [{ id: 'c1', name: 'library_organize', arguments: '{}' }],
+      };
     };
     const session = {
       tools: [],
@@ -2116,10 +2267,13 @@ describe('createAssistantPanel pending confirmations', () => {
     panel.open();
     await flush();
     submitQuestion(panel, '整理一下');
-    await flushUntil(() => roundMessages.length > 0);
-    expect(roundMessages.join('\n')).not.toContain('pending_ref');
-    expect(roundMessages.join('\n')).not.toContain('pending_confirmation');
-    // 面板仍拿到完整结果并渲染待确认条目。
+    await flushUntil(() => round >= 1 && panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null);
+    const sent = stripAssistantPendingConfirmations(
+      JSON.stringify(libraryReply),
+    );
+    expect(sent).not.toContain('pending_ref');
+    expect(sent).not.toContain('pending_confirmation');
+    expect(sent).toContain('这不是失败');
     expect(
       panel.element.querySelector('[data-assistant-pending-id="p1"]'),
     ).not.toBeNull();
@@ -2174,18 +2328,17 @@ describe('createAssistantPanel pending confirmations', () => {
       ?.click();
     await flushUntil(
       () =>
-        panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p2"]')?.dataset
-          .status === 'rejected',
+        panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden ===
+        true,
     );
-    expect(confirmPending).toHaveBeenCalledWith('p1');
-    expect(confirmPending).not.toHaveBeenCalledWith('p2');
-    expect(
-      panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p2"]')?.dataset.status,
-    ).toBe('rejected');
+    expect(confirmPending).toHaveBeenCalledWith('p1', expect.any(Function), expect.any(Function));
+    expect(confirmPending).not.toHaveBeenCalledWith('p2', expect.any(Function), expect.any(Function));
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
+    expect(panel.element.querySelector('[data-assistant-pending-id="p2"]')).toBeNull();
     panel.destroy();
   });
 
-  it('mounts the pending card inline as the last element of the message flow', async () => {
+  it('pins the pending card above the quick actions', async () => {
     const execute = vi.fn(async () => pendingReply);
     const { panel } = mountPanel(toolCallsRounds(execute));
     panel.open();
@@ -2195,19 +2348,17 @@ describe('createAssistantPanel pending confirmations', () => {
       () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
     );
 
+    const main = panel.element.querySelector('.lightink-reader-assistant-main');
     const messagesHost = panel.element.querySelector('.lightink-reader-assistant-messages');
     const card = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending');
-    expect(card).not.toBeNull();
-    // 内联进消息流：卡片的父节点是消息列表，且不再是主列的底部固定兄弟。
-    expect(card?.parentElement).toBe(messagesHost);
-    expect(messagesHost?.lastElementChild).toBe(card);
-    expect(
-      panel.element.querySelector('.lightink-reader-assistant-main > .lightink-reader-assistant-pending'),
-    ).toBeNull();
+    const actions = panel.element.querySelector('.lightink-reader-assistant-actions');
+    expect(card?.parentElement).toBe(main);
+    expect(messagesHost?.contains(card ?? null)).toBe(false);
+    expect(card?.nextElementSibling?.nextElementSibling).toBe(actions);
     panel.destroy();
   });
 
-  it('keeps the inline card in place while new messages arrive', async () => {
+  it('keeps the pending card above the quick actions while new messages arrive', async () => {
     const execute = vi.fn(async () => pendingReply);
     const { panel } = mountPanel(toolCallsRounds(execute));
     panel.open();
@@ -2220,10 +2371,9 @@ describe('createAssistantPanel pending confirmations', () => {
     submitQuestion(panel, '再问一句');
     await flushUntil(() => bubbleTexts(panel, 'assistant').length >= 2);
 
-    const messagesHost = panel.element.querySelector('.lightink-reader-assistant-messages');
+    const main = panel.element.querySelector('.lightink-reader-assistant-main');
     const card = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending');
-    expect(card?.parentElement).toBe(messagesHost);
-    expect(messagesHost?.lastElementChild).toBe(card);
+    expect(card?.parentElement).toBe(main);
     expect(
       panel.element.querySelector<HTMLElement>('[data-assistant-pending-id="p1"]')?.dataset.status,
     ).toBe('pending');

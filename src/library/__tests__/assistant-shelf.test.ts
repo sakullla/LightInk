@@ -532,7 +532,7 @@ describe('createShelfAssistant library tools', () => {
     yolo.assistant.destroy();
   });
 
-  it('renders the pending card inline inside the message flow', async () => {
+  it('renders the pending card above the quick actions', async () => {
     const fixture = libraryFixture([book({ id: 'local:/a.epub', title: '三体' })]);
     const { assistant } = mountShelf({
       library: fixture.deps,
@@ -560,10 +560,11 @@ describe('createShelfAssistant library tools', () => {
     await flushUntil(
       () => panelElement()?.querySelector('[data-assistant-pending-check]') != null,
     );
-    const messagesHost = panelElement()!.querySelector('.lightink-reader-assistant-messages');
+    const main = panelElement()!.querySelector('.lightink-reader-assistant-main');
     const card = panelElement()!.querySelector('.lightink-reader-assistant-pending');
-    expect(card?.parentElement).toBe(messagesHost);
-    expect(messagesHost?.lastElementChild).toBe(card);
+    const actions = panelElement()!.querySelector('.lightink-reader-assistant-actions');
+    expect(card?.parentElement).toBe(main);
+    expect(card?.nextElementSibling?.nextElementSibling).toBe(actions);
     assistant.destroy();
   });
 

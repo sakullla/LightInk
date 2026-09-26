@@ -9,6 +9,7 @@ import type {
 import {
   bookDownloadClient,
   chapterProgress,
+  formatDownloadProgress,
   createBookDownloadController,
   type BookDownloadChapterInput,
   type BookDownloadFormat,
@@ -468,6 +469,12 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   const downloadTitle = doc.createElement('h3');
   const downloadInfo = doc.createElement('p');
   downloadInfo.className = 'lightink-library-book-source-download-info';
+  const downloadProgress = doc.createElement('div');
+  downloadProgress.className = 'lightink-library-book-source-download-progress';
+  downloadProgress.hidden = true;
+  const downloadProgressBar = doc.createElement('div');
+  downloadProgressBar.className = 'lightink-library-book-source-download-progress-bar';
+  downloadProgress.append(downloadProgressBar);
   const downloadStatus = doc.createElement('p');
   downloadStatus.className = 'lightink-library-book-source-editor-status';
   downloadStatus.setAttribute('role', 'status');
@@ -479,6 +486,7 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   downloadSection.append(
     downloadTitle,
     downloadInfo,
+    downloadProgress,
     downloadStatus,
     downloadChapterList,
     downloadActions,
@@ -957,11 +965,20 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
         .join(' · ');
     } else if (phase !== 'idle') {
       downloadTitle.textContent = `${l.download}: ${state.title}`;
-      const progress = chapterProgress(state);
-      downloadInfo.textContent = `${progress.done}/${progress.total}`;
+      downloadInfo.textContent = formatDownloadProgress(state);
     } else {
       downloadTitle.textContent = '';
       downloadInfo.textContent = '';
+    }
+    const progress = phase === 'idle' ? undefined : chapterProgress(state);
+    const ratio =
+      progress === undefined || progress.total === 0 ? 0 : progress.done / progress.total;
+    downloadProgress.hidden = progress === undefined;
+    downloadProgressBar.style.width = `${Math.round(ratio * 100)}%`;
+    if (progress !== undefined && progress.failed > 0 && progress.done === 0) {
+      downloadProgress.dataset.status = 'error';
+    } else {
+      delete downloadProgress.dataset.status;
     }
     const phaseText: Partial<Record<typeof phase, string>> = {
       starting: l.downloadPreparing,
@@ -1011,6 +1028,10 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
           row.append(retry);
         }
         downloadChapterList.appendChild(row);
+      }
+      const activeRow = downloadChapterList.querySelector('[data-status="active"]');
+      if (activeRow instanceof HTMLElement && typeof activeRow.scrollIntoView === 'function') {
+        activeRow.scrollIntoView({ block: 'nearest' });
       }
     }
 

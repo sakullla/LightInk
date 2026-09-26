@@ -177,9 +177,9 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
           sources.tools.some((tool) => tool.name === name)
             ? sources.execute(name, args)
             : library.execute(name, args),
-        confirmPending: (id) =>
+        confirmPending: (id, report, bindCancel) =>
           id.startsWith('bs-') && sources.confirmPending !== undefined
-            ? sources.confirmPending(id)
+            ? sources.confirmPending(id, report, bindCancel)
             : library.confirmPending(id),
       };
     },

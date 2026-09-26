@@ -12,6 +12,7 @@ import {
   createBookDownloadClient,
   createBookDownloadController,
   downloadPaused,
+  formatDownloadProgress,
   INITIAL_DOWNLOAD_STATE,
   missingChapterIndices,
   runtimeFromPersisted,
@@ -101,6 +102,7 @@ describe('download state machine (pure transitions)', () => {
     const state = runtimeFromPersisted(persistedJob());
     expect(missingChapterIndices(state)).toEqual([1]);
     expect(chapterProgress(state)).toEqual({ done: 2, failed: 0, total: 3 });
+    expect(formatDownloadProgress({ ...state, phase: 'downloading' })).toBe('2/3');
   });
 
   it('treats persisted failed chapters as missing on resume', () => {
@@ -222,11 +224,11 @@ describe('download controller (orchestration)', () => {
       return persistedChapter(indexNo, 'done', { content: `内容${indexNo}` });
     });
     const client = mockClient({ fetchChapter });
-    const controller = createBookDownloadController({ client });
+    const controller = createBookDownloadController({ client, retryDelayMs: 0 });
     await controller.start(startInput());
 
     expect(controller.state.phase).toBe('incomplete');
-    expect(fetchChapter).toHaveBeenCalledTimes(3);
+    expect(fetchChapter).toHaveBeenCalledTimes(5);
     expect(controller.state.chapters[1]).toMatchObject({ status: 'failed', error: '章节抓取失败' });
     expect(controller.state.chapters[0]).toMatchObject({ status: 'done' });
     expect(controller.state.chapters[2]).toMatchObject({ status: 'done' });
@@ -236,8 +238,35 @@ describe('download controller (orchestration)', () => {
     controller.retryFailed();
     await settle();
 
-    expect(fetchChapter).toHaveBeenCalledTimes(4);
+    expect(fetchChapter).toHaveBeenCalledTimes(6);
     expect(controller.state.phase).toBe('done');
+    expect(client.finalize).toHaveBeenCalled();
+  });
+
+  it('retries a transient chapter failure and still imports the book', async () => {
+    let attempts = 0;
+    const fetchChapter = vi.fn(async (_jobId: string, indexNo: number) => {
+      if (indexNo === 1 && attempts === 0) {
+        attempts += 1;
+        throw new Error('暂时无法连接');
+      }
+      return persistedChapter(indexNo, 'done', { content: `内容${indexNo}` });
+    });
+    const client = mockClient({ fetchChapter });
+    const seen: string[] = [];
+    const controller = createBookDownloadController({
+      client,
+      retryDelayMs: 0,
+      onState: (state) => {
+        const label = formatDownloadProgress(state);
+        if (label !== '') seen.push(label);
+      },
+    });
+    await controller.start(startInput());
+
+    expect(controller.state.phase).toBe('done');
+    expect(fetchChapter).toHaveBeenCalledTimes(4);
+    expect(seen.some((label) => label.startsWith('0/3') || label.startsWith('1/3'))).toBe(true);
     expect(client.finalize).toHaveBeenCalled();
   });
 

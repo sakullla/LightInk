@@ -249,7 +249,12 @@ import {
   remoteNeedsRangeWarning,
 } from './library/library-remote.js';
 import { webDavSourceClient } from './library/webdav-source-client.js';
-import { bookDownloadClient, createBookDownloadController } from './library/book-download.js';
+import {
+  bindActiveDownloadCancel,
+  bookDownloadClient,
+  createBookDownloadController,
+  formatDownloadProgress,
+} from './library/book-download.js';
 import { bookSourceClient } from './library/book-source-client.js';
 import { createSyncableStorage } from './storage/syncable-storage.js';
 import { documentClient } from './sync/document-client.js';
@@ -3158,19 +3163,79 @@ function ensureShelfAssistant(): ShelfAssistant {
           title: source.title,
           enabled: source.enabled,
           baseUrl: source.rule.baseUrl,
+          allowHttp: source.allowHttp,
+          rule: source.rule,
         }));
       },
       search: (sourceId, query) => bookSourceClient.search(sourceId, query),
-      download: async (input) => {
+      fetchPage: (sourceId, input) => bookSourceClient.fetchPage(sourceId, input),
+      listBuiltins: () => bookSourceClient.builtins(),
+      saveSource: async (input) => {
+        const saved = await bookSourceClient.upsertSource(input);
+        return { id: saved.id, title: saved.title };
+      },
+      importSources: async (json) => {
+        const saved = await bookSourceClient.importSources(json);
+        return saved.map((source) => ({ id: source.id, title: source.title }));
+      },
+      setSourceEnabled: async (sourceId, enabled) => {
+        await bookSourceClient.setSourceEnabled(sourceId, enabled);
+      },
+      removeSource: (sourceId) => bookSourceClient.removeSource(sourceId),
+      download: async (input, report, bindCancel) => {
+        let stopped = false;
+        let controller: ReturnType<typeof createBookDownloadController> | undefined;
+        const cancel = (): void => {
+          stopped = true;
+          controller?.cancel();
+        };
+        const releaseCancel = bindActiveDownloadCancel(cancel);
+        bindCancel?.(cancel);
+        try {
         const chapters = await bookSourceClient.chapters(input.sourceId, input.bookUrl);
-        const controller = createBookDownloadController({ client: bookDownloadClient });
+        if (stopped) {
+          return { phase: 'paused', message: '已停止下载。不要再次调用 book_source_download，除非用户要求继续。' };
+        }
+        if (chapters.length === 0) {
+          throw new Error(
+            '目录选择器没有匹配到章节。请修改 toc.item，只匹配章节链接，不要匹配整页所有链接。',
+          );
+        }
+        if (chapters.length > 2000) {
+          throw new Error(
+            `目录匹配到 ${chapters.length} 条，超过 2000。toc.item 选得太宽，请收窄到章节链接。`,
+          );
+        }
+        report?.(`0/${chapters.length}`);
+        controller = createBookDownloadController({
+          client: bookDownloadClient,
+          onState: (state) => {
+            const label = formatDownloadProgress(state);
+            if (label !== '') report?.(label);
+          },
+        });
+        if (stopped) {
+          return { phase: 'paused', message: '已停止下载。不要再次调用 book_source_download，除非用户要求继续。' };
+        }
         await controller.start({ ...input, chapters });
         const state = controller.state;
+        if (state.phase === 'paused') {
+          const label = formatDownloadProgress(state);
+          return {
+            phase: 'paused',
+            message: label === ''
+              ? '已停止下载。不要再次调用 book_source_download，除非用户要求继续。'
+              : `已停止下载（${label}）。不要再次调用 book_source_download，除非用户要求继续。`,
+          };
+        }
         return {
           ...(state.importedItemId !== undefined ? { itemId: state.importedItemId } : {}),
           phase: state.phase,
           ...(state.message !== undefined ? { message: state.message } : {}),
         };
+        } finally {
+          releaseCancel();
+        }
       },
     },
     onLibraryChanged: () => {

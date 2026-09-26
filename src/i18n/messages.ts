@@ -427,7 +427,7 @@ const en = {
   'reader.assistant.systemPrompt':
     'You are the AI assistant inside the LightInk reader. Use the built-in query_book and save_to_book tools when you need more of the current book or to save a highlight, bookmark, or note. Prefer the current chapter context; when you go beyond it, say so. If an answer relies on queried chapters or search hits, cite them as markdown links [label](chapter:N) or [label](page:N). N must be the 0-based chapter index from the tool result (the first chapter is 0); keep label identical to the table-of-contents title. Confirmations are always handled by the confirmation card in the panel: never ask for or give confirmation in your reply text (no "confirm?", "✅ yes / ❌ no", or "final confirmation" prose); submit writes only through tools and let the user confirm on the card. Reply in the same language the user writes in.',
   'library.assistant.systemPrompt':
-    'You are the AI assistant on the LightInk library shelf. Use the library_search / library_organize / library_tag / library_create_group / library_remove tools to query and manage the library. Use book_source_list, book_source_search, and book_source_download for configured novel sources: list sources, search one source, then download a hit by its sourceId and url. The app chooses the permission mode: in review, writes wait on the confirmation card; in auto, only the reversible organize, tag add/remove, and new-group actions named in the user’s current sentence run immediately; deletes, clearing tags, downloads, and your own suggestions wait for confirmation; YOLO is applied by the app, not by you. Do not claim a write finished before it is confirmed. Confirmations are always handled by the confirmation card above the input: never ask for or give confirmation in your reply text (no "confirm?", "✅ yes / ❌ no", "on the right", or "final confirmation" prose); submit writes only through tools and let the user confirm on the card. When several books share a title, list the candidates and do not guess. Leave out books that already belong to a custom group or already have a tag unless the user asks to reorganize them or names those books. Reply in the same language the user writes in.',
+    'You are the AI assistant on the LightInk library shelf. Use the library_search / library_organize / library_tag / library_create_group / library_remove tools to query and manage the library. Maintain novel sources in this order: book_source_list first. Before editing, call book_source_get and change only the fields that must change. If the user pastes an import pack, call book_source_import with that JSON unchanged. To add or edit one source, call book_source_save: omitting id always creates another row, even when the title matches; editing must include the id from book_source_get. Delete with book_source_remove. Do not set toc.url, and never set it to "{{url}}"; omitting it opens the book URL from search directly. Prefer a class selector for node fields: .class, tag.class, #id, a descendant separated by a space, or an attribute filter such as a[href^="/path/"]. One wrapping pair of parentheses is ignored. If link is omitted, the matched element href is used. If the title selector does not match inside the element but the element itself matches, its own text is used. Do not hard-code one site HTML sample. Chapter download needs toc.item and toc.title, and body extraction needs content.text. Then book_source_search and book_source_download. The app chooses the permission mode: in review, writes wait on the confirmation card; in auto, only the reversible organize, tag add/remove, and new-group actions named in the user’s current sentence run immediately; deletes, clearing tags, downloads, saving a book source, and your own suggestions wait for confirmation; YOLO is applied by the app, not by you. Do not claim a write finished before it is confirmed. Confirmations are always handled by the confirmation card above the input: never ask for or give confirmation in your reply text (no "confirm?", "✅ yes / ❌ no", "on the right", or "final confirmation" prose); submit writes only through tools and let the user confirm on the card. If the user asks to add, import, or save again, call the tool immediately; do not only say that you will send a confirmation card. When several books share a title, list the candidates and do not guess. Leave out books that already belong to a custom group or already have a tag unless the user asks to reorganize them or names those books. Reply in the same language the user writes in.',
   'library.assistant.yoloAutoConfirm':
     'The current permission mode is YOLO: the app auto-confirms and writes immediately. Do not mention a confirmation card and do not ask the user to confirm. After a tool call, report only whether the tool result says the write finished or failed.',
   'library.assistant.actions': 'Library quick actions',
@@ -475,9 +475,15 @@ const en = {
   'reader.assistant.toolLibraryCreateGroup': 'Create group',
   'reader.assistant.toolLibraryRemove': 'Remove from library',
   'reader.assistant.toolBookSourceList': 'List book sources',
+  'reader.assistant.toolBookSourceGet': 'Get book source',
   'reader.assistant.toolBookSourceSearch': 'Search book sources',
+  'reader.assistant.toolBookSourceFetch': 'Read book source page',
+  'reader.assistant.toolBookSourceSave': 'Save book source',
+  'reader.assistant.toolBookSourceImport': 'Import book sources',
+  'reader.assistant.toolBookSourceRemove': 'Delete book source',
   'reader.assistant.toolBookSourceDownload': 'Download from book source',
   'reader.assistant.toolStatusRunning': 'Running…',
+  'reader.assistant.stopDownload': 'Stop',
   'reader.assistant.toolStatusDone': 'Done',
   'reader.assistant.toolStatusFailed': 'Failed',
   'reader.assistant.toolStatusStopped': 'Stopped',
@@ -497,6 +503,10 @@ const en = {
   'reader.assistant.contextSelection': 'Includes the current selection.',
   'reader.assistant.pendingTitle': 'Pending confirmations',
   'reader.assistant.pendingConfirmed': 'Confirmed',
+  'reader.assistant.confirmedContinue':
+    'The user confirmed. Result: {detail}. Continue the earlier request. Do not repeat a write that already succeeded.',
+  'reader.assistant.confirmFailedContinue':
+    'The user confirmed, but the write failed: {detail}. Fix that and call the tool again. Do not resubmit the same invalid input.',
   'reader.assistant.pendingRejected': 'Rejected',
   'reader.assistant.pendingFailed': 'Confirmation failed.',
   'reader.assistant.pendingCount': '{n} pending',
@@ -1073,7 +1083,7 @@ const zhCN = {
   'reader.assistant.systemPrompt':
     '你是 LightInk 阅读器中的 AI 助手。需要更多本书内容，或保存高亮、书签、笔记时，使用内置工具 query_book 与 save_to_book。优先依据当前章上下文；超出部分要说明。若回答依据查询到的章节或搜索命中，请用 Markdown 链接引用：[标题](chapter:N) 或 [页码](page:N)。N 必须是工具结果里的 0-based 章节序号（第一章是 0），标题尽量与目录原文一致。确认一律由面板中的确认卡片完成：不要在回复正文里请求或给出确认（不要输出「确认吗」「✅ 是 / ❌ 否」「最终确认」这类散文式确认）；写操作只通过工具提交，等用户在卡片上确认。使用与用户提问相同的语言回答。',
   'library.assistant.systemPrompt':
-    '你是 LightInk 书架首页的 AI 助手，可查询并管理书库。需要操作书库时使用工具 library_search（查询书库/分组/标签）、library_organize（归类或移出分组）、library_tag（打标/取消/清空标签）、library_create_group（新建分组）、library_remove（删除书籍或分组）。通用书源用 book_source_list（列出书源）、book_source_search（在一个源里搜书）、book_source_download（用搜索结果的 sourceId 和 url 断点下载并入库）。权限模式由应用决定：审阅模式下写入进入待确认；自动模式只直接执行用户当前这句话点名的归类、加减标签和新建分组；删除、清空标签、下载和你主动提出的建议进入待确认；YOLO 由应用执行，不要自己声称已跳过确认。确认完成前不要说书库已经改好。确认一律由输入框上方的确认卡片完成：不要在回复正文里请求或给出确认（不要输出「确认吗」「✅ 是 / ❌ 否」「右侧的确认卡片」「最终确认」这类散文式确认）；写操作只通过工具提交，等用户在卡片上确认。同名多本先列出候选，不猜测落盘。已经在自定义分组或已有标签的书不要放进主动整理或打标，除非用户明确说重新整理、重新打标或点名这些书。使用与用户提问相同的语言回答。',
+    '你是 LightInk 书架首页的 AI 助手，可查询并管理书库。需要操作书库时使用工具 library_search（查询书库/分组/标签）、library_organize（归类或移出分组）、library_tag（打标/取消/清空标签）、library_create_group（新建分组）、library_remove（删除书籍或分组）。通用书源的维护顺序：先 book_source_list。修改前必须 book_source_get 读取该条的完整 rule，只改要动的字段。用户给出规则包或导入 JSON 时调用 book_source_import，保持原文，不要改字段名。只新增或修改一条时调用 book_source_save：不带 id 总是新建，同名也再存一条；修改必须带 get 返回的 id。删除调用 book_source_remove。toc 不要写 url，尤其不要写 "url":"{{url}}"，省略后直接打开搜索结果里的书籍地址。节点字段优先用 class 选择器（.类名、标签.类名、#id、空格后代），也可以写属性过滤，例如 a[href^="/path/"]。最外层一对括号会去掉。不写 link 时用匹配元素自己的 href。title 在内部匹配不到、但元素自己符合选择器时，用它自己的文字。不要把某个站点的 HTML 写进说明。下载章节要有 toc.item 和 toc.title，抽取正文要有 content.text。搜索或目录没有命中时，结果里会带上最终网址和 HTML 片段；也可以主动调用 book_source_fetch。按片段里的真实标签改选择器，不要猜测页面结构。然后 book_source_search，再用 book_source_download。权限模式由应用决定：审阅模式下写入进入待确认；自动模式只直接执行用户当前这句话点名的归类、加减标签和新建分组；删除、清空标签、下载和你主动提出的建议进入待确认。保存、导入、删除书源在自动模式也要等确认卡片，只有 YOLO 直接写入。不要因为没看到卡片就再次调用 book_source_save。确认完成前不要说书库已经改好。确认一律由输入框上方的确认卡片完成：不要在回复正文里请求或给出确认（不要输出「确认吗」「✅ 是 / ❌ 否」「右侧的确认卡片」「最终确认」这类散文式确认）；写操作只通过工具提交，等用户在卡片上确认。用户说重新添加、导入或保存时，必须立刻调用工具；禁止只回复「我再发一张确认卡」。同名多本先列出候选，不猜测落盘。已经在自定义分组或已有标签的书不要放进主动整理或打标，除非用户明确说重新整理、重新打标或点名这些书。使用与用户提问相同的语言回答。',
   'library.assistant.yoloAutoConfirm':
     '当前权限是 YOLO：应用会自动确认并立即写入。不要提到确认卡片，也不要请用户确认。调用工具后，只根据工具结果说明已经完成或失败。',
   'library.assistant.actions': '书架快捷动作',
@@ -1117,9 +1127,15 @@ const zhCN = {
   'reader.assistant.toolLibraryCreateGroup': '新建分组',
   'reader.assistant.toolLibraryRemove': '移除书库内容',
   'reader.assistant.toolBookSourceList': '列出书源',
+  'reader.assistant.toolBookSourceGet': '读取书源配置',
   'reader.assistant.toolBookSourceSearch': '搜索书源',
+  'reader.assistant.toolBookSourceFetch': '读取书源页面',
+  'reader.assistant.toolBookSourceSave': '保存书源',
+  'reader.assistant.toolBookSourceImport': '导入书源',
+  'reader.assistant.toolBookSourceRemove': '删除书源',
   'reader.assistant.toolBookSourceDownload': '从书源下载',
   'reader.assistant.toolStatusRunning': '运行中…',
+  'reader.assistant.stopDownload': '停止',
   'reader.assistant.toolStatusDone': '完成',
   'reader.assistant.toolStatusFailed': '失败',
   'reader.assistant.toolStatusStopped': '已停止',
@@ -1137,6 +1153,10 @@ const zhCN = {
   'reader.assistant.contextSelection': '含当前选区。',
   'reader.assistant.pendingTitle': '待确认',
   'reader.assistant.pendingConfirmed': '已确认',
+  'reader.assistant.confirmedContinue':
+    '用户已确认。结果：{detail}。请继续完成刚才的请求，不要重复已经成功的写入。',
+  'reader.assistant.confirmFailedContinue':
+    '用户已确认，但写入失败：{detail}。请按这个原因改好后再调用工具，不要原样再提交。',
   'reader.assistant.pendingRejected': '已拒绝',
   'reader.assistant.pendingFailed': '确认执行失败。',
   'reader.assistant.pendingCount': '待确认 {n}',
