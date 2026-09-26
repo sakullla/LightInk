@@ -897,7 +897,9 @@ export function createLibraryManage(
     themeSwatches.setAttribute('aria-label', labels().libraryTheme);
     for (const theme of LIBRARY_THEMES) {
       const swatch = button(doc, '', 'lightink-library-theme-swatch');
-      swatch.dataset.libraryTheme = theme.id;
+      // Not data-library-theme: that attribute republishes a preset, and the
+      // name is drawn on the shelf page rather than a filled swatch.
+      swatch.dataset.libraryThemeId = theme.id;
       const preview = doc.createElement('span');
       preview.className = 'lightink-library-theme-preview';
       preview.style.backgroundColor = theme.page;

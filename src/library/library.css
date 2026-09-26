@@ -2,6 +2,9 @@
  * Bookshelf chrome. Kindle / Apple Books: the shelf is its own surface.
  * Preset colors are [data-library-theme] rules below, not inline styles,
  * so #lightink-custom-theme can override the same --lightink-* tokens.
+ * Keep these selectors at one attribute: a later .lightink-library sheet
+ * must be able to win. Theme swatches do not carry this attribute — their
+ * names sit on the shelf page and would otherwise take another preset's muted.
  * The shelf does not follow the editor's data-theme.
  */
 

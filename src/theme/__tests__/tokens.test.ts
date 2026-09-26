@@ -333,7 +333,7 @@ describe('library shelf preset tokens', () => {
   it('publishes each preset on [data-library-theme] so a later sheet can override it', () => {
     for (const theme of LIBRARY_THEMES) {
       const match = new RegExp(
-        `\\[data-library-theme=['"]${theme.id}['"]\\][^{]*\\{([^}]*)\\}`,
+        `\\[data-library-theme=['"]${theme.id}['"]\\]\\s*\\{([^}]*)\\}`,
       ).exec(libraryCss);
       expect(match, theme.id).not.toBeNull();
       const block = match?.[1] ?? '';

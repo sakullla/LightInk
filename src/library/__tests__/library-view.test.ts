@@ -3990,8 +3990,9 @@ describe('LibraryView sources, manage, and catalog', () => {
       '.lightink-library-manage-panel .lightink-library-theme-swatch',
     );
     expect(swatches).toHaveLength(5);
-    const ink = [...swatches].find((button) => button.dataset.libraryTheme === 'ink');
+    const ink = [...swatches].find((button) => button.dataset.libraryThemeId === 'ink');
     expect(ink).toBeTruthy();
+    expect(ink!.hasAttribute('data-library-theme')).toBe(false);
     ink!.click();
     expect(root.dataset.libraryTheme).toBe('ink');
     expect(root.style.getPropertyValue('--lightink-bg')).toBe('');

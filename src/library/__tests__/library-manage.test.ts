@@ -396,8 +396,9 @@ describe('createLibraryManage grouped settings page', () => {
     themeRoot.appendChild(manage.element);
 
     const ink = manage.element.querySelector<HTMLButtonElement>(
-      '.lightink-library-theme-swatch[data-library-theme="ink"]',
+      '.lightink-library-theme-swatch[data-library-theme-id="ink"]',
     )!;
+    expect(ink.hasAttribute('data-library-theme')).toBe(false);
     ink.click();
 
     expect(themeRoot.dataset.libraryTheme).toBe('ink');
@@ -407,7 +408,7 @@ describe('createLibraryManage grouped settings page', () => {
     expect(themeStorage.store['lightink.reader.theme']).toBeUndefined();
     // 色板重新渲染后 ink 项为选中态。
     const active = manage.element.querySelector<HTMLButtonElement>(
-      '.lightink-library-theme-swatch[data-library-theme="ink"]',
+      '.lightink-library-theme-swatch[data-library-theme-id="ink"]',
     )!;
     expect(active.getAttribute('aria-checked')).toBe('true');
     expect(active.classList.contains('is-active')).toBe(true);
