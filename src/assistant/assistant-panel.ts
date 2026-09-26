@@ -778,6 +778,12 @@ function toolLabelKey(name: string): MessageKey {
       return 'reader.assistant.toolLibraryCreateGroup';
     case 'library_remove':
       return 'reader.assistant.toolLibraryRemove';
+    case 'book_source_list':
+      return 'reader.assistant.toolBookSourceList';
+    case 'book_source_search':
+      return 'reader.assistant.toolBookSourceSearch';
+    case 'book_source_download':
+      return 'reader.assistant.toolBookSourceDownload';
     default:
       return 'reader.assistant.toolUnknown';
   }
@@ -1017,8 +1023,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   rejectAllButton.textContent = t('reader.assistant.pendingRejectAll');
   pendingBar.append(confirmAllButton, rejectAllButton);
   pendingSection.append(pendingTitle, pendingList, pendingBar);
-  // 待确认是消息流末尾的内联卡片（单例）：随消息流上滚、原位更新；
-  // renderMessages 每次重建消息节点后都把它放回末尾。
+  // 待确认是消息流末尾的内联卡片：renderMessages 重建消息后把它放回末尾。
   messagesHost.appendChild(pendingSection);
 
   const panelActions: readonly AssistantPanelAction[] =
@@ -1111,6 +1116,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (permissionMode !== mode) {
         permissionMode = mode;
         saveAssistantPermissionMode(permissionStorage(), mode);
+        if (mode === 'yolo') {
+          void confirmYoloQueue();
+        }
       }
       paintMode();
       if (focus) {
@@ -1672,9 +1680,43 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         added = true;
       }
     }
-    if (added) {
-      renderPendingConfirmations();
+    if (!added) {
+      return;
     }
+    if (permissionMode === 'yolo') {
+      void confirmYoloQueue();
+      return;
+    }
+    renderPendingConfirmations();
+  };
+
+  /** YOLO 不展示确认卡片，直接执行待确认写入。失败的条目才留在卡片上。 */
+  const confirmYoloQueue = async (): Promise<void> => {
+    if (permissionMode !== 'yolo' || pendingBusy) {
+      return;
+    }
+    pendingBusy = true;
+    const batch = pendingQueue.filter((entry) => entry.status === 'pending');
+    for (const entry of batch) {
+      try {
+        const result =
+          entry.session.confirmPending !== undefined
+            ? await entry.session.confirmPending(entry.item.id)
+            : await entry.session.execute(entry.item.tool, entry.item.arguments);
+        if (result.ok === true) {
+          const index = pendingQueue.indexOf(entry);
+          if (index >= 0) {
+            pendingQueue.splice(index, 1);
+          }
+        } else {
+          entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
+        }
+      } catch (error) {
+        entry.error = assistantAiErrorMessage(t, error, aiMissing);
+      }
+    }
+    pendingBusy = false;
+    renderPendingConfirmations();
   };
 
   const historyLocale = (): string =>

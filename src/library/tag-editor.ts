@@ -24,6 +24,7 @@ export interface TagEditorView {
   readonly emptyLabel: string;
   readonly showCreate: boolean;
   readonly createPlaceholder: string;
+  readonly searchPlaceholder?: string;
   readonly createLabel: string;
   readonly showDelete: boolean;
   readonly deleteLabel: string;
@@ -183,6 +184,7 @@ export function createTagEditor(doc: Document): TagEditor {
       deleteButton.textContent = view.deleteLabel;
       saveButton.textContent = view.saveLabel;
       cancelButton.textContent = view.cancelLabel;
+      searchInput.placeholder = view.searchPlaceholder ?? '';
       searchInput.value = '';
       if (view.showOptions) setOptions(view.tags, view.checked, view.emptyLabel);
       else options.replaceChildren();
@@ -198,6 +200,7 @@ export function createTagEditor(doc: Document): TagEditor {
       actions.replaceChildren(...actionNodes);
       nodes.push(actions);
       form.replaceChildren(...nodes);
+      page.dataset.tagMode = view.showOptions ? 'assign' : view.showDelete ? 'delete' : 'name';
       element.hidden = false;
       focusField(view.focus);
     },

@@ -974,10 +974,12 @@
   flex: 0 0 auto;
   flex-direction: column;
   gap: 0.4rem;
+  margin: 0 0.85rem 0.45rem;
   padding: 0.55rem 0.7rem;
   border: 1px solid color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-border));
   border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, var(--lightink-accent-soft) 40%, transparent);
+  box-shadow: var(--lightink-shadow);
 }
 
 .lightink-reader-assistant-pending[hidden] {

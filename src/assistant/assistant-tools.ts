@@ -187,6 +187,10 @@ export interface AssistantToolResult {
   readonly limit?: number;
   /** AI 主动建议的待确认写操作（确认后回调同一执行器）。 */
   readonly pending_confirmation?: readonly AssistantPendingConfirmation[];
+  /** 通用书源列表或下载影响的条目。 */
+  readonly sources?: readonly unknown[];
+  readonly results?: readonly unknown[];
+  readonly updated?: readonly string[];
 }
 
 export interface AssistantToolSession {

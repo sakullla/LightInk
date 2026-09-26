@@ -31,6 +31,10 @@ import {
   type AssistantPermissionStorage,
 } from '../assistant/assistant-permission.js';
 import {
+  createBookSourceToolSession,
+  type BookSourceToolDeps,
+} from '../assistant/book-source-tools.js';
+import {
   createLibraryToolSession,
   defaultLibraryToolDeps,
   type LibraryReadingStatus,
@@ -61,6 +65,8 @@ export interface ShelfAssistantDeps {
   readonly readingStatusOf?: (itemId: string) => LibraryReadingStatus | null;
   /** 写操作成功后的首页刷新（缺省不回调）。 */
   readonly onLibraryChanged?: (change: LibraryToolChange) => void;
+  /** 通用书源工具。缺省不向模型广告 book_source_*。 */
+  readonly bookSources?: Omit<BookSourceToolDeps, 'permissionMode' | 'userMessage'>;
   /** surface 挂载/钉位/触屏注入（缺省 body portal + 不钉位）。 */
   readonly surface?: AssistantSurfaceDeps;
   /** 流式通道注入（测试）。 */
@@ -122,7 +128,13 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
     host: deps.host,
     // 首页没有当前文档：书库数据只经 library_* 工具读取。
     chapterContext: () => null,
-    systemPrompt: () => deps.t('library.assistant.systemPrompt'),
+    systemPrompt: () => {
+      const base = deps.t('library.assistant.systemPrompt');
+      if (loadAssistantPermissionMode(permissionStorage()) !== 'yolo') {
+        return base;
+      }
+      return `${base}\n${deps.t('library.assistant.yoloAutoConfirm')}`;
+    },
     placeholder: deps.t('library.assistant.placeholder'),
     openSettings: deps.openSettings,
     // 首页没有当前书籍：摘要不落标注。书架不提供引用选区和章节动作。
@@ -137,8 +149,8 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
     ...(deps.writeHistory !== undefined ? { writeHistory: deps.writeHistory } : {}),
     ...(deps.clearHistory !== undefined ? { clearHistory: deps.clearHistory } : {}),
     historyKey: () => SHELF_ASSISTANT_HISTORY_KEY,
-    createToolSession: (userMessage, turn) =>
-      createLibraryToolSession(
+    createToolSession: (userMessage, turn) => {
+      const library = createLibraryToolSession(
         defaultLibraryToolDeps({
           ...deps.library,
           userMessage,
@@ -151,7 +163,26 @@ export function createShelfAssistant(deps: ShelfAssistantDeps): ShelfAssistant {
             ? { onLibraryChanged: deps.onLibraryChanged }
             : {}),
         }),
-      ),
+      );
+      if (deps.bookSources === undefined) return library;
+      const sources = createBookSourceToolSession({
+        ...deps.bookSources,
+        userMessage,
+        permissionMode: loadAssistantPermissionMode(permissionStorage()),
+      });
+      return {
+        tools: [...library.tools, ...sources.tools],
+        specifiedChapterCount: () => 0,
+        execute: (name, args) =>
+          sources.tools.some((tool) => tool.name === name)
+            ? sources.execute(name, args)
+            : library.execute(name, args),
+        confirmPending: (id) =>
+          id.startsWith('bs-') && sources.confirmPending !== undefined
+            ? sources.confirmPending(id)
+            : library.confirmPending(id),
+      };
+    },
     ...(deps.surface !== undefined ? { surface: deps.surface } : {}),
     ...(deps.stream !== undefined ? { stream: deps.stream } : {}),
     ...(deps.openExternalLink !== undefined

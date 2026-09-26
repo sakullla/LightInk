@@ -249,6 +249,7 @@ import {
   remoteNeedsRangeWarning,
 } from './library/library-remote.js';
 import { webDavSourceClient } from './library/webdav-source-client.js';
+import { bookDownloadClient, createBookDownloadController } from './library/book-download.js';
 import { bookSourceClient } from './library/book-source-client.js';
 import { createSyncableStorage } from './storage/syncable-storage.js';
 import { documentClient } from './sync/document-client.js';
@@ -3149,6 +3150,29 @@ function ensureShelfAssistant(): ShelfAssistant {
     ...assistantHistoryIo,
     readingStatusOf: (itemId) =>
       bindLibraryProgress(syncableStorage)({ id: itemId })?.status ?? null,
+    bookSources: {
+      listSources: async () => {
+        const sources = await bookSourceClient.listSources();
+        return sources.map((source) => ({
+          id: source.id,
+          title: source.title,
+          enabled: source.enabled,
+          baseUrl: source.rule.baseUrl,
+        }));
+      },
+      search: (sourceId, query) => bookSourceClient.search(sourceId, query),
+      download: async (input) => {
+        const chapters = await bookSourceClient.chapters(input.sourceId, input.bookUrl);
+        const controller = createBookDownloadController({ client: bookDownloadClient });
+        await controller.start({ ...input, chapters });
+        const state = controller.state;
+        return {
+          ...(state.importedItemId !== undefined ? { itemId: state.importedItemId } : {}),
+          phase: state.phase,
+          ...(state.message !== undefined ? { message: state.message } : {}),
+        };
+      },
+    },
     onLibraryChanged: () => {
       // 工具写入绕过 LibraryView 的 onLocalChange：刷新封面墙并调度同步。
       void libraryView?.refresh();

@@ -806,11 +806,18 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-filter-list,
 .lightink-library-group-list,
 .lightink-library-smart-group-list,
-.lightink-library-tag-list,
 .lightink-library-manage-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.lightink-library-tag-list {
+  display: flex;
+  flex-flow: row wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0 8px;
 }
 
 .lightink-library-group-list:empty {
@@ -1198,10 +1205,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-group-modal .lightink-modal-dialog {
-  width: min(22rem, calc(100% - 48px));
-  padding: 18px 16px 14px;
+  width: min(24rem, calc(100% - 48px));
+  padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-dialog);
+  border-radius: 16px;
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1233,10 +1240,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-source-modal .lightink-modal-dialog {
-  width: min(22rem, calc(100vw - 48px));
-  padding: 18px 16px 14px;
+  width: min(24rem, calc(100vw - 48px));
+  padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-dialog);
+  border-radius: 16px;
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1248,9 +1255,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-source-form label,
-.lightink-library-source-form > div {
+.lightink-library-source-form > div:not(.lightink-library-source-form-actions) {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
@@ -1276,12 +1283,18 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-detail select {
   box-sizing: border-box;
   width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-control);
+  border-radius: 8px;
   background: var(--lightink-bg);
   color: var(--lightink-fg);
+}
+
+.lightink-library-detail input,
+.lightink-library-detail select {
+  min-height: 34px;
+  padding: 6px 10px;
 }
 
 .lightink-library-group-form input:focus-visible,
@@ -1384,26 +1397,24 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-tag {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 26px;
-  padding: 3px 8px;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 12px;
   overflow: hidden;
-  border: none !important;
-  border-radius: var(--lightink-radius-control);
-  background: transparent !important;
+  border: 1px solid var(--lightink-border) !important;
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated) !important;
   color: var(--lightink-fg);
   font-size: 13px;
   text-align: left;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .lightink-library-tag .lightink-library-nav-icon {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  color: var(--lightink-muted);
+  display: none;
 }
 
 .lightink-library-tag:hover {
@@ -1416,9 +1427,29 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-tag.is-active {
-  background: var(--lightink-accent-soft) !important;
-  color: var(--lightink-accent-ink, var(--lightink-accent));
+  border-color: transparent !important;
+  background: var(--lightink-accent) !important;
+  color: var(--lightink-bg-elevated);
   font-weight: 600;
+}
+
+.lightink-library-tag.is-active .lightink-library-home-group-count {
+  color: inherit;
+}
+
+.lightink-library-tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lightink-library-tag-index-open {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px dashed var(--lightink-border) !important;
+  border-radius: 999px;
+  background: transparent !important;
+  color: var(--lightink-muted);
+  font-size: 13px;
 }
 
 .lightink-library-detail-tags {
@@ -1442,13 +1473,15 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   align-items: center;
   gap: 2px;
   max-width: 100%;
-  min-height: 20px;
-  padding: 1px 8px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent-ink, var(--lightink-accent));
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
 }
 
 /* 卡片内的 chip 需压过 .lightink-library-item-text span 的弱化色。 */
@@ -1501,15 +1534,16 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   display: flex;
   flex-direction: column;
   align-self: center;
-  width: min(40rem, 100%);
+  width: min(24rem, 100%);
   height: auto;
-  max-height: 100%;
-  padding: 22px 22px 16px;
+  max-height: min(100%, 40rem);
+  overflow: auto;
+  padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-panel);
+  border-radius: 16px;
   background: var(--lightink-bg-elevated);
   color: var(--lightink-fg);
-  box-shadow: var(--lightink-shadow);
+  box-shadow: var(--lightink-shadow-strong);
 }
 
 .lightink-library-tag-form {
@@ -1518,9 +1552,160 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   margin: 0;
 }
 
-.lightink-library-tag-form h2 {
+.lightink-library-tag-editor-page[data-tag-mode='assign'] {
+  width: min(36rem, 100%);
+}
+
+.lightink-library-tag-form h2,
+.lightink-library-tag-index-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.lightink-library-tag-search {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 8px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font-size: 14px;
+}
+
+.lightink-library-tag-search::placeholder,
+.lightink-library-tag-form input::placeholder {
+  color: var(--lightink-muted);
+  opacity: 1;
+}
+
+.lightink-library-tag-form input:not([type='checkbox']) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 8px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.lightink-library-tag-form input:focus-visible,
+.lightink-library-tag-search:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-library-tag-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lightink-library-tag-create-add {
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: max-content !important;
+  white-space: nowrap !important;
+  min-height: 40px;
+  padding: 0 14px !important;
+  border: 1px solid var(--lightink-border) !important;
+  border-radius: 8px !important;
+  background: var(--lightink-bg) !important;
+  color: var(--lightink-fg) !important;
+}
+
+.lightink-library-group-form-actions,
+.lightink-library-source-form-actions,
+.lightink-library-tag-actions,
+.lightink-library-membership-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--lightink-border);
+}
+
+.lightink-library-tag-index-actions,
+.lightink-library-group-form-actions,
+.lightink-library-source-form-actions,
+.lightink-library-tag-actions,
+.lightink-library-membership-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.lightink-library-group-form-actions button,
+.lightink-library-source-form-actions button,
+.lightink-library-tag-actions button,
+.lightink-library-membership-actions button,
+.lightink-library-cache-limit-form button,
+.lightink-library-tag-index-actions button {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: auto !important;
+  align-self: center;
+  min-height: 36px !important;
+  min-width: max-content !important;
+  padding: 0 14px !important;
+  border: 1px solid var(--lightink-border) !important;
+  border-radius: 8px !important;
+  background: var(--lightink-bg) !important;
+  color: var(--lightink-fg) !important;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap !important;
+  cursor: pointer;
+}
+
+.lightink-library-group-form-actions .lightink-library-primary,
+.lightink-library-source-form-actions .lightink-library-primary,
+.lightink-library-tag-actions .lightink-library-primary,
+.lightink-library-membership-actions .lightink-library-primary,
+.lightink-library-cache-limit-form .lightink-library-primary {
+  border-color: var(--lightink-fg) !important;
+  background: var(--lightink-fg) !important;
+  color: var(--lightink-bg) !important;
+}
+
+.lightink-library-group-form-actions button:hover,
+.lightink-library-source-form-actions button:hover,
+.lightink-library-tag-actions button:hover,
+.lightink-library-membership-actions button:hover,
+.lightink-library-tag-index-actions button:hover,
+.lightink-library-tag-create-add:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, var(--lightink-bg)) !important;
+}
+
+.lightink-library-group-form-actions .lightink-library-primary:hover,
+.lightink-library-source-form-actions .lightink-library-primary:hover,
+.lightink-library-tag-actions .lightink-library-primary:hover,
+.lightink-library-membership-actions .lightink-library-primary:hover,
+.lightink-library-cache-limit-form .lightink-library-primary:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 86%, white) !important;
+  color: var(--lightink-bg) !important;
+}
+
+.lightink-library-tag-actions .lightink-library-danger {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--lightink-danger) !important;
+}
+
+.lightink-library-tag-actions .lightink-library-danger:hover {
+  background: color-mix(in srgb, var(--lightink-danger) 12%, var(--lightink-bg)) !important;
 }
 
 .lightink-library-tag-confirm {
@@ -1532,24 +1717,36 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-tag-options {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-flow: row wrap;
+  align-content: flex-start;
+  gap: 8px;
   min-height: 0;
   max-height: min(52vh, 28rem);
   overflow-y: auto;
 }
 
 .lightink-library-tag-option {
-  display: flex;
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 6px 10px;
+  width: auto;
+  min-height: 36px;
+  padding: 6px 14px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-control);
+  border-radius: 999px;
   background: var(--lightink-bg);
   color: var(--lightink-fg);
-  font-size: 13px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.lightink-library-tag-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
 }
 
 .lightink-library-tag-option:has(input:checked) {
@@ -1569,20 +1766,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   font-size: 12px;
 }
 
-.lightink-library-tag-create {
-  display: flex;
-  gap: 6px;
-}
-
 .lightink-library-tag-create input {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.lightink-library-tag-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
 }
 
 .lightink-library-filter-sheet-heading {
@@ -1973,12 +2159,42 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   grid-column: 1 / -1;
 }
 
+.lightink-library-filter-sheet-tags {
+  display: flex;
+  flex-flow: row wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .lightink-library-tag-filter-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 40px;
+  gap: 8px;
+  min-height: 0;
+  padding: 2px 0 8px;
+}
+
+.lightink-library-tag-filter-banner > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--lightink-accent);
+  color: var(--lightink-bg-elevated);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lightink-library-tag-filter-clear {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--lightink-border) !important;
+  border-radius: 999px;
+  background: transparent !important;
+  color: var(--lightink-muted);
+  font-size: 13px;
 }
 
 .lightink-library-tag-index {
@@ -2001,20 +2217,58 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   flex-direction: column;
   gap: 12px;
   width: min(32rem, 100%);
-  max-height: 100%;
-  padding: 22px;
+  max-height: min(100%, 36rem);
+  padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-panel);
+  border-radius: 16px;
   background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+}
+
+.lightink-library-tag-index-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lightink-library-tag-index-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.lightink-library-tag-index-manage {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--lightink-border) !important;
+  border-radius: 999px;
+  background: transparent !important;
+  color: var(--lightink-muted);
+  font-size: 13px;
+}
+
+.lightink-library-tag-index-manage[aria-pressed='true'] {
+  border-color: transparent !important;
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
 }
 
 .lightink-library-tag-index-list {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-flow: row wrap;
+  align-content: flex-start;
+  gap: 8px;
   min-height: 0;
   max-height: min(52vh, 28rem);
   overflow-y: auto;
+}
+
+.lightink-library-tag-index-list.is-managing {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
 }
 
 .lightink-library-tag-index-row {
@@ -2023,10 +2277,26 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   gap: 8px;
 }
 
-.lightink-library-tag-index-row > button:first-child {
+.lightink-library-tag-index-row.is-pill {
+  display: contents;
+}
+
+.lightink-library-tag-index-list.is-managing .lightink-library-tag {
   flex: 1 1 auto;
-  min-width: 0;
-  text-align: start;
+}
+
+.lightink-library-tag-index-row > button:not(.lightink-library-tag) {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 8px;
+  border: none !important;
+  background: transparent !important;
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library-tag-index-row > .lightink-library-danger {
+  color: var(--lightink-danger, #9b3a3a);
 }
 
 .lightink-library-cover-wall > .lightink-library-item:not(.lightink-library-catalog-folder) {
@@ -2211,6 +2481,17 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   flex: 0 0 auto;
   color: var(--lightink-muted);
   font-size: 12px;
+}
+
+.lightink-library-home-group.is-active {
+  border-color: transparent;
+  background: var(--lightink-accent);
+  color: var(--lightink-bg-elevated);
+}
+
+.lightink-library-home-group.is-active .lightink-library-home-group-count,
+.lightink-library-home-group.is-active .lightink-library-nav-icon {
+  color: inherit;
 }
 
 .lightink-library-home-group:hover,

@@ -5182,7 +5182,7 @@ describe('LibraryView book tags (R6)', () => {
       (node) => node.textContent,
     );
     expect(names).toEqual(['冷门7']);
-    index.querySelector('button')!.click();
+    index.querySelector<HTMLButtonElement>('.lightink-library-tag')!.click();
     await settle();
     expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('冷门7');
     expect(host.querySelector('[data-item-id]')).toBeNull();
@@ -5219,6 +5219,7 @@ describe('LibraryView book tags (R6)', () => {
     expandNavSection(host, 'tags');
     shownButtonWithText(host, '全部标签').click();
     const index = document.querySelector<HTMLElement>('[data-tag-index="page"]')!;
+    shownButtonWithText(index, '管理').click();
     shownButtonWithText(index, '重命名标签').click();
     await settle();
     dialog = tagDialogOf();

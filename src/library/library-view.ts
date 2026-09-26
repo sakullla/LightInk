@@ -2552,6 +2552,7 @@ export function createLibraryView(
         emptyLabel: l.noTags,
         showCreate: deps.library.createTag !== undefined,
         createPlaceholder: l.newTag,
+        searchPlaceholder: l.filterTags,
         createLabel: l.newTag,
         showDelete: false,
         deleteLabel: l.deleteTag,
@@ -3735,15 +3736,10 @@ export function createLibraryView(
     tagGroup.setAttribute('aria-label', labels().tags);
     for (const entry of tagPreview()) {
       const active = selectedTagId === entry.tag.id;
-      const option = button(doc, '', 'lightink-library-groups-sheet-item');
-      option.classList.add('lightink-library-shelf-filter-option');
+      const option = button(doc, '', 'lightink-library-tag');
       option.dataset.shelfTagId = entry.tag.id;
       option.setAttribute('aria-pressed', active ? 'true' : 'false');
       option.classList.toggle('is-active', active);
-      option.style.minHeight = '48px';
-      option.style.width = '100%';
-      option.style.whiteSpace = 'normal';
-      option.style.textAlign = 'start';
       const name = doc.createElement('span');
       name.className = 'lightink-library-tag-name';
       name.textContent = entry.tag.name;
@@ -3758,8 +3754,6 @@ export function createLibraryView(
     }
     if (tags.length > 0) {
       const all = button(doc, labels().allTags, 'lightink-library-tag-index-open');
-      all.style.minHeight = '48px';
-      all.style.width = '100%';
       all.addEventListener('click', () => {
         closeFilterSheet();
         openTagIndex();
@@ -3786,18 +3780,34 @@ export function createLibraryView(
     page.className = 'lightink-library-tag-index-page';
     page.setAttribute('role', 'dialog');
     page.setAttribute('aria-modal', 'true');
+    const head = doc.createElement('div');
+    head.className = 'lightink-library-tag-index-head';
     const title = doc.createElement('h2');
     title.textContent = labels().allTags;
+    const manage = button(doc, labels().manage, 'lightink-library-tag-index-manage');
+    manage.setAttribute('aria-pressed', 'false');
+    head.append(title, manage);
     const search = doc.createElement('input');
     search.className = 'lightink-library-tag-search';
     search.placeholder = labels().filterTags;
     const list = doc.createElement('div');
     list.className = 'lightink-library-tag-index-list';
+    let managing = false;
     const close = button(doc, labels().cancel);
+    close.type = 'button';
     close.addEventListener('click', () => {
       closeTagIndex();
     });
-    page.append(title, search, list, close);
+    const footer = doc.createElement('div');
+    footer.className = 'lightink-library-tag-index-actions';
+    footer.appendChild(close);
+    page.append(head, search, list, footer);
+    manage.addEventListener('click', () => {
+      managing = !managing;
+      manage.setAttribute('aria-pressed', String(managing));
+      list.classList.toggle('is-managing', managing);
+      render();
+    });
     overlay.appendChild(page);
     overlay.addEventListener('pointerdown', (event) => {
       if (event.target === overlay) closeTagIndex();
@@ -3819,6 +3829,7 @@ export function createLibraryView(
       for (const entry of rows) {
         const row = doc.createElement('div');
         row.className = 'lightink-library-tag-index-row';
+        if (!managing) row.classList.add('is-pill');
         const pick = button(doc, '', 'lightink-library-tag');
         pick.dataset.tagId = entry.tag.id;
         const name = doc.createElement('span');
@@ -3834,6 +3845,10 @@ export function createLibraryView(
           applyTagFilter(entry.tag.id);
         });
         row.appendChild(pick);
+        if (!managing) {
+          list.appendChild(row);
+          continue;
+        }
         if (deps.library.renameTag !== undefined) {
           const rename = button(doc, labels().renameTag);
           rename.addEventListener('click', () => {

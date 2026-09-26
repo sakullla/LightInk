@@ -890,7 +890,7 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
         source.textContent = result.sourceTitle;
         const url = doc.createElement('code');
         url.textContent = result.url;
-        const download = createButton(doc, l.download);
+        const download = createButton(doc, l.download, 'lightink-library-primary');
         download.addEventListener('click', () => void beginDownload(result));
         row.append(name, author, source, url, download);
         searchResults.appendChild(row);
