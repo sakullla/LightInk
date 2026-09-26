@@ -816,6 +816,162 @@ describe('createAssistantPanel composer redesign (R4/R5)', () => {
   });
 });
 
+describe('createAssistantPanel minimal typographic flow (T4)', () => {
+  const css = readFileSync('src/assistant/assistant-panel.css', 'utf-8');
+  const ruleBody = (pattern: RegExp): string => pattern.exec(css)?.[1] ?? '';
+
+  it('keeps assistant replies unadorned and user messages as light right bubbles', () => {
+    const assistantRule = ruleBody(
+      /\.lightink-reader-assistant-message\.is-assistant\s*\{([^}]*)\}/,
+    );
+    expect(assistantRule).not.toMatch(/background/);
+    expect(assistantRule).not.toMatch(/border/);
+    const userRule = ruleBody(/\.lightink-reader-assistant-message\.is-user\s*\{([^}]*)\}/);
+    expect(userRule).toMatch(/align-self:\s*flex-end/);
+    expect(userRule).toMatch(/background:/);
+    // 消息流里唯一带边框的强调元素是内联确认卡片。
+    const pendingRule = ruleBody(/\.lightink-reader-assistant-pending\s*\{([^}]*)\}/);
+    expect(pendingRule).toMatch(/border:\s*1px solid/);
+  });
+
+  it('converges markdown headings, tables, and lists inside the message text', () => {
+    const headingRule = ruleBody(
+      /\.lightink-reader-assistant-message-text\s*:is\(h1, h2, h3, h4, h5, h6\)\s*\{([^}]*)\}/,
+    );
+    expect(headingRule).toMatch(/font-size:\s*1em/);
+    const tableRule = ruleBody(
+      /\.lightink-reader-assistant-message-text table\s*\{([^}]*)\}/,
+    );
+    expect(tableRule).toMatch(/overflow-x:\s*auto/);
+    expect(tableRule).toMatch(/border-collapse:\s*collapse/);
+    const cellRule = ruleBody(
+      /\.lightink-reader-assistant-message-text\s*:is\(th, td\)\s*\{([^}]*)\}/,
+    );
+    expect(cellRule).toMatch(/border:\s*1px solid/);
+    const listRule = ruleBody(
+      /\.lightink-reader-assistant-message-text\s*:is\(ul, ol\)\s*\{([^}]*)\}/,
+    );
+    expect(listRule).toMatch(/padding-inline-start/);
+    const preRule = ruleBody(
+      /\.lightink-reader-assistant-message-text pre\s*\{([^}]*)\}/,
+    );
+    expect(preRule).toMatch(/overflow-x:\s*auto/);
+  });
+
+  it('keeps streamed reflow from moving finished messages via overflow-anchor', () => {
+    const anchorRule = ruleBody(
+      /\.lightink-reader-assistant-messages\s*>\s*\*\s*\{([^}]*)\}/,
+    );
+    expect(anchorRule).toMatch(/overflow-anchor:\s*none/);
+  });
+
+  it('keeps quick actions on one horizontally scrollable row', () => {
+    const actionsRule = ruleBody(/\.lightink-reader-assistant-actions\s*\{([^}]*)\}/);
+    expect(actionsRule).toMatch(/flex-wrap:\s*nowrap/);
+    expect(actionsRule).toMatch(/overflow-x:\s*auto/);
+  });
+
+  it('renders jump-to-bottom as a small round icon button and drops the dead pending-actions rule', async () => {
+    const jumpRule = ruleBody(/\.lightink-reader-assistant-jump-bottom\s*\{([^}]*)\}/);
+    expect(jumpRule).toMatch(/border-radius:\s*50%/);
+    expect(css).not.toContain('lightink-reader-assistant-pending-actions');
+
+    const { panel } = mountPanel();
+    panel.open();
+    await flush();
+    const jump = panel.element.querySelector('[data-assistant-jump-bottom]');
+    expect(jump?.getAttribute('aria-label')).toBe(t('reader.assistant.jumpBottom'));
+    expect(jump?.querySelector('svg')).not.toBeNull();
+    panel.destroy();
+  });
+
+  it('closes the permission menu on pointerdown outside and removes the listener on destroy', async () => {
+    const { panel } = mountPanel({
+      showPermissionMode: true,
+      permissionStorage: memoryStorage(),
+    });
+    panel.open();
+    await flush();
+    const trigger = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-mode-trigger',
+    )!;
+    const menu = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-mode-menu',
+    )!;
+    trigger.click();
+    expect(menu.hidden).toBe(false);
+
+    // 面板外点击:document 捕获监听收到 root stopPropagation 之外的按下。
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(menu.hidden).toBe(true);
+
+    // 面板内、菜单外点击同样收起。
+    trigger.click();
+    expect(menu.hidden).toBe(false);
+    panel.element
+      .querySelector('.lightink-reader-assistant-messages')!
+      .dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(menu.hidden).toBe(true);
+
+    // destroy 移除 document 监听:外部按下不再触碰已拆除的菜单。
+    trigger.click();
+    expect(menu.hidden).toBe(false);
+    panel.destroy();
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(menu.hidden).toBe(false);
+  });
+
+  it('freezes a tool chip as stopped when generation stops mid-execution', async () => {
+    let round = 0;
+    let resolveExecute: (value: unknown) => void = () => undefined;
+    const execute = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveExecute = resolve;
+        }),
+    );
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          return {
+            finish: 'tool_calls',
+            totalChars: 0,
+            toolCalls: [{ id: 'c1', name: 'library_tag', arguments: '{}' }],
+          };
+        }
+        emit('不该到达');
+        return { finish: 'stop', totalChars: 3 };
+      },
+      createToolSession: () =>
+        ({
+          tools: [],
+          specifiedChapterCount: () => 0,
+          execute,
+        }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '给三体打标签');
+    await flushUntil(() => execute.mock.calls.length > 0);
+    const running = panel.element.querySelector<HTMLElement>('[data-tool="library_tag"]');
+    expect(running?.dataset.toolState).toBe('running');
+
+    // 工具仍在执行时停止:chip 定格为已停止,而不是永远停在「运行中」。
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]')!.click();
+    resolveExecute({ ok: true, updated: ['a'] });
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="library_tag"]');
+    expect(chip).not.toBeNull();
+    expect(chip!.dataset.toolState).toBe('stopped');
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-status.is-stopped')).not.toBeNull();
+    expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
+      t('reader.assistant.toolStatusStopped'),
+    );
+    panel.destroy();
+  });
+});
+
 describe('createAssistantPanel quick actions', () => {
   it('runs chapter actions with the chapter as context and offers save-as-annotation for summaries', async () => {
     const { panel, invoke, deps } = mountPanel({

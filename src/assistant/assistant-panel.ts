@@ -152,6 +152,10 @@ const ASSISTANT_SEND_ICON =
 const ASSISTANT_STOP_ICON =
   '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.6"/></svg>';
 
+/** 回到底部图标（下箭头）：消息区右下角的小圆浮动钮（R7）。 */
+const ASSISTANT_JUMP_BOTTOM_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5v9"/><path d="M3.9 8.4 8 12.5l4.1-4.1"/></svg>';
+
 export type { AssistantHistoryMessage };
 
 interface AssistantToolBlock {
@@ -159,6 +163,8 @@ interface AssistantToolBlock {
   readonly name: string;
   readonly arguments: string;
   readonly result?: string;
+  /** 停止/中断时仍无结果的块:定格为已停止,不永远显示运行中。 */
+  readonly stopped?: boolean;
 }
 
 interface PanelMessage extends AssistantHistoryMessage {
@@ -777,8 +783,8 @@ function toolLabelKey(name: string): MessageKey {
   }
 }
 
-/** 工具 chip 三态：无结果 = 运行中；结果 ok:false = 失败；其余 = 完成。 */
-type AssistantToolState = 'running' | 'done' | 'failed';
+/** 工具 chip 四态:停止/中断无结果 = 已停止;无结果 = 运行中;结果 ok:false = 失败;其余 = 完成。 */
+type AssistantToolState = 'running' | 'done' | 'failed' | 'stopped';
 
 function tryParseToolResult(result: string): Record<string, unknown> | null {
   try {
@@ -793,6 +799,9 @@ function tryParseToolResult(result: string): Record<string, unknown> | null {
 }
 
 function toolBlockState(block: AssistantToolBlock): AssistantToolState {
+  if (block.stopped === true) {
+    return 'stopped';
+  }
   if (block.result === undefined || block.result === '') {
     return 'running';
   }
@@ -806,6 +815,8 @@ function toolStatusKey(state: AssistantToolState): MessageKey {
       return 'reader.assistant.toolStatusRunning';
     case 'failed':
       return 'reader.assistant.toolStatusFailed';
+    case 'stopped':
+      return 'reader.assistant.toolStatusStopped';
     case 'done':
       return 'reader.assistant.toolStatusDone';
   }
@@ -825,8 +836,8 @@ function toolBlockSummary(
   translate: AssistantPanelDeps['t'],
 ): string {
   const state = toolBlockState(block);
-  if (state === 'running') {
-    return translate('reader.assistant.toolStatusRunning');
+  if (state === 'running' || state === 'stopped') {
+    return translate(toolStatusKey(state));
   }
   const result = tryParseToolResult(block.result ?? '');
   if (result === null) {
@@ -931,6 +942,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
   let permissionMode: AssistantPermissionMode = loadAssistantPermissionMode(permissionStorage());
+  /** 权限菜单的 document 级外部点击收起监听；destroy 时移除。 */
+  let removeModeMenuOutsideDismiss: (() => void) | null = null;
 
   const historyPane = document.createElement('div');
   historyPane.className = 'lightink-reader-assistant-history';
@@ -972,7 +985,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   jumpBottom.type = 'button';
   jumpBottom.className = 'lightink-reader-assistant-jump-bottom';
   jumpBottom.dataset.assistantJumpBottom = 'true';
-  jumpBottom.textContent = t('reader.assistant.jumpBottom');
+  jumpBottom.setAttribute('aria-label', t('reader.assistant.jumpBottom'));
+  jumpBottom.setAttribute('title', t('reader.assistant.jumpBottom'));
+  jumpBottom.innerHTML = ASSISTANT_JUMP_BOTTOM_ICON;
   jumpBottom.hidden = true;
   messagesWrap.append(messagesHost, jumpBottom);
 
@@ -1120,18 +1135,25 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         modeTrigger.focus();
       }
     });
-    // 面板自身的 click/pointerdown 都 stopPropagation：点击面板内菜单外的
-    // 区域收起菜单，靠挂在 root 上的这个监听（面板外点击不处理，菜单随下次
-    // 交互自然收起）。
-    root.addEventListener('pointerdown', (event) => {
+    // 点击菜单外即收起:挂在 document 捕获阶段——面板 root 的 pointerdown
+    // stopPropagation 只挡冒泡,捕获监听照样收到面板内外的按下;destroy 时移除。
+    const onDocumentPointerDown = (event: Event): void => {
       if (
-        !modeMenu.hidden &&
-        event.target instanceof Node &&
-        !modeWrap.contains(event.target)
+        modeMenu.hidden ||
+        !(event.target instanceof Node) ||
+        modeWrap.contains(event.target)
       ) {
-        setModeMenuOpen(false);
+        return;
       }
-    });
+      setModeMenuOpen(false);
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('pointerdown', onDocumentPointerDown, true);
+      removeModeMenuOutsideDismiss = () => {
+        document.removeEventListener('pointerdown', onDocumentPointerDown, true);
+        removeModeMenuOutsideDismiss = null;
+      };
+    }
     paintMode();
     modeWrap.append(modeTrigger, modeMenu);
     composerBar.appendChild(modeWrap);
@@ -1307,7 +1329,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
     const status = document.createElement('span');
     status.className = `lightink-reader-assistant-tool-status is-${state}`;
-    status.textContent = state === 'running' ? '…' : state === 'failed' ? '✕' : '✓';
+    status.textContent =
+      state === 'running' ? '…' : state === 'failed' ? '✕' : state === 'stopped' ? '■' : '✓';
     status.title = t(toolStatusKey(state));
 
     const name = document.createElement('span');
@@ -2118,6 +2141,22 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         streaming = false;
         abortActive = null;
         streamingText = null;
+        // 停止/中断直接 break 时,已展示但拿不到结果的工具 chip 定格为「已停止」,
+        // 不永远停在「运行中」(正常完成时所有块都有结果,这里是 no-op)。
+        let unfinished = false;
+        for (let i = 0; i < toolBlocks.length; i += 1) {
+          const block = toolBlocks[i]!;
+          if (block.stopped !== true && (block.result === undefined || block.result === '')) {
+            toolBlocks[i] = { ...block, stopped: true };
+            unfinished = true;
+          }
+        }
+        if (unfinished) {
+          const entry = messages[targetIndex];
+          if (entry !== undefined) {
+            messages[targetIndex] = { ...entry, toolBlocks: toolBlocks.slice() };
+          }
+        }
         if (!disposed.value) {
           renderMessages();
           syncComposer();
@@ -2514,6 +2553,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       abortActive?.();
       abortActive = null;
       streamingText = null;
+      removeModeMenuOutsideDismiss?.();
       if (typeof document !== 'undefined') {
         document.removeEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
         document.removeEventListener('selectionchange', onSelectionChange);

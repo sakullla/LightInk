@@ -317,69 +317,175 @@
   min-height: 8rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.75rem 0.75rem 0.5rem;
+  padding: 0.75rem 0.85rem 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.7rem;
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
 }
 
+/* 流式重渲染只在消息流末尾生长:不做滚动锚定,已完成消息不随之跳动(R6/ADR-6)。 */
+.lightink-reader-assistant-messages > * {
+  overflow-anchor: none;
+}
+
+/* 回到底部:右下角小圆浮动钮,只盖住滚动区边角、不遮正文(R7)。 */
 .lightink-reader-assistant-jump-bottom {
   position: absolute;
-  right: 0.75rem;
-  bottom: 0.45rem;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   min-height: 28px;
-  padding: 0.2rem 0.65rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
-  border-radius: 999px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+  border-radius: 50%;
   background: var(--lightink-bg-elevated);
-  color: var(--lightink-fg);
-  font: inherit;
-  font-size: 0.72rem;
+  color: var(--lightink-muted);
   box-shadow: var(--lightink-shadow);
   cursor: pointer;
+}
+
+.lightink-reader-assistant-jump-bottom:hover {
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-jump-bottom:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-reader-assistant-jump-bottom[hidden] {
   display: none;
 }
 
+/* ===== 消息流:AI 回复无气泡、排版流直排;仅用户消息是浅色小气泡(R1) ===== */
+
 .lightink-reader-assistant-message {
-  max-width: 92%;
-  padding: 0.5rem 0.7rem;
-  border-radius: var(--lightink-radius-panel);
   overflow-wrap: anywhere;
 }
 
 .lightink-reader-assistant-message.is-user {
   align-self: flex-end;
-  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  max-width: 85%;
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--lightink-radius-panel);
   border-bottom-right-radius: 4px;
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
   white-space: pre-wrap;
 }
 
 .lightink-reader-assistant-message.is-assistant {
-  align-self: flex-start;
-  background: var(--lightink-bg-elevated);
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 60%, transparent);
-  border-bottom-left-radius: 4px;
+  align-self: stretch;
+  padding: 0.05rem 0.1rem;
 }
 
 .lightink-reader-assistant-message-text {
   margin: 0;
 }
 
-.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote) {
+/* ===== 面板内 markdown 收敛:标题压到正文强调级、表格紧凑可横滚(R6) ===== */
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(p, ul, ol, pre, table, blockquote) {
   margin: 0.35em 0;
 }
 
-.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote):first-child {
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0.55em 0 0.25em;
+  font-size: 1em;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(h4, h5, h6) {
+  font-weight: 600;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6):first-child {
   margin-top: 0;
 }
 
-.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text :is(p, ul, ol, pre, table, blockquote):last-child {
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6):last-child {
   margin-bottom: 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text li {
+  margin: 0.12em 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  li > :is(ul, ol) {
+  margin: 0.12em 0;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  scrollbar-width: thin;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  :is(th, td) {
+  padding: 0.18rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+  text-align: start;
+  vertical-align: top;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text th {
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text pre {
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--lightink-radius-control);
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  overflow-x: auto;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text code {
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  font-size: 0.92em;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
+  blockquote {
+  padding-left: 0.6rem;
+  border-left: 2px solid color-mix(in srgb, var(--lightink-fg) 28%, transparent);
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text hr {
+  margin: 0.5em 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
 }
 
 .lightink-reader-assistant-message-text a[data-chapter],
@@ -444,6 +550,10 @@
 
 .lightink-reader-assistant-tool-status.is-failed {
   color: var(--lightink-danger);
+}
+
+.lightink-reader-assistant-tool-status.is-stopped {
+  color: var(--lightink-muted);
 }
 
 .lightink-reader-assistant-tool-name {
@@ -518,30 +628,35 @@
   cursor: default;
 }
 
-/* ===== 快捷动作区（本章摘要 / 生词卡 / 章节测验） ===== */
+/* ===== 快捷动作区:一行轻量文字按钮,超出横向滚动(R7) ===== */
 
 .lightink-reader-assistant-actions {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.5rem 0.75rem 0.25rem;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  padding: 0.4rem 0.75rem 0.15rem;
+  overflow-x: auto;
+  scrollbar-width: none;
   border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
 }
 
 .lightink-reader-assistant-action {
-  padding: 0.32rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+  flex: 0 0 auto;
+  padding: 0.28rem 0.6rem;
+  border: 0;
   border-radius: 999px;
   background: var(--lightink-bg-elevated);
-  color: var(--lightink-fg);
+  color: var(--lightink-muted);
   font: inherit;
-  font-size: 0.74rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .lightink-reader-assistant-action:hover:not(:disabled) {
   background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
 }
 
 .lightink-reader-assistant-action:focus-visible {
@@ -691,11 +806,9 @@
 }
 
 .lightink-reader-assistant-quote-card {
-  margin: 0 0 0.4rem;
-  padding: 0.35rem 0.5rem;
-  border-left: 3px solid color-mix(in srgb, var(--lightink-fg) 28%, transparent);
-  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
-  border-radius: 0 8px 8px 0;
+  margin: 0 0 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-left: 2px solid color-mix(in srgb, var(--lightink-fg) 28%, transparent);
 }
 
 .lightink-reader-assistant-quote-card-label {
@@ -854,7 +967,7 @@
   outline-offset: 1px;
 }
 
-/* ===== 待确认卡片（消息流内联单例；确认后回调执行器，未确认不落盘） ===== */
+/* ===== 待确认卡片(消息流内联单例;流中唯一带边框的强调元素,R1/R3) ===== */
 
 .lightink-reader-assistant-pending {
   display: flex;
@@ -862,9 +975,9 @@
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.55rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-border));
   border-radius: var(--lightink-radius-panel);
-  background: var(--lightink-bg-elevated);
+  background: color-mix(in srgb, var(--lightink-accent-soft) 40%, transparent);
 }
 
 .lightink-reader-assistant-pending[hidden] {
@@ -938,11 +1051,6 @@
   margin: 0;
   color: var(--lightink-muted);
   font-size: 0.7rem;
-}
-
-.lightink-reader-assistant-pending-actions {
-  display: flex;
-  gap: 0.35rem;
 }
 
 .lightink-reader-assistant-pending-confirm,
