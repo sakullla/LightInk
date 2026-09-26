@@ -1310,6 +1310,46 @@ describe('权限模式与未处理新书', () => {
     expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
   });
 
+  it('自动模式未点名书名时，本轮直写后夹带的分组和标签仍待确认', async () => {
+    const fresh = book({ id: 'a', title: '流浪地球' });
+    const alreadyGrouped = book({ id: 'b', title: '三体' });
+    const h = harness({
+      items: [fresh, alreadyGrouped],
+      groups: [sciFi],
+      groupMembers: [{ groupId: 'g1', itemId: 'b' }],
+      userMessage: '把这些书归到科幻',
+      permissionMode: 'auto',
+    });
+    const organized = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['流浪地球', '三体'],
+      group: '科幻',
+    });
+    expect(organized.pending_confirmation).toBeUndefined();
+    expect(organized.ok).toBe(true);
+    expect(h.writes.setGroupMember).toHaveBeenCalledTimes(1);
+    expect(h.writes.setGroupMember).toHaveBeenCalledWith('g1', 'a', true);
+
+    const otherGroup = await h.session.execute(LIBRARY_ORGANIZE_TOOL_NAME, {
+      books: ['流浪地球', '三体'],
+      group: '文学',
+    });
+    expect(otherGroup.pending).toBe(true);
+    expect(otherGroup.message).not.toBe('没有新书需要处理。');
+    expect(otherGroup.pending_confirmation?.[0]?.summary).toContain('《流浪地球》');
+    expect(otherGroup.pending_confirmation?.[0]?.summary).not.toContain('《三体》');
+    expect(h.writes.createGroup).not.toHaveBeenCalled();
+
+    const tagged = await h.session.execute(LIBRARY_TAG_TOOL_NAME, {
+      books: ['流浪地球'],
+      mode: 'add',
+      tags: ['经典'],
+    });
+    expect(tagged.pending).toBe(true);
+    expect(tagged.pending_confirmation?.[0]?.summary).toContain('经典');
+    expect(h.writes.setItemTags).not.toHaveBeenCalled();
+    expect(h.writes.createTag).not.toHaveBeenCalled();
+  });
+
   it('自动模式只直写当前句点名的归类，夹带的标签仍待确认', async () => {
     const h = harness({
       items: [book({ id: 'a', title: '三体' })],

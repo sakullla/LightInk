@@ -17,9 +17,11 @@
  *   即使句子像显式指令也进待确认。
  * - `yolo`：`gate` 直接 `executePlan`，删除、清空和主动建议也不进卡片。
  * - 三种模式都不放宽同名候选、分组层级/循环和 50 本上限。
- * - 归类和打标（不含清空、删除）在进门前去掉已在自定义分组或已有标签的书。
- *   智能组不算已整理。用户说重新整理/重新打标，或点名这些书并要求写入时，
- *   这些书才留下。没有可处理的新书时只返回说明，不改书库。
+ * - 归类和打标（不含清空、删除）在进门前去掉会话开始时已在自定义分组或已有
+ *   标签的书。这份快照只取一次：本轮内刚直接落盘的书仍视为未处理，不匹配
+ *   当前句的后续计划继续进待确认，而不是被当成没有新书丢掉。智能组不算已
+ *   整理。用户说重新整理/重新打标，或点名这些书并要求写入时，这些书才留下。
+ *   没有可处理的新书时只返回说明，不改书库。
  * - 面板确认后走同一 session 的 `confirmPending(id)`；建议阶段不产生任何写
  *   调用。模型可调用的 `execute` 拒绝任何携带 `pending_ref` 的调用。
  * - 批量写中途失败：可逆步骤（归类/打标，含新建分组/标签）逐项补偿回滚；
@@ -904,11 +906,52 @@ function bookNamedInMessage(item: LibraryItem, message: string): boolean {
   return id !== '' && haystack.includes(id);
 }
 
+interface ProcessedSnapshot {
+  readonly ok: true;
+  readonly ids: ReadonlySet<string>;
+}
+
+interface ProcessedSnapshotFailure {
+  readonly ok: false;
+  readonly error: unknown;
+}
+
 /**
- * 主动归类/打标只留未进自定义分组且无标签的书。读取失败时不写，交回调用方。
+ * 会话开始时的已处理书：自定义分组成员或已有任一标签。智能组不算。
+ * 读取失败时不抛，交给每次过滤返回 write_failed。
+ */
+function loadProcessedSnapshot(
+  deps: LibraryToolDeps,
+): Promise<ProcessedSnapshot | ProcessedSnapshotFailure> {
+  return Promise.all([
+    deps.listGroups(),
+    deps.listGroupMemberships(),
+    deps.listTagMemberships(),
+  ])
+    .then(([groups, memberships, tagMemberships]) => {
+      const customIds = new Set(
+        groups.filter((group) => group.kind === 'custom').map((group) => group.id),
+      );
+      const ids = new Set<string>();
+      for (const membership of memberships) {
+        if (customIds.has(membership.groupId)) {
+          ids.add(membership.itemId);
+        }
+      }
+      for (const membership of tagMemberships) {
+        ids.add(membership.itemId);
+      }
+      return { ok: true as const, ids };
+    })
+    .catch((error: unknown) => ({ ok: false as const, error }));
+}
+
+/**
+ * 主动归类/打标只留快照里未进自定义分组且无标签的书。快照读取失败时不写。
  * 重新整理/重新打标，或点名且要求写入的已处理书，保留。
  */
 async function selectActionableBooks(
+  snapshot: Promise<ProcessedSnapshot | ProcessedSnapshotFailure>,
   deps: LibraryToolDeps,
   tool: string,
   items: readonly LibraryItem[],
@@ -917,32 +960,14 @@ async function selectActionableBooks(
   if (REPROCESS_REQUEST.test(message)) {
     return [...items];
   }
-  let groups: readonly LibraryGroup[];
-  let memberships: readonly LibraryGroupMembership[];
-  let tagMemberships: readonly LibraryTagMembership[];
-  try {
-    [groups, memberships, tagMemberships] = await Promise.all([
-      deps.listGroups(),
-      deps.listGroupMemberships(),
-      deps.listTagMemberships(),
-    ]);
-  } catch (error) {
-    return fail(tool, 'write_failed', { message: errorMessage(error) });
+  const loaded = await snapshot;
+  if (!loaded.ok) {
+    return fail(tool, 'write_failed', { message: errorMessage(loaded.error) });
   }
-  const customIds = new Set(
-    groups.filter((group) => group.kind === 'custom').map((group) => group.id),
-  );
-  const grouped = new Set(
-    memberships
-      .filter((membership) => customIds.has(membership.groupId))
-      .map((membership) => membership.itemId),
-  );
-  const tagged = new Set(tagMemberships.map((membership) => membership.itemId));
   const writeAsked = userRequestsLibraryWrite(message);
   const kept: LibraryItem[] = [];
   for (const item of items) {
-    const processed = grouped.has(item.id) || tagged.has(item.id);
-    if (!processed || (writeAsked && bookNamedInMessage(item, message))) {
+    if (!loaded.ids.has(item.id) || (writeAsked && bookNamedInMessage(item, message))) {
       kept.push(item);
     }
   }
@@ -1121,6 +1146,9 @@ function writeFailure(
 
 export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSession {
   const pendingWrites = new Map<string, PendingWrite>();
+  // 本轮过滤只用会话开始时的已处理书。同一轮前面的直写不能让后续夹带计划
+  // 看起来没有新书。
+  const processedAtStart = loadProcessedSnapshot(deps);
   const userMessage = deps.userMessage ?? '';
   const classify = deps.isExplicitInstruction ?? isExplicitLibraryWriteInstruction;
   const explicitTurn = classify(userMessage);
@@ -1586,7 +1614,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         });
       }
     }
-    const actionable = await selectActionableBooks(deps, tool, resolved);
+    const actionable = await selectActionableBooks(processedAtStart, deps, tool, resolved);
     if (!Array.isArray(actionable)) {
       return actionable;
     }
@@ -1668,7 +1696,7 @@ export function createLibraryToolSession(deps: LibraryToolDeps): LibraryToolSess
         });
       }
     }
-    const actionable = await selectActionableBooks(deps, tool, resolved);
+    const actionable = await selectActionableBooks(processedAtStart, deps, tool, resolved);
     if (!Array.isArray(actionable)) {
       return actionable;
     }
