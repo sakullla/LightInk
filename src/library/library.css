@@ -1947,6 +1947,15 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   text-align: left;
 }
 
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open {
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
 .lightink-library-continue-cue {
   flex: 0 0 auto;
   margin-left: auto;
@@ -2054,7 +2063,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   overflow: hidden;
 }
 
-/* Cover wall (shelf): grid of covers. */
+/* Cover wall (shelf): grid of covers. Catalog keeps its own token grid below. */
 .lightink-library-items {
   display: flex;
   flex-direction: column;
@@ -2069,7 +2078,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-cover-wall {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: repeat(auto-fill, minmax(var(--lightink-library-cover-min), var(--lightink-library-cover-max)));
+  /* 桌面书架向右排满；目录墙在后方用 148/164 令牌盖回自己的网格。 */
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   grid-auto-rows: max-content;
   justify-content: start;
   align-content: start;
@@ -2148,6 +2158,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   gap: 6px;
   min-width: 0;
   max-width: var(--lightink-library-cover-max);
+}
+
+/* 书架卡片铺满轨道，但单本不超过 240px。手机三列在 ≤760px 规则里收回令牌上限。 */
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-wall > .lightink-library-item-shell,
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-wall > .lightink-library-item--import {
+  width: 100%;
+  max-width: 240px;
 }
 
 .lightink-library-item-shell > .lightink-library-item--cover {
@@ -2311,197 +2328,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   flex: 0 0 auto;
 }
 
-/* ===== 发现型首页模块：继续阅读下方依次为最近打开、智能分组，再到我的书墙 =====
-   模块整行挂在封面墙网格内（grid-column: 1 / -1），随书墙一起滚动；桌面专属。 */
-.lightink-library-home-modules {
-  display: grid;
-  grid-column: 1 / -1;
-  gap: 24px;
-  width: 100%;
-  min-width: 0;
-}
-
-.lightink-library-home-modules[hidden],
-.lightink-library-home-module[hidden],
-.lightink-library-wall-heading[hidden] {
-  display: none;
-}
-
-.lightink-library-home-module {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-
-/* 编辑式模块标题：衬线标题 + 右侧细分割线，构成杂志栏目头。 */
-.lightink-library-home-module-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0;
-  color: var(--lightink-fg);
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: 16.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.lightink-library-home-module-title::after {
-  content: '';
-  flex: 1 1 auto;
-  height: 1px;
-  min-width: 20px;
-  background: color-mix(in srgb, var(--lightink-fg) 15%, transparent);
-}
-
-.lightink-library-wall-heading {
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  margin-top: 6px;
-}
-
-.lightink-library-wall-heading .lightink-library-home-module-title {
-  flex: 1 1 auto;
-}
-
-.lightink-library-recent-list {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(112px, var(--lightink-library-cover-min));
-  justify-content: start;
-  gap: var(--lightink-library-cover-gap-x);
-  min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  overscroll-behavior-x: contain;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-  scrollbar-color: var(--lightink-border) transparent;
-}
-
-.lightink-library-recent-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  scroll-snap-align: start;
-}
-
-.lightink-library-recent-item .lightink-library-cover {
-  width: 100%;
-  min-width: 0;
-  transition: transform 160ms ease, box-shadow 160ms ease;
-}
-
-.lightink-library-recent-item:hover .lightink-library-cover,
-.lightink-library-recent-item:focus-visible .lightink-library-cover {
-  transform: translateY(-3px);
-  box-shadow:
-    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
-    0 2px 4px color-mix(in srgb, var(--lightink-fg) 14%, transparent),
-    0 16px 32px color-mix(in srgb, var(--lightink-fg) 20%, transparent);
-}
-
-.lightink-library-recent-item:focus-visible {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 3px;
-  border-radius: 10px;
-}
-
-.lightink-library-recent-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.lightink-library-recent-text strong {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lightink-library-recent-text .lightink-library-item-progress {
-  overflow: hidden;
-  color: var(--lightink-muted);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lightink-library-home-group-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
-.lightink-library-home-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  max-width: 100%;
-  padding: 4px 12px;
-  border: 1px solid var(--lightink-border);
-  border-radius: 999px;
-  background: var(--lightink-bg-elevated);
-  color: var(--lightink-fg);
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
-}
-
-.lightink-library-home-group .lightink-library-nav-icon {
-  flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-  color: var(--lightink-muted);
-}
-
-.lightink-library-home-group > span:first-of-type {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .lightink-library-home-group-count {
   flex: 0 0 auto;
   color: var(--lightink-muted);
   font-size: 12px;
-}
-
-.lightink-library-home-group.is-active {
-  border-color: transparent;
-  background: var(--lightink-accent);
-  color: var(--lightink-bg-elevated);
-}
-
-.lightink-library-home-group.is-active .lightink-library-home-group-count,
-.lightink-library-home-group.is-active .lightink-library-nav-icon {
-  color: inherit;
-}
-
-.lightink-library-home-group:hover,
-.lightink-library-home-group:focus-visible {
-  border-color: var(--lightink-accent);
-}
-
-.lightink-library-home-group:focus-visible {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 2px;
 }
 
 .lightink-library-home-empty {
@@ -2539,93 +2369,6 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   justify-content: center;
   gap: 10px;
   margin-top: 4px;
-}
-
-/* ===== 沉浸杂志风（R2）：模块入场细动效（减少动态效果下关闭，见文件末尾） ===== */
-@keyframes lightink-library-home-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.lightink-library-home-module,
-.lightink-library-wall-heading {
-  animation: lightink-library-home-enter 260ms ease-out both;
-}
-
-.lightink-library-home-module:nth-child(2) {
-  animation-delay: 40ms;
-}
-
-.lightink-library-wall-heading {
-  animation-delay: 80ms;
-}
-
-/* ===== 沉浸杂志风（R2）：桌面继续阅读 hero =====
-   触屏/手机壳沿用文件后半段的紧凑条（≤760px 与 :is(html[data-android]…) 规则），
-   这里只在桌面 chrome 上放大封面与标题，形成首页的杂志头图。 */
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue {
-  max-width: none;
-  margin: 6px var(--lightink-library-pad-x) 2px;
-  padding: 12px 16px 12px 12px;
-  border-radius: 20px;
-  background: linear-gradient(
-    112deg,
-    color-mix(in srgb, var(--lightink-accent) 13%, var(--lightink-bg-elevated)),
-    var(--lightink-bg-elevated) 62%
-  );
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--lightink-fg) 7%, transparent),
-    0 12px 30px color-mix(in srgb, var(--lightink-fg) 9%, transparent);
-}
-
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open {
-  gap: 16px;
-  min-height: 96px !important;
-  padding: 0 10px 0 0 !important;
-  transition: transform 180ms ease;
-}
-
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open:hover {
-  transform: translateY(-2px);
-}
-
-html:not([data-android]):not([data-touch-primary])
-  .lightink-library-continue
-  .lightink-library-cover {
-  flex: 0 0 64px;
-  width: 64px;
-  height: 96px;
-  border-radius: 4px 10px 10px 4px;
-  box-shadow:
-    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
-    0 8px 20px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
-}
-
-html:not([data-android]):not([data-touch-primary])
-  .lightink-library-continue-text strong {
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cue {
-  background: var(--lightink-accent-ink, var(--lightink-accent));
-  color: var(--lightink-bg);
-  letter-spacing: 0.08em;
-}
-
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-open:focus-visible,
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-dismiss:focus-visible {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 3px;
-  border-radius: 14px;
 }
 
 .lightink-library-item {
@@ -3867,14 +3610,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     transition: none;
   }
 
-  /* R2：系统「减少动态效果」下首页退化为无动画——模块入场、hero 悬浮、
-     最近打开与书墙封面抬升、智能分组过渡一律取消，滚动也不启用平滑。 */
-  .lightink-library-home-modules,
-  .lightink-library-home-module,
-  .lightink-library-wall-heading,
-  .lightink-library-home-group,
-  .lightink-library-recent-item,
-  .lightink-library-recent-item .lightink-library-cover,
+  /* 减少动态效果时，继续阅读与封面悬停不再过渡，滚动也不平滑。 */
   .lightink-library-continue,
   .lightink-library-continue-open,
   .lightink-library-continue .lightink-library-cover,
@@ -4841,6 +4577,14 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     max-width: none;
     width: 100%;
     gap: 8px;
+  }
+
+  /* 书架 240px 上限只属于桌面；窄屏三列仍用封面令牌，避免卡片被放宽。 */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-cover-wall
+    > .lightink-library-item-shell {
+    max-width: var(--lightink-library-cover-max);
   }
 
   :is(html[data-android], html[data-touch-primary])

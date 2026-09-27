@@ -1096,7 +1096,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('keeps the import tile on an empty shelf and hides it while searching or browsing a catalog', async () => {
+  it('shows only the empty guide on an empty shelf and hides it while searching or browsing a catalog', async () => {
     const onImportLocal = vi.fn(async () => null);
     const base = dependencies();
     const deps = dependencies({
@@ -1108,21 +1108,25 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
     expect(host.querySelector('.lightink-library-empty')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-home-empty'))).toBe(true);
 
     const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
     input.value = '河山';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
     expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
 
     shownControl(host, '清除').click();
     await settle();
-    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-home-empty'))).toBe(true);
 
     await openCatalog(host);
     expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
     expect(itemRow(host, 'item-1').textContent).toContain('远程漫画');
     view.destroy();
   });
@@ -1149,7 +1153,11 @@ describe('LibraryView my-books home', () => {
     await view.show();
 
     expect(host.textContent).not.toContain('无法连接此书库源。');
-    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
+    const card = host.querySelector<HTMLElement>('.lightink-library-home-empty');
+    expect(isShown(card)).toBe(true);
+    expect(card?.textContent).toContain('导入本地书籍');
+    expect(card?.textContent).toContain('添加书源');
     expect(
       Array.from(host.querySelectorAll('button')).some(
         (button) => button.textContent === '重试' && isShown(button),
@@ -1841,7 +1849,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('lays out the discovery home with recent, smart groups, and the wall', async () => {
+  it('lays out the shelf home as a cover wall without discovery modules', async () => {
     const reading = localItem({
       id: 'local:/books/reading.epub',
       title: '在读小说',
@@ -1897,32 +1905,24 @@ describe('LibraryView my-books home', () => {
     await view.show();
 
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-smart')).toBeNull();
+    expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
+    expect(host.textContent).not.toContain('最近打开');
+    expect(host.textContent).not.toContain('我的书墙');
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
+    expect(itemRow(host, older.id)).toBeTruthy();
+    expect(itemRow(host, unread.id)).toBeTruthy();
+    expect(itemRow(host, grouped.id)).toBeTruthy();
+    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
 
-    const recent = host.querySelector<HTMLElement>('.lightink-library-home-recent')!;
-    expect(isShown(recent)).toBe(true);
-    expect(recent.textContent).toContain('最近打开');
-    const recentIds = Array.from(
-      recent.querySelectorAll<HTMLElement>('[data-home-item-id]'),
-    ).map((entry) => entry.dataset.homeItemId);
-    expect(recentIds).toEqual([reading.id, older.id]);
-    expect(recent.textContent).toContain('在读小说');
-    expect(recent.textContent).toContain('较早打开');
-    expect(recent.textContent).not.toContain('没读的书');
-
-    expect(host.querySelector('.lightink-library-home-smart')?.hidden).not.toBe(false);
     expandSmartGroupTypes(host);
     expect(host.textContent).toContain('智能分组');
     expect(host.querySelector('[data-smart-group-id="smart:epub"]')).not.toBeNull();
 
-    const wallHeading = host.querySelector<HTMLElement>('.lightink-library-wall-heading')!;
-    expect(isShown(wallHeading)).toBe(true);
-    expect(wallHeading.textContent).toContain('我的书墙');
-    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
-    expect(itemRow(host, grouped.id)).toBeTruthy();
-    // 最近打开卡片不是墙面卡片：itemRow 仍命中书墙上的正式卡片。
-    expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
-
-    // 自定义分组仍从侧栏筛选书墙：首页模块让位给结果墙。
+    // 自定义分组仍从侧栏筛选书墙，筛完只剩对应封面。
     expandNavSection(host, 'groups');
     const customChip = host.querySelector<HTMLButtonElement>(
       `.lightink-library-group[data-custom-group-id="${created.id}"]`,
@@ -1931,13 +1931,14 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(itemRow(host, grouped.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${reading.id}"]`)).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-home-recent'))).toBe(false);
-    expect(isShown(host.querySelector('.lightink-library-wall-heading'))).toBe(false);
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     view.destroy();
   });
 
-  it('opens a recent book from the home module and hides the module without records', async () => {
+  it('opens a cover from the shelf wall and does not render a recent module', async () => {
     const reading = localItem({
       id: 'local:/books/recent.epub',
       title: '最近在读',
@@ -1965,9 +1966,9 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    const entry = host.querySelector<HTMLButtonElement>(`[data-home-item-id="${reading.id}"]`);
-    expect(entry).not.toBeNull();
-    entry!.click();
+    expect(host.querySelector('[data-home-item-id]')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    itemRow(host, reading.id).click();
     await settle();
     expect(deps.onOpen).toHaveBeenCalledWith(
       expect.objectContaining({ item: expect.objectContaining({ id: reading.id }) }),
@@ -1983,7 +1984,9 @@ describe('LibraryView my-books home', () => {
     });
     const emptyView = createLibraryView(emptyHost, emptyDeps);
     await emptyView.show();
-    expect(isShown(emptyHost.querySelector('.lightink-library-home-recent'))).toBe(false);
+    expect(emptyHost.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(isShown(emptyHost.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(emptyHost, reading.id)).toBeTruthy();
     emptyView.destroy();
   });
 
@@ -2004,8 +2007,7 @@ describe('LibraryView my-books home', () => {
     expect(card.textContent).toContain('书库还是空的');
     expect(card.textContent).toContain('导入本地书籍');
     expect(card.textContent).toContain('添加书源');
-    // 既有快速导入磁贴仍在空书库上可达，且不出现空骨架模块。
-    expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
     expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
     expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
 
@@ -2037,6 +2039,7 @@ describe('LibraryView my-books home', () => {
     expect(isShown(card)).toBe(true);
     expect(card.textContent).toContain('导入本地书籍');
     expect(card.textContent).toContain('添加书源');
+    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
     view.destroy();
   });
 
@@ -2066,7 +2069,10 @@ describe('LibraryView my-books home', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    expect(host.querySelector('.lightink-library-home-modules')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(host.querySelector('.lightink-library-wall-heading')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(itemRow(host, book.id)).toBeTruthy();
     expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
     view.destroy();
     window.matchMedia = original;
@@ -4880,7 +4886,7 @@ describe('LibraryView shelf collections', () => {
 });
 
 describe('LibraryView book tags (R6)', () => {
-  it('filters the cover wall by tag from the nav and the home smart module', async () => {
+  it('filters the cover wall by tag from the nav', async () => {
     const scifi = localItem({
       id: 'local:/books/scifi.epub',
       title: '科幻小说',
@@ -4908,33 +4914,29 @@ describe('LibraryView book tags (R6)', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    // 首页「智能分组」模块聚合标签并显示计数（R6）。
-    const smartModule = host.querySelector<HTMLElement>('.lightink-library-home-smart')!;
-    expect(isShown(smartModule)).toBe(true);
-    const scifiChip = smartModule.querySelector<HTMLButtonElement>(
-      `[data-home-tag-id="${scifiTag.id}"]`,
-    )!;
-    expect(scifiChip.textContent).toContain('科幻');
-    expect(scifiChip.querySelector('.lightink-library-home-group-count')?.textContent).toBe('2');
-    expect(
-      smartModule.querySelector(`[data-home-tag-id="${historyTag.id}"] .lightink-library-home-group-count`)
-        ?.textContent,
-    ).toBe('1');
+    expect(host.querySelector('.lightink-library-home-smart')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(itemRow(host, scifi.id)).toBeTruthy();
+    expect(itemRow(host, space.id)).toBeTruthy();
+    expect(itemRow(host, history.id)).toBeTruthy();
 
-    // 首页标签 chip 点选即过滤书墙。
-    smartModule
-      .querySelector<HTMLButtonElement>(`[data-home-tag-id="${historyTag.id}"]`)!
-      .click();
+    const historyNav = tagNavButton(host, '历史');
+    expect(historyNav.querySelector('.lightink-library-home-group-count')?.textContent).toBe('1');
+    expect(tagNavButton(host, '科幻').querySelector('.lightink-library-home-group-count')?.textContent).toBe(
+      '2',
+    );
+    historyNav.click();
     await settle();
     expect(itemRow(host, history.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${scifi.id}"]`)).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-home-modules'))).toBe(false);
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
 
-    // 导航标签分区同源：再点同一标签取消，书目恢复。
-    const historyNav = tagNavButton(host, '历史');
-    expect(historyNav.dataset.tagId).toBe(historyTag.id);
-    expect(historyNav.classList.contains('is-active')).toBe(true);
-    historyNav.click();
+    // 导航标签再点同一标签取消，书目恢复。
+    const historyNavAgain = tagNavButton(host, '历史');
+    expect(historyNavAgain.dataset.tagId).toBe(historyTag.id);
+    expect(historyNavAgain.classList.contains('is-active')).toBe(true);
+    historyNavAgain.click();
     await settle();
     expect(itemRow(host, scifi.id)).toBeTruthy();
     expect(itemRow(host, history.id)).toBeTruthy();
@@ -5691,9 +5693,7 @@ describe('LibraryView mobile shelf', () => {
     expect(desktopContinueTitle).toMatch(/white-space:\s*nowrap/);
     expect(desktopContinueTitle).not.toMatch(/-webkit-line-clamp/);
     const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0];
-    expect(desktopWall).toMatch(
-      /repeat\(\s*auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)/,
-    );
+    expect(desktopWall).toMatch(/repeat\(\s*auto-fill,\s*minmax\(180px,\s*1fr\)\)/);
     expect(desktopWall).toMatch(/padding:\s*8px var\(--lightink-library-pad-x\) 56px/);
     const desktopItem = cssRuleBodies(css, /\.lightink-library-item(?![\w-])/)[0];
     expect(cssLengthPx(cssDeclaration(desktopItem, 'gap'))[0]).toBe(10);
@@ -5815,7 +5815,7 @@ describe('LibraryView mobile shelf', () => {
     expect(wallPad).not.toMatch(/28px\s*\+\s*var\(--lightink-safe-bottom/);
   });
 
-  it('fails if the phone wall stays two columns, desktop auto-fill is rewritten, or phone search stays 40px', () => {
+  it('fails if the phone wall stays two columns, the shelf wall loses auto-fill, or phone search stays 40px', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
 
     const phoneWallBlocks = cssRuleBodies(
@@ -5828,10 +5828,16 @@ describe('LibraryView mobile shelf', () => {
     expect(css).toMatch(/\.lightink-library-cover\s*\{[^}]*aspect-ratio:\s*2\s*\/\s*3/);
 
     const desktopWall = cssRuleBodies(css, /\.lightink-library-cover-wall/)[0] ?? '';
-    expect(desktopWall).toMatch(
+    expect(desktopWall).toMatch(/repeat\(\s*auto-fill,\s*minmax\(180px,\s*1fr\)\)/);
+    expect(desktopWall).not.toMatch(/repeat\(\s*[23],\s*minmax\(0,\s*1fr\)/);
+    const catalogWall =
+      cssRuleBodies(
+        css,
+        /\.lightink-library\[data-library-nav=['"]catalog['"]\] \.lightink-library-cover-wall/,
+      )[0] ?? '';
+    expect(catalogWall).toMatch(
       /repeat\(\s*auto-fill,\s*minmax\(var\(--lightink-library-cover-min\),\s*var\(--lightink-library-cover-max\)\)/,
     );
-    expect(desktopWall).not.toMatch(/repeat\(\s*[23],\s*minmax\(0,\s*1fr\)/);
 
     const searchBlocks = cssRuleBodies(
       css,
@@ -7069,7 +7075,7 @@ describe('LibraryView home visual system (R2)', () => {
     root.remove();
   });
 
-  it('uses the same title-keyed jacket placeholder on the hero, recent row, and wall', async () => {
+  it('uses the same title-keyed jacket placeholder on the continue strip and the wall', async () => {
     const reading = localItem({
       id: 'local:/books/hero.epub',
       title: '无封面在读',
@@ -7106,11 +7112,8 @@ describe('LibraryView home visual system (R2)', () => {
     const heroCover = host.querySelector<HTMLElement>(
       '.lightink-library-continue .lightink-library-cover',
     )!;
-    const recentCover = host.querySelector<HTMLElement>(
-      '.lightink-library-home-recent .lightink-library-cover',
-    )!;
     const wallCover = itemRow(host, plain.id).querySelector<HTMLElement>('.lightink-library-cover')!;
-    for (const cover of [heroCover, recentCover, wallCover]) {
+    for (const cover of [heroCover, wallCover]) {
       expect(cover).not.toBeNull();
       expect(cover.querySelector('img')).toBeNull();
       expect(cover.classList.contains('lightink-library-cover--jacket')).toBe(true);
@@ -7118,16 +7121,10 @@ describe('LibraryView home visual system (R2)', () => {
     expect(heroCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
       String(jacketHue('无封面在读')),
     );
-    expect(recentCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
-      String(jacketHue('无封面在读')),
-    );
     expect(wallCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
       String(jacketHue('无封面未读')),
     );
     expect(heroCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
-      '无封面在读',
-    );
-    expect(recentCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
       '无封面在读',
     );
     expect(wallCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
@@ -7146,82 +7143,86 @@ describe('LibraryView home visual system (R2)', () => {
     expect(image).toMatch(/width:\s*100%/);
     expect(image).toMatch(/height:\s*100%/);
     expect(image).toMatch(/object-fit:\s*cover/);
-    const recentCover =
-      ruleBodies(css, /\.lightink-library-recent-item \.lightink-library-cover(?![\w-])/)[0] ?? '';
-    expect(recentCover).toMatch(/min-width:\s*0/);
-    // 最近打开的轨道是固定宽度的横向网格，封面加载不改变列宽。
-    const recentList = ruleBodies(css, /\.lightink-library-recent-list/)[0] ?? '';
-    expect(recentList).toMatch(/grid-auto-columns:\s*minmax\(/);
+    const wall = ruleBodies(css, /^\.lightink-library-cover-wall(?![\w-])/m)[0] ?? '';
+    expect(wall).toMatch(/repeat\(\s*auto-fill,\s*minmax\(180px,\s*1fr\)\)/);
+    const shelfCard =
+      ruleBodies(
+        css,
+        /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-wall > \.lightink-library-item--import/,
+      )[0] ?? '';
+    expect(shelfCard).toMatch(/width:\s*100%/);
+    expect(shelfCard).toMatch(/max-width:\s*240px/);
+    expect(css).not.toMatch(/\.lightink-library-recent-list/);
   });
 
-  it('lays out the desktop home as a magazine with editorial section heads', () => {
+  it('lays out desktop continue reading as a subordinate strip beside the cover wall', () => {
     const css = homeCss();
-    const hero = ruleBodies(
-      css,
-      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue(?![\w-])/,
-    )[0];
-    expect(hero).toBeDefined();
-    expect(hero).toMatch(/max-width:\s*none/);
-    expect(hero).toMatch(/border-radius:\s*20px/);
-    expect(hero).toMatch(/background:\s*linear-gradient\(/);
-    const heroCover = ruleBodies(
-      css,
-      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\)\s+\.lightink-library-continue\s+\.lightink-library-cover(?![\w-])/,
-    )[0];
-    expect(heroCover).toMatch(/width:\s*64px/);
-    expect(heroCover).toMatch(/height:\s*96px/);
-    const heroTitle = ruleBodies(
-      css,
-      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\)\s+\.lightink-library-continue-text strong/,
-    )[0];
-    expect(heroTitle).toMatch(/font-size:\s*20px/);
-    expect(heroTitle).toMatch(/font-family:\s*var\(--lightink-font-serif/);
-    const cue = ruleBodies(
-      css,
-      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-cue/,
-    )[0];
-    expect(cue).toMatch(/background:\s*var\(--lightink-accent-ink/);
-    expect(cue).toMatch(/color:\s*var\(--lightink-bg\)/);
+    expect(css).not.toMatch(
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue(?![\w-])\s*\{[^}]*linear-gradient\(/,
+    );
+    expect(css).not.toMatch(
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue(?![\w-])\s*\{[^}]*max-width:\s*none/,
+    );
+    expect(css).not.toMatch(/width:\s*64px/);
+    expect(css).not.toMatch(/height:\s*96px/);
+    expect(css).not.toMatch(/\.lightink-library-home-module-title/);
+    expect(css).not.toMatch(/@keyframes\s+lightink-library-home-enter/);
 
-    const titleRules = ruleBodies(css, /\.lightink-library-home-module-title(?![\w-])/).join('\n');
-    expect(titleRules).toMatch(/font-family:\s*var\(--lightink-font-serif/);
-    expect(titleRules).toMatch(/color:\s*var\(--lightink-fg\)/);
-    const titleRule = ruleBodies(css, /\.lightink-library-home-module-title::after/)[0];
-    expect(titleRule).toMatch(/content:\s*''/);
-    expect(titleRule).toMatch(/background:\s*color-mix\(in srgb, var\(--lightink-fg\)/);
+    const strip = ruleBodies(css, /\.lightink-library-continue(?![\w-\[])/)[0] ?? '';
+    expect(strip).toMatch(/max-width:\s*560px/);
+    expect(strip).toMatch(/color:\s*var\(--lightink-fg\)/);
+    const continueCover =
+      ruleBodies(css, /\.lightink-library-continue \.lightink-library-cover(?![\w-])/)[0] ?? '';
+    expect(continueCover).toMatch(/width:\s*36px/);
+    expect(continueCover).toMatch(/height:\s*52px/);
+    const title = ruleBodies(css, /\.lightink-library-continue-text strong/)[0] ?? '';
+    expect(title).toMatch(/font-size:\s*14px/);
+    expect(title).not.toMatch(/font-family:\s*var\(--lightink-font-serif/);
+    const progress = ruleBodies(css, /\.lightink-library-continue-text span/)[0] ?? '';
+    expect(progress).toMatch(/color:\s*var\(--lightink-muted\)/);
+    const hover =
+      ruleBodies(
+        css,
+        /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-open:hover/,
+      )[0] ?? '';
+    expect(hover).toMatch(/transform:\s*translateY\(-1px\)/);
+    expect(hover).toMatch(/box-shadow:/);
+    expect(hover).not.toMatch(/(?:^|[;\s])(?:min-)?height\s*:/);
+    expect(hover).not.toMatch(/padding\s*:/);
+    expect(hover).not.toMatch(/margin\s*:/);
 
-    // 模块文字只消费主题令牌，浅色/深色族自动跟随对比度。
     const emptyHint = ruleBodies(css, /\.lightink-library-home-empty p/)[0] ?? '';
     expect(emptyHint).toMatch(/color:\s*var\(--lightink-muted\)/);
     const emptyTitle = ruleBodies(css, /\.lightink-library-home-empty h2/)[0] ?? '';
-    expect(emptyTitle).toMatch(/font-family:\s*var\(--lightink-font-serif/);
+    expect(emptyTitle).toMatch(/color:\s*var\(--lightink-fg\)/);
   });
 
-  it('animates module entrance and hover with restrained motion, then drops it on request', () => {
+  it('keeps cover and continue hover to transform or shadow and drops motion on request', () => {
     const css = homeCss();
-    expect(css).toMatch(/@keyframes\s+lightink-library-home-enter\s*\{/);
-    const entrance = css.match(
-      /\.lightink-library-home-module,\s*\.lightink-library-wall-heading\s*\{([^}]*)\}/,
-    );
-    expect(entrance?.[1]).toMatch(
-      /animation:\s*lightink-library-home-enter 260ms ease-out both/,
-    );
-    const recentLift =
+    expect(css).not.toMatch(/@keyframes\s+lightink-library-home-enter\s*\{/);
+    expect(css).not.toMatch(/\.lightink-library-home-module/);
+    const coverHover =
       css.match(
-        /\.lightink-library-recent-item:hover \.lightink-library-cover,[\s\S]{0,120}?\{([^}]*)\}/,
+        /\.lightink-library-item:hover \.lightink-library-cover,[\s\S]{0,220}?\{([^}]*)\}/,
       )?.[1] ?? '';
-    expect(recentLift).toMatch(/transform:\s*translateY\(-3px\)/);
+    expect(coverHover).toMatch(/transform:\s*translateY\(-3px\)/);
+    expect(coverHover).toMatch(/box-shadow:/);
+    expect(coverHover).not.toMatch(/(?:^|[;\s])(?:min-)?height\s*:/);
+    expect(coverHover).not.toMatch(/(?:^|[;\s])width\s*:/);
+    expect(coverHover).not.toMatch(/margin\s*:/);
+    expect(coverHover).not.toMatch(/padding\s*:/);
 
     const reduceStart = css.indexOf('@media (prefers-reduced-motion: reduce)');
     expect(reduceStart).toBeGreaterThanOrEqual(0);
     const reduceEnd = css.indexOf('/* ===== 360dp', reduceStart);
     const reduce = css.slice(reduceStart, reduceEnd === -1 ? undefined : reduceEnd);
-    expect(reduce).toMatch(/\.lightink-library-home-module[\s\S]*?animation:\s*none\s*!important/);
+    expect(reduce).not.toMatch(/\.lightink-library-home-module/);
+    expect(reduce).not.toMatch(/\.lightink-library-recent-item/);
     expect(reduce).toMatch(
       /\.lightink-library-continue-open[\s\S]*?transition:\s*none\s*!important/,
     );
     expect(reduce).toMatch(
-      /\.lightink-library-recent-item \.lightink-library-cover[\s\S]*?transition:\s*none\s*!important/,
+      /\.lightink-library-cover-wall \.lightink-library-cover[\s\S]*?transition:\s*none\s*!important/,
     );
     expect(reduce).toMatch(/scroll-behavior:\s*auto\s*!important/);
   });
@@ -7266,13 +7267,11 @@ describe('LibraryView home visual system (R2)', () => {
     const focusables: HTMLElement[] = [
       host.querySelector('.lightink-library-continue-open')!,
       host.querySelector('.lightink-library-continue-dismiss')!,
-      ...Array.from(host.querySelectorAll<HTMLElement>('.lightink-library-recent-item')),
-      ...Array.from(host.querySelectorAll<HTMLElement>('.lightink-library-home-group')),
       ...Array.from(
         host.querySelectorAll<HTMLElement>('.lightink-library-cover-wall .lightink-library-item--cover'),
       ),
     ];
-    expect(focusables.length).toBeGreaterThanOrEqual(5);
+    expect(focusables.length).toBeGreaterThanOrEqual(4);
     for (const control of focusables) {
       expect(control).toBeInstanceOf(HTMLButtonElement);
       expect((control as HTMLButtonElement).tabIndex).toBe(0);
@@ -7281,12 +7280,8 @@ describe('LibraryView home visual system (R2)', () => {
     expect(css).toMatch(
       /\.lightink-library button:focus-visible,[\s\S]{0,400}?outline:\s*2px solid var\(--lightink-accent\)/,
     );
-    expect(css).toMatch(
-      /\.lightink-library-recent-item:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightink-accent\)/,
-    );
-    expect(css).toMatch(
-      /\.lightink-library-home-group:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightink-accent\)/,
-    );
+    expect(css).not.toMatch(/\.lightink-library-recent-item:focus-visible/);
+    expect(css).not.toMatch(/\.lightink-library-home-group:focus-visible/);
 
     // 续读：hero 通过焦点 + 激活完成。
     const hero = host.querySelector<HTMLButtonElement>('.lightink-library-continue-open')!;
@@ -7303,7 +7298,8 @@ describe('LibraryView home visual system (R2)', () => {
     // 返回首页。
     await view.show();
     expect(view.visible).toBe(true);
-    expect(host.querySelector('.lightink-library-home-modules')).not.toBeNull();
+    expect(host.querySelector('.lightink-library-home-modules')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
 
     // 选择书籍：焦点在封面卡片上，Enter 打开。
     const card = itemRow(host, unread.id);
