@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>书架首页预览</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+        background: #1c1915;
+        color: #f4efe6;
+        font: 13px/1.4 "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+      }
+
+      #preview-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        align-items: center;
+        padding: 8px 12px;
+        background: #2a241e;
+      }
+
+      #preview-bar p {
+        margin: 0;
+        color: #cbbba6;
+      }
+
+      #preview-stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="preview-bar">
+      <label>样本 <select id="preview-scenario"></select></label>
+      <label>主题 <select id="preview-theme"></select></label>
+      <label>布局 <select id="preview-layout"></select></label>
+      <p id="preview-note"></p>
+    </div>
+    <div id="preview-stage"></div>
+    <script type="module" src="./shelf-home-preview.ts"></script>
+  </body>
+</html>
