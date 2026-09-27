@@ -7171,6 +7171,21 @@ describe('LibraryView home visual system (R2)', () => {
     const strip = ruleBodies(css, /\.lightink-library-continue(?![\w-\[])/)[0] ?? '';
     expect(strip).toMatch(/max-width:\s*560px/);
     expect(strip).toMatch(/color:\s*var\(--lightink-fg\)/);
+    const desktopStrip =
+      ruleBodies(
+        css,
+        /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue(?![\w-])/,
+      )[0] ?? '';
+    expect(desktopStrip).toMatch(/background:\s*var\(--lightink-bg-elevated\)/);
+    expect(desktopStrip).not.toMatch(/max-width|padding|transform|box-shadow/);
+    const desktopCue =
+      ruleBodies(
+        css,
+        /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-cue/,
+      )[0] ?? '';
+    expect(desktopCue).toMatch(/background:\s*var\(--lightink-accent-ink\)/);
+    expect(desktopCue).toMatch(/color:\s*var\(--lightink-bg\)/);
+    expect(desktopCue).not.toMatch(/font-size|padding|font-weight/);
     const continueCover =
       ruleBodies(css, /\.lightink-library-continue \.lightink-library-cover(?![\w-])/)[0] ?? '';
     expect(continueCover).toMatch(/width:\s*36px/);
