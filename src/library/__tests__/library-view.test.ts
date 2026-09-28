@@ -1412,6 +1412,53 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('keeps a selected smart group when a catalog is opened and the shelf is shown again', async () => {
+    const epub = localItem({
+      id: 'local:/books/novel.epub',
+      title: '续读小说',
+      extension: 'epub',
+      localPath: '/books/novel.epub',
+    });
+    const pdf = localItem({
+      id: 'local:/books/hill.pdf',
+      title: '河山记',
+      extension: 'pdf',
+      localPath: '/books/hill.pdf',
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [epub, pdf]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expandSmartGroupTypes(host);
+    smartGroupButton(host, 'EPUB').click();
+    await settle();
+    expect(smartGroupButton(host, 'EPUB').classList.contains('is-active')).toBe(true);
+    expect(wallHeading(host).textContent).toBe('EPUB · 1');
+    expect(itemRow(host, epub.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+
+    await openCatalog(host);
+    expect(itemRow(host, 'item-1').textContent).toContain('远程漫画');
+
+    backToShelfControl(host).click();
+    await waitForShown(
+      () => libraryRoot(host).dataset.libraryNav === 'shelf',
+      'catalog did not return to the shelf',
+    );
+    expandSmartGroupTypes(host);
+    expect(smartGroupButton(host, 'EPUB').classList.contains('is-active')).toBe(true);
+    expect(wallHeading(host).textContent).toBe('EPUB · 1');
+    expect(itemRow(host, epub.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+    expect(host.querySelector('[data-item-id="item-1"]')).toBeNull();
+    view.destroy();
+  });
+
   it('keeps manage content, close, and detail off the first screen while nav entries stay reachable', async () => {
     const deps = dependencies();
     const host = document.createElement('div');

@@ -2390,7 +2390,8 @@ export function createLibraryView(
   }
 
   function smartGroupSourceItems(): readonly DisplayItem[] {
-    if (activeSection === 'shelf' && shelfItems.length > 0) return shelfItems;
+    // 书架已加载且非空时，分组是否存在、选中是否有效只看完整书架，不用搜索子集或目录 items。
+    if (shelfItems.length > 0) return shelfItems;
     return items;
   }
 
@@ -2421,7 +2422,7 @@ export function createLibraryView(
       seenRules.add(ruleKey);
       return true;
     });
-    // 空组不显示。书架用完整书目，搜索子集不能清掉仍有书的智能分组；
+    // 空组不显示。完整书架已加载时，搜索子集和目录 items 都不能清掉仍有书的智能分组；
     // 书目尚未加载时不改分组和选中态。
     if (pool.length > 0) {
       smartGroups = smartGroups.filter((group) =>
