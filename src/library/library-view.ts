@@ -1955,6 +1955,10 @@ export function createLibraryView(
   let currentUrl: string | undefined;
   let lastAction: (() => Promise<void>) | null = null;
   let requestGeneration = 0;
+  /** 已提交的书架搜索词。组字期间不用输入框里的临时文本。 */
+  let shelfSearchQuery = '';
+  /** 与 requestGeneration 相等时，书架搜索仍在等 listItems。 */
+  let shelfSearchEpoch = 0;
   let catalogSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let catalogComposing = false;
   /** OPDS directory to restore when the search field is cleared. WebDAV does not use this. */
@@ -2942,8 +2946,12 @@ export function createLibraryView(
     return left.item.id.localeCompare(right.item.id);
   }
 
+  function shelfQuery(): string {
+    return catalogComposing ? shelfSearchQuery : searchInput.value.trim();
+  }
+
   function visibleItems(): DisplayItem[] {
-    const query = searchInput.value.trim();
+    const query = shelfQuery();
     const filtered =
       activeSection === 'shelf'
         ? items.filter(
@@ -3005,7 +3013,7 @@ export function createLibraryView(
     if (selectedTagId !== null) {
       parts.push(tagById(selectedTagId)?.name ?? labels().tags);
     }
-    const query = searchInput.value.trim();
+    const query = shelfQuery();
     if (query !== '') parts.push(query);
     return parts.join(' · ');
   }
@@ -4972,6 +4980,15 @@ export function createLibraryView(
   }
 
   function renderItems(): void {
+    if (
+      activeSection === 'shelf' &&
+      shelfSearchEpoch !== 0 &&
+      shelfSearchEpoch === requestGeneration
+    ) {
+      renderContinueBar();
+      itemList.replaceChildren();
+      return;
+    }
     if (activeSection === 'shelf') {
       renderContinueBar();
       syncWallHeading();
@@ -5846,6 +5863,7 @@ export function createLibraryView(
   async function search(): Promise<void> {
     const query = searchInput.value.trim();
     if (query === '') {
+      if (!catalogActive()) shelfSearchQuery = '';
       if (catalogActive() && selectedSourceId !== null) {
         if (selectedSource()?.kind === 'webdav') {
           catalogSearchSnapshot = null;
@@ -5871,15 +5889,54 @@ export function createLibraryView(
       return;
     }
     if (!catalogActive() || selectedSourceId === null) {
-      const loaded = await deps.library.listItems();
-      rememberImportedItems(loaded);
-      const displays = loaded.map(displayFromPersistedItem);
-      if (activeSection === 'shelf') shelfItems = displays;
-      items = displays.filter((display) => matchesShelfQuery(display.item, query));
-      refreshSmartGroups();
-      selected = null;
+      if (activeSection !== 'shelf') {
+        const loaded = await deps.library.listItems();
+        rememberImportedItems(loaded);
+        const displays = loaded.map(displayFromPersistedItem);
+        items = displays.filter((display) => matchesShelfQuery(display.item, query));
+        refreshSmartGroups();
+        selected = null;
+        renderContinueBar();
+        renderItems();
+        return;
+      }
+      const generation = ++requestGeneration;
+      shelfSearchEpoch = generation;
+      shelfSearchQuery = query;
+      lastAction = search;
+      setStatus(labels().searching);
       renderContinueBar();
-      renderItems();
+      itemList.replaceChildren();
+      try {
+        const loaded = await deps.library.listItems();
+        if (generation !== requestGeneration) return;
+        shelfSearchEpoch = 0;
+        if (activeSection !== 'shelf') return;
+        const currentQuery = catalogComposing ? query : searchInput.value.trim();
+        if (currentQuery === '') {
+          setStatus('');
+          renderContinueBar();
+          renderItems();
+          return;
+        }
+        rememberImportedItems(loaded);
+        const displays = loaded.map(displayFromPersistedItem);
+        shelfItems = displays;
+        items = displays.filter((display) => matchesShelfQuery(display.item, currentQuery));
+        refreshSmartGroups();
+        selected = null;
+        setStatus('');
+        renderContinueBar();
+        renderItems();
+      } catch (error) {
+        if (generation !== requestGeneration) return;
+        if (shelfSearchEpoch === generation) shelfSearchEpoch = 0;
+        if (activeSection !== 'shelf') return;
+        items = [];
+        setStatus(errorText(error, labels().offline), true);
+        renderContinueBar();
+        renderItems();
+      }
       return;
     }
     if (selectedSource()?.kind === 'webdav') {
