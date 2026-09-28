@@ -502,6 +502,9 @@ const en = {
   'reader.assistant.copyFailed': 'Could not copy to the clipboard.',
   'reader.assistant.regenerate': 'Regenerate',
   'reader.assistant.continue': 'Continue',
+  'reader.assistant.edit': 'Edit',
+  'reader.assistant.editSubmit': 'Submit',
+  'reader.assistant.editCancel': 'Cancel',
   'reader.assistant.continuePrompt':
     'Continue the previous answer exactly from where it stopped. Do not repeat text you already wrote.',
   'reader.assistant.historyTooLarge':
@@ -1160,6 +1163,9 @@ const zhCN = {
   'reader.assistant.copyFailed': '复制失败，未能写入剪贴板。',
   'reader.assistant.regenerate': '重新生成',
   'reader.assistant.continue': '继续生成',
+  'reader.assistant.edit': '编辑',
+  'reader.assistant.editSubmit': '提交',
+  'reader.assistant.editCancel': '取消',
   'reader.assistant.continuePrompt': '请从上次中断处继续完成上面的回答，不要重复已经写过的内容。',
   'reader.assistant.historyTooLarge': '这段对话超出保存上限，屏幕上的消息仍保留。',
   'reader.assistant.jumpBottom': '回到底部',

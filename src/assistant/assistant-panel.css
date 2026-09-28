@@ -700,7 +700,10 @@
 .lightink-reader-assistant-regenerate,
 .lightink-reader-assistant-continue,
 .lightink-reader-assistant-retry,
-.lightink-reader-assistant-save {
+.lightink-reader-assistant-save,
+.lightink-reader-assistant-edit,
+.lightink-reader-assistant-edit-submit,
+.lightink-reader-assistant-edit-cancel {
   padding: 0.28rem 0.75rem;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
   border-radius: 999px;
@@ -719,7 +722,10 @@
 .lightink-reader-assistant-regenerate:disabled,
 .lightink-reader-assistant-continue:disabled,
 .lightink-reader-assistant-retry:disabled,
-.lightink-reader-assistant-save:disabled {
+.lightink-reader-assistant-save:disabled,
+.lightink-reader-assistant-edit:disabled,
+.lightink-reader-assistant-edit-submit:disabled,
+.lightink-reader-assistant-edit-cancel:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -728,7 +734,10 @@
 .lightink-reader-assistant-copy:hover:not(:disabled),
 .lightink-reader-assistant-regenerate:hover:not(:disabled),
 .lightink-reader-assistant-continue:hover:not(:disabled),
-.lightink-reader-assistant-save:hover:not(:disabled) {
+.lightink-reader-assistant-save:hover:not(:disabled),
+.lightink-reader-assistant-edit:hover:not(:disabled),
+.lightink-reader-assistant-edit-submit:hover:not(:disabled),
+.lightink-reader-assistant-edit-cancel:hover:not(:disabled) {
   background: var(--lightink-accent-soft);
 }
 
@@ -736,7 +745,10 @@
 .lightink-reader-assistant-regenerate:focus-visible,
 .lightink-reader-assistant-continue:focus-visible,
 .lightink-reader-assistant-retry:focus-visible,
-.lightink-reader-assistant-save:focus-visible {
+.lightink-reader-assistant-save:focus-visible,
+.lightink-reader-assistant-edit:focus-visible,
+.lightink-reader-assistant-edit-submit:focus-visible,
+.lightink-reader-assistant-edit-cancel:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 1px;
 }
@@ -944,6 +956,33 @@
   display: block;
   margin-top: 0.15rem;
   white-space: pre-wrap;
+}
+
+/* 用户消息编辑态：原气泡内正文切换为 textarea（ADR-4 / R6）。 */
+
+.lightink-reader-assistant-message.is-user[data-editing='true'] {
+  width: 85%;
+}
+
+.lightink-reader-assistant-edit-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.6em;
+  margin: 0.1rem 0 0;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  font: inherit;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.lightink-reader-assistant-edit-input:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-reader-assistant-composer-hint {
@@ -1264,7 +1303,13 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-pending-confirm:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-pending-reject:not(:disabled):active {
+  .lightink-reader-assistant-pending-reject:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit-submit:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit-cancel:not(:disabled):active {
   background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
   transition: background-color 100ms ease;
 }
@@ -1327,7 +1372,13 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-pending-confirm:hover:not(:active),
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-pending-reject:hover:not(:active) {
+  .lightink-reader-assistant-pending-reject:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit:hover:not(:disabled):not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit-submit:hover:not(:disabled):not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-edit-cancel:hover:not(:disabled):not(:active) {
   background: transparent;
 }
 

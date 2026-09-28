@@ -1142,6 +1142,306 @@ describe('createAssistantPanel message actions (R5)', () => {
   });
 });
 
+describe('createAssistantPanel user message edit (R6)', () => {
+  function userBubble(
+    panel: ReturnType<typeof createAssistantPanel>,
+    index = 0,
+  ): HTMLElement | null {
+    return (
+      panel.element.querySelectorAll<HTMLElement>(
+        '.lightink-reader-assistant-message[data-role="user"]',
+      )[index] ?? null
+    );
+  }
+
+  function editButtonIn(bubble: Element | null): HTMLButtonElement | null {
+    return (
+      bubble?.querySelector<HTMLButtonElement>('[data-assistant-action-kind="edit"]') ?? null
+    );
+  }
+
+  function editorIn(panel: ReturnType<typeof createAssistantPanel>): HTMLTextAreaElement | null {
+    return panel.element.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
+  }
+
+  it('switches a user bubble into an inline textarea and restores the original on cancel', async () => {
+    const { panel, invoke } = mountPanel({ chapter: { title: 'C1', text: 'T1' } });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    const requests = invoke.mock.calls.length;
+
+    const edit = editButtonIn(userBubble(panel, 0));
+    expect(edit).not.toBeNull();
+    expect(edit?.disabled).toBe(false);
+    expect(edit?.textContent).toBe(t('reader.assistant.edit'));
+
+    edit!.click();
+    const first = userBubble(panel, 0);
+    expect(first?.dataset.editing).toBe('true');
+    expect(first?.querySelector('.lightink-reader-assistant-message-text')).toBeNull();
+    const editor = editorIn(panel);
+    expect(editor).not.toBeNull();
+    expect(editor?.value).toBe('第一问');
+    expect(editor?.rows).toBe(2);
+    expect(editor?.getAttribute('aria-label')).toBe(t('reader.assistant.edit'));
+    // 编辑态进入即聚焦；同一时间只开一个编辑器。
+    expect(document.activeElement).toBe(editor);
+    expect(editButtonIn(userBubble(panel, 1))?.disabled).toBe(true);
+
+    editor!.value = '丢弃的草稿';
+    first?.querySelector<HTMLButtonElement>('[data-assistant-edit-cancel]')?.click();
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(requests);
+    const restored = userBubble(panel, 0);
+    expect(restored?.dataset.editing).toBeUndefined();
+    expect(editorIn(panel)).toBeNull();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
+    expect(bubbleTexts(panel, 'assistant')).toHaveLength(2);
+    // 取消后焦点回到原消息，其它消息恢复可编辑。
+    expect(document.activeElement).toBe(restored);
+    expect(editButtonIn(userBubble(panel, 1))?.disabled).toBe(false);
+    panel.destroy();
+  });
+
+  it('keeps Shift+Enter as a newline, ignores composing Enter, and cancels on Escape', async () => {
+    const { panel, invoke } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      script: async ({ emit }) => {
+        emit('回答内容');
+        return { finish: 'stop', totalChars: 4 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '第一行\n第二行';
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(editorIn(panel)?.value).toBe('第一行\n第二行');
+
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await flush();
+    expect(editorIn(panel)).toBeNull();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问']);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('resubmits the edited body, keeps the quoted selection, and drops the later turns', async () => {
+    let round = 0;
+    const { panel, invoke } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      currentSelection: '引用句',
+      script: async ({ emit }) => {
+        round += 1;
+        emit(`回答${round}`);
+        return { finish: 'stop', totalChars: 3 };
+      },
+    });
+    panel.open();
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]')!.click();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['回答1', '回答2']);
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editing = userBubble(panel, 0);
+    // 引用选区卡片保留且不可编辑；编辑框只预填正文。
+    expect(
+      editing?.querySelector('.lightink-reader-assistant-quote-card')?.textContent,
+    ).toContain('引用句');
+    const editor = editorIn(panel);
+    expect(editor?.value).toBe('第一问');
+
+    editor!.value = '改写后的问题';
+    editor!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flushUntil(() => invoke.mock.calls.length === 3);
+
+    const payload = invoke.mock.calls[2]?.[1] as {
+      messages: { role: string; content: string }[];
+    };
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '<selection>\n引用句\n</selection>\n改写后的问题',
+    });
+    // 该条之后的会话被截断，重新请求不携带旧轮次。
+    expect(payload.messages.some((message) => message.content === '第二问')).toBe(false);
+    expect(payload.messages.some((message) => message.content === '回答2')).toBe(false);
+    expect(bubbleTexts(panel, 'user')).toEqual(['改写后的问题']);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['回答3']);
+    expect(panel.element.querySelectorAll('.lightink-reader-assistant-message')).toHaveLength(2);
+    expect(editorIn(panel)).toBeNull();
+    panel.destroy();
+  });
+
+  it('submits via the button and clears the quick-action tag on the rewritten message', async () => {
+    const { panel, invoke, deps } = mountPanel({
+      historyKey: '0123456789abcdef',
+      chapter: { title: 'C1', text: 'T1' },
+    });
+    panel.open();
+    await flush();
+    actionButton(panel, 'chapterSummary').click();
+    await flushUntil(() => bubbleTexts(panel, 'user').length === 1);
+    expect(userBubble(panel, 0)?.dataset.action).toBe('chapterSummary');
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    expect(editor.value).toBe(t('reader.assistant.prompt.chapterSummary'));
+    editor.value = '改写摘要';
+    panel.element
+      .querySelector<HTMLButtonElement>('[data-assistant-edit-submit]')!
+      .click();
+    await flushUntil(() => invoke.mock.calls.length === 2);
+
+    const payload = invoke.mock.calls[1]?.[1] as {
+      messages: { role: string; content: string }[];
+    };
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '改写摘要',
+    });
+    // 内容已由用户改写：气泡与持久化都清掉 action 标记。
+    expect(userBubble(panel, 0)?.dataset.action).toBeUndefined();
+    expect(bubbleTexts(panel, 'user')).toEqual(['改写摘要']);
+    const writes = deps.writeHistory.mock.calls as unknown as Array<[string, string]>;
+    const store = parseAssistantHistoryStore(writes[writes.length - 1]?.[1] ?? '');
+    const active = store.conversations.find(
+      (conversation) => conversation.id === store.activeId,
+    );
+    expect(active?.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(active?.messages[0]?.content).toBe('改写摘要');
+    expect(active?.messages[0]?.action).toBeUndefined();
+    panel.destroy();
+  });
+
+  it('persists the truncated conversation so a reopened session keeps the edited state', async () => {
+    let round = 0;
+    const { panel, deps } = mountPanel({
+      historyKey: '0123456789abcdef',
+      chapter: { title: 'C1', text: 'T1' },
+      script: async ({ emit }) => {
+        round += 1;
+        emit(`回答${round}`);
+        return { finish: 'stop', totalChars: 3 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '第一问改';
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flushUntil(
+      () => bubbleTexts(panel, 'assistant').length === 1 && bubbleTexts(panel, 'assistant')[0] === '回答3',
+    );
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问改']);
+
+    // 关闭重开（同一实例）保持内存态；磁盘态也不含被截断的轮次。
+    panel.close();
+    panel.open();
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问改']);
+    const writes = deps.writeHistory.mock.calls as unknown as Array<[string, string]>;
+    const persisted = writes[writes.length - 1]?.[1] ?? '';
+    expect(persisted).not.toContain('第二问');
+    expect(persisted).not.toContain('回答2');
+    panel.destroy();
+
+    // 新面板从持久化历史重载：仍是截断后的状态，schema 不变。
+    const reopened = mountPanel({
+      historyKey: '0123456789abcdef',
+      historyJson: persisted,
+    });
+    reopened.panel.open();
+    await flush();
+    expect(bubbleTexts(reopened.panel, 'user')).toEqual(['第一问改']);
+    expect(bubbleTexts(reopened.panel, 'assistant')).toEqual(['回答3']);
+    expect(reopened.panel.element.querySelectorAll('.lightink-reader-assistant-message')).toHaveLength(
+      2,
+    );
+    const reloaded = parseAssistantHistoryStore(persisted);
+    expect(reloaded.version).toBe(2);
+    reopened.panel.destroy();
+  });
+
+  it('disables the edit entry while a stream is in flight', async () => {
+    let round = 0;
+    let release: ((value: unknown) => void) | null = null;
+    const { panel } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('第一答');
+          return { finish: 'stop', totalChars: 3 };
+        }
+        emit('第二答开头');
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return { finish: 'stop', totalChars: 6 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+
+    const edit = editButtonIn(userBubble(panel, 0));
+    expect(edit).not.toBeNull();
+    expect(edit?.disabled).toBe(true);
+    edit!.click();
+    expect(editorIn(panel)).toBeNull();
+
+    (release as ((value: unknown) => void) | null)?.(null);
+    await flush();
+    expect(editButtonIn(userBubble(panel, 0))?.disabled).toBe(false);
+    panel.destroy();
+  });
+});
+
 function memoryStorage(): AssistantPermissionStorage & { readonly data: Map<string, string> } {
   const data = new Map<string, string>();
   return {

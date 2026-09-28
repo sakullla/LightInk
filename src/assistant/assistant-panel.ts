@@ -1572,6 +1572,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let streamingText: HTMLElement | null = null;
   /** 当前流式目标的助手消息下标：waiting/streaming 只作用于这一条。 */
   let streamingIndex: number | null = null;
+  /** 正在原气泡内编辑的用户消息下标；null = 无编辑态（ADR-4 / R6）。 */
+  let editingIndex: number | null = null;
   let markdownStream = createAssistantMarkdownStream();
   let stickToBottom = true;
   let persistError: string | null = null;
@@ -1840,6 +1842,33 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     return row;
   };
 
+  /**
+   * 用户消息操作行（ADR-4 / R6）：有内容的用户消息可进入编辑态；流式进行或
+   * 已有其它消息处于编辑态时不可用（同一时间只开一个编辑器）。
+   */
+  const renderUserMessageActions = (index: number): HTMLElement | null => {
+    const message = messages[index];
+    if (message === undefined || message.role !== 'user' || message.content.trim() === '') {
+      return null;
+    }
+    const row = document.createElement('div');
+    row.className = 'lightink-reader-assistant-message-actions';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lightink-reader-assistant-edit';
+    button.dataset.assistantActionKind = 'edit';
+    button.textContent = t('reader.assistant.edit');
+    button.setAttribute('aria-label', t('reader.assistant.edit'));
+    button.disabled = streaming || editingIndex !== null;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      beginEditAt(index);
+    });
+    row.appendChild(button);
+    return row;
+  };
+
   const renderMessage = (message: PanelMessage, index: number): HTMLElement => {
     const bubble = document.createElement('div');
     bubble.className = `lightink-reader-assistant-message is-${message.role}`;
@@ -1853,6 +1882,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     if (message.role === 'user') {
       const split = splitQuotedUserContent(message.content);
+      const editing = editingIndex === index;
+      // 取消编辑后焦点回到原消息气泡；tabindex=-1 只做程序聚焦，不进 Tab 序。
+      bubble.tabIndex = -1;
       if (split.quote !== '') {
         const card = document.createElement('blockquote');
         card.className = 'lightink-reader-assistant-quote-card';
@@ -1865,6 +1897,62 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         card.append(label, excerpt);
         bubble.appendChild(card);
       }
+      if (editing) {
+        bubble.dataset.editing = 'true';
+        const editor = document.createElement('textarea');
+        editor.className = 'lightink-reader-assistant-edit-input';
+        editor.dataset.assistantEditInput = 'true';
+        editor.rows = 2;
+        // 只编辑正文；body 为空（纯引用消息）时回退原文，避免空白编辑框。
+        editor.value = split.body === '' ? message.content : split.body;
+        editor.setAttribute('aria-label', t('reader.assistant.edit'));
+        editor.addEventListener('keydown', (event) => {
+          if (event.isComposing) {
+            return;
+          }
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            submitEditAt(index);
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelEditAt(index);
+          }
+        });
+        bubble.appendChild(editor);
+        const row = document.createElement('div');
+        row.className = 'lightink-reader-assistant-message-actions';
+        const submitEdit = document.createElement('button');
+        submitEdit.type = 'button';
+        submitEdit.className = 'lightink-reader-assistant-edit-submit';
+        submitEdit.dataset.assistantEditSubmit = 'true';
+        submitEdit.textContent = t('reader.assistant.editSubmit');
+        submitEdit.setAttribute('aria-label', t('reader.assistant.editSubmit'));
+        submitEdit.disabled = streaming;
+        submitEdit.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          submitEditAt(index);
+        });
+        const cancelEdit = document.createElement('button');
+        cancelEdit.type = 'button';
+        cancelEdit.className = 'lightink-reader-assistant-edit-cancel';
+        cancelEdit.dataset.assistantEditCancel = 'true';
+        cancelEdit.textContent = t('reader.assistant.editCancel');
+        cancelEdit.setAttribute('aria-label', t('reader.assistant.editCancel'));
+        cancelEdit.disabled = streaming;
+        cancelEdit.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          cancelEditAt(index);
+        });
+        row.append(submitEdit, cancelEdit);
+        bubble.appendChild(row);
+        return bubble;
+      }
       const hideInstruction =
         split.quote !== '' &&
         (message.action === 'explain' || message.action === 'summarize');
@@ -1873,6 +1961,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         text.className = 'lightink-reader-assistant-message-text';
         text.textContent = split.body === '' ? message.content : split.body;
         bubble.appendChild(text);
+      }
+      const userActions = renderUserMessageActions(index);
+      if (userActions !== null) {
+        bubble.appendChild(userActions);
       }
       return bubble;
     }
@@ -1965,6 +2057,124 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       }
     }
     scrollMessagesBottom();
+  };
+
+  // ── 用户消息编辑重发：原地编辑 → 截断其后会话 → 重新入列并复用流式（ADR-4 / R6） ──
+
+  const focusEditInput = (): void => {
+    const editor = messagesHost.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
+    if (editor === null) {
+      return;
+    }
+    try {
+      editor.focus({ preventScroll: true });
+    } catch {
+      editor.focus();
+    }
+    const end = editor.value.length;
+    try {
+      editor.setSelectionRange(end, end);
+    } catch {
+      // 宿主不支持选区时只保留聚焦结果。
+    }
+  };
+
+  /** 进入编辑态：原气泡内切换为 textarea，预填正文并聚焦。 */
+  const beginEditAt = (index: number): void => {
+    const message = messages[index];
+    if (
+      message === undefined ||
+      message.role !== 'user' ||
+      message.content.trim() === '' ||
+      streaming ||
+      sendGate ||
+      !aiConfigured ||
+      editingIndex === index
+    ) {
+      return;
+    }
+    editingIndex = index;
+    renderMessages();
+    focusEditInput();
+  };
+
+  /** 取消编辑：丢弃草稿，焦点回到原消息气泡。 */
+  const cancelEditAt = (index: number): void => {
+    if (editingIndex !== index) {
+      return;
+    }
+    editingIndex = null;
+    renderMessages();
+    const bubble = messagesHost.children[index];
+    if (bubble instanceof HTMLElement) {
+      try {
+        bubble.focus({ preventScroll: true });
+      } catch {
+        bubble.focus();
+      }
+    }
+  };
+
+  /**
+   * 提交编辑：截断该条及其后的全部消息，以编辑后正文重组用户消息（保留原引用
+   * 选区并重组 `<selection>`），清空 action/suggestionTurn（内容已由用户改写），
+   * 追加空助手消息并复用 runStream；与 composer 共用 sendGate / streaming 守卫。
+   */
+  const submitEditAt = (index: number): boolean => {
+    const message = messages[index];
+    if (
+      message === undefined ||
+      message.role !== 'user' ||
+      editingIndex !== index ||
+      streaming ||
+      sendGate ||
+      !aiConfigured
+    ) {
+      return false;
+    }
+    const editor = messagesHost.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
+    const body = editor === null ? splitQuotedUserContent(message.content).body : editor.value;
+    const next = composeQuotedUserContent(splitQuotedUserContent(message.content).quote, body);
+    if (next === '') {
+      // 正文与引用都为空：保持编辑态，等待用户输入。
+      focusEditInput();
+      return false;
+    }
+    sendGate = true;
+    void (async () => {
+      try {
+        await ensureHistory();
+        if (disposed.value || streaming) {
+          return;
+        }
+        const current = messages[index];
+        if (current === undefined || current.role !== 'user') {
+          return;
+        }
+        const quote = splitQuotedUserContent(current.content).quote;
+        const payload = composeQuotedUserContent(quote, body);
+        if (payload === '') {
+          return;
+        }
+        historyEpoch += 1;
+        ensureActiveConversation();
+        editingIndex = null;
+        messages = messages.slice(0, index);
+        messages.push({
+          role: 'user',
+          content: payload,
+          createdAt: current.createdAt,
+        });
+        messages.push({ role: 'assistant', content: '', createdAt: Date.now() });
+        // 提交即持久化：即使流式尚未结束，截断结果也已经落盘。
+        persistHistory();
+        renderMessages();
+        void runStream(messages.length - 1);
+      } finally {
+        sendGate = false;
+      }
+    })();
+    return true;
   };
 
   // ── 待确认列表：面板渲染 + 确认后回调同一执行器 ─────────────────────
@@ -2562,6 +2772,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     messages = active === null ? [] : active.messages.map((message) => ({ ...message }));
     savedAnswers.clear();
     resetCopyNotice();
+    editingIndex = null;
     persistError = null;
     persistNotice.hidden = true;
     renderMessages();
@@ -2620,6 +2831,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       messages = [];
       savedAnswers.clear();
       resetCopyNotice();
+      editingIndex = null;
       historyEpoch = 0;
       // 待确认建议属于上一上下文：切换身份即清空，避免跨书确认落错目标。
       pendingQueue.length = 0;
@@ -2748,6 +2960,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
     streaming = true;
     streamingIndex = targetIndex;
+    editingIndex = null;
     stopRequested = false;
     syncComposer();
     renderMessages();
