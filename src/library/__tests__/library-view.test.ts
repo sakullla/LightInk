@@ -919,6 +919,7 @@ function itemCard(host: ParentNode, itemId: string): HTMLElement {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-android');
   document.documentElement.removeAttribute('data-touch-primary');
@@ -1416,13 +1417,52 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('hides the home assistant entry under mobile library chrome', async () => {
+  it('shows one recognizable assistant entry under mobile library chrome and reuses its callback', async () => {
     document.documentElement.setAttribute('data-touch-primary', '');
+    const openAssistant = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ onOpenAssistant: openAssistant }));
+    await view.show();
+
+    const entries = host.querySelectorAll<HTMLButtonElement>('.lightink-library-header-assistant');
+    expect(entries).toHaveLength(1);
+    expect(isShown(entries[0])).toBe(true);
+    expect(entries[0].textContent).toContain('AI');
+    expect(entries[0].getAttribute('aria-label')).toBe('AI 助手');
+    entries[0].click();
+    expect(openAssistant).toHaveBeenCalledTimes(1);
+    expect(
+      host.querySelectorAll('.lightink-library-tabbar [data-library-tab-item]'),
+    ).toHaveLength(3);
+    view.destroy();
+  });
+
+  it('does not render a dead mobile assistant control without a callback', async () => {
+    document.documentElement.setAttribute('data-android', '');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    expect(isShown(host.querySelector('.lightink-library-header-assistant'))).toBe(false);
+    view.destroy();
+  });
+
+  it('keeps a single desktop-style assistant entry on wide touch viewports', async () => {
+    document.documentElement.setAttribute('data-touch-primary', '');
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: false })) as unknown as typeof window.matchMedia,
+    );
     const host = document.createElement('div');
     document.body.appendChild(host);
     const view = createLibraryView(host, dependencies({ onOpenAssistant: vi.fn() }));
     await view.show();
-    expect(isShown(host.querySelector('.lightink-library-header-assistant'))).toBe(false);
+
+    const entries = host.querySelectorAll<HTMLButtonElement>('.lightink-library-header-assistant');
+    expect(entries).toHaveLength(1);
+    expect(isShown(entries[0])).toBe(true);
+    expect(entries[0].textContent).toContain('AI');
     view.destroy();
   });
 
@@ -5750,7 +5790,10 @@ describe('LibraryView mobile shelf', () => {
       /\.lightink-library-shelf-toolbar\s+\.lightink-library-shelf-groups\s*\{[^}]*margin:\s*0 0 0 auto/,
     );
     expect(css).toMatch(
-      /\[data-library-tab=['"]?shelf['"]?\]\s+\.lightink-library-header-import\s*\{[^}]*display:\s*inline-flex/,
+      /\[data-library-tab=['"]?shelf['"]?[\s\S]*?:is\(\.lightink-library-header-assistant, \.lightink-library-header-import\):not\(\[hidden\]\)\s*\{[^}]*display:\s*inline-flex/,
+    );
+    expect(css).toMatch(
+      /\[data-library-tab=['"]?shelf['"]?\][\s\S]*?\.lightink-library-header-assistant\s*\{[^}]*grid-column:\s*2[^}]*min-width:\s*54px/,
     );
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-search input\s*\{[^}]*line-height:\s*1\.25/,

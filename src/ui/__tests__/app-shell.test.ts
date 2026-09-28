@@ -690,6 +690,22 @@ describe('createAppShell immersive chrome', () => {
   });
 });
 
+describe('mobile shelf assistant assembly', () => {
+  const mainSource = readFileSync(new URL('../../main.ts', import.meta.url), 'utf-8');
+  const assemblyStart = mainSource.indexOf('libraryView = createLibraryView');
+  const assemblyEnd = mainSource.indexOf('webdavSource:', assemblyStart);
+  const shelfAssembly = mainSource.slice(assemblyStart, assemblyEnd);
+
+  it('wires the shelf assistant outside the Android editor-travel exclusion', () => {
+    expect(assemblyStart).toBeGreaterThanOrEqual(0);
+    expect(assemblyEnd).toBeGreaterThan(assemblyStart);
+    expect(shelfAssembly.match(/onOpenAssistant/g)).toHaveLength(1);
+    expect(shelfAssembly).toMatch(
+      /\.\.\.\(isAndroidApp[\s\S]*?workspaceTravel:[\s\S]*?onEnterEditor:[\s\S]*?\}\),[\s\S]*?onOpenAssistant:\s*\(\)\s*=>\s*ensureShelfAssistant\(\)\.open\(\)/,
+    );
+  });
+});
+
 describe('buildMenus 生产结构', () => {
   const menus = buildMenus(stubActions());
   const file = menus.find((m) => m.id === 'file');

@@ -3038,14 +3038,14 @@ function ensureLibraryView(): LibraryView {
     getProgress: bindLibraryProgress(syncableStorage),
     // R6：Android 不接线编辑器入口——书架 manage 面板「编辑」按钮与
     // travel 按钮迁移同时缺席（library-view 以 deps 缺省抑制渲染）。
-    // R3：同一裁剪面也抑制首页助手入口；桌面由 header 入口唤起书库助手。
     ...(isAndroidApp
       ? {}
       : {
           workspaceTravel: shell.enterEditorButton,
           onEnterEditor: () => workspace.enterEditor(),
-          onOpenAssistant: () => ensureShelfAssistant().open(),
         }),
+    // R3：桌面、Android 与触屏手机共用 LibraryView 的书库助手打开任务流。
+    onOpenAssistant: () => ensureShelfAssistant().open(),
     webdavSource: webDavSourceClient,
     // R7：通用书源管理（添加/编辑/导入/导出/启停/自检/搜索），入口在 sources 分区。
     bookSources: bookSourceClient,

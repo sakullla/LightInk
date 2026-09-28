@@ -749,7 +749,7 @@ export interface LibraryViewDependencies {
   /** Open the Markdown editor from Manage. */
   readonly onEnterEditor?: () => void;
   /**
-   * 首页 header 助手入口（R3）。缺省（Android/测试/降级）不渲染按钮；
+   * 首页 header 助手入口（R3）。缺省（测试/降级）不渲染按钮；
    * 提供时在书架分区显示，点击交给宿主唤起书库助手。
    */
   readonly onOpenAssistant?: () => void;
@@ -1413,8 +1413,8 @@ export function createLibraryView(
   manageNavButton.dataset.libraryNavItem = 'manage';
   const headerImport = button(doc, '', 'lightink-library-header-import lightink-library-icon-button');
   headerImport.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus));
-  // R3：首页 header 助手入口。deps 缺省（Android/测试）不渲染；仅在书架分区显示，
-  // 未配置 provider 时仍可打开以显示配置引导。
+  // R3：首页 header 助手入口。deps 缺省（测试/降级）不渲染；仅在书架分区显示，
+  // 未配置 provider 时仍可打开以显示配置引导。手机复用同一按钮，避免重复入口。
   const headerAssistant = button(
     doc,
     '',
@@ -1423,6 +1423,11 @@ export function createLibraryView(
   headerAssistant.type = 'button';
   headerAssistant.hidden = true;
   headerAssistant.appendChild(createNavIcon(doc, NAV_ICON_PATHS.sparkles));
+  const headerAssistantMobileLabel = doc.createElement('span');
+  headerAssistantMobileLabel.className = 'lightink-library-header-assistant-mobile-label';
+  headerAssistantMobileLabel.textContent = 'AI';
+  headerAssistantMobileLabel.setAttribute('aria-hidden', 'true');
+  headerAssistant.appendChild(headerAssistantMobileLabel);
   if (deps.onOpenAssistant !== undefined) {
     headerAssistant.addEventListener('click', (event) => {
       event.preventDefault();
@@ -3003,10 +3008,8 @@ export function createLibraryView(
     searchForm.hidden = activeSection !== 'shelf' && !inCatalog;
     // 顶栏 + 只负责书架导入；书源有自己的分区 +，管理页走「导入本地书籍」。
     headerImport.hidden = currentTab !== 'shelf';
-    // R3/R12：助手入口仅桌面书架 chrome；移动壳（Android/触屏优先）不新增入口，
-    // 不改变既有 header grid 契约。
-    headerAssistant.hidden =
-      deps.onOpenAssistant === undefined || currentTab !== 'shelf' || isMobileLibraryChrome();
+    // R3/R12：同一个助手入口覆盖桌面与手机书架；无回调或离开书架时不渲染死控件。
+    headerAssistant.hidden = deps.onOpenAssistant === undefined || currentTab !== 'shelf';
     parkWorkspaceTravel();
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
     groupPane.hidden = inCatalog;

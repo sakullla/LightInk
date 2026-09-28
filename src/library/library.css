@@ -3775,6 +3775,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   display: none;
 }
 
+.lightink-library-header-assistant-mobile-label {
+  display: none;
+}
 
 @media (max-width: 760px) {
   /*
@@ -3841,7 +3844,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-tab='shelf'][data-library-nav-collapsed='true']
     .lightink-library-header-main {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) 54px 44px;
     grid-template-rows: auto;
   }
 
@@ -3902,14 +3905,11 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-tab='shelf']
-    .lightink-library-header-import {
+    :is(.lightink-library-header-assistant, .lightink-library-header-import):not([hidden]) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    grid-column: 2;
     grid-row: 1;
-    width: 44px;
-    min-width: 44px;
     min-height: 44px;
     border-radius: 14px;
     background: var(--lightink-bg-elevated);
@@ -3921,7 +3921,40 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-tab='shelf']
-    .lightink-library-header-import:hover:not(:active) {
+    .lightink-library-header-assistant {
+    grid-column: 2;
+    flex-direction: column;
+    gap: 0;
+    width: 54px;
+    min-width: 54px;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    .lightink-library-header-assistant .lightink-library-nav-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    .lightink-library-header-assistant-mobile-label {
+    display: inline;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    .lightink-library-header-import {
+    grid-column: 3;
+    width: 44px;
+    min-width: 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-tab='shelf']
+    :is(.lightink-library-header-assistant, .lightink-library-header-import):hover:not(:active) {
     background: var(--lightink-bg-elevated);
     color: var(--lightink-fg);
   }
