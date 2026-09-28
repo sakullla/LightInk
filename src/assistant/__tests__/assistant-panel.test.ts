@@ -1815,6 +1815,73 @@ describe('createAssistantPanel user message edit (R6)', () => {
     panel.destroy();
   });
 
+  it('restores retained pending confirmations after editing a later text-only turn', async () => {
+    const pendingReply = {
+      ok: true,
+      tool: 'classify_book',
+      pending_confirmation: [
+        {
+          id: 'p1',
+          summary: '将《示例书》归入「旧书」',
+          tool: 'classify_book',
+          arguments: { book: '示例书', group: '旧书' },
+        },
+      ],
+    };
+    const confirmPending = vi.fn(async () => ({ ok: true, tool: 'classify_book' }));
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 2) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit(`回答${round}`);
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute: vi.fn(async () => pendingReply),
+      confirmPending,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+
+    // 更早轮次产生的待确认仍在；第三轮是纯文本（无 toolBlocks）。
+    submitQuestion(panel, '第三问');
+    await flushUntil(() => bubbleTexts(panel, 'assistant').includes('回答3'));
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).not.toBeNull();
+
+    // 编辑第三轮并提交：更早轮次的待确认条目保留，编辑结束后必须恢复可确认。
+    editButtonIn(userBubble(panel, 2))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '第三问改';
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flushUntil(() => bubbleTexts(panel, 'user').includes('第三问改'));
+
+    const confirmAll = (): HTMLButtonElement | null =>
+      panel.element.querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]');
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).not.toBeNull();
+    expect(confirmAll()?.disabled).toBe(false);
+    confirmAll()!.click();
+    await flushUntil(() => confirmPending.mock.calls.length === 1);
+    expect(confirmPending).toHaveBeenCalledWith('p1', expect.any(Function), expect.any(Function));
+    panel.destroy();
+  });
+
   it('returns focus to the composer after an edit submit', async () => {
     const { panel } = mountPanel({ chapter: { title: 'C1', text: 'T1' } });
     panel.open();
@@ -3339,6 +3406,68 @@ describe('createAssistantPanel pending confirmations', () => {
     );
     expect(confirmPending).toHaveBeenCalledWith('p1', expect.any(Function), expect.any(Function));
     expect(execute).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('keeps the edit entry locked while a confirmation batch is in flight', async () => {
+    let releaseConfirm: (() => void) | null = null;
+    const confirmGate = new Promise<void>((resolve) => {
+      releaseConfirm = resolve;
+    });
+    const confirmPending = vi.fn(async () => {
+      await confirmGate;
+      return { ok: true, tool: 'classify_book', message: '已归入旧书' };
+    });
+    const execute = vi.fn(async () => pendingReply);
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 1) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit(`回答${round}`);
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+      confirmPending,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '把示例书归入旧书');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+
+    const editButton = (): HTMLButtonElement | null =>
+      panel.element
+        .querySelectorAll<HTMLElement>('.lightink-reader-assistant-message[data-role="user"]')[0]
+        ?.querySelector<HTMLButtonElement>('[data-assistant-action-kind="edit"]') ?? null;
+    const editorIn = (): HTMLTextAreaElement | null =>
+      panel.element.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
+    expect(editButton()?.disabled).toBe(false);
+
+    const confirmAll = panel.element.querySelector<HTMLButtonElement>(
+      '[data-assistant-pending-confirm-all]',
+    );
+    expect(confirmAll?.disabled).toBe(false);
+    confirmAll!.click();
+    // await confirmPending 窗口内：编辑入口禁用，点击无法进入编辑（草稿不会被清）。
+    await flushUntil(() => confirmPending.mock.calls.length === 1);
+    expect(editButton()?.disabled).toBe(true);
+    editButton()!.click();
+    expect(editorIn()).toBeNull();
+
+    releaseConfirm!();
+    await flushUntil(() => editButton()?.disabled === false);
+    expect(editorIn()).toBeNull();
     panel.destroy();
   });
 

@@ -1882,7 +1882,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     button.dataset.assistantActionKind = 'edit';
     button.textContent = t('reader.assistant.edit');
     button.setAttribute('aria-label', t('reader.assistant.edit'));
-    button.disabled = streaming || editingIndex !== null;
+    // 确认批次在途（pendingBusy）与编辑态同为会话级互斥：确认完成后会续跑
+    // runStream，不能让此时新输入的草稿被静默清掉。
+    button.disabled = streaming || editingIndex !== null || pendingBusy;
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2132,6 +2134,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       message.role !== 'user' ||
       message.content.trim() === '' ||
       streaming ||
+      pendingBusy ||
       sendGate ||
       !aiConfigured ||
       editingIndex === index
@@ -2224,6 +2227,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         messages.push({ role: 'assistant', content: '', createdAt: Date.now() });
         // 被截断轮次的待确认条目失去承接：与身份切换同规则，立即丢弃并重渲染。
         dropPendingForRemovedTurns(removed);
+        // 编辑态已结束：无条件重渲染待确认区，使与本次编辑无关、仍保留的条目
+        // 恢复可确认/可拒绝（dropPendingForRemovedTurns 未删除任何条目时不会重渲染）。
+        renderPendingConfirmations();
         // 提交即持久化：即使流式尚未结束，截断结果也已经落盘。
         persistHistory();
         syncComposer();
@@ -2421,74 +2427,79 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (pendingBusy || editingIndex !== null) {
       return;
     }
+    // pendingBusy 覆盖整个异步批次（含 await confirmPending 窗口）：确认在途期间
+    // 不允许进入编辑，避免完成后 continueAfterConfirmation→runStream 清掉草稿。
     pendingBusy = true;
     renderPendingConfirmations();
     const batch = pendingQueue.filter((entry) => entry.status === 'pending');
     const jobs = batch.filter((entry) => entry.included);
     const confirmed: { toolCallId?: string; result: AssistantToolResult }[] = [];
     const failed: { toolCallId?: string; message: string; cancelled: boolean }[] = [];
-    for (const entry of batch) {
-      if (!entry.included) {
-        entry.status = 'rejected';
+    try {
+      for (const entry of batch) {
+        if (!entry.included) {
+          entry.status = 'rejected';
+        }
+        const index = pendingQueue.indexOf(entry);
+        if (index >= 0) {
+          pendingQueue.splice(index, 1);
+        }
       }
-      const index = pendingQueue.indexOf(entry);
-      if (index >= 0) {
-        pendingQueue.splice(index, 1);
+      renderPendingConfirmations();
+      for (const entry of jobs) {
+        markToolRunning(entry.toolCallId);
       }
-    }
-    pendingBusy = false;
-    renderPendingConfirmations();
-    for (const entry of jobs) {
-      markToolRunning(entry.toolCallId);
-    }
-    renderMessages();
-    for (const entry of jobs) {
-      try {
-        const result =
-          entry.session.confirmPending !== undefined
-            ? await entry.session.confirmPending(
-                entry.item.id,
-                (message) => {
-                  setToolProgress(entry.toolCallId, message);
-                },
-                (cancel) => {
-                  if (entry.toolCallId === undefined) return;
-                  downloadCancels.set(entry.toolCallId, cancel);
-                  renderMessages();
-                },
-              )
-            : await entry.session.execute(entry.item.tool, entry.item.arguments);
-        if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
-        if (result.ok === true) {
-          confirmed.push({ toolCallId: entry.toolCallId, result });
-        } else {
+      renderMessages();
+      for (const entry of jobs) {
+        try {
+          const result =
+            entry.session.confirmPending !== undefined
+              ? await entry.session.confirmPending(
+                  entry.item.id,
+                  (message) => {
+                    setToolProgress(entry.toolCallId, message);
+                  },
+                  (cancel) => {
+                    if (entry.toolCallId === undefined) return;
+                    downloadCancels.set(entry.toolCallId, cancel);
+                    renderMessages();
+                  },
+                )
+              : await entry.session.execute(entry.item.tool, entry.item.arguments);
+          if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
+          if (result.ok === true) {
+            confirmed.push({ toolCallId: entry.toolCallId, result });
+          } else {
+            failed.push({
+              toolCallId: entry.toolCallId,
+              message: result.message ?? result.error ?? t('reader.assistant.pendingFailed'),
+              cancelled: result.error === 'download_cancelled',
+            });
+          }
+        } catch (error) {
+          if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
           failed.push({
             toolCallId: entry.toolCallId,
-            message: result.message ?? result.error ?? t('reader.assistant.pendingFailed'),
-            cancelled: result.error === 'download_cancelled',
+            message: assistantAiErrorMessage(t, error, aiMissing),
+            cancelled: false,
           });
         }
-      } catch (error) {
-        if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
-        failed.push({
-          toolCallId: entry.toolCallId,
-          message: assistantAiErrorMessage(t, error, aiMissing),
-          cancelled: false,
-        });
       }
-    }
-    for (const item of confirmed) {
-      if (item.toolCallId !== undefined) {
-        applyConfirmedToolResult(item.toolCallId, item.result);
+      for (const item of confirmed) {
+        if (item.toolCallId !== undefined) {
+          applyConfirmedToolResult(item.toolCallId, item.result);
+        }
       }
-    }
-    for (const item of failed) {
-      if (item.toolCallId !== undefined) {
-        applyConfirmedToolResult(item.toolCallId, { ok: false, message: item.message });
+      for (const item of failed) {
+        if (item.toolCallId !== undefined) {
+          applyConfirmedToolResult(item.toolCallId, { ok: false, message: item.message });
+        }
       }
+    } finally {
+      pendingBusy = false;
+      renderPendingConfirmations();
+      renderMessages();
     }
-    renderPendingConfirmations();
-    renderMessages();
     if (failed.length > 0) {
       if (failed.every((item) => item.cancelled)) {
         return;
