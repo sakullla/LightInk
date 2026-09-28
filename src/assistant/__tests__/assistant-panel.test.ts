@@ -7,6 +7,9 @@
  * - 助手消息以 data-status（waiting/streaming/stopped/error/done）表达状态：
  *   提交后首字未到是 waiting（脉冲点 + 流式文案），首字到达转 streaming，
  *   停止/失败保留文本且视觉可辨（stopped 中性、error 危险 + 重试），完成是 done。
+ * - 助手消息操作行（R5）：有内容的可复制 Markdown 原文（短时已复制/失败提示），
+ *   已完成可重新生成（截断其后），本次运行内停止的已有文本可继续生成，错误可重试；
+ *   流式期间全部禁用，空文本不渲染操作。
  * - 面板管理多段历史；工具调用显示为块；查询定位可点跳转。
  * - 一次发送内工具往返满 24 轮后停止并提示。
  * - 用户消息纯文本；助手消息 Markdown。流式停止丢掉 Channel。
@@ -18,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 import {
+  ASSISTANT_COPY_FEEDBACK_MS,
   ASSISTANT_MAX_TOOL_ROUNDS,
   ASSISTANT_PANEL_ACTIONS,
   assistantActionContent,
@@ -786,6 +790,354 @@ describe('createAssistantPanel composer (R1)', () => {
       '.lightink-reader-assistant-message',
     );
     expect(bubbles[1]?.dataset.status).toBe('stopped');
+    panel.destroy();
+  });
+});
+
+describe('createAssistantPanel message actions (R5)', () => {
+  function stubClipboard(writeText: (text: string) => Promise<void>): () => void {
+    const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    return () => {
+      if (previous === undefined) {
+        Reflect.deleteProperty(navigator, 'clipboard');
+        return;
+      }
+      Object.defineProperty(navigator, 'clipboard', previous);
+    };
+  }
+
+  function actionIn(bubble: Element | null, kind: string): HTMLButtonElement | null {
+    return (
+      bubble?.querySelector<HTMLButtonElement>(`[data-assistant-action-kind="${kind}"]`) ?? null
+    );
+  }
+
+  function assistantBubble(
+    panel: ReturnType<typeof createAssistantPanel>,
+    index = 0,
+  ): HTMLElement | null {
+    return (
+      panel.element.querySelectorAll<HTMLElement>(
+        '.lightink-reader-assistant-message[data-role="assistant"]',
+      )[index] ?? null
+    );
+  }
+
+  // 复制反馈状态由微任务链更新；fake timers 下无法用 flush 的宏任务等待。
+  const drainMicrotasks = async (): Promise<void> => {
+    for (let index = 0; index < 8; index += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  it('copies the raw markdown, flashes a short-lived copied notice, and skips history', async () => {
+    const writeText = vi.fn(async () => undefined);
+    const restoreClipboard = stubClipboard(writeText);
+    try {
+      const { panel, deps } = mountPanel({
+        historyKey: '0123456789abcdef',
+        script: async ({ emit }) => {
+          emit('**粗体**回答');
+          return { finish: 'stop', totalChars: 8 };
+        },
+      });
+      panel.open();
+      await flush();
+      submitQuestion(panel, '问题');
+      await flush();
+      const historyWrites = deps.writeHistory.mock.calls.length;
+
+      const copy = actionIn(assistantBubble(panel), 'copy');
+      expect(copy).not.toBeNull();
+      expect(copy?.disabled).toBe(false);
+      expect(copy?.getAttribute('aria-label')).toBe(t('reader.assistant.copy'));
+
+      vi.useFakeTimers();
+      try {
+        copy!.click();
+        await drainMicrotasks();
+        expect(writeText).toHaveBeenCalledWith('**粗体**回答');
+        const status = panel.element.querySelector<HTMLElement>('[data-assistant-copy-status]');
+        expect(status?.textContent).toBe(t('reader.assistant.copied'));
+        expect(status?.dataset.assistantCopyStatus).toBe('ok');
+        expect(status?.getAttribute('aria-live')).toBe('polite');
+
+        // 反馈短时停留：到点后自动消失。
+        vi.advanceTimersByTime(ASSISTANT_COPY_FEEDBACK_MS + 20);
+        expect(panel.element.querySelector('[data-assistant-copy-status]')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+      // 复制不写入历史。
+      expect(deps.writeHistory.mock.calls.length).toBe(historyWrites);
+      panel.destroy();
+    } finally {
+      restoreClipboard();
+    }
+  });
+
+  it('shows a readable inline hint when the clipboard write fails', async () => {
+    const writeText = vi.fn(async () => {
+      throw new Error('denied');
+    });
+    const execCommand = vi.fn(() => false);
+    const restoreClipboard = stubClipboard(writeText);
+    const previousExec = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+    try {
+      const { panel } = mountPanel({
+        script: async ({ emit }) => {
+          emit('回答');
+          return { finish: 'stop', totalChars: 2 };
+        },
+      });
+      panel.open();
+      await flush();
+      submitQuestion(panel, '问题');
+      await flush();
+
+      actionIn(assistantBubble(panel), 'copy')!.click();
+      await flush();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      const status = panel.element.querySelector<HTMLElement>('[data-assistant-copy-status]');
+      expect(status?.textContent).toBe(t('reader.assistant.copyFailed'));
+      expect(status?.dataset.assistantCopyStatus).toBe('error');
+      panel.destroy();
+    } finally {
+      if (previousExec === undefined) {
+        Reflect.deleteProperty(document, 'execCommand');
+      } else {
+        Object.defineProperty(document, 'execCommand', previousExec);
+      }
+      restoreClipboard();
+    }
+  });
+
+  it('regenerates from the matching user turn and removes the messages after it', async () => {
+    let round = 0;
+    const { panel, invoke } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      script: async ({ emit }) => {
+        round += 1;
+        emit(`回答${round}`);
+        return { finish: 'stop', totalChars: 3 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['回答1', '回答2']);
+
+    const regenerate = actionIn(assistantBubble(panel, 0), 'regenerate');
+    expect(regenerate).not.toBeNull();
+    expect(regenerate?.disabled).toBe(false);
+    regenerate!.click();
+    await flush();
+
+    expect(invoke).toHaveBeenCalledTimes(3);
+    const payload = invoke.mock.calls[2]?.[1] as {
+      messages: { role: string; content: string }[];
+    };
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '第一问',
+    });
+    // 重新生成沿用该条对应用户消息及之前的会话；其后的轮次被移除。
+    expect(payload.messages.some((message) => message.content === '第二问')).toBe(false);
+    expect(payload.messages.some((message) => message.content === '回答1')).toBe(false);
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问']);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['回答3']);
+    expect(panel.element.querySelectorAll('.lightink-reader-assistant-message')).toHaveLength(2);
+    panel.destroy();
+  });
+
+  it('keeps the original reply when regeneration fails', async () => {
+    let round = 0;
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('原回答');
+          return { finish: 'stop', totalChars: 3 };
+        }
+        emit('新回答的开头');
+        throw { code: 'AI_NETWORK_ERROR', message: '无法连接 AI 服务' };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '问题');
+    await flush();
+    actionIn(assistantBubble(panel), 'regenerate')!.click();
+    await flushUntil(() => assistantBubble(panel)?.dataset.status === 'error');
+
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['原回答']);
+    const bubble = assistantBubble(panel);
+    expect(actionIn(bubble, 'retry')).not.toBeNull();
+    expect(actionIn(bubble, 'regenerate')).toBeNull();
+    expect(actionIn(bubble, 'copy')).not.toBeNull();
+    panel.destroy();
+  });
+
+  it('continues a stopped reply with the fixed prompt and appends after the existing text', async () => {
+    let round = 0;
+    const { panel, invoke } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('半截回答');
+          await new Promise(() => undefined);
+        }
+        emit('，续写的后半段');
+        return { finish: 'stop', totalChars: 8 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]')!.click();
+    await flush();
+
+    const continueButton = actionIn(assistantBubble(panel), 'continue');
+    expect(continueButton).not.toBeNull();
+    expect(continueButton?.disabled).toBe(false);
+    continueButton!.click();
+    await flushUntil(() => (bubbleTexts(panel, 'assistant')[0] ?? '').includes('续写的后半段'));
+
+    const payload = invoke.mock.calls[1]?.[1] as {
+      messages: { role: string; content: string }[];
+    };
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: t('reader.assistant.continuePrompt'),
+    });
+    expect(payload.messages[payload.messages.length - 2]).toEqual({
+      role: 'assistant',
+      content: '半截回答',
+    });
+    expect(payload.messages.some((message) => message.content === '第一问')).toBe(true);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['半截回答，续写的后半段']);
+    expect(assistantBubble(panel)?.dataset.status).toBe('done');
+    expect(actionIn(assistantBubble(panel), 'continue')).toBeNull();
+    expect(actionIn(assistantBubble(panel), 'regenerate')).not.toBeNull();
+    panel.destroy();
+  });
+
+  it('keeps the stopped text and falls back to error + retry when continuing fails', async () => {
+    let round = 0;
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('半截回答');
+          await new Promise(() => undefined);
+        }
+        throw { code: 'AI_NETWORK_ERROR', message: '无法连接 AI 服务' };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]')!.click();
+    await flush();
+    actionIn(assistantBubble(panel), 'continue')!.click();
+    await flushUntil(() => assistantBubble(panel)?.dataset.status === 'error');
+
+    const bubble = assistantBubble(panel);
+    expect(bubble?.dataset.status).toBe('error');
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['半截回答']);
+    expect(bubble?.querySelector('.lightink-reader-assistant-error')?.textContent).toContain(
+      '无法连接 AI 服务',
+    );
+    expect(bubble?.querySelector('.lightink-reader-assistant-stopped')).toBeNull();
+    expect(actionIn(bubble, 'retry')).not.toBeNull();
+    expect(actionIn(bubble, 'continue')).toBeNull();
+    panel.destroy();
+  });
+
+  it('disables message actions while a stream is in flight', async () => {
+    let round = 0;
+    let release: ((value: unknown) => void) | null = null;
+    const { panel } = mountPanel({
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('第一答');
+          return { finish: 'stop', totalChars: 3 };
+        }
+        emit('第二答开头');
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return { finish: 'stop', totalChars: 6 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['第一答', '第二答开头']);
+
+    const buttons = [
+      ...panel.element.querySelectorAll<HTMLButtonElement>('[data-assistant-action-kind]'),
+    ];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      expect(button.disabled).toBe(true);
+    }
+    expect(actionIn(assistantBubble(panel, 0), 'regenerate')).not.toBeNull();
+    expect(actionIn(assistantBubble(panel, 1), 'copy')).not.toBeNull();
+
+    (release as ((value: unknown) => void) | null)?.(null);
+    await flush();
+    const settled = [
+      ...panel.element.querySelectorAll<HTMLButtonElement>('[data-assistant-action-kind]'),
+    ];
+    expect(settled.some((button) => !button.disabled)).toBe(true);
+    panel.destroy();
+  });
+
+  it('renders no actions for an assistant message without text', async () => {
+    const { panel } = mountPanel({
+      script: async () => ({ finish: 'stop', totalChars: 0 }),
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '空回答');
+    await flush();
+    const bubble = assistantBubble(panel);
+    expect(bubble?.dataset.status).toBe('done');
+    expect(bubble?.querySelector('.lightink-reader-assistant-message-actions')).toBeNull();
+    expect(bubble?.querySelectorAll('[data-assistant-action-kind]').length).toBe(0);
+    panel.destroy();
+  });
+
+  it('still offers retry when a failed reply has no text', async () => {
+    const { panel } = mountPanel({
+      script: async () => {
+        throw { code: 'AI_NETWORK_ERROR', message: '无法连接 AI 服务' };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '失败');
+    await flush();
+    const bubble = assistantBubble(panel);
+    expect(bubble?.dataset.status).toBe('error');
+    expect(actionIn(bubble, 'retry')).not.toBeNull();
+    expect(actionIn(bubble, 'copy')).toBeNull();
     panel.destroy();
   });
 });

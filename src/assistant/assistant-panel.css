@@ -686,9 +686,21 @@
   font-size: 0.74rem;
 }
 
+/* ===== 助手消息操作行：复制 / 重新生成 / 继续生成 / 重试（ADR-3 / R5） ===== */
+
+.lightink-reader-assistant-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.lightink-reader-assistant-copy,
+.lightink-reader-assistant-regenerate,
+.lightink-reader-assistant-continue,
 .lightink-reader-assistant-retry,
 .lightink-reader-assistant-save {
-  margin-top: 0.45rem;
   padding: 0.28rem 0.75rem;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
   border-radius: 999px;
@@ -699,20 +711,43 @@
   cursor: pointer;
 }
 
+.lightink-reader-assistant-save {
+  margin-top: 0.45rem;
+}
+
+.lightink-reader-assistant-copy:disabled,
+.lightink-reader-assistant-regenerate:disabled,
+.lightink-reader-assistant-continue:disabled,
+.lightink-reader-assistant-retry:disabled,
+.lightink-reader-assistant-save:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .lightink-reader-assistant-retry:hover,
+.lightink-reader-assistant-copy:hover:not(:disabled),
+.lightink-reader-assistant-regenerate:hover:not(:disabled),
+.lightink-reader-assistant-continue:hover:not(:disabled),
 .lightink-reader-assistant-save:hover:not(:disabled) {
   background: var(--lightink-accent-soft);
 }
 
+.lightink-reader-assistant-copy:focus-visible,
+.lightink-reader-assistant-regenerate:focus-visible,
+.lightink-reader-assistant-continue:focus-visible,
 .lightink-reader-assistant-retry:focus-visible,
 .lightink-reader-assistant-save:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 1px;
 }
 
-.lightink-reader-assistant-save:disabled {
-  opacity: 0.6;
-  cursor: default;
+.lightink-reader-assistant-copy-status {
+  font-size: 0.72rem;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-copy-status[data-assistant-copy-status='error'] {
+  color: var(--lightink-danger);
 }
 
 /* ===== 快捷动作区:一行轻量文字按钮,超出横向滚动(R7) ===== */
@@ -1213,6 +1248,12 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-retry:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-copy:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-regenerate:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-continue:not(:disabled):active,
+:is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-save:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-action:not(:disabled):active,
@@ -1273,6 +1314,12 @@
 
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-retry:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-copy:hover:not(:disabled):not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-regenerate:hover:not(:disabled):not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-continue:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-save:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])

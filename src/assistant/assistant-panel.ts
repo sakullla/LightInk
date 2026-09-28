@@ -11,6 +11,7 @@ import './assistant-panel.css';
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { MessageKey } from '../i18n/messages.js';
+import { writeClipboardText } from '../ui/clipboard.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 import {
   ASSISTANT_PERMISSION_MODES,
@@ -146,6 +147,9 @@ export function syncAssistantHostTheme(overlay: HTMLElement, host: HTMLElement):
 /** 同一条用户发送内的工具往返上限（ADR-2 / R6）。 */
 export const ASSISTANT_MAX_TOOL_ROUNDS = 24;
 
+/** 复制成功「已复制」反馈的停留时长（ADR-3）。 */
+export const ASSISTANT_COPY_FEEDBACK_MS = 1500;
+
 /** 发送图标（上箭头）：内嵌输入框右下的图标按钮（ADR-4 / R4）。 */
 const ASSISTANT_SEND_ICON =
   '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5v-9"/><path d="M3.9 7.6 8 3.5l4.1 4.1"/></svg>';
@@ -184,6 +188,19 @@ interface PanelMessage extends AssistantHistoryMessage {
   readonly suggestionTurn?: boolean;
   /** 本轮被用户停止/中断的助手消息。不写入历史 schema（重启按 error 呈现）。 */
   readonly stopped?: boolean;
+}
+
+/**
+ * 一轮流式的运行模式（ADR-3）：`regenerate` 以该条对应用户消息重新请求并替换；
+ * `continue` 把该条已生成文本作为 assistant 轮 + 固定续写指令作为 user 轮，增量
+ * 追加到已有文本之后。缺省模式即首答与重试。
+ */
+type AssistantStreamRunMode = 'regenerate' | 'continue';
+
+interface AssistantStreamRunOptions {
+  readonly mode?: AssistantStreamRunMode;
+  /** 非缺省模式失败时回落的原消息（保留原文本与工具块，清 stopped）。 */
+  readonly fallback?: PanelMessage;
 }
 
 /** `ai_chat_stream` 经 Channel 推送的事件（snake_case tag 与 ai.rs 钉死）。 */
@@ -322,6 +339,24 @@ function persistableMessages(list: readonly PanelMessage[]): AssistantHistoryMes
       ...(toolBlocks.length > 0 ? { toolBlocks } : {}),
     };
   });
+}
+
+/**
+ * 重新生成/继续生成失败时回落的原消息：保留原 Markdown 文本与工具块，只把
+ * 状态切成失败（error + 重试），不残留 stopped（ADR-3）。
+ */
+function restoreAssistantMessage(source: PanelMessage, error: string): PanelMessage {
+  return {
+    role: 'assistant',
+    content: source.content,
+    createdAt: source.createdAt,
+    ...(source.toolBlocks !== undefined && source.toolBlocks.length > 0
+      ? { toolBlocks: source.toolBlocks }
+      : {}),
+    ...(source.contextTruncated === true ? { contextTruncated: true } : {}),
+    ...(source.suggestionTurn === true ? { suggestionTurn: true } : {}),
+    error,
+  };
 }
 
 /**
@@ -1544,6 +1579,21 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   /** 待确认写操作队列：未确认前不落盘；确认后回调产生建议的同一执行器。 */
   const pendingQueue: PendingConfirmationEntry[] = [];
   let pendingBusy = false;
+  /** 复制反馈：仅对最近一次复制的消息渲染「已复制」/失败提示（ADR-3）。 */
+  let copyNotice: { readonly index: number; readonly ok: boolean } | null = null;
+  let copyNoticeTimer: number | null = null;
+
+  const clearCopyNoticeTimer = (): void => {
+    if (copyNoticeTimer !== null) {
+      window.clearTimeout(copyNoticeTimer);
+      copyNoticeTimer = null;
+    }
+  };
+
+  const resetCopyNotice = (): void => {
+    clearCopyNoticeTimer();
+    copyNotice = null;
+  };
 
   const chapterContextOrNull = (): AssistantChapterContext | null => {
     try {
@@ -1720,6 +1770,76 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     return 'done';
   };
 
+  /**
+   * 助手消息操作行（ADR-3 / R5）：有内容的助手消息可复制 Markdown 原文；已完成
+   * 可重新生成；本次运行内被停止且已有文本可继续生成；错误保留重试。流式进行时
+   * 全部不可用；空文本不渲染操作。复制反馈（成功约 1.5s「已复制」/ 失败提示）由
+   * aria-live 状态元素承载。
+   */
+  const renderMessageActions = (
+    message: PanelMessage,
+    index: number,
+    status: AssistantMessageStatus,
+  ): HTMLElement | null => {
+    const hasText = message.content.trim() !== '';
+    const showCopy = hasText;
+    const showRegenerate = status === 'done' && hasText;
+    const showContinue = status === 'stopped' && hasText;
+    const showRetry = status === 'error';
+    if (!showCopy && !showRegenerate && !showContinue && !showRetry) {
+      return null;
+    }
+    const row = document.createElement('div');
+    row.className = 'lightink-reader-assistant-message-actions';
+    const addButton = (kind: string, label: string, handler: () => void): void => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `lightink-reader-assistant-${kind}`;
+      button.dataset.assistantActionKind = kind;
+      button.textContent = label;
+      button.setAttribute('aria-label', label);
+      button.disabled = streaming;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handler();
+      });
+      row.appendChild(button);
+    };
+    if (showCopy) {
+      addButton('copy', t('reader.assistant.copy'), () => {
+        void copyMessageAt(index);
+      });
+      if (copyNotice !== null && copyNotice.index === index) {
+        const notice = document.createElement('span');
+        notice.className = 'lightink-reader-assistant-copy-status';
+        notice.dataset.assistantCopyStatus = copyNotice.ok ? 'ok' : 'error';
+        notice.setAttribute('role', 'status');
+        notice.setAttribute('aria-live', 'polite');
+        notice.textContent = copyNotice.ok
+          ? t('reader.assistant.copied')
+          : t('reader.assistant.copyFailed');
+        row.appendChild(notice);
+      }
+    }
+    if (showRegenerate) {
+      addButton('regenerate', t('reader.assistant.regenerate'), () => {
+        regenerateAt(index);
+      });
+    }
+    if (showContinue) {
+      addButton('continue', t('reader.assistant.continue'), () => {
+        continueAt(index);
+      });
+    }
+    if (showRetry) {
+      addButton('retry', t('reader.lookup.retry'), () => {
+        retryAt(index);
+      });
+    }
+    return row;
+  };
+
   const renderMessage = (message: PanelMessage, index: number): HTMLElement => {
     const bubble = document.createElement('div');
     bubble.className = `lightink-reader-assistant-message is-${message.role}`;
@@ -1799,17 +1919,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       error.className = 'lightink-reader-assistant-error';
       error.textContent = message.error;
       bubble.appendChild(error);
-      const retry = document.createElement('button');
-      retry.type = 'button';
-      retry.className = 'lightink-reader-assistant-retry';
-      retry.textContent = t('reader.lookup.retry');
-      retry.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        retryAt(index);
-      });
-      bubble.appendChild(retry);
-    } else if (savableAt(index)) {
+    }
+    // 用户消息已在上方提前返回，此处 status 是助手消息状态（null 时按完成处理）。
+    const actions = renderMessageActions(message, index, status ?? 'done');
+    if (actions !== null) {
+      bubble.appendChild(actions);
+    }
+    if (status === 'done' && savableAt(index)) {
       const saveButton = document.createElement('button');
       saveButton.type = 'button';
       saveButton.className = 'lightink-reader-assistant-save';
@@ -1841,10 +1957,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     const nodes = messages.map((message, index) => renderMessage(message, index));
     messagesHost.replaceChildren(...nodes);
-    const last = messages[messages.length - 1]!;
-    if (streaming && last.role === 'assistant' && last.error === undefined) {
-      streamingText =
-        nodes[nodes.length - 1]?.querySelector('.lightink-reader-assistant-message-text') ?? null;
+    if (streaming && streamingIndex !== null) {
+      const target = messages[streamingIndex];
+      if (target !== undefined && target.role === 'assistant' && target.error === undefined) {
+        streamingText =
+          nodes[streamingIndex]?.querySelector('.lightink-reader-assistant-message-text') ?? null;
+      }
     }
     scrollMessagesBottom();
   };
@@ -2443,6 +2561,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     const active = activeAssistantConversation(store);
     messages = active === null ? [] : active.messages.map((message) => ({ ...message }));
     savedAnswers.clear();
+    resetCopyNotice();
     persistError = null;
     persistNotice.hidden = true;
     renderMessages();
@@ -2500,6 +2619,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       store = emptyAssistantHistoryStore();
       messages = [];
       savedAnswers.clear();
+      resetCopyNotice();
       historyEpoch = 0;
       // 待确认建议属于上一上下文：切换身份即清空，避免跨书确认落错目标。
       pendingQueue.length = 0;
@@ -2545,19 +2665,36 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     abortActive?.();
   };
 
-  const runStream = async (targetIndex: number): Promise<void> => {
+  const runStream = async (
+    targetIndex: number,
+    options: AssistantStreamRunOptions = {},
+  ): Promise<void> => {
     const generation = sessionGeneration;
+    const mode = options.mode;
+    const continuing = mode === 'continue';
+    const entryAtStart = messages[targetIndex];
+    const existing = continuing ? (entryAtStart?.content ?? '') : '';
     const user = messages[targetIndex - 1];
     const userMessage = user?.role === 'user' ? user.content : '';
-    let userMessageForRequest = userMessage;
+    let userMessageForRequest = continuing ? t('reader.assistant.continuePrompt') : userMessage;
     let nudgedTool = false;
     let fetchCount = 0;
     const seenFetchUrls = new Set<string>();
-    const prior = historyTurns(messages, Math.max(0, targetIndex - 1));
+    // 续写把已生成文本作为 assistant 轮接在会话之后，请求仍以 user 轮收尾。
+    const prior = continuing
+      ? [
+          ...historyTurns(messages, targetIndex),
+          ...(existing.trim() === ''
+            ? []
+            : [{ role: 'assistant' as const, content: existing }]),
+        ]
+      : historyTurns(messages, Math.max(0, targetIndex - 1));
     const loopTurns: AssistantRequestTurn[] = [];
-    const toolBlocks: AssistantToolBlock[] = [];
-    markdownStream = createAssistantMarkdownStream();
-    let visible = '';
+    const toolBlocks: AssistantToolBlock[] = continuing
+      ? [...(entryAtStart?.toolBlocks ?? [])]
+      : [];
+    markdownStream = createAssistantMarkdownStream(existing);
+    let visible = existing;
     let contextTruncated = false;
     let toolLimitReached = false;
     const suggestion =
@@ -2586,7 +2723,25 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       if (streamingText !== null) {
         streamingText.innerHTML = html;
         // 快速路径不整表重渲染：首字到达即把消息从 waiting 切到 streaming。
-        streamingText.parentElement?.setAttribute('data-status', 'streaming');
+        const bubble = streamingText.parentElement;
+        bubble?.setAttribute('data-status', 'streaming');
+        // 首字出现后再补一条禁用的操作行（流式期间所有操作不可用）。
+        if (
+          bubble !== null &&
+          visible.trim() !== '' &&
+          bubble.querySelector('.lightink-reader-assistant-message-actions') === null
+        ) {
+          const entry = messages[targetIndex];
+          if (entry !== undefined) {
+            const actions = renderMessageActions(entry, targetIndex, 'streaming');
+            if (actions !== null) {
+              bubble.appendChild(actions);
+            }
+          }
+        }
+      }
+      // 只有流式目标是末条时才贴底；中途续写不把视口拽到会话末尾。
+      if (targetIndex === messages.length - 1) {
         scrollMessagesBottom();
       }
     };
@@ -2607,7 +2762,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           chapter: chapterSource(),
           history: [...prior, ...loopTurns],
           userMessage: userMessageForRequest,
-          page: currentPageNumber(),
+          // 续写指令不是用户提问：页码已随原用户轮进入会话，不再重复注入。
+          page: continuing ? undefined : currentPageNumber(),
           // 会话工具清单进 ①：书架会话广告 library_*，编辑器只读会话为空，
           // 无会话时保持内置 query_book/save_to_book（阅读器旧行为）。
           ...(session !== null ? { tools: session.tools } : {}),
@@ -2772,15 +2928,23 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       const entry = messages[targetIndex];
       if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
         const aborted = stopRequested || isAbortError(error);
-        messages[targetIndex] = {
-          ...entry,
-          content: visible,
-          toolBlocks: toolBlocks.slice(),
-          contextTruncated,
-          toolLimitReached,
-          error: aborted ? t('reader.assistant.stopped') : assistantAiErrorMessage(t, error, aiMissing),
-          ...(aborted ? { stopped: true } : {}),
-        };
+        if (!aborted && options.fallback !== undefined) {
+          // 重新生成/继续失败：保留原文本与工具块，回落 error + 重试（ADR-3）。
+          messages[targetIndex] = restoreAssistantMessage(
+            options.fallback,
+            assistantAiErrorMessage(t, error, aiMissing),
+          );
+        } else {
+          messages[targetIndex] = {
+            ...entry,
+            content: visible,
+            toolBlocks: toolBlocks.slice(),
+            contextTruncated,
+            toolLimitReached,
+            error: aborted ? t('reader.assistant.stopped') : assistantAiErrorMessage(t, error, aiMissing),
+            ...(aborted ? { stopped: true } : {}),
+          };
+        }
       }
     } finally {
       if (generation === sessionGeneration) {
@@ -2894,7 +3058,44 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     ask(t(assistantPromptKey(action)), action);
   };
 
-  const retryAt = (index: number): void => {
+  /** 复制某条助手消息的 Markdown 原文（R5）：成功 1.5s「已复制」、失败内联提示，不写历史。 */
+  const copyMessageAt = async (index: number): Promise<void> => {
+    const message = messages[index];
+    if (message === undefined || message.role !== 'assistant') {
+      return;
+    }
+    const text = message.content;
+    let ok = false;
+    try {
+      ok = await writeClipboardText(text);
+    } catch {
+      ok = false;
+    }
+    if (disposed.value) {
+      return;
+    }
+    clearCopyNoticeTimer();
+    copyNotice = { index, ok };
+    renderMessages();
+    if (ok) {
+      copyNoticeTimer = window.setTimeout(() => {
+        copyNoticeTimer = null;
+        if (disposed.value) {
+          return;
+        }
+        if (copyNotice !== null && copyNotice.index === index && copyNotice.ok) {
+          copyNotice = null;
+          renderMessages();
+        }
+      }, ASSISTANT_COPY_FEEDBACK_MS);
+    }
+  };
+
+  /**
+   * 重跑某条助手消息（与 retry 共用装配）：`retry` 原位重发该轮用户消息；
+   * `regenerate` 先移除该条之后的会话，再以该条对应用户消息重新请求并替换。
+   */
+  const restartAt = (index: number, mode: 'retry' | 'regenerate'): void => {
     const entry = messages[index];
     if (entry === undefined || entry.role !== 'assistant' || streaming || sendGate) {
       return;
@@ -2911,8 +3112,67 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           return;
         }
         historyEpoch += 1;
+        if (mode === 'regenerate') {
+          // 该条之后的会话失去承接：与编辑重发同规则，一并移除。
+          messages = messages.slice(0, index + 1);
+        }
         messages[index] = { role: 'assistant', content: '', createdAt: current.createdAt };
-        void runStream(index);
+        void runStream(index, mode === 'regenerate' ? { mode, fallback: current } : {});
+      } finally {
+        sendGate = false;
+      }
+    })();
+  };
+
+  const retryAt = (index: number): void => {
+    restartAt(index, 'retry');
+  };
+
+  const regenerateAt = (index: number): void => {
+    restartAt(index, 'regenerate');
+  };
+
+  /** 继续生成：只对本次运行内被停止且已有文本的消息开放（ADR-3）。 */
+  const continueAt = (index: number): void => {
+    const entry = messages[index];
+    if (
+      entry === undefined ||
+      entry.role !== 'assistant' ||
+      entry.stopped !== true ||
+      entry.content.trim() === '' ||
+      streaming ||
+      sendGate
+    ) {
+      return;
+    }
+    sendGate = true;
+    void (async () => {
+      try {
+        await ensureHistory();
+        if (disposed.value || streaming) {
+          return;
+        }
+        const current = messages[index];
+        if (
+          current === undefined ||
+          current.role !== 'assistant' ||
+          current.stopped !== true ||
+          current.content.trim() === ''
+        ) {
+          return;
+        }
+        historyEpoch += 1;
+        // 保留文本与工具块，清掉停止/失败态，让增量追加在已有内容之后。
+        messages[index] = {
+          role: 'assistant',
+          content: current.content,
+          createdAt: current.createdAt,
+          ...(current.toolBlocks !== undefined && current.toolBlocks.length > 0
+            ? { toolBlocks: current.toolBlocks }
+            : {}),
+          ...(current.contextTruncated === true ? { contextTruncated: true } : {}),
+        };
+        void runStream(index, { mode: 'continue', fallback: current });
       } finally {
         sendGate = false;
       }
@@ -3034,15 +3294,15 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     downloadCancels.clear();
     cancelActiveDownload();
-    const lastIndex = messages.length - 1;
-    const last = messages[lastIndex];
+    const targetIndex = streamingIndex ?? messages.length - 1;
+    const last = messages[targetIndex];
     if (last?.role === 'assistant') {
       const toolBlocks = (last.toolBlocks ?? []).map((block) =>
         block.stopped === true || (block.result !== undefined && block.result !== '')
           ? block
           : { ...block, stopped: true },
       );
-      messages[lastIndex] = {
+      messages[targetIndex] = {
         ...last,
         error: last.error ?? t('reader.assistant.stopped'),
         stopped: true,
@@ -3230,6 +3490,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       abortActive?.();
       abortActive = null;
       streamingText = null;
+      clearCopyNoticeTimer();
       removeModeMenuOutsideDismiss?.();
       if (typeof document !== 'undefined') {
         document.removeEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAiConfiguredEvent);

@@ -497,6 +497,13 @@ const en = {
   'reader.assistant.maxToolRounds':
     'Stopped after {n} tool round-trips in this send.',
   'reader.assistant.stopped': 'Generation stopped. Partial text was kept.',
+  'reader.assistant.copy': 'Copy',
+  'reader.assistant.copied': 'Copied',
+  'reader.assistant.copyFailed': 'Could not copy to the clipboard.',
+  'reader.assistant.regenerate': 'Regenerate',
+  'reader.assistant.continue': 'Continue',
+  'reader.assistant.continuePrompt':
+    'Continue the previous answer exactly from where it stopped. Do not repeat text you already wrote.',
   'reader.assistant.historyTooLarge':
     'This conversation is too large to save. On-screen messages were kept.',
   'reader.assistant.jumpBottom': 'Jump to latest',
@@ -1148,6 +1155,12 @@ const zhCN = {
   'reader.assistant.toolSummary.tags': '找到 {n} 个标签',
   'reader.assistant.maxToolRounds': '本轮提问已达到 {n} 次工具往返上限，已停止。',
   'reader.assistant.stopped': '已停止生成，已生成的文字已保留。',
+  'reader.assistant.copy': '复制',
+  'reader.assistant.copied': '已复制',
+  'reader.assistant.copyFailed': '复制失败，未能写入剪贴板。',
+  'reader.assistant.regenerate': '重新生成',
+  'reader.assistant.continue': '继续生成',
+  'reader.assistant.continuePrompt': '请从上次中断处继续完成上面的回答，不要重复已经写过的内容。',
   'reader.assistant.historyTooLarge': '这段对话超出保存上限，屏幕上的消息仍保留。',
   'reader.assistant.jumpBottom': '回到底部',
   'reader.assistant.contextSelection': '含当前选区。',
