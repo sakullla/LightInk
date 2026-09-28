@@ -440,6 +440,17 @@ describe('touch press feedback baseline (T1)', () => {
         `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-action:hover:not\\(:disabled\\):not\\(:active\\),[\\s\\S]*?\\{[^}]*background:\\s*var\\(--lightink-bg-elevated\\)`,
       ),
     );
+    // R4：工具步骤展开行复用同一套按压洗色 + 抬手复位（透明底恢复透明）。
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-tool-head:active,[^{]*\\{[^}]*${WASH_RE}`,
+      ),
+    );
+    expect(assistantCss).toMatch(
+      new RegExp(
+        `${TOUCH_GATE_RE}\\s*\\.lightink-reader-assistant-tool-head:hover:not\\(:active\\)\\s*\\{[^}]*background:\\s*transparent`,
+      ),
+    );
     expect(lookupCss).toMatch(
       new RegExp(
         `${TOUCH_GATE_RE}\\s*\\.lightink-reader-lookup-close:active,[^{]*\\{[^}]*${WASH_RE}`,

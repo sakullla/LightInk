@@ -1782,6 +1782,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const renderToolBlock = (block: AssistantToolBlock): HTMLElement => {
     const state = toolBlockState(block);
+    const statusLabel = t(toolStatusKey(state));
+    const nameLabel = t(toolLabelKey(block.name));
+    const summaryText = toolBlockSummary(block, t);
     const el = document.createElement('div');
     el.className = 'lightink-reader-assistant-tool';
     el.dataset.tool = block.name;
@@ -1791,7 +1794,9 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     head.type = 'button';
     head.className = 'lightink-reader-assistant-tool-head';
     head.setAttribute('aria-expanded', 'false');
-    head.setAttribute('aria-label', t('reader.assistant.toolToggleDetails'));
+    // 展开按钮的可访问名带上人类化名称、状态与摘要（可见文本被 aria-label 覆盖）。
+    head.setAttribute('aria-label', `${nameLabel} · ${statusLabel} · ${summaryText}`);
+    head.title = t('reader.assistant.toolToggleDetails');
 
     const arrow = document.createElement('span');
     arrow.className = 'lightink-reader-assistant-tool-arrow';
@@ -1800,26 +1805,43 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
     const status = document.createElement('span');
     status.className = `lightink-reader-assistant-tool-status is-${state}`;
+    status.setAttribute('role', 'img');
+    status.setAttribute('aria-label', statusLabel);
     status.textContent =
       state === 'running' ? '…' : state === 'failed' ? '✕' : state === 'stopped' ? '■' : '✓';
-    status.title = t(toolStatusKey(state));
+    status.title = statusLabel;
 
     const name = document.createElement('span');
     name.className = 'lightink-reader-assistant-tool-name';
-    name.textContent = t(toolLabelKey(block.name));
+    name.textContent = nameLabel;
 
     const summary = document.createElement('span');
     summary.className = 'lightink-reader-assistant-tool-summary';
-    summary.textContent = toolBlockSummary(block, t);
+    summary.textContent = summaryText;
+    // 截断时仍可悬停看全文；展开详情里的参数/结果才是完整原文。
+    summary.title = summaryText;
 
-    const body = document.createElement('pre');
+    // 参数与结果默认收起：展开后分节呈现，长内容在自身区域内滚动/换行。
+    const body = document.createElement('div');
     body.className = 'lightink-reader-assistant-tool-body';
     body.hidden = true;
-    const parts = [block.arguments];
-    if (block.result !== undefined && block.result !== '') {
-      parts.push(block.result);
-    }
-    body.textContent = parts.filter((part) => part !== '').join('\n');
+    const appendSection = (label: string, value: string | undefined): void => {
+      if (value === undefined || value === '') {
+        return;
+      }
+      const section = document.createElement('section');
+      section.className = 'lightink-reader-assistant-tool-body-section';
+      const caption = document.createElement('span');
+      caption.className = 'lightink-reader-assistant-tool-body-label';
+      caption.textContent = label;
+      const pre = document.createElement('pre');
+      pre.className = 'lightink-reader-assistant-tool-body-pre';
+      pre.textContent = value;
+      section.append(caption, pre);
+      body.appendChild(section);
+    };
+    appendSection(t('reader.assistant.toolArguments'), block.arguments);
+    appendSection(t('reader.assistant.toolResult'), block.result);
 
     head.addEventListener('click', () => {
       const open = body.hidden;
@@ -2125,14 +2147,18 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       });
       bubble.appendChild(notice);
     }
-    const text = document.createElement('div');
-    text.className = 'lightink-reader-assistant-message-text';
+    // 空内容不渲染空白块（R1）：等待态渲染指示器，其余状态仅在有文本时渲染排版流。
     if (status === 'waiting') {
-      text.appendChild(renderWaitingIndicator());
+      const waiting = document.createElement('div');
+      waiting.className = 'lightink-reader-assistant-message-text';
+      waiting.appendChild(renderWaitingIndicator());
+      bubble.appendChild(waiting);
     } else if (message.content !== '') {
+      const text = document.createElement('div');
+      text.className = 'lightink-reader-assistant-message-text';
       text.innerHTML = renderAssistantMarkdown(message.content);
+      bubble.appendChild(text);
     }
-    bubble.appendChild(text);
     if (status === 'stopped') {
       // 停止是中性终态：保留文本并标记「已停止」；重试入口留给 error（ADR-3）。
       const note = document.createElement('p');

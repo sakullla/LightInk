@@ -1121,6 +1121,8 @@ describe('createAssistantPanel message actions (R5)', () => {
     await flush();
     const bubble = assistantBubble(panel);
     expect(bubble?.dataset.status).toBe('done');
+    // 空内容不渲染空白块：没有 markdown 排版流容器。
+    expect(bubble?.querySelector('.lightink-reader-assistant-message-text')).toBeNull();
     expect(bubble?.querySelector('.lightink-reader-assistant-message-actions')).toBeNull();
     expect(bubble?.querySelectorAll('[data-assistant-action-kind]').length).toBe(0);
     panel.destroy();
@@ -1138,6 +1140,8 @@ describe('createAssistantPanel message actions (R5)', () => {
     await flush();
     const bubble = assistantBubble(panel);
     expect(bubble?.dataset.status).toBe('error');
+    // 失败但无文本时不渲染空白块，只留可读原因与重试。
+    expect(bubble?.querySelector('.lightink-reader-assistant-message-text')).toBeNull();
     expect(actionIn(bubble, 'retry')).not.toBeNull();
     expect(actionIn(bubble, 'copy')).toBeNull();
     panel.destroy();
@@ -2118,15 +2122,36 @@ describe('createAssistantPanel minimal typographic flow (T4)', () => {
   });
 
   it('converges markdown headings, tables, and lists inside the message text', () => {
-    const headingRule = ruleBody(
+    const headingBase = ruleBody(
       /\.lightink-reader-assistant-message-text\s*:is\(h1, h2, h3, h4, h5, h6\)\s*\{([^}]*)\}/,
     );
-    expect(headingRule).toMatch(/font-size:\s*1em/);
+    expect(headingBase).toMatch(/font-weight:\s*700/);
+    expect(headingBase).toMatch(/margin:\s*[\d.]+em 0 [\d.]+em/);
+    // 标题按级降档：h1 > h2 > h3 > h4–h6，层级成体系且都在正文级附近。
+    const levelSize = (selector: string): number => {
+      const body = ruleBody(
+        new RegExp(`\\.lightink-reader-assistant-message-text\\s+${selector}\\s*\\{([^}]*)\\}`),
+      );
+      const match = /font-size:\s*([\d.]+)em/.exec(body);
+      expect(match, `${selector} should set a font-size`).not.toBeNull();
+      return Number((match as RegExpExecArray)[1]);
+    };
+    const h1 = levelSize('h1');
+    const h2 = levelSize('h2');
+    const h3 = levelSize('h3');
+    const h4 = levelSize(':is\\(h4, h5, h6\\)');
+    expect(h1).toBeGreaterThan(h2);
+    expect(h2).toBeGreaterThan(h3);
+    expect(h3).toBeGreaterThan(h4);
+    expect(h1).toBeLessThanOrEqual(1.2);
+    expect(h4).toBeGreaterThan(0.8);
     const tableRule = ruleBody(
       /\.lightink-reader-assistant-message-text table\s*\{([^}]*)\}/,
     );
     expect(tableRule).toMatch(/overflow-x:\s*auto/);
     expect(tableRule).toMatch(/border-collapse:\s*collapse/);
+    // 宽表格/代码块在容器内滚动：max-width 上限兜底不撑破面板。
+    expect(tableRule).toMatch(/max-width:\s*100%/);
     const cellRule = ruleBody(
       /\.lightink-reader-assistant-message-text\s*:is\(th, td\)\s*\{([^}]*)\}/,
     );
@@ -2139,6 +2164,28 @@ describe('createAssistantPanel minimal typographic flow (T4)', () => {
       /\.lightink-reader-assistant-message-text pre\s*\{([^}]*)\}/,
     );
     expect(preRule).toMatch(/overflow-x:\s*auto/);
+    expect(preRule).toMatch(/max-width:\s*100%/);
+  });
+
+  it('shares the panel language across message text, links and tool steps', () => {
+    const assistantTextRule = ruleBody(
+      /\.lightink-reader-assistant-message\.is-assistant\s+\.lightink-reader-assistant-message-text\s*\{([^}]*)\}/,
+    );
+    expect(assistantTextRule).toMatch(/line-height:\s*1\.55/);
+    expect(css).toMatch(
+      /\.lightink-reader-assistant-message-text a\s*\{[^}]*color:\s*var\(--lightink-accent\)[^}]*text-decoration:\s*underline/,
+    );
+    const toolHeadFocus = ruleBody(
+      /\.lightink-reader-assistant-tool-head:focus-visible\s*\{([^}]*)\}/,
+    );
+    expect(toolHeadFocus).toMatch(/outline:\s*2px solid var\(--lightink-accent\)/);
+    const toolBody = ruleBody(/\.lightink-reader-assistant-tool-body\s*\{([^}]*)\}/);
+    expect(toolBody).toMatch(/border-radius:\s*var\(--lightink-radius-control\)/);
+    expect(toolBody).toMatch(/max-height:/);
+    expect(toolBody).toMatch(/overflow:\s*auto/);
+    const toolBodyPre = ruleBody(/\.lightink-reader-assistant-tool-body-pre\s*\{([^}]*)\}/);
+    expect(toolBodyPre).toMatch(/white-space:\s*pre-wrap/);
+    expect(toolBodyPre).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it('keeps streamed reflow from moving finished messages via overflow-anchor', () => {
@@ -3320,6 +3367,15 @@ describe('createAssistantPanel tools and locators', () => {
     expect(chip!.querySelector('.lightink-reader-assistant-tool-summary')?.textContent).toBe(
       t('reader.assistant.toolSummary.groups', { n: '7' }),
     );
+    // 可访问名带人类化名称/状态/摘要；状态字形以 role=img + 文案播报。
+    const statusGlyph = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-status');
+    expect(statusGlyph?.getAttribute('role')).toBe('img');
+    expect(statusGlyph?.getAttribute('aria-label')).toBe(t('reader.assistant.toolStatusDone'));
+    expect(
+      chip!.querySelector('.lightink-reader-assistant-tool-head')?.getAttribute('aria-label'),
+    ).toBe(
+      `${t('reader.assistant.toolLibrarySearch')} · ${t('reader.assistant.toolStatusDone')} · ${t('reader.assistant.toolSummary.groups', { n: '7' })}`,
+    );
     const body = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-body');
     const head = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-head');
     expect(body).not.toBeNull();
@@ -3333,6 +3389,15 @@ describe('createAssistantPanel tools and locators', () => {
     expect(chip!.classList.contains('is-open')).toBe(true);
     expect(body!.textContent).toContain('"groups"');
     expect(body!.textContent).toContain('{"query":"科幻"}');
+    // 参数与结果分节标注：展开后人类可读，原始 JSON 仍完整可查。
+    expect(
+      [...body!.querySelectorAll('.lightink-reader-assistant-tool-body-label')].map(
+        (label) => label.textContent,
+      ),
+    ).toEqual([t('reader.assistant.toolArguments'), t('reader.assistant.toolResult')]);
+    expect(
+      body!.querySelectorAll('.lightink-reader-assistant-tool-body-section').length,
+    ).toBe(2);
     head!.click();
     expect(body!.hidden).toBe(true);
     expect(head!.getAttribute('aria-expanded')).toBe('false');
