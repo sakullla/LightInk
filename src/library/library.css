@@ -20,9 +20,6 @@
   --lightink-overlay: #2a261f48;
   --lightink-shadow: 0 12px 32px #2a261f1c;
   --lightink-danger: #b42318;
-  --lightink-home-paper: #ebe5da;
-  --lightink-home-wash: #f8f4ed;
-  --lightink-home-rule: #cfc5b6;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -39,9 +36,6 @@
   --lightink-overlay: #3a2f2448;
   --lightink-shadow: 0 12px 32px #3a2f241c;
   --lightink-danger: #b42318;
-  --lightink-home-paper: #ead9c5;
-  --lightink-home-wash: #fbf0e4;
-  --lightink-home-rule: #ccb89f;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -58,9 +52,6 @@
   --lightink-overlay: #24302848;
   --lightink-shadow: 0 12px 32px #2430281c;
   --lightink-danger: #b42318;
-  --lightink-home-paper: #e1eadc;
-  --lightink-home-wash: #f4f8f1;
-  --lightink-home-rule: #bccbb8;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -77,9 +68,6 @@
   --lightink-overlay: #100c0a73;
   --lightink-shadow: 0 12px 32px #100c0a59;
   --lightink-danger: #f97066;
-  --lightink-home-paper: #2b211b;
-  --lightink-home-wash: #382b22;
-  --lightink-home-rule: #584536;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
@@ -96,9 +84,6 @@
   --lightink-overlay: #0a0c0f73;
   --lightink-shadow: 0 12px 32px #0a0c0f59;
   --lightink-danger: #f97066;
-  --lightink-home-paper: #191c21;
-  --lightink-home-wash: #22272e;
-  --lightink-home-rule: #353d48;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
@@ -5405,8 +5390,8 @@ html:not([data-android]):not([data-touch-primary])
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-cover-wall {
-  gap: 36px 28px;
-  padding-top: 22px;
+  gap: var(--lightink-library-cover-gap-y) var(--lightink-library-cover-gap-x);
+  padding-top: 0;
 }
 
 html:not([data-android]):not([data-touch-primary])
@@ -5418,17 +5403,18 @@ html:not([data-android]):not([data-touch-primary])
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-item-text {
-  gap: 4px;
+  gap: 3px;
   padding: 0 2px;
 }
 
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-item-text strong {
-  font-size: 14.5px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  line-height: 1.3;
+  font-family: var(--lightink-font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
 }
 
 html:not([data-android]):not([data-touch-primary])
@@ -5446,18 +5432,20 @@ html:not([data-android]):not([data-touch-primary])
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-continue {
-  margin-top: 16px;
-  margin-bottom: 4px;
-  padding: 8px 8px 8px 6px;
-  border: 1px solid var(--lightink-border);
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-continue-text strong {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-family: var(--lightink-font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 html:not([data-android]):not([data-touch-primary])
@@ -5471,9 +5459,10 @@ html:not([data-android]):not([data-touch-primary])
 html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-home-empty h2 {
-  font-size: 28px;
+  font-family: var(--lightink-font-ui);
+  font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 html:not([data-android]):not([data-touch-primary])
@@ -5501,8 +5490,8 @@ html:not([data-android]):not([data-touch-primary])
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-cover-wall {
-    gap: 36px 28px;
-    padding-top: 22px;
+    gap: var(--lightink-library-cover-gap-y) var(--lightink-library-cover-gap-x);
+    padding-top: 0;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -5514,17 +5503,18 @@ html:not([data-android]):not([data-touch-primary])
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-item-text {
-    gap: 4px;
+    gap: 3px;
     padding: 0 2px;
   }
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-item-text strong {
-    font-size: 14.5px;
-    font-weight: 650;
-    letter-spacing: -0.015em;
-    line-height: 1.3;
+    font-family: var(--lightink-font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1.35;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -5542,18 +5532,20 @@ html:not([data-android]):not([data-touch-primary])
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-continue {
-    margin-top: 16px;
-    margin-bottom: 4px;
-    padding: 8px 8px 8px 6px;
-    border: 1px solid var(--lightink-border);
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
   }
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-continue-text strong {
-    font-size: 15px;
-    font-weight: 650;
-    letter-spacing: -0.015em;
+    font-family: var(--lightink-font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -5567,9 +5559,10 @@ html:not([data-android]):not([data-touch-primary])
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-home-empty h2 {
-    font-size: 28px;
+    font-family: var(--lightink-font-ui);
+    font-size: 15px;
     font-weight: 650;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -5621,9 +5614,10 @@ html:not([data-android]):not([data-touch-primary])
 }
 
 
-/* ===== Shelf-only editorial study home =====
- * This layer deliberately starts at [data-library-nav='shelf']. Catalog,
- * sources and manage retain their established chrome and scroll ownership. */
+/* ===== Shelf home cover grid =====
+ * Continue reading and the wall share one 2:3 grid. A 132px minimum track
+ * still fits four columns in a 1024px window after the nav.
+ * Catalog, sources, and manage keep their own chrome. */
 .lightink-library[data-library-nav='shelf'] .lightink-library-workarea {
   min-height: 0;
   overflow: hidden;
@@ -5631,19 +5625,25 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home {
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+  column-gap: var(--lightink-library-cover-gap-x);
+  row-gap: var(--lightink-library-cover-gap-y);
   width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: var(--lightink-home-rule) transparent;
-  padding: clamp(22px, 3vw, 44px) clamp(22px, 4vw, 64px) 72px;
-  background:
-    linear-gradient(90deg, transparent 0 23px, color-mix(in srgb, var(--lightink-home-rule) 46%, transparent) 23px 24px, transparent 24px),
-    var(--lightink-bg);
+  scrollbar-color: var(--lightink-border) transparent;
+  padding: 12px var(--lightink-library-pad-x) 24px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font-family: var(--lightink-font-ui);
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home::-webkit-scrollbar {
@@ -5653,487 +5653,280 @@ html:not([data-android]):not([data-touch-primary])
 .lightink-library[data-library-nav='shelf'] .lightink-library-home::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: var(--lightink-home-rule);
+  background: var(--lightink-border);
   background-clip: content-box;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-section,
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-primary {
-  width: min(100%, 76rem);
-  margin-inline: auto;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-section {
-  margin-block-start: clamp(30px, 4vw, 52px);
+/* Books and the wall box drop out so each cover joins the home grid. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
+  display: contents;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 0 0 16px;
-  color: var(--lightink-fg);
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: clamp(19px, 1.7vw, 25px);
-  font-weight: 650;
-  line-height: 1.2;
-  letter-spacing: 0.035em;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-heading::after {
-  content: '';
-  flex: 1 1 auto;
-  height: 1px;
-  background: linear-gradient(90deg, var(--lightink-home-rule), transparent);
-}
-
-/* Lead story: an editorial reading desk, not a dashboard card. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 0 18px;
-  max-width: 76rem;
-  margin: 0 auto;
-  padding: clamp(20px, 3vw, 34px);
-  overflow: hidden;
-  border: 1px solid var(--lightink-home-rule);
-  border-radius: 2px 18px 2px 2px;
-  background:
-    linear-gradient(128deg, var(--lightink-home-wash), var(--lightink-home-paper));
-  box-shadow:
-    inset 5px 0 0 color-mix(in srgb, var(--lightink-accent) 72%, transparent),
-    0 18px 42px color-mix(in srgb, var(--lightink-fg) 9%, transparent);
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue > .lightink-library-home-heading {
   grid-column: 1 / -1;
-  margin-bottom: 18px;
-  color: var(--lightink-accent-ink);
-  font-size: 12px;
+  margin: 0;
+  color: var(--lightink-fg);
   font-family: var(--lightink-font-ui);
-  font-weight: 750;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue {
+  position: relative;
+  display: block;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--lightink-fg);
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
-  display: grid;
-  grid-template-columns: clamp(82px, 9vw, 116px) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: clamp(16px, 2.4vw, 30px);
-  min-height: 0 !important;
-  padding: 0 !important;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
-  width: clamp(82px, 9vw, 116px);
-  height: auto;
-  min-width: 0;
-  aspect-ratio: 2 / 3;
-  border-radius: 2px 6px 6px 2px;
-  box-shadow:
-    inset 1px 0 color-mix(in srgb, #fff 28%, transparent),
-    0 14px 26px color-mix(in srgb, var(--lightink-fg) 24%, transparent);
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text {
-  gap: 8px;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text strong {
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: clamp(24px, 3vw, 42px);
-  font-weight: 650;
-  line-height: 1.18;
-  letter-spacing: -0.025em;
-  white-space: normal;
-  text-wrap: balance;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text span {
-  color: var(--lightink-muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
-  align-self: end;
-  padding: 9px 16px;
-  border: 1px solid color-mix(in srgb, var(--lightink-accent-ink) 34%, transparent);
-  background: var(--lightink-accent-ink);
-  color: var(--lightink-bg);
-  letter-spacing: 0.03em;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
-  align-self: start;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
-  border: 1px solid color-mix(in srgb, var(--lightink-fg) 12%, transparent);
-  border-radius: 999px !important;
-}
-
-/* Recently read: horizontal folio cards keep this section distinct from the wall. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-list {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-  min-height: 92px;
-  padding: 12px;
-  border: 1px solid var(--lightink-home-rule);
-  border-radius: 2px 12px 2px 2px;
-  background: color-mix(in srgb, var(--lightink-home-wash) 78%, transparent);
-  text-align: left;
-  transition: transform 160ms ease, box-shadow 160ms ease;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card .lightink-library-cover {
-  width: 54px;
-  min-width: 54px;
-  height: 76px;
-  aspect-ratio: auto;
-  border-radius: 2px 4px 4px 2px;
-  box-shadow: 0 5px 12px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text {
   display: flex;
-  min-width: 0;
   flex-direction: column;
-  gap: 6px;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text strong {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: 16px;
-  line-height: 1.35;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text span {
-  color: var(--lightink-muted);
-  font-size: 12px;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 24px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
-}
-
-/* Shortcuts resemble an index drawer: compact, text-forward, count aligned. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut-list {
-  display: flex;
-  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 10px;
   width: 100%;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-inline: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--lightink-home-rule) transparent;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none;
+  transform: none;
+  transition: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: baseline;
-  gap: 14px;
-  max-width: min(100%, 24rem);
-  min-height: 42px;
-  padding: 9px 14px;
-  border: 1px solid var(--lightink-home-rule);
-  border-radius: 2px 999px 999px 2px;
-  background: transparent;
-  white-space: nowrap;
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-open:hover,
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-open:focus-visible {
+  background: transparent !important;
+  color: inherit;
+  box-shadow: none;
+  transform: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut strong {
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
+  flex: none;
+  width: 100%;
   min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 650;
-  text-overflow: ellipsis;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  transition: none;
+  transform: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut span {
-  flex: 0 0 auto;
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:hover .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item.is-selected .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:focus-visible .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-open:hover .lightink-library-cover {
+  transform: none;
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 16%, transparent),
+    0 6px 16px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item,
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
+  gap: 10px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item-shell,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item--import {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item-text {
+  gap: 3px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item-text strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--lightink-fg);
+  font-family: var(--lightink-font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0;
+  white-space: normal;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item-progress {
   color: var(--lightink-muted);
-  font-size: 11px;
+  font-family: var(--lightink-font-ui);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut:hover,
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut:focus-visible {
-  border-color: var(--lightink-accent);
-  background: var(--lightink-accent-soft);
-  color: var(--lightink-accent-ink);
+.lightink-library[data-library-nav='shelf'] .lightink-library-item[data-progress-fill] .lightink-library-cover::before,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item[data-progress-fill] .lightink-library-cover::after {
+  height: 3px;
 }
 
-/* The wall belongs to the same scroll page; it never creates a second scrollbar. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books {
-  padding-bottom: 24px;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
+/* No artwork: same vertical cover, short title in the theme muted color. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover--jacket {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
-  grid-auto-rows: max-content;
-  align-content: start;
-  gap: 32px 24px;
-  min-height: 0;
-  overflow: visible;
-  padding: 0;
+  grid-template-rows: 1fr auto;
+  align-items: start;
+  justify-items: stretch;
+  place-items: start stretch;
+  padding: 16% 12% 14%;
+  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg));
+  background-image: none;
+  color: var(--lightink-muted);
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-item-shell,
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-item--import {
-  width: 100%;
-  max-width: 190px;
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--lightink-font-ui);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover {
-  min-width: 0;
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-title::after {
+  content: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-wall-heading {
-  position: sticky;
-  top: -1px;
-  z-index: 3;
-  margin-bottom: 20px;
-  padding: 8px 0 10px;
-  background: linear-gradient(var(--lightink-bg) 76%, transparent);
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-author {
+  display: block;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue:hover .lightink-library-continue-dismiss,
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue:focus-within .lightink-library-continue-dismiss {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lightink-library[data-library-nav='shelf'] :is(
+  .lightink-library-nav-item.is-active,
+  .lightink-library-group.is-active,
+  .lightink-library-smart-group.is-active,
+  .lightink-library-source.is-active
+) {
+  border-radius: 6px;
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-tag.is-active {
+  border-radius: 6px;
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent)) !important;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-empty {
-  min-height: min(52vh, 32rem);
-  border: 1px solid var(--lightink-home-rule);
-  border-radius: 2px 24px 2px 2px;
-  background:
-    radial-gradient(circle at 50% 20%, var(--lightink-home-wash), transparent 58%),
-    repeating-linear-gradient(0deg, transparent 0 31px, color-mix(in srgb, var(--lightink-home-rule) 30%, transparent) 31px 32px);
+  grid-column: 1 / -1;
+  border: none;
+  background: transparent;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-empty-actions button {
-  min-height: 42px;
-  padding-inline: 16px;
-  border: 1px solid var(--lightink-home-rule);
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-empty h2 {
+  font-family: var(--lightink-font-ui);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 .lightink-library[data-library-nav='shelf'] :is(
   .lightink-library-continue-open,
-  .lightink-library-home-recent-card,
-  .lightink-library-home-shortcut,
   .lightink-library-item--cover
 ):focus-visible {
   outline: 3px solid var(--lightink-accent);
   outline-offset: 3px;
 }
 
-/* Sidebar remains present in an unmarked narrow desktop window. */
-@container library-content (max-width: 46rem) {
-  .lightink-library[data-library-nav='shelf'] .lightink-library-home {
-    padding: 20px 18px 56px;
-    background: var(--lightink-bg);
-  }
-
-  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
-    grid-template-columns: 70px minmax(0, 1fr);
-  }
-
-  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-list {
-    grid-template-columns: 1fr;
-  }
-
-  .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
-  .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
-    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-    gap: 24px 16px;
-  }
-}
-
 @media (max-width: 760px) {
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-home {
-    padding: 14px max(16px, var(--lightink-safe-right, 0px))
-      calc(92px + var(--lightink-safe-bottom, 0px))
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 12px max(16px, var(--lightink-safe-right, 0px))
+      calc(88px + var(--lightink-safe-bottom, 0px))
       max(16px, var(--lightink-safe-left, 0px));
     background: var(--lightink-bg);
-    scrollbar-gutter: auto;
     -webkit-overflow-scrolling: touch;
   }
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-section {
-    margin-top: 30px;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-heading {
-    margin-bottom: 12px;
-    font-size: 1.15rem;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
-    gap: 0 8px;
-    margin: 0;
-    padding: 16px;
-    border: 1px solid var(--lightink-home-rule);
-    border-radius: 2px 14px 2px 2px;
-    background: linear-gradient(128deg, var(--lightink-home-wash), var(--lightink-home-paper));
-    box-shadow: inset 4px 0 0 color-mix(in srgb, var(--lightink-accent) 72%, transparent);
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue-open {
-    display: grid;
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 12px;
-    min-height: 72px !important;
-    padding: 0 !important;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue
-    .lightink-library-cover {
-    width: 36px;
-    min-width: 36px;
-    height: 48px;
-    aspect-ratio: 2 / 3;
-    box-shadow: 0 8px 18px color-mix(in srgb, var(--lightink-fg) 20%, transparent);
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue-text strong {
-    font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-    font-size: 1.22rem;
-    line-height: 1.25;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue-cue {
-    grid-column: 2;
-    justify-self: start;
-    padding: 5px 10px;
-    font-size: var(--lightink-type-caption);
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue-dismiss {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    min-height: 44px;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-recent-list {
-    display: flex;
-    gap: 10px;
-    margin-inline: -16px;
-    padding-inline: 16px;
-    overflow-x: auto;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-recent-card {
-    flex: 0 0 min(78vw, 290px);
-    min-height: 88px;
-    scroll-snap-align: start;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-shortcut {
-    min-height: 44px;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-books
-    :is(.lightink-library-cover-wall, .lightink-library-items) {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 22px 12px;
-    padding: 0;
-    overflow: visible;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-wall-heading {
-    top: -1px;
-  }
-
-  html[data-keyboard]:is([data-android], [data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-home {
-    padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
-    scroll-padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
+    .lightink-library-cover--jacket {
+    background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg));
+    background-image: none;
+    color: var(--lightink-muted);
+    font-size: 13px;
+    letter-spacing: 0;
   }
 }
 
 @media (max-width: 430px) {
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-home-books
-    :is(.lightink-library-cover-wall, .lightink-library-items) {
+    .lightink-library-home {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 22px 16px;
   }
 }
 
 @media (pointer: coarse) {
-  .lightink-library[data-library-nav='shelf'] :is(
-    .lightink-library-home-recent-card,
-    .lightink-library-home-shortcut
-  ) {
-    min-height: 48px;
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
+    opacity: 1;
+    pointer-events: auto;
   }
+}
+
+html[data-keyboard]:is([data-android], [data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-home {
+  padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
+  scroll-padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lightink-library[data-library-nav='shelf'] :is(
     .lightink-library-home,
-    .lightink-library-home-recent-card,
-    .lightink-library-home-shortcut,
     .lightink-library-continue-open,
+    .lightink-library-continue-dismiss,
     .lightink-library-cover
   ) {
     scroll-behavior: auto !important;

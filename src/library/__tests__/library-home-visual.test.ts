@@ -5,80 +5,194 @@ const css = readFileSync(new URL('../library.css', import.meta.url), 'utf-8');
 const preview = readFileSync(new URL('../shelf-home-preview.ts', import.meta.url), 'utf-8');
 const previewHtml = readFileSync(new URL('../shelf-home-preview.html', import.meta.url), 'utf-8');
 
-function ruleBody(selector: RegExp): string {
-  return css.match(new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`, selector.flags))?.[1] ?? '';
+/** Default desktop window and titlebar. See tauri.conf.json and window-titlebar.css. */
+const DESKTOP_WINDOW = { width: 1024, height: 768, titlebar: 36, scrollbar: 16 };
+
+function ruleBody(source: string, selector: RegExp): string {
+  return source.match(new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`, selector.flags))?.[1] ?? '';
 }
 
-function editorialSection(): string {
-  const start = css.indexOf('/* ===== Shelf-only editorial study home =====');
+function shelfHomeSection(): string {
+  const start = css.indexOf('/* ===== Shelf home cover grid =====');
   const end = css.indexOf('/* ===== R7 通用书源管理面板', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return css.slice(start, end);
 }
 
-describe('shelf home editorial visual contract', () => {
-  it('provides a readable editorial surface in every shelf theme', () => {
+function decl(block: string, property: string): string {
+  const match = block.match(new RegExp(`(?:^|[;\\s])${property}\\s*:\\s*([^;]+)`));
+  return match?.[1]?.trim() ?? '';
+}
+
+function px(value: string): number {
+  const match = value.match(/(\d+(?:\.\d+)?)px/);
+  return match === null ? Number.NaN : Number(match[1]);
+}
+
+function tokenPx(block: string, name: string): number {
+  return px(decl(block, name));
+}
+
+describe('shelf home cover grid', () => {
+  it('keeps five shelf themes on background, text, and accent without study colors', () => {
     for (const theme of ['gallery', 'paper', 'moss', 'walnut', 'ink']) {
-      const block = ruleBody(new RegExp(`\\[data-library-theme='${theme}'\\]`));
-      expect(block, theme).toMatch(/--lightink-home-paper:\s*#[0-9a-f]{6}/i);
-      expect(block, theme).toMatch(/--lightink-home-wash:\s*#[0-9a-f]{6}/i);
-      expect(block, theme).toMatch(/--lightink-home-rule:\s*#[0-9a-f]{6}/i);
-      expect(block, theme).toMatch(/--lightink-accent-ink:\s*#[0-9a-f]{6}/i);
+      const block = ruleBody(css, new RegExp(`\\[data-library-theme='${theme}'\\]`));
+      expect(block, theme).toMatch(/--lightink-bg:\s*#[0-9a-f]{6}/i);
+      expect(block, theme).toMatch(/--lightink-fg:\s*#[0-9a-f]{6}/i);
+      expect(block, theme).toMatch(/--lightink-muted:\s*#[0-9a-f]{6}/i);
+      expect(block, theme).toMatch(/--lightink-accent:\s*#[0-9a-f]{6}/i);
+      expect(block, theme).not.toMatch(/--lightink-home-paper|--lightink-home-wash|--lightink-home-rule/);
     }
 
-    const home = editorialSection();
-    expect(home).toMatch(/font-family:\s*var\(--lightink-font-serif/);
-    expect(home).toMatch(/background:[\s\S]*var\(--lightink-home-wash\)/);
-    expect(home).toMatch(/color:\s*var\(--lightink-accent-ink\)/);
-    expect(home).toMatch(/font-variant-numeric:\s*tabular-nums/);
+    const home = shelfHomeSection();
+    expect(home).toMatch(/background:\s*var\(--lightink-bg\)/);
+    expect(home).toMatch(/color:\s*var\(--lightink-fg\)/);
+    expect(css).not.toMatch(/--lightink-home-paper|--lightink-home-wash|--lightink-home-rule/);
   });
 
-  it('keeps one vertical scroll owner and scopes the redesign to the shelf home', () => {
-    const home = ruleBody(
+  it('drops the study banner, horizontal cards, and title rule from the shelf home', () => {
+    const home = shelfHomeSection();
+    expect(home).not.toMatch(/lightink-library-home-recent/);
+    expect(home).not.toMatch(/lightink-library-home-shortcut/);
+    expect(home).not.toMatch(/home-heading::after/);
+    expect(home).not.toMatch(/clamp\(\s*24px,\s*3vw,\s*42px\s*\)/);
+    expect(home).not.toMatch(/font-family:\s*var\(--lightink-font-serif/);
+    expect(home).not.toMatch(/linear-gradient/);
+    expect(home).not.toMatch(/translateY\(/);
+    expect(home).toMatch(
+      /\.lightink-library-item:hover \.lightink-library-cover,[\s\S]*?transform:\s*none/,
+    );
+    expect(home).toMatch(/\.lightink-library-continue-open:hover[\s\S]*?transform:\s*none/);
+  });
+
+  it('uses one 2:3 cover spec, cover-gap spacing, and three UI type sizes', () => {
+    const home = shelfHomeSection();
+    const covers = home.match(
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home \.lightink-library-cover,\s*\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue \.lightink-library-cover\s*\{([^}]*)\}/,
+    );
+    expect(covers).not.toBeNull();
+    expect(covers?.[1]).toMatch(/width:\s*100%/);
+    expect(covers?.[1]).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
+    expect(covers?.[1]).toMatch(/border-radius:\s*6px/);
+    expect(covers?.[1]).toMatch(/transition:\s*none/);
+
+    const homeGrid = ruleBody(
+      home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
     );
-    expect(home).toMatch(/height:\s*100%/);
-    expect(home).toMatch(/overflow-x:\s*hidden/);
-    expect(home).toMatch(/overflow-y:\s*auto/);
-    expect(home).toMatch(/overscroll-behavior:\s*contain/);
+    expect(homeGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(132px,\s*1fr\)\)/);
+    expect(homeGrid).toMatch(/column-gap:\s*var\(--lightink-library-cover-gap-x\)/);
+    expect(homeGrid).toMatch(/row-gap:\s*var\(--lightink-library-cover-gap-y\)/);
+    expect(homeGrid).toMatch(/overflow-y:\s*auto/);
+    expect(home).toMatch(/\.lightink-library-home-books \.lightink-library-cover-wall,[\s\S]*?display:\s*contents/);
 
-    const section = editorialSection();
-    expect(section).toMatch(
-      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home-books \.lightink-library-cover-wall,[\s\S]*?overflow:\s*visible/,
+    const heading = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home-heading/,
     );
-    expect(section).not.toMatch(/data-library-nav='catalog'/);
-    expect(section).not.toMatch(/data-library-nav='manage'/);
-    expect(section).not.toMatch(/data-library-nav='sources'/);
+    const title = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-text strong/,
+    );
+    const progress = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-progress/,
+    );
+    expect(heading).toMatch(/font-family:\s*var\(--lightink-font-ui\)/);
+    expect(title).toMatch(/font-family:\s*var\(--lightink-font-ui\)/);
+    expect(progress).toMatch(/font-family:\s*var\(--lightink-font-ui\)/);
+    expect(px(decl(heading, 'font-size'))).toBe(15);
+    expect(px(decl(title, 'font-size'))).toBe(13);
+    expect(px(decl(progress, 'font-size'))).toBe(12);
+    expect(title).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(home).toMatch(/\.lightink-library-cover--jacket\s*\{[^}]*color:\s*var\(--lightink-muted\)/);
+    expect(home).toMatch(/cover-jacket-title::after\s*\{[^}]*content:\s*none/);
+    expect(home).toMatch(/data-progress-fill[\s\S]*?height:\s*3px/);
+
+    const selected = home.match(
+      /\.lightink-library-nav-item\.is-active,[\s\S]*?\)\s*\{([^}]*)\}/,
+    )?.[1] ?? '';
+    expect(selected).toMatch(/border-radius:\s*6px/);
+    expect(selected).toMatch(/background:\s*var\(--lightink-accent-soft\)/);
+    expect(selected).toMatch(/color:\s*var\(--lightink-accent-ink/);
   });
 
-  it('gives primary, recent, shortcuts, and cover wall distinct hierarchy', () => {
-    const section = editorialSection();
-    expect(section).toMatch(/\.lightink-library-continue\s*\{[\s\S]*?grid-template-columns/);
-    expect(section).toMatch(/\.lightink-library-continue-text strong\s*\{[\s\S]*?clamp\(24px, 3vw, 42px\)/);
-    expect(section).toMatch(/\.lightink-library-home-recent-list\s*\{[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/);
-    expect(section).toMatch(
-      /\.lightink-library-home-shortcut-list\s*\{[\s\S]*?flex-wrap:\s*nowrap[\s\S]*?overflow-x:\s*auto[\s\S]*?overflow-y:\s*hidden/,
+  it('fits two rows of at least four covers on the default desktop, and at least two on a phone', () => {
+    const home = shelfHomeSection();
+    const grid = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
     );
-    expect(section).toMatch(
-      /\.lightink-library-home-shortcut\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?max-width:\s*min\(100%, 24rem\)/,
+    const trackMin = Number(grid.match(/minmax\((\d+)px,\s*1fr\)/)?.[1]);
+    const padTop = px(decl(grid, 'padding'));
+    const title = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-text strong/,
     );
-    expect(section).toMatch(/\.lightink-library-wall-heading\s*\{[\s\S]*?position:\s*sticky/);
-    expect(section).toMatch(/\.lightink-library-home-empty\s*\{[\s\S]*?repeating-linear-gradient/);
+    const progress = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-progress/,
+    );
+    const itemGap = px(
+      decl(
+        ruleBody(
+          home,
+          /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-open/,
+        ),
+        'gap',
+      ),
+    );
+    const textGap = px(
+      decl(
+        ruleBody(home, /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-text/),
+        'gap',
+      ),
+    );
+    const titleSize = px(decl(title, 'font-size'));
+    const titleLine = Number(decl(title, 'line-height'));
+    const progressSize = px(decl(progress, 'font-size'));
+    const progressLine = Number(decl(progress, 'line-height'));
+    const textBlock = itemGap + titleSize * titleLine * 2 + textGap + progressSize * progressLine;
+
+    function fits(tokens: string, windowWidth: number, windowHeight: number): void {
+      const nav = tokenPx(tokens, '--lightink-library-nav-width');
+      const padX = tokenPx(tokens, '--lightink-library-pad-x');
+      const gapX = tokenPx(tokens, '--lightink-library-cover-gap-x');
+      const gapY = tokenPx(tokens, '--lightink-library-cover-gap-y');
+      const inner = windowWidth - nav - padX * 2 - DESKTOP_WINDOW.scrollbar;
+      const columns = Math.floor((inner + gapX) / (trackMin + gapX));
+      expect(columns).toBeGreaterThanOrEqual(4);
+      const track = (inner - (columns - 1) * gapX) / columns;
+      const row = track * (3 / 2) + textBlock;
+      const twoRows = row * 2 + gapY + padTop;
+      expect(twoRows).toBeLessThanOrEqual(windowHeight - DESKTOP_WINDOW.titlebar);
+    }
+
+    const base = ruleBody(css, /\.lightink-library/);
+    const compact = ruleBody(css, /html\[data-display='compact'\] \.lightink-library/);
+    fits(base, DESKTOP_WINDOW.width, DESKTOP_WINDOW.height);
+    fits(compact, DESKTOP_WINDOW.width, DESKTOP_WINDOW.height);
+
+    expect(home).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?repeat\(\s*3,\s*minmax\(0,\s*1fr\)\)/);
+    expect(home).toMatch(/@media \(max-width:\s*430px\)[\s\S]*?repeat\(\s*2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(home).not.toMatch(/repeat\(\s*1,\s*minmax\(0,\s*1fr\)\)/);
   });
 
-  it('defines narrow desktop, phone, safe-area, keyboard, touch, focus, and reduced-motion results', () => {
-    const section = editorialSection();
-    expect(section).toMatch(/@container library-content \(max-width:\s*46rem\)/);
-    expect(section).toMatch(/@media \(max-width:\s*760px\)/);
-    expect(section).toMatch(/:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/);
-    expect(section).toMatch(/@media \(max-width:\s*430px\)[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/);
-    expect(section).toMatch(/var\(--lightink-safe-bottom, 0px\)/);
-    expect(section).toMatch(/html\[data-keyboard\]:is\(\[data-android\], \[data-touch-primary\]\)/);
-    expect(section).toMatch(/var\(--lightink-keyboard-inset, 0px\)/);
-    expect(section).toMatch(/@media \(pointer:\s*coarse\)[\s\S]*?min-height:\s*48px/);
-    expect(section).toMatch(/:focus-visible\s*\{[\s\S]*?outline:\s*3px solid var\(--lightink-accent\)/);
-    expect(section).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none !important/);
+  it('keeps focus, dismiss-on-hover, safe area, keyboard inset, and reduced motion', () => {
+    const home = shelfHomeSection();
+    expect(home).toMatch(/:focus-visible\s*\{[^}]*outline:\s*3px solid var\(--lightink-accent\)/);
+    const dismiss = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-dismiss/,
+    );
+    expect(dismiss).toMatch(/position:\s*absolute/);
+    expect(dismiss).toMatch(/opacity:\s*0/);
+    expect(home).toMatch(/focus-within \.lightink-library-continue-dismiss\s*\{[^}]*opacity:\s*1/);
+    expect(home).toMatch(/var\(--lightink-safe-bottom, 0px\)/);
+    expect(home).toMatch(/html\[data-keyboard\]:is\(\[data-android\], \[data-touch-primary\]\)/);
+    expect(home).toMatch(/var\(--lightink-keyboard-inset, 0px\)/);
+    expect(home).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none !important/);
   });
 
   it('keeps the preview reproducible across required content and responsive samples', () => {
