@@ -757,6 +757,8 @@ const en = {
   'conceal.flushFailed': 'Unsaved content could not be snapshotted for recovery.',
   'conceal.exitAborted': 'LightInk did not exit: {reason}',
   'conceal.exitFailed': 'Exit failed: {reason}',
+  'conceal.readerBar': 'Stealth',
+  'conceal.readerBarLabel': 'Stealth adjustments',
 } as const satisfies Dict;
 
 export type MessageKey = keyof typeof en;
@@ -1475,6 +1477,8 @@ const zhCN = {
   'conceal.flushFailed': '未保存内容无法留下可恢复副本。',
   'conceal.exitAborted': '退出没有发生：{reason}',
   'conceal.exitFailed': '退出失败：{reason}',
+  'conceal.readerBar': '摸鱼',
+  'conceal.readerBarLabel': '摸鱼调节',
 } as const satisfies Readonly<Record<MessageKey, string>>;
 
 const CATALOG: Readonly<Record<LocaleId, Readonly<Record<MessageKey, string>>>> = {

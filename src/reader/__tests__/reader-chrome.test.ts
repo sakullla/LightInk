@@ -42,11 +42,19 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { applyConcealScene, defaultConcealPrefs, type ConcealPrefs } from '../../conceal/conceal-prefs.js';
+import { translate } from '../../i18n/messages.js';
 import {
   createReaderChrome,
+  parseReaderConcealOpacity,
   READER_CHROME_ACTIONS,
   READER_CHROME_TOUCH_GAP_PX,
   READER_CHROME_TOUCH_HIT_PX,
+  READER_CONCEAL_REFUSAL_KEYS,
+  shouldAttachReaderConcealBar,
+  type ReaderChrome,
+  type ReaderConcealBarLabels,
+  type ReaderConcealRefusalKey,
 } from '../reader-chrome.js';
 
 const LABELS = ['返回书架', '目录', '排版', '书签', '搜索', '助手'] as const;
@@ -1304,5 +1312,298 @@ describe('createReaderChrome setConcealZones (R7 摸鱼接管)', () => {
     chrome.destroy();
     chrome.setConcealZones('held', 'held');
     expect(chrome.isRevealed()).toBe(false);
+  });
+});
+
+const READER_CONCEAL_LABELS: ReaderConcealBarLabels = {
+  toggle: '摸鱼',
+  toggleLabel: '摸鱼调节',
+  sceneNormal: '普通阅读',
+  sceneHideOnLeave: '离开即隐',
+  sceneFloating: '悬浮看文',
+  sceneCustom: '自定义',
+  contentOpacity: '内容透明度（0–100%）',
+  opacityScale: '100 为完全不透明，0 为完全淡出。',
+  bossKeyActive: '当前生效：{combo}',
+};
+
+function attachConceal(
+  chrome: ReaderChrome,
+  initial: Partial<ConcealPrefs> = {},
+) {
+  let prefs: ConcealPrefs = { ...defaultConcealPrefs(false), ...initial };
+  const previewOpacity = vi.fn();
+  const commitOpacity = vi.fn((value: number) => {
+    prefs = { ...prefs, contentOpacity: value };
+  });
+  const applyPrefs = vi.fn((next: ConcealPrefs) => {
+    prefs = next;
+  });
+  const clearRefusal = vi.fn();
+  const onLayout = vi.fn();
+  let listener: ((key: ReaderConcealRefusalKey, reason: string) => void) | null = null;
+  chrome.attachConcealBar({
+    labels: () => ({ ...READER_CONCEAL_LABELS }),
+    getPrefs: () => prefs,
+    applyPrefs,
+    previewOpacity,
+    commitOpacity,
+    clearRefusal,
+    onLayout,
+    subscribeRefusals: (next) => {
+      listener = next;
+      return () => {
+        if (listener === next) {
+          listener = null;
+        }
+      };
+    },
+  });
+  const toggle = chrome.bar.querySelector<HTMLButtonElement>('[data-conceal-reader-toggle]');
+  const panel = chrome.bar.querySelector<HTMLElement>('[data-conceal-reader-bar]');
+  const slider = panel?.querySelector<HTMLInputElement>('[data-conceal-reader-opacity]');
+  expect(toggle).toBeTruthy();
+  expect(panel).toBeTruthy();
+  expect(slider).toBeTruthy();
+  return {
+    prefs: () => prefs,
+    previewOpacity,
+    commitOpacity,
+    applyPrefs,
+    clearRefusal,
+    onLayout,
+    notifyRefusal: (key: ReaderConcealRefusalKey, reason: string) => listener?.(key, reason),
+    toggle: toggle!,
+    panel: panel!,
+    slider: slider!,
+  };
+}
+
+describe('reader conceal bar', () => {
+  it('stays off the editor, Android, shelf, and an unattached reader chrome', () => {
+    expect(
+      shouldAttachReaderConcealBar({ concealEnabled: true, android: false, surface: 'reader' }),
+    ).toBe(true);
+    expect(
+      shouldAttachReaderConcealBar({ concealEnabled: true, android: false, surface: 'shelf' }),
+    ).toBe(false);
+    expect(
+      shouldAttachReaderConcealBar({ concealEnabled: true, android: false, surface: 'editor' }),
+    ).toBe(false);
+    expect(
+      shouldAttachReaderConcealBar({ concealEnabled: true, android: true, surface: 'reader' }),
+    ).toBe(false);
+    expect(
+      shouldAttachReaderConcealBar({ concealEnabled: false, android: false, surface: 'reader' }),
+    ).toBe(false);
+
+    const desktop = mount();
+    desktop.chrome.reveal();
+    expect(desktop.host.querySelector('[data-conceal-reader-bar]')).toBeNull();
+    expect(desktop.host.querySelector('[data-conceal-reader-toggle]')).toBeNull();
+
+    const touch = mount({ touchMode: true });
+    touch.chrome.reveal();
+    expect(touch.host.querySelector('[data-conceal-reader-bar]')).toBeNull();
+  });
+
+  it('keeps the shelf conceal copy and adds the reader-bar labels in both locales', () => {
+    expect(translate('zh-CN', 'conceal.group')).toBe('摸鱼');
+    expect(translate('en', 'conceal.group')).toBe('Stealth reading');
+    expect(translate('zh-CN', 'conceal.groupDodge')).toBe('躲开');
+    expect(translate('en', 'conceal.groupDodge')).toBe('Duck away');
+    expect(translate('zh-CN', 'conceal.groupDisguise')).toBe('看起来不像在看书');
+    expect(translate('zh-CN', 'conceal.groupFloat')).toBe('浮在工作上');
+    expect(translate('en', 'conceal.groupFloat')).toBe('Float over work');
+    expect(translate('zh-CN', 'conceal.sceneNormal')).toBe('普通阅读');
+    expect(translate('zh-CN', 'conceal.sceneHideOnLeave')).toBe('离开即隐');
+    expect(translate('zh-CN', 'conceal.sceneFloating')).toBe('悬浮看文');
+    expect(translate('zh-CN', 'conceal.sceneCustom')).toBe('自定义');
+    expect(translate('en', 'conceal.sceneNormal')).toBe('Normal reading');
+    expect(translate('en', 'conceal.sceneHideOnLeave')).toBe('Hide on leave');
+    expect(translate('en', 'conceal.sceneFloating')).toBe('Floating read');
+    expect(translate('zh-CN', 'conceal.exitHint')).toBe('按下会退出轻墨。');
+    expect(translate('en', 'conceal.exitHint')).toBe('Pressing this quits LightInk.');
+    expect(translate('zh-CN', 'conceal.opacityScale')).toBe('100 为完全不透明，0 为完全淡出。');
+    expect(translate('zh-CN', 'conceal.readerBar')).toBe('摸鱼');
+    expect(translate('en', 'conceal.readerBar')).toBe('Stealth');
+    expect(translate('zh-CN', 'conceal.readerBarLabel')).toBe('摸鱼调节');
+    expect(translate('en', 'conceal.readerBarLabel')).toBe('Stealth adjustments');
+  });
+
+  it('collapses inside the top bar without font, spacing, or page-turn controls', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf8');
+    const panelRule = cssRuleBodies(css, /\.lightink-reader-conceal-panel/).join('\n');
+    expect(panelRule).toMatch(/flex:\s*1\s+0\s+100%/);
+    expect(panelRule).not.toMatch(/position\s*:\s*(fixed|absolute)/);
+    expect(cssRuleBodies(css, /\.lightink-reader-conceal-panel\[hidden\]/).join('\n')).toMatch(
+      /display\s*:\s*none/,
+    );
+
+    const { host, chrome } = mount();
+    chrome.reveal();
+    const bar = attachConceal(chrome, { contentOpacity: 40, bossPrimary: 'Alt+Z' });
+    expect(chrome.bar.contains(bar.panel)).toBe(true);
+    expect(chrome.bar.contains(bar.toggle)).toBe(true);
+    expect(chrome.bar.style.flexWrap).toBe('wrap');
+    expect(bar.panel.hidden).toBe(true);
+    expect(bar.toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(bar.onLayout).toHaveBeenCalledTimes(1);
+
+    expect(labeledButtons(host)).toHaveLength(6);
+    expect(
+      [...host.querySelectorAll('[data-reader-chrome-action]')].map(
+        (button) => (button as HTMLElement).dataset.readerChromeAction,
+      ),
+    ).toEqual([...READER_CHROME_ACTIONS]);
+
+    bar.toggle.click();
+    expect(bar.panel.hidden).toBe(false);
+    expect(bar.toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(bar.onLayout).toHaveBeenCalledTimes(2);
+    expect(bar.panel.querySelector('[data-reader-chrome-action]')).toBeNull();
+    expect(bar.panel.textContent ?? '').not.toMatch(/字号|行距|翻页/);
+    expect([...bar.panel.querySelectorAll('input')].map((input) => input.type)).toEqual(['range']);
+    expect(bar.panel.querySelector('[data-conceal-scene="normal"]')?.textContent).toBe('普通阅读');
+    expect(bar.panel.querySelector('[data-conceal-scene="hideOnLeave"]')?.textContent).toBe('离开即隐');
+    expect(bar.panel.querySelector('[data-conceal-scene="floating"]')?.textContent).toBe('悬浮看文');
+    expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.tagName).toBe('SPAN');
+    expect(bar.panel.querySelector('[data-conceal-reader-opacity-scale]')?.textContent).toBe(
+      '100 为完全不透明，0 为完全淡出。',
+    );
+    expect(bar.panel.querySelector('[data-conceal-reader-boss]')?.textContent).toBe('当前生效：Alt+Z');
+
+    bar.toggle.click();
+    expect(bar.panel.hidden).toBe(true);
+    expect(bar.onLayout).toHaveBeenCalledTimes(3);
+    expect(bar.panel.hidden).toBe(true);
+  });
+
+  it('applies the same scene prefs as the shelf and shows a refusal beside the scenes', () => {
+    const { chrome } = mount();
+    chrome.reveal();
+    const before: ConcealPrefs = {
+      ...defaultConcealPrefs(false),
+      background: { kind: 'preset', preset: 'mint' },
+      contentOpacity: 40,
+      transparentMode: true,
+      clickThrough: true,
+      bossPrimary: 'Alt+P',
+      bossSecondary: 'Alt+Q',
+    };
+    const bar = attachConceal(chrome, before);
+    bar.toggle.click();
+    const floatingButton = bar.panel.querySelector<HTMLButtonElement>('[data-conceal-scene="floating"]');
+    expect(floatingButton?.disabled).toBe(false);
+    expect(chrome.bar.contains(floatingButton!)).toBe(true);
+    floatingButton?.click();
+
+    const floating = applyConcealScene(before, 'floating');
+    expect(bar.applyPrefs).toHaveBeenCalledWith(floating);
+    expect(bar.prefs()).toEqual(floating);
+    expect(bar.prefs().bossPrimary).toBe('Alt+P');
+    expect(bar.prefs().background).toEqual({ kind: 'preset', preset: 'mint' });
+    for (const key of READER_CONCEAL_REFUSAL_KEYS) {
+      expect(bar.clearRefusal).toHaveBeenCalledWith(key);
+    }
+    expect(bar.clearRefusal.mock.invocationCallOrder[0]).toBeLessThan(
+      bar.applyPrefs.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(
+      bar.panel.querySelector('[data-conceal-scene="floating"]')?.getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(bar.slider.value).toBe('60');
+
+    const sceneButton = bar.panel.querySelector<HTMLButtonElement>('[data-conceal-scene="normal"]');
+    expect(sceneButton?.disabled).toBe(false);
+    expect(chrome.bar.contains(sceneButton!)).toBe(true);
+    sceneButton?.click();
+    expect(bar.prefs().background).toEqual({ kind: 'theme' });
+    expect(bar.prefs().contentOpacity).toBe(100);
+    expect(bar.prefs().clickThrough).toBe(false);
+
+    (bar.prefs() as { alwaysOnTop: boolean }).alwaysOnTop = true;
+    chrome.syncConcealBar();
+    expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.getAttribute('aria-current')).toBe(
+      'true',
+    );
+
+    bar.notifyRefusal('miniWindow', '迷你窗口失败');
+    bar.notifyRefusal('clickThrough', '穿透被拒绝');
+    const reason = bar.panel.querySelector<HTMLElement>('[data-conceal-reader-refusal]');
+    expect(reason?.hidden).toBe(false);
+    expect(bar.panel.querySelector('.lightink-reader-conceal-scenes-row')?.contains(reason!)).toBe(
+      true,
+    );
+    expect(reason?.textContent).toContain('迷你窗口失败');
+    expect(reason?.textContent).toContain('穿透被拒绝');
+    bar.notifyRefusal('miniWindow', '');
+    bar.notifyRefusal('clickThrough', '');
+    expect(reason?.hidden).toBe(true);
+  });
+
+  it('previews opacity while dragging and keeps the committed integer after collapse', () => {
+    const { chrome } = mount();
+    chrome.reveal();
+    const bar = attachConceal(chrome, { contentOpacity: 40 });
+    bar.toggle.click();
+    expect(bar.slider.value).toBe('40');
+
+    bar.slider.value = '25';
+    bar.slider.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(bar.previewOpacity).toHaveBeenCalledWith(25);
+    expect(bar.commitOpacity).not.toHaveBeenCalled();
+    expect(bar.prefs().contentOpacity).toBe(40);
+
+    bar.slider.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bar.commitOpacity).toHaveBeenCalledTimes(1);
+    expect(bar.commitOpacity).toHaveBeenCalledWith(25);
+    expect(bar.prefs().contentOpacity).toBe(25);
+
+    bar.slider.value = '10';
+    bar.slider.dispatchEvent(new Event('input', { bubbles: true }));
+    bar.toggle.click();
+    expect(bar.panel.hidden).toBe(true);
+    expect(bar.commitOpacity).toHaveBeenCalledWith(10);
+    expect(bar.prefs().contentOpacity).toBe(10);
+
+    bar.toggle.click();
+    expect(bar.panel.hidden).toBe(false);
+    expect(bar.slider.value).toBe('10');
+
+    bar.slider.value = '101';
+    bar.slider.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bar.commitOpacity).not.toHaveBeenCalledWith(101);
+    expect(bar.slider.value).toBe('10');
+    bar.slider.value = '50.5';
+    bar.slider.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bar.slider.value).toBe('10');
+  });
+
+  it('can be operated again when the hidden top bar is held', () => {
+    const { chrome } = mount();
+    const bar = attachConceal(chrome);
+    chrome.setConcealZones('hidden', 'auto');
+    expect(chrome.bar.hidden).toBe(true);
+    chrome.setConcealZones('held', 'auto');
+    expect(chrome.bar.hidden).toBe(false);
+    expect(bar.toggle.hidden).toBe(false);
+    bar.toggle.click();
+    expect(bar.panel.hidden).toBe(false);
+    bar.panel.querySelector<HTMLButtonElement>('[data-conceal-scene="hideOnLeave"]')?.click();
+    expect(bar.applyPrefs).toHaveBeenCalledTimes(1);
+    expect(bar.prefs().hideTop).toBe(true);
+    expect(bar.prefs().clickThrough).toBe(true);
+  });
+
+  it('rejects opacity values outside integers 0–100', () => {
+    expect(parseReaderConcealOpacity('0')).toBe(0);
+    expect(parseReaderConcealOpacity('100')).toBe(100);
+    expect(parseReaderConcealOpacity(' 60 ')).toBe(60);
+    expect(parseReaderConcealOpacity('101')).toBeNull();
+    expect(parseReaderConcealOpacity('-1')).toBeNull();
+    expect(parseReaderConcealOpacity('50.5')).toBeNull();
+    expect(parseReaderConcealOpacity('')).toBeNull();
+    expect(parseReaderConcealOpacity('nope')).toBeNull();
   });
 });

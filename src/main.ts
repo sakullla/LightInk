@@ -151,7 +151,12 @@ import {
   type WorkspaceMode,
   type WorkspaceSnapshot,
 } from './ui/workspace-mode.js';
-import { createReaderChrome, type ReaderChrome } from './reader/reader-chrome.js';
+import {
+  createReaderChrome,
+  shouldAttachReaderConcealBar,
+  type ReaderChrome,
+  type ReaderConcealBarLabels,
+} from './reader/reader-chrome.js';
 import {
   handleExternalOpen,
   planColdStartSurface,
@@ -490,6 +495,7 @@ function refreshLocalizedSurfaces(revealMenu = false): void {
   if (revealMenu) shell?.revealMenu();
   outline?.retranslate();
   libraryView?.retranslate();
+  syncOpenReaderConcealBars();
   statusBar?.refresh(getActiveStatusSnapshot);
   const tab = manager?.activeTab ?? null;
   document.title = formatDocumentTitle(
@@ -721,9 +727,30 @@ const CONCEAL_NOTICE_SWITCH: Partial<Record<ConcealNoticeKind, ConcealSwitchRefu
   clickThroughFailed: 'clickThrough',
 };
 
-/** 会话内的开关拒绝（不入库）。设置页晚创建时，订阅会重放尚未清除的原因。 */
+/** 会话内的开关拒绝（不入库）。设置页或调节条晚创建时，订阅会重放尚未清除的原因。 */
 const concealSwitchRefusals = new Map<ConcealSwitchRefusalKey, string>();
-let concealRefusalListener: ((key: ConcealSwitchRefusalKey, reason: string) => void) | null = null;
+const concealRefusalListeners = new Set<(key: ConcealSwitchRefusalKey, reason: string) => void>();
+
+/** 空原因表示该键的会话拒绝已清除，书架和调节条都收起旧文案。 */
+function publishConcealRefusal(key: ConcealSwitchRefusalKey, reason: string): void {
+  if (reason === '') {
+    concealSwitchRefusals.delete(key);
+  } else {
+    concealSwitchRefusals.set(key, reason);
+  }
+  for (const listener of [...concealRefusalListeners]) {
+    listener(key, reason);
+  }
+}
+
+/**
+ * 书架摸鱼段只在拒绝回调里重绘。重放当前原因（没有则为空）让它读到
+ * 阅读器刚写入的同一份偏好，同时不抹掉另一项仍在的拒绝。
+ */
+function notifyConcealPrefsRefresh(): void {
+  const key: ConcealSwitchRefusalKey = 'alwaysOnTop';
+  publishConcealRefusal(key, concealSwitchRefusals.get(key) ?? '');
+}
 
 /** R4 终退出口（老板键 2 / 托盘菜单 / File→退出 共用；依赖注入可测）。 */
 const concealQuit = createConcealQuitController({
@@ -803,20 +830,66 @@ const concealManageDeps = {
   subscribeSwitchRefusal: (
     listener: (key: ConcealSwitchRefusalKey, reason: string) => void,
   ) => {
-    concealRefusalListener = listener;
+    concealRefusalListeners.add(listener);
     for (const [key, reason] of concealSwitchRefusals) {
       listener(key, reason);
     }
     return () => {
-      if (concealRefusalListener === listener) {
-        concealRefusalListener = null;
-      }
+      concealRefusalListeners.delete(listener);
     };
   },
   clearSwitchRefusal: (key: ConcealSwitchRefusalKey) => {
-    concealSwitchRefusals.delete(key);
+    publishConcealRefusal(key, '');
   },
 };
+
+function readerConcealBarLabels(): ReaderConcealBarLabels {
+  return {
+    toggle: i18n.t('conceal.readerBar'),
+    toggleLabel: i18n.t('conceal.readerBarLabel'),
+    sceneNormal: i18n.t('conceal.sceneNormal'),
+    sceneHideOnLeave: i18n.t('conceal.sceneHideOnLeave'),
+    sceneFloating: i18n.t('conceal.sceneFloating'),
+    sceneCustom: i18n.t('conceal.sceneCustom'),
+    contentOpacity: i18n.t('conceal.contentOpacity'),
+    opacityScale: i18n.t('conceal.opacityScale'),
+    bossKeyActive: i18n.t('conceal.bossKeyActive'),
+  };
+}
+
+function syncOpenReaderConcealBars(): void {
+  for (const tab of manager?.tabList ?? []) {
+    if (tab.kind === 'reader') {
+      tab.reader.getChrome?.()?.syncConcealBar();
+    }
+  }
+}
+
+/** 只补阅读器顶栏。书架摸鱼设置仍走 concealManageDeps，文案不在这里改写。 */
+function attachReaderConcealBar(chrome: ReaderChrome): void {
+  chrome.attachConcealBar({
+    labels: readerConcealBarLabels,
+    getPrefs: () => concealController?.getEffectivePrefs() ?? concealPrefsInitial,
+    applyPrefs: (next) => {
+      concealController?.applyPrefs(next);
+      notifyConcealPrefsRefresh();
+    },
+    previewOpacity: (value) => {
+      concealController?.previewContentOpacity(value);
+    },
+    commitOpacity: (value) => {
+      concealController?.commitContentOpacity(value);
+      notifyConcealPrefsRefresh();
+    },
+    subscribeRefusals: (listener) => concealManageDeps.subscribeSwitchRefusal(listener),
+    clearRefusal: (key) => {
+      concealManageDeps.clearSwitchRefusal(key);
+    },
+    onLayout: () => {
+      concealController?.notifyZonesStale();
+    },
+  });
+}
 
 /**
  * 启动顺序契约：先注册全部 conceal 事件 listener，再 conceal_get_status 取
@@ -846,8 +919,7 @@ async function initConceal(): Promise<void> {
       void showAppAlert(text);
       const key = CONCEAL_NOTICE_SWITCH[kind];
       if (key !== undefined) {
-        concealSwitchRefusals.set(key, text);
-        concealRefusalListener?.(key, text);
+        publishConcealRefusal(key, text);
       }
     },
   });
@@ -1429,6 +1501,9 @@ workspace.subscribe((state) => {
   shell?.rebuildMenus();
   // R1：效果只在 shelf/reader 生效；表面应用完成后再同步（DOM 就绪可测 zones）。
   concealController?.setSurface(state.surface);
+  if (state.surface === 'reader') {
+    syncOpenReaderConcealBars();
+  }
 });
 
 function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot()): void {
@@ -3028,6 +3103,17 @@ manager = new TabManager({
         outline?.refreshNow();
       }
     });
+    const chrome = reader.getChrome?.() ?? null;
+    if (
+      chrome !== null &&
+      shouldAttachReaderConcealBar({
+        concealEnabled: concealClient.isEnabled(),
+        android: isAndroidApp,
+        surface: 'reader',
+      })
+    ) {
+      attachReaderConcealBar(chrome);
+    }
     return reader;
   },
   createHostElement: (tabId) => {
@@ -3094,6 +3180,7 @@ manager = new TabManager({
     editorScroller.dataset.surface = tab?.kind === 'reader' ? 'reader' : 'markdown';
     // R7×多 reader 标签：活动 chrome 可能换了实例，重驱接管态与 zones。
     concealController?.notifyZonesStale();
+    syncOpenReaderConcealBars();
     // reader 覆盖层（侧栏/搜索面板）portal 到共享 chrome，不随标签宿主隐藏——
     // 逐个 reader 标签同步可见性，防止残留在别的标签上。
     for (const item of manager.tabList) {

@@ -22,6 +22,13 @@
  * 一套 chrome 状态机。文字书与漫画共用这套点按显隐。
  */
 
+import {
+  applyConcealScene,
+  CONCEAL_SCENE_CHOICES,
+  concealSceneOf,
+  type ConcealPrefs,
+  type ConcealSceneChoice,
+} from '../conceal/conceal-prefs.js';
 import { formatReaderPercent } from './reader-progress-ui.js';
 
 export type ReaderChromeLocale = 'en' | 'zh-CN';
@@ -183,6 +190,75 @@ export interface ReaderChromeDeps {
   onDestroy?: () => void;
 }
 
+/** 置顶、迷你窗口、透明、穿透被拒绝时贴在调节条场景控件旁。与书架同一组键。 */
+export const READER_CONCEAL_REFUSAL_KEYS = [
+  'transparentMode',
+  'alwaysOnTop',
+  'miniWindow',
+  'clickThrough',
+] as const;
+
+export type ReaderConcealRefusalKey = (typeof READER_CONCEAL_REFUSAL_KEYS)[number];
+
+export interface ReaderConcealBarLabels {
+  readonly toggle: string;
+  readonly toggleLabel: string;
+  readonly sceneNormal: string;
+  readonly sceneHideOnLeave: string;
+  readonly sceneFloating: string;
+  readonly sceneCustom: string;
+  readonly contentOpacity: string;
+  readonly opacityScale: string;
+  /** 含 `{combo}`。 */
+  readonly bossKeyActive: string;
+}
+
+export interface ReaderConcealBarDeps {
+  labels: () => ReaderConcealBarLabels;
+  getPrefs: () => ConcealPrefs;
+  /** 已按场景表改写的整份偏好，与书架 `update(applyConcealScene(...))` 相同。 */
+  applyPrefs: (next: ConcealPrefs) => void;
+  previewOpacity: (value: number) => void;
+  commitOpacity: (value: number) => void;
+  /**
+   * 订阅会话内的窗口开关拒绝。空原因表示该键已清除。
+   * 订阅时可以重放尚未清除的原因。
+   */
+  subscribeRefusals?: (
+    listener: (key: ReaderConcealRefusalKey, reason: string) => void,
+  ) => () => void;
+  clearRefusal?: (key: ReaderConcealRefusalKey) => void;
+  /** 展开或收起改变了顶栏高度，宿主应重测穿透顶带。 */
+  onLayout?: () => void;
+}
+
+/**
+ * 调节条只挂桌面阅读器。编辑器、Android、书架封面墙不挂。
+ * `concealEnabled` 在 Android 和浏览器预览上为假。
+ */
+export function shouldAttachReaderConcealBar(facts: {
+  readonly concealEnabled: boolean;
+  readonly android: boolean;
+  readonly surface: 'shelf' | 'reader' | 'editor';
+}): boolean {
+  return facts.concealEnabled && !facts.android && facts.surface === 'reader';
+}
+
+/** 调节条滑杆只接受 0–100 的整数。越界、空白、非整数返回 null。 */
+export function parseReaderConcealOpacity(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) {
+    return null;
+  }
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < 0 || value > 100) {
+    return null;
+  }
+  return value;
+}
+
+let readerConcealSeq = 0;
+
 export interface ReaderChrome {
   readonly element: HTMLElement;
   readonly bar: HTMLElement;
@@ -206,6 +282,10 @@ export interface ReaderChrome {
    * R7：顶带/底带显隐接管（'auto' 还原原机制）。见 ReaderChromeConcealZone。
    */
   setConcealZones(top: ReaderChromeConcealZone, bottom: ReaderChromeConcealZone): void;
+  /** 桌面阅读器顶栏的摸鱼调节条。不调用则不渲染。 */
+  attachConcealBar(deps: ReaderConcealBarDeps): void;
+  /** 重读调节条文案和当前偏好。未挂载时无操作。 */
+  syncConcealBar(): void;
   /**
    * One-step back. Never calls `returnToShelf`. True when a layer closed;
    * false when nothing is open (window leftover Escape may 合书).
@@ -540,6 +620,22 @@ export function createReaderChrome(
     }
   };
 
+  let concealMounted = false;
+  let concealDeps: ReaderConcealBarDeps | null = null;
+  let concealUnsubscribe: (() => void) | null = null;
+  let concealToggle: HTMLButtonElement | null = null;
+  let concealPanel: HTMLElement | null = null;
+  let concealOpacity: HTMLInputElement | null = null;
+  let concealOpacityText: HTMLElement | null = null;
+  let concealOpacityScale: HTMLElement | null = null;
+  let concealCustom: HTMLElement | null = null;
+  let concealReason: HTMLParagraphElement | null = null;
+  let concealBoss: HTMLParagraphElement | null = null;
+  let concealOpacityDirty = false;
+  let concealOpacityDragging = false;
+  const concealRefusals = new Map<ReaderConcealRefusalKey, string>();
+  const concealSceneButtons = new Map<ConcealSceneChoice, HTMLButtonElement>();
+
   const syncDom = (): void => {
     // R7 接管态与原机制合成（单写者仍在本函数）：
     //   barShown  = held 强制显示 ‖ (revealed 且未被 hidden 强制隐藏)
@@ -599,6 +695,9 @@ export function createReaderChrome(
       writeAttr(editButton, 'aria-label', label);
       writeAttr(editButton, 'data-markdown-editing', editing ? 'true' : 'false');
       editButton.hidden = !barShown;
+    }
+    if (concealToggle !== null) {
+      concealToggle.hidden = !barShown;
     }
     // 助手未配置时自摘除，配置后挂回 tools。
     const assistantOn = deps.assistantAvailable?.() !== false;
@@ -1030,6 +1129,248 @@ export function createReaderChrome(
     }
   };
 
+  const renderConcealBar = (): void => {
+    if (destroyed || concealDeps === null || concealToggle === null || concealPanel === null) {
+      return;
+    }
+    const texts = concealDeps.labels();
+    const prefs = concealDeps.getPrefs();
+    const scene = concealSceneOf(prefs);
+    if (concealToggle.textContent !== texts.toggle) {
+      concealToggle.textContent = texts.toggle;
+    }
+    writeAttr(concealToggle, 'aria-label', texts.toggleLabel);
+    concealPanel.setAttribute('aria-label', texts.toggleLabel);
+    const scenes = concealPanel.querySelector<HTMLElement>('.lightink-reader-conceal-scenes');
+    if (scenes !== null) {
+      scenes.setAttribute('aria-label', texts.toggleLabel);
+    }
+    for (const [choice, button] of concealSceneButtons) {
+      const label = texts[
+        choice === 'normal' ? 'sceneNormal' : choice === 'hideOnLeave' ? 'sceneHideOnLeave' : 'sceneFloating'
+      ];
+      if (button.textContent !== label) {
+        button.textContent = label;
+      }
+      writeAttr(button, 'aria-label', label);
+      const selected = scene === choice;
+      writeAttr(button, 'aria-checked', selected ? 'true' : 'false');
+      button.classList.toggle('is-active', selected);
+    }
+    if (concealCustom !== null) {
+      if (concealCustom.textContent !== texts.sceneCustom) {
+        concealCustom.textContent = texts.sceneCustom;
+      }
+      concealCustom.classList.toggle('is-active', scene === 'custom');
+      writeAttr(concealCustom, 'aria-current', scene === 'custom' ? 'true' : 'false');
+    }
+    const reasonText = READER_CONCEAL_REFUSAL_KEYS.flatMap((key) => {
+      const text = concealRefusals.get(key);
+      return text ? [text] : [];
+    }).join('\n');
+    const reasonWasHidden = concealReason?.hidden !== false;
+    if (concealReason !== null) {
+      concealReason.hidden = reasonText === '';
+      if (concealReason.textContent !== reasonText) {
+        concealReason.textContent = reasonText;
+      }
+    }
+    if (concealOpacityText !== null && concealOpacityText.textContent !== texts.contentOpacity) {
+      concealOpacityText.textContent = texts.contentOpacity;
+    }
+    if (concealOpacityScale !== null && concealOpacityScale.textContent !== texts.opacityScale) {
+      concealOpacityScale.textContent = texts.opacityScale;
+    }
+    if (concealOpacity !== null) {
+      writeAttr(concealOpacity, 'aria-label', texts.contentOpacity);
+      const parsed = parseReaderConcealOpacity(concealOpacity.value);
+      // 拖动中的合法整数留在滑杆上；松开、收起或非法值回到已提交的偏好。
+      if (!(concealOpacityDragging && parsed !== null) && concealOpacity.value !== String(prefs.contentOpacity)) {
+        concealOpacity.value = String(prefs.contentOpacity);
+      }
+    }
+    if (concealBoss !== null) {
+      const boss = texts.bossKeyActive.replace('{combo}', prefs.bossPrimary);
+      if (concealBoss.textContent !== boss) {
+        concealBoss.textContent = boss;
+      }
+    }
+    // 拒绝原因出现或消失会改变顶栏高度，顶带要按新的 bar 矩形重测。
+    if (!concealPanel.hidden && concealReason !== null && concealReason.hidden !== reasonWasHidden) {
+      concealDeps.onLayout?.();
+    }
+  };
+
+  const commitConcealOpacity = (): void => {
+    if (concealDeps === null || concealOpacity === null) {
+      return;
+    }
+    const value = parseReaderConcealOpacity(concealOpacity.value);
+    concealOpacityDirty = false;
+    concealOpacityDragging = false;
+    if (value === null) {
+      renderConcealBar();
+      return;
+    }
+    concealDeps.commitOpacity(value);
+    renderConcealBar();
+  };
+
+  const setConcealExpanded = (expanded: boolean): void => {
+    if (concealPanel === null || concealToggle === null) {
+      return;
+    }
+    if (!expanded && concealOpacityDirty) {
+      commitConcealOpacity();
+    }
+    concealPanel.hidden = !expanded;
+    writeAttr(concealToggle, 'aria-expanded', expanded ? 'true' : 'false');
+    if (expanded) {
+      renderConcealBar();
+    }
+    concealDeps?.onLayout?.();
+  };
+
+  const attachConcealBar = (next: ReaderConcealBarDeps): void => {
+    if (destroyed) {
+      return;
+    }
+    concealDeps = next;
+    concealUnsubscribe?.();
+    concealRefusals.clear();
+    concealUnsubscribe =
+      next.subscribeRefusals?.((key, reason) => {
+        if (reason === '') {
+          concealRefusals.delete(key);
+        } else {
+          concealRefusals.set(key, reason);
+        }
+        renderConcealBar();
+      }) ?? null;
+    if (!concealMounted) {
+      readerConcealSeq += 1;
+      const panelId = `lightink-reader-conceal-${readerConcealSeq}`;
+      const row = document.createElement('div');
+      row.className = 'lightink-reader-chrome-bar-row';
+      while (bar.firstChild !== null) {
+        row.appendChild(bar.firstChild);
+      }
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'lightink-reader-conceal-toggle';
+      toggle.dataset.concealReaderToggle = 'true';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-controls', panelId);
+      const panel = document.createElement('div');
+      panel.id = panelId;
+      panel.className = 'lightink-reader-conceal-panel';
+      panel.dataset.concealReaderBar = 'true';
+      panel.hidden = true;
+      panel.setAttribute('role', 'region');
+      const scenesRow = document.createElement('div');
+      scenesRow.className = 'lightink-reader-conceal-scenes-row';
+      const scenes = document.createElement('div');
+      scenes.className = 'lightink-reader-conceal-scenes';
+      scenes.setAttribute('role', 'radiogroup');
+      for (const choice of CONCEAL_SCENE_CHOICES) {
+        const sceneButton = document.createElement('button');
+        sceneButton.type = 'button';
+        sceneButton.className = 'lightink-reader-conceal-scene';
+        sceneButton.dataset.concealScene = choice;
+        sceneButton.setAttribute('role', 'radio');
+        sceneButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const current = concealDeps;
+          if (current === null) {
+            return;
+          }
+          concealOpacityDirty = false;
+          concealOpacityDragging = false;
+          for (const key of READER_CONCEAL_REFUSAL_KEYS) {
+            concealRefusals.delete(key);
+            current.clearRefusal?.(key);
+          }
+          current.applyPrefs(applyConcealScene(current.getPrefs(), choice));
+          renderConcealBar();
+        });
+        concealSceneButtons.set(choice, sceneButton);
+        scenes.append(sceneButton);
+      }
+      const custom = document.createElement('span');
+      custom.className = 'lightink-reader-conceal-scene is-readonly';
+      custom.dataset.concealScene = 'custom';
+      concealCustom = custom;
+      scenes.append(custom);
+      const reason = document.createElement('p');
+      reason.className = 'lightink-reader-conceal-reason';
+      reason.dataset.concealReaderRefusal = 'true';
+      reason.setAttribute('role', 'status');
+      reason.hidden = true;
+      concealReason = reason;
+      scenesRow.append(scenes, reason);
+      const opacityField = document.createElement('label');
+      opacityField.className = 'lightink-reader-conceal-opacity';
+      const opacityText = document.createElement('span');
+      const opacityScale = document.createElement('span');
+      opacityScale.className = 'lightink-reader-conceal-opacity-scale';
+      opacityScale.dataset.concealReaderOpacityScale = 'true';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '100';
+      slider.step = '1';
+      slider.dataset.concealReaderOpacity = 'true';
+      slider.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+      });
+      const finishOpacity = (): void => {
+        if (concealOpacityDirty) {
+          commitConcealOpacity();
+          return;
+        }
+        // 没有预览过的松开（含被滑杆夹成别的数）回到已提交的整数。
+        renderConcealBar();
+      };
+      slider.addEventListener('input', () => {
+        const value = parseReaderConcealOpacity(slider.value);
+        if (value === null || concealDeps === null) {
+          return;
+        }
+        concealOpacityDirty = true;
+        concealOpacityDragging = true;
+        concealDeps.previewOpacity(value);
+      });
+      slider.addEventListener('change', finishOpacity);
+      slider.addEventListener('pointerup', finishOpacity);
+      slider.addEventListener('blur', finishOpacity);
+      opacityField.append(opacityText, slider, opacityScale);
+      const boss = document.createElement('p');
+      boss.className = 'lightink-reader-conceal-boss';
+      boss.dataset.concealReaderBoss = 'true';
+      panel.append(scenesRow, opacityField, boss);
+      toggle.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setConcealExpanded(concealPanel?.hidden !== false);
+      });
+      row.append(toggle);
+      bar.append(row, panel);
+      bar.dataset.concealReaderBarHost = 'true';
+      bar.style.flexWrap = 'wrap';
+      concealToggle = toggle;
+      concealPanel = panel;
+      concealOpacity = slider;
+      concealOpacityText = opacityText;
+      concealOpacityScale = opacityScale;
+      concealBoss = boss;
+      concealMounted = true;
+    }
+    syncDom();
+    renderConcealBar();
+    next.onLayout?.();
+  };
+
   syncDom();
 
   if (initialHost !== undefined) {
@@ -1061,6 +1402,10 @@ export function createReaderChrome(
       syncDom();
     },
     setConcealZones,
+    attachConcealBar,
+    syncConcealBar: () => {
+      renderConcealBar();
+    },
     dismiss,
     toggle() {
       if (revealed) {
@@ -1078,6 +1423,8 @@ export function createReaderChrome(
     destroy() {
       destroyed = true;
       clearHideTimer();
+      concealUnsubscribe?.();
+      concealUnsubscribe = null;
       deps.onDestroy?.();
       detach();
       element.remove();

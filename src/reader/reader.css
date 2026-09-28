@@ -187,6 +187,135 @@
   font-weight: 600;
 }
 
+/* 调节条在顶栏内部换行：展开后 bar 变高，顶带和穿透保留区一起变高。收起用 hidden。 */
+.lightink-reader-chrome-bar[data-conceal-reader-bar-host] {
+  flex-wrap: wrap;
+}
+
+.lightink-reader-chrome-bar-row {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: inherit;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.lightink-reader-conceal-toggle,
+.lightink-reader-conceal-panel,
+.lightink-reader-conceal-panel button,
+.lightink-reader-conceal-panel input {
+  -webkit-app-region: no-drag;
+}
+
+.lightink-reader-conceal-toggle {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0.2rem 0.6rem;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.lightink-reader-conceal-toggle[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  font-weight: 600;
+}
+
+.lightink-reader-chrome-bar[data-touch-mode='true'] .lightink-reader-conceal-toggle {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+.lightink-reader-conceal-panel {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.15rem 0 0.35rem;
+  pointer-events: auto;
+}
+
+.lightink-reader-conceal-panel[hidden] {
+  display: none;
+}
+
+.lightink-reader-conceal-scenes-row,
+.lightink-reader-conceal-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+  min-width: 0;
+}
+
+.lightink-reader-conceal-scene {
+  min-height: 28px;
+  padding: 0.15rem 0.55rem;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.lightink-reader-conceal-scene.is-active,
+.lightink-reader-conceal-scene[aria-current='true'] {
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+  font-weight: 600;
+}
+
+.lightink-reader-conceal-scene.is-readonly {
+  cursor: default;
+}
+
+.lightink-reader-conceal-reason {
+  margin: 0;
+  color: var(--lightink-danger);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-line;
+}
+
+.lightink-reader-conceal-reason[hidden] {
+  display: none;
+}
+
+.lightink-reader-conceal-opacity {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.lightink-reader-conceal-opacity input {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  margin: 0;
+  pointer-events: auto;
+}
+
+.lightink-reader-conceal-opacity-scale,
+.lightink-reader-conceal-boss {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 0.75rem;
+}
+
 .lightink-reader-chrome-footer,
 .lightink-reader-chrome-whisper {
   position: absolute;
