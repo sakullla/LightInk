@@ -1440,6 +1440,403 @@ describe('createAssistantPanel user message edit (R6)', () => {
     expect(editButtonIn(userBubble(panel, 0))?.disabled).toBe(false);
     panel.destroy();
   });
+
+  it('edits a pure quote message without feeding the marker back into the body', async () => {
+    const { panel, invoke, deps } = mountPanel({
+      historyKey: '0123456789abcdef',
+      chapter: { title: 'C1', text: 'T1' },
+      currentSelection: '引用句',
+    });
+    panel.open();
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]')!.click();
+    submitQuestion(panel, '');
+    await flushUntil(() => bubbleTexts(panel, 'assistant').length === 1);
+
+    const first = invoke.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+    expect(first.messages[first.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '<selection>\n引用句\n</selection>',
+    });
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel);
+    // 纯引用消息只编辑正文：编辑框留空，引用卡片保留，不回填含标记的原文。
+    expect(editor?.value).toBe('');
+    expect(
+      userBubble(panel, 0)?.querySelector('.lightink-reader-assistant-quote-card')?.textContent,
+    ).toContain('引用句');
+
+    editor!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flushUntil(() => invoke.mock.calls.length === 2);
+
+    const sent = (
+      invoke.mock.calls[1]?.[1] as { messages: { role: string; content: string }[] }
+    ).messages;
+    const last = sent[sent.length - 1]!;
+    expect(last).toEqual({ role: 'user', content: '<selection>\n引用句\n</selection>' });
+    expect(last.content.match(/<selection>/g)).toHaveLength(1);
+    expect(last.content.match(/<\/selection>/g)).toHaveLength(1);
+
+    const bubble = userBubble(panel, 0);
+    expect(bubble?.querySelectorAll('.lightink-reader-assistant-quote-card')).toHaveLength(1);
+    expect(bubble?.querySelector('.lightink-reader-assistant-message-text')).toBeNull();
+    expect(bubble?.textContent).not.toContain('<selection>');
+
+    const writes = deps.writeHistory.mock.calls as unknown as Array<[string, string]>;
+    const persisted = parseAssistantHistoryStore(writes[writes.length - 1]?.[1] ?? '');
+    const active = persisted.conversations.find(
+      (conversation) => conversation.id === persisted.activeId,
+    );
+    expect(active?.messages[0]?.content).toBe('<selection>\n引用句\n</selection>');
+
+    await flushUntil(() => invoke.mock.calls.length === 2 && editorIn(panel) === null);
+    expect(userBubble(panel, 1)).toBeNull();
+    expect(bubbleTexts(panel, 'assistant')).toHaveLength(1);
+    panel.destroy();
+  });
+
+  it('keeps the edit draft and caret across a copy-feedback re-render', async () => {
+    const writeText = vi.fn(async () => undefined);
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const { panel } = mountPanel({ chapter: { title: 'C1', text: 'T1' } });
+      panel.open();
+      await flush();
+      submitQuestion(panel, '第一问');
+      await flush();
+
+      editButtonIn(userBubble(panel, 0))!.click();
+      const editor = editorIn(panel)!;
+      editor.value = '未提交的草稿';
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // 复制在编辑期间保可用；反馈触发的整表重渲染不得丢草稿与焦点。
+      const copy = panel.element.querySelector<HTMLButtonElement>(
+        '[data-assistant-action-kind="copy"]',
+      );
+      expect(copy?.disabled).toBe(false);
+      copy!.click();
+      await flushUntil(
+        () => panel.element.querySelector('[data-assistant-copy-status]') !== null,
+      );
+
+      const restored = editorIn(panel);
+      expect(restored).not.toBeNull();
+      expect(restored).not.toBe(editor);
+      expect(restored?.value).toBe('未提交的草稿');
+      expect(document.activeElement).toBe(restored);
+
+      // 草稿仍可提交：提交的是草稿内容而不是丢失后的原文。
+      restored!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+      );
+      await flushUntil(() => bubbleTexts(panel, 'user').includes('未提交的草稿'));
+      panel.destroy();
+    } finally {
+      if (previousClipboard === undefined) {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      } else {
+        Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      }
+    }
+  });
+
+  it('locks composer, quick actions, and assistant actions while editing', async () => {
+    let round = 0;
+    const { panel, invoke } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      script: async ({ emit }) => {
+        round += 1;
+        if (round === 1) {
+          emit('半截回答');
+          await new Promise(() => undefined);
+        }
+        if (round === 3) {
+          throw { code: 'AI_NETWORK_ERROR', message: '无法连接 AI 服务' };
+        }
+        emit('回答2');
+        return { finish: 'stop', totalChars: 3 };
+      },
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]')!.click();
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    submitQuestion(panel, '第三问');
+    await flushUntil(() => invoke.mock.calls.length === 3);
+    await flush();
+    const requests = invoke.mock.calls.length;
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['半截回答', '回答2', '']);
+    const idleUserTexts = bubbleTexts(panel, 'user');
+    const idleAssistantTexts = bubbleTexts(panel, 'assistant');
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '编辑中的草稿';
+
+    const kindIn = (bubbleIndex: number, kind: string): HTMLButtonElement | null => {
+      const bubbles = panel.element.querySelectorAll<HTMLElement>(
+        '.lightink-reader-assistant-message[data-role="assistant"]',
+      );
+      return (
+        bubbles[bubbleIndex]?.querySelector<HTMLButtonElement>(
+          `[data-assistant-action-kind="${kind}"]`,
+        ) ?? null
+      );
+    };
+    // 编辑期间：复制保留；继续/重新生成/重试与 composer、快捷动作全部锁定。
+    expect(kindIn(1, 'copy')?.disabled).toBe(false);
+    expect(kindIn(0, 'continue')?.disabled).toBe(true);
+    expect(kindIn(1, 'regenerate')?.disabled).toBe(true);
+    expect(kindIn(2, 'retry')?.disabled).toBe(true);
+    const send = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-send',
+    );
+    const quickAction = actionButton(panel, 'chapterSummary');
+    expect(send?.disabled).toBe(true);
+    expect(quickAction.disabled).toBe(true);
+
+    kindIn(0, 'continue')!.click();
+    kindIn(1, 'regenerate')!.click();
+    kindIn(2, 'retry')!.click();
+    quickAction.click();
+    submitQuestion(panel, '编辑期间不应发送');
+    await flush();
+    expect(invoke.mock.calls.length).toBe(requests);
+    // 编辑气泡本体切换为编辑框，其余消息不被任何发送路径改动。
+    expect(bubbleTexts(panel, 'user').slice(1)).toEqual(idleUserTexts.slice(1));
+    expect(bubbleTexts(panel, 'assistant')).toEqual(idleAssistantTexts);
+
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-edit-cancel]')!.click();
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(idleUserTexts);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(idleAssistantTexts);
+    expect(kindIn(0, 'continue')?.disabled).toBe(false);
+    expect(kindIn(1, 'regenerate')?.disabled).toBe(false);
+    expect(kindIn(2, 'retry')?.disabled).toBe(false);
+    expect(
+      panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-send')?.disabled,
+    ).toBe(false);
+    expect(actionButton(panel, 'chapterSummary').disabled).toBe(false);
+
+    // 取消后发送恢复：新的请求正常发出。
+    submitQuestion(panel, '第四问');
+    await flushUntil(() => invoke.mock.calls.length === requests + 1);
+    panel.destroy();
+  });
+
+  it('locks pending confirm/reject while editing and restores them on cancel', async () => {
+    const pendingReply = {
+      ok: true,
+      tool: 'classify_book',
+      pending_confirmation: [
+        {
+          id: 'p1',
+          summary: '将《示例书》归入「旧书」',
+          tool: 'classify_book',
+          arguments: { book: '示例书', group: '旧书' },
+        },
+      ],
+    };
+    const execute = vi.fn(async () => pendingReply);
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 1) {
+        emit('回答1');
+        return { finish: 'stop', totalChars: 3 };
+      }
+      return {
+        finish: 'tool_calls',
+        totalChars: 0,
+        toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+      };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const confirmAll = (): HTMLButtonElement | null =>
+      panel.element.querySelector<HTMLButtonElement>('[data-assistant-pending-confirm-all]');
+    const rejectAll = (): HTMLButtonElement | null =>
+      panel.element.querySelector<HTMLButtonElement>('[data-assistant-pending-reject-all]');
+    expect(confirmAll()?.disabled).toBe(true);
+    expect(rejectAll()?.disabled).toBe(true);
+    confirmAll()!.click();
+    rejectAll()!.click();
+    await flush();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).not.toBeNull();
+
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-edit-cancel]')!.click();
+    await flush();
+    expect(confirmAll()?.disabled).toBe(false);
+    confirmAll()!.click();
+    await flushUntil(() => execute.mock.calls.length >= 2);
+    panel.destroy();
+  });
+
+  it('drops pending confirmations from turns truncated by an edit resubmit', async () => {
+    const pendingReply = {
+      ok: true,
+      tool: 'classify_book',
+      pending_confirmation: [
+        {
+          id: 'p1',
+          summary: '将《示例书》归入「旧书」',
+          tool: 'classify_book',
+          arguments: { book: '示例书', group: '旧书' },
+        },
+      ],
+    };
+    const execute = vi.fn(async () => pendingReply);
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 2) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c1', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit(`回答${round}`);
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '第一问改';
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    await flushUntil(() => bubbleTexts(panel, 'assistant').includes('回答3'));
+
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问改']);
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-pending')?.hidden,
+    ).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('drops pending confirmations from turns removed by regeneration', async () => {
+    const pendingReply = {
+      ok: true,
+      tool: 'classify_book',
+      pending_confirmation: [
+        {
+          id: 'p1',
+          summary: '将《示例书》归入「旧书」',
+          tool: 'classify_book',
+          arguments: { book: '示例书', group: '旧书' },
+        },
+      ],
+    };
+    const execute = vi.fn(async () => pendingReply);
+    let round = 0;
+    const script: Script = async ({ emit }) => {
+      round += 1;
+      if (round === 3) {
+        return {
+          finish: 'tool_calls',
+          totalChars: 0,
+          toolCalls: [{ id: 'c3', name: 'classify_book', arguments: '{}' }],
+        };
+      }
+      emit(`回答${round}`);
+      return { finish: 'stop', totalChars: 3 };
+    };
+    const session = {
+      tools: [],
+      specifiedChapterCount: () => 0,
+      execute,
+    } as unknown as AssistantToolSession;
+    const { panel } = mountPanel({ script, createToolSession: () => session });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+    submitQuestion(panel, '第二问');
+    await flush();
+    submitQuestion(panel, '第三问');
+    await flushUntil(
+      () => panel.element.querySelector('[data-assistant-pending-id="p1"]') !== null,
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    const regenerate = panel.element
+      .querySelectorAll<HTMLElement>('.lightink-reader-assistant-message[data-role="assistant"]')[1]
+      ?.querySelector<HTMLButtonElement>('[data-assistant-action-kind="regenerate"]');
+    expect(regenerate).not.toBeNull();
+    regenerate!.click();
+    await flushUntil(() => bubbleTexts(panel, 'assistant').includes('回答4'));
+
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['回答1', '回答4']);
+    expect(panel.element.querySelector('[data-assistant-pending-id="p1"]')).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('returns focus to the composer after an edit submit', async () => {
+    const { panel } = mountPanel({ chapter: { title: 'C1', text: 'T1' } });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一问');
+    await flush();
+
+    editButtonIn(userBubble(panel, 0))!.click();
+    const editor = editorIn(panel)!;
+    editor.value = '第一问改';
+    editor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+
+    const input = panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    await flushUntil(() => document.activeElement === input);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(input);
+    panel.destroy();
+  });
 });
 
 function memoryStorage(): AssistantPermissionStorage & { readonly data: Map<string, string> } {

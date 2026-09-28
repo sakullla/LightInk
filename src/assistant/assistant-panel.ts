@@ -1574,6 +1574,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let streamingIndex: number | null = null;
   /** 正在原气泡内编辑的用户消息下标；null = 无编辑态（ADR-4 / R6）。 */
   let editingIndex: number | null = null;
+  /** 编辑草稿：只含正文（不含引用标记）。重渲染前从 textarea 抄回，避免丢稿。 */
+  let editDraft: string | null = null;
   let markdownStream = createAssistantMarkdownStream();
   let stickToBottom = true;
   let persistError: string | null = null;
@@ -1793,14 +1795,20 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     const row = document.createElement('div');
     row.className = 'lightink-reader-assistant-message-actions';
-    const addButton = (kind: string, label: string, handler: () => void): void => {
+    const addButton = (
+      kind: string,
+      label: string,
+      handler: () => void,
+      sessionChanging = false,
+    ): void => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `lightink-reader-assistant-${kind}`;
       button.dataset.assistantActionKind = kind;
       button.textContent = label;
       button.setAttribute('aria-label', label);
-      button.disabled = streaming;
+      // 复制不改变会话，编辑期间保可用（草稿已受保护）；其余操作与编辑互斥。
+      button.disabled = streaming || (sessionChanging && editingIndex !== null);
       button.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1825,19 +1833,34 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       }
     }
     if (showRegenerate) {
-      addButton('regenerate', t('reader.assistant.regenerate'), () => {
-        regenerateAt(index);
-      });
+      addButton(
+        'regenerate',
+        t('reader.assistant.regenerate'),
+        () => {
+          regenerateAt(index);
+        },
+        true,
+      );
     }
     if (showContinue) {
-      addButton('continue', t('reader.assistant.continue'), () => {
-        continueAt(index);
-      });
+      addButton(
+        'continue',
+        t('reader.assistant.continue'),
+        () => {
+          continueAt(index);
+        },
+        true,
+      );
     }
     if (showRetry) {
-      addButton('retry', t('reader.lookup.retry'), () => {
-        retryAt(index);
-      });
+      addButton(
+        'retry',
+        t('reader.lookup.retry'),
+        () => {
+          retryAt(index);
+        },
+        true,
+      );
     }
     return row;
   };
@@ -1903,9 +1926,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         editor.className = 'lightink-reader-assistant-edit-input';
         editor.dataset.assistantEditInput = 'true';
         editor.rows = 2;
-        // 只编辑正文；body 为空（纯引用消息）时回退原文，避免空白编辑框。
-        editor.value = split.body === '' ? message.content : split.body;
+        // 只编辑正文；纯引用消息留空即可（compose(quote, '') 仍还原唯一引用）。
+        editor.value = editDraft ?? split.body;
         editor.setAttribute('aria-label', t('reader.assistant.edit'));
+        editor.addEventListener('input', () => {
+          editDraft = editor.value;
+        });
         editor.addEventListener('keydown', (event) => {
           if (event.isComposing) {
             return;
@@ -2040,12 +2066,48 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     return bubble;
   };
 
+  // ── 用户消息编辑重发：原地编辑 → 截断其后会话 → 重新入列并复用流式（ADR-4 / R6） ──
+
+  /** 聚焦编辑框并恢复光标（默认落到末尾）；重渲染后由 renderMessages 复用。 */
+  const focusEditInput = (
+    selection: { readonly start: number; readonly end: number } | null = null,
+  ): void => {
+    const editor = messagesHost.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
+    if (editor === null) {
+      return;
+    }
+    try {
+      editor.focus({ preventScroll: true });
+    } catch {
+      editor.focus();
+    }
+    const length = editor.value.length;
+    const start = Math.min(selection?.start ?? length, length);
+    const end = Math.min(selection?.end ?? length, length);
+    try {
+      editor.setSelectionRange(start, end);
+    } catch {
+      // 宿主不支持选区时只保留聚焦结果。
+    }
+  };
+
   const renderMessages = (): void => {
     streamingText = null;
     if (messages.length === 0) {
       messagesHost.replaceChildren();
       scrollMessagesBottom(true);
       return;
+    }
+    // 编辑草稿与光标由面板状态承接：整表重建前先抄回，重建后回填并恢复焦点。
+    let editSelection: { start: number; end: number } | null = null;
+    if (editingIndex !== null) {
+      const current = messagesHost.querySelector<HTMLTextAreaElement>(
+        '[data-assistant-edit-input]',
+      );
+      if (current !== null) {
+        editDraft = current.value;
+        editSelection = { start: current.selectionStart, end: current.selectionEnd };
+      }
     }
     const nodes = messages.map((message, index) => renderMessage(message, index));
     messagesHost.replaceChildren(...nodes);
@@ -2056,30 +2118,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           nodes[streamingIndex]?.querySelector('.lightink-reader-assistant-message-text') ?? null;
       }
     }
+    if (editingIndex !== null) {
+      focusEditInput(editSelection);
+    }
     scrollMessagesBottom();
   };
 
-  // ── 用户消息编辑重发：原地编辑 → 截断其后会话 → 重新入列并复用流式（ADR-4 / R6） ──
-
-  const focusEditInput = (): void => {
-    const editor = messagesHost.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
-    if (editor === null) {
-      return;
-    }
-    try {
-      editor.focus({ preventScroll: true });
-    } catch {
-      editor.focus();
-    }
-    const end = editor.value.length;
-    try {
-      editor.setSelectionRange(end, end);
-    } catch {
-      // 宿主不支持选区时只保留聚焦结果。
-    }
-  };
-
-  /** 进入编辑态：原气泡内切换为 textarea，预填正文并聚焦。 */
+  /** 进入编辑态：原气泡内切换为 textarea，草稿以正文初始化（纯引用留空）并聚焦。 */
   const beginEditAt = (index: number): void => {
     const message = messages[index];
     if (
@@ -2094,16 +2139,22 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       return;
     }
     editingIndex = index;
+    editDraft = splitQuotedUserContent(message.content).body;
+    syncComposer();
+    renderPendingConfirmations();
     renderMessages();
     focusEditInput();
   };
 
-  /** 取消编辑：丢弃草稿，焦点回到原消息气泡。 */
+  /** 取消编辑：丢弃草稿，解锁其它变更路径，焦点回到原消息气泡。 */
   const cancelEditAt = (index: number): void => {
     if (editingIndex !== index) {
       return;
     }
     editingIndex = null;
+    editDraft = null;
+    syncComposer();
+    renderPendingConfirmations();
     renderMessages();
     const bubble = messagesHost.children[index];
     if (bubble instanceof HTMLElement) {
@@ -2133,7 +2184,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       return false;
     }
     const editor = messagesHost.querySelector<HTMLTextAreaElement>('[data-assistant-edit-input]');
-    const body = editor === null ? splitQuotedUserContent(message.content).body : editor.value;
+    const body =
+      editor === null
+        ? (editDraft ?? splitQuotedUserContent(message.content).body)
+        : editor.value;
     const next = composeQuotedUserContent(splitQuotedUserContent(message.content).quote, body);
     if (next === '') {
       // 正文与引用都为空：保持编辑态，等待用户输入。
@@ -2159,6 +2213,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         historyEpoch += 1;
         ensureActiveConversation();
         editingIndex = null;
+        editDraft = null;
+        const removed = messages.slice(index);
         messages = messages.slice(0, index);
         messages.push({
           role: 'user',
@@ -2166,9 +2222,18 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           createdAt: current.createdAt,
         });
         messages.push({ role: 'assistant', content: '', createdAt: Date.now() });
+        // 被截断轮次的待确认条目失去承接：与身份切换同规则，立即丢弃并重渲染。
+        dropPendingForRemovedTurns(removed);
         // 提交即持久化：即使流式尚未结束，截断结果也已经落盘。
         persistHistory();
+        syncComposer();
         renderMessages();
+        // 编辑框已随重渲染移除：焦点回到 composer，不落在 body。
+        try {
+          input.focus({ preventScroll: true });
+        } catch {
+          input.focus();
+        }
         void runStream(messages.length - 1);
       } finally {
         sendGate = false;
@@ -2230,12 +2295,42 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     pendingTitle.textContent = t('reader.assistant.pendingCount', { n: String(waiting) });
     pendingSection.hidden = pendingQueue.length === 0;
     pendingList.replaceChildren(...pendingQueue.map((entry) => renderPendingItem(entry)));
-    const busy = pendingBusy;
-    confirmAllButton.disabled = busy || waiting === 0;
-    rejectAllButton.disabled = busy || waiting === 0;
+    // 编辑态与身份切换一样是会话级互斥：编辑期间不允许确认/拒绝待确认写入。
+    const locked = pendingBusy || editingIndex !== null;
+    confirmAllButton.disabled = locked || waiting === 0;
+    rejectAllButton.disabled = locked || waiting === 0;
     // 卡片在消息流内新出现时滚到它，避免被流出的正文顶出视口。
     if (wasHidden && !pendingSection.hidden) {
       scrollMessagesBottom(true);
+    }
+  };
+
+  /**
+   * 会话截断后，丢弃只属于被移除轮次的待确认条目并重渲染；仍在会话中的条目保留
+   * （重新生成失败会回退原消息，其待确认不提前作废）。
+   */
+  const dropPendingForRemovedTurns = (removed: readonly PanelMessage[]): void => {
+    if (pendingQueue.length === 0 || removed.length === 0) {
+      return;
+    }
+    const removedToolIds = new Set<string>();
+    for (const message of removed) {
+      for (const block of message.toolBlocks ?? []) {
+        removedToolIds.add(block.id);
+      }
+    }
+    if (removedToolIds.size === 0) {
+      return;
+    }
+    const before = pendingQueue.length;
+    for (let index = pendingQueue.length - 1; index >= 0; index -= 1) {
+      const toolCallId = pendingQueue[index]?.toolCallId;
+      if (toolCallId !== undefined && removedToolIds.has(toolCallId)) {
+        pendingQueue.splice(index, 1);
+      }
+    }
+    if (pendingQueue.length !== before) {
+      renderPendingConfirmations();
     }
   };
 
@@ -2322,7 +2417,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const confirmSelected = async (): Promise<void> => {
-    if (pendingBusy) {
+    // 编辑期间单入口互斥：确认写入会改变会话，必须让位给编辑草稿。
+    if (pendingBusy || editingIndex !== null) {
       return;
     }
     pendingBusy = true;
@@ -2422,7 +2518,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const rejectSelected = (): void => {
-    if (pendingBusy) {
+    if (pendingBusy || editingIndex !== null) {
       return;
     }
     for (const entry of pendingQueue) {
@@ -2705,7 +2801,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const syncComposer = (): void => {
     send.hidden = streaming;
-    send.disabled = streaming;
+    send.disabled = streaming || editingIndex !== null;
     stop.hidden = !streaming;
     stop.disabled = !streaming;
     syncQuoteButton();
@@ -2720,7 +2816,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         continue;
       }
       const noContext = action.requiresContext && !chapterAvailable;
-      button.disabled = streaming || noContext;
+      button.disabled = streaming || noContext || editingIndex !== null;
       button.title = noContext ? t('reader.assistant.noChapterContext') : '';
     }
   };
@@ -2773,6 +2869,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     savedAnswers.clear();
     resetCopyNotice();
     editingIndex = null;
+    editDraft = null;
     persistError = null;
     persistNotice.hidden = true;
     renderMessages();
@@ -2832,6 +2929,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       savedAnswers.clear();
       resetCopyNotice();
       editingIndex = null;
+      editDraft = null;
       historyEpoch = 0;
       // 待确认建议属于上一上下文：切换身份即清空，避免跨书确认落错目标。
       pendingQueue.length = 0;
@@ -2961,6 +3059,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     streaming = true;
     streamingIndex = targetIndex;
     editingIndex = null;
+    editDraft = null;
     stopRequested = false;
     syncComposer();
     renderMessages();
@@ -3214,7 +3313,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   ): boolean => {
     const question = content.trim();
     const quote = attachedQuote.trim();
-    if ((question === '' && quote === '') || !aiConfigured || streaming || sendGate) {
+    // 编辑态是会话级互斥：composer 发送与快捷动作都必须让位给编辑草稿。
+    if (
+      (question === '' && quote === '') ||
+      !aiConfigured ||
+      streaming ||
+      sendGate ||
+      editingIndex !== null
+    ) {
       return false;
     }
     sendGate = true;
@@ -3310,7 +3416,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
    */
   const restartAt = (index: number, mode: 'retry' | 'regenerate'): void => {
     const entry = messages[index];
-    if (entry === undefined || entry.role !== 'assistant' || streaming || sendGate) {
+    if (
+      entry === undefined ||
+      entry.role !== 'assistant' ||
+      streaming ||
+      sendGate ||
+      editingIndex !== null
+    ) {
       return;
     }
     sendGate = true;
@@ -3326,10 +3438,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         }
         historyEpoch += 1;
         if (mode === 'regenerate') {
-          // 该条之后的会话失去承接：与编辑重发同规则，一并移除。
+          // 该条之后的会话失去承接：与编辑重发同规则一并移除，被移除轮次的待确认条目同步作废。
+          const removed = messages.slice(index + 1);
           messages = messages.slice(0, index + 1);
+          messages[index] = { role: 'assistant', content: '', createdAt: current.createdAt };
+          dropPendingForRemovedTurns(removed);
+        } else {
+          messages[index] = { role: 'assistant', content: '', createdAt: current.createdAt };
         }
-        messages[index] = { role: 'assistant', content: '', createdAt: current.createdAt };
         void runStream(index, mode === 'regenerate' ? { mode, fallback: current } : {});
       } finally {
         sendGate = false;
@@ -3354,7 +3470,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       entry.stopped !== true ||
       entry.content.trim() === '' ||
       streaming ||
-      sendGate
+      sendGate ||
+      editingIndex !== null
     ) {
       return;
     }
