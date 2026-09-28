@@ -1959,8 +1959,6 @@ export function createLibraryView(
   let shelfSearchQuery = '';
   /** 与 requestGeneration 相等时，书架搜索仍在等 listItems。 */
   let shelfSearchEpoch = 0;
-  /** 进行中的书架搜索被清空后，这一轮 listItems 结束前不画继续阅读。 */
-  let deferContinueUntilShelfLoad = false;
   let catalogSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let catalogComposing = false;
   /** OPDS directory to restore when the search field is cleared. WebDAV does not use this. */
@@ -4913,8 +4911,7 @@ export function createLibraryView(
       activeSection !== 'shelf' ||
       shelfHomeFiltered() ||
       status.dataset.status === 'error' ||
-      status.dataset.status === 'loading' ||
-      deferContinueUntilShelfLoad
+      status.dataset.status === 'loading'
     ) {
       continueHost.hidden = true;
       return;
@@ -5703,14 +5700,12 @@ export function createLibraryView(
       currentUrl = undefined;
       trail.splice(0);
       setStatus('');
-      deferContinueUntilShelfLoad = false;
       renderGroups();
       renderContinueBar();
       renderItems();
       void hydrateLocalCovers(generation);
     } catch (error) {
       if (generation !== requestGeneration) return;
-      deferContinueUntilShelfLoad = false;
       items = [];
       setStatus(errorText(error, labels().offline), true);
       renderContinueBar();
@@ -5772,10 +5767,7 @@ export function createLibraryView(
     items = shelfItems;
     syncPageChrome();
     renderGroups();
-    if (status.textContent === labels().searching) {
-      setStatus('');
-      deferContinueUntilShelfLoad = true;
-    }
+    if (status.textContent === labels().searching) setStatus('');
     renderContinueBar();
     renderItems();
     await loadPersistedItems();
@@ -5898,6 +5890,9 @@ export function createLibraryView(
       if (!catalogActive()) {
         shelfSearchQuery = '';
         shelfSearchEpoch = 0;
+        // 先结束「正在搜索」，再画继续阅读。无 error/loading 的封面墙不单独藏起它。
+        if (status.textContent === labels().searching) setStatus('');
+        renderContinueBar();
       }
       if (catalogActive() && selectedSourceId !== null) {
         if (selectedSource()?.kind === 'webdav') {
@@ -5952,7 +5947,6 @@ export function createLibraryView(
         const currentQuery = catalogComposing ? query : searchInput.value.trim();
         if (currentQuery === '') {
           setStatus('');
-          deferContinueUntilShelfLoad = false;
           renderContinueBar();
           renderItems();
           return;

@@ -1677,7 +1677,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('does not show continue reading with 正在搜索 when the query is cleared mid-search', async () => {
+  it('shows continue reading or loading after clearing an in-flight shelf search', async () => {
     const novel = localItem({ title: '续读小说' });
     const hill = localItem({
       id: 'local:/books/hill.epub',
@@ -1728,19 +1728,29 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector('.lightink-library-status')?.textContent).toContain('正在搜索…');
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
+    const expectContinueOrLoading = (): void => {
+      const statusText = host.querySelector('.lightink-library-status')?.textContent ?? '';
+      expect(statusText).not.toContain('正在搜索');
+      const continueEl = host.querySelector('.lightink-library-continue');
+      const continueShown = isShown(continueEl);
+      const loading = statusText.includes('正在加载');
+      if (host.querySelector(`[data-item-id="${novel.id}"]`) !== null) {
+        expect(continueShown || loading).toBe(true);
+        if (continueShown) expect(continueEl?.textContent).toContain('续读小说');
+        expect(itemRow(host, hill.id)).toBeTruthy();
+        return;
+      }
+      expect(loading).toBe(true);
+      expect(host.querySelector('.lightink-library-empty')).toBeNull();
+    };
+
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(host.querySelector('.lightink-library-status')?.textContent ?? '').not.toContain('正在搜索');
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
-    expect(host.querySelector('.lightink-library-continue')?.textContent ?? '').not.toContain('续读小说');
-    expect(itemRow(host, novel.id)).toBeTruthy();
+    expectContinueOrLoading();
 
     releaseSearch([hill]);
     await settle();
-    expect(host.querySelector('.lightink-library-status')?.textContent ?? '').not.toContain('正在搜索');
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
-    expect(itemRow(host, novel.id)).toBeTruthy();
-    expect(itemRow(host, hill.id)).toBeTruthy();
+    expectContinueOrLoading();
 
     releaseReload(shelf);
     await settle();
