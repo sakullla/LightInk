@@ -4,6 +4,9 @@
  * Contract for `src/assistant/assistant-panel.ts` (ADR-3 / ADR-6 / R1/R3):
  *
  * - 输入默认多行并长高；可引用选区；生成中可停止且保留已生成文字。
+ * - 助手消息以 data-status（waiting/streaming/stopped/error/done）表达状态：
+ *   提交后首字未到是 waiting（脉冲点 + 流式文案），首字到达转 streaming，
+ *   停止/失败保留文本且视觉可辨（stopped 中性、error 危险 + 重试），完成是 done。
  * - 面板管理多段历史；工具调用显示为块；查询定位可点跳转。
  * - 一次发送内工具往返满 24 轮后停止并提示。
  * - 用户消息纯文本；助手消息 Markdown。流式停止丢掉 Channel。
@@ -505,6 +508,53 @@ describe('createAssistantPanel streaming conversation', () => {
     panel.destroy();
   });
 
+  it('flips data-status waiting → streaming → done around the first delta', async () => {
+    let emitDelta: ((text: string) => void) | null = null;
+    let release: ((value: unknown) => void) | null = null;
+    const { panel } = mountPanel({
+      chapter: { title: 'C1', text: 'T1' },
+      script: ({ emit }) =>
+        new Promise((resolve) => {
+          emitDelta = emit;
+          release = resolve;
+        }),
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '问题');
+    await flush();
+
+    const waitingBubble = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-message[data-role="assistant"]',
+    );
+    expect(waitingBubble?.dataset.status).toBe('waiting');
+    expect(
+      waitingBubble?.querySelector('.lightink-reader-assistant-waiting-label')?.textContent,
+    ).toBe(t('reader.assistant.streaming'));
+    expect(
+      waitingBubble?.querySelectorAll('.lightink-reader-assistant-waiting-dot').length,
+    ).toBe(3);
+    expect(bubbleTexts(panel, 'assistant')).toEqual([t('reader.assistant.streaming')]);
+
+    emitDelta!('流式首字');
+    await flush();
+    const streamingBubble = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-message[data-role="assistant"]',
+    );
+    expect(streamingBubble?.dataset.status).toBe('streaming');
+    expect(streamingBubble?.querySelector('.lightink-reader-assistant-waiting')).toBeNull();
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['流式首字']);
+
+    release!({ finish: 'stop', totalChars: 4 });
+    await flush();
+    const doneBubble = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-message[data-role="assistant"]',
+    );
+    expect(doneBubble?.dataset.status).toBe('done');
+    expect(bubbleTexts(panel, 'assistant')).toEqual(['流式首字']);
+    panel.destroy();
+  });
+
   it('carries prior turns so follow-up questions keep context', async () => {
     const { panel, invoke } = mountPanel({ chapter: { title: 'C1', text: 'T1' } });
     panel.open();
@@ -567,20 +617,24 @@ describe('createAssistantPanel streaming conversation', () => {
     submitQuestion(panel, '问题');
     await flush();
 
-    let bubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
+    let bubbles =
+      panel.element.querySelectorAll<HTMLElement>('.lightink-reader-assistant-message');
     expect(bubbles).toHaveLength(2);
     const failed = bubbles[1]!;
+    expect(failed.dataset.status).toBe('error');
     expect(failed.querySelector('.lightink-reader-assistant-error')?.textContent).toContain(
       '无法连接 AI 服务',
     );
+    expect(failed.querySelector('.lightink-reader-assistant-retry')).not.toBeNull();
     expect(bubbleTexts(panel, 'assistant')).toEqual(['半截']);
 
     fail = false;
     failed.querySelector<HTMLButtonElement>('.lightink-reader-assistant-retry')?.click();
     await flush();
     expect(invoke).toHaveBeenCalledTimes(2);
-    bubbles = panel.element.querySelectorAll('.lightink-reader-assistant-message');
+    bubbles = panel.element.querySelectorAll<HTMLElement>('.lightink-reader-assistant-message');
     expect(bubbles).toHaveLength(2);
+    expect(bubbles[1]?.dataset.status).toBe('done');
     expect(bubbleTexts(panel, 'assistant')).toEqual(['恢复后的回答']);
     expect(panel.element.querySelector('.lightink-reader-assistant-retry')).toBeNull();
     panel.destroy();
@@ -700,21 +754,38 @@ describe('createAssistantPanel composer (R1)', () => {
     submitQuestion(panel, '第一问');
     await flush();
     expect(bubbleTexts(panel, 'assistant')[0]).toContain('半截回答');
+    expect(
+      panel.element.querySelector<HTMLElement>(
+        '.lightink-reader-assistant-message[data-role="assistant"]',
+      )?.dataset.status,
+    ).toBe('streaming');
     const stop = panel.element.querySelector<HTMLButtonElement>('[data-assistant-stop]');
     expect(stop?.hidden).toBe(false);
     expect(stop?.disabled).toBe(false);
     stop!.click();
     await flush();
+    const stopped = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-message[data-role="assistant"]',
+    );
+    expect(stopped?.dataset.status).toBe('stopped');
     expect(bubbleTexts(panel, 'assistant')[0]).toContain('半截回答');
-    expect(panel.element.querySelector('.lightink-reader-assistant-error')?.textContent).toBe(
+    expect(stopped?.querySelector('.lightink-reader-assistant-stopped')?.textContent).toBe(
       t('reader.assistant.stopped'),
     );
+    // 停止是中性终态：不出现错误样式与重试入口。
+    expect(stopped?.querySelector('.lightink-reader-assistant-error')).toBeNull();
+    expect(stopped?.querySelector('.lightink-reader-assistant-retry')).toBeNull();
     expect(stop?.hidden).toBe(true);
     expect(stop?.disabled).toBe(true);
     submitQuestion(panel, '第二问');
     await flush();
     expect(invoke.mock.calls.length).toBeGreaterThan(1);
     expect(bubbleTexts(panel, 'user')).toEqual(['第一问', '第二问']);
+    // 后续重渲染不把已停止消息退回进行中/失败态。
+    const bubbles = panel.element.querySelectorAll<HTMLElement>(
+      '.lightink-reader-assistant-message',
+    );
+    expect(bubbles[1]?.dataset.status).toBe('stopped');
     panel.destroy();
   });
 });
@@ -1063,6 +1134,36 @@ describe('createAssistantPanel minimal typographic flow (T4)', () => {
       t('reader.assistant.toolStatusStopped'),
     );
     panel.destroy();
+  });
+
+  it('drives each status from data-status and drops the legacy is-streaming class', () => {
+    expect(css).not.toContain('is-streaming');
+    const waitingRule = ruleBody(
+      /\[data-status='waiting'\]\s+\.lightink-reader-assistant-waiting\s*\{([^}]*)\}/,
+    );
+    expect(waitingRule).toMatch(/color:\s*var\(--lightink-muted\)/);
+    const streamingRule = ruleBody(
+      /\[data-status='streaming'\]\s+\.lightink-reader-assistant-message-text[^{]*\{([^}]*)\}/,
+    );
+    expect(streamingRule).toMatch(/color:\s*var\(--lightink-muted\)/);
+    const stoppedNoteRule = ruleBody(
+      /\[data-status='stopped'\]\s+\.lightink-reader-assistant-stopped\s*\{([^}]*)\}/,
+    );
+    expect(stoppedNoteRule).toMatch(/color:\s*var\(--lightink-muted\)/);
+    expect(stoppedNoteRule).toMatch(/border-left:\s*2px solid/);
+    const errorRule = ruleBody(
+      /\[data-status='error'\]\s+\.lightink-reader-assistant-message-text\s*\{([^}]*)\}/,
+    );
+    expect(errorRule).toMatch(/color:\s*var\(--lightink-danger\)/);
+    // 脉冲点动画（reduced-motion 由 theme.css 全局 kill-switch 退化为静态）。
+    expect(css).toMatch(
+      /\.lightink-reader-assistant-waiting-dot\s*\{[^}]*animation:\s*lightink-reader-assistant-dot-pulse/,
+    );
+    expect(css).toMatch(/@keyframes lightink-reader-assistant-dot-pulse/);
+    // 面板容器仍消费 panel 圆角令牌。
+    expect(ruleBody(/\.lightink-reader-assistant-panel\s*\{([^}]*)\}/)).toMatch(
+      /border-radius:\s*var\(--lightink-radius-panel\)/,
+    );
   });
 });
 

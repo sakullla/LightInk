@@ -604,8 +604,71 @@
   color: var(--lightink-muted);
 }
 
-.lightink-reader-assistant-message-text.is-streaming {
+/* ===== 助手消息状态（data-status = waiting | streaming | stopped | error | done；ADR-2/R3） =====
+   waiting：首字未到，脉冲点 + 流式文案；streaming：收流中弱化；stopped：中性保留
+   文本；error：危险色保留文本与重试；done：无进行中标记。脉冲动画由全局
+   prefers-reduced-motion kill-switch（theme.css）退化为静态。 */
+
+.lightink-reader-assistant-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.lightink-reader-assistant-message[data-status='waiting'] .lightink-reader-assistant-waiting {
   color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-waiting-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.lightink-reader-assistant-waiting-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.3;
+  animation: lightink-reader-assistant-dot-pulse 1.1s ease-in-out infinite;
+}
+
+.lightink-reader-assistant-waiting-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.lightink-reader-assistant-waiting-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes lightink-reader-assistant-dot-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+
+  40% {
+    opacity: 1;
+  }
+}
+
+.lightink-reader-assistant-message[data-status='streaming'] .lightink-reader-assistant-message-text,
+.lightink-reader-assistant-message[data-status='stopped'] .lightink-reader-assistant-message-text {
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-message[data-status='error'] .lightink-reader-assistant-message-text {
+  color: var(--lightink-danger);
+}
+
+.lightink-reader-assistant-message[data-status='stopped'] .lightink-reader-assistant-stopped {
+  margin: 0.4rem 0 0;
+  padding-left: 0.5rem;
+  border-left: 2px solid color-mix(in srgb, var(--lightink-fg) 24%, transparent);
+  color: var(--lightink-muted);
+  font-size: 0.74rem;
 }
 
 .lightink-reader-assistant-notice {

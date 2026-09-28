@@ -171,11 +171,19 @@ interface AssistantToolBlock {
   readonly stopped?: boolean;
 }
 
+/**
+ * 助手消息的渲染状态（`data-status`）：waiting 首字未到、streaming 收流中、
+ * stopped 用户停止、error 失败、done 完成。仅内存态，历史 schema 不变。
+ */
+export type AssistantMessageStatus = 'waiting' | 'streaming' | 'stopped' | 'error' | 'done';
+
 interface PanelMessage extends AssistantHistoryMessage {
   readonly toolBlocks?: readonly AssistantToolBlock[];
   readonly toolLimitReached?: boolean;
   /** 主动建议轮：不按显式写指令直写。不写入历史 schema。 */
   readonly suggestionTurn?: boolean;
+  /** 本轮被用户停止/中断的助手消息。不写入历史 schema（重启按 error 呈现）。 */
+  readonly stopped?: boolean;
 }
 
 /** `ai_chat_stream` 经 Channel 推送的事件（snake_case tag 与 ai.rs 钉死）。 */
@@ -1527,6 +1535,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let aiMissing: readonly string[] = [];
   const savedAnswers = new Set<number>();
   let streamingText: HTMLElement | null = null;
+  /** 当前流式目标的助手消息下标：waiting/streaming 只作用于这一条。 */
+  let streamingIndex: number | null = null;
   let markdownStream = createAssistantMarkdownStream();
   let stickToBottom = true;
   let persistError: string | null = null;
@@ -1674,10 +1684,50 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     return el;
   };
 
+  /** waiting：脉冲点 + `reader.assistant.streaming` 文案（reduced-motion 静态化）。 */
+  const renderWaitingIndicator = (): HTMLElement => {
+    const waiting = document.createElement('span');
+    waiting.className = 'lightink-reader-assistant-waiting';
+    const label = document.createElement('span');
+    label.className = 'lightink-reader-assistant-waiting-label';
+    label.textContent = t('reader.assistant.streaming');
+    const dots = document.createElement('span');
+    dots.className = 'lightink-reader-assistant-waiting-dots';
+    dots.setAttribute('aria-hidden', 'true');
+    for (let index = 0; index < 3; index += 1) {
+      const dot = document.createElement('span');
+      dot.className = 'lightink-reader-assistant-waiting-dot';
+      dots.appendChild(dot);
+    }
+    waiting.append(label, dots);
+    return waiting;
+  };
+
+  /**
+   * 助手消息状态：stopped/error 是终态；只有当前流式目标呈 waiting（空文本）
+   * 或 streaming；其余（含历史装载）都是 done，无进行中标记。
+   */
+  const messageStatus = (message: PanelMessage, index: number): AssistantMessageStatus => {
+    if (message.stopped === true) {
+      return 'stopped';
+    }
+    if (message.error !== undefined && message.error !== '') {
+      return 'error';
+    }
+    if (streaming && index === streamingIndex) {
+      return message.content === '' ? 'waiting' : 'streaming';
+    }
+    return 'done';
+  };
+
   const renderMessage = (message: PanelMessage, index: number): HTMLElement => {
     const bubble = document.createElement('div');
     bubble.className = `lightink-reader-assistant-message is-${message.role}`;
     bubble.dataset.role = message.role;
+    const status = message.role === 'assistant' ? messageStatus(message, index) : null;
+    if (status !== null) {
+      bubble.dataset.status = status;
+    }
     if (message.action !== undefined) {
       bubble.dataset.action = message.action;
     }
@@ -1728,14 +1778,23 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
     const text = document.createElement('div');
     text.className = 'lightink-reader-assistant-message-text';
-    if (message.content === '' && message.error === undefined) {
-      text.classList.add('is-streaming');
-      text.textContent = streaming ? t('reader.assistant.streaming') : '';
+    if (status === 'waiting') {
+      text.appendChild(renderWaitingIndicator());
     } else if (message.content !== '') {
       text.innerHTML = renderAssistantMarkdown(message.content);
     }
     bubble.appendChild(text);
-    if (message.error !== undefined && message.error !== '') {
+    if (status === 'stopped') {
+      // 停止是中性终态：保留文本并标记「已停止」；重试入口留给 error（ADR-3）。
+      const note = document.createElement('p');
+      note.className = 'lightink-reader-assistant-stopped';
+      note.dataset.assistantStopped = 'true';
+      note.textContent =
+        message.error !== undefined && message.error !== ''
+          ? message.error
+          : t('reader.assistant.stopped');
+      bubble.appendChild(note);
+    } else if (message.error !== undefined && message.error !== '') {
       const error = document.createElement('p');
       error.className = 'lightink-reader-assistant-error';
       error.textContent = message.error;
@@ -2433,6 +2492,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     if (loadedKey !== null) {
       sessionGeneration += 1;
       streaming = false;
+      streamingIndex = null;
       stopRequested = true;
       abortActive?.();
       abortActive = null;
@@ -2525,12 +2585,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       };
       if (streamingText !== null) {
         streamingText.innerHTML = html;
-        streamingText.classList.remove('is-streaming');
+        // 快速路径不整表重渲染：首字到达即把消息从 waiting 切到 streaming。
+        streamingText.parentElement?.setAttribute('data-status', 'streaming');
         scrollMessagesBottom();
       }
     };
 
     streaming = true;
+    streamingIndex = targetIndex;
     stopRequested = false;
     syncComposer();
     renderMessages();
@@ -2701,26 +2763,29 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
           toolBlocks: toolBlocks.slice(),
           contextTruncated,
           toolLimitReached,
-          ...(stopped ? { error: t('reader.assistant.stopped') } : { error: undefined }),
+          ...(stopped
+            ? { error: t('reader.assistant.stopped'), stopped: true }
+            : { error: undefined }),
         };
       }
     } catch (error) {
       const entry = messages[targetIndex];
       if (entry !== undefined && !disposed.value && generation === sessionGeneration) {
+        const aborted = stopRequested || isAbortError(error);
         messages[targetIndex] = {
           ...entry,
           content: visible,
           toolBlocks: toolBlocks.slice(),
           contextTruncated,
           toolLimitReached,
-          error: stopRequested || isAbortError(error)
-            ? t('reader.assistant.stopped')
-            : assistantAiErrorMessage(t, error, aiMissing),
+          error: aborted ? t('reader.assistant.stopped') : assistantAiErrorMessage(t, error, aiMissing),
+          ...(aborted ? { stopped: true } : {}),
         };
       }
     } finally {
       if (generation === sessionGeneration) {
         streaming = false;
+        streamingIndex = null;
         abortActive = null;
         streamingText = null;
         // 停止/中断直接 break 时,已展示但拿不到结果的工具 chip 定格为「已停止」,
@@ -2980,11 +3045,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       messages[lastIndex] = {
         ...last,
         error: last.error ?? t('reader.assistant.stopped'),
+        stopped: true,
         ...(toolBlocks.length > 0 ? { toolBlocks } : {}),
       };
     }
     sessionGeneration += 1;
     streaming = false;
+    streamingIndex = null;
     abortActive = null;
     streamingText = null;
     renderMessages();
@@ -3158,6 +3225,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     destroy() {
       disposed.value = true;
       streaming = false;
+      streamingIndex = null;
       stopRequested = true;
       abortActive?.();
       abortActive = null;
