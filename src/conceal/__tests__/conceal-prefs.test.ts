@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   CONCEAL_GRADIENT_PRESETS,
   CONCEAL_PREFS_STORAGE_KEY,
+  CONCEAL_SCENE_CHOICES,
+  applyConcealScene,
   concealBackgroundToCss,
+  concealSceneOf,
   defaultConcealPrefs,
   isSameHotkeyCombo,
   isValidConcealColor,
@@ -202,5 +205,151 @@ describe('save → load round trip (R10)', () => {
 
   it('treats a null storage as defaults (non-persisted environments)', () => {
     expect(loadConcealPrefs(null, false)).toEqual(defaultConcealPrefs(false));
+  });
+});
+
+const RESPONSIBLE_SWITCHES = [
+  'transparentMode',
+  'contentOpacity',
+  'hideTop',
+  'hideBody',
+  'hideBottom',
+  'alwaysOnTop',
+  'miniWindow',
+  'clickThrough',
+] as const;
+
+type ResponsibleSwitch = (typeof RESPONSIBLE_SWITCHES)[number];
+
+function deviateSwitch(prefs: ConcealPrefs, key: ResponsibleSwitch): ConcealPrefs {
+  if (key === 'contentOpacity') {
+    return { ...prefs, contentOpacity: 80 };
+  }
+  return { ...prefs, [key]: !prefs[key] };
+}
+
+describe('conceal scenes (R1)', () => {
+  const seed: ConcealPrefs = {
+    ...defaultConcealPrefs(false),
+    bossPrimary: 'Control+Shift+P',
+    bossSecondary: 'Control+Shift+Q',
+    background: { kind: 'custom', from: '#010203', to: '#040506' },
+    transparentMode: true,
+    contentOpacity: 40,
+    hideTop: true,
+    hideBody: false,
+    hideBottom: true,
+    alwaysOnTop: false,
+    miniWindow: true,
+    clickThrough: false,
+  };
+
+  it('writes normal reading, including the theme background', () => {
+    const next = applyConcealScene(seed, 'normal');
+    expect(next).toEqual({
+      ...seed,
+      background: { kind: 'theme' },
+      transparentMode: false,
+      contentOpacity: 100,
+      hideTop: false,
+      hideBody: false,
+      hideBottom: false,
+      alwaysOnTop: false,
+      miniWindow: false,
+      clickThrough: false,
+    });
+    expect(next.bossPrimary).toBe(seed.bossPrimary);
+    expect(next.bossSecondary).toBe(seed.bossSecondary);
+    expect(concealSceneOf(next)).toBe('normal');
+    expect(concealSceneOf(defaultConcealPrefs(false))).toBe('normal');
+    expect(concealSceneOf(defaultConcealPrefs(true))).toBe('normal');
+  });
+
+  it('writes hide-on-leave without changing the stored background', () => {
+    const next = applyConcealScene(seed, 'hideOnLeave');
+    expect(next).toEqual({
+      ...seed,
+      transparentMode: true,
+      contentOpacity: 100,
+      hideTop: true,
+      hideBody: true,
+      hideBottom: true,
+      alwaysOnTop: true,
+      miniWindow: false,
+      clickThrough: true,
+    });
+    expect(next.background).toBe(seed.background);
+    expect(concealSceneOf(next)).toBe('hideOnLeave');
+    const onTheme = applyConcealScene(defaultConcealPrefs(false), 'hideOnLeave');
+    expect(onTheme.background).toEqual({ kind: 'theme' });
+    expect(concealSceneOf(onTheme)).toBe('hideOnLeave');
+  });
+
+  it('writes floating read without changing the stored background', () => {
+    const next = applyConcealScene(seed, 'floating');
+    expect(next).toEqual({
+      ...seed,
+      transparentMode: true,
+      contentOpacity: 60,
+      hideTop: false,
+      hideBody: false,
+      hideBottom: false,
+      alwaysOnTop: true,
+      miniWindow: true,
+      clickThrough: false,
+    });
+    expect(next.background).toBe(seed.background);
+    expect(concealSceneOf(next)).toBe('floating');
+    const onTheme = applyConcealScene(defaultConcealPrefs(true), 'floating');
+    expect(onTheme.background).toEqual({ kind: 'theme' });
+    expect(onTheme.bossPrimary).toBe('Control+Z');
+    expect(concealSceneOf(onTheme)).toBe('floating');
+  });
+
+  it.each(
+    (['hideOnLeave', 'floating'] as const).flatMap((scene) =>
+      RESPONSIBLE_SWITCHES.map((key) => [scene, key] as const),
+    ),
+  )('%s becomes custom after only %s changes, then that scene restores it', (scene, key) => {
+    const applied = applyConcealScene(seed, scene);
+    const changed = deviateSwitch(applied, key);
+    expect(concealSceneOf(changed)).toBe('custom');
+    expect(applyConcealScene(changed, scene)).toEqual(applied);
+  });
+
+  it.each(['hideOnLeave', 'floating'] as const)('keeps %s when only the background changes', (scene) => {
+    const applied = applyConcealScene(seed, scene);
+    const changed: ConcealPrefs = {
+      ...applied,
+      background: { kind: 'preset', preset: 'butter' },
+    };
+    expect(concealSceneOf(changed)).toBe(scene);
+    const again = applyConcealScene(changed, scene);
+    expect(again.background).toBe(changed.background);
+    expect(concealSceneOf(again)).toBe(scene);
+  });
+
+  it('becomes custom when normal reading background leaves the theme', () => {
+    const applied = applyConcealScene(seed, 'normal');
+    expect(concealSceneOf({ ...applied, background: { kind: 'preset', preset: 'sky' } })).toBe('custom');
+    expect(
+      concealSceneOf({ ...applied, background: { kind: 'custom', from: '#112233', to: '#445566' } }),
+    ).toBe('custom');
+  });
+
+  it('ignores boss keys when deriving the scene', () => {
+    for (const scene of CONCEAL_SCENE_CHOICES) {
+      const applied = applyConcealScene(seed, scene);
+      expect(concealSceneOf({ ...applied, bossPrimary: 'Alt+P', bossSecondary: 'Alt+Q' })).toBe(scene);
+    }
+  });
+
+  it('does not store a scene field', () => {
+    const storage = memoryStorage();
+    const applied = applyConcealScene(seed, 'hideOnLeave');
+    saveConcealPrefs(storage, applied, seed);
+    const raw = JSON.parse(storage.dump()[CONCEAL_PREFS_STORAGE_KEY] ?? '') as Record<string, unknown>;
+    expect(raw).not.toHaveProperty('scene');
+    expect(concealSceneOf(loadConcealPrefs(storage, false))).toBe('hideOnLeave');
   });
 });

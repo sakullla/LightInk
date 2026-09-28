@@ -5,6 +5,8 @@
  * 默认），save 前整包校验（空组合、纯修饰键、两键同组、非法 #rrggbb、
  * opacity 越界 → 拒绝保存并保持旧值）。
  *
+ * 场景（普通阅读 / 离开即隐 / 悬浮看文 / 自定义）由现有字段比较得出，不入库。
+ *
  * 存储键为 `lightink.conceal.prefs`，走**普通 localStorage**（显式不加入
  * syncable-storage 允许清单）：老板键组合是平台相关的（macOS 用 Control，
  * Win/Linux 用 Alt），跨设备同步会把另一平台的默认键串过来。
@@ -248,6 +250,101 @@ export function saveConcealPrefs(
     }
   }
   return normalized;
+}
+
+/** 可写入的三个场景。自定义只是比较失败后的显示名，没有第四套写入。 */
+export const CONCEAL_SCENE_CHOICES = ['normal', 'hideOnLeave', 'floating'] as const;
+
+export type ConcealSceneChoice = (typeof CONCEAL_SCENE_CHOICES)[number];
+
+/** `normal` 普通阅读，`hideOnLeave` 离开即隐，`floating` 悬浮看文，`custom` 自定义。 */
+export type ConcealScene = ConcealSceneChoice | 'custom';
+
+type ConcealSceneSwitches = Pick<
+  ConcealPrefs,
+  | 'transparentMode'
+  | 'contentOpacity'
+  | 'hideTop'
+  | 'hideBody'
+  | 'hideBottom'
+  | 'alwaysOnTop'
+  | 'miniWindow'
+  | 'clickThrough'
+>;
+
+const NORMAL_SWITCHES: ConcealSceneSwitches = {
+  transparentMode: false,
+  contentOpacity: 100,
+  hideTop: false,
+  hideBody: false,
+  hideBottom: false,
+  alwaysOnTop: false,
+  miniWindow: false,
+  clickThrough: false,
+};
+
+const HIDE_ON_LEAVE_SWITCHES: ConcealSceneSwitches = {
+  transparentMode: true,
+  contentOpacity: 100,
+  hideTop: true,
+  hideBody: true,
+  hideBottom: true,
+  alwaysOnTop: true,
+  miniWindow: false,
+  clickThrough: true,
+};
+
+const FLOATING_SWITCHES: ConcealSceneSwitches = {
+  transparentMode: true,
+  contentOpacity: 60,
+  hideTop: false,
+  hideBody: false,
+  hideBottom: false,
+  alwaysOnTop: true,
+  miniWindow: true,
+  clickThrough: false,
+};
+
+const SCENE_SWITCHES: Readonly<Record<ConcealSceneChoice, ConcealSceneSwitches>> = {
+  normal: NORMAL_SWITCHES,
+  hideOnLeave: HIDE_ON_LEAVE_SWITCHES,
+  floating: FLOATING_SWITCHES,
+};
+
+function switchesMatch(prefs: ConcealPrefs, switches: ConcealSceneSwitches): boolean {
+  return (
+    prefs.transparentMode === switches.transparentMode &&
+    prefs.contentOpacity === switches.contentOpacity &&
+    prefs.hideTop === switches.hideTop &&
+    prefs.hideBody === switches.hideBody &&
+    prefs.hideBottom === switches.hideBottom &&
+    prefs.alwaysOnTop === switches.alwaysOnTop &&
+    prefs.miniWindow === switches.miniWindow &&
+    prefs.clickThrough === switches.clickThrough
+  );
+}
+
+/**
+ * 普通阅读连背景一起比较；离开即隐与悬浮看文忽略背景。
+ * 三套写入互斥，顺序只把「背景也算」的普通阅读与另外两个场景分开。
+ */
+export function concealSceneOf(prefs: ConcealPrefs): ConcealScene {
+  if (prefs.background.kind === 'theme' && switchesMatch(prefs, NORMAL_SWITCHES)) {
+    return 'normal';
+  }
+  if (switchesMatch(prefs, HIDE_ON_LEAVE_SWITCHES)) {
+    return 'hideOnLeave';
+  }
+  if (switchesMatch(prefs, FLOATING_SWITCHES)) {
+    return 'floating';
+  }
+  return 'custom';
+}
+
+/** 按场景表覆盖负责字段。离开即隐与悬浮看文保留已存背景；老板键始终保留。 */
+export function applyConcealScene(prefs: ConcealPrefs, scene: ConcealSceneChoice): ConcealPrefs {
+  const next: ConcealPrefs = { ...prefs, ...SCENE_SWITCHES[scene] };
+  return scene === 'normal' ? { ...next, background: { kind: 'theme' } } : next;
 }
 
 /** 背景选择 → CSS background 值；主题背景返回 null（CSS 回退主题变量）。 */
