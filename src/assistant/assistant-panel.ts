@@ -1280,8 +1280,83 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const main = document.createElement('div');
   main.className = 'lightink-reader-assistant-main';
+  // 上下文条（ADR-6 / R7）：输入区上方持续展示本轮将发送的上下文构成。
+  // 阅读器 = 章节（可移除/恢复）+ 选区（与 composer 引用条共享 attachedQuote）
+  // + PDF 页码（只读）；编辑器 = 当前文档（只读）；书架不渲染。
+  const contextBar = document.createElement('div');
+  contextBar.className = 'lightink-reader-assistant-context';
+  contextBar.dataset.assistantContextBar = 'true';
+  contextBar.hidden = true;
+  const contextChips = document.createElement('div');
+  contextChips.className = 'lightink-reader-assistant-context-chips';
+
+  const contextChapterChip = document.createElement('span');
+  contextChapterChip.className = 'lightink-reader-assistant-context-chip';
+  contextChapterChip.dataset.assistantContext = 'chapter';
+  contextChapterChip.hidden = true;
+  const contextChapterLabel = document.createElement('span');
+  contextChapterLabel.className = 'lightink-reader-assistant-context-chip-label';
+  contextChapterLabel.textContent = t('reader.assistant.contextChapter');
+  const contextChapterText = document.createElement('span');
+  contextChapterText.className = 'lightink-reader-assistant-context-chip-text';
+  const contextChapterToggle = document.createElement('button');
+  contextChapterToggle.type = 'button';
+  contextChapterToggle.className = 'lightink-reader-assistant-context-chip-action';
+  contextChapterToggle.dataset.assistantContextToggle = 'chapter';
+  contextChapterChip.append(contextChapterLabel, contextChapterText, contextChapterToggle);
+
+  const contextSelectionChip = document.createElement('span');
+  contextSelectionChip.className = 'lightink-reader-assistant-context-chip';
+  contextSelectionChip.dataset.assistantContext = 'selection';
+  contextSelectionChip.hidden = true;
+  const contextSelectionLabel = document.createElement('span');
+  contextSelectionLabel.className = 'lightink-reader-assistant-context-chip-label';
+  contextSelectionLabel.textContent = t('reader.assistant.quote');
+  const contextSelectionText = document.createElement('span');
+  contextSelectionText.className = 'lightink-reader-assistant-context-chip-text';
+  const contextSelectionClear = document.createElement('button');
+  contextSelectionClear.type = 'button';
+  contextSelectionClear.className = 'lightink-reader-assistant-context-chip-action';
+  contextSelectionClear.dataset.assistantContextClear = 'selection';
+  contextSelectionClear.textContent = '×';
+  contextSelectionClear.setAttribute('aria-label', t('reader.assistant.quoteRemove'));
+  contextSelectionClear.setAttribute('title', t('reader.assistant.quoteRemove'));
+  contextSelectionChip.append(contextSelectionLabel, contextSelectionText, contextSelectionClear);
+
+  const contextPageChip = document.createElement('span');
+  contextPageChip.className = 'lightink-reader-assistant-context-chip';
+  contextPageChip.dataset.assistantContext = 'page';
+  contextPageChip.hidden = true;
+  const contextPageText = document.createElement('span');
+  contextPageText.className = 'lightink-reader-assistant-context-chip-text';
+  contextPageChip.append(contextPageText);
+
+  const contextDocumentChip = document.createElement('span');
+  contextDocumentChip.className = 'lightink-reader-assistant-context-chip';
+  contextDocumentChip.dataset.assistantContext = 'document';
+  contextDocumentChip.hidden = true;
+  const contextDocumentLabel = document.createElement('span');
+  contextDocumentLabel.className = 'lightink-reader-assistant-context-chip-label';
+  contextDocumentLabel.textContent = t('reader.assistant.contextDocument');
+  const contextDocumentText = document.createElement('span');
+  contextDocumentText.className = 'lightink-reader-assistant-context-chip-text';
+  contextDocumentChip.append(contextDocumentLabel, contextDocumentText);
+
+  contextChips.append(
+    contextChapterChip,
+    contextSelectionChip,
+    contextPageChip,
+    contextDocumentChip,
+  );
   const contextHint = document.createElement('p');
-  contextHint.className = 'lightink-reader-assistant-context';
+  contextHint.className = 'lightink-reader-assistant-context-hint';
+  contextHint.hidden = true;
+  const contextFeedback = document.createElement('p');
+  contextFeedback.className = 'lightink-reader-assistant-context-feedback';
+  contextFeedback.setAttribute('role', 'status');
+  contextFeedback.setAttribute('aria-live', 'polite');
+  contextFeedback.hidden = true;
+  contextBar.append(contextChips, contextHint, contextFeedback);
   const messagesWrap = document.createElement('div');
   messagesWrap.className = 'lightink-reader-assistant-messages-wrap';
   const messagesHost = document.createElement('div');
@@ -1542,7 +1617,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   composerHint.className = 'lightink-reader-assistant-composer-hint';
   composerHint.textContent = t('reader.assistant.composerHint');
   composer.append(composerBox, composerHint);
-  main.append(contextHint, messagesWrap, pendingSection, persistNotice, actions, composer);
+  main.append(messagesWrap, pendingSection, persistNotice, actions, contextBar, composer);
   root.append(head, historyPane, guide, main);
 
   root.addEventListener(
@@ -1580,6 +1655,13 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   let stickToBottom = true;
   let persistError: string | null = null;
   let attachedQuote = '';
+  /**
+   * 本轮是否随请求发送章节正文（ADR-6 / R7）：仅内存态，随历史键切换/销毁重置，
+   * 不持久化、不改 schema。关闭时 `chapterSource()` 返回 null；页码不受影响。
+   */
+  let chapterIncluded = true;
+  /** 章节移除/恢复后的可辨识反馈：null = 尚未操作过（不显示）。 */
+  let chapterFeedback: 'included' | 'excluded' | null = null;
   /** 待确认写操作队列：未确认前不落盘；确认后回调产生建议的同一执行器。 */
   const pendingQueue: PendingConfirmationEntry[] = [];
   let pendingBusy = false;
@@ -1608,6 +1690,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const chapterSource = (): AssistantChapterSource | null => {
+    // 用户移除本章后，该轮请求不带章节正文；恢复后重新包含。
+    if (!chapterIncluded) {
+      return null;
+    }
     const chapter = chapterContextOrNull();
     if (chapter === null) {
       return null;
@@ -1628,8 +1714,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const currentPageNumber = (): number | undefined => {
-    const source = chapterSource();
-    if (source?.kind !== 'pdf') {
+    // 页码只写用户消息，与章节正文开关无关：这里直接看上下文类型，不走
+    // `chapterSource()`（后者在用户移除本章后为 null）。
+    const context = chapterContextOrNull();
+    if (context === null || (context.kind ?? 'flow') !== 'pdf') {
       return undefined;
     }
     try {
@@ -2779,7 +2867,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       return;
     }
     syncQuoteButton();
-    syncContextHint();
+    syncContextBar();
   };
   if (typeof document !== 'undefined') {
     document.addEventListener('selectionchange', onSelectionChange);
@@ -2788,26 +2876,100 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     syncQuoteButton();
   });
 
-  const syncContextHint = (): void => {
-    const chapter = chapterContextOrNull();
-    const parts: string[] = [];
-    if (chapter !== null && (chapter.title.trim() !== '' || chapter.text.trim() !== '')) {
-      const label = chapter.title.trim();
-      if (label !== '') {
-        parts.push(label);
-      }
-      const clipped = clipAssistantContext(chapter.text);
-      if (clipped.truncated) {
-        parts.push(
-          t('reader.assistant.truncated', { n: String(READER_LIMITS.maxAssistantContextChars) }),
-        );
-      }
+  /**
+   * 上下文条形态（不新增 surface 注入字段）：书架不注入选区（`showQuote: false`）
+   * 且没有自动上下文；编辑器不显示权限模式、只读当前文档；其余为阅读器。
+   */
+  const contextBarMode = (): 'chapter' | 'document' | 'none' => {
+    if (deps.showQuote === false) {
+      return 'none';
     }
-    if (currentSelectionText() !== '') {
-      parts.push(t('reader.assistant.contextSelection'));
+    if (deps.showPermissionMode === false) {
+      return 'document';
     }
-    contextHint.hidden = parts.length === 0;
-    contextHint.textContent = parts.join(' · ');
+    return 'chapter';
+  };
+
+  const syncContextBar = (): void => {
+    const mode = contextBarMode();
+    const chapter = mode === 'none' ? null : chapterContextOrNull();
+    const title = chapter?.title.trim() ?? '';
+    const isPdf = chapter?.kind === 'pdf';
+    const selection = attachedQuote.trim();
+
+    let showChapter = false;
+    let showPage = false;
+    let showSelection = false;
+    let showDocument = false;
+    let hintTruncated = false;
+
+    if (mode === 'chapter') {
+      showChapter = chapter !== null && !isPdf && title !== '';
+      if (showChapter) {
+        contextChapterText.textContent = title;
+        contextChapterChip.dataset.contextIncluded = chapterIncluded ? 'true' : 'false';
+        contextChapterToggle.textContent = chapterIncluded ? '×' : '↺';
+        const actionKey = chapterIncluded
+          ? 'reader.assistant.contextChapterRemove'
+          : 'reader.assistant.contextChapterRestore';
+        // 动作名随状态切换（移除 ⇄ 恢复），状态另由 aria-live 反馈与 chip 样式表达。
+        contextChapterToggle.setAttribute('aria-label', t(actionKey));
+        contextChapterToggle.setAttribute('title', t(actionKey));
+      }
+      const page = currentPageNumber();
+      const pageText =
+        page !== undefined
+          ? t('reader.assistant.contextPage', { n: String(page) })
+          : isPdf
+            ? title
+            : '';
+      showPage = isPdf && pageText !== '';
+      if (showPage) {
+        contextPageText.textContent = pageText;
+      }
+      showSelection = selection !== '';
+      if (showSelection) {
+        contextSelectionText.textContent = selection;
+      }
+      const clipped = chapter !== null ? clipAssistantContext(chapter.text) : null;
+      // PDF 页没有移除开关（页码只读），正文始终随请求发送；flow 章移除后不提示上限。
+      hintTruncated = clipped !== null && clipped.truncated && (isPdf || chapterIncluded);
+    } else if (mode === 'document') {
+      showDocument = chapter !== null && (title !== '' || chapter.text.trim() !== '');
+      if (showDocument && chapter !== null) {
+        contextDocumentText.textContent =
+          title !== '' ? title : clipAssistantContext(chapter.text, 40).text;
+      }
+      const clipped = chapter !== null ? clipAssistantContext(chapter.text) : null;
+      hintTruncated = clipped !== null && clipped.truncated;
+    }
+
+    contextChapterChip.hidden = !showChapter;
+    contextSelectionChip.hidden = !showSelection;
+    contextPageChip.hidden = !showPage;
+    contextDocumentChip.hidden = !showDocument;
+    contextHint.hidden = !hintTruncated;
+    if (hintTruncated) {
+      contextHint.textContent = t('reader.assistant.truncated', {
+        n: String(READER_LIMITS.maxAssistantContextChars),
+      });
+    }
+    contextFeedback.hidden = chapterFeedback === null;
+    if (chapterFeedback !== null) {
+      contextFeedback.textContent = t(
+        chapterFeedback === 'excluded'
+          ? 'reader.assistant.contextChapterExcluded'
+          : 'reader.assistant.contextChapterIncluded',
+      );
+    }
+    contextBar.hidden =
+      mode === 'none' ||
+      (!showChapter &&
+        !showSelection &&
+        !showPage &&
+        !showDocument &&
+        !hintTruncated &&
+        chapterFeedback === null);
   };
 
   const syncComposer = (): void => {
@@ -2820,7 +2982,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   };
 
   const syncActionButtons = (): void => {
-    const chapterAvailable = chapterContextOrNull() !== null;
+    // 用户移除本章后，依赖章节正文的快捷动作与 composer 一样只基于问题与选区。
+    const chapterAvailable = chapterSource() !== null;
     for (const action of panelActions) {
       const button = actionButtons.get(action.id);
       if (button === undefined) {
@@ -2840,7 +3003,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       setHistoryOpen(false);
     }
     syncComposer();
-    syncContextHint();
+    syncContextBar();
   };
 
   const refreshConfig = async (): Promise<void> => {
@@ -2944,10 +3107,14 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       historyEpoch = 0;
       // 待确认建议属于上一上下文：切换身份即清空，避免跨书确认落错目标。
       pendingQueue.length = 0;
+      // 章节开关属于上一本书/文档的会话态：切换身份即恢复默认随请求发送。
+      chapterIncluded = true;
+      chapterFeedback = null;
       renderMessages();
       renderHistoryList();
       renderPendingConfirmations();
       syncComposer();
+      syncContextBar();
     }
     loadedKey = key;
     historyLoad = (async () => {
@@ -3025,6 +3192,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       );
     const session = deps.createToolSession?.(userMessage, { suggestion }) ?? null;
     let toolRoundTrips = 0;
+    // 本轮发送的章节正文在流开始时定格：流式期间切换上下文条不影响进行中的请求。
+    const chapterAtStart = chapterSource();
 
     const onDelta = (delta: string): void => {
       if (disposed.value || generation !== sessionGeneration) {
@@ -3082,7 +3251,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         }
         const request = buildAssistantChatRequest({
           systemPrompt: deps.systemPrompt?.() ?? t('reader.assistant.systemPrompt'),
-          chapter: chapterSource(),
+          chapter: chapterAtStart,
           history: [...prior, ...loopTurns],
           userMessage: userMessageForRequest,
           // 续写指令不是用户提问：页码已随原用户轮进入会话，不再重复注入。
@@ -3345,6 +3514,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         attachedQuote = '';
         renderQuoteChip();
         syncQuoteButton();
+        syncContextBar();
         appendExchange({
           role: 'user',
           content: payload,
@@ -3364,7 +3534,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       return;
     }
     if (action.requiresContext) {
-      const chapter = chapterContextOrNull();
+      const chapter = chapterSource();
       if (chapter === null || chapter.text.trim() === '') {
         return;
       }
@@ -3381,7 +3551,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       ask(assistantActionContent(action, instruction, quote ?? ''), action);
       return;
     }
-    const chapter = chapterContextOrNull();
+    const chapter = chapterSource();
     if (chapter === null || chapter.text.trim() === '') {
       return;
     }
@@ -3612,6 +3782,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     attachedQuote = quote;
     renderQuoteChip();
     syncQuoteButton();
+    syncContextBar();
     input.focus();
   });
   quoteChipClear.addEventListener('click', (event) => {
@@ -3620,6 +3791,25 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     attachedQuote = '';
     renderQuoteChip();
     syncQuoteButton();
+    syncContextBar();
+    input.focus();
+  });
+  // 上下文条移除/恢复本章：只改面板会话态，请求在下一轮生效；反馈常驻可辨识。
+  contextChapterToggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    chapterIncluded = !chapterIncluded;
+    chapterFeedback = chapterIncluded ? 'included' : 'excluded';
+    syncContextBar();
+    syncActionButtons();
+  });
+  contextSelectionClear.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    attachedQuote = '';
+    renderQuoteChip();
+    syncQuoteButton();
+    syncContextBar();
     input.focus();
   });
   stop.addEventListener('click', (event) => {
@@ -3831,6 +4021,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       abortActive?.();
       abortActive = null;
       streamingText = null;
+      chapterIncluded = true;
+      chapterFeedback = null;
       clearCopyNoticeTimer();
       removeModeMenuOutsideDismiss?.();
       if (typeof document !== 'undefined') {

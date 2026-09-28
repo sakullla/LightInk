@@ -293,14 +293,102 @@
   display: none;
 }
 
+/* ===== 上下文条（ADR-6 / R7）：输入区上方展示本轮将发送的上下文构成 ===== */
+
 .lightink-reader-assistant-context {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
   margin: 0;
-  padding: 0.4rem 0.75rem 0;
+  padding: 0.45rem 0.75rem 0;
   color: var(--lightink-muted);
   font-size: 0.72rem;
 }
 
 .lightink-reader-assistant-context[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.lightink-reader-assistant-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.15rem 0.35rem 0.15rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
+  border-radius: var(--lightink-radius-control);
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-reader-assistant-context-chip[hidden] {
+  display: none;
+}
+
+.lightink-reader-assistant-context-chip-label {
+  flex: 0 0 auto;
+  color: var(--lightink-muted);
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-context-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 移除本章后的 chip：虚线边框 + 划除标题，与恢复按钮一起构成可辨识反馈。 */
+.lightink-reader-assistant-context-chip[data-context-included='false'] {
+  border-style: dashed;
+}
+
+.lightink-reader-assistant-context-chip[data-context-included='false']
+  .lightink-reader-assistant-context-chip-text {
+  color: var(--lightink-muted);
+  text-decoration: line-through;
+}
+
+.lightink-reader-assistant-context-chip-action {
+  flex: 0 0 auto;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-context-chip-action:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-context-chip-action:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-reader-assistant-context-hint,
+.lightink-reader-assistant-context-feedback {
+  margin: 0;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-context-hint[hidden],
+.lightink-reader-assistant-context-feedback[hidden] {
   display: none;
 }
 
@@ -1283,6 +1371,8 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-history-open:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-settings:active,
 :is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-context-chip-action:active,
+:is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-history-new:not(:disabled):active,
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-retry:not(:disabled):active,
@@ -1319,7 +1409,9 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-history-delete:hover:not(:active),
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-quote-chip-clear:hover:not(:active) {
+  .lightink-reader-assistant-quote-chip-clear:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-context-chip-action:hover:not(:active) {
   background: transparent;
   color: var(--lightink-muted);
 }

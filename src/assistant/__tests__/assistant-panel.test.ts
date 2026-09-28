@@ -331,6 +331,7 @@ interface MountOptions {
   readonly systemPrompt?: () => string;
   readonly placeholder?: string;
   readonly showPermissionMode?: boolean;
+  readonly showQuote?: boolean;
   readonly permissionStorage?: AssistantPermissionStorage | null;
   readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
 }
@@ -385,6 +386,7 @@ function mountPanel(options: MountOptions = {}): {
     ...(options.showPermissionMode !== undefined
       ? { showPermissionMode: options.showPermissionMode }
       : {}),
+    ...(options.showQuote !== undefined ? { showQuote: options.showQuote } : {}),
     ...(options.permissionStorage !== undefined
       ? { permissionStorage: options.permissionStorage }
       : {}),
@@ -2374,6 +2376,270 @@ describe('createAssistantPanel quick actions', () => {
     )?.textContent;
     expect(historyTitle).toBe('一个难句');
     expect(historyTitle).not.toContain(t('reader.assistant.prompt.summarize'));
+    panel.destroy();
+  });
+});
+
+describe('createAssistantPanel context bar (R7)', () => {
+  function contextBar(panel: ReturnType<typeof createAssistantPanel>): HTMLElement {
+    const bar = panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-context');
+    expect(bar).not.toBeNull();
+    return bar!;
+  }
+
+  function contextChip(
+    panel: ReturnType<typeof createAssistantPanel>,
+    kind: 'chapter' | 'selection' | 'page' | 'document',
+  ): HTMLElement {
+    const chip = panel.element.querySelector<HTMLElement>(
+      `[data-assistant-context="${kind}"]`,
+    );
+    expect(chip).not.toBeNull();
+    return chip!;
+  }
+
+  it('shows the reader chapter chip and drops chapter text from requests until restored', async () => {
+    const { panel, invoke } = mountPanel({ chapter: { title: '第一章', text: '章节正文' } });
+    panel.open();
+    await flush();
+
+    const bar = contextBar(panel);
+    expect(bar.hidden).toBe(false);
+    const chapterChip = contextChip(panel, 'chapter');
+    expect(chapterChip.hidden).toBe(false);
+    expect(chapterChip.textContent).toContain('第一章');
+    expect(contextChip(panel, 'page').hidden).toBe(true);
+    expect(contextChip(panel, 'document').hidden).toBe(true);
+
+    // 移除本章：chip 进入「不发送」态，恢复入口与 aria-live 反馈同时出现。
+    const toggle = chapterChip.querySelector<HTMLButtonElement>(
+      '[data-assistant-context-toggle="chapter"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute('aria-label')).toBe(t('reader.assistant.contextChapterRemove'));
+    toggle!.click();
+    expect(chapterChip.dataset.contextIncluded).toBe('false');
+    expect(toggle!.getAttribute('aria-label')).toBe(t('reader.assistant.contextChapterRestore'));
+    const feedback = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-context-feedback',
+    );
+    expect(feedback?.hidden).toBe(false);
+    expect(feedback?.textContent).toBe(t('reader.assistant.contextChapterExcluded'));
+    expect(actionButton(panel, 'chapterSummary').disabled).toBe(true);
+
+    submitQuestion(panel, '移除后的问题');
+    await flush();
+    const stripped = invoke.mock.calls[0]?.[1] as {
+      messages: { role: string; content: string }[];
+    };
+    expect(stripped.messages.some((message) => message.content.includes('章节正文'))).toBe(false);
+    expect(stripped.messages.some((message) => message.content.includes('<chapter>'))).toBe(false);
+    expect(stripped.messages[stripped.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '移除后的问题',
+    });
+
+    // 恢复：请求重新包含章节正文。
+    toggle!.click();
+    expect(chapterChip.dataset.contextIncluded).toBe('true');
+    expect(toggle!.getAttribute('aria-label')).toBe(t('reader.assistant.contextChapterRemove'));
+    expect(feedback?.textContent).toBe(t('reader.assistant.contextChapterIncluded'));
+    expect(actionButton(panel, 'chapterSummary').disabled).toBe(false);
+
+    submitQuestion(panel, '恢复后的问题');
+    await flush();
+    const restored = invoke.mock.calls[1]?.[1] as { messages: { content: string }[] };
+    expect(restored.messages.some((message) => message.content.includes('章节正文'))).toBe(true);
+    panel.destroy();
+  });
+
+  it('keeps the context-limit hint for a clipped reader chapter', async () => {
+    const longChapter = '章'.repeat(READER_LIMITS.maxAssistantContextChars + 30);
+    const { panel } = mountPanel({ chapter: { title: '长章', text: longChapter } });
+    panel.open();
+    await flush();
+    const hint = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-context-hint',
+    );
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.textContent).toContain(String(READER_LIMITS.maxAssistantContextChars));
+    expect(contextChip(panel, 'chapter').hidden).toBe(false);
+    panel.destroy();
+  });
+
+  it('shares the selection chip with the composer quote bar and clears it after send', async () => {
+    let selection = '';
+    const { panel, invoke } = mountPanel({
+      chapter: { title: '第一章', text: '章节正文' },
+      currentSelection: () => selection,
+    });
+    panel.open();
+    await flush();
+    expect(contextChip(panel, 'selection').hidden).toBe(true);
+
+    selection = '选中的句子';
+    document.dispatchEvent(new Event('selectionchange'));
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]')!.click();
+    const selectionChip = contextChip(panel, 'selection');
+    expect(selectionChip.hidden).toBe(false);
+    expect(selectionChip.textContent).toContain('选中的句子');
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-quote-chip')?.hidden,
+    ).toBe(false);
+
+    // 上下文条清掉引用：composer 引用条与下一轮请求同步清空。
+    selectionChip
+      .querySelector<HTMLButtonElement>('[data-assistant-context-clear="selection"]')!
+      .click();
+    expect(selectionChip.hidden).toBe(true);
+    expect(
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-quote-chip')?.hidden,
+    ).toBe(true);
+    expect(selection).toBe('选中的句子');
+
+    selection = '发送时仍选中的句子';
+    document.dispatchEvent(new Event('selectionchange'));
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-quote]')!.click();
+    expect(contextChip(panel, 'selection').hidden).toBe(false);
+    submitQuestion(panel, '这句话什么意思');
+    await flush();
+    expect(contextChip(panel, 'selection').hidden).toBe(true);
+    const payload = invoke.mock.calls[0]?.[1] as { messages: { content: string }[] };
+    const last = payload.messages[payload.messages.length - 1]?.content ?? '';
+    expect(last).toContain('<selection>\n发送时仍选中的句子\n</selection>');
+    expect(last).toContain('这句话什么意思');
+    panel.destroy();
+  });
+
+  it('renders the PDF page chip read-only and keeps the page on the user turn', async () => {
+    const { panel, invoke } = mountPanel({
+      chapter: { kind: 'pdf', title: '第 3 / 10 页', text: '当前页正文' },
+      currentPage: 3,
+    });
+    panel.open();
+    await flush();
+
+    const pageChip = contextChip(panel, 'page');
+    expect(pageChip.hidden).toBe(false);
+    expect(pageChip.textContent).toContain('3');
+    expect(pageChip.querySelector('button')).toBeNull();
+    expect(contextChip(panel, 'chapter').hidden).toBe(true);
+
+    submitQuestion(panel, '本页讲了什么');
+    await flush();
+    const payload = invoke.mock.calls[0]?.[1] as { messages: { content: string }[] };
+    expect(payload.messages.some((message) => message.content.startsWith('【当前页】'))).toBe(true);
+    expect(payload.messages[payload.messages.length - 1]?.content).toContain('【当前页码：3】');
+    panel.destroy();
+  });
+
+  it('renders a read-only document chip with the truncation hint in the editor', async () => {
+    const longDoc = '文'.repeat(READER_LIMITS.maxAssistantContextChars + 120);
+    const { panel, invoke } = mountPanel({
+      chapter: { title: '文档标题', text: longDoc },
+      showPermissionMode: false,
+    });
+    panel.open();
+    await flush();
+
+    const documentChip = contextChip(panel, 'document');
+    expect(documentChip.hidden).toBe(false);
+    expect(documentChip.textContent).toContain('文档标题');
+    expect(documentChip.querySelector('button')).toBeNull();
+    expect(contextChip(panel, 'chapter').hidden).toBe(true);
+    expect(contextChip(panel, 'page').hidden).toBe(true);
+    const hint = panel.element.querySelector<HTMLElement>(
+      '.lightink-reader-assistant-context-hint',
+    );
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.textContent).toContain(String(READER_LIMITS.maxAssistantContextChars));
+
+    submitQuestion(panel, '总结文档');
+    await flush();
+    const payload = invoke.mock.calls[0]?.[1] as { messages: { content: string }[] };
+    expect(payload.messages.some((message) => message.content.includes('<chapter>'))).toBe(true);
+    const answer = panel.element.querySelectorAll('.lightink-reader-assistant-message');
+    expect(
+      answer[answer.length - 1]?.querySelector('.lightink-reader-assistant-notice')?.textContent,
+    ).toContain(String(READER_LIMITS.maxAssistantContextChars));
+    panel.destroy();
+  });
+
+  it('renders no context bar on the library surface and still accepts questions', async () => {
+    const { panel, invoke } = mountPanel({ chapter: null, showQuote: false });
+    panel.open();
+    await flush();
+    expect(contextBar(panel).hidden).toBe(true);
+
+    submitQuestion(panel, '帮我找一本书');
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(bubbleTexts(panel, 'user')).toEqual(['帮我找一本书']);
+    panel.destroy();
+  });
+
+  it('keeps asking enabled for formats without text context', async () => {
+    const { panel, invoke } = mountPanel({ chapter: null });
+    panel.open();
+    await flush();
+    expect(contextBar(panel).hidden).toBe(true);
+
+    submitQuestion(panel, '这本漫画讲了什么');
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const payload = invoke.mock.calls[0]?.[1] as { messages: { content: string }[] };
+    expect(payload.messages.some((message) => message.content.includes('<chapter>'))).toBe(false);
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '这本漫画讲了什么',
+    });
+    panel.destroy();
+  });
+
+  it('resets the chapter switch when the book identity changes', async () => {
+    let key = 'book-a';
+    let chapter: { title: string; text: string } | null = { title: '第一章', text: '甲书正文' };
+    const stream = fakeStream(async ({ emit }) => {
+      emit('答');
+      return { finish: 'stop', totalChars: 1 };
+    });
+    const panel = createAssistantPanel({
+      t,
+      host: () => host,
+      chapterContext: () => chapter,
+      openSettings: () => undefined,
+      saveAnnotation: () => undefined,
+      fetchConfig: async () => ({ configured: true, missing: [] }),
+      readHistory: vi.fn(async () => ''),
+      writeHistory: vi.fn(async () => undefined),
+      historyKey: () => key,
+      stream,
+    });
+    panel.open();
+    await flush();
+    const chapterChip = (): HTMLElement =>
+      panel.element.querySelector<HTMLElement>('[data-assistant-context="chapter"]')!;
+    const feedback = (): HTMLElement | null =>
+      panel.element.querySelector<HTMLElement>('.lightink-reader-assistant-context-feedback');
+    chapterChip()
+      .querySelector<HTMLButtonElement>('[data-assistant-context-toggle="chapter"]')!
+      .click();
+    expect(chapterChip().dataset.contextIncluded).toBe('false');
+    expect(feedback()?.hidden).toBe(false);
+
+    key = 'book-b';
+    chapter = { title: '第二章', text: '乙书正文' };
+    panel.open();
+    await flush();
+    expect(chapterChip().dataset.contextIncluded).toBe('true');
+    expect(chapterChip().textContent).toContain('第二章');
+    expect(feedback()?.hidden).toBe(true);
+
+    submitQuestion(panel, '新书问题');
+    await flush();
+    const payload = stream.invoke.mock.calls[0]?.[1] as { messages: { content: string }[] };
+    expect(payload.messages.some((message) => message.content.includes('乙书正文'))).toBe(true);
+    expect(payload.messages.some((message) => message.content.includes('甲书正文'))).toBe(false);
     panel.destroy();
   });
 });
