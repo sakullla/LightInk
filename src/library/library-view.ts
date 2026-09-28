@@ -91,6 +91,15 @@ import {
   type LibraryThemeStorage,
 } from './library-theme.js';
 import { createTagEditor, type TagEditor } from './tag-editor.js';
+import {
+  libraryHomeShortcutCandidates,
+  loadLibraryHomeShortcutUsage,
+  projectLibraryHomeReading,
+  recordLibraryHomeShortcutUsage,
+  selectLibraryHomeShortcuts,
+  type LibraryHomeShortcut,
+  type LibraryHomeShortcutKey,
+} from './library-home.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibrarySection = 'shelf' | 'sources' | 'manage';
@@ -188,6 +197,8 @@ interface Labels {
   coverPage: string;
   notStarted: string;
   continueReading: string;
+  recentReading: string;
+  frequentShortcuts: string;
   dismissContinue: string;
   homeEmptyTitle: string;
   homeEmptyHint: string;
@@ -377,6 +388,8 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: 'Cover page',
     notStarted: 'Not started',
     continueReading: 'Continue reading',
+    recentReading: 'Recently read',
+    frequentShortcuts: 'Frequent shortcuts',
     dismissContinue: 'Dismiss',
     homeEmptyTitle: 'Your library is empty',
     homeEmptyHint: 'Import local books or add a library source to start building your shelf.',
@@ -564,6 +577,8 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: '封面页',
     notStarted: '未开始',
     continueReading: '继续阅读',
+    recentReading: '最近阅读',
+    frequentShortcuts: '常用捷径',
     dismissContinue: '关闭',
     homeEmptyTitle: '书库还是空的',
     homeEmptyHint: '导入本地书籍，或添加书库源，开始建立你的书墙。',
@@ -1696,9 +1711,21 @@ export function createLibraryView(
   const retryButton = button(doc, '');
   retryButton.hidden = true;
   status.append(retryButton);
-  const continueHost = doc.createElement('div');
-  continueHost.className = 'lightink-library-continue';
+  const home = doc.createElement('div');
+  home.className = 'lightink-library-home';
+  const continueHost = doc.createElement('section');
+  continueHost.className = 'lightink-library-continue lightink-library-home-primary';
   continueHost.hidden = true;
+  const recentHost = doc.createElement('section');
+  recentHost.className = 'lightink-library-home-section lightink-library-home-recent';
+  recentHost.hidden = true;
+  const shortcutHost = doc.createElement('section');
+  shortcutHost.className = 'lightink-library-home-section lightink-library-home-shortcuts';
+  shortcutHost.hidden = true;
+  const booksHost = doc.createElement('section');
+  booksHost.className = 'lightink-library-home-section lightink-library-home-books';
+  const booksHeading = doc.createElement('h2');
+  booksHeading.className = 'lightink-library-home-heading lightink-library-wall-heading';
   const shelfToolbar = doc.createElement('div');
   shelfToolbar.className = 'lightink-library-shelf-toolbar';
   shelfToolbar.hidden = true;
@@ -1828,7 +1855,9 @@ export function createLibraryView(
   const detailBackdrop = doc.createElement('div');
   detailBackdrop.className = 'lightink-library-detail-backdrop';
   detailBackdrop.hidden = true;
-  workArea.append(itemList, detail);
+  booksHost.append(booksHeading, itemList);
+  home.append(continueHost, recentHost, shortcutHost, booksHost);
+  workArea.append(home, detail);
   body.append(navPane, content);
   const membershipOverlay = doc.createElement('div');
   membershipOverlay.className = 'lightink-library-membership-overlay';
@@ -2029,12 +2058,13 @@ export function createLibraryView(
     }
   }
 
-  const isMobileLibraryChrome = (): boolean => {
+  const platformUsesTouchChrome = (): boolean => {
     const rootEl = doc.documentElement;
-    const flagged =
-      rootEl.hasAttribute('data-android') || rootEl.hasAttribute('data-touch-primary');
-    return flagged && libraryViewportIsNarrow();
+    return rootEl.hasAttribute('data-android') || rootEl.hasAttribute('data-touch-primary');
   };
+
+  const isMobileLibraryChrome = (): boolean =>
+    platformUsesTouchChrome() && libraryViewportIsNarrow();
 
   const tabbarLabels = (): LibraryTabbarLabels => ({
     navigation: labels().tabNavigation,
@@ -2090,13 +2120,19 @@ export function createLibraryView(
   setNavRailCollapsed(navRailCollapsed, false);
   // 底部 Tab 栏仅移动 chrome 挂载；≤760px 断点由 CSS 控制可见性，
   // 宽视口（含触屏桌面）只见桌面导航栏。
-  const tabbar = isMobileLibraryChrome()
+  const tabbar = platformUsesTouchChrome()
     ? createLibraryTabbar(doc, {
         labels: tabbarLabels(),
         onSelect: (tab) => void activateMobileTab(tab),
       })
     : null;
   if (tabbar !== null) root.appendChild(tabbar.element);
+  const onLibraryViewportResize = (): void => {
+    if (root.hidden) return;
+    syncPageChrome();
+    renderItems();
+  };
+  doc.defaultView?.addEventListener('resize', onLibraryViewportResize);
   // 管理页：分组设置页 DOM 与缓存上限弹层由 library-manage 拥有；view 只提供
   // deps 适配（导入后回书架）与挂载点（syncPageChrome 的 manage 分支）。
   const manageLabels = (): LibraryManageLabels => {
@@ -2455,9 +2491,29 @@ export function createLibraryView(
     );
   }
 
+  function homeShortcutCandidates(): LibraryHomeShortcut[] {
+    return libraryHomeShortcutCandidates(
+      shelfItems.map((display) => display.item),
+      groups,
+      memberships,
+      tags,
+      tagMemberships,
+    );
+  }
+
+  function validHomeShortcutKeys(): Set<LibraryHomeShortcutKey> {
+    return new Set(homeShortcutCandidates().map((shortcut) => shortcut.key));
+  }
+
+  function rememberHomeShortcut(key: LibraryHomeShortcutKey): void {
+    recordLibraryHomeShortcutUsage(deps.themeStorage, key, validHomeShortcutKeys());
+  }
+
   /** 点选标签过滤书墙：再点同一标签取消；与分组筛选叠加（AND）。 */
   function applyTagFilter(tagId: string): void {
-    selectedTagId = selectedTagId === tagId ? null : tagId;
+    const selecting = selectedTagId !== tagId;
+    selectedTagId = selecting ? tagId : null;
+    if (selecting) rememberHomeShortcut(`tag:${tagId}`);
     closeFilterSheet();
     closeGroupsSheet();
     void activateShelf();
@@ -2885,32 +2941,21 @@ export function createLibraryView(
     return filtered.slice().sort(compareShelfItems);
   }
 
+  function homeReadingProjection() {
+    return projectLibraryHomeReading(
+      shelfItems.map((display) => display.item),
+      (item) => {
+        const display = shelfItems.find((candidate) => candidate.item.id === item.id);
+        return display === undefined ? null : progressFor(display);
+      },
+    );
+  }
+
   function latestInProgress(): DisplayItem | null {
-    const opened =
-      lastOpenedItemId === null
-        ? null
-        : (items.find((display) => display.item.id === lastOpenedItemId) ?? null);
-    if (opened !== null) {
-      const progress = progressFor(opened);
-      if (progress?.status === 'in-progress') {
-        const fingerprint = continueFingerprint(opened);
-        if (fingerprint !== null && fingerprint !== dismissedContinue) {
-          return opened;
-        }
-      }
-    }
-    let latest: DisplayItem | null = null;
-    let latestClock = Number.NEGATIVE_INFINITY;
-    for (const display of items) {
-      const progress = progressFor(display);
-      if (progress?.status !== 'in-progress') continue;
-      const clock = progressClock(progress);
-      if (latest === null || clock > latestClock) {
-        latest = display;
-        latestClock = clock;
-      }
-    }
-    return latest;
+    const primaryId = homeReadingProjection().primary?.item.id;
+    return primaryId === undefined
+      ? null
+      : (shelfItems.find((display) => display.item.id === primaryId) ?? null);
   }
 
   function setStatus(message: string, retry = false): void {
@@ -2969,6 +3014,7 @@ export function createLibraryView(
     catalogPane.hidden = !inCatalog;
     navPane.hidden = isMobileLibraryChrome() && inCatalog;
     if (activeSection === 'shelf') {
+      booksHost.append(booksHeading, itemList);
       heading.textContent = isMobileLibraryChrome() ? labels().tabShelf : labels().library;
       // 宽屏触控仍显示标题；≤760 手机壳由 CSS 隐藏，勿对全部 chrome 强制 hidden。
       heading.hidden = !isMobileLibraryChrome();
@@ -2976,13 +3022,15 @@ export function createLibraryView(
       itemList.classList.add('lightink-library-cover-wall');
       if (isMobileLibraryChrome()) {
         syncMobileGroupsChrome();
-        content.replaceChildren(shelfToolbar, continueHost, status, itemList);
+        workArea.replaceChildren(home, detail);
+        content.replaceChildren(shelfToolbar, status, workArea);
       } else {
         closeFilterSheet();
         closeGroupsSheet();
         syncMobileGroupsChrome();
         // 桌面书架把书墙放回 workArea，使右键「作品详情」可打开详情侧栏（标签/R6）。
-        content.replaceChildren(continueHost, status, workArea);
+        workArea.replaceChildren(home, detail);
+        content.replaceChildren(status, workArea);
       }
       detail.hidden = true;
       selected = null;
@@ -3331,9 +3379,7 @@ export function createLibraryView(
     choose.classList.toggle('is-active', chosen);
     if (chosen) choose.setAttribute('aria-current', 'true');
     choose.addEventListener('click', () => {
-      selectedCustomGroupId = node.group.id;
-      selectedSmartGroupId = null;
-      void activateShelf();
+      applyCustomGroup(node.group.id);
     });
     choose.addEventListener('keydown', (event) => {
       if (event.key === 'F2') {
@@ -3603,6 +3649,7 @@ export function createLibraryView(
     selectedCustomGroupId = groupId;
     selectedSmartGroupId = null;
     selectedGroup = 'all';
+    rememberHomeShortcut(`group:${groupId}`);
     closeGroupsSheet();
     void activateShelf();
   }
@@ -4760,16 +4807,107 @@ export function createLibraryView(
     return shell;
   }
 
+  function homeSectionHeading(text: string): HTMLHeadingElement {
+    const heading = doc.createElement('h2');
+    heading.className = 'lightink-library-home-heading';
+    heading.textContent = text;
+    return heading;
+  }
+
+  function renderRecentReading(): void {
+    recentHost.replaceChildren();
+    if (activeSection !== 'shelf') {
+      recentHost.hidden = true;
+      return;
+    }
+    const projected = homeReadingProjection();
+    if (projected.recent.length === 0) {
+      recentHost.hidden = true;
+      return;
+    }
+    const list = doc.createElement('div');
+    list.className = 'lightink-library-home-recent-list';
+    list.setAttribute('role', 'list');
+    for (const entry of projected.recent) {
+      const display = shelfItems.find((candidate) => candidate.item.id === entry.item.id);
+      if (display === undefined) continue;
+      const card = button(doc, '', 'lightink-library-home-recent-card');
+      card.dataset.homeItemId = display.item.id;
+      card.setAttribute('role', 'listitem');
+      const cover = doc.createElement('div');
+      cover.className = 'lightink-library-cover';
+      appendCover(cover, display);
+      const text = doc.createElement('span');
+      text.className = 'lightink-library-home-recent-text';
+      const title = doc.createElement('strong');
+      title.textContent = itemTitle(display.item);
+      const progress = doc.createElement('span');
+      progress.className = 'lightink-library-item-progress';
+      progress.textContent = progressLabel(entry.progress);
+      text.append(title, progress);
+      card.append(cover, text);
+      card.addEventListener('click', () => void openSelected(display));
+      list.appendChild(card);
+    }
+    recentHost.append(homeSectionHeading(labels().recentReading), list);
+    recentHost.hidden = list.childElementCount === 0;
+  }
+
+  function scrollToAllBooks(): void {
+    if (typeof booksHost.scrollIntoView === 'function') {
+      booksHost.scrollIntoView({ block: 'start' });
+    }
+  }
+
+  function activateHomeShortcut(shortcut: LibraryHomeShortcut): void {
+    selectedGroup = 'all';
+    selectedSmartGroupId = null;
+    selectedCustomGroupId = shortcut.kind === 'group' ? shortcut.id : null;
+    selectedTagId = shortcut.kind === 'tag' ? shortcut.id : null;
+    searchInput.value = '';
+    syncSearchClear();
+    rememberHomeShortcut(shortcut.key);
+    closeFilterSheet();
+    closeGroupsSheet();
+    void activateShelf().then(scrollToAllBooks);
+  }
+
+  function renderHomeShortcuts(): void {
+    shortcutHost.replaceChildren();
+    if (activeSection !== 'shelf') {
+      shortcutHost.hidden = true;
+      return;
+    }
+    const candidates = homeShortcutCandidates();
+    const shortcuts = selectLibraryHomeShortcuts(
+      candidates,
+      loadLibraryHomeShortcutUsage(deps.themeStorage),
+    );
+    if (shortcuts.length === 0) {
+      shortcutHost.hidden = true;
+      return;
+    }
+    const list = doc.createElement('div');
+    list.className = 'lightink-library-home-shortcut-list';
+    for (const shortcut of shortcuts) {
+      const item = button(doc, '', 'lightink-library-home-shortcut');
+      item.dataset.homeShortcut = shortcut.key;
+      item.dataset.shortcutKind = shortcut.kind;
+      const name = doc.createElement('strong');
+      name.textContent = shortcut.name;
+      const count = doc.createElement('span');
+      count.textContent = String(shortcut.itemCount);
+      item.append(name, count);
+      item.addEventListener('click', () => activateHomeShortcut(shortcut));
+      list.appendChild(item);
+    }
+    shortcutHost.append(homeSectionHeading(labels().frequentShortcuts), list);
+    shortcutHost.hidden = false;
+  }
+
   function renderContinueBar(): void {
     continueHost.replaceChildren();
-    if (
-      activeSection !== 'shelf' ||
-      selectedGroup !== 'all' ||
-      selectedCustomGroupId !== null ||
-      selectedSmartGroupId !== null ||
-      selectedTagId !== null ||
-      searchInput.value.trim() !== ''
-    ) {
+    if (activeSection !== 'shelf') {
       continueHost.hidden = true;
       return;
     }
@@ -4810,7 +4948,7 @@ export function createLibraryView(
       writeDismissedContinue(fingerprint);
       renderContinueBar();
     });
-    continueHost.append(open, dismiss);
+    continueHost.append(homeSectionHeading(labels().continueReading), open, dismiss);
     continueHost.hidden = false;
   }
 
@@ -4858,6 +4996,12 @@ export function createLibraryView(
   }
 
   function renderItems(): void {
+    if (activeSection === 'shelf') {
+      booksHeading.textContent = labels().allBooks;
+      renderContinueBar();
+      renderRecentReading();
+      renderHomeShortcuts();
+    }
     const shown = visibleItems();
     itemList.replaceChildren();
     if (selectedTagId !== null && activeSection === 'shelf' && !catalogActive()) {
@@ -6759,6 +6903,7 @@ export function createLibraryView(
       if (typeof document !== 'undefined') {
         document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
       }
+      doc.defaultView?.removeEventListener('resize', onLibraryViewportResize);
       manage.destroy();
       unbindGroupOverlayReveal();
       unbindSourceOverlayReveal();
