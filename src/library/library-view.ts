@@ -92,15 +92,7 @@ import {
   type LibraryThemeStorage,
 } from './library-theme.js';
 import { createTagEditor, type TagEditor } from './tag-editor.js';
-import {
-  libraryHomeShortcutCandidates,
-  loadLibraryHomeShortcutUsage,
-  projectLibraryHomeReading,
-  recordLibraryHomeShortcutUsage,
-  selectLibraryHomeShortcuts,
-  type LibraryHomeShortcut,
-  type LibraryHomeShortcutKey,
-} from './library-home.js';
+import { projectLibraryHomeReading } from './library-home.js';
 
 type Locale = 'en' | 'zh-CN';
 type LibrarySection = 'shelf' | 'sources' | 'manage';
@@ -120,7 +112,6 @@ interface Labels {
   unread: string;
   textBooks: string;
   comics: string;
-  allBooks: string;
   sources: string;
   addSource: string;
   editSource: string;
@@ -198,8 +189,6 @@ interface Labels {
   coverPage: string;
   notStarted: string;
   continueReading: string;
-  recentReading: string;
-  frequentShortcuts: string;
   dismissContinue: string;
   homeEmptyTitle: string;
   homeEmptyHint: string;
@@ -312,7 +301,6 @@ const LABELS: Record<Locale, Labels> = {
     unread: 'Unread',
     textBooks: 'Text',
     comics: 'Comics',
-    allBooks: 'All books',
     sources: 'Sources',
     addSource: 'Add library source',
     editSource: 'Edit OPDS source',
@@ -389,8 +377,6 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: 'Cover page',
     notStarted: 'Not started',
     continueReading: 'Continue reading',
-    recentReading: 'Recently read',
-    frequentShortcuts: 'Frequent shortcuts',
     dismissContinue: 'Dismiss',
     homeEmptyTitle: 'Your library is empty',
     homeEmptyHint: 'Import local books or add a library source to start building your shelf.',
@@ -501,7 +487,6 @@ const LABELS: Record<Locale, Labels> = {
     unread: '未读',
     textBooks: '文字书',
     comics: '漫画',
-    allBooks: '全部作品',
     sources: '书库源',
     addSource: '添加书库源',
     editSource: '编辑 OPDS 源',
@@ -578,8 +563,6 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: '封面页',
     notStarted: '未开始',
     continueReading: '继续阅读',
-    recentReading: '最近阅读',
-    frequentShortcuts: '常用捷径',
     dismissContinue: '关闭',
     homeEmptyTitle: '书库还是空的',
     homeEmptyHint: '导入本地书籍，或添加书库源，开始建立你的书墙。',
@@ -1084,6 +1067,13 @@ function bindOverlayKeyboardReveal(overlay: HTMLElement): () => void {
 
 function itemTitle(item: LibraryItem): string {
   return typeof item.title === 'string' ? item.title : '';
+}
+
+/** Display-only. Stored `item.title` keeps its extension. */
+const BOOK_TITLE_EXTENSION = /\.(?:pdf|epub|txt|cbz|cbr|cb7)$/i;
+
+function displayBookTitle(item: LibraryItem): string {
+  return itemTitle(item).trimEnd().replace(BOOK_TITLE_EXTENSION, '');
 }
 
 function itemAuthors(item: LibraryItem): readonly string[] {
@@ -1727,16 +1717,11 @@ export function createLibraryView(
   const continueHost = doc.createElement('section');
   continueHost.className = 'lightink-library-continue lightink-library-home-primary';
   continueHost.hidden = true;
-  const recentHost = doc.createElement('section');
-  recentHost.className = 'lightink-library-home-section lightink-library-home-recent';
-  recentHost.hidden = true;
-  const shortcutHost = doc.createElement('section');
-  shortcutHost.className = 'lightink-library-home-section lightink-library-home-shortcuts';
-  shortcutHost.hidden = true;
   const booksHost = doc.createElement('section');
   booksHost.className = 'lightink-library-home-section lightink-library-home-books';
   const booksHeading = doc.createElement('h2');
   booksHeading.className = 'lightink-library-home-heading lightink-library-wall-heading';
+  booksHeading.hidden = true;
   const shelfToolbar = doc.createElement('div');
   shelfToolbar.className = 'lightink-library-shelf-toolbar';
   shelfToolbar.hidden = true;
@@ -1867,7 +1852,7 @@ export function createLibraryView(
   detailBackdrop.className = 'lightink-library-detail-backdrop';
   detailBackdrop.hidden = true;
   booksHost.append(booksHeading, itemList);
-  home.append(continueHost, recentHost, shortcutHost, booksHost);
+  home.append(continueHost, booksHost);
   workArea.append(home, detail);
   body.append(navPane, content);
   const membershipOverlay = doc.createElement('div');
@@ -2318,12 +2303,12 @@ export function createLibraryView(
       const key = catalogNodeKey(url);
       const existing = previous.get(key);
       if (existing !== undefined) {
-        existing.title = itemTitle(display.item);
+        existing.title = displayBookTitle(display.item);
         return existing;
       }
       return {
         key,
-        title: itemTitle(display.item),
+        title: displayBookTitle(display.item),
         url,
         children: [],
         publications: [],
@@ -2503,29 +2488,9 @@ export function createLibraryView(
     );
   }
 
-  function homeShortcutCandidates(): LibraryHomeShortcut[] {
-    return libraryHomeShortcutCandidates(
-      shelfItems.map((display) => display.item),
-      groups,
-      memberships,
-      tags,
-      tagMemberships,
-    );
-  }
-
-  function validHomeShortcutKeys(): Set<LibraryHomeShortcutKey> {
-    return new Set(homeShortcutCandidates().map((shortcut) => shortcut.key));
-  }
-
-  function rememberHomeShortcut(key: LibraryHomeShortcutKey): void {
-    recordLibraryHomeShortcutUsage(deps.themeStorage, key, validHomeShortcutKeys());
-  }
-
   /** 点选标签过滤书墙：再点同一标签取消；与分组筛选叠加（AND）。 */
   function applyTagFilter(tagId: string): void {
-    const selecting = selectedTagId !== tagId;
-    selectedTagId = selecting ? tagId : null;
-    if (selecting) rememberHomeShortcut(`tag:${tagId}`);
+    selectedTagId = selectedTagId !== tagId ? tagId : null;
     closeFilterSheet();
     closeGroupsSheet();
     void activateShelf();
@@ -2565,7 +2530,7 @@ export function createLibraryView(
         : new Set<string>();
     if (mode.kind === 'assign') {
       const display = items.find((candidate) => candidate.item.id === mode.itemId);
-      const title = display === undefined ? '' : `: ${itemTitle(display.item)}`;
+      const title = display === undefined ? '' : `: ${displayBookTitle(display.item)}`;
       tagEditor.open({
         title: `${l.manageTags}${title}`,
         message: '',
@@ -2829,6 +2794,26 @@ export function createLibraryView(
     return parts.length > 0 ? parts.join(' · ') : labels().continueReading;
   }
 
+  /** Home grid and continue reading: location, otherwise percent. No duration. */
+  function homeProgressLabel(progress: LibraryProgress): string {
+    if (progress.status === 'not-started') return labels().notStarted;
+    const location = displayLocation(progress);
+    if (location?.kind === 'page') {
+      return labels().pageProgress.replace('{current}', String(location.current));
+    }
+    if (location?.kind === 'chapter') {
+      return labels().chapterProgress.replace('{current}', String(location.current));
+    }
+    if (isDisplayablePercent(progress.percent)) {
+      return labels().readPercent.replace(
+        '{percent}',
+        String(Math.min(100, Math.round(progress.percent))),
+      );
+    }
+    if (progress.status === 'finished') return labels().finished;
+    return '';
+  }
+
   function continueStorage(): ProgressStorage | null {
     if (deps.progressStorage !== undefined) return deps.progressStorage;
     try {
@@ -2964,10 +2949,60 @@ export function createLibraryView(
   }
 
   function latestInProgress(): DisplayItem | null {
-    const primaryId = homeReadingProjection().primary?.item.id;
+    const primaryId = homeReadingProjection()?.item.id;
     return primaryId === undefined
       ? null
       : (shelfItems.find((display) => display.item.id === primaryId) ?? null);
+  }
+
+  /**
+   * 未筛选：左侧是「全部」、没有标签、书墙搜索为空。
+   * 侧栏里只缩小导航名单的输入不改变书墙，因此不在这里。
+   */
+  function shelfHomeFiltered(): boolean {
+    return (
+      searchInput.value.trim() !== '' ||
+      selectedTagId !== null ||
+      selectedCustomGroupId !== null ||
+      selectedSmartGroupId !== null ||
+      selectedGroup !== 'all'
+    );
+  }
+
+  function wallSelectionLabel(): string {
+    const parts: string[] = [];
+    if (selectedCustomGroupId !== null) {
+      parts.push(
+        groups.find((group) => group.id === selectedCustomGroupId)?.name ?? labels().groups,
+      );
+    } else if (selectedSmartGroupId !== null) {
+      const smart = smartGroups.find((group) => group.id === selectedSmartGroupId);
+      parts.push(smart !== undefined ? smartGroupName(smart) : labels().smartGroups);
+    } else if (selectedGroup !== 'all') {
+      parts.push(groupLabel(labels(), selectedGroup));
+    }
+    if (selectedTagId !== null) {
+      parts.push(tagById(selectedTagId)?.name ?? labels().tags);
+    }
+    const query = searchInput.value.trim();
+    if (query !== '') parts.push(query);
+    return parts.join(' · ');
+  }
+
+  function syncWallHeading(): void {
+    if (!shelfHomeFiltered()) {
+      booksHeading.hidden = true;
+      booksHeading.textContent = '';
+      delete booksHeading.dataset.wallSelection;
+      delete booksHeading.dataset.wallCount;
+      return;
+    }
+    const name = wallSelectionLabel();
+    const count = String(visibleItems().length);
+    booksHeading.hidden = false;
+    booksHeading.dataset.wallSelection = name;
+    booksHeading.dataset.wallCount = count;
+    booksHeading.textContent = `${name} · ${count}`;
   }
 
   function setStatus(message: string, retry = false): void {
@@ -3659,7 +3694,6 @@ export function createLibraryView(
     selectedCustomGroupId = groupId;
     selectedSmartGroupId = null;
     selectedGroup = 'all';
-    rememberHomeShortcut(`group:${groupId}`);
     closeGroupsSheet();
     void activateShelf();
   }
@@ -4263,7 +4297,7 @@ export function createLibraryView(
     row.dataset.itemId = display.item.id;
     row.setAttribute('role', 'option');
     const title = doc.createElement('span');
-    title.textContent = itemTitle(display.item);
+    title.textContent = displayBookTitle(display.item);
     row.append(
       createNavIcon(doc, NAV_ICON_PATHS.folder),
       title,
@@ -4418,7 +4452,7 @@ export function createLibraryView(
    * continue strip) fall back to the initial via the title's `data-cover-initial`.
    */
   function appendJacket(cover: HTMLElement, item: LibraryItem): void {
-    const title = itemTitle(item);
+    const title = displayBookTitle(item);
     const initial = title.slice(0, 1);
     cover.classList.add('lightink-library-cover--jacket');
     cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
@@ -4453,11 +4487,17 @@ export function createLibraryView(
       row.dataset.progressFill = String(fill);
       row.style.setProperty('--lightink-library-progress-fill', `${fill}%`);
     }
-    const progress = doc.createElement('span');
-    progress.className = 'lightink-library-item-progress';
-    progress.textContent = progressLabel(shelfProgress);
-    text.appendChild(progress);
-    if (shelfProgress.status === 'in-progress' && options.continueCue) {
+    const shortHomeProgress = activeSection === 'shelf' && !catalogActive();
+    const progressText = shortHomeProgress
+      ? homeProgressLabel(shelfProgress)
+      : progressLabel(shelfProgress);
+    if (progressText !== '') {
+      const progress = doc.createElement('span');
+      progress.className = 'lightink-library-item-progress';
+      progress.textContent = progressText;
+      text.appendChild(progress);
+    }
+    if (!shortHomeProgress && shelfProgress.status === 'in-progress' && options.continueCue) {
       const cue = doc.createElement('span');
       cue.className = 'lightink-library-item-continue';
       cue.textContent = labels().continueReading;
@@ -4639,7 +4679,9 @@ export function createLibraryView(
       return;
     }
     membershipItemId = itemId;
-    membershipTitle.textContent = `${labels().organizeBook}: ${display?.item.title ?? ''}`;
+    membershipTitle.textContent = `${labels().organizeBook}: ${
+      display === undefined ? '' : displayBookTitle(display.item)
+    }`;
     membershipOptions.replaceChildren();
     if (canPin && display !== undefined) {
       const pinLabel = doc.createElement('label');
@@ -4723,7 +4765,7 @@ export function createLibraryView(
     const text = doc.createElement('span');
     text.className = 'lightink-library-item-text';
     const title = doc.createElement('strong');
-    title.textContent = itemTitle(display.item);
+    title.textContent = displayBookTitle(display.item);
     text.append(title);
     const metaParts = [itemAuthors(display.item).join(', '), display.item.series].filter(
       (part): part is string => typeof part === 'string' && part !== '',
@@ -4817,107 +4859,9 @@ export function createLibraryView(
     return shell;
   }
 
-  function homeSectionHeading(text: string): HTMLHeadingElement {
-    const heading = doc.createElement('h2');
-    heading.className = 'lightink-library-home-heading';
-    heading.textContent = text;
-    return heading;
-  }
-
-  function renderRecentReading(): void {
-    recentHost.replaceChildren();
-    if (activeSection !== 'shelf') {
-      recentHost.hidden = true;
-      return;
-    }
-    const projected = homeReadingProjection();
-    if (projected.recent.length === 0) {
-      recentHost.hidden = true;
-      return;
-    }
-    const list = doc.createElement('div');
-    list.className = 'lightink-library-home-recent-list';
-    list.setAttribute('role', 'list');
-    for (const entry of projected.recent) {
-      const display = shelfItems.find((candidate) => candidate.item.id === entry.item.id);
-      if (display === undefined) continue;
-      const card = button(doc, '', 'lightink-library-home-recent-card');
-      card.dataset.homeItemId = display.item.id;
-      card.setAttribute('role', 'listitem');
-      const cover = doc.createElement('div');
-      cover.className = 'lightink-library-cover';
-      appendCover(cover, display);
-      const text = doc.createElement('span');
-      text.className = 'lightink-library-home-recent-text';
-      const title = doc.createElement('strong');
-      title.textContent = itemTitle(display.item);
-      const progress = doc.createElement('span');
-      progress.className = 'lightink-library-item-progress';
-      progress.textContent = progressLabel(entry.progress);
-      text.append(title, progress);
-      card.append(cover, text);
-      card.addEventListener('click', () => void openSelected(display));
-      list.appendChild(card);
-    }
-    recentHost.append(homeSectionHeading(labels().recentReading), list);
-    recentHost.hidden = list.childElementCount === 0;
-  }
-
-  function scrollToAllBooks(): void {
-    if (typeof booksHost.scrollIntoView === 'function') {
-      booksHost.scrollIntoView({ block: 'start' });
-    }
-  }
-
-  function activateHomeShortcut(shortcut: LibraryHomeShortcut): void {
-    selectedGroup = 'all';
-    selectedSmartGroupId = null;
-    selectedCustomGroupId = shortcut.kind === 'group' ? shortcut.id : null;
-    selectedTagId = shortcut.kind === 'tag' ? shortcut.id : null;
-    searchInput.value = '';
-    syncSearchClear();
-    rememberHomeShortcut(shortcut.key);
-    closeFilterSheet();
-    closeGroupsSheet();
-    void activateShelf().then(scrollToAllBooks);
-  }
-
-  function renderHomeShortcuts(): void {
-    shortcutHost.replaceChildren();
-    if (activeSection !== 'shelf') {
-      shortcutHost.hidden = true;
-      return;
-    }
-    const candidates = homeShortcutCandidates();
-    const shortcuts = selectLibraryHomeShortcuts(
-      candidates,
-      loadLibraryHomeShortcutUsage(deps.themeStorage),
-    );
-    if (shortcuts.length === 0) {
-      shortcutHost.hidden = true;
-      return;
-    }
-    const list = doc.createElement('div');
-    list.className = 'lightink-library-home-shortcut-list';
-    for (const shortcut of shortcuts) {
-      const item = button(doc, '', 'lightink-library-home-shortcut');
-      item.dataset.homeShortcut = shortcut.key;
-      item.dataset.shortcutKind = shortcut.kind;
-      const name = doc.createElement('strong');
-      name.textContent = shortcut.name;
-      const count = doc.createElement('span');
-      count.textContent = String(shortcut.itemCount);
-      item.append(name, count);
-      item.addEventListener('click', () => activateHomeShortcut(shortcut));
-      list.appendChild(item);
-    }
-    shortcutHost.append(homeSectionHeading(labels().frequentShortcuts), list);
-    shortcutHost.hidden = false;
-  }
-
   function renderContinueBar(): void {
     continueHost.replaceChildren();
-    if (activeSection !== 'shelf') {
+    if (activeSection !== 'shelf' || shelfHomeFiltered()) {
       continueHost.hidden = true;
       return;
     }
@@ -4929,25 +4873,26 @@ export function createLibraryView(
     }
     const progress = progressFor(latest);
     const open = button(doc, '', 'lightink-library-continue-open');
-    open.setAttribute('aria-label', labels().continueReading);
+    const titleText = displayBookTitle(latest.item);
+    open.setAttribute('aria-label', titleText === '' ? labels().open : titleText);
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover';
     appendCover(cover, latest);
     const text = doc.createElement('span');
-    text.className = 'lightink-library-continue-text';
+    text.className = 'lightink-library-item-text';
     const title = doc.createElement('strong');
-    title.textContent = itemTitle(latest.item);
+    title.textContent = titleText;
     text.append(title);
     if (progress !== null) {
-      const meta = doc.createElement('span');
-      meta.className = 'lightink-library-item-progress';
-      meta.textContent = progressLabel(progress);
-      text.appendChild(meta);
+      const progressText = homeProgressLabel(progress);
+      if (progressText !== '') {
+        const meta = doc.createElement('span');
+        meta.className = 'lightink-library-item-progress';
+        meta.textContent = progressText;
+        text.appendChild(meta);
+      }
     }
-    const cue = doc.createElement('span');
-    cue.className = 'lightink-library-continue-cue';
-    cue.textContent = labels().continueReading;
-    open.append(cover, text, cue);
+    open.append(cover, text);
     open.addEventListener('click', () => void openSelected(latest));
     const dismiss = button(doc, '×', 'lightink-library-icon-button lightink-library-continue-dismiss');
     dismiss.setAttribute('aria-label', labels().dismissContinue);
@@ -4958,7 +4903,7 @@ export function createLibraryView(
       writeDismissedContinue(fingerprint);
       renderContinueBar();
     });
-    continueHost.append(homeSectionHeading(labels().continueReading), open, dismiss);
+    continueHost.append(open, dismiss);
     continueHost.hidden = false;
   }
 
@@ -5007,10 +4952,8 @@ export function createLibraryView(
 
   function renderItems(): void {
     if (activeSection === 'shelf') {
-      booksHeading.textContent = labels().allBooks;
       renderContinueBar();
-      renderRecentReading();
-      renderHomeShortcuts();
+      syncWallHeading();
     }
     const shown = visibleItems();
     itemList.replaceChildren();
@@ -5272,7 +5215,7 @@ export function createLibraryView(
     const remote = !isLocalItem(resolved.item);
     const knownSize = request.acquisition?.size ?? resolved.item.size;
     const progress = beginOpenProgress({
-      title: itemTitle(resolved.item),
+      title: displayBookTitle(resolved.item),
       label: remote ? labels().downloading : labels().opening,
       cancelLabel: labels().cancel,
       ratio: remote && knownSize !== undefined && knownSize > 0 ? 0 : undefined,
@@ -5340,7 +5283,7 @@ export function createLibraryView(
     close.addEventListener('click', () => closeDetail());
     headerRow.append(detailHeading, close);
     const title = doc.createElement('h3');
-    title.textContent = itemTitle(selected.item);
+    title.textContent = displayBookTitle(selected.item);
     const authors = doc.createElement('p');
     authors.className = 'lightink-library-detail-authors';
     authors.textContent = itemAuthors(selected.item).join(', ');

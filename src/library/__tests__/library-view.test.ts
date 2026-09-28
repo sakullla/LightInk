@@ -11,6 +11,7 @@ import {
 } from '../library-progress.js';
 import { classifyLibraryKind } from '../library-kind.js';
 import {
+  CONTINUE_DISMISS_KEY,
   CONTINUE_LAST_OPENED_KEY,
   createLibraryView,
   jacketHue,
@@ -358,6 +359,12 @@ function expandSmartGroupTypes(host: ParentNode): void {
   }
 }
 
+
+function wallHeading(host: ParentNode): HTMLElement {
+  const heading = host.querySelector('.lightink-library-wall-heading');
+  if (!(heading instanceof HTMLElement)) throw new Error('wall heading missing');
+  return heading;
+}
 
 function isShown(el: Element | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -927,6 +934,7 @@ afterEach(() => {
   document.documentElement.style.removeProperty('--lightink-keyboard-inset');
   delete document.documentElement.dataset.readerProgressBar;
   window.localStorage.removeItem(CONTINUE_LAST_OPENED_KEY);
+  window.localStorage.removeItem(CONTINUE_DISMISS_KEY);
 });
 
 describe('LibraryView my-books home', () => {
@@ -969,7 +977,7 @@ describe('LibraryView my-books home', () => {
     expect(comicRow.style.getPropertyValue('--lightink-library-progress-fill')).toBe('37%');
     expect(unreadRow.dataset.progressFill).toBeUndefined();
     expect(comicRow.textContent).toContain('第 12 页');
-    expect(comicRow.textContent).toContain('已读 37%');
+    expect(comicRow.textContent).not.toContain('已读 37%');
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
     view.destroy();
   });
@@ -1052,7 +1060,7 @@ describe('LibraryView my-books home', () => {
 
     const row = itemRow(host, book.id);
     expect(row.textContent).toContain('第 1997 章');
-    expect(row.textContent).toContain('已读 79%');
+    expect(row.textContent).not.toContain('已读 79%');
     expect(row.textContent).not.toContain('浓浓的火药味');
     view.destroy();
   });
@@ -1234,6 +1242,8 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(itemRow(host, other.id)).toBeTruthy();
+    expect(wallHeading(host).textContent).toBe('河山 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     expect(host.querySelector<HTMLButtonElement>('.lightink-library-search-clear')?.hidden).toBe(
       false,
     );
@@ -1241,6 +1251,8 @@ describe('LibraryView my-books home', () => {
     shownControl(host, '清除').click();
     await settle();
     expect(input.value).toBe('');
+    expect(wallHeading(host).hidden).toBe(true);
+    expect(wallHeading(host).textContent).toBe('');
     expect(itemRow(host, novel.id)).toBeTruthy();
     expect(itemRow(host, other.id)).toBeTruthy();
     expect(host.querySelector<HTMLButtonElement>('.lightink-library-search-clear')?.hidden).toBe(
@@ -1297,17 +1309,22 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(itemRow(host, comic.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(wallHeading(host).textContent).toBe('漫画 · 漫画 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
     input.value = '没有这本书';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+    expect(wallHeading(host).textContent).toBe('漫画 · 漫画 · 没有这本书 · 0');
+    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
 
     shownControl(host, '清除').click();
     await settle();
     expect(groupButton(host, '漫画').classList.contains('is-active')).toBe(true);
     expect(tagNavButton(host, '漫画').classList.contains('is-active')).toBe(true);
+    expect(wallHeading(host).textContent).toBe('漫画 · 漫画 · 1');
     expect(itemRow(host, comic.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     view.destroy();
@@ -1327,6 +1344,7 @@ describe('LibraryView my-books home', () => {
     groupButton(host, '在读').click();
     await settle();
     expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
+    expect(wallHeading(host).textContent).toBe('在读 · 0');
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     view.destroy();
@@ -1628,6 +1646,7 @@ describe('LibraryView my-books home', () => {
     expect(desktopFilterLabels.join('')).not.toContain('…');
     expect(desktopFilterLabels).not.toContain('文字…');
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).hidden).toBe(true);
 
     groupButton(host, '在读').click();
     await settle();
@@ -1635,7 +1654,8 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).textContent).toBe('在读 · 2');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '读完').click();
     await settle();
@@ -1643,7 +1663,8 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
     expect(itemRow(host, done.id).textContent).toContain('读完的书');
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).textContent).toBe('读完 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '未读').click();
     await settle();
@@ -1651,7 +1672,8 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).textContent).toBe('未读 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '文字书').click();
     await settle();
@@ -1659,7 +1681,8 @@ describe('LibraryView my-books home', () => {
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
     expect(itemRow(host, done.id).textContent).toContain('读完的书');
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).textContent).toBe('文字书 · 3');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '漫画').click();
     await settle();
@@ -1667,7 +1690,8 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${done.id}"]`)).toBeNull();
     expect(itemRow(host, comic.id).textContent).toContain('本地漫画');
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).textContent).toBe('漫画 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
     groupButton(host, '全部').click();
     await settle();
@@ -1675,6 +1699,7 @@ describe('LibraryView my-books home', () => {
     expect(itemRow(host, novel.id)).toBeTruthy();
     expect(itemRow(host, done.id)).toBeTruthy();
     expect(itemRow(host, comic.id)).toBeTruthy();
+    expect(wallHeading(host).hidden).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     view.destroy();
   });
@@ -1788,7 +1813,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('opens an in-progress book from 继续阅读 and hides a zero percent', async () => {
+  it('opens an in-progress book from its cover or title and hides a zero percent', async () => {
     const novel = localItem({
       id: 'local:/books/c.epub',
       title: '续读小说',
@@ -1812,21 +1837,206 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
+    const open = host.querySelector<HTMLButtonElement>('.lightink-library-continue-open')!;
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
-    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('续读小说');
-    expect(host.querySelector('.lightink-library-continue-cue')?.textContent).toBe('继续阅读');
-    expect(host.textContent).toContain('第 4 章');
+    expect(open.querySelector('.lightink-library-continue-cue')).toBeNull();
+    expect(open.textContent).not.toContain('继续阅读');
+    expect(open.contains(open.querySelector('.lightink-library-cover'))).toBe(true);
+    expect(open.querySelector('strong')?.textContent).toBe('续读小说');
+    expect(open.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
+    expect(itemRow(host, novel.id)).toBeTruthy();
     expect(host.textContent).not.toContain('0%');
-    shownControl(host.querySelector('.lightink-library-continue')!, '继续阅读').click();
+    open.querySelector<HTMLElement>('strong')!.click();
     await settle();
     expect(deps.onOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ item: expect.objectContaining({ id: novel.id }) }),
+      expect.objectContaining({ item: expect.objectContaining({ id: novel.id, title: '续读小说' }) }),
       expect.anything(),
     );
     view.destroy();
   });
 
-  it('keeps the primary continue hero stable while groups and search filter all books', async () => {
+  it('restores a dismissed continue row only after its fingerprint changes', async () => {
+    const newer = localItem({
+      id: 'local:/books/newer.epub',
+      title: '较新在读',
+      localPath: '/books/newer.epub',
+    });
+    const older = localItem({
+      id: 'local:/books/older.epub',
+      title: '较早在读',
+      localPath: '/books/older.epub',
+    });
+    const records = new Map<string, {
+      status: 'in-progress';
+      unit: 'chapter';
+      index: number;
+      ratio: number;
+      updatedAt: number;
+    }>([
+      [newer.id, { status: 'in-progress', unit: 'chapter', index: 3, ratio: 0.2, updatedAt: 200 }],
+      [older.id, { status: 'in-progress', unit: 'chapter', index: 1, ratio: 0.1, updatedAt: 100 }],
+    ]);
+    const getProgress = vi.fn(
+      (item: LibraryProgressQuery) => records.get(item.id) ?? { status: 'not-started' as const },
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: { ...base.library, listItems: vi.fn(async () => [newer, older]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const continueBar = host.querySelector('.lightink-library-continue')!;
+    expect(continueBar.textContent).toContain('较新在读');
+    expect(continueBar.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
+    expect(itemRow(host, newer.id)).toBeTruthy();
+    host.querySelector<HTMLButtonElement>('.lightink-library-continue-dismiss')!.click();
+    expect(isShown(continueBar)).toBe(false);
+
+    await view.show();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(itemRow(host, newer.id)).toBeTruthy();
+    expect(itemRow(host, older.id)).toBeTruthy();
+
+    records.set(newer.id, { status: 'in-progress', unit: 'chapter', index: 8, ratio: 0.5, updatedAt: 200 });
+    await view.show();
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('较新在读');
+    expect(host.querySelector('.lightink-library-continue .lightink-library-item-progress')?.textContent).toBe(
+      '第 9 章',
+    );
+
+    host.querySelector<HTMLButtonElement>('.lightink-library-continue-dismiss')!.click();
+    records.set(older.id, { status: 'in-progress', unit: 'chapter', index: 1, ratio: 0.1, updatedAt: 900 });
+    await view.show();
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('较早在读');
+    expect(host.querySelector('.lightink-library-continue .lightink-library-item-progress')?.textContent).toBe(
+      '第 2 章',
+    );
+    view.destroy();
+  });
+
+  it('strips trailing book extensions and keeps home progress to one short line', async () => {
+    const hell = localItem({
+      id: 'local:/books/hell.pdf',
+      title: '地狱模式～喜欢挑战特殊成就的玩家在废设定的异世界成为无双～ - 01.pdf',
+      extension: 'pdf',
+      localPath: '/books/hell.pdf',
+    });
+    const reading = localItem({
+      id: 'local:/books/reading.epub',
+      title: '在读.EPUB',
+      extension: 'epub',
+      localPath: '/books/reading.epub',
+    });
+    const percentOnly = localItem({
+      id: 'local:/books/percent.cbz',
+      title: '仅百分比.cbz',
+      extension: 'cbz',
+      localPath: '/books/percent.cbz',
+    });
+    const notes = localItem({
+      id: 'local:/books/notes.txt',
+      title: '笔记.txt',
+      extension: 'txt',
+      localPath: '/books/notes.txt',
+    });
+    const scan = localItem({
+      id: 'local:/books/scan.cbr',
+      title: '扫描.cbr',
+      extension: 'cbr',
+      localPath: '/books/scan.cbr',
+    });
+    const pack = localItem({
+      id: 'local:/books/pack.cb7',
+      title: '图包.cb7',
+      extension: 'cb7',
+      localPath: '/books/pack.cb7',
+    });
+    const dotted = localItem({
+      id: 'local:/books/dotted.epub',
+      title: 'v1.2 手册',
+      extension: 'epub',
+      localPath: '/books/dotted.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) => {
+      if (item.id === reading.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: 2,
+          ratio: 0.4,
+          percent: 21,
+          readingMs: 45 * 60_000,
+          updatedAt: 300,
+        };
+      }
+      if (item.id === percentOnly.id) {
+        return {
+          status: 'in-progress' as const,
+          unit: 'chapter' as const,
+          index: -1,
+          ratio: 0.4,
+          percent: 40,
+          readingMs: 3_600_000,
+          updatedAt: 100,
+        };
+      }
+      return { status: 'not-started' as const };
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress,
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => [hell, reading, percentOnly, notes, scan, pack, dotted]),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const hellRow = itemRow(host, hell.id);
+    const stripped = '地狱模式～喜欢挑战特殊成就的玩家在废设定的异世界成为无双～ - 01';
+    expect(hellRow.querySelector('strong')?.textContent).toBe(stripped);
+    expect(hellRow.textContent).not.toContain('.pdf');
+    expect(hellRow.querySelector('.lightink-library-cover')?.classList.contains(
+      'lightink-library-cover--jacket',
+    )).toBe(true);
+    expect(itemRow(host, reading.id).querySelector('strong')?.textContent).toBe('在读');
+    expect(itemRow(host, notes.id).querySelector('strong')?.textContent).toBe('笔记');
+    expect(itemRow(host, scan.id).querySelector('strong')?.textContent).toBe('扫描');
+    expect(itemRow(host, pack.id).querySelector('strong')?.textContent).toBe('图包');
+    expect(itemRow(host, dotted.id).querySelector('strong')?.textContent).toBe('v1.2 手册');
+
+    const readingRow = itemRow(host, reading.id);
+    expect(readingRow.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 3 章');
+    expect(readingRow.textContent).not.toContain('已读');
+    expect(readingRow.textContent).not.toContain('45m');
+    expect(itemRow(host, percentOnly.id).querySelector('.lightink-library-item-progress')?.textContent).toBe(
+      '已读 40%',
+    );
+    expect(itemRow(host, percentOnly.id).textContent).not.toContain('1h');
+    expect(host.querySelector('.lightink-library-continue strong')?.textContent).toBe('在读');
+    expect(host.querySelector('.lightink-library-continue .lightink-library-item-progress')?.textContent).toBe(
+      '第 3 章',
+    );
+
+    hellRow.click();
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item: expect.objectContaining({ title: hell.title }),
+      }),
+      expect.anything(),
+    );
+    view.destroy();
+  });
+
+  it('hides continue reading while a group, smart group, or search is active', async () => {
     const novel = localItem({
       id: 'local:/books/c.epub',
       title: '续读小说',
@@ -1859,23 +2069,30 @@ describe('LibraryView my-books home', () => {
     const continueBar = host.querySelector('.lightink-library-continue');
     expect(isShown(continueBar)).toBe(true);
     expect(continueBar?.textContent).toContain('续读小说');
-    expect(host.querySelector('.lightink-library-continue-cue')?.textContent).toBe('继续阅读');
+    expect(host.querySelector('.lightink-library-continue-cue')).toBeNull();
+    expect(wallHeading(host).hidden).toBe(true);
     expect(
       host.querySelector('[data-library-sort], [data-library-density], [data-library-layout]'),
     ).toBeNull();
 
     collectionButton(host, '夏日书单').click();
     await settle();
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(wallHeading(host).textContent).toBe('夏日书单 · 0');
+    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
 
     groupButton(host, '全部').click();
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).hidden).toBe(true);
 
     expandSmartGroupTypes(host);
     smartGroupButton(host, 'EPUB').click();
     await settle();
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(wallHeading(host).textContent).toBe('EPUB · 1');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
 
     groupButton(host, '全部').click();
     await settle();
@@ -1885,11 +2102,14 @@ describe('LibraryView my-books home', () => {
     input.value = '河山';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(wallHeading(host).textContent).toBe('河山 · 0');
+    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
 
     shownControl(host, '清除').click();
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).hidden).toBe(true);
     view.destroy();
   });
 
@@ -1912,7 +2132,7 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('lays out primary, recent, shortcuts, and all books in order', async () => {
+  it('lays out continue reading and the cover wall without recent reading or shortcuts', async () => {
     const reading = localItem({
       id: 'local:/books/reading.epub',
       title: '在读小说',
@@ -1970,30 +2190,42 @@ describe('LibraryView my-books home', () => {
     const home = host.querySelector<HTMLElement>('.lightink-library-home')!;
     expect(Array.from(home.children).map((element) => element.className)).toEqual([
       'lightink-library-continue lightink-library-home-primary',
-      'lightink-library-home-section lightink-library-home-recent',
-      'lightink-library-home-section lightink-library-home-shortcuts',
       'lightink-library-home-section lightink-library-home-books',
     ]);
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-shortcuts')).toBeNull();
+    expect(host.querySelector('[data-home-shortcut]')).toBeNull();
+    const open = host.querySelector<HTMLButtonElement>('.lightink-library-continue-open')!;
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
-    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('在读小说');
-    expect(host.querySelector('.lightink-library-home-recent')?.textContent).toContain('较早打开');
-    expect(host.querySelector('[data-home-item-id="local:/books/reading.epub"]')).toBeNull();
-    expect(host.querySelector('[data-home-shortcut="group:group-1"]')?.textContent).toContain(
-      '研究资料',
-    );
-    expect(host.querySelector('.lightink-library-wall-heading')?.textContent).toBe('全部作品');
+    expect(open.querySelector('strong')?.textContent).toBe('在读小说');
+    expect(open.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
+    expect(open.textContent).not.toContain('已读');
+    expect(open.textContent).not.toContain('继续阅读');
+    expect(wallHeading(host).hidden).toBe(true);
+    expect(wallHeading(host).textContent).toBe('');
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
-    expect(itemRow(host, older.id)).toBeTruthy();
+    expect(itemRow(host, reading.id).textContent).toContain('在读小说');
+    expect(itemRow(host, older.id).textContent).toContain('第 10 章');
+    expect(itemRow(host, older.id).textContent).not.toContain('已读');
     expect(itemRow(host, unread.id)).toBeTruthy();
     expect(itemRow(host, grouped.id)).toBeTruthy();
     expect(host.querySelector('.lightink-library-item--import')).not.toBeNull();
+
+    const groupFilter = host.querySelector<HTMLInputElement>('.lightink-library-group-filter')!;
+    groupFilter.value = '没有这个分组';
+    groupFilter.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(itemRow(host, reading.id)).toBeTruthy();
+    expect(itemRow(host, unread.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(wallHeading(host).hidden).toBe(true);
+    groupFilter.value = '';
+    groupFilter.dispatchEvent(new Event('input', { bubbles: true }));
 
     expandSmartGroupTypes(host);
     expect(host.textContent).toContain('智能分组');
     expect(host.querySelector('[data-smart-group-id="smart:epub"]')).not.toBeNull();
 
-    // 自定义分组仍从侧栏筛选书墙，筛完只剩对应封面。
     expandNavSection(host, 'groups');
     const customChip = host.querySelector<HTMLButtonElement>(
       `.lightink-library-group[data-custom-group-id="${created.id}"]`,
@@ -2002,14 +2234,14 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(itemRow(host, grouped.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${reading.id}"]`)).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-home-recent'))).toBe(true);
-    expect(host.querySelector('.lightink-library-wall-heading')?.textContent).toBe('全部作品');
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(wallHeading(host).textContent).toBe('研究资料 · 1');
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
-    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     view.destroy();
   });
 
-  it('filters all books from group and tag shortcuts and prioritizes recent local use', async () => {
+  it('filters the wall from a sidebar group or tag without shortcut usage', async () => {
     const grouped = localItem({ id: 'grouped', title: '分组书' });
     const tagged = localItem({ id: 'tagged', title: '标签书' });
     const group: LibraryGroup = {
@@ -2048,35 +2280,27 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    const now = vi.spyOn(Date, 'now').mockReturnValue(100);
-    host.querySelector<HTMLButtonElement>('[data-home-shortcut="group:group-a"]')!.click();
+    expect(host.querySelector('.lightink-library-home-shortcut')).toBeNull();
+    expect(host.querySelector('[data-home-shortcut]')).toBeNull();
+    collectionButton(host, '研究资料').click();
     await settle();
     expect(itemRow(host, grouped.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${tagged.id}"]`)).toBeNull();
+    expect(wallHeading(host).textContent).toBe('研究资料 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
 
-    now.mockReturnValue(200);
-    host.querySelector<HTMLButtonElement>('[data-home-shortcut="tag:tag-a"]')!.click();
+    groupButton(host, '全部').click();
+    await settle();
+    tagNavButton(host, '重点').click();
     await settle();
     expect(itemRow(host, tagged.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${grouped.id}"]`)).toBeNull();
-    expect(JSON.parse(store['lightink.library.homeShortcutUsage.v1']!)).toEqual({
-      version: 1,
-      usedAt: { 'tag:tag-a': 200, 'group:group-a': 100 },
-    });
-    now.mockRestore();
+    expect(wallHeading(host).textContent).toBe('重点 · 1');
+    expect(store['lightink.library.homeShortcutUsage.v1']).toBeUndefined();
     view.destroy();
-
-    const nextHost = document.createElement('div');
-    document.body.appendChild(nextHost);
-    const nextView = createLibraryView(nextHost, deps);
-    await nextView.show();
-    expect(
-      nextHost.querySelector('.lightink-library-home-shortcut')?.getAttribute('data-home-shortcut'),
-    ).toBe('tag:tag-a');
-    nextView.destroy();
   });
 
-  it('opens a cover from the shelf wall and hides an empty recent section', async () => {
+  it('opens a cover from the shelf wall', async () => {
     const reading = localItem({
       id: 'local:/books/recent.epub',
       title: '最近在读',
@@ -2104,8 +2328,16 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(host.querySelector('[data-home-item-id]')).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-home-recent'))).toBe(false);
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-shortcuts')).toBeNull();
+    host.querySelector<HTMLElement>('.lightink-library-continue .lightink-library-cover')!.click();
+    await settle();
+    expect(deps.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ item: expect.objectContaining({ id: reading.id }) }),
+      expect.anything(),
+    );
+    vi.mocked(deps.onOpen).mockClear();
+    await view.show();
     itemRow(host, reading.id).click();
     await settle();
     expect(deps.onOpen).toHaveBeenCalledWith(
@@ -2122,7 +2354,7 @@ describe('LibraryView my-books home', () => {
     });
     const emptyView = createLibraryView(emptyHost, emptyDeps);
     await emptyView.show();
-    expect(isShown(emptyHost.querySelector('.lightink-library-home-recent'))).toBe(false);
+    expect(emptyHost.querySelector('.lightink-library-home-recent')).toBeNull();
     expect(isShown(emptyHost.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(itemRow(emptyHost, reading.id)).toBeTruthy();
     emptyView.destroy();
@@ -2146,8 +2378,10 @@ describe('LibraryView my-books home', () => {
     expect(card.textContent).toContain('导入本地书籍');
     expect(card.textContent).toContain('添加书源');
     expect(host.querySelector('.lightink-library-item--import')).toBeNull();
-    expect(isShown(host.querySelector('.lightink-library-home-recent'))).toBe(false);
-    expect(host.querySelector('.lightink-library-wall-heading')?.textContent).toBe('全部作品');
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-shortcuts')).toBeNull();
+    expect(wallHeading(host).hidden).toBe(true);
+    expect(wallHeading(host).textContent).toBe('');
 
     shownButtonWithText(card, '导入本地书籍').click();
     await settle();
@@ -2208,7 +2442,7 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
     expect(host.querySelector('.lightink-library-home')).not.toBeNull();
-    expect(host.querySelector('.lightink-library-wall-heading')?.textContent).toBe('全部作品');
+    expect(wallHeading(host).hidden).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
     expect(itemRow(host, book.id)).toBeTruthy();
     expect(host.querySelector('.lightink-library-tabbar')).not.toBeNull();
@@ -2253,7 +2487,7 @@ describe('LibraryView my-books home', () => {
     window.matchMedia = original;
   });
 
-  it('keeps the four-section home available on the mobile shelf', async () => {
+  it('keeps continue reading and the cover wall on the mobile shelf', async () => {
     document.documentElement.setAttribute('data-android', '');
     const reading = localItem({
       id: 'local:/books/mobile.epub',
@@ -2278,7 +2512,9 @@ describe('LibraryView my-books home', () => {
     await view.show();
 
     expect(host.querySelector('.lightink-library-home')).not.toBeNull();
-    expect(host.querySelector('.lightink-library-wall-heading')?.textContent).toBe('全部作品');
+    expect(host.querySelector('.lightink-library-home-recent')).toBeNull();
+    expect(host.querySelector('.lightink-library-home-shortcuts')).toBeNull();
+    expect(wallHeading(host).hidden).toBe(true);
     expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
@@ -2439,15 +2675,15 @@ describe('LibraryView reading management (R4)', () => {
     expect(finishedRow.dataset.progressStatus).toBe('finished');
     expect(finishedRow.dataset.progressFill).toBe('100');
     expect(finishedRow.style.getPropertyValue('--lightink-library-progress-fill')).toBe('100%');
-    expect(finishedRow.textContent).toContain('读完');
-    expect(finishedRow.textContent).toContain('已读 100%');
-    expect(finishedRow.textContent).toContain('3h12m');
+    expect(finishedRow.textContent).toContain('第 12 章');
+    expect(finishedRow.textContent).not.toContain('已读 100%');
+    expect(finishedRow.textContent).not.toContain('3h12m');
 
     const readingRow = itemRow(host, reading.id);
     expect(readingRow.dataset.progressStatus).toBe('in-progress');
     expect(readingRow.textContent).toContain('第 3 章');
-    expect(readingRow.textContent).toContain('已读 21%');
-    expect(readingRow.textContent).toContain('45m');
+    expect(readingRow.textContent).not.toContain('已读 21%');
+    expect(readingRow.textContent).not.toContain('45m');
 
     const freshRow = itemRow(host, fresh.id);
     expect(freshRow.dataset.progressStatus).toBe('not-started');
@@ -2633,8 +2869,8 @@ describe('LibraryView reading management (R4)', () => {
     expect(finishedRecord?.updatedAt).toBeGreaterThan(10);
     const finishedRow = itemRow(host, book.id);
     expect(finishedRow.dataset.progressStatus).toBe('finished');
-    expect(finishedRow.textContent).toContain('读完');
-    expect(finishedRow.textContent).toContain('已读 100%');
+    expect(finishedRow.textContent).toContain('第 3 章');
+    expect(finishedRow.textContent).not.toContain('已读 100%');
 
     await openItemMenu(host, book.id);
     contextMenuItem('标为在读').click();
@@ -3400,7 +3636,8 @@ describe('LibraryView sources, manage, and catalog', () => {
     catalogTreeNode(host, '漫画').click();
     await settle();
     expect(browse).toHaveBeenCalledWith('webdav-1', folder.navigationUrl);
-    expect(host.textContent).toContain('One Piece 01.cbz');
+    expect(host.textContent).toContain('One Piece 01');
+    expect(host.textContent).not.toContain('One Piece 01.cbz');
     const crumbs = host.querySelector('.lightink-library-breadcrumbs');
     expect(crumbs?.textContent).toContain('Nextcloud');
     expect(crumbs?.textContent).toContain('漫画');
@@ -4379,7 +4616,7 @@ describe('LibraryView sources, manage, and catalog', () => {
     expect(unreadRow.textContent).not.toContain('0%');
     expect(comicRow.dataset.progressStatus).toBe('in-progress');
     expect(comicRow.textContent).toContain('第 12 页');
-    expect(comicRow.textContent).toContain('已读 30%');
+    expect(comicRow.textContent).not.toContain('已读 30%');
 
     await openCatalog(host);
     expect(host.textContent).toContain('远程漫画');
@@ -6742,6 +6979,8 @@ describe('LibraryView mobile shelf', () => {
     sheetGroupButton(sheet, '夏日书单').click();
     await settle();
     expect(isShown(shelfGroupsSheetQuery())).toBe(false);
+    expect(wallHeading(host).textContent).toBe('夏日书单 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     expect(itemRow(host, grouped.id).textContent).toContain('分组小说');
     expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
     expect(currentShelfFilters(host)).toEqual([]);
@@ -6836,6 +7075,8 @@ describe('LibraryView mobile shelf', () => {
 
     await chooseShelfFilter(host, 'in-progress');
     expect(currentShelfFilters(host)).toEqual(['in-progress']);
+    expect(wallHeading(host).textContent).toBe('在读 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     expect(itemRow(host, novel.id).textContent).toContain('续读小说');
 
     await openShelfGroupsSheet(host);
