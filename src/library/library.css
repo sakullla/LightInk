@@ -20,6 +20,9 @@
   --lightink-overlay: #2a261f48;
   --lightink-shadow: 0 12px 32px #2a261f1c;
   --lightink-danger: #b42318;
+  --lightink-home-paper: #ebe5da;
+  --lightink-home-wash: #f8f4ed;
+  --lightink-home-rule: #cfc5b6;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -36,6 +39,9 @@
   --lightink-overlay: #3a2f2448;
   --lightink-shadow: 0 12px 32px #3a2f241c;
   --lightink-danger: #b42318;
+  --lightink-home-paper: #ead9c5;
+  --lightink-home-wash: #fbf0e4;
+  --lightink-home-rule: #ccb89f;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -52,6 +58,9 @@
   --lightink-overlay: #24302848;
   --lightink-shadow: 0 12px 32px #2430281c;
   --lightink-danger: #b42318;
+  --lightink-home-paper: #e1eadc;
+  --lightink-home-wash: #f4f8f1;
+  --lightink-home-rule: #bccbb8;
   color: var(--lightink-fg);
   color-scheme: light;
 }
@@ -68,6 +77,9 @@
   --lightink-overlay: #100c0a73;
   --lightink-shadow: 0 12px 32px #100c0a59;
   --lightink-danger: #f97066;
+  --lightink-home-paper: #2b211b;
+  --lightink-home-wash: #382b22;
+  --lightink-home-rule: #584536;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
@@ -84,6 +96,9 @@
   --lightink-overlay: #0a0c0f73;
   --lightink-shadow: 0 12px 32px #0a0c0f59;
   --lightink-danger: #f97066;
+  --lightink-home-paper: #191c21;
+  --lightink-home-wash: #22272e;
+  --lightink-home-rule: #353d48;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
@@ -5543,6 +5558,513 @@ html:not([data-android]):not([data-touch-primary])
   color: var(--lightink-muted);
 }
 
+
+/* ===== Shelf-only editorial study home =====
+ * This layer deliberately starts at [data-library-nav='shelf']. Catalog,
+ * sources and manage retain their established chrome and scroll ownership. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-workarea {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lightink-home-rule) transparent;
+  padding: clamp(22px, 3vw, 44px) clamp(22px, 4vw, 64px) 72px;
+  background:
+    linear-gradient(90deg, transparent 0 23px, color-mix(in srgb, var(--lightink-home-rule) 46%, transparent) 23px 24px, transparent 24px),
+    var(--lightink-bg);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home::-webkit-scrollbar {
+  width: 10px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--lightink-home-rule);
+  background-clip: content-box;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-section,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-primary {
+  width: min(100%, 76rem);
+  margin-inline: auto;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-section {
+  margin-block-start: clamp(30px, 4vw, 52px);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 16px;
+  color: var(--lightink-fg);
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: clamp(19px, 1.7vw, 25px);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: 0.035em;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-heading::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--lightink-home-rule), transparent);
+}
+
+/* Lead story: an editorial reading desk, not a dashboard card. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0 18px;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: clamp(20px, 3vw, 34px);
+  overflow: hidden;
+  border: 1px solid var(--lightink-home-rule);
+  border-radius: 2px 18px 2px 2px;
+  background:
+    linear-gradient(128deg, var(--lightink-home-wash), var(--lightink-home-paper));
+  box-shadow:
+    inset 5px 0 0 color-mix(in srgb, var(--lightink-accent) 72%, transparent),
+    0 18px 42px color-mix(in srgb, var(--lightink-fg) 9%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue > .lightink-library-home-heading {
+  grid-column: 1 / -1;
+  margin-bottom: 18px;
+  color: var(--lightink-accent-ink);
+  font-size: 12px;
+  font-family: var(--lightink-font-ui);
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
+  display: grid;
+  grid-template-columns: clamp(82px, 9vw, 116px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(16px, 2.4vw, 30px);
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
+  width: clamp(82px, 9vw, 116px);
+  height: auto;
+  min-width: 0;
+  aspect-ratio: 2 / 3;
+  border-radius: 2px 6px 6px 2px;
+  box-shadow:
+    inset 1px 0 color-mix(in srgb, #fff 28%, transparent),
+    0 14px 26px color-mix(in srgb, var(--lightink-fg) 24%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text {
+  gap: 8px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text strong {
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: clamp(24px, 3vw, 42px);
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+  white-space: normal;
+  text-wrap: balance;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-text span {
+  color: var(--lightink-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
+  align-self: end;
+  padding: 9px 16px;
+  border: 1px solid color-mix(in srgb, var(--lightink-accent-ink) 34%, transparent);
+  background: var(--lightink-accent-ink);
+  color: var(--lightink-bg);
+  letter-spacing: 0.03em;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
+  align-self: start;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+  border-radius: 999px !important;
+}
+
+/* Recently read: horizontal folio cards keep this section distinct from the wall. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid var(--lightink-home-rule);
+  border-radius: 2px 12px 2px 2px;
+  background: color-mix(in srgb, var(--lightink-home-wash) 78%, transparent);
+  text-align: left;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card .lightink-library-cover {
+  width: 54px;
+  min-width: 54px;
+  height: 76px;
+  aspect-ratio: auto;
+  border-radius: 2px 4px 4px 2px;
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-text span {
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+}
+
+/* Shortcuts resemble an index drawer: compact, text-forward, count aligned. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 14px;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid var(--lightink-home-rule);
+  border-radius: 2px 999px 999px 2px;
+  background: transparent;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut span {
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut:hover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut:focus-visible {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink);
+}
+
+/* The wall belongs to the same scroll page; it never creates a second scrollbar. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books {
+  padding-bottom: 24px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 32px 24px;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-item-shell,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-item--import {
+  width: 100%;
+  max-width: 190px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover {
+  min-width: 0;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-wall-heading {
+  position: sticky;
+  top: -1px;
+  z-index: 3;
+  margin-bottom: 20px;
+  padding: 8px 0 10px;
+  background: linear-gradient(var(--lightink-bg) 76%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-empty {
+  min-height: min(52vh, 32rem);
+  border: 1px solid var(--lightink-home-rule);
+  border-radius: 2px 24px 2px 2px;
+  background:
+    radial-gradient(circle at 50% 20%, var(--lightink-home-wash), transparent 58%),
+    repeating-linear-gradient(0deg, transparent 0 31px, color-mix(in srgb, var(--lightink-home-rule) 30%, transparent) 31px 32px);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-empty-actions button {
+  min-height: 42px;
+  padding-inline: 16px;
+  border: 1px solid var(--lightink-home-rule);
+}
+
+.lightink-library[data-library-nav='shelf'] :is(
+  .lightink-library-continue-open,
+  .lightink-library-home-recent-card,
+  .lightink-library-home-shortcut,
+  .lightink-library-item--cover
+):focus-visible {
+  outline: 3px solid var(--lightink-accent);
+  outline-offset: 3px;
+}
+
+/* Sidebar remains present in an unmarked narrow desktop window. */
+@container library-content (max-width: 46rem) {
+  .lightink-library[data-library-nav='shelf'] .lightink-library-home {
+    padding: 20px 18px 56px;
+    background: var(--lightink-bg);
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
+    grid-template-columns: 70px minmax(0, 1fr);
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-home-recent-list {
+    grid-template-columns: 1fr;
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
+  .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 24px 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home {
+    padding: 14px max(16px, var(--lightink-safe-right, 0px))
+      calc(92px + var(--lightink-safe-bottom, 0px))
+      max(16px, var(--lightink-safe-left, 0px));
+    background: var(--lightink-bg);
+    scrollbar-gutter: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-section {
+    margin-top: 30px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-heading {
+    margin-bottom: 12px;
+    font-size: 1.15rem;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 0 8px;
+    margin: 0;
+    padding: 16px;
+    border: 1px solid var(--lightink-home-rule);
+    border-radius: 2px 14px 2px 2px;
+    background: linear-gradient(128deg, var(--lightink-home-wash), var(--lightink-home-paper));
+    box-shadow: inset 4px 0 0 color-mix(in srgb, var(--lightink-accent) 72%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue-open {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 72px !important;
+    padding: 0 !important;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue
+    .lightink-library-cover {
+    width: 36px;
+    min-width: 36px;
+    height: 48px;
+    aspect-ratio: 2 / 3;
+    box-shadow: 0 8px 18px color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue-text strong {
+    font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+    font-size: 1.22rem;
+    line-height: 1.25;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue-cue {
+    grid-column: 2;
+    justify-self: start;
+    padding: 5px 10px;
+    font-size: var(--lightink-type-caption);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue-dismiss {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-recent-list {
+    display: flex;
+    gap: 10px;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-recent-card {
+    flex: 0 0 min(78vw, 290px);
+    min-height: 88px;
+    scroll-snap-align: start;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-shortcut {
+    min-height: 44px;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-books
+    :is(.lightink-library-cover-wall, .lightink-library-items) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 22px 12px;
+    padding: 0;
+    overflow: visible;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-wall-heading {
+    top: -1px;
+  }
+
+  html[data-keyboard]:is([data-android], [data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home {
+    padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
+    scroll-padding-bottom: calc(24px + var(--lightink-keyboard-inset, 0px));
+  }
+}
+
+@media (max-width: 430px) {
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-books
+    :is(.lightink-library-cover-wall, .lightink-library-items) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 16px;
+  }
+}
+
+@media (pointer: coarse) {
+  .lightink-library[data-library-nav='shelf'] :is(
+    .lightink-library-home-recent-card,
+    .lightink-library-home-shortcut
+  ) {
+    min-height: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-library[data-library-nav='shelf'] :is(
+    .lightink-library-home,
+    .lightink-library-home-recent-card,
+    .lightink-library-home-shortcut,
+    .lightink-library-continue-open,
+    .lightink-library-cover
+  ) {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
 
 /* ===== R7 通用书源管理面板：列表 + 编辑/导入/导出/自检/搜索 ===== */
 .lightink-modal-overlay.lightink-library-book-sources {

@@ -26,10 +26,33 @@
         gap: 8px 12px;
         align-items: center;
         padding: 8px 12px;
+        border-bottom: 1px solid #4a4036;
         background: #2a241e;
       }
 
+      #preview-bar strong {
+        margin-right: 4px;
+        font-family: Georgia, 'Songti SC', serif;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+      }
+
+      #preview-bar label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      #preview-bar select {
+        min-height: 30px;
+        border: 1px solid #5b4e41;
+        border-radius: 4px;
+        background: #211d19;
+        color: #f4efe6;
+      }
+
       #preview-bar p {
+        flex: 1 1 260px;
         margin: 0;
         color: #cbbba6;
       }
@@ -43,6 +66,7 @@
   </head>
   <body>
     <div id="preview-bar">
+      <strong>书架首页视觉样本</strong>
       <label>样本 <select id="preview-scenario"></select></label>
       <label>主题 <select id="preview-theme"></select></label>
       <label>布局 <select id="preview-layout"></select></label>
