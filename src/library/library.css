@@ -3045,6 +3045,158 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   transform: rotate(45deg);
 }
 
+/* 摸鱼：折叠时只留外层 h2（场景名 + 老板键）。内部分组不是可折叠的设置组。 */
+.lightink-library-conceal > .lightink-library-manage-group-toggle {
+  flex-wrap: wrap;
+}
+
+.lightink-library-conceal-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.lightink-library-conceal-scene {
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--lightink-border);
+  color: var(--lightink-fg);
+  font-size: 13px;
+}
+
+.lightink-library-conceal-scene.is-readonly {
+  display: inline-flex;
+  align-items: center;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-conceal-scene.is-active {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-library-conceal-subgroup {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.lightink-library-conceal-subgroup-title {
+  margin: 8px 0 0;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lightink-library-conceal-field-label,
+.lightink-library-conceal-opacity-field,
+.lightink-library-conceal-key-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  color: var(--lightink-fg);
+  font-size: 13px;
+}
+
+.lightink-library-conceal-key-field input,
+.lightink-library-conceal-opacity-field input {
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--lightink-border);
+  color: var(--lightink-fg);
+}
+
+.lightink-library-conceal-key-status,
+.lightink-library-conceal-switch-reason,
+.lightink-library-conceal-opacity-scale {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lightink-library-conceal-key-status.is-error,
+.lightink-library-conceal-switch-reason.is-error {
+  color: var(--lightink-danger);
+}
+
+.lightink-library-conceal-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 8px;
+}
+
+.lightink-library-conceal-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px;
+  border-radius: var(--lightink-radius-panel);
+  background: transparent;
+  color: var(--lightink-fg);
+}
+
+.lightink-library-conceal-swatch-chip {
+  display: block;
+  height: 36px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 6px;
+}
+
+.lightink-library-conceal-swatch-chip.is-theme {
+  background: linear-gradient(
+    135deg,
+    var(--lightink-bg, #f6f1e8) 50%,
+    var(--lightink-accent, #c4a574) 50%
+  );
+}
+
+.lightink-library-conceal-swatch-name {
+  color: var(--lightink-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.lightink-library-conceal-swatch.is-active .lightink-library-conceal-swatch-chip {
+  box-shadow: inset 0 0 0 2px var(--lightink-accent);
+}
+
+.lightink-library-conceal-swatch.is-active .lightink-library-conceal-swatch-name {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-library-conceal-custom-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.lightink-library-conceal-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.lightink-library-conceal-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.lightink-library-conceal-opacity-scale {
+  display: block;
+}
+
 /* Settings rows: large touch targets (import / clear cache / sync / editor). */
 .lightink-library-manage-row {
   display: flex;

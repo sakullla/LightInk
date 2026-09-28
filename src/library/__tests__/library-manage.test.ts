@@ -12,7 +12,12 @@ import {
   type LibraryManageLabels,
   type LibraryManageOptions,
 } from '../library-manage.js';
-import { defaultConcealPrefs, type ConcealPrefs } from '../../conceal/conceal-prefs.js';
+import {
+  applyConcealScene,
+  defaultConcealPrefs,
+  type ConcealPrefs,
+} from '../../conceal/conceal-prefs.js';
+import type { ConcealSwitchRefusalKey } from '../library-manage.js';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -1181,13 +1186,26 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     groupHint: '仅在书架与阅读器界面生效。',
     bossKeyHint: '全局快捷键注册成功后系统级生效，可能影响其他应用的同名按键，可随时改键。',
     macBossKeyHint: 'macOS 默认使用 Ctrl+Z / Ctrl+X。',
-    bossKey1: '老板键 1',
-    bossKey2: '老板键 2',
+    bossKey1: '老板键（隐藏 / 恢复窗口）',
+    bossKey2: '退出快捷键',
     bossKeyActive: '当前生效：{combo}',
     bossKeyEmpty: '组合不能为空。',
     bossKeyInvalid: '无效组合或仅修饰键。',
-    bossKeySame: '与老板键 1 相同。',
+    bossKeySame: '与另一快捷键相同。',
     bossKeyUnregistered: '未注册。',
+    recordCombo: '按下组合键。',
+    sceneNormal: '普通阅读',
+    sceneHideOnLeave: '离开即隐',
+    sceneFloating: '悬浮看文',
+    sceneCustom: '自定义',
+    groupDodge: '躲开',
+    groupDisguise: '看起来不像在看书',
+    groupFloat: '浮在工作上',
+    groupExit: '退出快捷键',
+    exitHint: '按下会退出轻墨。',
+    needsTransparent: '需要先打开透明模式。',
+    gradientHidden: '渐变要等透明模式关闭后才显示。',
+    opacityScale: '100 为完全不透明，0 为完全淡出。',
     background: '页面背景',
     backgroundTheme: '主题背景',
     backgroundPresets: {
@@ -1201,7 +1219,7 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     customFrom: '起始色',
     customTo: '结束色',
     transparentMode: '透明模式',
-    contentOpacity: '内容透明度（0–100%）',
+    contentOpacity: '内容不透明度',
     hideTop: '鼠标移出时隐藏顶栏',
     hideBody: '鼠标移出时隐藏主体',
     hideBottom: '鼠标移出时隐藏底栏',
@@ -1211,15 +1229,53 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     clickThroughHint: '需开启透明模式。',
   });
 
+  const englishConcealLabels = (): ConcealManageLabels => ({
+    ...concealLabels(),
+    group: 'Stealth reading',
+    bossKey1: 'Boss key (hide / restore window)',
+    bossKey2: 'Exit shortcut',
+    bossKeyEmpty: 'The combination cannot be empty.',
+    bossKeyInvalid: 'Invalid combination, or modifiers only.',
+    bossKeySame: 'Same as the other shortcut.',
+    sceneNormal: 'Normal reading',
+    sceneHideOnLeave: 'Hide on leave',
+    sceneFloating: 'Floating read',
+    sceneCustom: 'Custom',
+    groupDodge: 'Duck away',
+    groupDisguise: "Doesn't look like reading",
+    groupFloat: 'Float over work',
+    groupExit: 'Exit shortcut',
+    exitHint: 'Pressing this quits LightInk.',
+    needsTransparent: 'Turn on transparent mode first.',
+    gradientHidden: 'The gradient shows after transparent mode is turned off.',
+    opacityScale: '100 is fully opaque, 0 is fully faded.',
+    backgroundTheme: 'Theme background',
+    backgroundPresets: {
+      lavender: 'Lavender',
+      mint: 'Mint',
+      peach: 'Peach',
+      sky: 'Sky',
+      butter: 'Butter',
+    },
+    backgroundCustom: 'Custom gradient',
+  });
+
   function concealDeps(prefs = defaultConcealPrefs(false)): {
     deps: ConcealManageDeps;
     updates: Partial<ConcealPrefs>[];
     bossKeyCalls: Array<{ primary: string; secondary: string }>;
-    bossKeyResult: ConcealBossKeysStatus;
+    clearedRefusals: ConcealSwitchRefusalKey[];
+    setPrefs: (next: ConcealPrefs) => void;
+    setBossKeyResult: (result: ConcealBossKeysStatus) => void;
+    refusals: Map<ConcealSwitchRefusalKey, string>;
   } {
     const updates: Partial<ConcealPrefs>[] = [];
     const bossKeyCalls: Array<{ primary: string; secondary: string }> = [];
+    const clearedRefusals: ConcealSwitchRefusalKey[] = [];
+    const refusals = new Map<ConcealSwitchRefusalKey, string>();
     let current = { ...prefs };
+    let bossKeyResult: ConcealBossKeysStatus | null = null;
+    let listener: ((key: ConcealSwitchRefusalKey, reason: string) => void) | null = null;
     return {
       deps: {
         labels: concealLabels,
@@ -1231,22 +1287,40 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
         },
         updateBossKeys: async (primary, secondary) => {
           bossKeyCalls.push({ primary, secondary });
-          current = { ...current, bossPrimary: primary, bossSecondary: secondary };
-          return {
+          const result = bossKeyResult ?? {
             primary,
             secondary,
             primaryError: null,
             secondaryError: null,
           };
+          if (result.primaryError === null && result.secondaryError === null) {
+            current = { ...current, bossPrimary: primary, bossSecondary: secondary };
+          }
+          return result;
+        },
+        subscribeSwitchRefusal: (next) => {
+          listener = next;
+          for (const [key, reason] of refusals) {
+            next(key, reason);
+          }
+          return () => {
+            if (listener === next) listener = null;
+          };
+        },
+        clearSwitchRefusal: (key) => {
+          clearedRefusals.push(key);
+          refusals.delete(key);
         },
       },
       updates,
       bossKeyCalls,
-      bossKeyResult: {
-        primary: null,
-        secondary: null,
-        primaryError: null,
-        secondaryError: null,
+      clearedRefusals,
+      refusals,
+      setPrefs: (next) => {
+        current = next;
+      },
+      setBossKeyResult: (result) => {
+        bossKeyResult = result;
       },
     };
   }
@@ -1336,13 +1410,11 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     mini.checked = true;
     mini.dispatchEvent(new Event('change', { bubbles: true }));
 
-    const background = manage.element.querySelector<HTMLSelectElement>(
-      'select[name="concealBackground"]',
-    )!;
-    background.value = 'sky';
-    background.dispatchEvent(new Event('change', { bubbles: true }));
+    manage.element
+      .querySelector<HTMLButtonElement>('[data-conceal-background="sky"]')!
+      .click();
 
-    const opacity = manage.element.querySelector<HTMLInputElement>('input[type="number"]')!;
+    const opacity = manage.element.querySelector<HTMLInputElement>('[data-conceal-opacity]')!;
     opacity.value = '55';
     opacity.dispatchEvent(new Event('change', { bubbles: true }));
 
@@ -1355,8 +1427,15 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
   it('out-of-range opacity is not saved and falls back to the effective value (R6)', () => {
     const conceal = concealDeps({ ...defaultConcealPrefs(false), contentOpacity: 60 });
     const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
-    const opacity = manage.element.querySelector<HTMLInputElement>('input[type="number"]')!;
+    const opacity = manage.element.querySelector<HTMLInputElement>('[data-conceal-opacity]')!;
     opacity.value = '250';
+    opacity.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toHaveLength(0);
+    expect(opacity.value).toBe('60');
+
+    opacity.value = '55.5';
+    opacity.dispatchEvent(new Event('change', { bubbles: true }));
+    opacity.value = '';
     opacity.dispatchEvent(new Event('change', { bubbles: true }));
     expect(conceal.updates).toHaveLength(0);
     expect(opacity.value).toBe('60');
@@ -1368,11 +1447,9 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     const customRow = manage.element.querySelector<HTMLElement>('.lightink-library-conceal-custom-row')!;
     expect(customRow.hidden).toBe(true);
 
-    const background = manage.element.querySelector<HTMLSelectElement>(
-      'select[name="concealBackground"]',
-    )!;
-    background.value = 'custom';
-    background.dispatchEvent(new Event('change', { bubbles: true }));
+    manage.element
+      .querySelector<HTMLButtonElement>('[data-conceal-background="custom"]')!
+      .click();
     expect(conceal.updates).toContainEqual({
       background: { kind: 'custom', from: '#c9b6e4', to: '#f1e9fb' },
     });
@@ -1387,5 +1464,219 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     expect(conceal.updates).toContainEqual({
       background: { kind: 'custom', from: '#123456', to: '#abcdef' },
     });
+  });
+
+  it('shows three groups, scenes, and the collapsed boss-key summary in Chinese and English', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const group = manage.element.querySelector<HTMLElement>('[data-manage-group="conceal"]')!;
+    expect(group.dataset.collapsed).toBe('true');
+    const title = group.querySelector(':scope > h2')!;
+    expect(title.textContent).toContain('摸鱼');
+    expect(title.textContent).toContain('普通阅读');
+    expect(title.textContent).toContain('Alt+Z');
+    expect(group.querySelector('[data-conceal-group="dodge"] h3')?.textContent).toBe('躲开');
+    expect(group.querySelector('[data-conceal-group="disguise"] h3')?.textContent).toBe(
+      '看起来不像在看书',
+    );
+    expect(group.querySelector('[data-conceal-group="float"] h3')?.textContent).toBe('浮在工作上');
+    expect(group.textContent).toContain('离开即隐');
+    expect(group.textContent).toContain('悬浮看文');
+    expect(group.querySelector('[data-conceal-scene="custom"]')?.textContent).toBe('自定义');
+    expect(group.textContent).toContain('100 为完全不透明，0 为完全淡出。');
+
+    const english = concealDeps();
+    const englishManage = createLibraryManage(
+      document,
+      manageOptions({
+        conceal: { ...english.deps, labels: englishConcealLabels },
+      }).options,
+    );
+    const englishGroup = englishManage.element.querySelector<HTMLElement>(
+      '[data-manage-group="conceal"]',
+    )!;
+    expect(englishGroup.querySelector(':scope > h2')?.textContent).toContain('Normal reading');
+    expect(englishGroup.querySelector(':scope > h2')?.textContent).toContain('Alt+Z');
+    expect(englishGroup.textContent).toContain('Duck away');
+    expect(englishGroup.textContent).toContain("Doesn't look like reading");
+    expect(englishGroup.textContent).toContain('Float over work');
+    expect(englishGroup.textContent).toContain('Hide on leave');
+    expect(englishGroup.textContent).toContain('Floating read');
+    expect(englishGroup.textContent).toContain('Custom');
+    expect(englishGroup.textContent).toContain('100 is fully opaque, 0 is fully faded.');
+  });
+
+  it('keeps the boss key free of exit wording and puts quit in its own group', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const dodge = manage.element.querySelector<HTMLElement>('[data-conceal-group="dodge"]')!;
+    const exit = manage.element.querySelector<HTMLElement>('[data-conceal-group="exit"]')!;
+    expect(dodge.querySelector('[data-conceal-key-field="bossPrimary"]')).not.toBeNull();
+    expect(dodge.querySelector('[data-conceal-key-field="bossSecondary"]')).toBeNull();
+    expect(dodge.textContent).not.toContain('退出');
+    expect(exit.querySelector('[data-conceal-key-field="bossSecondary"]')).not.toBeNull();
+    expect(exit.textContent).toContain('按下会退出轻墨。');
+    expect(manage.element.querySelector('[data-conceal-group="disguise"] [data-conceal-toggle="transparentMode"]')).not.toBeNull();
+    expect(manage.element.querySelector('[data-conceal-group="float"] [data-conceal-toggle="alwaysOnTop"]')).not.toBeNull();
+    expect(manage.element.querySelector('[data-conceal-group="float"] [data-conceal-toggle="clickThrough"]')).not.toBeNull();
+  });
+
+  it('rejects empty, modifier-only, and duplicate combos without replacing the saved one', async () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const primary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossPrimary"]',
+    )!;
+    const status = manage.element.querySelector<HTMLElement>(
+      '[data-conceal-key-status="bossPrimary"]',
+    )!;
+
+    primary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Unidentified', bubbles: true, cancelable: true }),
+    );
+    expect(conceal.bossKeyCalls).toHaveLength(0);
+    expect(primary.value).toBe('Alt+Z');
+    expect(status.textContent).toBe('组合不能为空。');
+
+    primary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'x', altKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(conceal.bossKeyCalls).toHaveLength(0);
+    expect(primary.value).toBe('Alt+Z');
+    expect(status.textContent).toBe('与另一快捷键相同。');
+
+    primary.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(primary.value).toBe('Alt+Z');
+    primary.dispatchEvent(new FocusEvent('blur'));
+    expect(primary.value).toBe('Alt+Z');
+    expect(conceal.bossKeyCalls).toHaveLength(0);
+
+    const secondary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossSecondary"]',
+    )!;
+    secondary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', altKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(secondary.value).toBe('Alt+X');
+    expect(
+      manage.element.querySelector('[data-conceal-key-status="bossSecondary"]')?.textContent,
+    ).toBe('与另一快捷键相同。');
+  });
+
+  it('shows the registrar error beside the field and keeps the previous combo', async () => {
+    const conceal = concealDeps();
+    conceal.setBossKeyResult({
+      primary: null,
+      secondary: null,
+      primaryError: '系统拒绝注册',
+      secondaryError: null,
+    });
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const primary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossPrimary"]',
+    )!;
+    primary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'q', altKey: true, bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        manage.element.querySelector('[data-conceal-key-status="bossPrimary"]')?.textContent,
+      ).toBe('系统拒绝注册'),
+    );
+    expect(primary.value).toBe('Alt+Z');
+    expect(conceal.bossKeyCalls).toEqual([{ primary: 'Alt+Q', secondary: 'Alt+X' }]);
+  });
+
+  it('locks hide-top, hide-body, and click-through until transparent mode is on', () => {
+    const conceal = concealDeps({
+      ...defaultConcealPrefs(false),
+      hideTop: true,
+      hideBody: false,
+      clickThrough: true,
+      hideBottom: false,
+    });
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const toggle = (key: string): HTMLInputElement =>
+      manage.element.querySelector<HTMLInputElement>(`[data-conceal-toggle="${key}"]`)!;
+    const reason = (key: string): HTMLElement =>
+      manage.element.querySelector<HTMLElement>(`[data-conceal-switch-reason="${key}"]`)!;
+
+    expect(toggle('hideTop').disabled).toBe(true);
+    expect(toggle('hideTop').checked).toBe(true);
+    expect(toggle('hideBody').disabled).toBe(true);
+    expect(toggle('clickThrough').disabled).toBe(true);
+    expect(toggle('clickThrough').checked).toBe(true);
+    expect(toggle('hideBottom').disabled).toBe(false);
+    expect(reason('hideTop').textContent).toBe('需要先打开透明模式。');
+    expect(reason('hideBody').textContent).toBe('需要先打开透明模式。');
+    expect(reason('clickThrough').textContent).toBe('需要先打开透明模式。');
+
+    toggle('hideTop').checked = false;
+    toggle('hideTop').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).not.toContainEqual({ hideTop: false });
+    expect(toggle('hideTop').checked).toBe(true);
+
+    toggle('hideBottom').checked = true;
+    toggle('hideBottom').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toContainEqual({ hideBottom: true });
+
+    toggle('transparentMode').checked = true;
+    toggle('transparentMode').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(toggle('hideTop').disabled).toBe(false);
+    expect(reason('hideTop').hidden).toBe(true);
+    expect(
+      manage.element.querySelector<HTMLElement>('[data-conceal-gradient-note]')?.hidden,
+    ).toBe(false);
+    manage.element.querySelector<HTMLButtonElement>('[data-conceal-background="mint"]')!.click();
+    expect(conceal.updates).toContainEqual({ background: { kind: 'preset', preset: 'mint' } });
+  });
+
+  it('shows a refusal beside the switch that was turned back off', () => {
+    const conceal = concealDeps();
+    conceal.refusals.set('alwaysOnTop', '置顶被系统拒绝，开关已回退。系统拒绝');
+    conceal.setPrefs({ ...defaultConcealPrefs(false), alwaysOnTop: false, transparentMode: true });
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const toggle = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-toggle="alwaysOnTop"]',
+    )!;
+    const reason = manage.element.querySelector<HTMLElement>(
+      '[data-conceal-switch-reason="alwaysOnTop"]',
+    )!;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    expect(reason.hidden).toBe(false);
+    expect(reason.textContent).toContain('置顶被系统拒绝');
+    expect(reason.closest('[data-conceal-switch="alwaysOnTop"]')).not.toBeNull();
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.clearedRefusals).toContain('alwaysOnTop');
+    expect(reason.hidden).toBe(true);
+  });
+
+  it('applies a scene through the shared scene function and then shows custom', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    manage.element.querySelector<HTMLButtonElement>('[data-conceal-scene="floating"]')!.click();
+    expect(conceal.updates[conceal.updates.length - 1]).toEqual(
+      applyConcealScene(defaultConcealPrefs(false), 'floating'),
+    );
+    expect(conceal.bossKeyCalls).toHaveLength(0);
+    expect(manage.element.querySelector(':scope [data-manage-group="conceal"] > h2, [data-manage-group="conceal"] > h2')?.textContent).toContain(
+      '悬浮看文',
+    );
+
+    const opacity = manage.element.querySelector<HTMLInputElement>('[data-conceal-opacity]')!;
+    opacity.value = '80';
+    opacity.dispatchEvent(new Event('change', { bubbles: true }));
+    const title = manage.element.querySelector('[data-manage-group="conceal"] > h2');
+    expect(title?.textContent).toContain('自定义');
+    expect(
+      manage.element.querySelector('[data-conceal-scene="custom"]')?.classList.contains('is-active'),
+    ).toBe(true);
+    expect(
+      manage.element.querySelector('[data-conceal-scene="floating"]')?.getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(manage.element.querySelector('[data-conceal-scene="custom"]')?.tagName).toBe('SPAN');
   });
 });

@@ -280,6 +280,7 @@ import {
   type ConcealNoticeKind,
 } from './conceal/conceal-controller.js';
 import { loadConcealPrefs, saveConcealPrefs, type ConcealPrefs } from './conceal/conceal-prefs.js';
+import type { ConcealSwitchRefusalKey } from './library/library-manage.js';
 import { createConcealQuitController } from './conceal/conceal-quit.js';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -713,6 +714,17 @@ const CONCEAL_NOTICE_KEYS: Record<ConcealNoticeKind, Parameters<typeof i18n.t>[0
   baselineFailed: 'conceal.baselineFailed',
 };
 
+const CONCEAL_NOTICE_SWITCH: Partial<Record<ConcealNoticeKind, ConcealSwitchRefusalKey>> = {
+  alwaysOnTopFailed: 'alwaysOnTop',
+  miniWindowFailed: 'miniWindow',
+  transparentFailed: 'transparentMode',
+  clickThroughFailed: 'clickThrough',
+};
+
+/** 会话内的开关拒绝（不入库）。设置页晚创建时，订阅会重放尚未清除的原因。 */
+const concealSwitchRefusals = new Map<ConcealSwitchRefusalKey, string>();
+let concealRefusalListener: ((key: ConcealSwitchRefusalKey, reason: string) => void) | null = null;
+
 /** R4 终退出口（老板键 2 / 托盘菜单 / File→退出 共用；依赖注入可测）。 */
 const concealQuit = createConcealQuitController({
   commitSourceModes: () => commitAllSourceModes(),
@@ -740,6 +752,19 @@ const concealManageDeps = {
     bossKeyInvalid: i18n.t('conceal.bossKeyInvalid'),
     bossKeySame: i18n.t('conceal.bossKeySame'),
     bossKeyUnregistered: i18n.t('conceal.bossKeyUnregistered'),
+    recordCombo: i18n.t('conceal.recordCombo'),
+    sceneNormal: i18n.t('conceal.sceneNormal'),
+    sceneHideOnLeave: i18n.t('conceal.sceneHideOnLeave'),
+    sceneFloating: i18n.t('conceal.sceneFloating'),
+    sceneCustom: i18n.t('conceal.sceneCustom'),
+    groupDodge: i18n.t('conceal.groupDodge'),
+    groupDisguise: i18n.t('conceal.groupDisguise'),
+    groupFloat: i18n.t('conceal.groupFloat'),
+    groupExit: i18n.t('conceal.groupExit'),
+    exitHint: i18n.t('conceal.exitHint'),
+    needsTransparent: i18n.t('conceal.needsTransparent'),
+    gradientHidden: i18n.t('conceal.gradientHidden'),
+    opacityScale: i18n.t('conceal.opacityScale'),
     background: i18n.t('conceal.background'),
     backgroundTheme: i18n.t('conceal.backgroundTheme'),
     backgroundPresets: {
@@ -775,6 +800,22 @@ const concealManageDeps = {
       primaryError: null,
       secondaryError: null,
     }),
+  subscribeSwitchRefusal: (
+    listener: (key: ConcealSwitchRefusalKey, reason: string) => void,
+  ) => {
+    concealRefusalListener = listener;
+    for (const [key, reason] of concealSwitchRefusals) {
+      listener(key, reason);
+    }
+    return () => {
+      if (concealRefusalListener === listener) {
+        concealRefusalListener = null;
+      }
+    };
+  },
+  clearSwitchRefusal: (key: ConcealSwitchRefusalKey) => {
+    concealSwitchRefusals.delete(key);
+  },
 };
 
 /**
@@ -801,7 +842,13 @@ async function initConceal(): Promise<void> {
     fallbackTopHeight: 48,
     fallbackBottomHeight: 40,
     onNotice: (kind: ConcealNoticeKind, reason?: string) => {
-      void showAppAlert(i18n.t(CONCEAL_NOTICE_KEYS[kind], { reason: reason ?? '' }));
+      const text = i18n.t(CONCEAL_NOTICE_KEYS[kind], { reason: reason ?? '' });
+      void showAppAlert(text);
+      const key = CONCEAL_NOTICE_SWITCH[kind];
+      if (key !== undefined) {
+        concealSwitchRefusals.set(key, text);
+        concealRefusalListener?.(key, text);
+      }
     },
   });
   try {
