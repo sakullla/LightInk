@@ -25,6 +25,7 @@ import {
   SUPPORTED_HIGHLIGHT_LANGUAGES,
   type HighlightLanguage,
 } from './code-languages.js';
+import { writeClipboardText } from '../../ui/clipboard.js';
 
 export { ensureHighlightLanguage, isHighlightLanguageLoaded } from './code-languages.js';
 
@@ -679,41 +680,6 @@ export function createLanguagePicker(options: LanguagePickerOptions = {}): Langu
       detachPanel();
     },
   };
-}
-
-export async function writeClipboardText(text: string): Promise<boolean> {
-  try {
-    if (
-      typeof navigator !== 'undefined' &&
-      navigator.clipboard !== undefined &&
-      typeof navigator.clipboard.writeText === 'function'
-    ) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // fall through
-  }
-  return legacyClipboardCopy(text);
-}
-
-function legacyClipboardCopy(text: string): boolean {
-  if (typeof document === 'undefined') return false;
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'absolute';
-  textarea.style.left = '-9999px';
-  document.body.appendChild(textarea);
-  textarea.select();
-  let ok = false;
-  try {
-    ok = document.execCommand('copy');
-  } catch {
-    ok = false;
-  }
-  document.body.removeChild(textarea);
-  return ok;
 }
 
 /**
