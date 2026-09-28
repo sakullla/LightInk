@@ -114,7 +114,7 @@ const LIST_DEFINITION: AssistantToolDefinition = {
   name: BOOK_SOURCE_LIST_TOOL_NAME,
   description:
     '列出已配置的通用书源（只读）。只返回 id、title、enabled、baseUrl，不含完整 rule。要改某一条之前，先用 book_source_get 读取它的配置。',
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
+  parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
 };
 
 const GET_DEFINITION: AssistantToolDefinition = {
@@ -180,6 +180,7 @@ const SAVE_DEFINITION: AssistantToolDefinition = {
       id: { type: 'string', description: '更新或停用已有书源时填写它的 id' },
       enabled: { type: 'boolean', description: 'false 为停用；省略则保持或新建为启用' },
     },
+    required: [],
     additionalProperties: false,
   },
 };
@@ -195,6 +196,7 @@ const IMPORT_DEFINITION: AssistantToolDefinition = {
       json: { type: 'string', description: '导入 JSON 原文' },
       sources: { description: '规则数组；与 json 二选一' },
     },
+    required: [],
     additionalProperties: false,
   },
 };

@@ -61,6 +61,7 @@ import {
   QUERY_BOOK_TOOL_NAME,
   SAVE_TO_BOOK_TOOL_NAME,
   type AssistantPendingConfirmation,
+  type AssistantToolResult,
   type AssistantToolSession,
 } from './assistant-tools.js';
 
@@ -1851,37 +1852,6 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
 
-  /**
-   * 确认 → 走产生建议的同一 session：优先专用 `confirmPending(id)`（模型路径
-   * 不可达），会话未实现时回退 `execute(tool, arguments)`；失败回到待确认并
-   * 显示原因。拒绝 → 只标记该条，不调用执行器、不落盘。
-   */
-  const resolvePending = async (
-    entry: PendingConfirmationEntry,
-  ): Promise<Record<string, unknown> | null> => {
-    if (entry.status !== 'pending') {
-      return null;
-    }
-    entry.status = 'confirmed';
-    entry.error = undefined;
-    try {
-      const result =
-        entry.session.confirmPending !== undefined
-          ? await entry.session.confirmPending(entry.item.id)
-          : await entry.session.execute(entry.item.tool, entry.item.arguments);
-      if (result.ok !== true) {
-        entry.status = 'pending';
-        entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');
-        return null;
-      }
-      return result as Record<string, unknown>;
-    } catch (error) {
-      entry.status = 'pending';
-      entry.error = assistantAiErrorMessage(t, error, aiMissing);
-      return null;
-    }
-  };
-
   let progressFrame = 0;
 
   const setToolProgress = (toolCallId: string | undefined, label: string): void => {
@@ -1926,7 +1896,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
 
-  const applyConfirmedToolResult = (toolCallId: string, result: Record<string, unknown>): void => {
+  const applyConfirmedToolResult = (toolCallId: string, result: unknown): void => {
     const payload = JSON.stringify(result);
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
@@ -1972,7 +1942,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     renderPendingConfirmations();
     const batch = pendingQueue.filter((entry) => entry.status === 'pending');
     const jobs = batch.filter((entry) => entry.included);
-    const confirmed: { toolCallId?: string; result: Record<string, unknown> }[] = [];
+    const confirmed: { toolCallId?: string; result: AssistantToolResult }[] = [];
     const failed: { toolCallId?: string; message: string; cancelled: boolean }[] = [];
     for (const entry of batch) {
       if (!entry.included) {
@@ -2007,7 +1977,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
             : await entry.session.execute(entry.item.tool, entry.item.arguments);
         if (entry.toolCallId !== undefined) downloadCancels.delete(entry.toolCallId);
         if (result.ok === true) {
-          confirmed.push({ toolCallId: entry.toolCallId, result: result as Record<string, unknown> });
+          confirmed.push({ toolCallId: entry.toolCallId, result });
         } else {
           failed.push({
             toolCallId: entry.toolCallId,
@@ -2172,7 +2142,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
             pendingQueue.splice(index, 1);
           }
           if (entry.toolCallId !== undefined) {
-            applyConfirmedToolResult(entry.toolCallId, result as Record<string, unknown>);
+            applyConfirmedToolResult(entry.toolCallId, result);
           }
         } else {
           entry.error = result.message ?? result.error ?? t('reader.assistant.pendingFailed');

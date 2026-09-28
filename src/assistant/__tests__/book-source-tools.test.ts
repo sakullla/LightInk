@@ -226,8 +226,12 @@ describe('book source tools', () => {
     );
     expect(found.ok).toBe(true);
     expect(found.results).toEqual([]);
-    expect(found.page?.finalUrl).toBe('https://example.test/search?q=empty');
-    expect(found.page?.snippet).toContain('result extra');
+    const page = found.page;
+    if (typeof page !== 'object' || page === null) {
+      throw new Error('expected fetched page diagnostics');
+    }
+    expect(page.finalUrl).toBe('https://example.test/search?q=empty');
+    expect(page.snippet).toContain('result extra');
     expect(client.fetchPage).toHaveBeenCalledWith('src-1', { query: '无' });
   });
 

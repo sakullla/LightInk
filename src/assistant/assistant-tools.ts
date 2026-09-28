@@ -160,6 +160,13 @@ export interface AssistantPendingConfirmation {
   readonly arguments: unknown;
 }
 
+export interface AssistantFetchedPage {
+  readonly finalUrl: string;
+  readonly status: number;
+  readonly length: number;
+  readonly snippet: string;
+}
+
 export interface AssistantToolResult {
   readonly ok: boolean;
   readonly tool?: string;
@@ -176,7 +183,8 @@ export interface AssistantToolResult {
   readonly hits?: readonly AssistantSearchHitView[];
   readonly candidates?: readonly AssistantTocItem[];
   readonly chapter?: number;
-  readonly page?: number;
+  /** 阅读器页码，或书源诊断抓取的页面摘要。 */
+  readonly page?: number | AssistantFetchedPage;
   readonly saved?: boolean;
   readonly rejected?: boolean;
   /** 已进入待确认，确认前没有写入。 */
@@ -190,7 +198,6 @@ export interface AssistantToolResult {
   /** 通用书源列表或下载影响的条目。 */
   readonly sources?: readonly unknown[];
   readonly results?: readonly unknown[];
-  readonly page?: { finalUrl: string; status: number; length: number; snippet: string };
   readonly updated?: readonly string[];
 }
 

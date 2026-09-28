@@ -1223,7 +1223,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   width: min(24rem, calc(100% - 48px));
   padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: 16px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
@@ -1255,10 +1255,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-source-modal .lightink-modal-dialog {
-  width: min(24rem, calc(100vw - 48px));
+  width: min(22rem, calc(100vw - 48px));
   padding: 20px 20px 16px;
   border: 1px solid var(--lightink-border);
-  border-radius: 16px;
+  border-radius: var(--lightink-radius-dialog);
   background: var(--lightink-bg-elevated);
   box-shadow: var(--lightink-shadow-strong);
 }
