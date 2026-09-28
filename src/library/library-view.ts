@@ -1080,6 +1080,13 @@ function itemAuthors(item: LibraryItem): readonly string[] {
   return Array.isArray(item.authors) ? item.authors : [];
 }
 
+/** Shelf search matches title or author, same rule as the search field. */
+function matchesShelfQuery(item: LibraryItem, query: string): boolean {
+  const lowered = query.trim().toLocaleLowerCase();
+  if (lowered === '') return true;
+  return `${itemTitle(item)}\n${itemAuthors(item).join('\n')}`.toLocaleLowerCase().includes(lowered);
+}
+
 /** Stable 0–359 hue from the title so a book keeps its jacket colour across reloads. */
 export function jacketHue(title: string): number {
   let hash = 5381;
@@ -2382,14 +2389,20 @@ export function createLibraryView(
     return keyed ?? group.nameKey;
   }
 
+  function smartGroupSourceItems(): readonly DisplayItem[] {
+    if (activeSection === 'shelf' && shelfItems.length > 0) return shelfItems;
+    return items;
+  }
+
   function refreshSmartGroups(): void {
+    const pool = smartGroupSourceItems();
     const persisted = groups
       .map(smartGroupFromRecord)
       .filter((group): group is SmartGroupDefinition => group !== null);
     const definitions = [
       ...SMART_GROUP_DEFINITIONS,
-      ...dynamicAuthorAndSeriesGroups(items.map((display) => display.item)),
-      ...dynamicSourceAndFormatGroups(items.map((display) => display.item)),
+      ...dynamicAuthorAndSeriesGroups(pool.map((display) => display.item)),
+      ...dynamicSourceAndFormatGroups(pool.map((display) => display.item)),
     ];
     const seen = new Set<string>();
     smartGroups = [...definitions, ...persisted].filter((group) => {
@@ -2408,17 +2421,18 @@ export function createLibraryView(
       seenRules.add(ruleKey);
       return true;
     });
-    // 没有匹配书籍的空组不显示；书目尚未加载时保持现状，避免选中态被误清。
-    if (items.length > 0) {
+    // 空组不显示。书架用完整书目，搜索子集不能清掉仍有书的智能分组；
+    // 书目尚未加载时不改分组和选中态。
+    if (pool.length > 0) {
       smartGroups = smartGroups.filter((group) =>
-        items.some((display) => smartGroupMatches(display.item, group.rule, progressFor(display))),
+        pool.some((display) => smartGroupMatches(display.item, group.rule, progressFor(display))),
       );
     }
     smartGroups.sort(
       (left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
     );
     if (
-      items.length > 0 &&
+      pool.length > 0 &&
       selectedSmartGroupId !== null &&
       !smartGroups.some((group) => group.id === selectedSmartGroupId)
     ) {
@@ -2928,9 +2942,15 @@ export function createLibraryView(
   }
 
   function visibleItems(): DisplayItem[] {
+    const query = searchInput.value.trim();
     const filtered =
       activeSection === 'shelf'
-        ? items.filter((item) => matchesGroup(item) && matchesTag(item))
+        ? items.filter(
+            (display) =>
+              matchesGroup(display) &&
+              matchesTag(display) &&
+              matchesShelfQuery(display.item, query),
+          )
         : items;
     if (activeSection !== 'shelf') {
       return filtered;
@@ -4861,7 +4881,7 @@ export function createLibraryView(
 
   function renderContinueBar(): void {
     continueHost.replaceChildren();
-    if (activeSection !== 'shelf' || shelfHomeFiltered()) {
+    if (activeSection !== 'shelf' || shelfHomeFiltered() || status.dataset.status === 'error') {
       continueHost.hidden = true;
       return;
     }
@@ -5643,10 +5663,10 @@ export function createLibraryView(
       renderContinueBar();
       renderItems();
       void hydrateLocalCovers(generation);
-    } catch {
+    } catch (error) {
       if (generation !== requestGeneration) return;
       items = [];
-      setStatus('');
+      setStatus(errorText(error, labels().offline), true);
       renderContinueBar();
       renderItems();
     }
@@ -5850,14 +5870,11 @@ export function createLibraryView(
       return;
     }
     if (!catalogActive() || selectedSourceId === null) {
-      const lowered = query.toLocaleLowerCase();
       const loaded = await deps.library.listItems();
       rememberImportedItems(loaded);
-      items = loaded
-        .filter((item) =>
-          `${itemTitle(item)}\n${itemAuthors(item).join('\n')}`.toLocaleLowerCase().includes(lowered),
-        )
-        .map(displayFromPersistedItem);
+      const displays = loaded.map(displayFromPersistedItem);
+      if (activeSection === 'shelf') shelfItems = displays;
+      items = displays.filter((display) => matchesShelfQuery(display.item, query));
       refreshSmartGroups();
       selected = null;
       renderContinueBar();
@@ -6213,6 +6230,7 @@ export function createLibraryView(
   async function initialLoad(): Promise<void> {
     const generation = ++requestGeneration;
     beginBlockingLoad();
+    lastAction = initialLoad;
     try {
       await refreshSources();
       if (generation !== requestGeneration) return;
@@ -6245,7 +6263,7 @@ export function createLibraryView(
         return;
       }
       items = [];
-      setStatus('');
+      setStatus(errorText(error, labels().offline), true);
       renderContinueBar();
       renderItems();
     }
@@ -6823,12 +6841,7 @@ export function createLibraryView(
       root.hidden = false;
       deps.onVisibilityChange?.(true);
       activeSection = 'shelf';
-      selectedGroup = 'all';
-      selectedSmartGroupId = null;
-      selectedCustomGroupId = null;
-      selectedTagId = null;
       closeGroupsSheet();
-      searchInput.value = '';
       syncSearchClear();
       await initialLoad();
       if (!isMobileLibraryChrome()) {

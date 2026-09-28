@@ -1140,19 +1140,26 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('keeps the empty local shelf when listing sources or items fails', async () => {
+  it('shows a retryable error instead of the empty guide when listing sources or items fails', async () => {
     const base = dependencies();
+    const book = localItem();
+    let sourceCalls = 0;
+    let itemCalls = 0;
     const deps = dependencies({
       opds: {
         ...base.opds,
         listSources: vi.fn(async () => {
-          throw new Error('error sending request');
+          sourceCalls += 1;
+          if (sourceCalls === 1) throw new Error('error sending request');
+          return [source];
         }),
       },
       library: {
         ...base.library,
         listItems: vi.fn(async () => {
-          throw new Error('IPC plugin not found');
+          itemCalls += 1;
+          if (itemCalls === 1) throw new Error('IPC plugin not found');
+          return [book];
         }),
       },
     });
@@ -1161,17 +1168,247 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    expect(host.textContent).not.toContain('无法连接此书库源。');
-    expect(host.querySelector('.lightink-library-item--import')).toBeNull();
-    const card = host.querySelector<HTMLElement>('.lightink-library-home-empty');
-    expect(isShown(card)).toBe(true);
-    expect(card?.textContent).toContain('导入本地书籍');
-    expect(card?.textContent).toContain('添加书源');
-    expect(
-      Array.from(host.querySelectorAll('button')).some(
-        (button) => button.textContent === '重试' && isShown(button),
-      ),
-    ).toBe(false);
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(host.textContent).toContain('无法连接此书库源。');
+    expect(host.textContent).not.toContain('书库还是空的');
+    shownButtonWithText(host, '重试').click();
+    await settle();
+
+    expect(itemCalls).toBe(1);
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(host.textContent).toContain('IPC plugin not found');
+    shownButtonWithText(host, '重试').click();
+    await settle();
+
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
+    expect(host.textContent).not.toContain('IPC plugin not found');
+    view.destroy();
+  });
+
+  it('hides continue reading and the empty guide when a later shelf reload fails', async () => {
+    const book = localItem({ title: '续读小说' });
+    let fail = false;
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: () => ({
+        status: 'in-progress' as const,
+        unit: 'chapter' as const,
+        index: 1,
+        ratio: 0.2,
+        updatedAt: 10,
+      }),
+      library: {
+        ...base.library,
+        listItems: vi.fn(async () => {
+          if (fail) throw new Error('IPC plugin not found');
+          return [book];
+        }),
+      },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    fail = true;
+    await view.refresh();
+    expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(host.textContent).toContain('IPC plugin not found');
+    expect(host.querySelector(`[data-item-id="${book.id}"]`)).toBeNull();
+
+    fail = false;
+    shownButtonWithText(host, '重试').click();
+    await settle();
+    expect(itemRow(host, book.id)).toBeTruthy();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(host.textContent).not.toContain('IPC plugin not found');
+    view.destroy();
+  });
+
+  it('keeps the shelf filter, group, tag, and search when show() runs again', async () => {
+    const novel = localItem({
+      id: 'local:/books/novel.epub',
+      title: '续读小说',
+      authors: ['甲作者'],
+      localPath: '/books/novel.epub',
+    });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '河山记',
+      authors: ['乙作者'],
+      localPath: '/books/other.epub',
+    });
+    const getProgress = vi.fn((item: LibraryProgressQuery) =>
+      item.id === novel.id
+        ? {
+            status: 'in-progress' as const,
+            unit: 'chapter' as const,
+            index: 1,
+            ratio: 0.2,
+            updatedAt: 50,
+          }
+        : { status: 'not-started' as const },
+    );
+    const { deps, library } = collectionDependencies({ items: [novel, other], getProgress });
+    const created = await library.createGroup!('夏日书单');
+    await library.setGroupMember!(created.id, novel.id, true);
+    const tagStore = createTagStore();
+    const tag = await tagStore.createTag('长篇');
+    await tagStore.setItemTags(novel.id, [tag.id]);
+    deps.library.listTags = vi.fn(() => tagStore.listTags());
+    deps.library.listTagMemberships = vi.fn(() => tagStore.listTagMemberships());
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(navItemActive(groupButton(host, '全部'))).toBe(true);
+    expect(wallHeading(host).hidden).toBe(true);
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    expect(input.value).toBe('');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(itemRow(host, other.id)).toBeTruthy();
+
+    groupButton(host, '在读').click();
+    await settle();
+    view.hide();
+    await view.show();
+    expect(groupButton(host, '在读').classList.contains('is-active')).toBe(true);
+    expect(input.value).toBe('');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
+    expect(wallHeading(host).textContent).toBe('在读 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    collectionButton(host, '夏日书单').click();
+    await settle();
+    tagNavButton(host, '长篇').click();
+    await settle();
+    input.value = '续读';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(wallHeading(host).textContent).toBe('夏日书单 · 长篇 · 续读 · 1');
+
+    view.hide();
+    await view.show();
+    expect(input.value).toBe('续读');
+    expect(collectionButton(host, '夏日书单').classList.contains('is-active')).toBe(true);
+    expect(tagNavButton(host, '长篇').classList.contains('is-active')).toBe(true);
+    expect(groupButton(host, '全部').classList.contains('is-active')).toBe(false);
+    expect(wallHeading(host).textContent).toBe('夏日书单 · 长篇 · 续读 · 1');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    view.destroy();
+  });
+
+  it('filters titles and authors, and keeps that intersection after a full reload', async () => {
+    const novel = localItem({ title: '续读小说', authors: ['甲作者'] });
+    const other = localItem({
+      id: 'local:/books/other.epub',
+      title: '河山记',
+      authors: ['乙作者'],
+      localPath: '/books/other.epub',
+    });
+    const books = [novel, other];
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => books) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '乙作者';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    expect(wallHeading(host).textContent).toBe('乙作者 · 1');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    books.push(
+      localItem({
+        id: 'local:/books/third.epub',
+        title: '乙作者新作',
+        authors: ['丙'],
+        localPath: '/books/third.epub',
+      }),
+    );
+    await view.refresh();
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    expect(itemRow(host, other.id)).toBeTruthy();
+    expect(itemRow(host, 'local:/books/third.epub')).toBeTruthy();
+    expect(wallHeading(host).textContent).toBe('乙作者 · 2');
+    expect(input.value).toBe('乙作者');
+    view.destroy();
+  });
+
+  it('keeps a smart group that still has books when search hits none of them', async () => {
+    const epub = localItem({
+      id: 'local:/books/novel.epub',
+      title: '续读小说',
+      extension: 'epub',
+      localPath: '/books/novel.epub',
+    });
+    const otherEpub = localItem({
+      id: 'local:/books/other.epub',
+      title: '另一本',
+      extension: 'epub',
+      localPath: '/books/other.epub',
+    });
+    const pdf = localItem({
+      id: 'local:/books/hill.pdf',
+      title: '河山记',
+      extension: 'pdf',
+      localPath: '/books/hill.pdf',
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [epub, otherEpub, pdf]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expandSmartGroupTypes(host);
+    smartGroupButton(host, 'EPUB').click();
+    await settle();
+    expect(wallHeading(host).textContent).toBe('EPUB · 2');
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河山';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(smartGroupButton(host, 'EPUB').classList.contains('is-active')).toBe(true);
+    expect(wallHeading(host).textContent).toBe('EPUB · 河山 · 0');
+    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${epub.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${otherEpub.id}"]`)).toBeNull();
+
+    await view.refresh();
+    expect(input.value).toBe('河山');
+    expect(smartGroupButton(host, 'EPUB').classList.contains('is-active')).toBe(true);
+    expect(wallHeading(host).textContent).toBe('EPUB · 河山 · 0');
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+
+    input.value = '另一';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(wallHeading(host).textContent).toBe('EPUB · 另一 · 1');
+    expect(itemRow(host, otherEpub.id)).toBeTruthy();
+    expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
+    expect(host.querySelector(`[data-item-id="${epub.id}"]`)).toBeNull();
     view.destroy();
   });
 
