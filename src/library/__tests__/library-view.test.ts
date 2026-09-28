@@ -1632,6 +1632,125 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('drops the previous wall count while a shelf search is still waiting for items', async () => {
+    const novel = localItem({ title: '续读小说' });
+    const comic = comicItem({ title: '河漫画' });
+    const shelf = [novel, comic];
+    let releaseSearch: (items: LibraryItem[]) => void = () => {};
+    const listItems = vi
+      .fn()
+      .mockResolvedValueOnce(shelf)
+      .mockImplementationOnce(
+        () =>
+          new Promise<LibraryItem[]>((resolve) => {
+            releaseSearch = resolve;
+          }),
+      );
+    const deps = dependencies({
+      library: { ...dependencies().library, listItems },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    groupButton(host, '漫画').click();
+    await settle();
+    expect(wallHeading(host).textContent).toBe('漫画 · 1');
+    expect(wallHeading(host).dataset.wallCount).toBe('1');
+
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(host.querySelector('.lightink-library-status')?.textContent).toContain('正在搜索…');
+    expect(wallHeading(host).dataset.wallCount).toBeUndefined();
+    expect(wallHeading(host).textContent).toBe('漫画 · 河');
+    expect(host.querySelector('.lightink-library-empty')).toBeNull();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+
+    releaseSearch(shelf);
+    await settle();
+    expect(wallHeading(host).textContent).toBe('漫画 · 河 · 1');
+    expect(wallHeading(host).dataset.wallCount).toBe('1');
+    expect(itemRow(host, comic.id).textContent).toContain('河漫画');
+    expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    view.destroy();
+  });
+
+  it('does not show continue reading with 正在搜索 when the query is cleared mid-search', async () => {
+    const novel = localItem({ title: '续读小说' });
+    const hill = localItem({
+      id: 'local:/books/hill.epub',
+      title: '河山记',
+      localPath: '/books/hill.epub',
+    });
+    const shelf = [novel, hill];
+    let releaseSearch: (items: LibraryItem[]) => void = () => {};
+    let releaseReload: (items: LibraryItem[]) => void = () => {};
+    const listItems = vi
+      .fn()
+      .mockResolvedValueOnce(shelf)
+      .mockImplementationOnce(
+        () =>
+          new Promise<LibraryItem[]>((resolve) => {
+            releaseSearch = resolve;
+          }),
+      )
+      .mockImplementation(
+        () =>
+          new Promise<LibraryItem[]>((resolve) => {
+            releaseReload = resolve;
+          }),
+      );
+    const base = dependencies();
+    const deps = dependencies({
+      getProgress: (item) =>
+        item.id === novel.id
+          ? {
+              status: 'in-progress' as const,
+              unit: 'chapter' as const,
+              index: 2,
+              ratio: 0.2,
+              updatedAt: 20,
+            }
+          : { status: 'not-started' as const },
+      library: { ...base.library, listItems },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '河山';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(host.querySelector('.lightink-library-status')?.textContent).toContain('正在搜索…');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(host.querySelector('.lightink-library-status')?.textContent ?? '').not.toContain('正在搜索');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(host.querySelector('.lightink-library-continue')?.textContent ?? '').not.toContain('续读小说');
+    expect(itemRow(host, novel.id)).toBeTruthy();
+
+    releaseSearch([hill]);
+    await settle();
+    expect(host.querySelector('.lightink-library-status')?.textContent ?? '').not.toContain('正在搜索');
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    expect(itemRow(host, hill.id)).toBeTruthy();
+
+    releaseReload(shelf);
+    await settle();
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('续读小说');
+    expect(host.querySelector('.lightink-library-status')?.textContent ?? '').not.toContain('正在搜索');
+    expect(host.textContent).not.toContain('正在加载');
+    view.destroy();
+  });
+
   it('retries a failed shelf search without keeping continue reading or a stale failure', async () => {
     const novel = localItem({ title: '续读小说' });
     const hill = localItem({
