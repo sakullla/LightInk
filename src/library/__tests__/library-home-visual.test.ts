@@ -81,7 +81,7 @@ describe('shelf home cover grid', () => {
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
     );
-    expect(homeGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(132px,\s*1fr\)\)/);
+    expect(homeGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(96px,\s*1fr\)\)/);
     expect(homeGrid).toMatch(/column-gap:\s*var\(--lightink-library-cover-gap-x\)/);
     expect(homeGrid).toMatch(/row-gap:\s*var\(--lightink-library-cover-gap-y\)/);
     expect(homeGrid).toMatch(/overflow-y:\s*auto/);
@@ -118,7 +118,35 @@ describe('shelf home cover grid', () => {
     expect(selected).toMatch(/color:\s*var\(--lightink-accent-ink/);
   });
 
-  it('fits two rows of at least four covers on the default desktop, and at least two on a phone', () => {
+  it('puts continue reading on its own row without stretching the cover into a banner', () => {
+    const home = shelfHomeSection();
+    const continueRow = ruleBody(
+      home,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s+\.lightink-library\[data-library-nav='shelf'\]\s+\.lightink-library-continue(?![\w-])/,
+    );
+    expect(continueRow).toMatch(/display:\s*grid/);
+    expect(continueRow).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(continueRow).toMatch(/grid-template-columns:\s*subgrid/);
+    expect(continueRow).not.toMatch(/grid-template-columns:\s*1fr/);
+
+    const open = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-open(?!:)/,
+    );
+    expect(open).toMatch(/grid-column:\s*1\s*\/\s*2/);
+    expect(open).not.toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(open).toMatch(/width:\s*100%/);
+
+    const dismiss = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-dismiss(?![\w-])/,
+    );
+    expect(dismiss).toMatch(/grid-column:\s*1\s*\/\s*2/);
+    expect(dismiss).toMatch(/grid-row:\s*1\s*\/\s*2/);
+    expect(home).toMatch(/\.lightink-library-home-books \.lightink-library-cover-wall,[\s\S]*?display:\s*contents/);
+  });
+
+  it('fits a continue row plus two rows of at least four covers on the default desktop, and at least two on a phone', () => {
     const home = shelfHomeSection();
     const grid = ruleBody(
       home,
@@ -165,8 +193,8 @@ describe('shelf home cover grid', () => {
       expect(columns).toBeGreaterThanOrEqual(4);
       const track = (inner - (columns - 1) * gapX) / columns;
       const row = track * (3 / 2) + textBlock;
-      const twoRows = row * 2 + gapY + padTop;
-      expect(twoRows).toBeLessThanOrEqual(windowHeight - DESKTOP_WINDOW.titlebar);
+      const firstScreen = row * 3 + gapY * 2 + padTop;
+      expect(firstScreen).toBeLessThanOrEqual(windowHeight - DESKTOP_WINDOW.titlebar);
     }
 
     const base = ruleBody(css, /\.lightink-library/);
