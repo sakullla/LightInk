@@ -251,6 +251,14 @@ export interface AppShellActions {
   isAutosaveEnabled?(): boolean;
   onExportHtml(): void;
   onExportPdf(): void;
+  /**
+   * R14 降级退出：File→退出（仅桌面接线；Android R12 不注入即不渲染）。
+   * 修复「托盘不可用 + 老板键注册失败时无任何退出路径」的死角；action 走
+   * conceal-quit.requestQuit（与老板键 2/托盘菜单退出同一编排）。
+   */
+  onQuit?(): void;
+  /** 退出项的快捷键提示（跟随老板键 2 当前组合；缺省不显示）。 */
+  getQuitAccelerator?(): string;
   // 编辑
   onUndo(): void;
   onRedo(): void;
@@ -902,6 +910,20 @@ export function buildMenus(actions: AppShellActions): Menu[] {
         ),
         menuItem('file-export-html', () => t('file.exportHtml'), actions.onExportHtml),
         menuItem('file-export-pdf', () => t('file.exportPdf'), actions.onExportPdf),
+        // R14 降级退出（desktop）：仅接线时渲染（Android R12 不注入 onQuit）。
+        ...(actions.onQuit === undefined
+          ? []
+          : [
+              separator('file-sep-exit'),
+              menuItem(
+                'file-quit',
+                () => t('file.quit'),
+                () => actions.onQuit?.(),
+                // 快捷键提示跟随老板键 2 当前组合（不注册为本地快捷键——
+                // 全局键由后端 conceal_register_boss_keys 注册）。
+                actions.getQuitAccelerator?.() ?? '',
+              ),
+            ]),
       ],
     },
     {

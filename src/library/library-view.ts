@@ -45,6 +45,7 @@ import {
   createLibraryManage,
   invokeAiGetConfig,
   READER_AI_CONFIGURED_EVENT,
+  type ConcealManageDeps,
   type LibraryManageLabels,
 } from './library-manage.js';
 import { translate, type MessageKey } from '../i18n/messages.js';
@@ -775,6 +776,11 @@ export interface LibraryViewDependencies {
     'addSource' | 'listSources' | 'removeSource' | 'browse' | 'test'
   >;
   readonly onOpenSyncPanel?: () => void;
+  /**
+   * 摸鱼设置段（R2/R5–R10/R13）。缺省（Android R12 / 测试降级）整段不
+   * 渲染；透传给 library-manage。
+   */
+  readonly concealManage?: ConcealManageDeps;
   /** Persists the shelf chrome theme; never the editor or reader keys. */
   readonly themeStorage?: LibraryThemeStorage | null;
   /** Persists reader chrome prefs such as the bottom progress bar. */
@@ -2235,6 +2241,7 @@ export function createLibraryView(
     onImport: importLocalBook,
     onOpenSyncPanel: deps.onOpenSyncPanel,
     onEnterEditor: deps.onEnterEditor,
+    conceal: deps.concealManage,
   });
   const selectedSource = (): CatalogSource | undefined =>
     sources.find((source) => source.id === selectedSourceId);

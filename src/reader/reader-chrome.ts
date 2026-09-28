@@ -114,6 +114,16 @@ export interface ReaderChromeBounds {
   readonly height: number;
 }
 
+/**
+ * R7 鼠标移出隐藏 × reader-chrome 的接管通道（单写者保留在 syncDom）：
+ *   - 'auto'   默认：原 reveal/idle 自动隐藏机制全权；
+ *   - 'held'   强制显示该带，且抑制 idle 自动隐藏（R7 开 + 指针在带内）；
+ *   - 'hidden' 强制隐藏该带（R7 开 + 指针已离开）。
+ * conceal-controller 调用；所有 bar/footer/whisper 的 DOM 写入仍收敛在
+ * syncDom 单点，不引入第二套状态机。
+ */
+export type ReaderChromeConcealZone = 'auto' | 'held' | 'hidden';
+
 export interface ReaderChromeDeps {
   host?: HTMLElement;
   locale?: ReaderChromeLocale;
@@ -192,6 +202,10 @@ export interface ReaderChrome {
   refreshAvailability(): void;
   /** Re-read `markdownEditing()` and swap 编辑/完成 label. */
   syncMarkdownEdit(): void;
+  /**
+   * R7：顶带/底带显隐接管（'auto' 还原原机制）。见 ReaderChromeConcealZone。
+   */
+  setConcealZones(top: ReaderChromeConcealZone, bottom: ReaderChromeConcealZone): void;
   /**
    * One-step back. Never calls `returnToShelf`. True when a layer closed;
    * false when nothing is open (window leftover Escape may 合书).
@@ -502,6 +516,9 @@ export function createReaderChrome(
   let hideTimer: number | null = null;
   let attachedHost: HTMLElement | null = null;
   let destroyed = false;
+  // R7 接管态（默认 'auto' = 原机制全权）。仅 setConcealZones 写入。
+  let concealTop: ReaderChromeConcealZone = 'auto';
+  let concealBottom: ReaderChromeConcealZone = 'auto';
 
   const overlayOpen = (): boolean => deps.isOverlayOpen?.() === true;
   const stayRevealed = (): boolean => deps.stayRevealed?.() === true;
@@ -524,16 +541,20 @@ export function createReaderChrome(
   };
 
   const syncDom = (): void => {
-    if (element.hidden === revealed) {
-      element.hidden = !revealed;
+    // R7 接管态与原机制合成（单写者仍在本函数）：
+    //   barShown  = held 强制显示 ‖ (revealed 且未被 hidden 强制隐藏)
+    //   footerShown/whisperShown 同理按 bottom 合成。
+    const barShown = concealTop === 'held' || (revealed && concealTop !== 'hidden');
+    if (element.hidden === barShown) {
+      element.hidden = !barShown;
     }
-    writeAttr(element, 'aria-hidden', revealed ? 'false' : 'true');
-    writeAttr(element, 'data-revealed', revealed ? 'true' : 'false');
-    element.classList.toggle('is-revealed', revealed);
-    bar.hidden = !revealed;
-    writeAttr(bar, 'aria-hidden', revealed ? 'false' : 'true');
-    bar.style.display = revealed ? 'flex' : 'none';
-    if (revealed) {
+    writeAttr(element, 'aria-hidden', barShown ? 'false' : 'true');
+    writeAttr(element, 'data-revealed', barShown ? 'true' : 'false');
+    element.classList.toggle('is-revealed', barShown);
+    bar.hidden = !barShown;
+    writeAttr(bar, 'aria-hidden', barShown ? 'false' : 'true');
+    bar.style.display = barShown ? 'flex' : 'none';
+    if (barShown) {
       bar.setAttribute('data-tauri-drag-region', '');
       drag.setAttribute('data-tauri-drag-region', '');
       bar.style.setProperty('-webkit-app-region', 'drag');
@@ -543,11 +564,20 @@ export function createReaderChrome(
       bar.style.setProperty('-webkit-app-region', 'no-drag');
     }
     const hideProgress = suppressProgressDock();
-    const hideFooter = !revealed || (hideProgress && !touchMode);
+    const footerShown =
+      concealBottom === 'held' ||
+      (revealed && !(hideProgress && !touchMode) && concealBottom !== 'hidden');
+    const hideFooter = !footerShown;
     footer.hidden = hideFooter;
     writeAttr(footer, 'aria-hidden', hideFooter ? 'true' : 'false');
+    // whisper：bottom 被接管隐藏时一并隐藏；'held' 时 footer 已可见，
+    // whisper 按「与 footer 互斥」的原口径保持隐藏；'auto' 时与原规则逐字节一致。
     const hideWhisper =
-      hideProgress || revealed || attachedHost?.dataset.readingLayout === 'scroll';
+      hideProgress ||
+      revealed ||
+      footerShown ||
+      attachedHost?.dataset.readingLayout === 'scroll' ||
+      concealBottom === 'hidden';
     whisper.hidden = hideWhisper;
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');
     for (const button of [
@@ -558,7 +588,7 @@ export function createReaderChrome(
       searchButton,
       assistantButton,
     ]) {
-      button.hidden = !revealed;
+      button.hidden = !barShown;
     }
     if (editButton !== null) {
       const editing = deps.markdownEditing?.() === true;
@@ -568,11 +598,11 @@ export function createReaderChrome(
       }
       writeAttr(editButton, 'aria-label', label);
       writeAttr(editButton, 'data-markdown-editing', editing ? 'true' : 'false');
-      editButton.hidden = !revealed;
+      editButton.hidden = !barShown;
     }
     // 助手未配置时自摘除，配置后挂回 tools。
     const assistantOn = deps.assistantAvailable?.() !== false;
-    assistantButton.hidden = !revealed || !assistantOn;
+    assistantButton.hidden = !barShown || !assistantOn;
     if (!assistantOn) {
       assistantButton.remove();
     } else if (!tools.contains(assistantButton)) {
@@ -595,7 +625,9 @@ export function createReaderChrome(
       pointerInsideBar ||
       !revealed ||
       stayRevealed() ||
-      isWindowTitlebarHot()
+      isWindowTitlebarHot() ||
+      // R7：顶带被 'held' 接管时抑制 idle 自动隐藏（强制显示语义）。
+      concealTop === 'held'
     ) {
       return;
     }
@@ -928,6 +960,30 @@ export function createReaderChrome(
   };
 
   let lastPinKey = '';
+  /**
+   * R7 接管通道：'held' 时把内部 revealed 对齐为 true（切回 'auto' 后原
+   * 机制从已显示态自然续接），随后统一经 syncDom 单点写 DOM；回到 'auto'
+   * 时重挂 idle 自动隐藏计时（R7「开关关闭→立即显示」由原机制呈现）。
+   */
+  const setConcealZones = (top: ReaderChromeConcealZone, bottom: ReaderChromeConcealZone): void => {
+    if (destroyed) {
+      return;
+    }
+    concealTop = top;
+    concealBottom = bottom;
+    if (top === 'held') {
+      // 仅顶带 'held' 对齐 revealed=true（切回 'auto' 后原机制从已显示态
+      // 续接）；底栏 'held' 独立强制显示 footer，不影响顶栏。
+      clearHideTimer();
+      revealed = true;
+    } else if (bottom === 'held') {
+      clearHideTimer();
+    }
+    syncDom();
+    if (top !== 'held' && bottom !== 'held' && revealed && !touchMode) {
+      scheduleHide();
+    }
+  };
   const pinDocks = (
     pane: { getBoundingClientRect(): DOMRect } | null,
     paginated: boolean,
@@ -1004,6 +1060,7 @@ export function createReaderChrome(
     syncMarkdownEdit: () => {
       syncDom();
     },
+    setConcealZones,
     dismiss,
     toggle() {
       if (revealed) {

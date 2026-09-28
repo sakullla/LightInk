@@ -1482,3 +1482,38 @@ describe('chrome-shell five-bar inset and desktop density', () => {
     }
   });
 });
+
+describe('File→退出（R14 无退出死角降级出口）', () => {
+  it('renders the exit item with the boss-key-2 accelerator when onQuit is wired (desktop)', () => {
+    const menus = buildMenus({
+      ...stubActions(),
+      onQuit: () => undefined,
+      getQuitAccelerator: () => 'Alt+X',
+    });
+    const file = menus.find((m) => m.id === 'file');
+    const item = file?.items.find((i) => i.id === 'file-quit');
+    expect(item).toBeDefined();
+    const label = typeof item?.label === 'function' ? item!.label!() : item?.label;
+    expect(label).toMatch(/退出|file\.quit/);
+    expect(item?.shortcut).toBe('Alt+X');
+    expect(item?.separator).not.toBe(true);
+  });
+
+  it('routes the exit action through the injected onQuit (conceal-quit orchestration)', () => {
+    const onQuit = vi.fn();
+    const menus = buildMenus({ ...stubActions(), onQuit });
+    const item = menus
+      .find((m) => m.id === 'file')
+      ?.items.find((i) => i.id === 'file-quit');
+    expect(item).toBeDefined();
+    item!.action!();
+    expect(onQuit).toHaveBeenCalledOnce();
+  });
+
+  it('omits the exit item entirely when onQuit is absent (Android R12 / browser preview)', () => {
+    const menus = buildMenus(stubActions());
+    const file = menus.find((m) => m.id === 'file');
+    expect(file?.items.some((i) => i.id === 'file-quit')).toBe(false);
+    expect(file?.items.some((i) => i.id === 'file-sep-exit')).toBe(false);
+  });
+});

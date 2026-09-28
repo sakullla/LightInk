@@ -13,6 +13,8 @@ export interface AppWindowLike {
   close?(): Promise<void>;
   isMaximized?(): Promise<boolean>;
   onResized?(handler: () => void): Promise<(() => void) | void>;
+  /** R13：DPI/缩放变化（zones 需按新 scale 重测重推）。 */
+  onScaleChanged?(handler: () => void): Promise<(() => void) | void>;
 }
 
 /** Resolve the current Tauri webview/window, or null outside Tauri. */

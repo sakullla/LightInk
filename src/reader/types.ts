@@ -12,6 +12,7 @@
 
 import type { OutlineItem } from '../outline/outline-model.js';
 import type { ComicMetadata } from './comic-model.js';
+import type { ReaderChrome } from './reader-chrome.js';
 import type { ReaderTarget } from './sources/types.js';
 
 export type ReaderPhase =
@@ -63,6 +64,11 @@ export interface ReaderInstance {
   destroy(): Promise<void>;
   /** 在当前阅读位置添加/取消书签（开关语义；标注未启用时空操作）。 */
   addBookmark(): void;
+  /**
+   * 本实例的沉浸控件（R7 摸鱼接管通道 setConcealZones / zones 测量）。
+   * 可选——chrome 未挂载（触屏裁剪/测试 stub）或已销毁时为 null。
+   */
+  getChrome?(): ReaderChrome | null;
   /** 当前阅读位置是否已有书签（chrome 按钮两态与菜单勾选的事实源）。可选——测试 stub 可省略。 */
   isBookmarked?(): boolean;
   /** 在当前阅读位置添加笔记（经 prompt 取文本；标注未启用时空操作）。 */

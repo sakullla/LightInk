@@ -1,0 +1,78 @@
+/*
+ * `conceal.css` — 书架与阅读器摸鱼（R5/R6/R7）的视觉层。
+ *
+ * 作用域设计（终审 finding：body 不是 #app 的后代，页面背景由 body /
+ * .lightink-library / .lightink-reader 三处绘制）：
+ *   - conceal-controller 把 data-conceal-surface（editor|shelf|reader）写在
+ *     <html> 上，透明/渐变只匹配 shelf/reader 两个值，编辑器表面（与未
+ *     初始化的默认态）完全不命中 → R1「编辑器外观与升级前一致」；
+ *   - html[data-conceal-surface='editor'] 显式补不透明背景（transparent:true
+ *     是创建期全局窗口开关；html 背景会铺满 viewport 画布，恰好兜住 Linux
+ *     无合成器时加载瞬间/overscroll/滚动条角落发黑的像素——仅在编辑器表
+ *     面启用，不破坏 shelf/reader 的透明）；
+ *   - 三区隐藏用 visibility（不 display:none）：几何不动，R13 zones 缓存与
+ *     R7 重显不发生回流（reader footer 在正常流内，display:none 会改版心）。
+ */
+
+/* ── R5/R6 页面背景：body 与两个表面根同源取 --lightink-conceal-page-background ── */
+html[data-conceal-surface='shelf'] body,
+html[data-conceal-surface='reader'] body {
+  background: var(--lightink-conceal-page-background, var(--lightink-bg));
+}
+
+html[data-conceal-surface='shelf'] .lightink-library,
+html[data-conceal-surface='reader'] .lightink-reader {
+  background: var(--lightink-conceal-page-background, var(--lightink-bg));
+}
+
+/* ── R5/R6 覆盖内联背景涂层 ──
+ * applyReaderTheme 把阅读主题纸色写成 .lightink-reader 与
+ * #lightink-editor-area 的**内联** background-color（reader-theme.ts:170），
+ * 普通样式表声明在级联中必输给内联样式。仅当页面背景改写变量确实写入
+ * （透明开或选定渐变，由 data-conceal-page-background 标记）时，用
+ * !important 压回这两层内联涂层；默认态（主题背景）不命中本规则，
+ * 书架/阅读主题与自定义主题表的行为与升级前完全一致。 */
+html[data-conceal-surface='shelf'][data-conceal-page-background='on'] .lightink-library,
+html[data-conceal-surface='shelf'][data-conceal-page-background='on'] #lightink-editor-area,
+html[data-conceal-surface='reader'][data-conceal-page-background='on'] .lightink-reader,
+html[data-conceal-surface='reader'][data-conceal-page-background='on'] #lightink-editor-area {
+  background: var(--lightink-conceal-page-background) !important;
+}
+
+/* ── R1/R10 编辑器兜底：窗口级 transparent 后仍保证编辑器像素全不透明 ── */
+html[data-conceal-surface='editor'],
+html[data-conceal-surface='editor'] body {
+  background: var(--lightink-bg);
+}
+
+#app.is-workspace-editor,
+#app.is-workspace-editor #lightink-main,
+#app.is-workspace-editor #lightink-editor-area {
+  background-color: var(--lightink-bg);
+}
+
+/* ── R6 内容透明度：书架封面/标题（封面墙）与阅读器正文 ──
+ * 只改 opacity，不改文字颜色（R6 原文）。 */
+html[data-conceal-surface='shelf'] .lightink-library-body {
+  opacity: var(--lightink-conceal-content-opacity, 1);
+}
+
+html[data-conceal-surface='reader'] .lightink-reader-scroll,
+html[data-conceal-surface='reader'] .lightink-reader-pages,
+html[data-conceal-surface='reader'] .lightink-reader-status {
+  opacity: var(--lightink-conceal-content-opacity, 1);
+}
+
+/* ── R7 三区隐藏（visibility 保几何；阅读器 bar/footer/whisper 由
+ *    reader-chrome.setConcealZones 单写者接管，不经这里） ── */
+#app[data-conceal-top='hidden'] #lightink-window-titlebar,
+#app[data-conceal-top='hidden'] .lightink-library-header {
+  visibility: hidden;
+}
+
+#app[data-conceal-body='hidden'] .lightink-library-body,
+#app[data-conceal-body='hidden'] .lightink-reader-scroll,
+#app[data-conceal-body='hidden'] .lightink-reader-pages,
+#app[data-conceal-body='hidden'] .lightink-reader-status {
+  visibility: hidden;
+}

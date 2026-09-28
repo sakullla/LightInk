@@ -12,6 +12,8 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { LibraryClient } from './library-client.js';
+import type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
+import type { ConcealGradientPreset, ConcealPrefs } from '../conceal/conceal-prefs.js';
 import {
   AI_TARGET_LANG_VALUES,
   type AiTargetLangValue,
@@ -37,8 +39,52 @@ import {
 
 export { AI_TARGET_LANG_VALUES };
 export type { AiTargetLangValue };
+export type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
 
 export type ManageSubpage = 'home' | 'cache-limit';
+
+/** 摸鱼段（R2/R5–R10/R13）的显示文案（main.ts 以 i18n 装配）。 */
+export interface ConcealManageLabels {
+  readonly group: string;
+  readonly groupHint: string;
+  readonly bossKeyHint: string;
+  readonly macBossKeyHint: string;
+  readonly bossKey1: string;
+  readonly bossKey2: string;
+  readonly bossKeyActive: string;
+  readonly bossKeyEmpty: string;
+  readonly bossKeyInvalid: string;
+  readonly bossKeySame: string;
+  readonly bossKeyUnregistered: string;
+  readonly background: string;
+  readonly backgroundTheme: string;
+  readonly backgroundPresets: Readonly<Record<ConcealGradientPreset, string>>;
+  readonly backgroundCustom: string;
+  readonly customFrom: string;
+  readonly customTo: string;
+  readonly transparentMode: string;
+  readonly contentOpacity: string;
+  readonly hideTop: string;
+  readonly hideBody: string;
+  readonly hideBottom: string;
+  readonly alwaysOnTop: string;
+  readonly miniWindow: string;
+  readonly clickThrough: string;
+  readonly clickThroughHint: string;
+}
+
+/** 摸鱼段与 conceal-controller 的接线（注入式，Vitest 可 fake）。 */
+export interface ConcealManageDeps {
+  readonly labels: () => ConcealManageLabels;
+  /** macOS 平台（决定是否展示 Ctrl 默认值说明）。 */
+  readonly isMac: boolean;
+  /** 当前生效偏好（命令失败的开关已内存回退，回显以它为准）。 */
+  readonly getPrefs: () => ConcealPrefs;
+  /** 非键位改动：合并→校验→持久化→即时生效（R10）。 */
+  readonly update: (update: Partial<ConcealPrefs>) => void;
+  /** R2 改键注册（返回注册结果与失败原因）。 */
+  readonly updateBossKeys: (primary: string, secondary: string) => Promise<ConcealBossKeysStatus>;
+}
 
 export interface LibraryManageLabels {
   readonly appearance: string;
@@ -126,6 +172,8 @@ export interface LibraryManageOptions {
   readonly onOpenSyncPanel?: () => void;
   /** Desktop-only entry; the row is suppressed when absent. */
   readonly onEnterEditor?: () => void;
+  /** 摸鱼段（R12：仅桌面注入；缺省整段不渲染）。 */
+  readonly conceal?: ConcealManageDeps;
 }
 
 export interface LibraryManageView {
@@ -446,6 +494,42 @@ export function aiErrorMessage(
     text += ` (HTTP ${parts.status})`;
   }
   return text;
+}
+
+/**
+ * 设置分组默认折叠（分组多、内容长，AI/摸鱼等大区块尤甚）：标题即开关
+ * （role=button + aria-expanded，与分组树同口径的双状态标记）。不持久化
+ * 展开态——每次打开设置一律从全折叠开始，会话内的展开由 DOM 自身保持。
+ */
+function setupManageGroupCollapsing(home: HTMLElement): void {
+  for (const group of home.querySelectorAll<HTMLElement>('.lightink-library-manage-group')) {
+    const title = group.querySelector<HTMLElement>(':scope > h2');
+    if (title === null) {
+      continue;
+    }
+    const apply = (open: boolean): void => {
+      if (open) {
+        delete group.dataset.collapsed;
+      } else {
+        group.dataset.collapsed = 'true';
+      }
+      title.setAttribute('aria-expanded', String(open));
+    };
+    apply(false);
+    const toggle = (): void => {
+      apply(group.dataset.collapsed === 'true');
+    };
+    title.classList.add('lightink-library-manage-group-toggle');
+    title.setAttribute('role', 'button');
+    title.setAttribute('tabindex', '0');
+    title.addEventListener('click', toggle);
+    title.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggle();
+      }
+    });
+  }
 }
 
 
@@ -829,14 +913,324 @@ export function createLibraryManage(
     other.append(editorButton);
   }
 
+  // 摸鱼（R2/R5–R10/R13）：仅桌面注入（R12 Android 缺省整段不渲染）。
+  // 改动即时经 conceal-controller apply + save prefs（R10）；老板键录入
+  // 走 keydown 捕获组合串，注册结果与失败原因就地展示（R2）。
+  let renderConcealState: ((registerResult?: ConcealBossKeysStatus) => void) | null = null;
+  let concealSection: HTMLElement | null = null;
+  const concealTexts = {
+    backgroundLabels: {
+      theme: '',
+      lavender: '',
+      mint: '',
+      peach: '',
+      sky: '',
+      butter: '',
+      custom: '',
+    } as Record<string, string>,
+    bossKeyActive: '',
+    bossKeyUnregistered: '',
+  };
+  const concealDom = {
+    title: null as HTMLHeadingElement | null,
+    hint: null as HTMLParagraphElement | null,
+    bossHint: null as HTMLParagraphElement | null,
+    macHint: null as HTMLParagraphElement | null,
+    bossPrimary: null as HTMLInputElement | null,
+    bossPrimaryStatus: null as HTMLParagraphElement | null,
+    bossSecondary: null as HTMLInputElement | null,
+    bossSecondaryStatus: null as HTMLParagraphElement | null,
+    backgroundSelect: null as HTMLSelectElement | null,
+    backgroundOptions: null as Map<string, HTMLOptionElement> | null,
+    backgroundText: null as HTMLSpanElement | null,
+    customRow: null as HTMLElement | null,
+    customFromText: null as HTMLSpanElement | null,
+    customToText: null as HTMLSpanElement | null,
+    customFrom: null as HTMLInputElement | null,
+    customTo: null as HTMLInputElement | null,
+    opacityInput: null as HTMLInputElement | null,
+    opacityText: null as HTMLSpanElement | null,
+    toggles: new Map<string, { input: HTMLInputElement; text: HTMLSpanElement }>(),
+    clickThroughHint: null as HTMLParagraphElement | null,
+  };
+
+  if (options.conceal !== undefined) {
+    const concealDeps = options.conceal;
+    concealSection = doc.createElement('section');
+    concealSection.className = 'lightink-library-manage-group lightink-library-conceal';
+    concealSection.dataset.manageGroup = 'conceal';
+
+    concealDom.title = doc.createElement('h2');
+    concealDom.title.className = 'lightink-library-manage-group-title';
+    concealDom.hint = doc.createElement('p');
+    concealDom.hint.className = 'lightink-library-appearance-hint';
+    concealDom.bossHint = doc.createElement('p');
+    concealDom.bossHint.className = 'lightink-library-appearance-hint';
+    if (concealDeps.isMac) {
+      concealDom.macHint = doc.createElement('p');
+      concealDom.macHint.className = 'lightink-library-appearance-hint';
+    }
+
+    /** keydown → accelerator 串（修饰键在前按 Control/Shift/Alt/Meta 排序）。 */
+    const comboFromEvent = (event: KeyboardEvent): { combo: string; complete: boolean } => {
+      const modifiers: string[] = [];
+      if (event.ctrlKey) modifiers.push('Control');
+      if (event.shiftKey) modifiers.push('Shift');
+      if (event.altKey) modifiers.push('Alt');
+      if (event.metaKey) modifiers.push('Meta');
+      const key = event.key;
+      const isMain =
+        /^F([1-9]|1[0-9]|2[0-4])$/.test(key) ||
+        /^[a-zA-Z0-9]$/.test(key) ||
+        ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete', 'Backspace', 'Tab', 'Enter', 'Space', 'Plus', 'Minus'].includes(
+          key,
+        );
+      if (!isMain) {
+        return { combo: modifiers.join('+'), complete: false };
+      }
+      const main = key === 'Space' ? 'Space' : key.length === 1 ? key.toUpperCase() : key;
+      return { combo: [...modifiers, main].join('+'), complete: true };
+    };
+
+    const makeBossKeyField = (
+      prefKey: 'bossPrimary' | 'bossSecondary',
+      statusEl: HTMLParagraphElement,
+    ): HTMLInputElement => {
+      const field = doc.createElement('label');
+      field.className = 'lightink-library-conceal-key-field';
+      const input = doc.createElement('input');
+      input.type = 'text';
+      input.readOnly = true;
+      input.dataset.concealKeyField = prefKey;
+      input.dataset.recording = 'false';
+      statusEl.className = 'lightink-library-conceal-key-status';
+      statusEl.setAttribute('role', 'status');
+      input.addEventListener('keydown', (event) => {
+        event.preventDefault();
+        if (event.key === 'Escape') {
+          input.dataset.recording = 'false';
+          input.value = concealDeps.getPrefs()[prefKey];
+          return;
+        }
+        const { combo, complete } = comboFromEvent(event);
+        if (combo === '') {
+          return;
+        }
+        if (!complete) {
+          // 只按了修饰键：显示预览但不提交（R2 纯修饰键不注册）。
+          input.dataset.recording = 'true';
+          input.value = combo;
+          return;
+        }
+        input.dataset.recording = 'false';
+        const prefs = concealDeps.getPrefs();
+        void concealDeps
+          .updateBossKeys(
+            prefKey === 'bossPrimary' ? combo : prefs.bossPrimary,
+            prefKey === 'bossSecondary' ? combo : prefs.bossSecondary,
+          )
+          .then((result) => {
+            renderConcealState?.(result);
+          });
+      });
+      input.addEventListener('blur', () => {
+        input.dataset.recording = 'false';
+        input.value = concealDeps.getPrefs()[prefKey];
+      });
+      field.append(input, statusEl);
+      return input;
+    };
+    concealDom.bossPrimaryStatus = doc.createElement('p');
+    concealDom.bossPrimary = makeBossKeyField('bossPrimary', concealDom.bossPrimaryStatus);
+    concealDom.bossSecondaryStatus = doc.createElement('p');
+    concealDom.bossSecondary = makeBossKeyField('bossSecondary', concealDom.bossSecondaryStatus);
+
+    concealDom.backgroundSelect = doc.createElement('select');
+    concealDom.backgroundSelect.name = 'concealBackground';
+    concealDom.backgroundOptions = new Map<string, HTMLOptionElement>();
+    for (const value of ['theme', 'lavender', 'mint', 'peach', 'sky', 'butter', 'custom']) {
+      const option = doc.createElement('option');
+      option.value = value;
+      concealDom.backgroundOptions.set(value, option);
+      concealDom.backgroundSelect.append(option);
+    }
+    const backgroundField = doc.createElement('label');
+    backgroundField.className = 'lightink-library-conceal-background-field';
+    concealDom.backgroundText = doc.createElement('span');
+    backgroundField.append(concealDom.backgroundSelect, concealDom.backgroundText);
+
+    concealDom.customRow = doc.createElement('div');
+    concealDom.customRow.className = 'lightink-library-conceal-custom-row';
+    const customFromField = doc.createElement('label');
+    customFromField.className = 'lightink-library-field';
+    concealDom.customFromText = doc.createElement('span');
+    concealDom.customFrom = doc.createElement('input');
+    concealDom.customFrom.type = 'color';
+    const customToField = doc.createElement('label');
+    customToField.className = 'lightink-library-field';
+    concealDom.customToText = doc.createElement('span');
+    concealDom.customTo = doc.createElement('input');
+    concealDom.customTo.type = 'color';
+    customFromField.append(concealDom.customFromText, concealDom.customFrom);
+    customToField.append(concealDom.customToText, concealDom.customTo);
+    concealDom.customRow.append(customFromField, customToField);
+
+    const opacityField = doc.createElement('label');
+    opacityField.className = 'lightink-library-conceal-opacity-field';
+    concealDom.opacityInput = doc.createElement('input');
+    concealDom.opacityInput.type = 'number';
+    concealDom.opacityInput.min = '0';
+    concealDom.opacityInput.max = '100';
+    concealDom.opacityInput.step = '1';
+    concealDom.opacityText = doc.createElement('span');
+    opacityField.append(concealDom.opacityInput, concealDom.opacityText);
+
+    const concealSectionEl = concealSection;
+    const toggleLabels: HTMLLabelElement[] = [];
+    for (const prefKey of [
+      'transparentMode',
+      'hideTop',
+      'hideBody',
+      'hideBottom',
+      'alwaysOnTop',
+      'miniWindow',
+      'clickThrough',
+    ] as const) {
+      const label = doc.createElement('label');
+      label.className = 'lightink-library-reader-pref';
+      const input = doc.createElement('input');
+      input.type = 'checkbox';
+      input.dataset.concealToggle = prefKey;
+      const text = doc.createElement('span');
+      label.append(input, text);
+      input.addEventListener('change', () => {
+        concealDeps.update({ [prefKey]: input.checked } as Partial<ConcealPrefs>);
+        renderConcealState?.();
+      });
+      concealDom.toggles.set(prefKey, { input, text });
+      toggleLabels.push(label);
+    }
+    concealDom.clickThroughHint = doc.createElement('p');
+    concealDom.clickThroughHint.className = 'lightink-library-appearance-hint';
+
+    concealSectionEl.append(
+      concealDom.title,
+      concealDom.hint,
+      concealDom.bossHint,
+      ...(concealDom.macHint === null ? [] : [concealDom.macHint]),
+      concealDom.bossPrimary.closest('.lightink-library-conceal-key-field') ?? concealDom.bossPrimary,
+      concealDom.bossSecondary.closest('.lightink-library-conceal-key-field') ?? concealDom.bossSecondary,
+      backgroundField,
+      concealDom.customRow,
+      opacityField,
+      ...toggleLabels,
+      concealDom.clickThroughHint,
+    );
+
+    concealDom.backgroundSelect.addEventListener('change', () => {
+      const prefs = concealDeps.getPrefs();
+      const value = concealDom.backgroundSelect?.value ?? 'theme';
+      if (value === 'theme') {
+        concealDeps.update({ background: { kind: 'theme' } });
+      } else if (value === 'custom') {
+        concealDeps.update({
+          background: {
+            kind: 'custom',
+            from: prefs.background.kind === 'custom' ? prefs.background.from : '#c9b6e4',
+            to: prefs.background.kind === 'custom' ? prefs.background.to : '#f1e9fb',
+          },
+        });
+      } else {
+        concealDeps.update({
+          background: { kind: 'preset', preset: value as ConcealGradientPreset },
+        });
+      }
+      renderConcealState?.();
+    });
+    const commitCustomColors = (): void => {
+      concealDeps.update({
+        background: {
+          kind: 'custom',
+          from: concealDom.customFrom?.value ?? '#000000',
+          to: concealDom.customTo?.value ?? '#ffffff',
+        },
+      });
+      renderConcealState?.();
+    };
+    concealDom.customFrom?.addEventListener('change', commitCustomColors);
+    concealDom.customTo?.addEventListener('change', commitCustomColors);
+
+    concealDom.opacityInput?.addEventListener('change', () => {
+      const input = concealDom.opacityInput;
+      if (input === null) return;
+      const value = Math.round(input.valueAsNumber);
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        // R6：超界不保存，回显当前生效值。
+        input.value = String(concealDeps.getPrefs().contentOpacity);
+        return;
+      }
+      concealDeps.update({ contentOpacity: value });
+      renderConcealState?.();
+    });
+
+    /** 按当前生效偏好 + 最近一次注册结果回显（concealDeps.getPrefs 即事实源）。 */
+    renderConcealState = (registerResult?: ConcealBossKeysStatus): void => {
+      const prefs = concealDeps.getPrefs();
+      const fields = [
+        { key: 'bossPrimary' as const, input: concealDom.bossPrimary, status: concealDom.bossPrimaryStatus },
+        { key: 'bossSecondary' as const, input: concealDom.bossSecondary, status: concealDom.bossSecondaryStatus },
+      ];
+      for (const field of fields) {
+        if (field.input === null || field.status === null) continue;
+        if (registerResult !== undefined) {
+          const error = field.key === 'bossPrimary' ? registerResult.primaryError : registerResult.secondaryError;
+          const combo = field.key === 'bossPrimary' ? registerResult.primary : registerResult.secondary;
+          field.status.textContent =
+            error !== null
+              ? error
+              : combo !== null
+                ? concealTexts.bossKeyActive.replace('{combo}', combo)
+                : concealTexts.bossKeyUnregistered;
+        }
+        if (field.input.dataset.recording !== 'true') {
+          field.input.value = field.key === 'bossPrimary' ? prefs.bossPrimary : prefs.bossSecondary;
+        }
+      }
+      if (concealDom.backgroundSelect !== null) {
+        concealDom.backgroundSelect.value =
+          prefs.background.kind === 'theme'
+            ? 'theme'
+            : prefs.background.kind === 'preset'
+              ? prefs.background.preset
+              : 'custom';
+      }
+      if (concealDom.customRow !== null) {
+        concealDom.customRow.hidden = prefs.background.kind !== 'custom';
+      }
+      if (prefs.background.kind === 'custom') {
+        if (concealDom.customFrom !== null) concealDom.customFrom.value = prefs.background.from;
+        if (concealDom.customTo !== null) concealDom.customTo.value = prefs.background.to;
+      }
+      for (const [prefKey, toggle] of concealDom.toggles) {
+        toggle.input.checked = prefs[prefKey as keyof ConcealPrefs] === true;
+      }
+      if (concealDom.opacityInput !== null) {
+        concealDom.opacityInput.value = String(prefs.contentOpacity);
+      }
+    };
+    renderConcealState();
+  }
+
   home.append(
     appearance,
     readerPrefs,
     aiGroup,
     storage,
     ...(sync === null ? [] : [sync]),
+    ...(concealSection === null ? [] : [concealSection]),
     other,
   );
+  setupManageGroupCollapsing(home);
   element.append(home);
 
   const cacheLimitOverlay = doc.createElement('div');
@@ -1082,6 +1476,58 @@ export function createLibraryManage(
       editorButton.textContent = l.markdownEditor;
       editorButton.title = l.markdownEditor;
       editorButton.setAttribute('aria-label', l.markdownEditor);
+    }
+    // 摸鱼段（R2/R5–R10/R13）：文案 + 回显当前生效偏好。
+    if (options.conceal !== undefined && concealDom.title !== null) {
+      const cl = options.conceal.labels();
+      concealDom.title.textContent = cl.group;
+      if (concealDom.hint !== null) concealDom.hint.textContent = cl.groupHint;
+      if (concealDom.bossHint !== null) concealDom.bossHint.textContent = cl.bossKeyHint;
+      if (concealDom.macHint !== null) concealDom.macHint.textContent = cl.macBossKeyHint;
+      if (concealDom.bossPrimary !== null) {
+        concealDom.bossPrimary.setAttribute('aria-label', cl.bossKey1);
+        concealDom.bossPrimary.title = cl.bossKey1;
+      }
+      if (concealDom.bossSecondary !== null) {
+        concealDom.bossSecondary.setAttribute('aria-label', cl.bossKey2);
+        concealDom.bossSecondary.title = cl.bossKey2;
+      }
+      concealTexts.bossKeyActive = cl.bossKeyActive;
+      concealTexts.bossKeyUnregistered = cl.bossKeyUnregistered;
+      concealTexts.backgroundLabels = {
+        theme: cl.backgroundTheme,
+        lavender: cl.backgroundPresets.lavender,
+        mint: cl.backgroundPresets.mint,
+        peach: cl.backgroundPresets.peach,
+        sky: cl.backgroundPresets.sky,
+        butter: cl.backgroundPresets.butter,
+        custom: cl.backgroundCustom,
+      };
+      if (concealDom.backgroundOptions !== null) {
+        for (const [value, option] of concealDom.backgroundOptions) {
+          option.textContent = concealTexts.backgroundLabels[value] ?? value;
+        }
+      }
+      if (concealDom.backgroundText !== null) concealDom.backgroundText.textContent = cl.background;
+      if (concealDom.customFromText !== null) concealDom.customFromText.textContent = cl.customFrom;
+      if (concealDom.customToText !== null) concealDom.customToText.textContent = cl.customTo;
+      if (concealDom.opacityText !== null) concealDom.opacityText.textContent = cl.contentOpacity;
+      const toggleLabels: Record<string, string> = {
+        transparentMode: cl.transparentMode,
+        hideTop: cl.hideTop,
+        hideBody: cl.hideBody,
+        hideBottom: cl.hideBottom,
+        alwaysOnTop: cl.alwaysOnTop,
+        miniWindow: cl.miniWindow,
+        clickThrough: cl.clickThrough,
+      };
+      for (const [prefKey, toggle] of concealDom.toggles) {
+        toggle.text.textContent = toggleLabels[prefKey] ?? prefKey;
+      }
+      if (concealDom.clickThroughHint !== null) {
+        concealDom.clickThroughHint.textContent = cl.clickThroughHint;
+      }
+      renderConcealState?.();
     }
     cacheLimitTitle.textContent = l.changeCacheLimit;
     cacheLimitLabelText.textContent = l.cacheLimit;

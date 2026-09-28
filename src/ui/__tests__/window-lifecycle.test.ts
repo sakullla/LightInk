@@ -159,3 +159,129 @@ describe('browser beforeunload fallback', () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 });
+
+describe('R14 tray-first close path', () => {
+  it('hides to the tray on close with dirty documents and no confirmation dialog', async () => {
+    const confirmExit = vi.fn(async () => 'cancel' as const);
+    const closeAllTabs = vi.fn(async () => true);
+    const hideToTray = vi.fn(async () => undefined);
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => true,
+      confirmExit,
+      closeAllTabs,
+      flushDirtySnapshots: vi.fn(),
+      closeWindow: vi.fn(async () => undefined),
+      closeToTray: () => true,
+      hideToTray,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    await Promise.resolve();
+    await pending;
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(hideToTray).toHaveBeenCalledOnce();
+    // 脏文档也不弹确认、不销毁、不关标签（进度/编辑/界面全保留）。
+    expect(confirmExit).not.toHaveBeenCalled();
+    expect(closeAllTabs).not.toHaveBeenCalled();
+  });
+
+  it('hides to the tray on close even for a clean window', async () => {
+    const hideToTray = vi.fn(async () => undefined);
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => false,
+      confirmExit: vi.fn(),
+      closeAllTabs: vi.fn(),
+      flushDirtySnapshots: vi.fn(),
+      closeWindow: vi.fn(async () => undefined),
+      closeToTray: () => true,
+      hideToTray,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    await Promise.resolve();
+    await pending;
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(hideToTray).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the window visible and notifies when the tray is unavailable', async () => {
+    const hideToTray = vi.fn(async () => undefined);
+    const trayUnavailableNotice = vi.fn();
+    const confirmExit = vi.fn(async () => 'cancel' as const);
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => true,
+      confirmExit,
+      closeAllTabs: vi.fn(async () => false),
+      flushDirtySnapshots: vi.fn(),
+      closeWindow: vi.fn(async () => undefined),
+      closeToTray: () => false,
+      hideToTray,
+      trayUnavailableNotice,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    await Promise.resolve();
+    await pending;
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(trayUnavailableNotice).toHaveBeenCalledOnce();
+    // 不收起、不销毁、不弹退出确认——退出走 File 菜单/老板键 2。
+    expect(hideToTray).not.toHaveBeenCalled();
+    expect(confirmExit).not.toHaveBeenCalled();
+  });
+
+  it('reports a hideToTray failure without crashing the guard', async () => {
+    const reportError = vi.fn();
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => false,
+      confirmExit: vi.fn(),
+      closeAllTabs: vi.fn(),
+      flushDirtySnapshots: vi.fn(),
+      closeWindow: vi.fn(async () => undefined),
+      closeToTray: () => true,
+      hideToTray: vi.fn(async () => {
+        throw new Error('tray gone');
+      }),
+      reportError,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    await Promise.resolve();
+    await pending;
+    await Promise.resolve();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledWith(expect.objectContaining({ message: 'tray gone' }));
+  });
+
+  it('keeps the legacy dirty-close flow when no tray deps are wired (browser preview)', async () => {
+    let releaseChoice: ((choice: 'save') => void) | undefined;
+    const confirmExit = vi.fn(
+      () =>
+        new Promise<'save'>((resolve) => {
+          releaseChoice = resolve;
+        }),
+    );
+    const closeWindow = vi.fn(async () => undefined);
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => true,
+      confirmExit,
+      closeAllTabs: vi.fn(async () => true),
+      flushDirtySnapshots: vi.fn(),
+      closeWindow,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    releaseChoice!('save');
+    await pending;
+    expect(closeWindow).toHaveBeenCalledOnce();
+  });
+});

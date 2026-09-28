@@ -6,9 +6,13 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   bytesLabel,
   createLibraryManage,
+  type ConcealBossKeysStatus,
+  type ConcealManageDeps,
+  type ConcealManageLabels,
   type LibraryManageLabels,
   type LibraryManageOptions,
 } from '../library-manage.js';
+import { defaultConcealPrefs, type ConcealPrefs } from '../../conceal/conceal-prefs.js';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -217,6 +221,37 @@ afterEach(() => {
   delete document.documentElement.dataset.readerPageTurn;
   invokeMock.mockReset();
   invokeMock.mockResolvedValue({ configured: false });
+});
+
+describe('manage group collapsing', () => {
+  it('groups always start collapsed; clicking a title toggles without persisting', () => {
+    const storage = memoryStorage();
+    const { options } = manageOptions({ themeStorage: storage });
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    const groups = Array.from(
+      manage.element.querySelectorAll<HTMLElement>('.lightink-library-manage-group'),
+    );
+    expect(groups.length).toBeGreaterThan(4);
+    for (const group of groups) {
+      expect(group.dataset.collapsed).toBe('true');
+      expect(group.querySelector('h2')?.getAttribute('aria-expanded')).toBe('false');
+    }
+
+    const appearance = groups[0]!;
+    const title = appearance.querySelector('h2')!;
+    title.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(appearance.dataset.collapsed).toBeUndefined();
+    expect(title.getAttribute('aria-expanded')).toBe('true');
+    // 不持久化：设置页重建（如下次打开）永远从全折叠开始。
+    expect(Object.keys(storage.store)).not.toContain('lightink.library.manageExpanded');
+
+    title.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(appearance.dataset.collapsed).toBe('true');
+    expect(title.getAttribute('aria-expanded')).toBe('false');
+    manage.destroy();
+  });
 });
 
 describe('createLibraryManage grouped settings page', () => {
@@ -1137,5 +1172,220 @@ describe('library tabbar', () => {
       'Sources',
       'Manage',
     ]);
+  });
+});
+
+describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）', () => {
+  const concealLabels = (): ConcealManageLabels => ({
+    group: '摸鱼',
+    groupHint: '仅在书架与阅读器界面生效。',
+    bossKeyHint: '全局快捷键注册成功后系统级生效，可能影响其他应用的同名按键，可随时改键。',
+    macBossKeyHint: 'macOS 默认使用 Ctrl+Z / Ctrl+X。',
+    bossKey1: '老板键 1',
+    bossKey2: '老板键 2',
+    bossKeyActive: '当前生效：{combo}',
+    bossKeyEmpty: '组合不能为空。',
+    bossKeyInvalid: '无效组合或仅修饰键。',
+    bossKeySame: '与老板键 1 相同。',
+    bossKeyUnregistered: '未注册。',
+    background: '页面背景',
+    backgroundTheme: '主题背景',
+    backgroundPresets: {
+      lavender: '薰衣草',
+      mint: '薄荷绿',
+      peach: '蜜桃粉',
+      sky: '天空蓝',
+      butter: '奶油黄',
+    },
+    backgroundCustom: '自定义渐变',
+    customFrom: '起始色',
+    customTo: '结束色',
+    transparentMode: '透明模式',
+    contentOpacity: '内容透明度（0–100%）',
+    hideTop: '鼠标移出时隐藏顶栏',
+    hideBody: '鼠标移出时隐藏主体',
+    hideBottom: '鼠标移出时隐藏底栏',
+    alwaysOnTop: '窗口置顶',
+    miniWindow: '迷你窗口',
+    clickThrough: '点击穿透',
+    clickThroughHint: '需开启透明模式。',
+  });
+
+  function concealDeps(prefs = defaultConcealPrefs(false)): {
+    deps: ConcealManageDeps;
+    updates: Partial<ConcealPrefs>[];
+    bossKeyCalls: Array<{ primary: string; secondary: string }>;
+    bossKeyResult: ConcealBossKeysStatus;
+  } {
+    const updates: Partial<ConcealPrefs>[] = [];
+    const bossKeyCalls: Array<{ primary: string; secondary: string }> = [];
+    let current = { ...prefs };
+    return {
+      deps: {
+        labels: concealLabels,
+        isMac: false,
+        getPrefs: () => current,
+        update: (update) => {
+          updates.push(update);
+          current = { ...current, ...update };
+        },
+        updateBossKeys: async (primary, secondary) => {
+          bossKeyCalls.push({ primary, secondary });
+          current = { ...current, bossPrimary: primary, bossSecondary: secondary };
+          return {
+            primary,
+            secondary,
+            primaryError: null,
+            secondaryError: null,
+          };
+        },
+      },
+      updates,
+      bossKeyCalls,
+      bossKeyResult: {
+        primary: null,
+        secondary: null,
+        primaryError: null,
+        secondaryError: null,
+      },
+    };
+  }
+
+  it('renders the conceal group on desktop but not when deps are absent (R12)', () => {
+    const conceal = concealDeps();
+    const { options } = manageOptions({ conceal: conceal.deps });
+    const manage = createLibraryManage(document, options);
+    expect(groupTitles(manage.element)).toContain('conceal');
+
+    const plain = createLibraryManage(document, manageOptions().options);
+    expect(groupTitles(plain.element)).not.toContain('conceal');
+  });
+
+  it('shows the global-shortcut impact hint and the macOS Ctrl default note only on mac', () => {
+    const mac = concealDeps();
+    const macDeps: ConcealManageDeps = { ...mac.deps, isMac: true };
+    const macManage = createLibraryManage(
+      document,
+      manageOptions({ conceal: macDeps }).options,
+    );
+    const macText = macManage.element.textContent ?? '';
+    expect(macText).toContain('可能影响其他应用的同名按键');
+    expect(macText).toContain('macOS 默认使用 Ctrl');
+
+    const pc = concealDeps();
+    const pcManage = createLibraryManage(document, manageOptions({ conceal: pc.deps }).options);
+    expect(pcManage.element.textContent ?? '').not.toContain('macOS 默认使用 Ctrl');
+  });
+
+  it('capturing a combo on the boss key field registers it and shows the active status', async () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const primary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossPrimary"]',
+    );
+    expect(primary).not.toBeNull();
+
+    primary!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => expect(conceal.bossKeyCalls).toHaveLength(1));
+    expect(conceal.bossKeyCalls[0]).toEqual({ primary: 'Control+Shift+Z', secondary: 'Alt+X' });
+    await vi.waitFor(() =>
+      expect(manage.element.textContent).toContain('当前生效：Control+Shift+Z'),
+    );
+  });
+
+  it('modifier-only presses preview but never register (R2 纯修饰键)', async () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const primary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossPrimary"]',
+    )!;
+    primary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(primary.value).toBe('Shift');
+    await Promise.resolve();
+    expect(conceal.bossKeyCalls).toHaveLength(0);
+  });
+
+  it('Escape cancels recording and restores the saved combo', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const primary = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-key-field="bossPrimary"]',
+    )!;
+    primary.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    primary.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(primary.value).toBe('Alt+Z');
+  });
+
+  it('toggling switches and changing background/opacity route through update()', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const toggles = manage.element.querySelectorAll<HTMLInputElement>('[data-conceal-toggle]');
+    expect(toggles.length).toBe(7);
+
+    const transparent = [...toggles].find((t) => t.dataset.concealToggle === 'transparentMode')!;
+    transparent.checked = true;
+    transparent.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const mini = [...toggles].find((t) => t.dataset.concealToggle === 'miniWindow')!;
+    mini.checked = true;
+    mini.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const background = manage.element.querySelector<HTMLSelectElement>(
+      'select[name="concealBackground"]',
+    )!;
+    background.value = 'sky';
+    background.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const opacity = manage.element.querySelector<HTMLInputElement>('input[type="number"]')!;
+    opacity.value = '55';
+    opacity.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(conceal.updates).toContainEqual({ transparentMode: true });
+    expect(conceal.updates).toContainEqual({ miniWindow: true });
+    expect(conceal.updates).toContainEqual({ background: { kind: 'preset', preset: 'sky' } });
+    expect(conceal.updates).toContainEqual({ contentOpacity: 55 });
+  });
+
+  it('out-of-range opacity is not saved and falls back to the effective value (R6)', () => {
+    const conceal = concealDeps({ ...defaultConcealPrefs(false), contentOpacity: 60 });
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const opacity = manage.element.querySelector<HTMLInputElement>('input[type="number"]')!;
+    opacity.value = '250';
+    opacity.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toHaveLength(0);
+    expect(opacity.value).toBe('60');
+  });
+
+  it('custom colors commit through update() and the row only shows for custom', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const customRow = manage.element.querySelector<HTMLElement>('.lightink-library-conceal-custom-row')!;
+    expect(customRow.hidden).toBe(true);
+
+    const background = manage.element.querySelector<HTMLSelectElement>(
+      'select[name="concealBackground"]',
+    )!;
+    background.value = 'custom';
+    background.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toContainEqual({
+      background: { kind: 'custom', from: '#c9b6e4', to: '#f1e9fb' },
+    });
+    expect(customRow.hidden).toBe(false);
+
+    const from = manage.element.querySelector<HTMLInputElement>('input[type="color"]')!;
+    from.value = '#123456';
+    from.dispatchEvent(new Event('change', { bubbles: true }));
+    const to = manage.element.querySelectorAll<HTMLInputElement>('input[type="color"]')[1]!;
+    to.value = '#abcdef';
+    to.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toContainEqual({
+      background: { kind: 'custom', from: '#123456', to: '#abcdef' },
+    });
   });
 });

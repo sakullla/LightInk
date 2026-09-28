@@ -16,10 +16,16 @@ tauri-build = { version = "2", features = [] }
 embed-resource = "3.0"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon：R14 托盘常驻；macos-private-api：R6/R13 透明窗口在 macOS 生效
+# （tauri-runtime-wry 把 transparent() 编译门控在该 feature 之后，缺它 WKWebView
+# 恒不透明，NSWindow 层 clearColor 无效；该 feature 使用 App Store 禁用的私有
+# API，当前 ad-hoc 自签分发可接受，上架 MAS 前须移除并放弃 macOS 透明）。
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
+# R2 老板键：全局快捷键注册（含 global-hotkey 解析与 Pressed/Released 事件）。
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -45,16 +51,22 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 # webview2-com 提供 ICoreWebView2_7 / PrintToPdf 与异步回调（wait_with_pump）；
 # tauri-runtime-wry 暴露 Webview（含 controller）；windows 提供 core 类型（Interface/PCWSTR/HRESULT）。
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.38"
+# 版本对齐说明：wry 0.57（tauri 2.12 栈）固定用 webview2-com 0.39/windows 0.62；
+# 本 crate 的 PCWSTR/handler 直接参与 PlatformWebview 透出的 ICoreWebView2 调用，
+# 两套版本会因 windows-core 类型不同而 E0277，故与 wry 同版。
+webview2-com = "0.39"
 tauri-runtime-wry = "2.11"
-windows = "0.61"
+# Win32_Globalization：GetUserDefaultUILanguage 供 R14 托盘菜单按系统 UI 语言
+# 取中英文案（前端 i18n 无法触达 Rust 托盘，系统语言是最近似的可用信号）。
+windows = { version = "0.62", features = ["Win32_Globalization"] }
 
 # 仅 macOS：WKWebView createPDF（macOS 11+）原生矢量 PDF 导出，对齐 Windows
 # WebView2 PrintToPdf。版本与 wry 0.55 对齐。NSWindow/NSColor 用于阅读纸张染标题栏；
 # NSView + CALayer 用于还原态外框圆角（非不透明窗口 + 内容层纸色）。
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSError"] }
+# NSLocale：R14 托盘菜单按系统 UI 语言取中英文案（同 Windows 侧说明）。
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSError", "NSLocale"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["objc2"] }
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSWindow", "NSView", "NSResponder", "objc2-quartz-core", "objc2-core-graphics"] }
@@ -64,6 +76,15 @@ block2 = "0.6"
 # 仅 Linux：GTK CSD 标题栏跟阅读纸张染色（GNOME 等自绘装饰）。
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
+
+# 仅 Linux：R14 托盘单击切换显隐。tray-icon 0.25 新增 ksni（StatusNotifier
+# DBus）后端，会发出左键/中键激活事件；tauri 的 tray-icon 依赖默认 features
+# 仍是 libappindicator（其 Linux 后端不发出任何图标事件）。这里开 ksni 与
+# tauri 的依赖做 feature 统一——两个后端 feature 同时启用时 ksni 后端胜出
+# （Cargo 会因此发一条无害警告）。BSD 目标不经本节，维持 libappindicator
+# 原状（发行渠道不含 BSD）。
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mobile)', 'cfg(desktop)'] }

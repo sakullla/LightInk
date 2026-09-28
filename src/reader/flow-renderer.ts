@@ -889,13 +889,26 @@ function readerChapterLooksLikePlates(frameDocument: Document): boolean {
   return media !== undefined && media.length >= 2 && readerChapterTextIsSparse(frameDocument);
 }
 
+/**
+ * 章节 iframe 的纸色（R5/R6）：默认取阅读主题 --lightink-bg；摸鱼页面背景
+ * 改写变量存在（透明或渐变，conceal-controller 写在 <html> 并继承到 root）
+ * 时返回 transparent，让宿主层（.lightink-reader 的渐变/透明）透出——
+ * iframe 是独立文档，宿主 conceal.css 管不到内部，若仍内联涂纸色会把
+ * 渐变/透明全部挡住。正文墨色（--lightink-fg）不受影响。
+ */
+export function readerFramePaperColor(
+  concealPageBackground: string,
+  themePaper: string,
+): string {
+  return concealPageBackground.trim() !== '' ? 'transparent' : themePaper;
+}
+
 function readerPaperColor(root: HTMLElement): string {
   const computed = getComputedStyle(root);
-  const token = computed.getPropertyValue('--lightink-bg').trim();
-  if (token !== '') {
-    return token;
-  }
-  return computed.backgroundColor || 'transparent';
+  return readerFramePaperColor(
+    computed.getPropertyValue('--lightink-conceal-page-background'),
+    computed.getPropertyValue('--lightink-bg').trim() || computed.backgroundColor || 'transparent',
+  );
 }
 
 /** Layout / visual viewport CSS width; NaN when the engine has no usable figure. */

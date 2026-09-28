@@ -17,6 +17,15 @@ export interface WindowCloseGuardDeps {
   /** 关闭窗口前释放 app 生命周期资源（定时器/监听器）。 */
   shutdown?(): void;
   reportError?: (error: unknown) => void;
+  /**
+   * R14：托盘是否可用（conceal_get_status 缓存）。提供时点关闭一律收起到
+   * 托盘——含脏文档也不弹确认（进度/未保存编辑/界面全保留，进程不退）。
+   */
+  closeToTray?(): boolean;
+  /** R14：收起到托盘（conceal_hide_to_tray 封装）。 */
+  hideToTray?(): Promise<void>;
+  /** R14：托盘不可用时的一次性提示（关闭按钮既不收起也不退出）。 */
+  trayUnavailableNotice?(): void;
 }
 
 export interface WindowCloseGuard {
@@ -82,6 +91,22 @@ export function createWindowCloseGuard(deps: WindowCloseGuardDeps): WindowCloseG
 
   return {
     handleCloseRequested(event) {
+      // R14 首判托盘路径：可用→preventDefault + 收起到托盘（脏文档也不弹
+      // 确认）；不可用→preventDefault + 提示，不走退出确认/销毁（退出经
+      // File 菜单/老板键 2）。浏览器回退路径（closeToTray 未接线）不变。
+      if (deps.closeToTray !== undefined) {
+        event.preventDefault();
+        if (deps.closeToTray()) {
+          void deps
+            .hideToTray?.()
+            .then(() => undefined)
+            .catch(reportError);
+          return null;
+        }
+        deps.trayUnavailableNotice?.();
+        return null;
+      }
+
       if (!deps.hasUnsavedChanges()) {
         return null;
       }

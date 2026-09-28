@@ -1217,3 +1217,92 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
   });
 });
 
+
+describe('createReaderChrome setConcealZones (R7 摸鱼接管)', () => {
+  it("'auto' keeps the original reveal/idle mechanism in full charge", () => {
+    vi.useFakeTimers();
+    try {
+      const { chrome } = mount();
+      expect(chrome.bar.hidden).toBe(true);
+      chrome.reveal();
+      expect(chrome.bar.hidden).toBe(false);
+      vi.advanceTimersByTime(AUTO_HIDE_MS);
+      expect(chrome.bar.hidden).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("'hidden' force-hides bar/footer/whisper even while revealed", () => {
+    const { chrome } = mount();
+    chrome.reveal();
+    expect(chrome.bar.hidden).toBe(false);
+    expect(chrome.footer.hidden).toBe(false);
+
+    chrome.setConcealZones('hidden', 'hidden');
+    expect(chrome.bar.hidden).toBe(true);
+    expect(chrome.footer.hidden).toBe(true);
+    expect(chrome.whisper.hidden).toBe(true);
+    // isRevealed 仍反映原机制（切回 'auto' 时按已显示态续接）。
+    expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it("'held' force-shows the bar and suppresses idle auto-hide", () => {
+    vi.useFakeTimers();
+    try {
+      const { chrome } = mount();
+      chrome.setConcealZones('held', 'auto');
+      expect(chrome.bar.hidden).toBe(false);
+      expect(chrome.footer.hidden).toBe(false);
+      vi.advanceTimersByTime(AUTO_HIDE_MS * 4);
+      expect(chrome.bar.hidden).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("'held' bottom keeps the footer visible without the bar", () => {
+    const { chrome } = mount();
+    chrome.setConcealZones('auto', 'held');
+    expect(chrome.bar.hidden).toBe(true);
+    expect(chrome.footer.hidden).toBe(false);
+    // footer 可见时 whisper 按互斥口径隐藏。
+    expect(chrome.whisper.hidden).toBe(true);
+  });
+
+  it('all hidden writes still go through the single syncDom writer (attrs stay consistent)', () => {
+    const { chrome } = mount();
+    chrome.setConcealZones('hidden', 'hidden');
+    expect(chrome.element.getAttribute('aria-hidden')).toBe('true');
+    expect(chrome.bar.getAttribute('aria-hidden')).toBe('true');
+    expect(chrome.footer.getAttribute('aria-hidden')).toBe('true');
+    expect(chrome.whisper.getAttribute('aria-hidden')).toBe('true');
+    chrome.setConcealZones('held', 'held');
+    expect(chrome.element.getAttribute('aria-hidden')).toBe('false');
+    expect(chrome.bar.getAttribute('aria-hidden')).toBe('false');
+    expect(chrome.footer.getAttribute('aria-hidden')).toBe('false');
+  });
+
+  it("returning to 'auto' restores idle auto-hide", () => {
+    vi.useFakeTimers();
+    try {
+      const { chrome } = mount();
+      chrome.setConcealZones('held', 'held');
+      expect(chrome.bar.hidden).toBe(false);
+      chrome.setConcealZones('auto', 'auto');
+      // 原机制续接：已显示 → idle 计时重启 → 自动隐藏。
+      expect(chrome.bar.hidden).toBe(false);
+      vi.advanceTimersByTime(AUTO_HIDE_MS);
+      expect(chrome.bar.hidden).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores setConcealZones after destroy', () => {
+    const { chrome } = mount();
+    chrome.destroy();
+    chrome.setConcealZones('held', 'held');
+    expect(chrome.isRevealed()).toBe(false);
+  });
+});

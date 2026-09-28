@@ -32,6 +32,7 @@ import {
   type RemoteReaderTarget,
 } from './sources/types.js';
 import { throwIfReaderLoadCancelled } from './load-lifecycle.js';
+import { CONCEAL_PAGE_BACKGROUND_EVENT } from '../conceal/conceal-controller.js';
 import { ParseError, type ReaderContent } from './formats/types.js';
 import { sanitizeReaderCss } from './sanitize-css.js';
 import { escapeHtml } from './html-escape.js';
@@ -293,6 +294,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
   }
   if (typeof document !== 'undefined') {
     document.addEventListener('lightink:theme-change', ctx.chrome.onThemeChange);
+    // 摸鱼页面背景改写（R5/R6）：宿主 CSS 变量变了，章节 iframe 的内联纸色
+    // 必须重算（透明模式下应为 transparent），复用主题重涂路径。
+    document.addEventListener(CONCEAL_PAGE_BACKGROUND_EVENT, ctx.chrome.onThemeChange);
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', ctx.zoom.onWindowResize);
@@ -566,6 +570,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
         document.removeEventListener('lightink:font-scale', ctx.zoom.onFontScaleChange);
         document.removeEventListener('lightink:pdf-user-zoom', ctx.zoom.onPdfUserZoom);
         document.removeEventListener('lightink:theme-change', ctx.chrome.onThemeChange);
+        document.removeEventListener(CONCEAL_PAGE_BACKGROUND_EVENT, ctx.chrome.onThemeChange);
       }
       ctx.annotation.closeOpenNoteDialog();
       ctx.dom.setReaderPhase('destroyed', true);
@@ -577,6 +582,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       // 开关语义（chrome 书签按钮与标注菜单共用）：当前位置已书签则取消。
       ctx.bookmarks.toggleBookmarkAtCurrentPosition();
     },
+    // R7 摸鱼接管通道：暴露本实例的 ReaderChrome（conceal-controller 经
+    // main.ts 取活动 reader 标签的 chrome；未挂载/已销毁为 null）。
+    getChrome: () => (ctx.destroyed ? null : ctx.readerChrome),
     isBookmarked: () =>
       ctx.sessionAnnotation.enabled() && ctx.bookmarks.bookmarkAtStatePosition(ctx.readerState) !== null,
     addNote: () => {

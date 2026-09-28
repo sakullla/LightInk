@@ -122,6 +122,13 @@ export interface TabManagerDeps {
   /** 文件/对话框流程依赖（生产为真实 Tauri 调用）。 */
   roundtrip?: RoundtripDeps;
   writeSnapshot?: (key: string, content: string) => Promise<void>;
+  /**
+   * R4 严格退出快照写入（flushDirtySnapshotsStrict 专用）。缺省复用
+   * writeSnapshot；main.ts 注入「本地崩溃快照严格成功 + untitled 的
+   * documentClient 草稿上传 best-effort」版本——同步上传失败不得阻断
+   * 退出（本地快照即满足 R4「现有崩溃恢复可找回的副本」）。
+   */
+  writeSnapshotForExit?: (key: string, content: string) => Promise<void>;
   clearSnapshot?: (key: string) => Promise<void>;
   readStaleSnapshot?: (path: string) => Promise<string | null>;
   /** R13：取文件元数据与内容指纹（默认为真实 Tauri stat_file 调用）。 */
@@ -225,7 +232,8 @@ type TabManagerOptionalUi =
   | 'formatUntitledTitle'
   | 'formatUntitledRestoredTitle'
   | 'mountReader'
-  | 'replaceExistingReader';
+  | 'replaceExistingReader'
+  | 'writeSnapshotForExit';
 
 export class TabManager {
   private readonly deps: Required<Omit<TabManagerDeps, TabManagerOptionalUi>> &
@@ -304,6 +312,7 @@ export class TabManager {
       notifyExternalUnreadable: deps.notifyExternalUnreadable,
       mountReader: deps.mountReader,
       replaceExistingReader: deps.replaceExistingReader,
+      writeSnapshotForExit: deps.writeSnapshotForExit,
     };
   }
 
@@ -972,6 +981,52 @@ export class TabManager {
   }
 
   /**
+   * R4 严格退出快照落盘：与 flushDirtySnapshots 的队列吞错版不同，本方法
+   * 的返回值必须如实反映「副本是否确认落盘」（R4：留不下副本就不退出）。
+   *
+   * 写序竞态防护（终审 finding）：既有 enqueueSnapshotOperation 捕获错误后
+   * resolve，无法判定成败；这里对每个脏 markdown 标签——
+   *   1. cancelPendingSnapshot：取消 1s 防抖定时器（否则定时器晚于退出写
+   *      触发，可能以旧内容再写一次）；
+   *   2. waitForSnapshotQueue：先等该标签在飞的旧写完成；
+   *   3. 现取 getMarkdown 最新内容，直接 writeSnapshotForExit（缺省
+   *      writeSnapshot）严格 await，任一 reject → false；
+   *   4. 严格写仍入 snapshotQueues 链（enqueueStrictSnapshotOperation）：
+   *      与并发新编辑触发的防抖写保持同标签串行，防旧内容后写覆盖。
+   *
+   * reader 标签只读、永不写崩溃快照，不参与。untitled 的 documentClient
+   * 同步草稿上传由注入的 writeSnapshotForExit 按 best-effort 处理，本地
+   * 崩溃快照成功即视为可恢复副本落盘。
+   */
+  async flushDirtySnapshotsStrict(): Promise<boolean> {
+    let allOk = true;
+    for (const tab of [...this.tabs]) {
+      if (tab.kind !== 'markdown' || !tab.dirty) {
+        continue;
+      }
+      this.cancelPendingSnapshot(tab.id);
+      await this.waitForSnapshotQueue(tab.id);
+      let content: string;
+      try {
+        content = tab.editor.getMarkdown();
+      } catch {
+        allOk = false;
+        continue;
+      }
+      const key = snapshotKeyOf(tab);
+      const write = this.deps.writeSnapshotForExit ?? this.deps.writeSnapshot;
+      try {
+        // 不带 generation 失效检查：退出写必须落盘（clear 只发生在正常
+        // 保存/关闭路径，退出编排期间不会触发）。
+        await this.enqueueStrictSnapshotOperation(tab.id, () => write(key, content));
+      } catch {
+        allOk = false;
+      }
+    }
+    return allOk;
+  }
+
+  /**
    * T3/R3：记录标签的滚动位置。由 main.ts 在共享滚动容器 `#lightink-editor-area`
    * 的 scroll 事件中回写活动标签（reader 标签自有分页，main.ts 不对其调用）。
    */
@@ -1123,6 +1178,26 @@ export class TabManager {
       }
     });
     return pending;
+  }
+
+  /**
+   * R4 严格版入队：与 enqueueSnapshotOperation 同链（同标签串行），但保留
+   * rejection 交给调用方判定；队列尾仍吞错，后续操作照常接续。
+   */
+  private enqueueStrictSnapshotOperation(id: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.snapshotQueues.get(id);
+    const started = previous === undefined ? operation() : previous.then(operation, operation);
+    const tail = started.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.snapshotQueues.set(id, tail);
+    void tail.then(() => {
+      if (this.snapshotQueues.get(id) === tail) {
+        this.snapshotQueues.delete(id);
+      }
+    });
+    return started;
   }
 
   private clearSnapshotKeys(id: string, keys: readonly string[]): Promise<void> {

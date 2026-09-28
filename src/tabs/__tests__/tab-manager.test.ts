@@ -1370,3 +1370,126 @@ describe('T3 每标签独立滚动位置', () => {
     expect(() => manager.recordScrollPosition('no-such-tab', 50)).not.toThrow();
   });
 });
+
+describe('flushDirtySnapshotsStrict（R4 严格退出快照）', () => {
+  function readerMountDeps() {
+    return {
+      mountReader: vi.fn(async () => ({
+        state: {
+          phase: 'empty' as const,
+          current: 0,
+          total: 0,
+          progress: 0,
+          scale: 1,
+          locationKind: null,
+        },
+        subscribeState: vi.fn(() => () => undefined),
+        load: vi.fn(async () => undefined),
+        destroy: vi.fn(async () => undefined),
+        addBookmark: vi.fn(() => undefined),
+        addNote: vi.fn(() => undefined),
+        toggleSidebar: vi.fn(() => undefined),
+        setTabActive: vi.fn(() => undefined),
+        isSidebarVisible: vi.fn(() => false),
+        getOutline: vi.fn(() => []),
+        jumpToOutlineItem: vi.fn(() => undefined),
+        isAnnotationEnabled: vi.fn(() => false),
+        getExportHtml: vi.fn(async () => null),
+        advanceReading: vi.fn(() => false),
+      })),
+    };
+  }
+
+  it('writes every dirty markdown tab and returns true when all succeed', async () => {
+    const harness = makeHarness();
+    const fileTab = (await harness.manager.openFile('C:\a.md'))!;
+    fileTab.editor.setMarkdown('改动 A');
+    harness.manager.handleContentChanged(fileTab.id);
+    const untitled = await harness.manager.newTab('欢迎');
+    untitled.editor.setMarkdown('草稿 B');
+    harness.manager.handleContentChanged(untitled.id);
+
+    const ok = await harness.manager.flushDirtySnapshotsStrict();
+
+    expect(ok).toBe(true);
+    expect(harness.snapshots.get('C:\a.md')).toBe('改动 A');
+    expect(harness.snapshots.get(snapshotKeyOf(untitled))).toBe('草稿 B');
+  });
+
+  it('returns false when getMarkdown throws for a dirty tab', async () => {
+    const harness = makeHarness();
+    const tab = (await harness.manager.openFile('C:\a.md'))!;
+    tab.editor.setMarkdown('改动');
+    harness.manager.handleContentChanged(tab.id);
+    (tab.editor as unknown as { getMarkdown: () => string }).getMarkdown = () => {
+      throw new Error('editor destroyed');
+    };
+
+    const ok = await harness.manager.flushDirtySnapshotsStrict();
+    expect(ok).toBe(false);
+  });
+
+  it('returns false when the snapshot write rejects', async () => {
+    const harness = makeHarness({
+      writeSnapshot: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
+    });
+    const tab = (await harness.manager.openFile('C:\a.md'))!;
+    tab.editor.setMarkdown('改动');
+    harness.manager.handleContentChanged(tab.id);
+
+    await expect(harness.manager.flushDirtySnapshotsStrict()).resolves.toBe(false);
+  });
+
+  it('reader tabs never participate', async () => {
+    const harness = makeHarness(readerMountDeps());
+    await harness.manager.openReader('C:\docs\book.epub');
+    const ok = await harness.manager.flushDirtySnapshotsStrict();
+    expect(ok).toBe(true);
+    expect(harness.deps.writeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('uses writeSnapshotForExit when injected (untitled sync upload best-effort channel)', async () => {
+    const snapshots = new Map<string, string>();
+    const writeSnapshot = vi.fn(async (key: string, content: string) => {
+      snapshots.set(key, content);
+    });
+    const writeSnapshotForExit = vi.fn(async (key: string, content: string) => {
+      snapshots.set(key, `${content}+exit`);
+    });
+    const harness = makeHarness({ writeSnapshot, writeSnapshotForExit });
+    const tab = await harness.manager.newTab('');
+    tab.editor.setMarkdown('退出前内容');
+    harness.manager.handleContentChanged(tab.id);
+
+    const ok = await harness.manager.flushDirtySnapshotsStrict();
+    expect(ok).toBe(true);
+    expect(writeSnapshot).not.toHaveBeenCalled();
+    expect(writeSnapshotForExit).toHaveBeenCalledWith(snapshotKeyOf(tab), '退出前内容');
+    expect(snapshots.get(snapshotKeyOf(tab))).toBe('退出前内容+exit');
+  });
+
+  it('cancels the pending debounce timer so a late queued write cannot overwrite the exit copy', async () => {
+    vi.useFakeTimers();
+    const writes: Array<{ key: string; content: string }> = [];
+    const harness = makeHarness({
+      snapshotDebounceMs: 1000,
+      writeSnapshot: vi.fn(async (key: string, content: string) => {
+        writes.push({ key, content });
+      }),
+    });
+    const tab = (await harness.manager.openFile('C:\a.md'))!;
+    tab.editor.setMarkdown('第一次编辑');
+    harness.manager.handleContentChanged(tab.id);
+    // 防抖在飞（<1s）：strict 必须取消它，退出写即最终态。
+    tab.editor.setMarkdown('退出前最终内容');
+    harness.manager.handleContentChanged(tab.id);
+
+    const ok = await harness.manager.flushDirtySnapshotsStrict();
+    expect(ok).toBe(true);
+
+    vi.advanceTimersByTime(5000);
+    expect(writes).toEqual([{ key: 'C:\a.md', content: '退出前最终内容' }]);
+  });
+});

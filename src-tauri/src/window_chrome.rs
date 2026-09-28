@@ -88,15 +88,26 @@ pub fn macos_content_corner_radius_pt(rounded: bool) -> f64 {
 }
 
 /// Borderless `NSWindow` stays a square compositor silhouette while opaque.
+/// R6 透明模式（transparent）要求非圆角也保持非不透明，否则 clearColor 被系统
+/// 当作不透明窗优化掉，桌面透不出来。
 #[cfg(any(target_os = "macos", test))]
-pub fn macos_window_opaque(rounded: bool) -> bool {
-    !rounded
+pub fn macos_window_opaque(rounded: bool, transparent: bool) -> bool {
+    !(rounded || transparent)
 }
 
-/// Window fill must be clear when rounded so clipped corners are transparent.
+/// Window fill must be clear when rounded so clipped corners are transparent,
+/// and when transparent so the desktop shows through (R6).
 #[cfg(any(target_os = "macos", test))]
-pub fn macos_window_background_clear(rounded: bool) -> bool {
-    rounded
+pub fn macos_window_background_clear(rounded: bool, transparent: bool) -> bool {
+    rounded || transparent
+}
+
+/// 圆角时内容层染纸色充当窗口背景；透明模式下必须清除，否则纸色层把
+/// WKWebView 透出的桌面挡住。两处（transparent 优先）必须收敛在同一
+/// `paint_macos_ns_window`，避免两套代码同时改 NSWindow 打架。
+#[cfg(any(target_os = "macos", test))]
+pub fn macos_content_layer_paper(rounded: bool, transparent: bool) -> bool {
+    rounded && !transparent
 }
 
 #[cfg(any(
@@ -294,6 +305,9 @@ fn apply_windows_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> 
 #[derive(Clone, Copy)]
 struct MacosChromeState {
     rounded: bool,
+    /// R6 透明模式：窗口层 clearColor + 内容层不染纸色（webview 透明由创建期
+    /// `macos-private-api` feature 保证，这里只管 NSWindow/AppKit 层）。
+    transparent: bool,
     caption: Option<(u8, u8, u8)>,
 }
 
@@ -302,6 +316,7 @@ fn macos_chrome_state() -> std::sync::MutexGuard<'static, MacosChromeState> {
     static STATE: std::sync::Mutex<MacosChromeState> = std::sync::Mutex::new(MacosChromeState {
         // Window starts restored (`maximized` is omitted / false in tauri.conf).
         rounded: true,
+        transparent: false,
         caption: None,
     });
     STATE
@@ -312,11 +327,13 @@ fn macos_chrome_state() -> std::sync::MutexGuard<'static, MacosChromeState> {
 #[cfg(target_os = "macos")]
 fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChromeState) {
     let rounded = state.rounded;
+    let transparent = state.transparent;
     ensure_macos_titled_chrome(ns_window);
     // Opaque borderless windows keep a square compositor silhouette even when
     // contentView is clipped; restored rounding needs a clear, non-opaque fill
-    // with paper on the clipped content layer.
-    ns_window.setOpaque(macos_window_opaque(rounded));
+    // with paper on the clipped content layer. Transparent mode (R6) forces
+    // clear/non-opaque regardless of rounding and drops the paper layer.
+    ns_window.setOpaque(macos_window_opaque(rounded, transparent));
     let paper = match state.caption {
         Some((red, green, blue)) => objc2_app_kit::NSColor::colorWithSRGBRed_green_blue_alpha(
             f64::from(red) / 255.0,
@@ -326,7 +343,7 @@ fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChrome
         ),
         None => objc2_app_kit::NSColor::windowBackgroundColor(),
     };
-    if macos_window_background_clear(rounded) {
+    if macos_window_background_clear(rounded, transparent) {
         ns_window.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
     } else {
         ns_window.setBackgroundColor(Some(&paper));
@@ -340,7 +357,7 @@ fn paint_macos_ns_window(ns_window: &objc2_app_kit::NSWindow, state: MacosChrome
         if let Some(layer) = content_view.layer() {
             layer.setCornerRadius(macos_content_corner_radius_pt(rounded));
             layer.setMasksToBounds(rounded);
-            if rounded {
+            if macos_content_layer_paper(rounded, transparent) {
                 let cg_paper = paper.CGColor();
                 layer.setBackgroundColor(Some(&cg_paper));
             } else {
@@ -395,6 +412,29 @@ fn apply_macos_caption_color(
 fn apply_macos_outer_rounded(window: &tauri::WebviewWindow, rounded: bool) -> Result<(), String> {
     macos_chrome_state().rounded = rounded;
     run_macos_chrome_paint(window)
+}
+
+/// R6 透明模式的 macOS 窗口层入口（conceal_set_transparent 调用）：
+/// 更新状态后走统一 `paint_macos_ns_window`，与圆角染色共享单点，避免两处
+/// 同时改 NSWindow 状态互相覆盖。AppKit 调度失败（run_on_main_thread 出错）
+/// 才返回 Err。
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_macos_window_transparent(
+    window: &tauri::WebviewWindow,
+    enabled: bool,
+) -> Result<(), String> {
+    macos_chrome_state().transparent = enabled;
+    run_macos_chrome_paint(window)
+}
+
+#[cfg(all(desktop, not(target_os = "macos")))]
+pub(crate) fn apply_macos_window_transparent(
+    _window: &tauri::WebviewWindow,
+    _enabled: bool,
+) -> Result<(), String> {
+    // Windows/Linux 的窗口级透明由创建期 `transparent: true` 恒生效，
+    // 运行期只需前端 CSS 决定视觉透明（conceal_set_transparent 恒 Ok 路径）。
+    Ok(())
 }
 
 #[cfg(any(
@@ -559,10 +599,10 @@ mod tests {
     ))]
     use super::linux_caption_css;
     use super::{
-        constrain_max_extent, macos_content_corner_radius_pt, macos_style_mask_with_traffic_lights,
-        macos_window_background_clear, macos_window_opaque, parse_hex_colorref, parse_hex_rgb,
-        window_outer_should_round, windows_corner_preference, work_area_needs_fit,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+        constrain_max_extent, macos_content_corner_radius_pt, macos_content_layer_paper,
+        macos_style_mask_with_traffic_lights, macos_window_background_clear, macos_window_opaque,
+        parse_hex_colorref, parse_hex_rgb, window_outer_should_round, windows_corner_preference,
+        work_area_needs_fit, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
         MACOS_TRAFFIC_LIGHT_STYLE_MASK,
     };
 
@@ -632,10 +672,25 @@ mod tests {
         let restored = macos_content_corner_radius_pt(true);
         assert!((10.0..=12.0).contains(&restored));
         assert_eq!(macos_content_corner_radius_pt(false), 0.0);
-        assert!(!macos_window_opaque(true));
-        assert!(macos_window_opaque(false));
-        assert!(macos_window_background_clear(true));
-        assert!(!macos_window_background_clear(false));
+        assert!(!macos_window_opaque(true, false));
+        assert!(macos_window_opaque(false, false));
+        assert!(macos_window_background_clear(true, false));
+        assert!(!macos_window_background_clear(false, false));
+    }
+
+    #[test]
+    fn macos_transparent_mode_forces_clear_and_drops_paper_layer() {
+        // R6：transparent 优先于圆角逻辑——非圆角也必须 clear/非不透明，
+        // 且内容层不得染纸色（纸色会把透明 webview 背后的桌面挡住）。
+        assert!(!macos_window_opaque(false, true));
+        assert!(!macos_window_opaque(true, true));
+        assert!(macos_window_background_clear(false, true));
+        assert!(macos_window_background_clear(true, true));
+        assert!(!macos_content_layer_paper(true, true));
+        assert!(!macos_content_layer_paper(false, true));
+        // 关闭透明后恢复原圆角行为：圆角染纸色、非圆角不染。
+        assert!(macos_content_layer_paper(true, false));
+        assert!(!macos_content_layer_paper(false, false));
     }
 
     #[test]

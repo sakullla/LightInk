@@ -272,6 +272,15 @@ import './theme/prose.css';
 import './ui/theme.css';
 import './ui/window-titlebar.css';
 import './library/library.css';
+import './conceal/conceal.css';
+import { createConcealClient } from './conceal/conceal-client.js';
+import {
+  createConcealController,
+  type ConcealController,
+  type ConcealNoticeKind,
+} from './conceal/conceal-controller.js';
+import { loadConcealPrefs, saveConcealPrefs, type ConcealPrefs } from './conceal/conceal-prefs.js';
+import { createConcealQuitController } from './conceal/conceal-quit.js';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (app === null) {
@@ -558,6 +567,294 @@ let markdownEditing = false;
 let markdownEditSaving = false;
 // Cold start is the reader cover wall, not the Markdown editor.
 workspace.enterReaderHome();
+
+// ── 摸鱼（书架与阅读器隐蔽阅读，R1–R10/R13/R14）前端接线 ────────────────
+// 位置说明：conceal 控制器在 workspace 创建后、任何表面应用/书架创建之前
+// 初始化——applyWorkspaceState 与 ensureLibraryView 经下面的可空句柄安全引用。
+// R12：Android（isTauriRuntime 为真但 conceal_* 命令只 cfg(desktop) 注册）
+// 整体不启用：client 惰性 no-op，控制器不初始化，设置段不注入。
+const concealMac = isMac;
+const concealPrefsInitial: ConcealPrefs = loadConcealPrefs(window.localStorage, concealMac);
+const concealClient = createConcealClient({ isAndroid: () => isAndroidApp });
+let concealController: ConcealController | null = null;
+let concealTrayAvailable = false;
+
+/** 活动 reader 标签的 chrome（R7 接管通道 + zones 测量；多标签取当前活动者）。 */
+function getActiveReaderChrome() {
+  return activeReaderTab()?.reader.getChrome?.() ?? null;
+}
+
+function concealElementZone(el: Element | null): { y: number; height: number } | null {
+  if (el === null) {
+    return null;
+  }
+  try {
+    const rect = el.getBoundingClientRect();
+    if (!(rect.height > 0)) {
+      return null;
+    }
+    return { y: Math.max(0, rect.top), height: rect.height };
+  } catch {
+    return null;
+  }
+}
+
+/** 顶带 = 窗口标题栏 ∪ 表面顶栏（书架 header / 阅读器 chrome bar）。 */
+function measureConcealTopZone(): { y: number; height: number } | null {
+  const surface = workspace.snapshot().surface;
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = 0;
+  let found = false;
+  const take = (el: Element | null): void => {
+    const zone = concealElementZone(el);
+    if (zone === null) {
+      return;
+    }
+    found = true;
+    top = Math.min(top, zone.y);
+    bottom = Math.max(bottom, zone.y + zone.height);
+  };
+  take(document.getElementById('lightink-window-titlebar'));
+  if (surface === 'shelf') {
+    take(document.querySelector<HTMLElement>('.lightink-library:not([hidden]) > .lightink-library-header'));
+  } else if (surface === 'reader') {
+    const chrome = getActiveReaderChrome();
+    take(chrome === null ? null : chrome.bar);
+  }
+  if (!found) {
+    return null;
+  }
+  return { y: Math.max(0, top), height: Math.max(0, bottom - top) };
+}
+
+/** 底带：阅读器 footer（书架无底栏 → null，R7 底栏开关在书架 no-op）。 */
+function measureConcealBottomZone(): { y: number; height: number } | null {
+  if (workspace.snapshot().surface !== 'reader') {
+    return null;
+  }
+  const chrome = getActiveReaderChrome();
+  return concealElementZone(chrome === null ? null : chrome.footer);
+}
+
+/**
+ * R13 交互控件带：书架设置入口按钮与打开中的摸鱼设置页（含穿透/透明开关
+ * 自身）、阅读器打开中的 chrome 面板。它们是顶/底带之外的「可见按钮」，
+ * 不测量则穿透态点击落到后面的窗口，用户没有鼠标路径关掉双开关（陷阱态）。
+ * 元素不可见（display:none / visibility:hidden / [hidden]）时不计入——
+ * 隐藏后的控件不再是可见控件，点击按穿透处理（R13）。
+ */
+function measureConcealUiZone(): { x: number; y: number; width: number; height: number } | null {
+  const surface = workspace.snapshot().surface;
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = 0;
+  let bottom = 0;
+  let found = false;
+  const take = (el: Element | null): void => {
+    if (el === null) {
+      return;
+    }
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') {
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      if (!(rect.width > 0) || !(rect.height > 0)) {
+        return;
+      }
+      found = true;
+      left = Math.min(left, rect.left);
+      top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right);
+      bottom = Math.max(bottom, rect.bottom);
+    } catch {
+      // 非 Element / 假 DOM：跳过该项。
+    }
+  };
+  if (surface === 'shelf') {
+    // R13 枚举穿透的是「封面、标题、正文和透明页面背景」；左侧分组导航
+    // 是一列按钮（控件列），按「可见按钮仍由 LightInk 接收」保持可点可滚。
+    // 隐藏态（R7 主体隐藏）由 take 的可见性过滤跳过。
+    take(document.querySelector('.lightink-library:not([hidden]) .lightink-library-nav'));
+    take(
+      document.querySelector(
+        '.lightink-library:not([hidden]) .lightink-library-manage-entry',
+      ),
+    );
+    take(
+      document.querySelector(
+        '.lightink-library:not([hidden]) .lightink-library-manage-panel',
+      ),
+    );
+  } else if (surface === 'reader') {
+    for (const panel of document.querySelectorAll('.lightink-reader-chrome-panel:not([hidden])')) {
+      take(panel);
+    }
+  }
+  // body 级 portal overlay（不限表面，随时开合）：AI 助手面板、模态对话框
+  // （确认/告警/链接编辑共用 overlay）、右键菜单。它们不在顶/底带内、也不
+  // 属于任何 surface 容器，漏测则穿透态点击落到后面的窗口——「可见按钮仍
+  // 由 LightInk 接收」（R13）对它们同样成立。
+  take(document.querySelector('.lightink-reader-assistant-panel'));
+  take(document.querySelector('.lightink-modal-overlay'));
+  take(document.querySelector('.lightink-context-menu'));
+  if (!found) {
+    return null;
+  }
+  return { x: left, y: Math.max(0, top), width: right - left, height: bottom - top };
+}
+
+const CONCEAL_NOTICE_KEYS: Record<ConcealNoticeKind, Parameters<typeof i18n.t>[0]> = {
+  alwaysOnTopFailed: 'conceal.alwaysOnTopFailed',
+  miniWindowFailed: 'conceal.miniWindowFailed',
+  transparentFailed: 'conceal.transparentFailed',
+  clickThroughFailed: 'conceal.clickThroughFailed',
+  baselineFailed: 'conceal.baselineFailed',
+};
+
+/** R4 终退出口（老板键 2 / 托盘菜单 / File→退出 共用；依赖注入可测）。 */
+const concealQuit = createConcealQuitController({
+  commitSourceModes: () => commitAllSourceModes(),
+  hasDirtyTabs: () => manager?.tabList.some((tab) => tab.kind === 'markdown' && tab.dirty) === true,
+  flushStrict: () => manager.flushDirtySnapshotsStrict(),
+  shutdown,
+  exitApp: () => concealClient.exitApp().then(() => undefined),
+  alert: (message) => showAppAlert(message),
+  exitAbortedMessage: (reason?: string) =>
+    i18n.t('conceal.exitAborted', { reason: reason ?? i18n.t('conceal.flushFailed') }),
+  exitFailedMessage: (reason?: string) => i18n.t('conceal.exitFailed', { reason: reason ?? '' }),
+});
+
+/** 摸鱼设置段注入（library-manage 消费；Android 不注入即整段不渲染）。 */
+const concealManageDeps = {
+  labels: () => ({
+    group: i18n.t('conceal.group'),
+    groupHint: i18n.t('conceal.groupHint'),
+    bossKeyHint: i18n.t('conceal.bossKeyHint'),
+    macBossKeyHint: i18n.t('conceal.macBossKeyHint'),
+    bossKey1: i18n.t('conceal.bossKey1'),
+    bossKey2: i18n.t('conceal.bossKey2'),
+    bossKeyActive: i18n.t('conceal.bossKeyActive', { combo: '{combo}' }),
+    bossKeyEmpty: i18n.t('conceal.bossKeyEmpty'),
+    bossKeyInvalid: i18n.t('conceal.bossKeyInvalid'),
+    bossKeySame: i18n.t('conceal.bossKeySame'),
+    bossKeyUnregistered: i18n.t('conceal.bossKeyUnregistered'),
+    background: i18n.t('conceal.background'),
+    backgroundTheme: i18n.t('conceal.backgroundTheme'),
+    backgroundPresets: {
+      lavender: i18n.t('conceal.backgroundLavender'),
+      mint: i18n.t('conceal.backgroundMint'),
+      peach: i18n.t('conceal.backgroundPeach'),
+      sky: i18n.t('conceal.backgroundSky'),
+      butter: i18n.t('conceal.backgroundButter'),
+    },
+    backgroundCustom: i18n.t('conceal.backgroundCustom'),
+    customFrom: i18n.t('conceal.customFrom'),
+    customTo: i18n.t('conceal.customTo'),
+    transparentMode: i18n.t('conceal.transparentMode'),
+    contentOpacity: i18n.t('conceal.contentOpacity'),
+    hideTop: i18n.t('conceal.hideTop'),
+    hideBody: i18n.t('conceal.hideBody'),
+    hideBottom: i18n.t('conceal.hideBottom'),
+    alwaysOnTop: i18n.t('conceal.alwaysOnTop'),
+    miniWindow: i18n.t('conceal.miniWindow'),
+    clickThrough: i18n.t('conceal.clickThrough'),
+    clickThroughHint: i18n.t('conceal.clickThroughHint'),
+  }),
+  isMac: concealMac,
+  getPrefs: (): ConcealPrefs => concealController?.getEffectivePrefs() ?? concealPrefsInitial,
+  update: (update: Partial<ConcealPrefs>) => {
+    concealController?.applyPrefs(update);
+  },
+  updateBossKeys: (primary: string, secondary: string) =>
+    concealController?.updateBossKeys(primary, secondary) ??
+    Promise.resolve({
+      primary: null,
+      secondary: null,
+      primaryError: null,
+      secondaryError: null,
+    }),
+};
+
+/**
+ * 启动顺序契约：先注册全部 conceal 事件 listener，再 conceal_get_status 取
+ * 初始态（后端 setup 期首发的 conceal-tray-status 必早于 listener，以查询为
+ * 准），随后读 prefs 注册老板键，最后按当前表面应用效果。
+ */
+async function initConceal(): Promise<void> {
+  if (!concealClient.isEnabled()) {
+    return; // R12：Android / 浏览器预览整体不启用（无命令、无提示）。
+  }
+  concealController = createConcealController({
+    client: concealClient,
+    prefs: concealPrefsInitial,
+    persist: (next, previous) =>
+      // 普通 localStorage（非 syncableStorage）：老板键平台相关，防跨设备串扰。
+      saveConcealPrefs(window.localStorage, next, previous),
+    doc: document,
+    getActiveReaderChrome,
+    measureTopZone: measureConcealTopZone,
+    measureBottomZone: measureConcealBottomZone,
+    measureUiZone: measureConcealUiZone,
+    getViewportHeight: () => window.innerHeight,
+    fallbackTopHeight: 48,
+    fallbackBottomHeight: 40,
+    onNotice: (kind: ConcealNoticeKind, reason?: string) => {
+      void showAppAlert(i18n.t(CONCEAL_NOTICE_KEYS[kind], { reason: reason ?? '' }));
+    },
+  });
+  try {
+    await concealClient.onQuitRequested(({ source }) => {
+      void concealQuit.requestQuit(source);
+    });
+    await concealClient.onTrayStatusChanged(({ available }) => {
+      concealTrayAvailable = available;
+    });
+    await concealClient.onPointerZone(({ zone }) => {
+      concealController?.handlePointerZone(zone);
+    });
+    await concealClient.onZonesStale(() => {
+      concealController?.notifyZonesStale();
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[lightink/conceal] event listener setup failed', error);
+  }
+  const status = await concealClient.getStatus();
+  concealTrayAvailable = status.trayAvailable;
+  const registered = await concealClient.registerBossKeys({
+    primary: concealPrefsInitial.bossPrimary,
+    secondary: concealPrefsInitial.bossSecondary,
+  });
+  if (registered.primaryError !== null || registered.secondaryError !== null) {
+    // 启动注册失败不上弹窗（R2 失败原因在设置段展示），仅记录。
+    // eslint-disable-next-line no-console
+    console.warn('[lightink/conceal] boss keys not registered', registered);
+  }
+  concealController.setSurface(workspace.snapshot().surface);
+  // R7 DOM 指针输入（穿透开启时正文收不到 pointermove，由后端事件驱动）。
+  document.addEventListener('pointermove', (event) => {
+    concealController?.handlePointerMove(event.clientY);
+  });
+  document.documentElement.addEventListener('pointerleave', () => {
+    concealController?.handlePointerMove(null);
+  });
+  // zones 过期四重保险之二/三：窗口 resize（先例 window-titlebar.ts）与 DPI。
+  void getAppWindow().then((win) => {
+    if (win === null) {
+      return;
+    }
+    if (typeof win.onResized === 'function') {
+      void win.onResized(() => concealController?.notifyZonesStale());
+    }
+    if (typeof win.onScaleChanged === 'function') {
+      void win.onScaleChanged(() => concealController?.notifyZonesStale());
+    }
+  });
+}
+void initConceal();
+
 let applyingWorkspaceSurfaces = false;
 // R6：外部变更秒级轮询句柄（退出时清理）。
 let externalChangeTimer: number | null = null;
@@ -1083,6 +1380,8 @@ function onLibraryVisibilityChange(visible: boolean): void {
 workspace.subscribe((state) => {
   applyWorkspaceState(state);
   shell?.rebuildMenus();
+  // R1：效果只在 shelf/reader 生效；表面应用完成后再同步（DOM 就绪可测 zones）。
+  concealController?.setSurface(state.surface);
 });
 
 function syncNativeWindowChrome(state: WorkspaceSnapshot = workspace.snapshot()): void {
@@ -2111,6 +2410,16 @@ shell = createAppShell(
       await persistRecentMutation('clear_recents');
     },
     onShowVersions: () => showVersionsForActive(),
+    // R14 降级退出：File→退出（desktop）走 conceal-quit 编排（与老板键 2/
+    // 托盘菜单退出共用）；快捷键提示跟随老板键 2 当前组合。
+    ...(isAndroidApp
+      ? {}
+      : {
+          onQuit: () => {
+            void concealQuit.requestQuit('menu');
+          },
+          getQuitAccelerator: () => concealController?.getEffectivePrefs().bossSecondary ?? '',
+        }),
     // 注意：菜单 enabled 回调在 createAppShell 构造期就被同步调用（见 menus.ts 的
     // refreshItemEnabled），此时 manager 尚未赋值（于下方 new TabManager 处赋值）。
     // 用 ?. 短路避免构造期抛错；构造期返回 false（无活动文件）也正确，菜单打开时
@@ -2565,6 +2874,29 @@ manager = new TabManager({
     document.documentElement.hasAttribute('data-touch-primary'),
   writeSnapshot: writeSynchronizedSnapshot,
   clearSnapshot: clearSynchronizedSnapshot,
+  // R4 严格退出快照：本地崩溃快照必须确认落盘；untitled 的 documentClient
+  // 草稿上传 best-effort（失败不阻断退出——本地快照即满足「现有崩溃恢复
+  // 可找回的副本」，重启经 list_untitled_drafts/read_stale_snapshot 恢复）。
+  writeSnapshotForExit: async (key, content) => {
+    await writeCrashSnapshot(key, content);
+    if (!isUntitledSnapshotKey(key)) {
+      return;
+    }
+    try {
+      const deviceId = await syncRecordClient.deviceId();
+      const draft = await documentClient.saveDraft(
+        undefined,
+        key,
+        deviceId,
+        content,
+        synchronizedDraftIdsByKey.get(key) ?? embeddedDraftId(key),
+      );
+      synchronizedDraftIdsByKey.set(key, draft.id);
+      applicationStateSync?.schedule();
+    } catch {
+      // best-effort：同步草稿上传失败不影响退出判定。
+    }
+  },
   listUntitledDrafts: listRecoverableDrafts,
   mountEditor,
   mountReader: async (host) => {
@@ -2713,6 +3045,8 @@ manager = new TabManager({
     // R3：文档身份变化即销毁编辑器助手会话（含流式中止，不跨文档写历史）。
     editorAssistant?.syncDocument();
     editorScroller.dataset.surface = tab?.kind === 'reader' ? 'reader' : 'markdown';
+    // R7×多 reader 标签：活动 chrome 可能换了实例，重驱接管态与 zones。
+    concealController?.notifyZonesStale();
     // reader 覆盖层（侧栏/搜索面板）portal 到共享 chrome，不随标签宿主隐藏——
     // 逐个 reader 标签同步可见性，防止残留在别的标签上。
     for (const item of manager.tabList) {
@@ -3043,6 +3377,8 @@ function ensureLibraryView(): LibraryView {
       : {
           workspaceTravel: shell.enterEditorButton,
           onEnterEditor: () => workspace.enterEditor(),
+          // 摸鱼设置段（R12：Android 不注入 → manage 面板整段不渲染）。
+          concealManage: concealManageDeps,
         }),
     // R3：桌面、Android 与触屏手机共用 LibraryView 的书库助手打开任务流。
     onOpenAssistant: () => ensureShelfAssistant().open(),
@@ -4386,6 +4722,17 @@ function installApplicationCloseProtection(): void {
     },
     closeAllTabs: (action) => manager.closeAllTabs(action),
     flushDirtySnapshots: () => manager.flushDirtySnapshots(),
+    // R14：桌面托盘常驻——点关闭收起到托盘（脏文档也不弹确认）；托盘不可用
+    // 时只提示不收起不退出。浏览器回退路径（isNative=false）不受影响。
+    ...(isTauriRuntime() && !isAndroidApp
+      ? {
+          closeToTray: () => concealTrayAvailable,
+          hideToTray: () => concealClient.hideToTray().then(() => undefined),
+          trayUnavailableNotice: () => {
+            void showAppAlert(i18n.t('conceal.trayUnavailable'));
+          },
+        }
+      : {}),
     shutdown,
     reportError: (error) => {
       // eslint-disable-next-line no-console

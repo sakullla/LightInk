@@ -3031,6 +3031,35 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   font-weight: 650;
 }
 
+/* 设置分组折叠（默认收起，分组太多）：标题即开关，箭头指示展开态；
+ * 折叠时仅保留标题（h2），其余子元素不渲染占位。 */
+.lightink-library-manage-group[data-collapsed='true'] > :not(h2) {
+  display: none;
+}
+
+.lightink-library-manage-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lightink-library-manage-group-toggle::after {
+  content: '';
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--lightink-muted);
+  border-bottom: 1.5px solid var(--lightink-muted);
+  transform: rotate(-45deg);
+  transition: transform 200ms ease;
+}
+
+.lightink-library-manage-group-toggle[aria-expanded='true']::after {
+  transform: rotate(45deg);
+}
+
 /* Settings rows: large touch targets (import / clear cache / sync / editor). */
 .lightink-library-manage-row {
   display: flex;

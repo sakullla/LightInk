@@ -63,45 +63,55 @@ describe('runAssistantSessionSearch (tool search wiring)', () => {
   });
 
   it('does not treat pre-start idle as done when run() stays idle until later', async () => {
-    let pending = false;
-    let searching = false;
-    let doneFlag = false;
-    const activateKey = vi.fn();
-    const session = {
-      run: vi.fn((query: string) => {
-        expect(query).toBe('needle');
-        // PDF-like: runPdfSearch returns before onResult, so hitsState stays idle.
-        doneFlag = false;
-        setTimeout(() => {
-          pending = true;
-          searching = false;
+    // 真实定时器在满载跑测时会被调度/GC 拖过实现的 50ms 启动等待死线，
+    // 改用 fake timers 精确推进时间，锁定“启动前空闲 ≠ done”的时序契约。
+    vi.useFakeTimers();
+    try {
+      let pending = false;
+      let searching = false;
+      let doneFlag = false;
+      const activateKey = vi.fn();
+      const session = {
+        run: vi.fn((query: string) => {
+          expect(query).toBe('needle');
+          // PDF-like: runPdfSearch returns before onResult, so hitsState stays idle.
+          doneFlag = false;
           setTimeout(() => {
-            pending = false;
+            pending = true;
             searching = false;
-            doneFlag = true;
+            setTimeout(() => {
+              pending = false;
+              searching = false;
+              doneFlag = true;
+            }, 8);
           }, 8);
-        }, 8);
-      }),
-      hitsState: () => ({ pending, searching, done: doneFlag, hasMore: false }),
-      activateKey,
-    };
-    const done = runAssistantSessionSearch(session, 'needle');
-    let settled = false;
-    void done.then(() => {
-      settled = true;
-    });
-    await flush();
-    expect(settled).toBe(false);
-    await done;
-    expect(settled).toBe(true);
-    expect(session.run).toHaveBeenCalledWith('needle');
-    expect(activateKey).not.toHaveBeenCalled();
-    expect(session.hitsState()).toEqual({
-      pending: false,
-      searching: false,
-      done: true,
-      hasMore: false,
-    });
+        }),
+        hitsState: () => ({ pending, searching, done: doneFlag, hasMore: false }),
+        activateKey,
+      };
+      const done = runAssistantSessionSearch(session, 'needle');
+      let settled = false;
+      void done.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(7);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(8);
+      await done;
+      expect(settled).toBe(true);
+      expect(session.run).toHaveBeenCalledWith('needle');
+      expect(activateKey).not.toHaveBeenCalled();
+      expect(session.hitsState()).toEqual({
+        pending: false,
+        searching: false,
+        done: true,
+        hasMore: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns hits immediately when run() already finished with done=true', async () => {

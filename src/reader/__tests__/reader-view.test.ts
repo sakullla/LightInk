@@ -26,6 +26,7 @@ import {
 } from '../../ui/reading-layout.js';
 import { readerFlowSpreadFromTypography } from '../reader-layout.js';
 import { applyReaderTheme } from '../reader-theme.js';
+import { CONCEAL_PAGE_BACKGROUND_EVENT } from '../../conceal/conceal-controller.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
 
 const cbzMock = vi.hoisted(() => ({ renderCbzInto: vi.fn() }));
@@ -1928,6 +1929,52 @@ describe('主题切换刷新（R4）', () => {
     document.dispatchEvent(new CustomEvent('lightink:theme-change'));
     expect(frameBody.style.color).toBe('rgb(1, 2, 3)');
     expect(frameBody.style.color).not.toBe(original);
+    await view.destroy();
+  });
+
+  it('摸鱼页面背景改写事件重涂 flow 帧纸色（R5/R6：渐变/透明不被 iframe 内联纸色挡住）', async () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.readingLayout = 'scroll';
+    const { view, frames } = await loadFlowBook();
+    const frameDoc = frames[0]!.contentDocument!;
+    const frameHtml = frameDoc.documentElement;
+    const frameBody = frameDoc.body;
+
+    const computedStub = (vars: Record<string, string>): CSSStyleDeclaration =>
+      ({
+        color: 'rgb(92, 74, 50)',
+        fontFamily: 'serif',
+        fontSize: '16px',
+        colorScheme: 'light',
+        getPropertyValue: (name: string) => vars[name] ?? '',
+      }) as unknown as CSSStyleDeclaration;
+    const spy = vi.spyOn(window, 'getComputedStyle');
+
+    // 无改写：帧内联纸色 = 阅读主题纸色（jsdom 把 background 简写规范化为
+    // rgb 形式：#fbf0d9 → rgb(251, 240, 217)）。
+    spy.mockReturnValue(computedStub({ '--lightink-bg': '#fbf0d9' }));
+    document.dispatchEvent(
+      new CustomEvent(CONCEAL_PAGE_BACKGROUND_EVENT, {
+        detail: { background: 'linear-gradient(180deg, #f7dc8f 0%, #fdf7e3 100%)' },
+      }),
+    );
+    expect(frameBody.style.background).toBe('rgb(251, 240, 217)');
+    expect(frameHtml.style.background).toBe('rgb(251, 240, 217)');
+    // 文字色仍跟随阅读主题（R5）。
+    expect(frameBody.style.color).toBe('rgb(92, 74, 50)');
+
+    // 透明/渐变改写生效：帧改涂 transparent，宿主层透出。
+    spy.mockReturnValue(
+      computedStub({ '--lightink-bg': '#fbf0d9', '--lightink-conceal-page-background': 'transparent' }),
+    );
+    document.dispatchEvent(
+      new CustomEvent(CONCEAL_PAGE_BACKGROUND_EVENT, { detail: { background: 'transparent' } }),
+    );
+    expect(frameBody.style.background).toBe('transparent');
+    expect(frameHtml.style.background).toBe('transparent');
+    // FLOW_FRAME_CSS 的 var(--lightink-bg, transparent) !important 解析为 transparent。
+    expect(frameHtml.style.getPropertyValue('--lightink-bg')).toBe('transparent');
+    expect(frameBody.style.color).toBe('rgb(92, 74, 50)');
     await view.destroy();
   });
 });

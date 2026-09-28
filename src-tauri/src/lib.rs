@@ -12,6 +12,10 @@ mod assistant;
 mod book_source;
 mod book_translation;
 mod cli;
+// 摸鱼（书架/阅读器隐蔽）桌面能力：老板键/托盘/窗口效果/点击穿透。
+// 移动端（R12）不编译整个模块，命令也不注册。
+#[cfg(desktop)]
+mod conceal;
 mod credential_store;
 mod documents;
 mod export;
@@ -57,6 +61,12 @@ pub fn run() {
             cli::enqueue_pending_file(app, path);
         }
     }));
+    // R2 老板键全局快捷键：仅桌面注册（插件自身在移动端为空实现之外的目标
+    // 上不编译，这里显式 cfg 保持与命令注册同口径）。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    #[cfg(desktop)]
+    let builder = builder.manage(conceal::ConcealState::default());
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -72,6 +82,9 @@ pub fn run() {
             credential_store::init_mobile_store(app.handle());
             #[cfg(windows)]
             window_chrome::install_main_window_work_area(app);
+            // R9 等待取消最大化的 Resized 唤醒通道 + R14 托盘创建与状态首发。
+            #[cfg(desktop)]
+            conceal::setup_desktop(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -229,6 +242,28 @@ pub fn run() {
             window_chrome::set_window_caption_color,
             #[cfg(desktop)]
             window_chrome::set_window_outer_rounded,
+            // 桌面专属：摸鱼（书架/阅读器隐蔽）命令族，与 conceal.rs 模块
+            // 的 cfg(desktop) 同口径，Android/iOS 不注册（R12）。
+            #[cfg(desktop)]
+            conceal::conceal_register_boss_keys,
+            #[cfg(desktop)]
+            conceal::conceal_set_always_on_top,
+            #[cfg(desktop)]
+            conceal::conceal_set_transparent,
+            #[cfg(desktop)]
+            conceal::conceal_set_mini_window,
+            #[cfg(desktop)]
+            conceal::conceal_restore_window_baseline,
+            #[cfg(desktop)]
+            conceal::conceal_set_click_through,
+            #[cfg(desktop)]
+            conceal::conceal_hide_to_tray,
+            #[cfg(desktop)]
+            conceal::conceal_restore_from_tray,
+            #[cfg(desktop)]
+            conceal::conceal_get_status,
+            #[cfg(desktop)]
+            conceal::conceal_exit_app,
         ])
         // 用 build + run 才能接 RunEvent::Opened（macOS/iOS/Android 文件关联）。
         // Builder::run 会消费 builder 且不暴露事件循环钩子。
