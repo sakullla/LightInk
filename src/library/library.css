@@ -5776,27 +5776,41 @@ html:not([data-android]):not([data-touch-primary])
 /* Shortcuts resemble an index drawer: compact, text-forward, count aligned. */
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lightink-home-rule) transparent;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: baseline;
   gap: 14px;
+  max-width: min(100%, 24rem);
   min-height: 42px;
   padding: 9px 14px;
   border: 1px solid var(--lightink-home-rule);
   border-radius: 2px 999px 999px 2px;
   background: transparent;
+  white-space: nowrap;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut strong {
+  min-width: 0;
+  overflow: hidden;
   font-size: 13px;
   font-weight: 650;
+  text-overflow: ellipsis;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-shortcut span {
+  flex: 0 0 auto;
   color: var(--lightink-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;

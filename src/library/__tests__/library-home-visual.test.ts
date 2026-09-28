@@ -57,7 +57,12 @@ describe('shelf home editorial visual contract', () => {
     expect(section).toMatch(/\.lightink-library-continue\s*\{[\s\S]*?grid-template-columns/);
     expect(section).toMatch(/\.lightink-library-continue-text strong\s*\{[\s\S]*?clamp\(24px, 3vw, 42px\)/);
     expect(section).toMatch(/\.lightink-library-home-recent-list\s*\{[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/);
-    expect(section).toMatch(/\.lightink-library-home-shortcut-list\s*\{[\s\S]*?flex-wrap:\s*wrap/);
+    expect(section).toMatch(
+      /\.lightink-library-home-shortcut-list\s*\{[\s\S]*?flex-wrap:\s*nowrap[\s\S]*?overflow-x:\s*auto[\s\S]*?overflow-y:\s*hidden/,
+    );
+    expect(section).toMatch(
+      /\.lightink-library-home-shortcut\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?max-width:\s*min\(100%, 24rem\)/,
+    );
     expect(section).toMatch(/\.lightink-library-wall-heading\s*\{[\s\S]*?position:\s*sticky/);
     expect(section).toMatch(/\.lightink-library-home-empty\s*\{[\s\S]*?repeating-linear-gradient/);
   });
