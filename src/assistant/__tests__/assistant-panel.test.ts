@@ -2888,6 +2888,137 @@ describe('createAssistantPanel history lifecycle', () => {
   });
 });
 
+describe('createAssistantPanel header new conversation (R2)', () => {
+  function headerNewConversation(
+    panel: ReturnType<typeof createAssistantPanel>,
+  ): HTMLButtonElement {
+    const button = panel.element.querySelector<HTMLButtonElement>(
+      '[data-assistant-new-conversation]',
+    );
+    expect(button, 'missing header new-conversation button').not.toBeNull();
+    return button!;
+  }
+
+  function composerInput(
+    panel: ReturnType<typeof createAssistantPanel>,
+  ): HTMLTextAreaElement {
+    const input = panel.element.querySelector<HTMLTextAreaElement>(
+      '.lightink-reader-assistant-input',
+    );
+    expect(input).not.toBeNull();
+    return input!;
+  }
+
+  it('keeps a labelled header action alongside the conversations entry', async () => {
+    const { panel } = mountPanel({ historyKey: '0123456789abcdef' });
+    panel.open();
+    await flush();
+    const button = headerNewConversation(panel);
+    const head = panel.element.querySelector('.lightink-reader-assistant-head');
+    expect(head?.contains(button)).toBe(true);
+    expect(button.hidden).toBe(false);
+    expect(button.classList.contains('lightink-reader-assistant-new')).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe(t('reader.assistant.newConversation'));
+    expect(button.getAttribute('title')).toBe(t('reader.assistant.newConversation'));
+    expect(button.querySelector('svg')).not.toBeNull();
+    expect(
+      panel.element.querySelector('.lightink-reader-assistant-history-toggle'),
+    ).not.toBeNull();
+    panel.destroy();
+  });
+
+  it('starts a conversation in one step, closes history, and focuses the composer', async () => {
+    const { panel, deps } = mountPanel({ historyKey: '0123456789abcdef' });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一段问题');
+    await flush();
+    expect(bubbleTexts(panel, 'user')).toEqual(['第一段问题']);
+
+    panel.element
+      .querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')
+      ?.click();
+    expect(panel.element.classList.contains('is-history')).toBe(true);
+    const input = composerInput(panel);
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+
+    headerNewConversation(panel).click();
+    await flush();
+    expect(panel.element.classList.contains('is-history')).toBe(false);
+    expect(bubbleTexts(panel, 'user')).toEqual([]);
+    expect(document.activeElement).toBe(input);
+
+    const writes = deps.writeHistory.mock.calls as unknown as Array<[string, string]>;
+    const store = parseAssistantHistoryStore(writes[writes.length - 1]?.[1] ?? '');
+    expect(store.conversations).toHaveLength(2);
+    const active = store.conversations.find(
+      (conversation) => conversation.id === store.activeId,
+    );
+    expect(active?.messages).toEqual([]);
+    panel.destroy();
+  });
+
+  it('does not create an empty conversation without a user turn but still focuses input', async () => {
+    const { panel, deps } = mountPanel({
+      historyKey: '0123456789abcdef',
+      historyJson: serializeAssistantHistoryStore({
+        version: 2,
+        activeId: '',
+        conversations: [],
+      }),
+    });
+    panel.open();
+    await flush();
+    deps.writeHistory.mockClear();
+    panel.element
+      .querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')
+      ?.click();
+    expect(panel.element.classList.contains('is-history')).toBe(true);
+    const input = composerInput(panel);
+    input.blur();
+
+    headerNewConversation(panel).click();
+    await flush();
+    expect(panel.element.classList.contains('is-history')).toBe(false);
+    expect(panel.element.querySelectorAll('[data-assistant-history-id]').length).toBe(0);
+    expect(deps.writeHistory).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    panel.destroy();
+  });
+
+  it('keeps the inline list action working while the header entry stays visible', async () => {
+    const { panel } = mountPanel({ historyKey: '0123456789abcdef' });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '第一段问题');
+    await flush();
+
+    panel.element
+      .querySelector<HTMLButtonElement>('.lightink-reader-assistant-history-toggle')
+      ?.click();
+    expect(panel.element.classList.contains('is-history')).toBe(true);
+    expect(headerNewConversation(panel).hidden).toBe(false);
+    const inlineNew = panel.element.querySelector<HTMLButtonElement>(
+      '[data-assistant-history-new]',
+    );
+    expect(inlineNew).not.toBeNull();
+    inlineNew!.click();
+    await flush();
+    expect(panel.element.classList.contains('is-history')).toBe(false);
+    expect(bubbleTexts(panel, 'user')).toEqual([]);
+    panel.destroy();
+  });
+
+  it('hides the header action while the assistant is unconfigured', async () => {
+    const { panel } = mountPanel({ configured: false });
+    panel.open();
+    await flush();
+    expect(headerNewConversation(panel).hidden).toBe(true);
+    panel.destroy();
+  });
+});
+
 describe('createAssistantPanel tools and locators', () => {
   it('renders tool calls as blocks and stops after 24 tool rounds with a notice', async () => {
     let round = 0;

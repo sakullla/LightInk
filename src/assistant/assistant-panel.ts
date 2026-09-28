@@ -162,6 +162,10 @@ const ASSISTANT_STOP_ICON =
 const ASSISTANT_JUMP_BOTTOM_ICON =
   '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5v9"/><path d="M3.9 8.4 8 12.5l4.1-4.1"/></svg>';
 
+/** 新建会话图标（加号）：面板头部一级入口（ADR-10 / R2）。 */
+const ASSISTANT_NEW_CONVERSATION_ICON =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3.5v9"/><path d="M3.5 8h9"/></svg>';
+
 export type { AssistantHistoryMessage };
 
 interface AssistantToolBlock {
@@ -1233,8 +1237,16 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   historyToggle.textContent = t('reader.assistant.history');
   historyToggle.setAttribute('title', t('reader.assistant.history'));
   historyToggle.setAttribute('aria-expanded', 'false');
+  // 头部一级「新建会话」（ADR-10 / R2）：常驻图标按钮，语义与列表内按钮一致。
+  const newConversationButton = document.createElement('button');
+  newConversationButton.type = 'button';
+  newConversationButton.className = 'lightink-reader-assistant-new';
+  newConversationButton.dataset.assistantNewConversation = 'true';
+  newConversationButton.innerHTML = ASSISTANT_NEW_CONVERSATION_ICON;
+  newConversationButton.setAttribute('aria-label', t('reader.assistant.newConversation'));
+  newConversationButton.setAttribute('title', t('reader.assistant.newConversation'));
   head.prepend(historyToggle);
-  head.append(title, close);
+  head.append(title, newConversationButton, close);
   const permissionStorage = (): AssistantPermissionStorage | null => {
     if (deps.permissionStorage !== undefined) {
       return deps.permissionStorage;
@@ -1731,6 +1743,15 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const resizeInput = (): void => {
     input.style.height = 'auto';
     input.style.height = `${input.scrollHeight}px`;
+  };
+
+  /** 焦点回到 composer 输入区（header 新建会话等显式操作后调用）。 */
+  const focusComposerInput = (): void => {
+    try {
+      input.focus({ preventScroll: true });
+    } catch {
+      input.focus();
+    }
   };
 
   const updateStickFromScroll = (): void => {
@@ -2999,6 +3020,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     guide.hidden = aiConfigured;
     main.hidden = !aiConfigured;
     historyToggle.hidden = !aiConfigured;
+    newConversationButton.hidden = !aiConfigured;
     if (!aiConfigured) {
       setHistoryOpen(false);
     }
@@ -3720,7 +3742,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     }
   };
 
-  const startNewConversation = (): void => {
+  const startNewConversation = (focusAfter = false): void => {
     if (streaming) {
       abortStream();
     }
@@ -3747,6 +3769,10 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         persistHistory();
       }
       setHistoryOpen(false);
+      // header 一级入口点击后把焦点交给输入区，一步进入可提问状态。
+      if (focusAfter) {
+        focusComposerInput();
+      }
     });
   };
 
@@ -3898,6 +3924,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.preventDefault();
     event.stopPropagation();
     startNewConversation();
+  });
+  newConversationButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startNewConversation(true);
   });
   settingsButton.addEventListener('click', (event) => {
     event.preventDefault();

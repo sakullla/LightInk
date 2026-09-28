@@ -106,6 +106,30 @@
   outline-offset: 1px;
 }
 
+/* 头部一级「新建会话」图标按钮（ADR-10 / R2）：图标 chrome 用 ink 洗色。 */
+.lightink-reader-assistant-new {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-muted);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-new:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-new:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
 .lightink-reader-assistant-history {
   display: flex;
   flex-direction: column;
@@ -1362,9 +1386,16 @@
   opacity: 0;
 }
 
+/* 触屏命中区 ≥44px（视觉尺寸/圆角不变，按压洗色走下方门控）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-new {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 /* ===== 触屏按压反馈（ADR-5）：洗色不改圆角/阴影；抬手后 hover 复位 ===== */
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-close:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-new:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-history-toggle:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-history-delete:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-quote-chip-clear:active,
@@ -1406,6 +1437,8 @@
 
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-close:hover:not(:active),
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-new:hover:not(:active),
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-history-delete:hover:not(:active),
 :is(html[data-android], html[data-touch-primary])
