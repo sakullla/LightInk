@@ -147,8 +147,7 @@ export function libraryHomeShortcutCandidates(
     .sort(
       (left, right) =>
         right.itemCount - left.itemCount ||
-        left.tag.name.localeCompare(right.tag.name) ||
-        left.tag.id.localeCompare(right.tag.id),
+        left.tag.name.localeCompare(right.tag.name, undefined, { sensitivity: 'base' }),
     )
     .map(({ tag, itemCount }) => ({
       key: `tag:${tag.id}` as const,

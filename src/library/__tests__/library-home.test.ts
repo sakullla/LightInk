@@ -164,6 +164,34 @@ describe('library home shortcut projection', () => {
     expect(candidates.map((candidate) => candidate.itemCount)).toEqual([1, 1, 1, 2, 2, 1]);
   });
 
+  it('preserves case- and diacritic-insensitive tag fallback ties', () => {
+    const equivalentTags: LibraryTag[] = [
+      { id: 'plain-first', name: 'eclair', createdAt: 1, updatedAt: 1 },
+      { id: 'uppercase-second', name: 'ECLAIR', createdAt: 1, updatedAt: 1 },
+      { id: 'accent-third', name: 'Éclair', createdAt: 1, updatedAt: 1 },
+      { id: 'alpha', name: 'ALPHA', createdAt: 1, updatedAt: 1 },
+    ];
+    const equivalentMemberships: LibraryTagMembership[] = equivalentTags.map((tag) => ({
+      tagId: tag.id,
+      itemId: 'a',
+    }));
+
+    const candidates = libraryHomeShortcutCandidates(
+      [item('a')],
+      [],
+      [],
+      equivalentTags,
+      equivalentMemberships,
+    );
+
+    expect(candidates.map((candidate) => candidate.key)).toEqual([
+      'tag:alpha',
+      'tag:plain-first',
+      'tag:uppercase-second',
+      'tag:accent-third',
+    ]);
+  });
+
   it('puts recent usage first without mutating the candidate fallback order', () => {
     const candidates = libraryHomeShortcutCandidates(
       [item('a'), item('b')],
