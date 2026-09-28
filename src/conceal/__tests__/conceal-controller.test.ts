@@ -109,6 +109,7 @@ interface Harness {
   controller: ReturnType<typeof createConcealController>;
   dom: { html: HTMLElement; app: HTMLElement };
   prefs: ConcealPrefs;
+  persistWrites: () => number;
   measures: {
     top: { y: number; height: number } | null;
     bottom: { y: number; height: number } | null;
@@ -129,6 +130,7 @@ function makeHarness(prefsOverride: Partial<ConcealPrefs> = {}, clientOverride?:
   app.id = 'app';
   document.body.appendChild(app);
   const prefs: ConcealPrefs = { ...defaultConcealPrefs(false), ...prefsOverride };
+  let persistWrites = 0;
   const geometry = {
     top: { y: 0, height: 48 } as { y: number; height: number } | null,
     bottom: { y: 660, height: 40 } as { y: number; height: number } | null,
@@ -143,6 +145,7 @@ function makeHarness(prefsOverride: Partial<ConcealPrefs> = {}, clientOverride?:
     client,
     prefs,
     persist: (next) => {
+      persistWrites += 1;
       Object.assign(prefs, next);
       return { ...prefs };
     },
@@ -189,6 +192,7 @@ function makeHarness(prefsOverride: Partial<ConcealPrefs> = {}, clientOverride?:
     controller,
     dom: { html, app },
     prefs,
+    persistWrites: () => persistWrites,
     measures: geometry,
     setMeasures(top, bottom) {
       geometry.top = top;
@@ -704,5 +708,216 @@ describe('conceal controller R2 boss key updates', () => {
     expect(result.primaryError).toBeNull();
     expect(h.controller.getEffectivePrefs().bossPrimary).toBe('Control+Shift+P');
     expect(h.client.calls.filter((c) => c.cmd === 'conceal_register_boss_keys')).toHaveLength(1);
+  });
+});
+
+describe('conceal controller R5 rejected opens write that switch off', () => {
+  const stored: Partial<ConcealPrefs> = {
+    background: { kind: 'preset', preset: 'sky' },
+    contentOpacity: 60,
+    hideTop: true,
+    hideBody: false,
+    hideBottom: true,
+    alwaysOnTop: false,
+    miniWindow: false,
+    transparentMode: false,
+    clickThrough: false,
+  };
+
+  it.each([
+    ['conceal_set_always_on_top', 'alwaysOnTop', 'alwaysOnTopFailed'],
+    ['conceal_set_mini_window', 'miniWindow', 'miniWindowFailed'],
+    ['conceal_set_transparent', 'transparentMode', 'transparentFailed'],
+    ['conceal_set_click_through', 'clickThrough', 'clickThroughFailed'],
+  ] as const)(
+    '%s rejection persists that switch off and keeps every other field',
+    async (cmd, key, kind) => {
+      const h = makeHarness(stored, { fail: (name) => (name === cmd ? '系统拒绝' : undefined) });
+      h.controller.setSurface('shelf');
+      await h.controller.settled();
+      const before = structuredClone(h.prefs);
+      const writes = h.persistWrites();
+
+      h.controller.applyPrefs({
+        alwaysOnTop: true,
+        miniWindow: true,
+        transparentMode: true,
+        clickThrough: true,
+      });
+      await h.controller.settled();
+
+      const expected = { ...before, alwaysOnTop: true, miniWindow: true, transparentMode: true, clickThrough: true, [key]: false };
+      expect(h.prefs).toEqual(expected);
+      expect(h.controller.getEffectivePrefs()).toEqual(expected);
+      expect(h.notices).toContainEqual({ kind, reason: '系统拒绝' });
+      expect(h.persistWrites()).toBe(writes + 2);
+    },
+  );
+
+  it('baseline restore failure writes only the mini window off', async () => {
+    const h = makeHarness(
+      {
+        background: { kind: 'custom', from: '#112233', to: '#abcdef' },
+        transparentMode: true,
+        contentOpacity: 45,
+        hideTop: true,
+        hideBody: true,
+        hideBottom: false,
+        alwaysOnTop: true,
+        miniWindow: true,
+        clickThrough: true,
+      },
+      { fail: (cmd) => (cmd === 'conceal_restore_window_baseline' ? '窗口状态未稳定' : undefined) },
+    );
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    const before = structuredClone(h.prefs);
+    const writes = h.persistWrites();
+    const miniOn = () =>
+      h.client.calls.filter((call) => call.cmd === 'conceal_set_mini_window' && call.args.enabled === true).length;
+    expect(miniOn()).toBe(1);
+
+    h.controller.setSurface('editor');
+    await h.controller.settled();
+
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBe('editor');
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBeNull();
+    expect(h.prefs).toEqual({ ...before, miniWindow: false });
+    expect(h.controller.getEffectivePrefs()).toEqual({ ...before, miniWindow: false });
+    expect(h.notices).toContainEqual({ kind: 'baselineFailed', reason: '窗口状态未稳定' });
+    expect(h.persistWrites()).toBe(writes + 1);
+
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    expect(miniOn()).toBe(1);
+    expect(h.prefs.alwaysOnTop).toBe(true);
+    expect(h.prefs.transparentMode).toBe(true);
+    expect(h.prefs.clickThrough).toBe(true);
+    expect(h.prefs.hideTop).toBe(true);
+    expect(h.prefs.hideBody).toBe(true);
+    expect(h.prefs.hideBottom).toBe(false);
+    expect(h.prefs.contentOpacity).toBe(45);
+  });
+
+  it('baseline restore failure does not rewrite prefs when mini is already off', async () => {
+    const h = makeHarness(
+      { miniWindow: false, alwaysOnTop: true, transparentMode: true, hideTop: true, hideBody: true, clickThrough: true },
+      { fail: (cmd) => (cmd === 'conceal_restore_window_baseline' ? '窗口状态未稳定' : undefined) },
+    );
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    const before = structuredClone(h.prefs);
+    const writes = h.persistWrites();
+
+    h.controller.setSurface('editor');
+    await h.controller.settled();
+
+    expect(h.prefs).toEqual(before);
+    expect(h.persistWrites()).toBe(writes);
+    expect(h.notices).toContainEqual({ kind: 'baselineFailed', reason: '窗口状态未稳定' });
+  });
+});
+
+describe('conceal controller R5 content opacity preview', () => {
+  const opacityOf = (h: Harness): string =>
+    h.dom.html.style.getPropertyValue('--lightink-conceal-content-opacity');
+
+  it('follows integers 0–100 without writing storage', async () => {
+    const h = makeHarness({ contentOpacity: 100, alwaysOnTop: true, hideBottom: true });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    const before = structuredClone(h.prefs);
+    const writes = h.persistWrites();
+
+    h.controller.previewContentOpacity(0);
+    expect(opacityOf(h)).toBe('0');
+    h.controller.previewContentOpacity(40);
+    expect(opacityOf(h)).toBe('0.4');
+    h.controller.previewContentOpacity(100);
+    expect(opacityOf(h)).toBe('');
+    h.controller.previewContentOpacity(15);
+    h.controller.handlePointerMove(200);
+    expect(opacityOf(h)).toBe('0.15');
+
+    expect(h.persistWrites()).toBe(writes);
+    expect(h.prefs).toEqual(before);
+    expect(h.controller.getEffectivePrefs().contentOpacity).toBe(100);
+  });
+
+  it('ignores preview values that are not integers from 0 to 100', async () => {
+    const h = makeHarness({ contentOpacity: 80 });
+    h.controller.setSurface('shelf');
+    await h.controller.settled();
+    expect(opacityOf(h)).toBe('0.8');
+    const writes = h.persistWrites();
+
+    h.controller.previewContentOpacity(101);
+    h.controller.previewContentOpacity(-1);
+    h.controller.previewContentOpacity(50.5);
+    h.controller.previewContentOpacity(Number.NaN);
+    expect(opacityOf(h)).toBe('0.8');
+    expect(h.prefs.contentOpacity).toBe(80);
+    expect(h.persistWrites()).toBe(writes);
+  });
+
+  it('saves an in-range integer and drops blank, out-of-range, or non-integer commits', async () => {
+    const h = makeHarness({
+      contentOpacity: 80,
+      miniWindow: true,
+      hideBody: true,
+      alwaysOnTop: true,
+      background: { kind: 'preset', preset: 'mint' },
+    });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+
+    h.controller.previewContentOpacity(25);
+    expect(opacityOf(h)).toBe('0.25');
+    const writes = h.persistWrites();
+    expect(h.controller.commitContentOpacity(25).contentOpacity).toBe(25);
+    expect(h.prefs.contentOpacity).toBe(25);
+    expect(h.prefs.miniWindow).toBe(true);
+    expect(h.prefs.hideBody).toBe(true);
+    expect(h.prefs.alwaysOnTop).toBe(true);
+    expect(h.prefs.background).toEqual({ kind: 'preset', preset: 'mint' });
+    expect(opacityOf(h)).toBe('0.25');
+    expect(h.persistWrites()).toBe(writes + 1);
+
+    h.controller.previewContentOpacity(10);
+    expect(opacityOf(h)).toBe('0.1');
+    const afterSave = h.persistWrites();
+    for (const rejected of [101, -3, 50.5, Number.NaN, '', '   ', 'abc', '60.0', null, undefined, false]) {
+      h.controller.commitContentOpacity(rejected);
+    }
+    expect(h.prefs.contentOpacity).toBe(25);
+    expect(h.controller.getEffectivePrefs().contentOpacity).toBe(25);
+    expect(opacityOf(h)).toBe('0.25');
+    expect(h.persistWrites()).toBe(afterSave);
+
+    expect(h.controller.commitContentOpacity(' 60 ').contentOpacity).toBe(60);
+    expect(h.prefs.contentOpacity).toBe(60);
+    expect(opacityOf(h)).toBe('0.6');
+    expect(h.controller.commitContentOpacity(0).contentOpacity).toBe(0);
+    expect(opacityOf(h)).toBe('0');
+    expect(h.controller.commitContentOpacity(100).contentOpacity).toBe(100);
+    expect(opacityOf(h)).toBe('');
+  });
+
+  it('drops an unsaved preview when entering the editor', async () => {
+    const h = makeHarness({ contentOpacity: 70 });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    h.controller.previewContentOpacity(30);
+    expect(opacityOf(h)).toBe('0.3');
+
+    h.controller.setSurface('editor');
+    await h.controller.settled();
+    expect(opacityOf(h)).toBe('');
+    expect(h.prefs.contentOpacity).toBe(70);
+
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    expect(opacityOf(h)).toBe('0.7');
+    expect(h.prefs.contentOpacity).toBe(70);
   });
 });

@@ -13,12 +13,12 @@
  *   - 阅读器 bar/footer/whisper 经 ReaderChrome.setConcealZones 接管
  *     （单写者仍在 reader-chrome 的 syncDom；本控制器不直接写那些元素）；
  *   - 窗口效果命令序列（置顶/透明/mini/穿透含 zones 与 visible）；
- *   - 失败回调（开关内存回退 + 原因；文案 i18n 在 main.ts 映射）。
+ *   - 失败回调（打开被拒则该开关写回关闭 + 原因；文案 i18n 在 main.ts 映射）。
  *
  * R1：surface→editor 调 conceal_restore_window_baseline（后端幂等撤销全部
  * 窗口效果，含恢复进迷你窗口前的位置大小）并清全部 data 属性；回
  * shelf/reader 按仍保存的开关逐项重放，不触碰 tabs/reader（书与位置天然
- * 保留）。
+ * 保留）。基线命令失败时只把迷你窗口写回关闭。
  *
  * R13 关键不变量：透明模式关闭（或穿透开关关闭）时绝不保持
  * conceal_set_click_through(enabled=true)——点击必须落回 LightInk。
@@ -105,6 +105,24 @@ export interface ConcealControllerDeps {
 const errorText = (error: unknown): string | undefined =>
   typeof error === 'string' ? error : error instanceof Error ? error.message : undefined;
 
+const isOpacityInRange = (value: number): boolean =>
+  Number.isInteger(value) && value >= 0 && value <= 100;
+
+/** 空白、越界、非整数 → null。整数字符串去掉首尾空白后接受。 */
+const parseCommittedOpacity = (value: unknown): number | null => {
+  if (typeof value === 'number') {
+    return isOpacityInRange(value) ? value : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^(?:0|[1-9]\d?|100)$/.test(trimmed)) {
+    return null;
+  }
+  return Number(trimmed);
+};
+
 export interface ConcealController {
   /** 应用初始表面（bootstrap 后调用一次）。 */
   init(): void;
@@ -112,8 +130,15 @@ export interface ConcealController {
   setSurface(surface: ConcealSurface): void;
   /** 设置改动：合并 → 校验持久化 → 即时生效（R10）。返回生效后的偏好。 */
   applyPrefs(update: Partial<ConcealPrefs>): ConcealPrefs;
-  /** 当前生效偏好（命令失败的开关已内存回退）。 */
+  /** 当前生效偏好（打开被拒的开关已写回关闭）。 */
   getEffectivePrefs(): ConcealPrefs;
+  /** 拖动预览内容不透明度：只改正文深浅，不写存储。非 0–100 整数忽略。 */
+  previewContentOpacity(value: number): void;
+  /**
+   * 提交内容不透明度。0–100 的整数（或去掉空白后的整数字符串）才保存；
+   * 越界、空白或非整数不保存，正文回到当前生效值。
+   */
+  commitContentOpacity(value: unknown): ConcealPrefs;
   /** R2：改键注册。客户端预校验失败不发起 invoke；成功才持久化。 */
   updateBossKeys(primary: string, secondary: string): Promise<ConcealBossKeysStatus>;
   /** R7 DOM 指针输入（clientY 为视口 y；null = 指针离开窗口）。 */
@@ -143,6 +168,8 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
   let clickThroughRevoked = true;
   // 上次生效的页面背景改写值（null=未改写）：变化时派发重涂事件。
   let lastPageBackground: string | null = null;
+  // 拖动中的内容不透明度。null 表示用已保存值；不写存储，sync 时仍保留预览。
+  let opacityPreview: number | null = null;
 
   const inFlight = new Set<Promise<unknown>>();
   const track = <T>(promise: Promise<T>): Promise<T> => {
@@ -294,9 +321,10 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     track(client.setClickThrough(payload)).catch((error: unknown) => {
       appliedClickThrough = false;
       pushedClickThroughKey = '';
-      effective = { ...effective, clickThrough: false };
+      // 打开被拒：写回关闭，避免半穿透和下次启动再打开。
+      persistSwitchOff('clickThrough');
       deps.onNotice('clickThroughFailed', errorText(error));
-      // 撤销尝试失败也把开关按失败处理（Wayland 不支持等场景）。
+      sync();
     });
   };
 
@@ -359,8 +387,9 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       setAttr(root, 'data-conceal-page-background', 'on');
     }
     notifyPageBackground(pageBackground);
-    if (effective.contentOpacity < 100) {
-      root.style.setProperty('--lightink-conceal-content-opacity', String(effective.contentOpacity / 100));
+    const shownOpacity = opacityPreview ?? effective.contentOpacity;
+    if (shownOpacity < 100) {
+      root.style.setProperty('--lightink-conceal-content-opacity', String(shownOpacity / 100));
     } else {
       root.style.removeProperty('--lightink-conceal-content-opacity');
     }
@@ -384,6 +413,17 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     pushClickThrough();
   };
 
+  // 打开被拒绝时只把这一项写回关闭。关闭命令失败不走这里。
+  const persistSwitchOff = (
+    key: 'alwaysOnTop' | 'miniWindow' | 'transparentMode' | 'clickThrough',
+  ): void => {
+    if (!effective[key]) {
+      return;
+    }
+    const previous = effective;
+    effective = deps.persist({ ...previous, [key]: false }, previous);
+  };
+
   // ── 窗口效果命令（R8/R6/R9） ────────────────────────────────
   const command = (
     run: () => Promise<null>,
@@ -402,7 +442,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       appliedAlwaysOnTop = true;
       command(() => client.setAlwaysOnTop(true), (reason) => {
         appliedAlwaysOnTop = false;
-        effective = { ...effective, alwaysOnTop: false };
+        persistSwitchOff('alwaysOnTop');
         deps.onNotice('alwaysOnTopFailed', reason);
       });
     }
@@ -410,7 +450,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       appliedTransparent = true;
       command(() => client.setTransparent(true), (reason) => {
         appliedTransparent = false;
-        effective = { ...effective, transparentMode: false };
+        persistSwitchOff('transparentMode');
         deps.onNotice('transparentFailed', reason);
         sync();
       });
@@ -419,7 +459,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       appliedMiniWindow = true;
       command(() => client.setMiniWindow(true), (reason) => {
         appliedMiniWindow = false;
-        effective = { ...effective, miniWindow: false };
+        persistSwitchOff('miniWindow');
         deps.onNotice('miniWindowFailed', reason);
       });
     }
@@ -443,16 +483,16 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     const previous = surface;
     surface = next;
     pointerZone = null;
+    opacityPreview = null;
     if (next === 'editor') {
       if (previous !== 'editor') {
         stopZonePoll();
         // 一键撤销全部窗口效果（后端幂等：停穿透轮询+置顶+透明+mini 恢复）。
         track(client.restoreWindowBaseline()).catch((error: unknown) => {
-          // R1 失败边界：编辑器表面仍按无效果呈现（属性已清）；
-          // mini 开关内存回退，避免回书架重放与失败态打架（可重试：再次
-          // 进入编辑器会再调 baseline，命令幂等）。
+          // 基线失败只写回迷你窗口。置顶、透明、穿透和三项隐藏保持失败前的值。
+          // 再次进入编辑器会再调 baseline（命令幂等）。
           appliedMiniWindow = false;
-          effective = { ...effective, miniWindow: false };
+          persistSwitchOff('miniWindow');
           deps.onNotice('baselineFailed', errorText(error));
         });
         appliedAlwaysOnTop = false;
@@ -505,21 +545,51 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     setPointerZone('body');
   };
 
+  const applyPrefs = (update: Partial<ConcealPrefs>): ConcealPrefs => {
+    const merged: ConcealPrefs = { ...effective, ...update };
+    if (!isConcealPrefsValid(merged)) {
+      return effective;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, 'contentOpacity')) {
+      opacityPreview = null;
+    }
+    effective = deps.persist(merged, effective);
+    applyWindowEffects();
+    sync();
+    return effective;
+  };
+
+  const previewContentOpacity = (value: number): void => {
+    if (surface === null || surface === 'editor') {
+      return;
+    }
+    if (!isOpacityInRange(value)) {
+      return;
+    }
+    opacityPreview = value;
+    applyDomState();
+  };
+
+  const commitContentOpacity = (value: unknown): ConcealPrefs => {
+    const parsed = parseCommittedOpacity(value);
+    opacityPreview = null;
+    if (parsed === null) {
+      if (surface !== null) {
+        applyDomState();
+      }
+      return effective;
+    }
+    return applyPrefs({ contentOpacity: parsed });
+  };
+
   return {
     init() {
       setSurface(surface ?? 'shelf');
     },
     setSurface,
-    applyPrefs(update) {
-      const merged: ConcealPrefs = { ...effective, ...update };
-      if (!isConcealPrefsValid(merged)) {
-        return effective;
-      }
-      effective = deps.persist(merged, effective);
-      applyWindowEffects();
-      sync();
-      return effective;
-    },
+    applyPrefs,
+    previewContentOpacity,
+    commitContentOpacity,
     getEffectivePrefs: () => ({ ...effective }),
     async updateBossKeys(primary, secondary) {
       // 客户端预校验（与后端 conceal_register_boss_keys 同一错误分类）。
