@@ -640,10 +640,11 @@ const en = {
 
   // Dialogs / misc
   'dialog.closeTab.title': 'Close Tab',
-  'dialog.closeTab.message': '“{title}” has unsaved changes.\nSave before closing?',
+  'dialog.closeTab.message':
+    '“{title}” has unsaved changes.\nSave before closing? “Don’t Save” discards these changes.',
   'dialog.exit.title': 'Unsaved Documents',
   'dialog.exit.message':
-    'The following documents have unsaved changes:\n\n{documents}\n\nSave all before exiting?',
+    'The following documents have unsaved changes:\n\n{documents}\n\nSave all before exiting? “Discard All” permanently loses these changes.',
   'dialog.exit.saveAll': 'Save All',
   'dialog.exit.discardAll': 'Discard All',
   'dialog.save': 'Save',
@@ -651,7 +652,7 @@ const en = {
   'dialog.cancel': 'Cancel',
   'dialog.crash.title': 'Crash Recovery',
   'dialog.crash.message':
-    'A recovery snapshot for “{path}” is newer than the file on disk.\nRestore unsaved content?',
+    'A recovery snapshot for “{path}” is newer than the file on disk. The snapshot holds unsaved edits not yet written to disk.\nRestore that content?',
   'dialog.crash.restore': 'Restore',
   'dialog.crash.skip': 'Don’t Restore',
   'dialog.externalReload.title': 'File Changed on Disk',
@@ -1366,10 +1367,11 @@ const zhCN = {
   'shortcut.toggle-reading-layout': '切换滚动/翻页',
 
   'dialog.closeTab.title': '关闭标签',
-  'dialog.closeTab.message': '「{title}」有未保存的更改。\n保存后再关闭？',
+  'dialog.closeTab.message':
+    '「{title}」有未保存的更改。\n保存后再关闭？选择「不保存」将丢弃这些更改。',
   'dialog.exit.title': '尚未保存的文档',
   'dialog.exit.message':
-    '以下文档包含尚未保存的更改：\n\n{documents}\n\n是否全部保存后退出？',
+    '以下文档包含尚未保存的更改：\n\n{documents}\n\n是否全部保存后退出？选择「全部丢弃」将永久丢失这些更改。',
   'dialog.exit.saveAll': '全部保存',
   'dialog.exit.discardAll': '全部丢弃',
   'dialog.save': '保存',
@@ -1377,7 +1379,7 @@ const zhCN = {
   'dialog.cancel': '取消',
   'dialog.crash.title': '崩溃恢复',
   'dialog.crash.message':
-    '检测到「{path}」的崩溃恢复快照比磁盘文件新。\n是否恢复未保存的内容？',
+    '检测到「{path}」的崩溃恢复快照比磁盘文件新，快照里有尚未写入磁盘的编辑。\n是否恢复这些内容？',
   'dialog.crash.restore': '恢复',
   'dialog.crash.skip': '不恢复',
   'dialog.externalReload.title': '文件已在磁盘上被修改',
@@ -1396,7 +1398,7 @@ const zhCN = {
   'dialog.link.apply': '应用',
   'dialog.link.openConfirm': '打开此链接？',
   'dialog.link.openTitle': '打开链接',
-  'dialog.link.openMessage': '确定打开以下链接吗？',
+  'dialog.link.openMessage': '要打开以下链接吗？',
   'dialog.link.textLabel': '显示文本',
   'dialog.link.textPlaceholder': '链接标题',
   'dialog.link.hrefLabel': '链接地址',
