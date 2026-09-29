@@ -42,14 +42,20 @@ export interface SyncPanelDeps {
 type Labels = {
   title: string;
   name: string;
+  namePlaceholder: string;
   url: string;
+  urlPlaceholder: string;
   auth: string;
   basic: string;
   bearer: string;
   username: string;
+  usernamePlaceholder: string;
   password: string;
+  passwordPlaceholder: string;
   token: string;
+  tokenPlaceholder: string;
   allowHttp: string;
+  missingFields: string;
   save: string;
   test: string;
   sync: string;
@@ -82,14 +88,20 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
   en: {
     title: 'WebDAV sync',
     name: 'Name',
+    namePlaceholder: 'A name you will recognize, such as Home cloud',
     url: 'WebDAV URL',
+    urlPlaceholder: 'https://cloud.example/remote.php/dav/files/you',
     auth: 'Authentication',
     basic: 'Basic',
     bearer: 'Bearer',
     username: 'Username',
+    usernamePlaceholder: 'Account on that server',
     password: 'App password',
+    passwordPlaceholder: 'Generated app password, not the website login',
     token: 'Access token',
+    tokenPlaceholder: 'Token only, without a Bearer prefix',
     allowHttp: 'Allow HTTP/LAN',
+    missingFields: 'Still empty: {missing}',
     save: 'Save',
     test: 'Test connection',
     sync: 'Sync now',
@@ -120,14 +132,20 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
   'zh-CN': {
     title: 'WebDAV 同步',
     name: '名称',
+    namePlaceholder: '好认的名字，例如家里的网盘',
     url: 'WebDAV 地址',
+    urlPlaceholder: 'https://cloud.example/remote.php/dav/files/you',
     auth: '鉴权',
     basic: 'Basic',
     bearer: 'Bearer',
     username: '用户名',
+    usernamePlaceholder: '这台服务器上的账号',
     password: '应用密码',
+    passwordPlaceholder: '单独生成的应用密码，不是网页登录密码',
     token: '访问令牌',
+    tokenPlaceholder: '只粘贴令牌，不要带 Bearer 前缀',
     allowHttp: '允许 HTTP/LAN',
+    missingFields: '还没填写：{missing}',
     save: '保存配置',
     test: '测试连接',
     sync: '立即同步',
@@ -230,7 +248,13 @@ function section(doc: Document, titleText: string, extraClass = ''): HTMLElement
   return root;
 }
 
-function field(doc: Document, label: string, type: string, value = ''): HTMLInputElement {
+function field(
+  doc: Document,
+  label: string,
+  type: string,
+  value = '',
+  placeholder = '',
+): HTMLInputElement {
   const wrapper = doc.createElement('label');
   wrapper.className = 'lightink-sync-field';
   const caption = doc.createElement('span');
@@ -238,6 +262,7 @@ function field(doc: Document, label: string, type: string, value = ''): HTMLInpu
   const input = doc.createElement('input');
   input.type = type;
   input.value = value;
+  if (placeholder !== '') input.placeholder = placeholder;
   input.autocomplete = type === 'password' ? 'new-password' : 'off';
   wrapper.append(caption, input);
   (input as HTMLInputElement & { fieldWrapper?: HTMLElement }).fieldWrapper = wrapper;
@@ -296,8 +321,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
 
   const form = doc.createElement('form');
   form.className = 'lightink-sync-form';
-  const name = field(doc, L.name, 'text');
-  const url = field(doc, L.url, 'url');
+  const name = field(doc, L.name, 'text', '', L.namePlaceholder);
+  const url = field(doc, L.url, 'url', '', L.urlPlaceholder);
   const authLabel = doc.createElement('label');
   authLabel.className = 'lightink-sync-field lightink-sync-field--span';
   const authCaption = doc.createElement('span');
@@ -315,9 +340,9 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   authHint.className = 'lightink-sync-auth-hint';
   authHint.id = 'lightink-sync-auth-hint';
   auth.setAttribute('aria-describedby', authHint.id);
-  const username = field(doc, L.username, 'text');
-  const password = field(doc, L.password, 'password');
-  const token = field(doc, L.token, 'password');
+  const username = field(doc, L.username, 'text', '', L.usernamePlaceholder);
+  const password = field(doc, L.password, 'password', '', L.passwordPlaceholder);
+  const token = field(doc, L.token, 'password', '', L.tokenPlaceholder);
   token.parentElement!.classList.add('lightink-sync-field--span');
   const credentialFields = doc.createElement('div');
   credentialFields.className = 'lightink-sync-credentials';
@@ -489,6 +514,35 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       credential,
     };
   };
+  const credentialStillNeeded = (): boolean => {
+    if (profile === null) return true;
+    if (profile.needsCredential) return true;
+    return profile.authType !== (auth.value as SyncAuthType);
+  };
+  const missingFieldNames = (): string[] => {
+    const names: string[] = [];
+    if (name.value.trim() === '') names.push(L.name);
+    if (url.value.trim() === '') names.push(L.url);
+    if ((auth.value as SyncAuthType) === 'basic') {
+      const usernameEmpty = username.value.trim() === '';
+      const passwordEmpty = password.value === '';
+      const partial = !usernameEmpty || !passwordEmpty;
+      if (credentialStillNeeded() || partial) {
+        if (usernameEmpty) names.push(L.username);
+        if (passwordEmpty) names.push(L.password);
+      }
+    } else if (token.value.trim() === '' && credentialStillNeeded()) {
+      names.push(L.token);
+    }
+    return names;
+  };
+  const markMissingFields = (names: readonly string[]): void => {
+    for (const input of [name, url, username, password, token]) {
+      const caption = input.parentElement?.querySelector('span')?.textContent ?? '';
+      if (names.includes(caption)) input.setAttribute('aria-invalid', 'true');
+      else input.removeAttribute('aria-invalid');
+    }
+  };
   const setMessage = (text: string, kind: 'info' | 'success' | 'error' = 'info'): void => {
     message.textContent = text;
     message.hidden = text === '';
@@ -633,6 +687,14 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
 
   form.addEventListener('submit', (event) => event.preventDefault());
   save.addEventListener('click', async () => {
+    const missing = missingFieldNames();
+    if (missing.length > 0) {
+      const joiner = locale === 'zh-CN' ? '、' : ', ';
+      setMessage(L.missingFields.replace('{missing}', missing.join(joiner)), 'error');
+      markMissingFields(missing);
+      return;
+    }
+    markMissingFields([]);
     save.disabled = true;
     try {
       profile = await deps.webdav.saveProfile(readInput());

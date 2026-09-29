@@ -70,6 +70,88 @@ describe('sync panel', () => {
     expect(document.querySelector('.lightink-sync-dialog')).toBeNull();
   });
 
+  it('names empty sync fields and keeps typed address and credentials when save fails', async () => {
+    const panelDeps = createDeps();
+    const saveProfile = vi.fn(async () => {
+      throw new Error('disk is read-only');
+    });
+    panelDeps.webdav.saveProfile = saveProfile;
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const fields = dialog.querySelectorAll<HTMLInputElement>('.lightink-sync-field input');
+    const captions = [...dialog.querySelectorAll('.lightink-sync-field span')].map(
+      (node) => node.textContent,
+    );
+    expect(fields[0]!.placeholder).not.toBe(captions[0]);
+    expect(fields[1]!.placeholder).not.toBe(captions[1]);
+    expect(fields[1]!.placeholder).toContain('https://');
+    expect(fields[2]!.placeholder).not.toBe(captions[2]);
+    expect(fields[3]!.placeholder).not.toBe(captions[3]);
+    expect(fields[4]!.placeholder).not.toBe(captions[4]);
+
+    button(dialog, '保存配置').click();
+    await settle();
+    expect(saveProfile).not.toHaveBeenCalled();
+    const missingMessage = dialog.querySelector('.lightink-sync-message')?.textContent ?? '';
+    expect(missingMessage).toContain('还没填写：');
+    expect(missingMessage).toContain('名称');
+    expect(missingMessage).toContain('WebDAV 地址');
+    expect(missingMessage).toContain('用户名');
+    expect(missingMessage).toContain('应用密码');
+    expect(fields[0]!.getAttribute('aria-invalid')).toBe('true');
+    expect(fields[1]!.getAttribute('aria-invalid')).toBe('true');
+
+    fields[0]!.value = 'Nextcloud';
+    fields[1]!.value = 'https://dav.example/remote.php/dav/files/me';
+    fields[2]!.value = 'me';
+    button(dialog, '保存配置').click();
+    await settle();
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(dialog.querySelector('.lightink-sync-message')?.textContent).toContain('应用密码');
+    expect(fields[1]!.value).toBe('https://dav.example/remote.php/dav/files/me');
+    expect(fields[2]!.value).toBe('me');
+
+    fields[3]!.value = 'app-password';
+    button(dialog, '保存配置').click();
+    await settle();
+    expect(saveProfile).toHaveBeenCalledTimes(1);
+    expect(fields[0]!.value).toBe('Nextcloud');
+    expect(fields[1]!.value).toBe('https://dav.example/remote.php/dav/files/me');
+    expect(fields[2]!.value).toBe('me');
+    expect(fields[3]!.value).toBe('app-password');
+    expect(dialog.textContent).toContain('disk is read-only');
+
+    const auth = dialog.querySelector('select')!;
+    auth.value = 'bearer';
+    auth.dispatchEvent(new Event('change'));
+    fields[4]!.value = '';
+    button(dialog, '保存配置').click();
+    await settle();
+    expect(dialog.querySelector('.lightink-sync-message')?.textContent).toContain('访问令牌');
+    expect(saveProfile).toHaveBeenCalledTimes(1);
+    fields[4]!.value = 'token-value';
+    expect(fields[4]!.value).toBe('token-value');
+    button(dialog, '关闭').click();
+  });
+
+  it('names empty English sync fields without using the label as the placeholder', async () => {
+    showSyncPanel({ ...createDeps(), locale: 'en' });
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const url = dialog.querySelectorAll<HTMLInputElement>('.lightink-sync-field input')[1]!;
+    expect(url.placeholder).not.toBe('WebDAV URL');
+    button(dialog, 'Save').click();
+    await settle();
+    const message = dialog.querySelector('.lightink-sync-message')?.textContent ?? '';
+    expect(message).toContain('Still empty:');
+    expect(message).toContain('Name');
+    expect(message).toContain('WebDAV URL');
+    expect(message).toContain('Username');
+    expect(message).toContain('App password');
+    button(dialog, 'Close').click();
+  });
+
   it('counts skipped remote files in the ↑ total so a no-op sync does not show ↑0', async () => {
     const panelDeps = createDeps();
     const done: SyncStatus = {

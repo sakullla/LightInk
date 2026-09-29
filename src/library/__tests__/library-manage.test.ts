@@ -217,6 +217,15 @@ function manageOptions(
   return { options, themeRoot };
 }
 
+function confirmDialogButton(label: string): HTMLButtonElement {
+  const dialog = document.querySelector('.lightink-confirm-dialog');
+  const button = Array.from(dialog?.querySelectorAll('button') ?? []).find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (!(button instanceof HTMLButtonElement)) throw new Error(`confirm button not found: ${label}`);
+  return button;
+}
+
 function groupTitles(panel: ParentNode): string[] {
   return Array.from(
     panel.querySelectorAll<HTMLElement>('.lightink-library-manage-home [data-manage-group]'),
@@ -409,7 +418,7 @@ describe('createLibraryManage grouped settings page', () => {
     manage.destroy();
   });
 
-  it('clears the cache and keeps the usage row readable on stats failure', async () => {
+  it('clears the cache only after confirmation and keeps the usage row readable on stats failure', async () => {
     const { options } = manageOptions({
       library: {
         clearCache: vi.fn(async () => undefined),
@@ -426,12 +435,58 @@ describe('createLibraryManage grouped settings page', () => {
       (button) => button.textContent === '清理缓存',
     )!;
     clear.click();
+    const dialog = document.querySelector<HTMLElement>('.lightink-confirm-dialog');
+    expect(dialog?.textContent).toContain('已下载缓存');
+    expect(dialog?.textContent).toContain('书库条目');
+    confirmDialogButton('取消').click();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(options.library.clearCache).not.toHaveBeenCalled();
+
+    clear.click();
+    confirmDialogButton('清理缓存').click();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(options.library.clearCache).toHaveBeenCalledTimes(1);
     const summary = manage.element.querySelector<HTMLElement>('.lightink-library-cache-summary');
     expect(summary?.textContent).toBe('');
     expect(summary?.hidden).toBe(true);
+    manage.destroy();
+  });
+
+  it('leaves cache usage unchanged when clearing is cancelled', async () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await manage.refreshCache();
+    const summary = manage.element.querySelector<HTMLElement>('.lightink-library-cache-summary')!;
+    const before = summary.textContent;
+    expect(summary.hidden).toBe(false);
+
+    const clear = Array.from(manage.element.querySelectorAll('button')).find(
+      (button) => button.textContent === '清理缓存',
+    )!;
+    clear.click();
+    confirmDialogButton('取消').click();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(options.library.clearCache).not.toHaveBeenCalled();
+    expect(summary.textContent).toBe(before);
+    expect(document.querySelector('.lightink-confirm-dialog')).toBeNull();
+    manage.destroy();
+  });
+
+  it('explains downloaded cache in English before clearing', () => {
+    const { options } = manageOptions({ labels: () => LABELS.en });
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    const clear = Array.from(manage.element.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Clear cache',
+    )!;
+    clear.click();
+    const dialog = document.querySelector<HTMLElement>('.lightink-confirm-dialog');
+    expect(dialog?.textContent).toContain('downloaded cache');
+    expect(dialog?.textContent).toContain('Library entries');
+    confirmDialogButton('Cancel').click();
     manage.destroy();
   });
 
@@ -639,8 +694,18 @@ describe('createLibraryManage AI provider group (R2)', () => {
     const baseUrl = aiField(manage, 'aiBaseUrl');
     expect(baseUrl.type).toBe('url');
     expect(baseUrl.value).toBe('https://api.openai.com/v1');
-    expect(aiField(manage, 'aiModel').type).toBe('text');
-    expect(aiField(manage, 'aiApiKey').type).toBe('password');
+    expect(baseUrl.placeholder).not.toBe(zh.aiBaseUrl);
+    expect(baseUrl.placeholder).toContain('https://');
+    const model = aiField(manage, 'aiModel');
+    expect(model.type).toBe('text');
+    expect(model.placeholder).not.toBe(zh.aiModel);
+    expect(model.placeholder.length).toBeGreaterThan(zh.aiModel.length);
+    const key = aiField(manage, 'aiApiKey');
+    expect(key.type).toBe('password');
+    expect(key.placeholder).not.toBe(zh.aiKey);
+    expect(key.placeholder).not.toBe(zh.aiKeySavedPlaceholder);
+    expect(model.getAttribute('aria-invalid')).toBe('true');
+    expect(key.getAttribute('aria-invalid')).toBe('true');
     expect(aiField(manage, 'aiAllowHttp').checked).toBe(false);
     const target = aiSelect(manage, 'aiTargetLang');
     expect(target.value).toBe('auto');
@@ -960,6 +1025,63 @@ describe('createLibraryManage AI provider group (R2)', () => {
     expect(feedback.textContent).toBe(
       LABELS['zh-CN'].aiErrorUnconfigured.replace('{missing}', '模型名, API 密钥'),
     );
+    manage.destroy();
+  });
+
+  it('keeps the address, model, and key when saving the AI configuration fails', async () => {
+    mockAiCommands({
+      saveConfigError: { code: 'AI_STORAGE_ERROR', message: 'app data dir unavailable' },
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const baseUrl = aiField(manage, 'aiBaseUrl');
+    const model = aiField(manage, 'aiModel');
+    const key = aiField(manage, 'aiApiKey');
+    baseUrl.value = 'https://proxy.example/v1';
+    model.value = 'my-model';
+    key.value = 'sk-secret';
+    baseUrl.dispatchEvent(new Event('input', { bubbles: true }));
+    model.dispatchEvent(new Event('input', { bubbles: true }));
+    key.dispatchEvent(new Event('input', { bubbles: true }));
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.textContent).not.toContain(LABELS['zh-CN'].aiModel);
+    expect(status.textContent).not.toContain(LABELS['zh-CN'].aiKey);
+
+    manage.element.querySelector<HTMLButtonElement>('.lightink-library-ai-save')!.click();
+    await settle();
+
+    expect(baseUrl.value).toBe('https://proxy.example/v1');
+    expect(model.value).toBe('my-model');
+    expect(key.value).toBe('sk-secret');
+    expect(aiFeedbackOf(manage).textContent).toBe(LABELS['zh-CN'].aiErrorStorage);
+    manage.destroy();
+  });
+
+  it('names the AI fields that are still empty', async () => {
+    mockAiCommands({
+      getConfig: aiStatus({
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        hasKey: true,
+        configured: true,
+        missing: [],
+      }),
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const model = aiField(manage, 'aiModel');
+    model.value = '';
+    model.dispatchEvent(new Event('input', { bubbles: true }));
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    expect(status.dataset.aiConfigured).toBe('false');
+    expect(status.textContent).toContain(LABELS['zh-CN'].aiModel);
+    expect(status.textContent).not.toContain(LABELS['zh-CN'].aiKey);
     manage.destroy();
   });
 

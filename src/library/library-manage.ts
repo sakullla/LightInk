@@ -11,6 +11,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { showConfirmDialog } from '../ui/confirm-dialog.js';
 import type { LibraryClient } from './library-client.js';
 import type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
 import {
@@ -535,6 +536,40 @@ export function aiErrorMessage(
     text += ` (HTTP ${parts.status})`;
   }
   return text;
+}
+
+function manageLabelsAreEnglish(l: LibraryManageLabels): boolean {
+  return l.cancel === 'Cancel';
+}
+
+/** 清理缓存确认：点名已下载缓存，并说明书库条目还在。 */
+function cacheClearPrompt(l: LibraryManageLabels): { title: string; message: string } {
+  if (manageLabelsAreEnglish(l)) {
+    return {
+      title: 'Clear downloaded cache',
+      message: 'This clears downloaded cache only. Library entries stay.',
+    };
+  }
+  return {
+    title: '清理已下载缓存',
+    message: '清掉的是已下载缓存，书库条目还会留着。',
+  };
+}
+
+/** 占位说明要解释怎么填，不能只把字段名再写一遍。 */
+function aiFieldHints(l: LibraryManageLabels): { baseUrl: string; model: string; key: string } {
+  if (manageLabelsAreEnglish(l)) {
+    return {
+      baseUrl: 'https://api.openai.com/v1 or a compatible service address',
+      model: 'Provider id such as gpt-4o-mini',
+      key: 'Paste the provider key. Leave blank to keep a saved key.',
+    };
+  }
+  return {
+    baseUrl: '例如 https://api.openai.com/v1，或兼容服务的地址',
+    model: '服务商给出的模型标识，例如 gpt-4o-mini',
+    key: '粘贴服务商密钥。留空则保留已经保存的密钥。',
+  };
 }
 
 /**
@@ -1460,26 +1495,55 @@ export function createLibraryManage(
   let aiModelDirty = false;
   aiBaseUrlInput.addEventListener('input', () => {
     aiBaseDirty = true;
+    syncAiState();
   });
   aiModelInput.addEventListener('input', () => {
     aiModelDirty = true;
+    syncAiState();
+  });
+  aiKeyInput.addEventListener('input', () => {
+    syncAiState();
   });
 
   const readAiEndpointKind = (): AiEndpointKindId =>
     isAiEndpointKind(aiEndpointSelect.value) ? aiEndpointSelect.value : 'openai-chat';
 
+  // 表单里已经填上的项不再算缺口；空着的地址、模型和密钥用字段名点出来。
+  const displayedAiGaps = (): string[] => {
+    const filled = new Set<string>(['endpoint_kind']);
+    if (aiBaseUrlInput.value.trim() !== '') filled.add('base_url');
+    if (aiModelInput.value.trim() !== '') filled.add('model');
+    if (aiKeyInput.value.trim() !== '' || aiStatusState.hasKey) filled.add('api_key');
+    const merged: string[] = [];
+    if (!filled.has('base_url')) merged.push('base_url');
+    if (!filled.has('model')) merged.push('model');
+    if (!filled.has('api_key')) merged.push('api_key');
+    for (const gap of aiStatusState.missing) {
+      if (!filled.has(gap) && !merged.includes(gap)) merged.push(gap);
+    }
+    return merged;
+  };
+
   const syncAiState = (): void => {
     const l = labels();
-    const summary = aiMissingSummary(l, aiStatusState.missing);
-    aiStatus.textContent = aiStatusState.configured
+    const gaps = displayedAiGaps();
+    const summary = aiMissingSummary(l, gaps);
+    const configured = aiStatusState.configured && gaps.length === 0;
+    aiStatus.textContent = configured
       ? l.aiConfigured
       : summary === ''
         ? l.aiUnconfigured
         : l.aiUnconfiguredGaps.replace('{missing}', summary);
-    aiStatus.dataset.aiConfigured = aiStatusState.configured ? 'true' : 'false';
+    aiStatus.dataset.aiConfigured = configured ? 'true' : 'false';
+    const hints = aiFieldHints(l);
+    aiBaseUrlInput.placeholder = hints.baseUrl;
+    aiModelInput.placeholder = hints.model;
+    aiKeyInput.placeholder = aiStatusState.hasKey ? l.aiKeySavedPlaceholder : hints.key;
+    aiBaseUrlInput.setAttribute('aria-invalid', String(gaps.includes('base_url')));
+    aiModelInput.setAttribute('aria-invalid', String(gaps.includes('model')));
+    aiKeyInput.setAttribute('aria-invalid', String(gaps.includes('api_key')));
     aiKeyClear.hidden = !aiStatusState.hasKey;
     aiKeyClear.disabled = !aiStatusState.hasKey;
-    aiKeyInput.placeholder = aiStatusState.hasKey ? l.aiKeySavedPlaceholder : l.aiKey;
   };
 
   const setAiFeedback = (text: string, kind: 'info' | 'success' | 'error'): void => {
@@ -1543,17 +1607,17 @@ export function createLibraryManage(
       }
     }
     aiEndpointKind = next;
+    syncAiState();
   });
 
   const saveAiConfig = async (): Promise<void> => {
     aiSave.disabled = true;
     try {
-      // 密钥框有内容时先写入钥匙串(失败即止,输入保留待重试);
-      // 留空不动既有密钥——清除密钥仍走独立按钮。
+      // 密钥框有内容时先写入钥匙串(失败即止);留空不动既有密钥。
+      // 整次保存成功后才清空密钥框,失败时地址、模型和密钥都留在表单里。
       const key = aiKeyInput.value.trim();
       if (key !== '') {
         await invokeAiStoreKey(key);
-        aiKeyInput.value = '';
       }
       const status = await invokeAiSaveConfig({
         endpointKind: readAiEndpointKind(),
@@ -1562,11 +1626,12 @@ export function createLibraryManage(
         allowHttp: aiAllowHttpInput.checked,
         targetLang: aiTargetLangSelect.value === 'auto' ? undefined : aiTargetLangSelect.value,
       });
+      if (key !== '') aiKeyInput.value = '';
       applyAiStatus(status, true);
       setAiFeedback(labels().aiSaved, 'success');
       dispatchAiConfigured({ configured: status.configured, missing: status.missing }, doc);
     } catch (error) {
-      setAiFeedback(aiErrorMessage(labels(), error, aiStatusState.missing), 'error');
+      setAiFeedback(aiErrorMessage(labels(), error, displayedAiGaps()), 'error');
     } finally {
       aiSave.disabled = false;
     }
@@ -1807,13 +1872,33 @@ export function createLibraryManage(
   editorButton?.addEventListener('click', () => options.onEnterEditor?.());
   syncButton?.addEventListener('click', () => options.onOpenSyncPanel?.());
 
-  clearCacheButton.addEventListener('click', async () => {
-    try {
-      await options.library.clearCache();
-      await view.refreshCache();
-    } catch (error) {
-      options.notify(options.formatError(error), 'error');
-    }
+  let clearCachePending = false;
+  clearCacheButton.addEventListener('click', () => {
+    if (clearCachePending) return;
+    clearCachePending = true;
+    void (async () => {
+      try {
+        const l = labels();
+        const prompt = cacheClearPrompt(l);
+        const choice = await showConfirmDialog(doc, {
+          title: prompt.title,
+          message: prompt.message,
+          buttons: [
+            { id: 'cancel', label: l.cancel },
+            { id: 'clear', label: l.clearCache, kind: 'danger' },
+          ],
+          cancelId: 'cancel',
+          themeHost: options.themeRoot,
+        });
+        if (choice !== 'clear') return;
+        await options.library.clearCache();
+        await view.refreshCache();
+      } catch (error) {
+        options.notify(options.formatError(error), 'error');
+      } finally {
+        clearCachePending = false;
+      }
+    })();
   });
 
   cacheLimitButton.addEventListener('click', () => {
@@ -1883,9 +1968,7 @@ export function createLibraryManage(
       option.textContent = aiEndpointLabels[kind];
     }
     aiBaseLabelText.textContent = l.aiBaseUrl;
-    aiBaseUrlInput.placeholder = l.aiBaseUrl;
     aiModelLabelText.textContent = l.aiModel;
-    aiModelInput.placeholder = l.aiModel;
     aiKeyLabelText.textContent = l.aiKey;
     aiAllowHttpText.textContent = l.aiAllowHttp;
     aiAllowHttpLabel.title = l.aiAllowHttp;
