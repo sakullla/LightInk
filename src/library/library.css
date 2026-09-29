@@ -6073,8 +6073,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:fo
   position: absolute;
   grid-column: 1 / 2;
   grid-row: 1 / 2;
+  /* 48px cover, 28px control, 6px inset: stays off the row-end menu. */
   top: 6px;
-  right: 6px;
+  right: auto;
+  left: calc(48px - 28px - 6px);
   z-index: 1;
   opacity: 0;
   pointer-events: none;
@@ -6133,6 +6135,19 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:fo
       max(16px, var(--lightink-safe-left, 0px));
     background: var(--lightink-bg);
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* The narrow touch list rule is more specific than the shelf wall.
+     Keep this wall in the home scroller. */
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-home-books
+    :is(.lightink-library-items, .lightink-library-cover-wall) {
+    flex: none;
+    height: auto;
+    min-height: auto;
+    overflow: visible;
+    overscroll-behavior: auto;
   }
 
   :is(html[data-android], html[data-touch-primary])

@@ -179,6 +179,8 @@ interface Labels {
   next: string;
   noAcquisition: string;
   offline: string;
+  /** OPDS/WebDAV source list failed. Not a local-library or catalog failure. */
+  sourceListFailed: string;
   /** Local library failed to load. Not a catalog-source connection error. */
   libraryLoadFailed: string;
   details: string;
@@ -373,6 +375,7 @@ const LABELS: Record<Locale, Labels> = {
     next: 'Next',
     noAcquisition: 'No supported acquisition link',
     offline: 'Could not reach this source.',
+    sourceListFailed: 'Could not open the source list.',
     libraryLoadFailed: 'Could not open the library.',
     details: 'Book details',
     closeDetails: 'Close',
@@ -565,6 +568,7 @@ const LABELS: Record<Locale, Labels> = {
     next: '下一页',
     noAcquisition: '没有可用的获取链接',
     offline: '无法连接此书库源。',
+    sourceListFailed: '无法打开书源列表。',
     libraryLoadFailed: '无法打开书库。',
     details: '作品详情',
     closeDetails: '关闭',
@@ -6429,7 +6433,20 @@ export function createLibraryView(
     lastAction = initialLoad;
     try {
       await refreshSources();
+    } catch (error) {
       if (generation !== requestGeneration) return;
+      if (catalogActive()) {
+        setStatus(errorText(error, labels().offline), true);
+        return;
+      }
+      items = [];
+      setStatus(errorText(error, labels().sourceListFailed), true);
+      renderContinueBar();
+      renderItems();
+      return;
+    }
+    if (generation !== requestGeneration) return;
+    try {
       if (catalogActive()) {
         syncPageChrome();
         renderSources();

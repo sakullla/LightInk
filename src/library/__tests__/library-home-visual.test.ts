@@ -167,7 +167,33 @@ describe('shelf home cover grid', () => {
     );
     expect(dismiss).toMatch(/grid-column:\s*1\s*\/\s*2/);
     expect(dismiss).toMatch(/grid-row:\s*1\s*\/\s*2/);
+    expect(dismiss).toMatch(/left:\s*calc\(48px - 28px - 6px\)/);
+    expect(dismiss).toMatch(/right:\s*auto/);
+    expect(dismiss).not.toMatch(/right:\s*6px/);
+    const continueMenu = ruleBody(
+      home,
+      /\.lightink-library-continue > \.lightink-library-item-menu/,
+    );
+    expect(continueMenu).toMatch(/flex:\s*0\s*0\s*auto/);
+    expect(continueMenu).not.toMatch(/position:\s*absolute/);
     expect(home).toMatch(/minmax\(152px,\s*1fr\)/);
+  });
+
+  it('keeps a narrow touch shelf list in the home scroller', () => {
+    const home = shelfHomeSection();
+    const phoneList = ruleBody(
+      home,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\s+\.lightink-library\[data-library-nav='shelf'\]\s+\.lightink-library-home-books\s+:is\(\.lightink-library-items, \.lightink-library-cover-wall\)/,
+    );
+    expect(phoneList).toMatch(/flex:\s*none/);
+    expect(phoneList).toMatch(/min-height:\s*auto/);
+    expect(phoneList).toMatch(/overflow:\s*visible/);
+    expect(phoneList).toMatch(/overscroll-behavior:\s*auto/);
+    expect(phoneList).not.toMatch(/min-height:\s*0/);
+    expect(phoneList).not.toMatch(/overflow-y:\s*auto/);
+    expect(home).toMatch(
+      /@media \(max-width:\s*760px\)[\s\S]*\.lightink-library-home-books\s+:is\(\.lightink-library-items, \.lightink-library-cover-wall\)\s*\{[^}]*overflow:\s*visible/,
+    );
   });
 
   it('fits a continue row plus two rows of at least four covers on the default desktop, and at least two on a phone', () => {

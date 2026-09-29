@@ -1201,7 +1201,8 @@ describe('LibraryView my-books home', () => {
 
     expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
-    expect(host.textContent).toContain('无法打开书库。');
+    expect(host.textContent).toContain('无法打开书源列表。');
+    expect(host.textContent).not.toContain('无法打开书库。');
     expect(host.textContent).not.toContain('无法连接此书库源。');
     expect(host.textContent).not.toContain('书库还是空的');
     shownButtonWithText(host, '重试').click();
