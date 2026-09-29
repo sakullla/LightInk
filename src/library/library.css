@@ -5798,11 +5798,11 @@ html:not([data-android]):not([data-touch-primary])
 
 
 /* ===== Shelf home cover grid =====
- * Continue reading is a horizontal row above the wall. Its cover is 200px
- * wide (2:3). The wall uses a 152px minimum so a 1024×768 window with the
- * nav open is about four columns, including the compact spacing tokens.
- * Narrower windows drop columns. Touch
- * widths that cannot fit two 140px tracks use two columns of at least 104px.
+ * Continue reading is a short row above the wall: a 48px (2:3) cover,
+ * the title, and the current position. It is shorter than a wall cover
+ * and only as wide as that content. The home is the only vertical
+ * scroller; the wall does not scroll or trap the gesture. Touch widths
+ * that cannot fit two 140px tracks use two columns of at least 104px.
  * Catalog, sources, and manage keep their own chrome. */
 .lightink-library[data-library-nav='shelf'] .lightink-library-workarea {
   min-height: 0;
@@ -5852,12 +5852,18 @@ html:not([data-android]):not([data-touch-primary])
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
   display: grid;
+  flex: none;
   grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
   grid-auto-rows: max-content;
   align-content: start;
   column-gap: var(--lightink-library-cover-gap-x);
   row-gap: var(--lightink-library-cover-gap-y);
+  width: 100%;
+  height: auto;
   min-width: 0;
+  min-height: auto;
+  overflow: visible;
+  overscroll-behavior: auto;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-heading {
@@ -5878,10 +5884,11 @@ html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-continue {
   position: relative;
-  display: block;
-  width: 100%;
+  display: flex;
+  align-items: center;
+  width: fit-content;
   min-width: 0;
-  max-width: none;
+  max-width: 100%;
   margin: 0;
   padding: 0;
   border: none;
@@ -5893,10 +5900,11 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, max-content);
   align-items: center;
-  gap: 16px;
-  width: 100%;
+  gap: 12px;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
   min-height: 0 !important;
   padding: 0 !important;
@@ -5933,11 +5941,11 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
   flex: none;
-  width: 200px;
+  width: 48px;
   min-width: 0;
   height: auto;
   aspect-ratio: 2 / 3;
-  border-radius: 6px;
+  border-radius: 4px;
   transition: none;
   transform: none;
 }
@@ -5983,10 +5991,15 @@ html:not([data-android]):not([data-touch-primary])
   white-space: normal;
 }
 
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text {
+  max-width: 28rem;
+}
+
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text strong {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.25;
+  -webkit-line-clamp: 2;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-item-progress {
@@ -6004,21 +6017,55 @@ html:not([data-android]):not([data-touch-primary])
   height: 3px;
 }
 
-/* No artwork: same vertical cover, short title in the theme muted color. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-cover--jacket {
-  display: grid;
-  grid-template-rows: 1fr auto;
-  align-items: start;
-  justify-items: stretch;
-  place-items: start stretch;
-  padding: 16% 12% 14%;
-  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg));
-  background-image: none;
-  color: var(--lightink-muted);
+/* Wall jackets keep the hue and paint the title on the cover, clamped so it
+   cannot spill onto the next book. The continue thumbnail stays an initial. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-wall .lightink-library-cover-jacket-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  max-height: 70%;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-title,
-.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-author {
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-title,
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-author {
+  display: none;
+}
+
+.lightink-library-item-shell {
+  position: relative;
+}
+
+.lightink-library-item-shell > .lightink-library-item-menu {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-bg) 88%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-library-continue > .lightink-library-item-menu {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-item-menu {
+  opacity: 0;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:hover .lightink-library-item-menu,
+html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:focus-within .lightink-library-item-menu,
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:hover .lightink-library-item-menu,
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:focus-within .lightink-library-item-menu {
+  opacity: 1;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-item-menu {
   display: none;
 }
 
@@ -6090,19 +6137,6 @@ html:not([data-android]):not([data-touch-primary])
 
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue-open {
-    grid-template-columns: 160px minmax(0, 1fr);
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue .lightink-library-cover {
-    width: 160px;
-    aspect-ratio: 2 / 3;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
     .lightink-library-cover-wall
     > .lightink-library-item-shell,
   :is(html[data-android], html[data-touch-primary])
@@ -6110,22 +6144,6 @@ html:not([data-android]):not([data-touch-primary])
     .lightink-library-cover-wall
     > .lightink-library-item--import {
     max-width: 148px;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-continue .lightink-library-item-text strong {
-    font-size: 22px;
-  }
-
-  :is(html[data-android], html[data-touch-primary])
-    .lightink-library[data-library-nav='shelf']
-    .lightink-library-cover--jacket {
-    background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg));
-    background-image: none;
-    color: var(--lightink-muted);
-    font-size: 13px;
-    letter-spacing: 0;
   }
 }
 

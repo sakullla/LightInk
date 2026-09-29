@@ -80,7 +80,7 @@ describe('shelf home cover grid', () => {
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue \.lightink-library-cover/,
     );
-    expect(heroCover).toMatch(/width:\s*200px/);
+    expect(heroCover).toMatch(/width:\s*48px/);
     expect(heroCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
     expect(css).toMatch(
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-wall > \.lightink-library-item--import\s*\{[^}]*max-width:\s*180px/,
@@ -98,6 +98,9 @@ describe('shelf home cover grid', () => {
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home-books \.lightink-library-items/,
     );
     expect(wallGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(152px,\s*1fr\)\)/);
+    expect(wallGrid).toMatch(/overflow:\s*visible/);
+    expect(wallGrid).not.toMatch(/overflow-y:\s*auto/);
+    expect(wallGrid).not.toMatch(/overscroll-behavior:\s*contain/);
     expect(wallGrid).toMatch(/column-gap:\s*var\(--lightink-library-cover-gap-x\)/);
     expect(wallGrid).toMatch(/row-gap:\s*var\(--lightink-library-cover-gap-y\)/);
     expect(home).toMatch(/display:\s*none/);
@@ -121,9 +124,12 @@ describe('shelf home cover grid', () => {
     expect(px(decl(title, 'font-size'))).toBe(13);
     expect(px(decl(progress, 'font-size'))).toBe(12);
     expect(title).toMatch(/-webkit-line-clamp:\s*2/);
-    expect(home).toMatch(/\.lightink-library-cover--jacket\s*\{[^}]*color:\s*var\(--lightink-muted\)/);
     expect(home).toMatch(
-      /\.lightink-library-cover-jacket-title,\s*\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-jacket-author\s*\{[^}]*display:\s*none/,
+      /\.lightink-library-cover-wall \.lightink-library-cover-jacket-title\s*\{[^}]*-webkit-line-clamp:\s*4/,
+    );
+    expect(home).not.toMatch(/\.lightink-library-cover--jacket\s*\{[^}]*background-image:\s*none/);
+    expect(home).toMatch(
+      /\.lightink-library-continue \.lightink-library-cover-jacket-title[\s\S]*?display:\s*none/,
     );
     expect(home).toMatch(/data-progress-fill[\s\S]*?height:\s*3px/);
 
@@ -141,16 +147,19 @@ describe('shelf home cover grid', () => {
       home,
       /:is\(html\[data-android\], html\[data-touch-primary\]\)\s+\.lightink-library\[data-library-nav='shelf'\]\s+\.lightink-library-continue(?![\w-])/,
     );
-    expect(continueRow).toMatch(/display:\s*block/);
-    expect(continueRow).toMatch(/width:\s*100%/);
+    expect(continueRow).toMatch(/display:\s*flex/);
+    expect(continueRow).toMatch(/width:\s*fit-content/);
+    expect(continueRow).toMatch(/max-width:\s*100%/);
     expect(continueRow).not.toMatch(/grid-template-columns:\s*subgrid/);
+    expect(continueRow).not.toMatch(/(?:^|[\s;])width:\s*100%/);
 
     const open = ruleBody(
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-open(?!:)/,
     );
-    expect(open).toMatch(/grid-template-columns:\s*200px\s+minmax\(0,\s*1fr\)/);
-    expect(open).toMatch(/width:\s*100%/);
+    expect(open).toMatch(/grid-template-columns:\s*48px\s+minmax\(0,\s*max-content\)/);
+    expect(open).not.toMatch(/minmax\(0,\s*1fr\)/);
+    expect(open).not.toMatch(/200px/);
 
     const dismiss = ruleBody(
       home,
@@ -211,9 +220,9 @@ describe('shelf home cover grid', () => {
       const columns = Math.floor((inner + gapX) / (trackMin + gapX));
       expect(columns).toBe(4);
       const track = (inner - (columns - 1) * gapX) / columns;
-      const heroCover = 200 * (3 / 2);
+      const heroCover = 48 * (3 / 2);
       const wallRow = track * (3 / 2);
-      expect(heroCover).toBeGreaterThan(wallRow);
+      expect(heroCover).toBeLessThan(wallRow);
       const firstScreen = heroCover + wallRow + textBlock + gapY + padTop;
       expect(firstScreen).toBeLessThanOrEqual(windowHeight - DESKTOP_WINDOW.titlebar);
     }
@@ -226,6 +235,17 @@ describe('shelf home cover grid', () => {
     expect(home).toMatch(/@media \(max-width:\s*430px\)[\s\S]*?repeat\(\s*2,\s*minmax\(104px,\s*1fr\)\)/);
     expect(home).not.toMatch(/repeat\(\s*3,\s*minmax\(0,\s*1fr\)\)/);
     expect(home).not.toMatch(/repeat\(\s*1,\s*minmax\(0,\s*1fr\)\)/);
+
+    // Phone: the 48px continue row must leave the first 2:3 cover on screen.
+    const continueHeight = 48 * (3 / 2);
+    const phoneCover = 104 * (3 / 2);
+    expect(continueHeight).toBeLessThan(phoneCover);
+    const phoneHeader = 10 + 44 + 2;
+    const phoneTabbar = 4 + 48 + 8;
+    const phoneVisible = 640 - phoneHeader - phoneTabbar;
+    const phoneGap = 28;
+    const phonePadTop = 12;
+    expect(phonePadTop + continueHeight + phoneGap + phoneCover).toBeLessThanOrEqual(phoneVisible);
   });
 
   it('keeps focus, dismiss-on-hover, safe area, keyboard inset, and reduced motion', () => {

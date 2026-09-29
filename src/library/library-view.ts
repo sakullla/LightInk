@@ -77,6 +77,7 @@ import {
 import { type ProgressStorage } from '../reader/reading-progress.js';
 import type { ReaderPrefsStorage } from '../reader/reader-prefs.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
+import { showConfirmDialog } from '../ui/confirm-dialog.js';
 import { beginOpenProgress } from '../ui/open-progress.js';
 import { bindLongPress } from '../ui/touch/long-press.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
@@ -153,6 +154,8 @@ interface Labels {
   keepGroupOffline: string;
   removeGroupOffline: string;
   remove: string;
+  /** Names the book and says the original file is left untouched. */
+  removeConfirm: string;
   clearCache: string;
   cacheUsage: string;
   cacheLimit: string;
@@ -176,6 +179,8 @@ interface Labels {
   next: string;
   noAcquisition: string;
   offline: string;
+  /** Local library failed to load. Not a catalog-source connection error. */
+  libraryLoadFailed: string;
   details: string;
   closeDetails: string;
   local: string;
@@ -209,6 +214,7 @@ interface Labels {
   renameGroup: string;
   deleteGroup: string;
   deleteGroupConfirm: string;
+  groupNameRequired: string;
   groupName: string;
   groupParent: string;
   rootGroup: string;
@@ -217,6 +223,7 @@ interface Labels {
   outdent: string;
   indent: string;
   editGroup: string;
+  itemMenu: string;
   organizeBook: string;
   saveGroups: string;
   noCustomGroups: string;
@@ -341,6 +348,8 @@ const LABELS: Record<Locale, Labels> = {
     keepGroupOffline: 'Keep group offline',
     removeGroupOffline: 'Stop keeping group offline',
     remove: 'Remove from library',
+    removeConfirm:
+      'Remove “{name}” from the library? This removes the library entry and its groups, tags, and progress. The original file is not changed.',
     clearCache: 'Clear cache',
     cacheUsage: '{used} of {limit}',
     cacheLimit: 'Cache limit (GiB)',
@@ -364,6 +373,7 @@ const LABELS: Record<Locale, Labels> = {
     next: 'Next',
     noAcquisition: 'No supported acquisition link',
     offline: 'Could not reach this source.',
+    libraryLoadFailed: 'Could not open the library.',
     details: 'Book details',
     closeDetails: 'Close',
     local: 'Local',
@@ -396,7 +406,9 @@ const LABELS: Record<Locale, Labels> = {
     addChildGroup: 'Add child group',
     renameGroup: 'Rename group',
     deleteGroup: 'Delete group',
-    deleteGroupConfirm: 'Delete “{name}”? Its child groups will move up one level.',
+    deleteGroupConfirm:
+      'Delete “{name}”? Its child groups will move up one level. Books stay in the library.',
+    groupNameRequired: 'Enter a group name.',
     groupName: 'Group name',
     groupParent: 'Parent group',
     rootGroup: 'Top level',
@@ -405,6 +417,7 @@ const LABELS: Record<Locale, Labels> = {
     outdent: 'Move out one level',
     indent: 'Move into previous group',
     editGroup: 'Group actions',
+    itemMenu: 'Book actions',
     organizeBook: 'Organize into groups',
     saveGroups: 'Save groups',
     noCustomGroups: 'Create a custom group first.',
@@ -527,6 +540,8 @@ const LABELS: Record<Locale, Labels> = {
     keepGroupOffline: '整组保留离线',
     removeGroupOffline: '取消整组离线保留',
     remove: '移出书库',
+    removeConfirm:
+      '将“{name}”移出书库？移出的是书库条目及其分组、标签和进度，不改写原始文件。',
     clearCache: '清理缓存',
     cacheUsage: '已用 {used} / {limit}',
     cacheLimit: '缓存上限（GiB）',
@@ -550,6 +565,7 @@ const LABELS: Record<Locale, Labels> = {
     next: '下一页',
     noAcquisition: '没有可用的获取链接',
     offline: '无法连接此书库源。',
+    libraryLoadFailed: '无法打开书库。',
     details: '作品详情',
     closeDetails: '关闭',
     local: '本地',
@@ -582,7 +598,8 @@ const LABELS: Record<Locale, Labels> = {
     addChildGroup: '新建子组',
     renameGroup: '重命名分组',
     deleteGroup: '删除分组',
-    deleteGroupConfirm: '删除“{name}”？其子组将提升一级。',
+    deleteGroupConfirm: '删除“{name}”？其子组将提升一级，书仍留在书库。',
+    groupNameRequired: '请填写分组名称。',
     groupName: '分组名称',
     groupParent: '上级分组',
     rootGroup: '顶层',
@@ -591,6 +608,7 @@ const LABELS: Record<Locale, Labels> = {
     outdent: '提升一级',
     indent: '移入上一个分组',
     editGroup: '分组操作',
+    itemMenu: '书籍操作',
     organizeBook: '整理到分组',
     saveGroups: '保存分组',
     noCustomGroups: '请先创建自定义分组。',
@@ -1937,7 +1955,6 @@ export function createLibraryView(
     | { readonly kind: 'create'; readonly parentId?: string }
     | { readonly kind: 'rename'; readonly groupId: string }
     | null = null;
-  let groupActionsId: string | null = null;
   let membershipItemId: string | null = null;
   let pendingAddItemId: string | null = null;
   let ignoreGroupBackdrop = false;
@@ -3256,7 +3273,6 @@ export function createLibraryView(
       | { readonly kind: 'rename'; readonly groupId: string },
   ): void {
     groupEditorMode = mode;
-    groupActionsId = null;
     renderGroups();
     groupNameInput.focus();
     groupNameInput.select();
@@ -3308,27 +3324,12 @@ export function createLibraryView(
         selectedCustomGroupId = null;
         selectedGroup = 'all';
       }
-      groupActionsId = null;
       closeGroupEditor();
       await reloadGroups();
       deps.onLocalChange?.();
     } catch (error) {
       deps.notify(errorText(error, labels().offline), 'error');
     }
-  }
-
-  function groupAction(
-    label: string,
-    run: () => void,
-    disabled = false,
-  ): HTMLButtonElement {
-    const action = button(doc, label);
-    action.disabled = disabled;
-    action.addEventListener('click', (event) => {
-      event.stopPropagation();
-      run();
-    });
-    return action;
   }
 
   async function setGroupOffline(groupId: string, pinned: boolean): Promise<void> {
@@ -3343,7 +3344,6 @@ export function createLibraryView(
         await deps.library.setOfflinePinned(item.id, pinned);
         updateItemInMemory({ ...item, offlinePinned: pinned });
       }
-      groupActionsId = null;
       renderGroups();
       renderItems();
       deps.onLocalChange?.();
@@ -3515,27 +3515,15 @@ export function createLibraryView(
     const actions = button(doc, '...', 'lightink-library-icon-button lightink-library-group-menu');
     actions.title = labels().editGroup;
     actions.setAttribute('aria-label', `${labels().editGroup}: ${node.group.name}`);
-    actions.setAttribute('aria-expanded', String(groupActionsId === node.group.id));
+    actions.setAttribute('aria-haspopup', 'menu');
     actions.addEventListener('click', (event) => {
+      event.preventDefault();
       event.stopPropagation();
-      groupActionsId = groupActionsId === node.group.id ? null : node.group.id;
-      renderGroups();
+      const rect = actions.getBoundingClientRect();
+      createContextMenu(buildGroupMenuItems(node), { x: rect.left, y: rect.bottom }, doc);
     });
     row.append(toggle, choose, actions);
     wrapper.appendChild(row);
-
-    if (groupActionsId === node.group.id) {
-      const menu = doc.createElement('div');
-      menu.className = 'lightink-library-group-actions';
-      // 与长按上下文菜单同一动作集：buildGroupMenuItems 为唯一事实点，
-      // 内联菜单仅将其映射为按钮（分隔线在内联形态下省略）。
-      menu.append(
-        ...buildGroupMenuItems(node)
-          .filter((item) => item.separator !== true)
-          .map((item) => groupAction(item.label, item.action, item.enabled?.() === false)),
-      );
-      wrapper.appendChild(menu);
-    }
 
     wrapper.addEventListener('dragstart', (event) => {
       event.dataTransfer?.setData('application/x-lightink-library-group', node.group.id);
@@ -4620,22 +4608,31 @@ export function createLibraryView(
     });
   }
 
+  /** Items that open another surface get an ellipsis so the next step is visible. */
+  function marksNextStep(label: string): string {
+    return label.endsWith('…') ? label : `${label}…`;
+  }
+
+  function menuSeparator(id: string): MenuItem {
+    return { id, label: '', separator: true, action: () => undefined };
+  }
+
   function openItemCollectionMenu(display: DisplayItem, position: { x: number; y: number }): void {
     // 右键菜单保持短：分组走「加入分组」打开既有勾选对话框，不把全部分组摊平
-    // 进菜单（Apple HIG / NN/G：长列表用选择器而非扁平菜单）。
+    // 进菜单。动作分成阅读、整理、移出；整理项标出还会进入下一步。
     const custom = flattenedCustomGroups();
-    const items: MenuItem[] = [];
-    // 封面单击直接开书。桌面右键和窄触屏长按都能打开详情。
-    items.push({
-      id: 'details',
-      label: labels().details,
-      action: () => {
-        void selectItem(display);
+    const reading: MenuItem[] = [
+      {
+        id: 'details',
+        label: labels().details,
+        action: () => {
+          void selectItem(display);
+        },
       },
-    });
+    ];
     const shelfProgress = progressFor(display);
     if (shelfProgress?.status === 'in-progress' || shelfProgress?.status === 'finished') {
-      items.push({
+      reading.push({
         id: 'progress-status',
         label:
           shelfProgress.status === 'finished' ? labels().markInProgress : labels().markFinished,
@@ -4651,7 +4648,7 @@ export function createLibraryView(
       const path = display.item.localPath ?? '';
       const status = deps.bookTranslation?.statusFor(path);
       const resumable = status?.phase === 'paused' || status?.phase === 'error';
-      items.push({
+      reading.push({
         id: 'translate-book',
         label: translate(
           deps.getLocale(),
@@ -4660,55 +4657,43 @@ export function createLibraryView(
         action: () => launchBookTranslation(display),
       });
     }
+    const organize: MenuItem[] = [];
     if (deps.library.setItemTags !== undefined) {
-      items.push({
+      organize.push({
         id: 'tags',
-        label: labels().manageTags,
+        label: marksNextStep(labels().manageTags),
         action: () => openTagDialog({ kind: 'assign', itemId: display.item.id }),
       });
     }
-    if (items.length > 0) {
-      items.push({
-        id: 'sep-progress',
-        label: '',
-        separator: true,
-        action: () => undefined,
-      });
-    }
     if (custom.length === 0) {
-      items.push({
+      organize.push({
         id: 'add',
-        label: labels().addToGroup,
+        label: marksNextStep(labels().addToGroup),
         action: () => {
           pendingAddItemId = display.item.id;
           openGroupEditor({ kind: 'create' });
         },
       });
     } else {
-      items.push({
+      organize.push({
         id: 'add',
-        label: labels().addToGroup,
+        label: marksNextStep(labels().addToGroup),
         action: () => {
           openMembershipEditor(display.item.id);
         },
       });
-      items.push({
+      organize.push({
         id: 'new',
-        label: labels().newGroup,
+        label: marksNextStep(labels().newGroup),
         action: () => {
           pendingAddItemId = display.item.id;
           openGroupEditor({ kind: 'create' });
         },
       });
     }
+    const removal: MenuItem[] = [];
     if (canRemoveFromLibrary(display)) {
-      items.push({
-        id: 'sep-remove',
-        label: '',
-        separator: true,
-        action: () => undefined,
-      });
-      items.push({
+      removal.push({
         id: 'remove',
         label: labels().remove,
         action: () => {
@@ -4716,7 +4701,28 @@ export function createLibraryView(
         },
       });
     }
+    const items: MenuItem[] = [...reading];
+    if (organize.length > 0) {
+      items.push(menuSeparator('sep-organize'), ...organize);
+    }
+    if (removal.length > 0) {
+      items.push(menuSeparator('sep-remove'), ...removal);
+    }
     createContextMenu(items, position, doc);
+  }
+
+  function createItemMenuButton(display: DisplayItem): HTMLButtonElement {
+    const menuButton = button(doc, '…', 'lightink-library-icon-button lightink-library-item-menu');
+    const title = displayBookTitle(display.item);
+    menuButton.setAttribute('aria-label', `${labels().itemMenu}: ${title === '' ? labels().open : title}`);
+    menuButton.setAttribute('aria-haspopup', 'menu');
+    menuButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = menuButton.getBoundingClientRect();
+      openItemCollectionMenu(display, { x: rect.left, y: rect.bottom });
+    });
+    return menuButton;
   }
 
   function closeMembershipEditor(): void {
@@ -4821,7 +4827,7 @@ export function createLibraryView(
     const shelfWall = activeSection === 'shelf' && !catalogActive();
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover';
-    appendCover(cover, display, shelfWall);
+    appendCover(cover, display);
     const text = doc.createElement('span');
     text.className = 'lightink-library-item-text';
     const title = doc.createElement('strong');
@@ -4842,7 +4848,7 @@ export function createLibraryView(
     const shell = doc.createElement('div');
     shell.className = 'lightink-library-item-shell';
     shell.dataset.itemId = display.item.id;
-    shell.appendChild(row);
+    shell.append(row, createItemMenuButton(display));
     shell.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4969,6 +4975,9 @@ export function createLibraryView(
       event.stopPropagation();
       openItemCollectionMenu(latest, { x: event.clientX, y: event.clientY });
     });
+    bindLongPress(open, {
+      onLongPress: (position) => openItemCollectionMenu(latest, position),
+    });
     const dismiss = button(doc, '×', 'lightink-library-icon-button lightink-library-continue-dismiss');
     dismiss.setAttribute('aria-label', labels().dismissContinue);
     dismiss.addEventListener('click', (event) => {
@@ -4978,7 +4987,7 @@ export function createLibraryView(
       writeDismissedContinue(fingerprint);
       renderItems();
     });
-    continueHost.append(open, dismiss);
+    continueHost.append(open, dismiss, createItemMenuButton(latest));
     continueHost.hidden = false;
   }
 
@@ -5357,6 +5366,35 @@ export function createLibraryView(
     renderDetail();
   }
 
+  function appendDetailOrganizeActions(actions: HTMLElement, display: DisplayItem): void {
+    if (deps.library.setItemTags !== undefined) {
+      const tagsButton = button(doc, labels().manageTags);
+      tagsButton.addEventListener('click', () => {
+        openTagDialog({ kind: 'assign', itemId: display.item.id });
+      });
+      actions.appendChild(tagsButton);
+    }
+    const custom = flattenedCustomGroups();
+    const add = button(doc, labels().addToGroup);
+    add.addEventListener('click', () => {
+      if (flattenedCustomGroups().length === 0) {
+        pendingAddItemId = display.item.id;
+        openGroupEditor({ kind: 'create' });
+        return;
+      }
+      openMembershipEditor(display.item.id);
+    });
+    actions.appendChild(add);
+    if (custom.length > 0) {
+      const create = button(doc, labels().newGroup);
+      create.addEventListener('click', () => {
+        pendingAddItemId = display.item.id;
+        openGroupEditor({ kind: 'create' });
+      });
+      actions.appendChild(create);
+    }
+  }
+
   function renderDetail(): void {
     detail.replaceChildren();
     if (selected === null) {
@@ -5565,6 +5603,7 @@ export function createLibraryView(
       });
       actions.appendChild(statusToggle);
     }
+    appendDetailOrganizeActions(actions, selected);
     if (managedBodyMissing && deps.onDownload !== undefined) {
       const download = button(doc, labels().downloadBook);
       const itemId = selected.item.id;
@@ -5748,7 +5787,7 @@ export function createLibraryView(
     } catch (error) {
       if (generation !== requestGeneration) return;
       items = [];
-      setStatus(errorText(error, labels().offline), true);
+      setStatus(errorText(error, labels().libraryLoadFailed), true);
       renderContinueBar();
       renderItems();
     }
@@ -6009,7 +6048,7 @@ export function createLibraryView(
         if (shelfSearchEpoch === generation) shelfSearchEpoch = 0;
         if (activeSection !== 'shelf') return;
         items = [];
-        setStatus(errorText(error, labels().offline), true);
+        setStatus(errorText(error, labels().libraryLoadFailed), true);
         renderContinueBar();
         renderItems();
       }
@@ -6352,7 +6391,23 @@ export function createLibraryView(
     }
   }
 
+  async function confirmRemoveItem(item: LibraryItem): Promise<boolean> {
+    const name = displayBookTitle(item);
+    const choice = await showConfirmDialog(doc, {
+      title: labels().remove,
+      message: labels().removeConfirm.replace('{name}', name === '' ? labels().remove : name),
+      buttons: [
+        { id: 'remove', label: labels().remove, kind: 'danger' },
+        { id: 'cancel', label: labels().cancel, kind: 'plain' },
+      ],
+      cancelId: 'cancel',
+      themeHost: root,
+    });
+    return choice === 'remove';
+  }
+
   async function removeItem(item: LibraryItem): Promise<void> {
+    if (!(await confirmRemoveItem(item))) return;
     try {
       await deps.library.removeItem(item.id);
       importedItemIds.delete(item.id);
@@ -6404,7 +6459,7 @@ export function createLibraryView(
         return;
       }
       items = [];
-      setStatus(errorText(error, labels().offline), true);
+      setStatus(errorText(error, labels().libraryLoadFailed), true);
       renderContinueBar();
       renderItems();
     }
@@ -6718,7 +6773,10 @@ export function createLibraryView(
     event.preventDefault();
     if (groupEditorMode === null) return;
     const name = groupNameInput.value.trim();
-    if (name === '') return;
+    if (name === '') {
+      deps.notify(labels().groupNameRequired, 'warning');
+      return;
+    }
     try {
       if (groupEditorMode.kind === 'create') {
         if (deps.library.createGroup === undefined) return;

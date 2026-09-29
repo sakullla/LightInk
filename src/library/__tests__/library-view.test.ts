@@ -487,6 +487,16 @@ async function organizeShelf(_host: HTMLElement): Promise<void> {
   await settle();
 }
 
+function contextMenuOrder(): string[] {
+  const menu = document.querySelector('.lightink-context-menu');
+  if (!(menu instanceof HTMLElement)) throw new Error('context menu not found');
+  return Array.from(menu.children).map((node) => {
+    if (node.tagName === 'HR') return '---';
+    const disabled = node instanceof HTMLButtonElement && node.disabled ? ':disabled' : '';
+    return `${node.textContent ?? ''}${disabled}`;
+  });
+}
+
 function contextMenuItem(label: string): HTMLButtonElement {
   const menu = document.querySelector('.lightink-context-menu');
   if (!(menu instanceof HTMLElement)) throw new Error('context menu not found');
@@ -534,6 +544,26 @@ async function tryOpenItemMenu(host: HTMLElement, itemId: string): Promise<HTMLE
   await settle();
   const afterPress = document.querySelector('.lightink-context-menu');
   return afterPress instanceof HTMLElement ? afterPress : null;
+}
+
+async function confirmRemoveDialog(): Promise<void> {
+  const dialog = document.querySelector('.lightink-confirm-dialog');
+  if (!(dialog instanceof HTMLElement)) throw new Error('remove confirm not found');
+  const remove = dialog.querySelector<HTMLButtonElement>('.lightink-modal-btn--danger');
+  if (!(remove instanceof HTMLButtonElement)) throw new Error('remove confirm button not found');
+  remove.click();
+  await settle();
+}
+
+async function cancelRemoveDialog(): Promise<void> {
+  const dialog = document.querySelector('.lightink-confirm-dialog');
+  if (!(dialog instanceof HTMLElement)) throw new Error('remove confirm not found');
+  const cancel = Array.from(dialog.querySelectorAll('button')).find(
+    (button) => button.textContent === '取消',
+  );
+  if (!(cancel instanceof HTMLButtonElement)) throw new Error('remove cancel button not found');
+  cancel.click();
+  await settle();
 }
 
 function detailShowsRemove(host: ParentNode): boolean {
@@ -1001,13 +1031,15 @@ describe('LibraryView my-books home', () => {
     expect(hue).toBe(jacketHue('围城'));
     expect(hue).toBeGreaterThanOrEqual(0);
     expect(hue).toBeLessThan(360);
-    expect(cover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
-    expect(cover.querySelector('.lightink-library-cover-jacket-author')).toBeNull();
+    expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('围城');
+    expect(cover.querySelector('.lightink-library-cover-jacket-author')?.textContent).toBe('钱钟书');
     expect(itemRow(host, bare.id).textContent).toContain('围城');
-    expect(itemRow(host, bare.id).textContent).not.toContain('钱钟书');
+    expect(itemRow(host, bare.id).querySelector('.lightink-library-item-text')?.textContent).not.toContain(
+      '钱钟书',
+    );
 
     const blank = itemRow(host, nameless.id).querySelector<HTMLElement>('.lightink-library-cover')!;
-    expect(blank.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
+    expect(blank.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('?');
     expect(blank.querySelector('.lightink-library-cover-jacket-author')).toBeNull();
 
     // Same title, same hue; different titles spread out rather than clustering.
@@ -1169,7 +1201,8 @@ describe('LibraryView my-books home', () => {
 
     expect(host.querySelector('.lightink-library-home-empty')).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
-    expect(host.textContent).toContain('无法连接此书库源。');
+    expect(host.textContent).toContain('无法打开书库。');
+    expect(host.textContent).not.toContain('无法连接此书库源。');
     expect(host.textContent).not.toContain('书库还是空的');
     shownButtonWithText(host, '重试').click();
     await settle();
@@ -5433,7 +5466,8 @@ describe('LibraryView shelf collections', () => {
       collectionButton(host, '临时组').dataset.groupId;
     shownControl(collectionRow(host, '临时组'), '分组操作: 临时组').click();
     await settle();
-    shownControl(collectionRow(host, '临时组'), '删除分组').click();
+    expect(collectionRow(host, '临时组').querySelector('.lightink-library-group-actions')).toBeNull();
+    contextMenuItem('删除分组').click();
     await settle();
 
     expect(library.deleteGroup).toHaveBeenCalledWith(removedId);
@@ -5444,6 +5478,141 @@ describe('LibraryView shelf collections', () => {
     expect(itemRow(host, novel.id)).toBeTruthy();
     collectionButton(host, '保留组').click();
     await settle();
+    expect(itemRow(host, novel.id)).toBeTruthy();
+    view.destroy();
+  });
+
+  it('opens one group menu from … and long-press, and cancel leaves the group in place', async () => {
+    const novel = seriesNovel();
+    const confirmGroupDelete = vi.fn(async () => false);
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, { ...deps, confirmGroupDelete });
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '临时组' });
+    shownControl(collectionRow(host, '临时组'), '分组操作: 临时组').click();
+    await settle();
+    const fromButton = contextMenuOrder();
+    expect(fromButton.filter((entry) => entry === '---')).toEqual(['---']);
+    expect(fromButton[fromButton.length - 2]).toBe('---');
+    expect(fromButton[fromButton.length - 1]).toContain('删除分组');
+    expect(fromButton.find((entry) => entry.includes('提升一级'))).toMatch(/:disabled$/);
+    expect(collectionRow(host, '临时组').querySelector('.lightink-library-group-actions')).toBeNull();
+    document.querySelector('.lightink-context-menu')?.remove();
+
+    const row = collectionRow(host, '临时组');
+    vi.useFakeTimers();
+    row.dispatchEvent(touchAt('touchstart', { clientX: 12, clientY: 12 }));
+    vi.advanceTimersByTime(500);
+    vi.useRealTimers();
+    expect(contextMenuOrder()).toEqual(fromButton);
+
+    contextMenuItem('删除分组').click();
+    await settle();
+    expect(confirmGroupDelete).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '临时组' }),
+      expect.stringContaining('书仍留在书库'),
+    );
+    expect(library.deleteGroup).not.toHaveBeenCalled();
+    expect(collectionButton(host, '临时组')).toBeTruthy();
+    view.destroy();
+  });
+
+  it('explains an empty group name and keeps the editor open', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '   ' });
+    expect(deps.notify).toHaveBeenCalledWith('请填写分组名称。', 'warning');
+    expect(library.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.lightink-library-group-modal:not([hidden])')).not.toBeNull();
+    view.destroy();
+  });
+
+  it('keeps membership edits when saving groups fails', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '海猫' });
+    vi.mocked(library.setItemGroups!).mockRejectedValueOnce(new Error('save failed'));
+    await openItemMenu(host, novel.id);
+    contextMenuItem('加入分组').click();
+    await settle();
+    const overlay = document.querySelector<HTMLElement>(
+      '.lightink-library-membership-overlay:not([hidden])',
+    )!;
+    expect(overlay.textContent).toContain(novel.title);
+    const checkbox = overlay.querySelector<HTMLInputElement>('input[name="membership"]')!;
+    checkbox.checked = true;
+    overlay
+      .querySelector('form')!
+      .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(deps.notify).toHaveBeenCalledWith('save failed', 'error');
+    expect(isShown(overlay)).toBe(true);
+    expect(checkbox.checked).toBe(true);
+    expect(overlay.textContent).toContain('海猫');
+    view.destroy();
+  });
+
+  it('shares one grouped menu across right-click, long-press, and the desktop entry, and cancel keeps the book', async () => {
+    const novel = seriesNovel();
+    const { deps, library } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '海猫' });
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '某系列' });
+
+    await openItemMenu(host, novel.id);
+    const fromContext = contextMenuOrder();
+    expect(fromContext[0]).toContain('作品详情');
+    expect(fromContext.filter((entry) => entry === '---').length).toBeGreaterThanOrEqual(2);
+    const addIndex = fromContext.findIndex((entry) => entry.includes('加入分组'));
+    const removeIndex = fromContext.findIndex((entry) => entry.includes('移出书库'));
+    expect(addIndex).toBeGreaterThan(0);
+    expect(removeIndex).toBeGreaterThan(addIndex);
+    expect(fromContext[addIndex]).toContain('…');
+    expect(fromContext.find((entry) => entry.includes('新建分组'))).toContain('…');
+    expect(fromContext.join('\n')).not.toContain('海猫');
+    expect(fromContext.join('\n')).not.toContain('某系列');
+    expect(fromContext.join('\n')).not.toContain('翻译');
+    document.querySelector('.lightink-context-menu')?.remove();
+
+    itemCard(host, novel.id).querySelector<HTMLButtonElement>('.lightink-library-item-menu')!.click();
+    await settle();
+    expect(contextMenuOrder()).toEqual(fromContext);
+    document.querySelector('.lightink-context-menu')?.remove();
+
+    const card = itemRow(host, novel.id);
+    vi.useFakeTimers();
+    card.dispatchEvent(touchAt('touchstart', { clientX: 20, clientY: 20 }));
+    vi.advanceTimersByTime(500);
+    vi.useRealTimers();
+    expect(contextMenuOrder()).toEqual(fromContext);
+
+    contextMenuItem('移出书库').click();
+    await settle();
+    expect(document.querySelector('.lightink-confirm-dialog')?.textContent).toContain(novel.title);
+    await cancelRemoveDialog();
+    expect(library.removeItem).not.toHaveBeenCalled();
     expect(itemRow(host, novel.id)).toBeTruthy();
     view.destroy();
   });
@@ -5851,7 +6020,7 @@ describe('LibraryView shelf collections', () => {
 
     shownControl(collectionRow(host, seriesStem), `分组操作: ${seriesStem}`).click();
     await settle();
-    shownControl(collectionRow(host, seriesStem), '重命名分组').click();
+    contextMenuItem('重命名分组').click();
     await settle();
     await submitGroupForm(host, { name: '地狱系列' });
     expect(library.updateGroup).toHaveBeenCalledWith(seriesId, '地狱系列');
@@ -6008,7 +6177,7 @@ describe('LibraryView book tags (R6)', () => {
 
     const menu = await openItemMenu(host, book.id);
     expect(menu.textContent).toContain('作品详情');
-    expect(menu.textContent).toContain('编辑标签');
+    expect(menu.textContent).toContain('编辑标签…');
     contextMenuItem('编辑标签').click();
     await settle();
     const dialog = tagDialogOf();
@@ -6271,6 +6440,11 @@ describe('LibraryView remove from library', () => {
     expect(menu.textContent).toContain('移出书库');
     contextMenuItem('移出书库').click();
     await settle();
+    const confirm = document.querySelector('.lightink-confirm-dialog');
+    expect(confirm?.textContent).toContain('待移出');
+    expect(confirm?.textContent).toContain('不改写原始文件');
+    expect(removeItem).not.toHaveBeenCalled();
+    await confirmRemoveDialog();
 
     expect(removeItem).toHaveBeenCalledWith(gone.id);
     expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
@@ -6315,7 +6489,7 @@ describe('LibraryView remove from library', () => {
 
     await openItemMenu(host, gone.id);
     contextMenuItem('移出书库').click();
-    await settle();
+    await confirmRemoveDialog();
     expect(host.querySelector(`[data-item-id="${gone.id}"]`)).toBeNull();
 
     await openCatalog(host);
@@ -6371,6 +6545,9 @@ describe('LibraryView remove from library', () => {
     expect(detailShowsRemove(host)).toBe(true);
     shownButtonWithText(pane!, '移出书库').click();
     await settle();
+    expect(document.querySelector('.lightink-confirm-dialog')?.textContent).toContain('远程漫画');
+    expect(removeItem).not.toHaveBeenCalled();
+    await confirmRemoveDialog();
     expect(removeItem).toHaveBeenCalledWith('item-1');
     expect(host.querySelector('[data-item-id="item-1"]')).toBeNull();
     view.destroy();
@@ -6764,7 +6941,7 @@ describe('LibraryView mobile shelf', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]{0,80}?\.lightink-library-continue[\s\S]{0,40}?\.lightink-library-cover(?![\w-])/,
     );
     const touchContinueCover = touchContinueCoverBlocks[touchContinueCoverBlocks.length - 1] ?? '';
-    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'width'))[0]).toBe(160);
+    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'width'))[0]).toBe(36);
     expect(touchContinueCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
     const touchContinueOpenBlocks = cssRuleBodies(
       css,
@@ -8137,10 +8314,10 @@ describe('LibraryView home visual system (R2)', () => {
       String(jacketHue('无封面未读')),
     );
     expect(heroCover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
-    expect(wallCover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
+    expect(wallCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('无封面未读');
     expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('无封面在读');
     expect(itemRow(host, plain.id).textContent).toContain('无封面未读');
-    expect(itemRow(host, plain.id).textContent?.match(/无封面未读/g)).toHaveLength(1);
+    expect(itemRow(host, plain.id).textContent?.match(/无封面未读/g)).toHaveLength(2);
     view.destroy();
   });
 
