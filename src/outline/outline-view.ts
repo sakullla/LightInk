@@ -439,6 +439,8 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
           }
           marker.textContent = isFolded ? '▸' : '▾';
           marker.setAttribute('aria-label', isFolded ? '展开' : '折叠');
+          // T2（R2）：折叠钮的展开/折叠态对辅助技术可感知。
+          marker.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
           marker.addEventListener('mousedown', (event) => {
             event.preventDefault();
             event.stopPropagation();

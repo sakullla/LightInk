@@ -608,11 +608,21 @@ html[data-platform='mac'] #app.is-workspace-editor .lightink-menu-trigger {
 }
 
 .lightink-tab-close {
+  position: relative;
   color: var(--lightink-muted);
   width: 24px;
   height: 24px;
   padding: 0;
   cursor: pointer;
+  /* T2（R6）：44px 点按热区（溢出伪元素向四周扩出 10px），视觉图标尺寸
+     保持 24px 不变，桌面鼠标命中体验不回退。 */
+  overflow: visible;
+}
+
+.lightink-tab-close::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
 }
 
 .lightink-tab-close:hover {
@@ -2353,8 +2363,11 @@ html[data-reading-layout='scroll']:has(
   border-top: 1px solid var(--lightink-border);
 }
 
-/* 右键上下文菜单（R3）：与下拉菜单同源的浮层语言——圆角面板、细边框、
-   柔和投影；菜单项整行 hover 高亮，快捷键提示右对齐弱化显示。 */
+/* ===== context-menu：右键 / 长按上下文菜单 =====
+   非模态浮层，自管焦点（打开即聚焦首项 / 上下键循环 / Esc 关闭并还原触发
+   元素），不走 modal-focus 焦点陷阱（例外清单见全局 focus-visible 兜底处）。
+   与下拉菜单同源的浮层语言——圆角面板、细边框、柔和投影；菜单项整行 hover
+   高亮，快捷键提示右对齐弱化显示。触屏重锚与键盘态钳高见文件尾触控追加档。 */
 .lightink-context-menu {
   min-width: 200px;
   max-height: min(360px, calc(100vh - 16px));
@@ -2940,7 +2953,8 @@ html[data-reading-layout='scroll']:has(
   background: color-mix(in srgb, var(--lightink-accent) 22%, transparent);
 }
 
-/* 快捷键速查表（R5）。 */
+/* ===== cheatsheet：快捷键速查表（R5，挂 modal-overlay / modal-dialog，
+   走 modal-focus 焦点陷阱） ===== */
 .lightink-cheatsheet {
   margin: 0;
   padding: 0;
@@ -2968,7 +2982,8 @@ html[data-reading-layout='scroll']:has(
   background: var(--lightink-bg);
 }
 
-/* 通用模态弹层（快捷键速查等）。 */
+/* ===== modal-overlay：通用模态弹层底（快捷键速查 / open-progress /
+   link / confirm 等挂此 overlay，焦点统一由 modal-focus 接管） ===== */
 .lightink-modal-overlay {
   position: fixed;
   inset: 0;
@@ -2981,6 +2996,9 @@ html[data-reading-layout='scroll']:has(
   -webkit-app-region: no-drag;
 }
 
+/* ===== open-progress：打开进度弹层 =====
+   例外：不走 modal-focus——进度不可打断（无 Esc / 遮罩关闭），取消只能走
+   专属取消按钮（见 modal-focus 例外清单注释）。 */
 .lightink-open-progress-dialog {
   min-width: min(320px, calc(100vw - 32px));
 }
@@ -3033,6 +3051,8 @@ html[data-reading-layout='scroll']:has(
   min-height: 44px;
 }
 
+/* ===== modal-dialog：模态卡片基座（overlay 内的内容容器，
+   confirm / cheatsheet / open-progress / link 等共用） ===== */
 .lightink-modal-dialog {
   min-width: 280px;
   max-width: 80vw;
@@ -3141,7 +3161,7 @@ html[data-reading-layout='scroll']:has(
   color: var(--lightink-bg);
 }
 
-/* Link editor / open-confirm dialog */
+/* ===== link-dialog：链接编辑 / 打开确认弹层（走 modal-focus 焦点陷阱） ===== */
 .lightink-link-dialog {
   min-width: min(420px, 92vw);
 }
@@ -3558,8 +3578,28 @@ html[data-reading-layout='scroll']:has(
   }
 }
 
-/* Platform accessibility preferences apply to every application-owned surface. */
-:where(button, input, select, textarea, [role='button'], [role='menuitem'], [role='tab']):focus-visible {
+/* Platform accessibility preferences apply to every application-owned surface.
+   T2（R2）：兜底选择器显式列出外壳自定义控件类，防未来局部 outline 覆盖
+   后键盘焦点在这些按钮上丢失可见性。
+   modal-focus 例外清单（不走 mountModalFocus 焦点陷阱的弹层）：
+     - open-progress：进度不可打断语义（无 Esc / 遮罩关闭），取消走专属按钮，
+       不注册模态焦点陷阱；
+     - context-menu：非模态浮层，自管焦点（打开即聚焦首项 / 上下键循环 /
+       Esc 关闭并还原触发元素），不走 modal-focus。
+   其余弹层（confirm / link / archive-password / note / versions / sync 等）
+   均由 modal-focus.ts 统一接管焦点陷阱与 aria 标注。 */
+:where(
+    button,
+    input,
+    select,
+    textarea,
+    [role='button'],
+    [role='menuitem'],
+    [role='tab'],
+    .lightink-outline-item,
+    .lightink-outline-fold,
+    .lightink-command
+  ):focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 2px;
 }

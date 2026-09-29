@@ -278,6 +278,17 @@ describe('createOutlineView 折叠标记（T4/R2）', () => {
     expect(foldedItems[1]?.firstChild?.classList.contains('lightink-outline-fold')).toBe(true);
     expect(foldedItems[1]?.firstChild?.classList.contains('is-folded')).toBe(false);
     folded.destroy();
+
+    // T2（R2）：折叠钮 aria-expanded 随折叠态同步。
+    expect(
+      (expandedItems[0]?.firstChild as FakeElement).getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect((foldedItems[0]?.firstChild as FakeElement).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect((foldedItems[1]?.firstChild as FakeElement).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
   });
 
   it('折叠祖先后大纲隐藏其后代，再次点击展开', () => {

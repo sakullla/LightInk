@@ -153,6 +153,53 @@ describe('accessibility media preferences', () => {
   });
 });
 
+describe('T2 shell accessibility: focus-visible fallback, 44px tab close, modal section docs', () => {
+  it('extends the global focus-visible fallback to shell control classes', () => {
+    // 兜底选择器显式列出大纲条目 / 折叠钮 / 命令按钮类，防局部覆盖后焦点不可见。
+    expect(themeCss).toMatch(
+      /:where\([\s\S]*?\.lightink-outline-item[\s\S]*?\.lightink-outline-fold[\s\S]*?\.lightink-command[\s\S]*?\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightink-accent\)/,
+    );
+    expect(themeCss).toMatch(
+      /:where\([\s\S]*?\):focus-visible\s*\{[^}]*outline-offset:\s*2px/,
+    );
+  });
+
+  it('keeps the tab close icon at 24px while widening the hit area to 44px', () => {
+    // 取带尺寸的 .lightink-tab-close 规则（另有一个与 tab-button 共享的
+    // 基础样式块）。
+    const close = themeCss.match(/\.lightink-tab-close\s*\{[^}]*overflow:\s*visible[^}]*\}/)?.[0];
+    expect(close).toMatch(/width:\s*24px/);
+    expect(close).toMatch(/height:\s*24px/);
+    expect(close).toMatch(/overflow:\s*visible/);
+    const hitZone = themeCss.match(/\.lightink-tab-close::after\s*\{[^}]*\}/)?.[0];
+    expect(hitZone).toMatch(/inset:\s*-10px/);
+  });
+
+  it('documents the popup sections and the modal-focus exception list', () => {
+    for (const header of [
+      'context-menu',
+      'cheatsheet',
+      'modal-overlay',
+      'open-progress',
+      'modal-dialog',
+      'link-dialog',
+    ]) {
+      expect(themeCss).toContain(`===== ${header}：`);
+    }
+    // 例外清单：open-progress 不走 modal-focus（无 Esc/遮罩关闭，进度不可打断）、
+    // context-menu 非模态自管焦点。
+    expect(themeCss).toContain('modal-focus 例外清单');
+    expect(themeCss).toMatch(/open-progress[\s\S]*?不走 modal-focus/);
+    expect(themeCss).toMatch(/context-menu[\s\S]*?(非模态|自管焦点)/);
+  });
+
+  it('keeps the prefers-reduced-motion fallback intact', () => {
+    expect(themeCss).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(themeCss).toContain('animation-duration: 0.01ms !important');
+    expect(themeCss).toContain('transition-duration: 0.01ms !important');
+  });
+});
+
 describe('T4 modal touch form and keyboard-inset single deduction', () => {
   const KEYBOARD_INSET = '--lightink-keyboard-inset';
 
