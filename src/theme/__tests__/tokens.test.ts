@@ -286,6 +286,56 @@ describe('tokens.css 内置主题', () => {
   });
 });
 
+describe('tokens.css 主题无关共享令牌（T1: motion/z）', () => {
+  /** 提取文件级 `:root { ... }` 共享块（仅匹配行首 :root，避开 `:root,\n[data-theme=...]` 组合）。 */
+  function sharedRootBlock(): string {
+    const match = /(?:^|\})\s*:root\s*,?\s*\n?\s*\{([\s\S]*?)\}/.exec(css);
+    // 更稳妥：只取单行 `:root {` 开头的块，排除 `:root,` 组合选择器。
+    const single = /(^|\n)\s*:root\s*\{([\s\S]*?)\}/.exec(css);
+    if (single === null) {
+      throw new Error('tokens.css 缺少独立 :root 共享块');
+    }
+    return single[2];
+  }
+
+  it('在主题块外的共享 :root 定义 motion 令牌', () => {
+    const block = sharedRootBlock();
+    expect(tokenValue(block, '--lightink-duration-fast')).toBe('100ms');
+    expect(tokenValue(block, '--lightink-duration-base')).toBe('180ms');
+    expect(tokenValue(block, '--lightink-easing-standard')).toBe('cubic-bezier(0.2, 0, 0, 1)');
+    // 缓动必须是克制 ease-out 族（终点导数为 0）。
+    expect(tokenValue(block, '--lightink-easing-standard')).toContain('cubic-bezier(0.2, 0, 0, 1)');
+  });
+
+  it('在主题块外的共享 :root 定义三层 z-index 且 dialog < menu < progress', () => {
+    const block = sharedRootBlock();
+    const dialog = tokenValue(block, '--lightink-z-dialog');
+    const menu = tokenValue(block, '--lightink-z-menu');
+    const progress = tokenValue(block, '--lightink-z-progress');
+    expect(dialog).toBe('100'); // 对齐现有 .lightink-modal-overlay
+    expect(menu).toBe('2000'); // 对齐现有 context-menu 内联值
+    expect(progress).toBe('3000'); // 不可打断进度须压过弹窗与菜单
+    expect(Number(dialog)).toBeLessThan(Number(menu));
+    expect(Number(menu)).toBeLessThan(Number(progress));
+  });
+
+  it.each(BUILTIN_THEMES)('%s 主题块不重复定义 motion/z 令牌', (id) => {
+    const block = themeBlock(id);
+    for (const token of [
+      '--lightink-duration-fast',
+      '--lightink-duration-base',
+      '--lightink-easing-standard',
+      '--lightink-z-menu',
+      '--lightink-z-dialog',
+      '--lightink-z-progress',
+    ]) {
+      expect(new RegExp(`${token}\\s*:`).test(block), `${id} 不应在主题块内定义 ${token}`).toBe(
+        false,
+      );
+    }
+  });
+});
+
 describe('tokens.css hljs 类映射', () => {
   it('主要 hljs 类选择器均映射到语法令牌', () => {
     for (const cls of [

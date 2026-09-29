@@ -24,6 +24,22 @@
  * 未写出的 --lightink-syntax-* 同样回退纸墨浅色，而不是午夜/深空。
  */
 
+/*
+ * 主题无关共享令牌（T1, ADR-1）：过渡时长/缓动/z-index 与配色无关，
+ * 统一定义在 :root（所有主题含自定义主题继承），避免 4 主题块重复维护。
+ * 层级参考现有内联使用：modal overlay 100、context-menu 2000；
+ * progress 须压过弹窗与菜单，保持不可打断操作的可见性。
+ */
+:root {
+  --lightink-duration-fast: 100ms;
+  --lightink-duration-base: 180ms;
+  --lightink-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --lightink-z-dialog: 100;
+  --lightink-z-menu: 2000;
+  --lightink-z-progress: 3000;
+}
+
 :root,
 [data-theme="warm-light"] {
   color-scheme: light;
