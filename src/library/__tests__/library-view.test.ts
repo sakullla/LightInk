@@ -1424,7 +1424,10 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(smartGroupButton(host, 'EPUB').classList.contains('is-active')).toBe(true);
     expect(wallHeading(host).textContent).toBe('EPUB · 河山 · 0');
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
+    const emptyState = host.querySelector('.lightink-library-empty')!;
+    expect(emptyState.querySelector('.lightink-empty-title')?.textContent).toBe('没有匹配的作品');
+    expect(emptyState.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(emptyState.querySelector('.lightink-empty-action')?.textContent).toBe('清除搜索');
     expect(host.querySelector(`[data-item-id="${pdf.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${epub.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${otherEpub.id}"]`)).toBeNull();
@@ -1657,7 +1660,10 @@ describe('LibraryView my-books home', () => {
     input.value = '续读';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
+    const emptyState = host.querySelector('.lightink-library-empty')!;
+    expect(emptyState.querySelector('.lightink-empty-title')?.textContent).toBe('没有匹配的作品');
+    expect(emptyState.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(emptyState.querySelector('.lightink-empty-action')?.textContent).toBe('清除搜索');
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
@@ -1938,7 +1944,10 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
     expect(wallHeading(host).textContent).toBe('漫画 · 漫画 · 没有这本书 · 0');
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
+    const emptyState = host.querySelector('.lightink-library-empty')!;
+    expect(emptyState.querySelector('.lightink-empty-title')?.textContent).toBe('没有匹配的作品');
+    expect(emptyState.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(emptyState.querySelector('.lightink-empty-action')?.textContent).toBe('清除搜索');
 
     shownControl(host, '清除').click();
     await settle();
@@ -1947,6 +1956,29 @@ describe('LibraryView my-books home', () => {
     expect(wallHeading(host).textContent).toBe('漫画 · 漫画 · 1');
     expect(itemRow(host, comic.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${novel.id}"]`)).toBeNull();
+    view.destroy();
+  });
+
+  it('clears the shelf search from the empty-state CTA', async () => {
+    const comic = comicItem();
+    const deps = dependencies({
+      library: { ...dependencies().library, listItems: vi.fn(async () => [comic]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.value = '不存在的书';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    const emptyState = host.querySelector('.lightink-library-empty')!;
+    expect(emptyState.querySelector('.lightink-empty-title')?.textContent).toBe('没有匹配的作品');
+    (emptyState.querySelector<HTMLButtonElement>('.lightink-empty-action'))!.click();
+    await settle();
+    expect(host.querySelector('.lightink-library-empty')).toBeNull();
+    expect(input.value).toBe('');
+    expect(itemRow(host, comic.id)).toBeTruthy();
     view.destroy();
   });
 
@@ -1963,7 +1995,10 @@ describe('LibraryView my-books home', () => {
 
     groupButton(host, '在读').click();
     await settle();
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
+    const filteredEmpty = host.querySelector('.lightink-library-empty')!;
+    expect(filteredEmpty.querySelector('.lightink-empty-title')?.textContent).toBe('这一组还没有作品');
+    expect(filteredEmpty.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(filteredEmpty.querySelector('.lightink-empty-action')).toBeNull();
     expect(wallHeading(host).textContent).toBe('在读 · 0');
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
@@ -1983,7 +2018,11 @@ describe('LibraryView my-books home', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    expect(itemRow(host, cover.id).querySelector('img')?.src).toContain('data:image/png');
+    const image = itemRow(host, cover.id).querySelector<HTMLImageElement>('img')!;
+    expect(image.src).toContain('data:image/png');
+    expect(image.classList.contains('lightink-library-cover-img')).toBe(true);
+    image.dispatchEvent(new Event('load'));
+    expect(image.classList.contains('is-loaded')).toBe(true);
     view.destroy();
   });
 
@@ -2700,7 +2739,10 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     expect(wallHeading(host).textContent).toBe('夏日书单 · 0');
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('这一组还没有作品');
+    const filteredEmpty = host.querySelector('.lightink-library-empty')!;
+    expect(filteredEmpty.querySelector('.lightink-empty-title')?.textContent).toBe('这一组还没有作品');
+    expect(filteredEmpty.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(filteredEmpty.querySelector('.lightink-empty-action')).toBeNull();
 
     groupButton(host, '全部').click();
     await settle();
@@ -2725,7 +2767,10 @@ describe('LibraryView my-books home', () => {
     await settle();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
     expect(wallHeading(host).textContent).toBe('河山 · 0');
-    expect(host.querySelector('.lightink-library-empty')?.textContent).toBe('没有匹配的作品');
+    const emptyState = host.querySelector('.lightink-library-empty')!;
+    expect(emptyState.querySelector('.lightink-empty-title')?.textContent).toBe('没有匹配的作品');
+    expect(emptyState.querySelector('.lightink-empty-icon svg')).not.toBeNull();
+    expect(emptyState.querySelector('.lightink-empty-action')?.textContent).toBe('清除搜索');
 
     shownControl(host, '清除').click();
     await settle();
@@ -4965,10 +5010,70 @@ describe('LibraryView sources, manage, and catalog', () => {
 
     await openCatalog(host);
     expect(host.textContent).toContain('offline');
+    const status = libraryRoot(host).querySelector<HTMLElement>('.lightink-library-status')!;
+    expect(status.dataset.status).toBe('error');
+    expect(status.querySelector('.lightink-library-status-hint')?.textContent).toBe(
+      '请检查网络连接后重试。',
+    );
+    expect(status.querySelector('.lightink-library-status-shimmer')).toBeNull();
     shownButtonWithText(host, '重试').click();
     await settle();
     expect(browse).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain('远程漫画');
+  });
+
+  it('shows a shimmer skeleton while an unpainted catalog is loading', async () => {
+    let resolveBrowse: ((value: OpdsFeed) => void) | undefined;
+    const browse = vi.fn(
+      () =>
+        new Promise<OpdsFeed>((resolve) => {
+          resolveBrowse = resolve;
+        }),
+    );
+    const deps = dependencies({ opds: { ...dependencies().opds, browse } });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await openSources(host);
+    shownButtonWithText(host, '测试书库').click();
+    await settle();
+    const status = libraryRoot(host).querySelector<HTMLElement>('.lightink-library-status')!;
+    expect(status.dataset.status).toBe('loading');
+    expect(status.querySelector('.lightink-library-status-shimmer')).not.toBeNull();
+    resolveBrowse?.(feed());
+    await settle();
+    expect(host.querySelector('.lightink-library-status-shimmer')).toBeNull();
+    expect(itemRow(host, 'item-1')).toBeTruthy();
+    view.destroy();
+  });
+
+  it('keeps a source-save failure on the inline form status without a duplicate notify', async () => {
+    const addSource = vi.fn(async () => {
+      throw new Error('save failed');
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      opds: { ...base.opds, addSource },
+      library: { ...base.library, listItems: vi.fn(async () => [localItem()]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    await openSources(host);
+    shownControl(host, '添加书库源').click();
+    const form = sourceFormOf(host);
+    (form.elements.namedItem('title') as HTMLInputElement).value = '坏书库';
+    (form.elements.namedItem('url') as HTMLInputElement).value = 'https://bad.example/opds';
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    const status = form.querySelector<HTMLElement>('.lightink-library-source-form-status')!;
+    expect(isShown(status)).toBe(true);
+    expect(status.dataset.status).toBe('error');
+    expect(status.textContent).toContain('save failed');
+    expect(deps.notify).not.toHaveBeenCalled();
+    view.destroy();
   });
 
   it('does not flash 正在加载… on catalog paging, refresh, or search when covers are already painted', async () => {

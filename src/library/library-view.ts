@@ -1391,6 +1391,55 @@ function createNavIcon(
   return svg;
 }
 
+interface EmptyStateAction {
+  label: string;
+  onClick: () => void;
+}
+
+/**
+ * Shared empty-state pattern (R2): decorative icon slot, title, optional
+ * description, and optional CTA slot. Icons are inline SVG in currentColor
+ * so both themes keep contrast; no external assets.
+ */
+function renderEmptyState(
+  doc: Document,
+  options: {
+    icon: readonly string[];
+    className?: string;
+    title: string;
+    description?: string;
+    actions?: ReadonlyArray<EmptyStateAction>;
+  },
+): HTMLElement {
+  const rootEl = doc.createElement('div');
+  rootEl.className = `lightink-empty${options.className === undefined ? '' : ` ${options.className}`}`;
+  const icon = doc.createElement('span');
+  icon.className = 'lightink-empty-icon';
+  icon.appendChild(createNavIcon(doc, options.icon, 'lightink-empty-icon-svg'));
+  rootEl.appendChild(icon);
+  const title = doc.createElement('p');
+  title.className = 'lightink-empty-title';
+  title.textContent = options.title;
+  rootEl.appendChild(title);
+  if (options.description !== undefined && options.description !== '') {
+    const description = doc.createElement('p');
+    description.className = 'lightink-empty-description';
+    description.textContent = options.description;
+    rootEl.appendChild(description);
+  }
+  if (options.actions !== undefined && options.actions.length > 0) {
+    const actions = doc.createElement('div');
+    actions.className = 'lightink-empty-actions';
+    for (const action of options.actions) {
+      const el = button(doc, action.label, 'lightink-empty-action');
+      el.addEventListener('click', action.onClick);
+      actions.appendChild(el);
+    }
+    rootEl.appendChild(actions);
+  }
+  return rootEl;
+}
+
 export function createLibraryView(
   host: HTMLElement,
   deps: LibraryViewDependencies,
@@ -3088,9 +3137,21 @@ export function createLibraryView(
   function setStatus(message: string, retry = false): void {
     status.replaceChildren();
     if (message !== '') {
+      if (!retry) {
+        const shimmer = doc.createElement('span');
+        shimmer.className = 'lightink-library-status-shimmer';
+        shimmer.setAttribute('aria-hidden', 'true');
+        status.appendChild(shimmer);
+      }
       const text = doc.createElement('span');
       text.textContent = message;
       status.appendChild(text);
+      if (retry) {
+        const hint = doc.createElement('span');
+        hint.className = 'lightink-library-status-hint';
+        hint.textContent = translate(deps.getLocale(), 'library.status.errorHint');
+        status.appendChild(hint);
+      }
     }
     retryButton.textContent = labels().retry;
     retryButton.hidden = !retry;
@@ -3797,10 +3858,13 @@ export function createLibraryView(
       groupsSheetList.appendChild(item);
     }
     if (groupsSheetList.childElementCount === 0) {
-      const empty = doc.createElement('p');
-      empty.className = 'lightink-library-groups-sheet-empty';
-      empty.textContent = labels().emptyGroups;
-      groupsSheetList.appendChild(empty);
+      groupsSheetList.appendChild(
+        renderEmptyState(doc, {
+          icon: NAV_ICON_PATHS.folder,
+          className: 'lightink-library-groups-sheet-empty',
+          title: labels().emptyGroups,
+        }),
+      );
     }
   }
 
@@ -4199,10 +4263,13 @@ export function createLibraryView(
       smartGroupList.appendChild(typeBlock);
     }
     if (!sectionEmpty && smartGroupList.childElementCount === 0) {
-      const empty = doc.createElement('p');
-      empty.className = 'lightink-library-nav-empty';
-      empty.textContent = labels().noMatch;
-      smartGroupList.appendChild(empty);
+      smartGroupList.appendChild(
+        renderEmptyState(doc, {
+          icon: NAV_ICON_PATHS.search,
+          className: 'lightink-library-nav-empty',
+          title: labels().noMatch,
+        }),
+      );
     }
   }
 
@@ -4221,10 +4288,13 @@ export function createLibraryView(
       (source) => matches(source.title) || matches(source.url),
     );
     if (visibleSources.length === 0) {
-      const empty = doc.createElement('p');
-      empty.className = 'lightink-library-source-empty';
-      empty.textContent = query === '' ? labels().emptySources : labels().noMatch;
-      sourceList.appendChild(empty);
+      sourceList.appendChild(
+        renderEmptyState(doc, {
+          icon: NAV_ICON_PATHS.source,
+          className: 'lightink-library-source-empty',
+          title: query === '' ? labels().emptySources : labels().noMatch,
+        }),
+      );
       return;
     }
     for (const source of visibleSources) {
@@ -4487,6 +4557,8 @@ export function createLibraryView(
       image.alt = '';
       image.loading = 'lazy';
       image.referrerPolicy = 'no-referrer';
+      image.classList.add('lightink-library-cover-img');
+      image.addEventListener('load', () => image.classList.add('is-loaded'));
       image.addEventListener('error', () => {
         image.remove();
         appendJacket(cover, display.item, plainJacket);
@@ -5091,14 +5163,38 @@ export function createLibraryView(
         mountCatalogMoreSentinel();
         return;
       }
-      const empty = doc.createElement('div');
-      empty.className = 'lightink-library-empty';
-      if (query !== '') empty.textContent = labels().emptySearch;
-      else if (catalogActive()) empty.textContent = labels().emptyCatalog;
-      else if (filtered) empty.textContent = labels().emptyFilter;
-      else empty.textContent = labels().empty;
-      if (filtered) empty.classList.add('lightink-library-empty--filtered');
-      itemList.appendChild(empty);
+      const emptyIcon =
+        query !== ''
+          ? NAV_ICON_PATHS.search
+          : catalogActive()
+            ? NAV_ICON_PATHS.folder
+            : filtered
+              ? NAV_ICON_PATHS.tag
+              : NAV_ICON_PATHS.library;
+      const emptyTitle =
+        query !== ''
+          ? labels().emptySearch
+          : catalogActive()
+            ? labels().emptyCatalog
+            : filtered
+              ? labels().emptyFilter
+              : labels().empty;
+      itemList.appendChild(
+        renderEmptyState(doc, {
+          icon: emptyIcon,
+          className: `lightink-library-empty${filtered ? ' lightink-library-empty--filtered' : ''}`,
+          title: emptyTitle,
+          actions:
+            query !== ''
+              ? [
+                  {
+                    label: translate(deps.getLocale(), 'library.empty.clearSearch'),
+                    onClick: () => searchClear.click(),
+                  },
+                ]
+              : [],
+        }),
+      );
       detail.hidden = true;
       return;
     }
@@ -6327,16 +6423,13 @@ export function createLibraryView(
     const { input, url, allowHttp } = sourceInputFromForm(editing);
     if (httpRequiresAllow(url) && !allowHttp) {
       setFormStatus(labels().httpNotAllowed, 'error');
-      deps.notify(labels().httpNotAllowed, 'error');
       return;
     }
     try {
       await deps.webdavSource.test(input);
       setFormStatus(labels().testConnectionOk, 'success');
     } catch (error) {
-      const message = errorText(error, labels().offline);
-      setFormStatus(message, 'error');
-      deps.notify(message, 'error');
+      setFormStatus(errorText(error, labels().offline), 'error');
     }
   }
 
@@ -6348,7 +6441,6 @@ export function createLibraryView(
     const { input, kind, url, allowHttp } = sourceInputFromForm(editing);
     if (httpRequiresAllow(url) && !allowHttp) {
       setFormStatus(labels().httpNotAllowed, 'error');
-      deps.notify(labels().httpNotAllowed, 'error');
       return;
     }
     try {
@@ -6370,9 +6462,7 @@ export function createLibraryView(
         emptyFailure = message;
         closeSourceForm();
         await activateShelf();
-        return;
       }
-      deps.notify(message, 'error');
     }
   }
 

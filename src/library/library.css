@@ -1880,6 +1880,108 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   font-size: 14px;
 }
 
+/* 共享空态模式（R2）：图标槽 + 标题 + 说明 + CTA 槽。装饰图标为内联
+   SVG，currentColor 取令牌色，双主题下对比度一致，无外部资源。 */
+.lightink-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.lightink-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lightink-muted);
+}
+
+.lightink-empty-icon-svg {
+  width: 34px;
+  height: 34px;
+}
+
+.lightink-empty-title {
+  margin: 2px 0 0;
+  font-weight: 500;
+  color: var(--lightink-fg);
+}
+
+.lightink-empty-description {
+  margin: 0;
+  font-size: 13px;
+  color: var(--lightink-muted);
+}
+
+.lightink-empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.lightink-empty-action {
+  min-height: 32px;
+  padding: 4px 14px;
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* 加载反馈（R5）：目录/搜索加载时状态条上方给一条 shimmer 骨架，颜色走
+   令牌，动画时长用 --lightink-duration-base；减少动态效果时由下方全局
+   reduce 块兜成静态条。 */
+.lightink-library-status-shimmer {
+  display: block;
+  width: min(240px, 55vw);
+  height: 10px;
+  border-radius: var(--lightink-radius-control);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--lightink-muted) 16%, transparent),
+    color-mix(in srgb, var(--lightink-muted) 38%, transparent),
+    color-mix(in srgb, var(--lightink-muted) 16%, transparent)
+  );
+  background-size: 200% 100%;
+  animation: lightink-library-shimmer var(--lightink-duration-base) linear infinite;
+}
+
+@keyframes lightink-library-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* 错误态下一步建议（R2）：与重试按钮并列的次级说明。 */
+.lightink-library-status-hint {
+  font-size: 12px;
+  color: var(--lightink-muted);
+}
+
+/* 封面加载（R5）：封面图在占位盒上加载完成后淡入，时长走令牌。 */
+.lightink-library-cover-img {
+  opacity: 0;
+  transition: opacity var(--lightink-duration-base) ease;
+}
+
+.lightink-library-cover-img.is-loaded {
+  opacity: 1;
+}
+
+/* 空书架引导卡上的内联错误：保留为唯一错误通道时的样式（R2）。 */
+.lightink-library-home-empty-error {
+  margin: 12px 0 0;
+  color: var(--lightink-danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .lightink-library-catalog-more {
   display: flex;
   grid-column: 1 / -1;
@@ -3839,10 +3941,21 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   .lightink-library-cover-wall,
   .lightink-library-cover-wall .lightink-library-item,
   .lightink-library-cover-wall .lightink-library-cover,
-  .lightink-library-cover-wall .lightink-library-cover img {
+  .lightink-library-cover-wall .lightink-library-cover img,
+  .lightink-library-cover-img,
+  .lightink-library-status-shimmer {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+
+  /* 减少动态效果时封面图直接显示、shimmer 定格为静态条。 */
+  .lightink-library-cover-img {
+    opacity: 1;
+  }
+
+  .lightink-library-status-shimmer {
+    background: color-mix(in srgb, var(--lightink-muted) 24%, transparent);
   }
 }
 
