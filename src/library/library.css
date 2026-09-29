@@ -2170,11 +2170,11 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   max-width: var(--lightink-library-cover-max);
 }
 
-/* 书架卡片铺满轨道，但单本不超过 240px。手机三列在 ≤760px 规则里收回令牌上限。 */
+/* 墙上封面必须矮于主模块的 200px 封面。轨道变宽时在这里封顶。 */
 .lightink-library[data-library-nav='shelf'] .lightink-library-cover-wall > .lightink-library-item-shell,
 .lightink-library[data-library-nav='shelf'] .lightink-library-cover-wall > .lightink-library-item--import {
   width: 100%;
-  max-width: 240px;
+  max-width: 180px;
 }
 
 .lightink-library-item-shell > .lightink-library-item--cover {
@@ -6099,6 +6099,17 @@ html:not([data-android]):not([data-touch-primary])
     .lightink-library-continue .lightink-library-cover {
     width: 160px;
     aspect-ratio: 2 / 3;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-cover-wall
+    > .lightink-library-item-shell,
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-cover-wall
+    > .lightink-library-item--import {
+    max-width: 148px;
   }
 
   :is(html[data-android], html[data-touch-primary])

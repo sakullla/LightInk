@@ -2480,7 +2480,8 @@ describe('LibraryView my-books home', () => {
     expect(continueBar.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
     expect(itemRow(host, newer.id)).toBeTruthy();
     host.querySelector<HTMLButtonElement>('.lightink-library-continue-dismiss')!.click();
-    expect(isShown(continueBar)).toBe(false);
+    expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+    expect(host.querySelector(`.lightink-library-item[data-item-id="${newer.id}"]`)).not.toBeNull();
 
     await view.show();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
@@ -8161,7 +8162,7 @@ describe('LibraryView home visual system (R2)', () => {
         /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-wall > \.lightink-library-item--import/,
       )[0] ?? '';
     expect(shelfCard).toMatch(/width:\s*100%/);
-    expect(shelfCard).toMatch(/max-width:\s*240px/);
+    expect(shelfCard).toMatch(/max-width:\s*180px/);
     expect(css).not.toMatch(/\.lightink-library-recent-list/);
   });
 

@@ -4976,7 +4976,7 @@ export function createLibraryView(
       event.stopPropagation();
       dismissedContinue = fingerprint;
       writeDismissedContinue(fingerprint);
-      renderContinueBar();
+      renderItems();
     });
     continueHost.append(open, dismiss);
     continueHost.hidden = false;

@@ -82,6 +82,10 @@ describe('shelf home cover grid', () => {
     );
     expect(heroCover).toMatch(/width:\s*200px/);
     expect(heroCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
+    expect(css).toMatch(
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-wall > \.lightink-library-item--import\s*\{[^}]*max-width:\s*180px/,
+    );
+    expect(home).toMatch(/max-width:\s*148px/);
 
     const homeGrid = ruleBody(
       home,
