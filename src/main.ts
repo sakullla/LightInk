@@ -3544,7 +3544,7 @@ function ensureLibraryView(): LibraryView {
         title: i18n.t('app.name'),
         message,
         buttons: [
-          { id: 'delete', label: i18n.t('dialog.discard'), kind: 'danger' },
+          { id: 'delete', label: i18n.t('dialog.delete'), kind: 'danger' },
           { id: 'cancel', label: i18n.t('dialog.cancel'), kind: 'plain' },
         ],
         cancelId: 'cancel',

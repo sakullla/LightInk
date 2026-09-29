@@ -649,6 +649,7 @@ const en = {
   'dialog.exit.discardAll': 'Discard All',
   'dialog.save': 'Save',
   'dialog.discard': 'Don’t Save',
+  'dialog.delete': 'Delete',
   'dialog.cancel': 'Cancel',
   'dialog.crash.title': 'Crash Recovery',
   'dialog.crash.message':
@@ -1376,6 +1377,7 @@ const zhCN = {
   'dialog.exit.discardAll': '全部丢弃',
   'dialog.save': '保存',
   'dialog.discard': '不保存',
+  'dialog.delete': '删除',
   'dialog.cancel': '取消',
   'dialog.crash.title': '崩溃恢复',
   'dialog.crash.message':
