@@ -1001,14 +1001,13 @@ describe('LibraryView my-books home', () => {
     expect(hue).toBe(jacketHue('围城'));
     expect(hue).toBeGreaterThanOrEqual(0);
     expect(hue).toBeLessThan(360);
-    const title = cover.querySelector<HTMLElement>('.lightink-library-cover-jacket-title')!;
-    expect(title.textContent).toBe('围城');
-    // Small covers (continue strip / rows) collapse to this initial via CSS attr().
-    expect(title.dataset.coverInitial).toBe('围');
-    expect(cover.querySelector('.lightink-library-cover-jacket-author')?.textContent).toBe('钱钟书');
+    expect(cover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
+    expect(cover.querySelector('.lightink-library-cover-jacket-author')).toBeNull();
+    expect(itemRow(host, bare.id).textContent).toContain('围城');
+    expect(itemRow(host, bare.id).textContent).not.toContain('钱钟书');
 
     const blank = itemRow(host, nameless.id).querySelector<HTMLElement>('.lightink-library-cover')!;
-    expect(blank.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('?');
+    expect(blank.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
     expect(blank.querySelector('.lightink-library-cover-jacket-author')).toBeNull();
 
     // Same title, same hue; different titles spread out rather than clustering.
@@ -2791,8 +2790,8 @@ describe('LibraryView my-books home', () => {
     expect(wallHeading(host).hidden).toBe(true);
     expect(wallHeading(host).textContent).toBe('');
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
-    expect(itemRow(host, reading.id).classList.contains('lightink-library-item--cover')).toBe(true);
-    expect(itemRow(host, reading.id).textContent).toContain('在读小说');
+    expect(host.querySelector(`.lightink-library-item[data-item-id="${reading.id}"]`)).toBeNull();
+    expect(open.textContent).toContain('在读小说');
     expect(itemRow(host, older.id).textContent).toContain('第 10 章');
     expect(itemRow(host, older.id).textContent).not.toContain('已读');
     expect(itemRow(host, unread.id)).toBeTruthy();
@@ -3130,8 +3129,17 @@ describe('LibraryView my-books home', () => {
 
     const row = itemRow(host, comic.id);
     expect(row.textContent).toContain('本地漫画');
-    expect(row.textContent).toContain('墨色档案');
+    expect(row.textContent).not.toContain('墨色档案');
     expect(isShown(host.querySelector('.lightink-library-detail'))).toBe(false);
+    row.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+    );
+    await settle();
+    contextMenuItem('作品详情').click();
+    await settle();
+    const detail = host.querySelector<HTMLElement>('.lightink-library-detail')!;
+    expect(isShown(detail)).toBe(true);
+    expect(detail.textContent).toContain('墨色档案');
     view.destroy();
   });
 
@@ -3318,9 +3326,10 @@ describe('LibraryView reading management (R4)', () => {
     const tiles = Array.from(
       host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
     );
-    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([justRead.id, older.id]);
+    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([older.id]);
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('刚读的书');
+    expect(host.querySelector(`.lightink-library-item[data-item-id="${justRead.id}"]`)).toBeNull();
     view.destroy();
   });
 
@@ -3372,11 +3381,8 @@ describe('LibraryView reading management (R4)', () => {
     const tiles = Array.from(
       host.querySelectorAll<HTMLElement>('.lightink-library-item:not(.lightink-library-item--import)'),
     );
-    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([
-      newUnread.id,
-      oldRead.id,
-      oldUnread.id,
-    ]);
+    expect(tiles.map((tile) => tile.dataset.itemId)).toEqual([newUnread.id, oldUnread.id]);
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('更早在读');
     view.destroy();
   });
 
@@ -5970,15 +5976,18 @@ describe('LibraryView book tags (R6)', () => {
     await view.show();
 
     const card = itemCard(host, book.id);
-    const chips = Array.from(
-      card.querySelectorAll<HTMLElement>(
-        '.lightink-library-item-tags > .lightink-library-tag-chip',
-      ),
-    );
-    expect(chips.map((chip) => chip.textContent)).toEqual(['科幻', '太空', '探险', '+1']);
-    const more = card.querySelector<HTMLElement>('[data-tag-overflow]')!;
-    expect(more.dataset.tagOverflow).toBe('1');
-    expect(more.getAttribute('title')).toContain('1');
+    expect(card.querySelector('.lightink-library-item-tags')).toBeNull();
+    await openItemMenu(host, book.id);
+    contextMenuItem('作品详情').click();
+    await settle();
+    const detail = host.querySelector<HTMLElement>('.lightink-library-detail')!;
+    const chips = Array.from(detail.querySelectorAll<HTMLElement>('.lightink-library-detail-tag-list .lightink-library-tag-chip'));
+    expect(chips.map((chip) => chip.querySelector('span')?.textContent)).toEqual([
+      '科幻',
+      '太空',
+      '探险',
+      '长篇',
+    ]);
     view.destroy();
   });
 
@@ -6011,9 +6020,7 @@ describe('LibraryView book tags (R6)', () => {
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
     expect(library.setItemTags).toHaveBeenCalledWith(book.id, [scifi.id]);
-    expect(itemCard(host, book.id).querySelector('.lightink-library-tag-chip')?.textContent).toBe(
-      '科幻',
-    );
+    expect(itemCard(host, book.id).querySelector('.lightink-library-item-tags')).toBeNull();
 
     // 右键「作品详情」打开书架详情侧栏，标签可逐枚移除。
     await openItemMenu(host, book.id);
@@ -6127,25 +6134,24 @@ describe('LibraryView book tags (R6)', () => {
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
-    const card = itemCard(host, book.id);
-    card.querySelector<HTMLButtonElement>('.lightink-library-tag-chip')!.click();
+    expect(itemCard(host, book.id).querySelector('.lightink-library-item-tags')).toBeNull();
+    tagNavButton(host, '科幻').click();
     await settle();
     expect(deps.onOpen).not.toHaveBeenCalled();
     expect(itemRow(host, book.id)).toBeTruthy();
     expect(host.querySelector(`[data-item-id="${other.id}"]`)).toBeNull();
     expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('科幻');
+    expect(itemRow(host, book.id).textContent).not.toContain('长篇');
     host.querySelector<HTMLButtonElement>('.lightink-library-tag-filter-clear')!.click();
     await settle();
-    const more = itemCard(host, book.id).querySelector<HTMLButtonElement>('[data-tag-overflow]')!;
-    more.click();
-    const folded = itemCard(host, book.id).querySelector<HTMLButtonElement>(
-      '.lightink-library-tag-chip-rest .lightink-library-tag-chip',
-    )!;
-    expect(folded.textContent).toBe('长篇');
-    folded.click();
+    await openItemMenu(host, book.id);
+    contextMenuItem('作品详情').click();
     await settle();
+    const detailNames = Array.from(
+      host.querySelectorAll<HTMLElement>('.lightink-library-detail-tag-list .lightink-library-tag-chip span'),
+    ).map((chip) => chip.textContent);
+    expect(detailNames).toEqual(['科幻', '太空', '探险', '长篇']);
     expect(deps.onOpen).not.toHaveBeenCalled();
-    expect(host.querySelector('.lightink-library-tag-filter-banner')?.textContent).toContain('长篇');
     view.destroy();
   });
 
@@ -6746,7 +6752,6 @@ describe('LibraryView mobile shelf', () => {
     expect(continueBlocks.length).toBeGreaterThan(0);
     const continueBlock = continueBlocks[continueBlocks.length - 1] ?? '';
     const continuePadding = cssLengthPx(cssDeclaration(continueBlock, 'padding'));
-    expect(Math.max(0, ...continuePadding)).toBeGreaterThanOrEqual(4);
     expect(Math.max(0, ...continuePadding)).toBeLessThanOrEqual(8);
     expect(continueBlock).not.toMatch(/border:\s*1px/);
     expect(continueBlock).not.toMatch(/--lightink-bg-elevated/);
@@ -6758,8 +6763,8 @@ describe('LibraryView mobile shelf', () => {
       /:is\(html\[data-android\], html\[data-touch-primary\]\)[\s\S]{0,80}?\.lightink-library-continue[\s\S]{0,40}?\.lightink-library-cover(?![\w-])/,
     );
     const touchContinueCover = touchContinueCoverBlocks[touchContinueCoverBlocks.length - 1] ?? '';
-    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'width'))[0]).toBe(36);
-    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'height'))[0]).toBe(48);
+    expect(cssLengthPx(cssDeclaration(touchContinueCover, 'width'))[0]).toBe(160);
+    expect(touchContinueCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
     const touchContinueOpenBlocks = cssRuleBodies(
       css,
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-library-continue-open/,
@@ -8130,12 +8135,11 @@ describe('LibraryView home visual system (R2)', () => {
     expect(wallCover.style.getPropertyValue('--lightink-library-jacket-hue')).toBe(
       String(jacketHue('无封面未读')),
     );
-    expect(heroCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
-      '无封面在读',
-    );
-    expect(wallCover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(
-      '无封面未读',
-    );
+    expect(heroCover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
+    expect(wallCover.querySelector('.lightink-library-cover-jacket-title')).toBeNull();
+    expect(host.querySelector('.lightink-library-continue')?.textContent).toContain('无封面在读');
+    expect(itemRow(host, plain.id).textContent).toContain('无封面未读');
+    expect(itemRow(host, plain.id).textContent?.match(/无封面未读/g)).toHaveLength(1);
     view.destroy();
   });
 
@@ -8292,7 +8296,8 @@ describe('LibraryView home visual system (R2)', () => {
         host.querySelectorAll<HTMLElement>('.lightink-library-cover-wall .lightink-library-item--cover'),
       ),
     ];
-    expect(focusables.length).toBeGreaterThanOrEqual(4);
+    expect(host.querySelector(`.lightink-library-item[data-item-id="${reading.id}"]`)).toBeNull();
+    expect(focusables.length).toBeGreaterThanOrEqual(3);
     for (const control of focusables) {
       expect(control).toBeInstanceOf(HTMLButtonElement);
       expect((control as HTMLButtonElement).tabIndex).toBe(0);

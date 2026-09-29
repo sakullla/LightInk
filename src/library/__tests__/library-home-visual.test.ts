@@ -68,24 +68,35 @@ describe('shelf home cover grid', () => {
 
   it('uses one 2:3 cover spec, cover-gap spacing, and three UI type sizes', () => {
     const home = shelfHomeSection();
-    const covers = home.match(
-      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home \.lightink-library-cover,\s*\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue \.lightink-library-cover\s*\{([^}]*)\}/,
+    const wallCover = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home \.lightink-library-cover/,
     );
-    expect(covers).not.toBeNull();
-    expect(covers?.[1]).toMatch(/width:\s*100%/);
-    expect(covers?.[1]).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
-    expect(covers?.[1]).toMatch(/border-radius:\s*6px/);
-    expect(covers?.[1]).toMatch(/transition:\s*none/);
+    expect(wallCover).toMatch(/width:\s*100%/);
+    expect(wallCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
+    expect(wallCover).toMatch(/border-radius:\s*6px/);
+    expect(wallCover).toMatch(/transition:\s*none/);
+    const heroCover = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue \.lightink-library-cover/,
+    );
+    expect(heroCover).toMatch(/width:\s*200px/);
+    expect(heroCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
 
     const homeGrid = ruleBody(
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
     );
-    expect(homeGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(96px,\s*1fr\)\)/);
-    expect(homeGrid).toMatch(/column-gap:\s*var\(--lightink-library-cover-gap-x\)/);
-    expect(homeGrid).toMatch(/row-gap:\s*var\(--lightink-library-cover-gap-y\)/);
+    expect(homeGrid).toMatch(/display:\s*flex/);
     expect(homeGrid).toMatch(/overflow-y:\s*auto/);
-    expect(home).toMatch(/\.lightink-library-home-books \.lightink-library-cover-wall,[\s\S]*?display:\s*contents/);
+    const wallGrid = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home-books \.lightink-library-items/,
+    );
+    expect(wallGrid).toMatch(/repeat\(\s*auto-fill,\s*minmax\(152px,\s*1fr\)\)/);
+    expect(wallGrid).toMatch(/column-gap:\s*var\(--lightink-library-cover-gap-x\)/);
+    expect(wallGrid).toMatch(/row-gap:\s*var\(--lightink-library-cover-gap-y\)/);
+    expect(home).toMatch(/display:\s*none/);
 
     const heading = ruleBody(
       home,
@@ -107,7 +118,9 @@ describe('shelf home cover grid', () => {
     expect(px(decl(progress, 'font-size'))).toBe(12);
     expect(title).toMatch(/-webkit-line-clamp:\s*2/);
     expect(home).toMatch(/\.lightink-library-cover--jacket\s*\{[^}]*color:\s*var\(--lightink-muted\)/);
-    expect(home).toMatch(/cover-jacket-title::after\s*\{[^}]*content:\s*none/);
+    expect(home).toMatch(
+      /\.lightink-library-cover-jacket-title,\s*\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-jacket-author\s*\{[^}]*display:\s*none/,
+    );
     expect(home).toMatch(/data-progress-fill[\s\S]*?height:\s*3px/);
 
     const selected = home.match(
@@ -124,17 +137,15 @@ describe('shelf home cover grid', () => {
       home,
       /:is\(html\[data-android\], html\[data-touch-primary\]\)\s+\.lightink-library\[data-library-nav='shelf'\]\s+\.lightink-library-continue(?![\w-])/,
     );
-    expect(continueRow).toMatch(/display:\s*grid/);
-    expect(continueRow).toMatch(/grid-column:\s*1\s*\/\s*-1/);
-    expect(continueRow).toMatch(/grid-template-columns:\s*subgrid/);
-    expect(continueRow).not.toMatch(/grid-template-columns:\s*1fr/);
+    expect(continueRow).toMatch(/display:\s*block/);
+    expect(continueRow).toMatch(/width:\s*100%/);
+    expect(continueRow).not.toMatch(/grid-template-columns:\s*subgrid/);
 
     const open = ruleBody(
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue-open(?!:)/,
     );
-    expect(open).toMatch(/grid-column:\s*1\s*\/\s*2/);
-    expect(open).not.toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(open).toMatch(/grid-template-columns:\s*200px\s+minmax\(0,\s*1fr\)/);
     expect(open).toMatch(/width:\s*100%/);
 
     const dismiss = ruleBody(
@@ -143,17 +154,21 @@ describe('shelf home cover grid', () => {
     );
     expect(dismiss).toMatch(/grid-column:\s*1\s*\/\s*2/);
     expect(dismiss).toMatch(/grid-row:\s*1\s*\/\s*2/);
-    expect(home).toMatch(/\.lightink-library-home-books \.lightink-library-cover-wall,[\s\S]*?display:\s*contents/);
+    expect(home).toMatch(/minmax\(152px,\s*1fr\)/);
   });
 
   it('fits a continue row plus two rows of at least four covers on the default desktop, and at least two on a phone', () => {
     const home = shelfHomeSection();
     const grid = ruleBody(
       home,
-      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home-books \.lightink-library-items/,
     );
     const trackMin = Number(grid.match(/minmax\((\d+)px,\s*1fr\)/)?.[1]);
-    const padTop = px(decl(grid, 'padding'));
+    const homeBox = ruleBody(
+      home,
+      /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-home/,
+    );
+    const padTop = px(decl(homeBox, 'padding'));
     const title = ruleBody(
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-item-text strong/,
@@ -190,10 +205,12 @@ describe('shelf home cover grid', () => {
       const gapY = tokenPx(tokens, '--lightink-library-cover-gap-y');
       const inner = windowWidth - nav - padX * 2 - DESKTOP_WINDOW.scrollbar;
       const columns = Math.floor((inner + gapX) / (trackMin + gapX));
-      expect(columns).toBeGreaterThanOrEqual(4);
+      expect(columns).toBe(4);
       const track = (inner - (columns - 1) * gapX) / columns;
-      const row = track * (3 / 2) + textBlock;
-      const firstScreen = row * 3 + gapY * 2 + padTop;
+      const heroCover = 200 * (3 / 2);
+      const wallRow = track * (3 / 2);
+      expect(heroCover).toBeGreaterThan(wallRow);
+      const firstScreen = heroCover + wallRow + textBlock + gapY + padTop;
       expect(firstScreen).toBeLessThanOrEqual(windowHeight - DESKTOP_WINDOW.titlebar);
     }
 
@@ -202,8 +219,8 @@ describe('shelf home cover grid', () => {
     fits(base, DESKTOP_WINDOW.width, DESKTOP_WINDOW.height);
     fits(compact, DESKTOP_WINDOW.width, DESKTOP_WINDOW.height);
 
-    expect(home).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?repeat\(\s*3,\s*minmax\(0,\s*1fr\)\)/);
-    expect(home).toMatch(/@media \(max-width:\s*430px\)[\s\S]*?repeat\(\s*2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(home).toMatch(/@media \(max-width:\s*430px\)[\s\S]*?repeat\(\s*2,\s*minmax\(104px,\s*1fr\)\)/);
+    expect(home).not.toMatch(/repeat\(\s*3,\s*minmax\(0,\s*1fr\)\)/);
     expect(home).not.toMatch(/repeat\(\s*1,\s*minmax\(0,\s*1fr\)\)/);
   });
 

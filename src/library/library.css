@@ -3019,7 +3019,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 /* 设置分组折叠（默认收起，分组太多）：标题即开关，箭头指示展开态；
  * 折叠时仅保留标题（h2），其余子元素不渲染占位。 */
 .lightink-library-manage-group[data-collapsed='true'] > :not(h2) {
-  display: none;
+  display: none !important;
 }
 
 .lightink-library-manage-group-toggle {
@@ -3189,8 +3189,39 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   gap: 2px;
 }
 
+.lightink-library-conceal-switch input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  border: 1px solid var(--lightink-border);
+  border-radius: 4px;
+  background: var(--lightink-bg);
+}
+
+.lightink-library-conceal-switch input[type='checkbox']:checked {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent);
+}
+
+.lightink-library-conceal-switch input[type='checkbox']:checked::after {
+  content: '';
+  width: 8px;
+  height: 4px;
+  border-bottom: 2px solid var(--lightink-bg);
+  border-left: 2px solid var(--lightink-bg);
+  transform: rotate(-45deg) translateY(-1px);
+}
+
 .lightink-library-conceal-switch input:disabled {
   cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .lightink-library-conceal-opacity-scale {
@@ -5767,10 +5798,11 @@ html:not([data-android]):not([data-touch-primary])
 
 
 /* ===== Shelf home cover grid =====
- * Continue reading and the wall share one 2:3 grid. Continue spans the row;
- * subgrid keeps its cover on the first track instead of a banner. A 96px
- * minimum still yields at least four columns, and that continue row plus two
- * cover rows fit a 1024×768 window after the nav (base and compact).
+ * Continue reading is a horizontal row above the wall. Its cover is 200px
+ * wide (2:3). The wall uses a 152px minimum so a 1024×768 window with the
+ * nav open is about four columns, including the compact spacing tokens.
+ * Narrower windows drop columns. Touch
+ * widths that cannot fit two 140px tracks use two columns of at least 104px.
  * Catalog, sources, and manage keep their own chrome. */
 .lightink-library[data-library-nav='shelf'] .lightink-library-workarea {
   min-height: 0;
@@ -5779,12 +5811,10 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home {
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  grid-auto-rows: max-content;
-  align-content: start;
-  column-gap: var(--lightink-library-cover-gap-x);
-  row-gap: var(--lightink-library-cover-gap-y);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--lightink-library-cover-gap-y);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -5811,11 +5841,23 @@ html:not([data-android]):not([data-touch-primary])
   background-clip: content-box;
 }
 
-/* Books and the wall box drop out so each cover joins the home grid. */
-.lightink-library[data-library-nav='shelf'] .lightink-library-home-books,
+/* The wall is its own grid under the continue-reading row. */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lightink-library-cover-gap-y);
+  min-width: 0;
+}
+
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
-  display: contents;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+  column-gap: var(--lightink-library-cover-gap-x);
+  row-gap: var(--lightink-library-cover-gap-y);
+  min-width: 0;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home-heading {
@@ -5836,10 +5878,8 @@ html:not([data-android]):not([data-touch-primary])
   .lightink-library[data-library-nav='shelf']
   .lightink-library-continue {
   position: relative;
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  width: auto;
+  display: block;
+  width: 100%;
   min-width: 0;
   max-width: none;
   margin: 0;
@@ -5852,11 +5892,10 @@ html:not([data-android]):not([data-touch-primary])
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
-  display: flex;
-  grid-column: 1 / 2;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
   width: 100%;
   min-width: 0;
   min-height: 0 !important;
@@ -5881,10 +5920,20 @@ html:not([data-android]):not([data-touch-primary])
   transform: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-cover,
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-cover {
   flex: none;
   width: 100%;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  transition: none;
+  transform: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
+  flex: none;
+  width: 200px;
   min-width: 0;
   height: auto;
   aspect-ratio: 2 / 3;
@@ -5934,6 +5983,12 @@ html:not([data-android]):not([data-touch-primary])
   white-space: normal;
 }
 
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text strong {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
 .lightink-library[data-library-nav='shelf'] .lightink-library-item-progress {
   color: var(--lightink-muted);
   font-family: var(--lightink-font-ui);
@@ -5962,24 +6017,9 @@ html:not([data-android]):not([data-touch-primary])
   color: var(--lightink-muted);
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-title {
-  display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
-  font-family: var(--lightink-font-ui);
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-title::after {
-  content: none;
-}
-
-.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover-jacket-author {
-  display: block;
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-title,
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover-jacket-author {
+  display: none;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
@@ -6041,12 +6081,30 @@ html:not([data-android]):not([data-touch-primary])
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
     .lightink-library-home {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
     padding: 12px max(16px, var(--lightink-safe-right, 0px))
       calc(88px + var(--lightink-safe-bottom, 0px))
       max(16px, var(--lightink-safe-left, 0px));
     background: var(--lightink-bg);
     -webkit-overflow-scrolling: touch;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue-open {
+    grid-template-columns: 160px minmax(0, 1fr);
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue .lightink-library-cover {
+    width: 160px;
+    aspect-ratio: 2 / 3;
+  }
+
+  :is(html[data-android], html[data-touch-primary])
+    .lightink-library[data-library-nav='shelf']
+    .lightink-library-continue .lightink-library-item-text strong {
+    font-size: 22px;
   }
 
   :is(html[data-android], html[data-touch-primary])
@@ -6063,8 +6121,9 @@ html:not([data-android]):not([data-touch-primary])
 @media (max-width: 430px) {
   :is(html[data-android], html[data-touch-primary])
     .lightink-library[data-library-nav='shelf']
-    .lightink-library-home {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    .lightink-library-home-books
+    .lightink-library-cover-wall {
+    grid-template-columns: repeat(2, minmax(104px, 1fr));
   }
 }
 

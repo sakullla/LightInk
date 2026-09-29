@@ -1020,11 +1020,25 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
         render();
         return;
       }
+      const requested = input.checked;
       if (isConcealRefusalKey(prefKey)) {
         refusals.delete(prefKey);
         deps.clearSwitchRefusal?.(prefKey);
       }
-      deps.update({ [prefKey]: input.checked } as Partial<ConcealPrefs>);
+      deps.update({ [prefKey]: requested } as Partial<ConcealPrefs>);
+      if (
+        requested &&
+        isConcealRefusalKey(prefKey) &&
+        deps.getPrefs()[prefKey] !== true &&
+        !refusals.has(prefKey)
+      ) {
+        refusals.set(
+          prefKey,
+          texts.needsTransparent.includes('透明')
+            ? '没有生效，开关保持关闭。'
+            : 'This did not take effect. The switch stays off.',
+        );
+      }
       render();
     });
     toggles.set(prefKey, { input, text, reason });

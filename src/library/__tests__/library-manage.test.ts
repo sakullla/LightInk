@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -255,6 +258,10 @@ describe('manage group collapsing', () => {
     title.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(appearance.dataset.collapsed).toBe('true');
     expect(title.getAttribute('aria-expanded')).toBe('false');
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-library-manage-group\[data-collapsed='true'\] > :not\(h2\)\s*\{[^}]*display:\s*none !important/,
+    );
     manage.destroy();
   });
 });
@@ -1422,6 +1429,29 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     expect(conceal.updates).toContainEqual({ miniWindow: true });
     expect(conceal.updates).toContainEqual({ background: { kind: 'preset', preset: 'sky' } });
     expect(conceal.updates).toContainEqual({ contentOpacity: 55 });
+  });
+
+  it('keeps transparent mode off and shows a reason when the update does not stick', () => {
+    const conceal = concealDeps();
+    const stuck = {
+      ...conceal.deps,
+      update: (update: Partial<ConcealPrefs>) => {
+        conceal.updates.push(update);
+      },
+    };
+    const manage = createLibraryManage(document, manageOptions({ conceal: stuck }).options);
+    const toggle = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-toggle="transparentMode"]',
+    )!;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toContainEqual({ transparentMode: true });
+    expect(toggle.checked).toBe(false);
+    const reason = manage.element.querySelector<HTMLElement>(
+      '[data-conceal-switch-reason="transparentMode"]',
+    )!;
+    expect(reason.hidden).toBe(false);
+    expect(reason.textContent).toContain('没有生效');
   });
 
   it('out-of-range opacity is not saved and falls back to the effective value (R6)', () => {

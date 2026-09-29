@@ -2217,11 +2217,24 @@ export function createLibraryView(
     };
   };
 
+  let emptyFailure = '';
+
   async function importLocalBook(): Promise<void> {
-    const item = await deps.onImportLocal();
-    if (item !== null) {
-      deps.onLocalChange?.();
-      await showMyBooks();
+    try {
+      const item = await deps.onImportLocal();
+      if (item !== null) {
+        emptyFailure = '';
+        deps.onLocalChange?.();
+        await showMyBooks();
+      }
+    } catch (error) {
+      const message = errorText(error, labels().offline);
+      if (items.length === 0) {
+        emptyFailure = message;
+        renderItems();
+        return;
+      }
+      deps.notify(message, 'error');
     }
   }
 
@@ -4474,7 +4487,7 @@ export function createLibraryView(
     navigation.hidden = breadcrumbs.hidden && pager.hidden;
   }
 
-  function appendCover(cover: HTMLElement, display: DisplayItem): void {
+  function appendCover(cover: HTMLElement, display: DisplayItem, plainJacket = false): void {
     const coverUrl = safeCoverUrl(display.item, sources);
     if (coverUrl !== undefined) {
       const image = doc.createElement('img');
@@ -4484,11 +4497,11 @@ export function createLibraryView(
       image.referrerPolicy = 'no-referrer';
       image.addEventListener('error', () => {
         image.remove();
-        appendJacket(cover, display.item);
+        appendJacket(cover, display.item, plainJacket);
       });
       cover.appendChild(image);
     } else {
-      appendJacket(cover, display.item);
+      appendJacket(cover, display.item, plainJacket);
     }
   }
 
@@ -4497,11 +4510,13 @@ export function createLibraryView(
    * to the title) instead of a grey tile with one letter. Small covers (rows,
    * continue strip) fall back to the initial via the title's `data-cover-initial`.
    */
-  function appendJacket(cover: HTMLElement, item: LibraryItem): void {
+  function appendJacket(cover: HTMLElement, item: LibraryItem, plain = false): void {
     const title = displayBookTitle(item);
     const initial = title.slice(0, 1);
     cover.classList.add('lightink-library-cover--jacket');
     cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
+    // Shelf home keeps the title under the cover only.
+    if (plain) return;
     // Decorative like an <img alt="">: the row text already names the book.
     const jacketTitle = doc.createElement('span');
     jacketTitle.className = 'lightink-library-cover-jacket-title';
@@ -4610,16 +4625,14 @@ export function createLibraryView(
     // 进菜单（Apple HIG / NN/G：长列表用选择器而非扁平菜单）。
     const custom = flattenedCustomGroups();
     const items: MenuItem[] = [];
-    // 桌面书架单击直接开书；「作品详情」让详情侧栏（标签编辑、进度、元数据）可达。
-    if (!isMobileLibraryChrome()) {
-      items.push({
-        id: 'details',
-        label: labels().details,
-        action: () => {
-          void selectItem(display);
-        },
-      });
-    }
+    // 封面单击直接开书。桌面右键和窄触屏长按都能打开详情。
+    items.push({
+      id: 'details',
+      label: labels().details,
+      action: () => {
+        void selectItem(display);
+      },
+    });
     const shelfProgress = progressFor(display);
     if (shelfProgress?.status === 'in-progress' || shelfProgress?.status === 'finished') {
       items.push({
@@ -4805,17 +4818,20 @@ export function createLibraryView(
     row.classList.toggle('is-selected', selectedHere);
     row.setAttribute('aria-keyshortcuts', 'G');
     row.draggable = true;
+    const shelfWall = activeSection === 'shelf' && !catalogActive();
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover';
-    appendCover(cover, display);
+    appendCover(cover, display, shelfWall);
     const text = doc.createElement('span');
     text.className = 'lightink-library-item-text';
     const title = doc.createElement('strong');
     title.textContent = displayBookTitle(display.item);
     text.append(title);
-    const metaParts = [itemAuthors(display.item).join(', '), display.item.series].filter(
-      (part): part is string => typeof part === 'string' && part !== '',
-    );
+    const metaParts = shelfWall
+      ? []
+      : [itemAuthors(display.item).join(', '), display.item.series].filter(
+          (part): part is string => typeof part === 'string' && part !== '',
+        );
     if (metaParts.length > 0) {
       const meta = doc.createElement('span');
       meta.textContent = metaParts.join(' · ');
@@ -4839,7 +4855,8 @@ export function createLibraryView(
         openMembershipEditor(display.item.id);
       }
     });
-    const assignedTags = catalogActive() ? [] : tagsForItem(display.item.id);
+    const assignedTags =
+      catalogActive() || shelfWall ? [] : tagsForItem(display.item.id);
     if (assignedTags.length > 0) {
       const strip = doc.createElement('div');
       strip.className = 'lightink-library-item-tags';
@@ -4925,10 +4942,12 @@ export function createLibraryView(
     const progress = progressFor(latest);
     const open = button(doc, '', 'lightink-library-continue-open');
     const titleText = displayBookTitle(latest.item);
+    open.dataset.itemId = latest.item.id;
+    if (progress !== null) open.dataset.progressStatus = progress.status;
     open.setAttribute('aria-label', titleText === '' ? labels().open : titleText);
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover';
-    appendCover(cover, latest);
+    appendCover(cover, latest, true);
     const text = doc.createElement('span');
     text.className = 'lightink-library-item-text';
     const title = doc.createElement('strong');
@@ -4945,6 +4964,11 @@ export function createLibraryView(
     }
     open.append(cover, text);
     open.addEventListener('click', () => void openSelected(latest));
+    open.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openItemCollectionMenu(latest, { x: event.clientX, y: event.clientY });
+    });
     const dismiss = button(doc, '×', 'lightink-library-icon-button lightink-library-continue-dismiss');
     dismiss.setAttribute('aria-label', labels().dismissContinue);
     dismiss.addEventListener('click', (event) => {
@@ -4998,6 +5022,13 @@ export function createLibraryView(
     });
     actions.append(importButton, sourceButton);
     card.append(title, hint, actions);
+    if (emptyFailure !== '') {
+      const failure = doc.createElement('p');
+      failure.className = 'lightink-library-home-empty-error';
+      failure.dataset.libraryEmptyError = '';
+      failure.textContent = emptyFailure;
+      card.append(failure);
+    }
     return card;
   }
 
@@ -5013,6 +5044,7 @@ export function createLibraryView(
       return;
     }
     if (activeSection === 'shelf') {
+      if (items.length > 0) emptyFailure = '';
       renderContinueBar();
       syncWallHeading();
     }
@@ -5058,8 +5090,13 @@ export function createLibraryView(
       return;
     }
     for (const folder of folders) itemList.appendChild(renderFolderRow(folder));
+    const heroId =
+      activeSection === 'shelf' && !catalogActive() && !continueHost.hidden
+        ? (latestInProgress()?.item.id ?? null)
+        : null;
     let renderedCatalogGroup: string | undefined;
     for (const display of shown) {
+      if (heroId !== null && display.item.id === heroId) continue;
       if (
         catalogActive() &&
         display.catalogGroupKey !== undefined &&
@@ -5345,10 +5382,14 @@ export function createLibraryView(
     headerRow.append(detailHeading, close);
     const title = doc.createElement('h3');
     title.textContent = displayBookTitle(selected.item);
-    const authors = doc.createElement('p');
-    authors.className = 'lightink-library-detail-authors';
-    authors.textContent = itemAuthors(selected.item).join(', ');
-    detail.append(headerRow, title, authors);
+    detail.append(headerRow, title);
+    const authorText = itemAuthors(selected.item).join(', ');
+    if (authorText !== '') {
+      const authors = doc.createElement('p');
+      authors.className = 'lightink-library-detail-authors';
+      authors.textContent = authorText;
+      detail.append(authors);
+    }
     const facts: Array<[string, string | undefined]> = [
       [labels().series, selected.item.series],
       [labels().number, selected.item.number],
@@ -5433,7 +5474,7 @@ export function createLibraryView(
     const detailItemId = selected.item.id;
     const assignedTags = tagsForItem(detailItemId);
     const canEditTags = deps.library.setItemTags !== undefined;
-    if (assignedTags.length > 0 || canEditTags) {
+    if (assignedTags.length > 0) {
       const tagBlock = doc.createElement('div');
       tagBlock.className = 'lightink-library-detail-tags';
       const tagHeading = doc.createElement('h2');
@@ -6275,12 +6316,19 @@ export function createLibraryView(
             : await deps.webdavSource.addSource(input)
           : await deps.opds.addSource(input);
       if (saved === undefined) return;
+      emptyFailure = '';
       await refreshSources();
       closeSourceForm();
       await openCatalog(saved.id);
     } catch (error) {
       const message = errorText(error, labels().offline);
       setFormStatus(message, 'error');
+      if (items.length === 0 && shelfItems.length === 0) {
+        emptyFailure = message;
+        closeSourceForm();
+        await activateShelf();
+        return;
+      }
       deps.notify(message, 'error');
     }
   }
