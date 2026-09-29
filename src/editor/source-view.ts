@@ -404,6 +404,18 @@ export class SourceView {
     this.codeEl = code;
     this.lastSynced = text;
 
+    // T5 切换过渡：CSS 初始 opacity: 0（.lightink-source-overlay），挂载后
+    // 下一帧加 .is-visible 触发令牌驱动的淡入；reduced-motion 下全局媒体
+    // 查询把 duration 压到 0.01ms，等效无动效。双 rAF 保证首帧样式已提交。
+    const revealOverlay = (): void => {
+      if (this.wrapper === wrapper) this.wrapper.classList.add('is-visible');
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(revealOverlay));
+    } else {
+      revealOverlay();
+    }
+
     void ensureHighlightLanguage('markdown').then((loaded) => {
       if (loaded && this.codeEl === code && this.textarea !== null) {
         code.innerHTML = renderHighlightedSource(this.textarea.value);

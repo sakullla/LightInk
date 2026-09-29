@@ -19,6 +19,11 @@ html {
 }
 
 body {
+  /* T5：主题切换时背景/前景色平滑过渡（时长走 --lightink-duration-base 令牌；
+     reduced-motion 由文件底部全局媒体查询压制 duration）。 */
+  transition:
+    background-color var(--lightink-duration-base, 180ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-base, 180ms) var(--lightink-easing-standard);
   background: var(--lightink-bg);
   color: var(--lightink-fg);
   font-family: var(--lightink-font-ui);
@@ -1892,6 +1897,18 @@ html[data-reading-layout='scroll']:has(
   width: 0;
   height: 0;
   display: none;
+}
+
+/* T5 源码/所见切换过渡：进入源码态时叠加层从透明淡入（时长走
+   --lightink-duration-fast 令牌；reduced-motion 由文件底部全局媒体查询压制）。
+   初始 opacity: 0，source-view.ts 在挂载后下一帧加 .is-visible 触发过渡。 */
+.lightink-source-overlay {
+  opacity: 0;
+  transition: opacity var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-source-overlay.is-visible {
+  opacity: 1;
 }
 
 /* 源码态：宿主不再需要 WYSIWYG 的 min-height 占位（PM 已 display:none）。 */

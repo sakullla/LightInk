@@ -200,6 +200,39 @@ describe('T2 shell accessibility: focus-visible fallback, 44px tab close, modal 
   });
 });
 
+describe('T5 token-driven transitions for source/theme switch', () => {
+  const sourceViewSource = readFileSync(
+    new URL('../../editor/source-view.ts', import.meta.url),
+    'utf-8',
+  );
+
+  it('fades the source overlay in with the fast duration token on toggle', () => {
+    expect(themeCss).toMatch(
+      /\.lightink-source-overlay\s*\{[^}]*opacity:\s*0[^}]*transition:\s*opacity var\(--lightink-duration-fast,\s*100ms\) var\(--lightink-easing-standard\)/,
+    );
+    expect(themeCss).toMatch(
+      /\.lightink-source-overlay\.is-visible\s*\{[^}]*opacity:\s*1/,
+    );
+    // 挂载后由最小 class 时序触发淡入，不引入 JS 动画库。
+    expect(sourceViewSource).toContain("classList.add('is-visible')");
+  });
+
+  it('transitions body background/foreground with the base duration token on theme switch', () => {
+    expect(themeCss).toMatch(
+      /body\s*\{[^}]*transition:[^}]*background-color var\(--lightink-duration-base,\s*180ms\) var\(--lightink-easing-standard\)[^}]*color var\(--lightink-duration-base,\s*180ms\) var\(--lightink-easing-standard\)/,
+    );
+  });
+
+  it('keeps the reduced-motion fallback suppressing the new transitions', () => {
+    // 全局媒体查询用 !important 压所有元素 transition-duration，新规则天然被覆盖。
+    expect(themeCss).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(themeCss).toContain('transition-duration: 0.01ms !important');
+    expect(themeCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\*\s*,[\s\S]*\*::before,[\s\S]*\*::after/,
+    );
+  });
+});
+
 describe('T4 modal touch form and keyboard-inset single deduction', () => {
   const KEYBOARD_INSET = '--lightink-keyboard-inset';
 
