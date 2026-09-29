@@ -289,8 +289,7 @@ describe('tokens.css 内置主题', () => {
 describe('tokens.css 主题无关共享令牌（T1: motion/z）', () => {
   /** 提取文件级 `:root { ... }` 共享块（仅匹配行首 :root，避开 `:root,\n[data-theme=...]` 组合）。 */
   function sharedRootBlock(): string {
-    const match = /(?:^|\})\s*:root\s*,?\s*\n?\s*\{([\s\S]*?)\}/.exec(css);
-    // 更稳妥：只取单行 `:root {` 开头的块，排除 `:root,` 组合选择器。
+    // 只取单行 `:root {` 开头的块，排除 `:root,` 组合选择器。
     const single = /(^|\n)\s*:root\s*\{([\s\S]*?)\}/.exec(css);
     if (single === null) {
       throw new Error('tokens.css 缺少独立 :root 共享块');
@@ -302,9 +301,8 @@ describe('tokens.css 主题无关共享令牌（T1: motion/z）', () => {
     const block = sharedRootBlock();
     expect(tokenValue(block, '--lightink-duration-fast')).toBe('100ms');
     expect(tokenValue(block, '--lightink-duration-base')).toBe('180ms');
-    expect(tokenValue(block, '--lightink-easing-standard')).toBe('cubic-bezier(0.2, 0, 0, 1)');
     // 缓动必须是克制 ease-out 族（终点导数为 0）。
-    expect(tokenValue(block, '--lightink-easing-standard')).toContain('cubic-bezier(0.2, 0, 0, 1)');
+    expect(tokenValue(block, '--lightink-easing-standard')).toBe('cubic-bezier(0.2, 0, 0, 1)');
   });
 
   it('在主题块外的共享 :root 定义三层 z-index 且 dialog < menu < progress', () => {
@@ -312,9 +310,9 @@ describe('tokens.css 主题无关共享令牌（T1: motion/z）', () => {
     const dialog = tokenValue(block, '--lightink-z-dialog');
     const menu = tokenValue(block, '--lightink-z-menu');
     const progress = tokenValue(block, '--lightink-z-progress');
-    expect(dialog).toBe('100'); // 对齐现有 .lightink-modal-overlay
-    expect(menu).toBe('2000'); // 对齐现有 context-menu 内联值
-    expect(progress).toBe('3000'); // 不可打断进度须压过弹窗与菜单
+    expect(dialog).toBe('100'); // 对齐现有 .lightink-modal-overlay（theme.css z-index:100）
+    expect(menu).toBe('10050'); // 对齐现有 .lightink-context-menu（theme.css z-index:10050）
+    expect(progress).toBe('10100'); // 取高于菜单的 10100，不可打断进度须压过弹窗与菜单
     expect(Number(dialog)).toBeLessThan(Number(menu));
     expect(Number(menu)).toBeLessThan(Number(progress));
   });
