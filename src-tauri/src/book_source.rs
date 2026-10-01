@@ -960,10 +960,9 @@ fn parse_attr_pred(source: &str) -> Option<AttrPred> {
         (AttrOp::Suffix, value)
     } else if let Some(value) = rest.strip_prefix("*=") {
         (AttrOp::Contains, value)
-    } else if let Some(value) = rest.strip_prefix('=') {
-        (AttrOp::Equal, value)
     } else {
-        return None;
+        let value = rest.strip_prefix('=')?;
+        (AttrOp::Equal, value)
     };
     Some(AttrPred {
         name: name.to_ascii_lowercase(),
