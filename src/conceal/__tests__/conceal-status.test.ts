@@ -62,4 +62,19 @@ describe('concealCustomEffect', () => {
       '窗口不透明；正文不透明度为 100；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透',
     );
   });
+
+  it('omits top, body, and click-through once transparent mode is off', () => {
+    const prefs = {
+      ...defaultConcealPrefs(false),
+      transparentMode: false,
+      hideTop: true,
+      hideBody: true,
+      hideBottom: true,
+      alwaysOnTop: true,
+      clickThrough: true,
+    };
+    expect(concealCustomEffect(prefs, effects)).toBe(
+      '窗口不透明；正文不透明度为 100；鼠标离开时隐藏底栏；置顶；不是迷你窗口；点击不穿透',
+    );
+  });
 });

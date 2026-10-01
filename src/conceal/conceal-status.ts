@@ -42,13 +42,17 @@ export function concealSceneResult(
   return labels.sceneFloatingResult;
 }
 
-/** 偏离三个场景时的当前效果。顺序固定，便于两处对照。 */
+/**
+ * 偏离三个场景时的当前效果。顺序固定，便于两处对照。
+ * 顶栏、正文和点击穿透只在透明模式开启时生效，说明跟实际窗口，不跟仍留着的开关。
+ * 底栏不依赖透明模式。
+ */
 export function concealCustomEffect(prefs: ConcealPrefs, labels: ConcealEffectLabels): string {
   const regions: string[] = [];
-  if (prefs.hideTop) {
+  if (prefs.transparentMode && prefs.hideTop) {
     regions.push(labels.regionTop);
   }
-  if (prefs.hideBody) {
+  if (prefs.transparentMode && prefs.hideBody) {
     regions.push(labels.regionBody);
   }
   if (prefs.hideBottom) {
@@ -64,6 +68,8 @@ export function concealCustomEffect(prefs: ConcealPrefs, labels: ConcealEffectLa
     hide,
     prefs.alwaysOnTop ? labels.effectPinned : labels.effectNotPinned,
     prefs.miniWindow ? labels.effectMini : labels.effectNotMini,
-    prefs.clickThrough ? labels.effectClickThrough : labels.effectNoClickThrough,
+    prefs.transparentMode && prefs.clickThrough
+      ? labels.effectClickThrough
+      : labels.effectNoClickThrough,
   ].join(labels.effectSeparator);
 }

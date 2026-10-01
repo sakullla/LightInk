@@ -1918,4 +1918,20 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     );
     expect(conceal.updates).toHaveLength(updatesBeforeCustom);
   });
+
+  it('describes only effects that still apply after transparent mode is turned off', () => {
+    const conceal = concealDeps({
+      ...defaultConcealPrefs(false),
+      transparentMode: false,
+      hideTop: true,
+      hideBody: true,
+      hideBottom: true,
+      alwaysOnTop: true,
+      clickThrough: true,
+    });
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    expect(manage.element.querySelector<HTMLElement>('[data-conceal-custom-effect]')?.textContent).toBe(
+      '窗口不透明；正文不透明度为 100；鼠标离开时隐藏底栏；置顶；不是迷你窗口；点击不穿透',
+    );
+  });
 });
