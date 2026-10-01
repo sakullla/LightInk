@@ -167,11 +167,18 @@ describe('EPUB 合成确定性（跨作业 SHA-256 去重前提）', () => {
       ],
     });
 
-  it('同内容两次合成产出完全相同的字节', async () => {
+  it('同内容两次合成产出完全相同的字节（跨 2 秒 DOS 时间窗）', async () => {
     const state = runtimeFromPersisted(doneJob());
-    const first = await buildDownloadEpub(state, 'zh');
-    const second = await buildDownloadEpub(state, 'zh');
-    expect(Array.from(first)).toEqual(Array.from(second));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+      const first = await buildDownloadEpub(state, 'zh');
+      vi.setSystemTime(new Date('2026-10-01T00:00:05Z'));
+      const second = await buildDownloadEpub(state, 'zh');
+      expect(Array.from(first)).toEqual(Array.from(second));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('任一章节内容变化即产生不同字节（不同内容不同条目）', async () => {

@@ -35,6 +35,18 @@ function textEntry(text: string): Uint8ArrayReader {
   return new Uint8ArrayReader(new TextEncoder().encode(text));
 }
 
+/**
+ * 固定 ZIP 条目时间（DOS 1980-01-01 本地字段）：同内容合成必须逐字节一致，
+ * 这是跨作业 SHA-256 去重的前提。zip.js 默认取 `new Date()`，跨 2 秒 DOS
+ * 边界两次合成会写出不同时间字段，去重即失效。
+ */
+const EPUB_ZIP_LASTMOD = new Date(1980, 0, 1, 0, 0, 0);
+
+const EPUB_ZIP_WRITER_OPTIONS = {
+  extendedTimestamp: false,
+  lastModDate: EPUB_ZIP_LASTMOD,
+} as const;
+
 /** ── OPF/spine 最小解析（epub.ts 同源逻辑的重组侧子集） ───────────────── */
 
 function attrValue(tag: string, name: string): string | null {
@@ -166,7 +178,7 @@ export async function rebuildTranslatedEpub(input: RebuiltEpubInput): Promise<Ui
   const replacements = new Map(
     input.spinePaths.map((path, index) => [path, input.unitBodies[index] ?? '']),
   );
-  const writer = new ZipWriter(new Uint8ArrayWriter(), { extendedTimestamp: false });
+  const writer = new ZipWriter(new Uint8ArrayWriter(), EPUB_ZIP_WRITER_OPTIONS);
   const ordered = [...entries].sort((left, right) =>
     left.filename === 'mimetype' ? -1 : right.filename === 'mimetype' ? 1 : 0,
   );
@@ -297,7 +309,7 @@ async function deterministicEpubIdentifier(input: FreshEpubInput): Promise<strin
 /** 按已解析章节结构新组最小 EPUB 2 包。 */
 export async function buildTranslatedEpub(input: FreshEpubInput): Promise<Uint8Array> {
   const identifier = await deterministicEpubIdentifier(input);
-  const writer = new ZipWriter(new Uint8ArrayWriter(), { extendedTimestamp: false });
+  const writer = new ZipWriter(new Uint8ArrayWriter(), EPUB_ZIP_WRITER_OPTIONS);
   await writer.add('mimetype', textEntry('application/epub+zip'), { level: 0 });
   await writer.add('META-INF/container.xml', textEntry(containerXml()));
   await writer.add('OEBPS/content.opf', textEntry(contentOpf(input, identifier)));
