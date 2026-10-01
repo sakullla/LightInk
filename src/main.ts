@@ -157,6 +157,7 @@ import {
   type ReaderChrome,
   type ReaderConcealBarLabels,
 } from './reader/reader-chrome.js';
+import { syncSystemBarsVisible } from './reader/system-bars.js';
 import {
   handleExternalOpen,
   planColdStartSurface,
@@ -790,7 +791,28 @@ function concealStatusLabels() {
   };
 }
 
-/** 摸鱼设置段注入（library-manage 消费；Android 不注入即整段不渲染）。 */
+/**
+ * 摸鱼设置段注入（library-manage 消费；Android 不注入即整段不渲染）。
+ * 浏览器预览下 initConceal 提前 return，concealController 恒为 null——落到
+ * 本地可写副本：与控制器同一条「合并→校验→持久化」链路（saveConcealPrefs），
+ * 偏好照常编辑落地，窗口效果在真实桌面会话生效；否则会话内所有开关都是
+ * 点了没反应的死控件。
+ */
+let concealPreviewPrefs: ConcealPrefs | null = null;
+
+function concealPrefsCurrent(): ConcealPrefs {
+  return concealController?.getEffectivePrefs() ?? concealPreviewPrefs ?? concealPrefsInitial;
+}
+
+function concealApplyPrefsLocal(update: Partial<ConcealPrefs>): void {
+  const previous = concealPrefsCurrent();
+  concealPreviewPrefs = saveConcealPrefs(
+    window.localStorage,
+    { ...previous, ...update },
+    previous,
+  );
+}
+
 const concealManageDeps = {
   labels: () => ({
     ...concealStatusLabels(),
@@ -841,9 +863,13 @@ const concealManageDeps = {
     clickThroughHint: i18n.t('conceal.clickThroughHint'),
   }),
   isMac: concealMac,
-  getPrefs: (): ConcealPrefs => concealController?.getEffectivePrefs() ?? concealPrefsInitial,
+  getPrefs: concealPrefsCurrent,
   update: (update: Partial<ConcealPrefs>) => {
-    concealController?.applyPrefs(update);
+    if (concealController !== null) {
+      concealController.applyPrefs(update);
+      return;
+    }
+    concealApplyPrefsLocal(update);
   },
   updateBossKeys: (primary: string, secondary: string) =>
     concealController?.updateBossKeys(primary, secondary) ??
@@ -905,16 +931,24 @@ function syncOpenReaderConcealBars(): void {
 function attachReaderConcealBar(chrome: ReaderChrome): void {
   chrome.attachConcealBar({
     labels: readerConcealBarLabels,
-    getPrefs: () => concealController?.getEffectivePrefs() ?? concealPrefsInitial,
+    getPrefs: concealPrefsCurrent,
     applyPrefs: (next) => {
-      concealController?.applyPrefs(next);
+      if (concealController !== null) {
+        concealController.applyPrefs(next);
+      } else {
+        concealApplyPrefsLocal(next);
+      }
       notifyConcealPrefsRefresh();
     },
     previewOpacity: (value) => {
       concealController?.previewContentOpacity(value);
     },
     commitOpacity: (value) => {
-      concealController?.commitContentOpacity(value);
+      if (concealController !== null) {
+        concealController.commitContentOpacity(value);
+      } else if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100) {
+        concealApplyPrefsLocal({ contentOpacity: value });
+      }
       notifyConcealPrefsRefresh();
     },
     subscribeRefusals: (listener) => concealManageDeps.subscribeSwitchRefusal(listener),
@@ -1357,6 +1391,8 @@ function disposeMarkdownReaderChrome(): void {
   markdownReaderChromeHost = null;
   markdownReaderChrome?.destroy();
   markdownReaderChrome = null;
+  // 沉浸阅读 chrome 拆除后系统栏恢复显示（Android；非 Android 为 no-op）。
+  syncSystemBarsVisible(true);
 }
 
 function syncMarkdownReaderChrome(): void {
@@ -1404,6 +1440,10 @@ function syncMarkdownReaderChrome(): void {
         void finishMarkdownEdit();
       },
       markdownEditing: () => markdownEditing,
+      // 与书库阅读器同一契约：chrome 藏起时藏系统栏进入沉浸，唤出时恢复。
+      onRevealChange: (shown) => {
+        syncSystemBarsVisible(shown);
+      },
     });
     markdownReaderChromeHost = host;
     applyMarkdownEditable(false);

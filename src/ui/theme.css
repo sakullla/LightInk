@@ -156,6 +156,14 @@ html[data-display='xuhd'] {
   background: var(--lightink-selection);
 }
 
+/* 统一光标颜色：正文编辑由 .lightink-prose 声明，这里覆盖输入框/源码
+   textarea 等其余可输入表面（caret-color 沿继承链生效）。 */
+input,
+textarea,
+[contenteditable='true'] {
+  caret-color: var(--lightink-accent);
+}
+
 #app {
   display: flex;
   flex-direction: column;
@@ -545,11 +553,20 @@ html[data-platform='mac'] #app.is-workspace-editor .lightink-menu-trigger {
   align-items: stretch;
   overflow-x: auto;
   overflow-y: hidden;
+  /* 溢出滚动交给滚轮（wheel→scrollLeft）与激活项 scrollIntoView，
+     不渲染横向滚动条——一条滚动条会把标签栏垫高且视觉嘈杂。 */
+  scrollbar-width: none;
   gap: 2px;
   padding: 3px 4px 2px;
   border-bottom: 1px solid var(--lightink-border);
   border-radius: 0;
   background: var(--lightink-bg);
+}
+
+#lightink-tabbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .lightink-tab {
@@ -3011,6 +3028,26 @@ html[data-reading-layout='scroll']:has(
   background: var(--lightink-overlay);
   pointer-events: auto;
   -webkit-app-region: no-drag;
+  animation: lightink-modal-fade var(--lightink-duration-base, 180ms)
+    var(--lightink-easing-standard);
+}
+
+@keyframes lightink-modal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.lightink-modal-overlay > * {
+  animation: lightink-modal-pop var(--lightink-duration-base, 180ms)
+    var(--lightink-easing-standard);
+}
+
+@keyframes lightink-modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
 }
 
 /* ===== open-progress：打开进度弹层 =====

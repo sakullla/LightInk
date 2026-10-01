@@ -13,6 +13,12 @@
   letter-spacing: var(--lightink-letter-spacing-body, 0);
   text-autospace: normal;
   text-spacing-trim: trim-start;
+  /* ProseMirror 要求编辑根声明 white-space（推荐 pre-wrap）：否则连续空格
+     被 HTML 折叠，输入多空格时所见与序列化结果不一致，且运行时报
+     「expects the CSS white-space property to be set」警告。 */
+  white-space: pre-wrap;
+  /* 强调色光标：比默认前景色在暖纸/深底上都更易定位。 */
+  caret-color: var(--lightink-accent);
 }
 
 .lightink-prose pre,

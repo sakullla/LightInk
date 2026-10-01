@@ -193,6 +193,11 @@ export interface ReaderChromeDeps {
   onMarkdownEdit?: () => void;
   onMarkdownFinish?: () => void | Promise<void>;
   markdownEditing?: () => boolean;
+  /**
+   * 有效显隐变化通知（合成 conceal 接管后的 barShown，变化才回调）。
+   * Android 阅读态用它成对显隐系统栏；桌面宿主可忽略。
+   */
+  onRevealChange?: (shown: boolean) => void;
   onDestroy?: () => void;
 }
 
@@ -673,11 +678,17 @@ export function createReaderChrome(
     { readonly input: HTMLInputElement; readonly reason: HTMLParagraphElement }
   >();
 
+  let lastChromeShown: boolean | null = null;
+
   const syncDom = (): void => {
     // R7 接管态与原机制合成（单写者仍在本函数）：
     //   barShown  = held 强制显示 ‖ (revealed 且未被 hidden 强制隐藏)
     //   footerShown/whisperShown 同理按 bottom 合成。
     const barShown = concealTop === 'held' || (revealed && concealTop !== 'hidden');
+    if (barShown !== lastChromeShown) {
+      lastChromeShown = barShown;
+      deps.onRevealChange?.(barShown);
+    }
     if (element.hidden === barShown) {
       element.hidden = !barShown;
     }

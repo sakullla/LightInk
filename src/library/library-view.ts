@@ -2238,6 +2238,8 @@ export function createLibraryView(
       aiModel: translate(locale, 'reader.ai.model'),
       aiKey: translate(locale, 'reader.ai.key'),
       aiKeyClear: translate(locale, 'reader.ai.keyClear'),
+      aiKeyShow: translate(locale, 'reader.ai.keyShow'),
+      aiKeyHide: translate(locale, 'reader.ai.keyHide'),
       aiKeySavedPlaceholder: translate(locale, 'reader.ai.keySavedPlaceholder'),
       aiAllowHttp: translate(locale, 'reader.ai.allowHttp'),
       aiTargetLang: translate(locale, 'reader.ai.targetLang'),
@@ -6332,6 +6334,14 @@ export function createLibraryView(
     const username = makeInput('username');
     const password = makeInput('password', 'password');
     const token = makeInput('token', 'password');
+    // autocomplete 令牌：url/username/current-password 让密码管理器与浏览器
+    // 自动填充能认出凭据字段；title/token 是应用数据，显式关掉避免误填。
+    // （'url' 不在 TS AutoFill 联合类型内，统一走 setAttribute。）
+    title.setAttribute('autocomplete', 'off');
+    url.setAttribute('autocomplete', 'url');
+    username.setAttribute('autocomplete', 'username');
+    password.setAttribute('autocomplete', 'current-password');
+    token.setAttribute('autocomplete', 'off');
     username.required = false;
     password.required = false;
     token.required = false;

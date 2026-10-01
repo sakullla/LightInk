@@ -182,6 +182,23 @@ class FakeEl {
     }
   }
 
+  /** 派发任意类型事件（click 之外的 auxclick/mousedown/wheel 等）。 */
+  fire(type: string, props: Record<string, unknown> = {}): { defaultPrevented: boolean } {
+    const event = {
+      type,
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {},
+      ...props,
+    };
+    for (const fn of this.listeners.get(type) ?? []) {
+      fn(event);
+    }
+    return event;
+  }
+
   querySelector(selector: string): FakeEl | null {
     if (selector.startsWith('#')) {
       const id = selector.slice(1);
@@ -422,6 +439,38 @@ describe('createAppShell immersive chrome', () => {
     expect(activeButton?.getAttribute('aria-selected')).toBe('true');
     expect((activeButton as { title?: string } | undefined)?.title).toBe('b.md');
     expect(tabBar?.children[1]?.children[1]?.tagName).toBe('button');
+  });
+
+  it('middle-click on a tab closes it; other buttons do not', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(root, stubActions(), {
+      shortcutBindings: () => [],
+      storage: null,
+      initialPinPrefs: { menu: true, tabs: true },
+    });
+    const onClose = vi.fn();
+    shell.renderTabBar(
+      [
+        { id: 'tab-1', title: 'a.md', dirty: false },
+        { id: 'tab-2', title: 'b.md', dirty: false },
+      ],
+      'tab-1',
+      { onSwitch: () => undefined, onClose },
+    );
+    const tabBar = (root as unknown as FakeEl).querySelector('#lightink-tabbar');
+    const second = tabBar?.children[1];
+    expect(second).not.toBeNull();
+    // mousedown 吞掉中键 autoscroll 起始；auxclick 执行关闭。
+    const down = second!.fire('mousedown', { button: 1 });
+    expect(down.defaultPrevented).toBe(true);
+    const aux = second!.fire('auxclick', { button: 1 });
+    expect(aux.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledWith('tab-2');
+    onClose.mockClear();
+    // 左键 auxclick / 非中键不触发关闭。
+    second!.fire('auxclick', { button: 0 });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('restores pinned chrome from initialPinPrefs', () => {

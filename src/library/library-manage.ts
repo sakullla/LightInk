@@ -157,6 +157,8 @@ export interface LibraryManageLabels {
   readonly aiModel: string;
   readonly aiKey: string;
   readonly aiKeyClear: string;
+  readonly aiKeyShow: string;
+  readonly aiKeyHide: string;
   readonly aiKeySavedPlaceholder: string;
   readonly aiAllowHttp: string;
   readonly aiTargetLang: string;
@@ -272,6 +274,110 @@ function button(doc: Document, text: string, className = ''): HTMLButtonElement 
   if (className !== '') el.className = className;
   el.textContent = text;
   return el;
+}
+
+/**
+ * radiogroup 内 Arrow/Home/End 移动并激活目标项（WAI-ARIA radio group
+ * 惯例）。激活可能触发整组重建（主题色板 renderThemeSwatches 即如此）：
+ * click 后旧节点若已脱离文档，按下标重取新节点再聚焦。
+ */
+function bindRadioGroupKeys(container: HTMLElement, itemSelector: string): void {
+  container.addEventListener('keydown', (event) => {
+    if (!(event.target instanceof HTMLElement)) {
+      return;
+    }
+    const items = Array.from(container.querySelectorAll<HTMLElement>(itemSelector));
+    const index = items.indexOf(event.target);
+    if (index < 0 || items.length === 0) {
+      return;
+    }
+    let next: number;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        next = (index + 1) % items.length;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        next = (index - 1 + items.length) % items.length;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = items.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const target = items[next]!;
+    target.click();
+    const fresh = target.isConnected
+      ? target
+      : container.querySelectorAll<HTMLElement>(itemSelector)[next];
+    fresh?.focus();
+  });
+}
+
+/** 导航行右端的 › 指示（feather chevron，与书库分区标题同 stroke 语言）。 */
+function manageRowChevron(doc: Document): SVGElement {
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'lightink-library-manage-row-chevron');
+  const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M9 18l6-6-6-6');
+  svg.appendChild(path);
+  return svg;
+}
+
+/** 设置行：左标签 + 可选右端 ›（仅导航/打开面板类行，动作行不加）。 */
+function manageRow(
+  doc: Document,
+  className: string,
+  navigates: boolean,
+): { readonly button: HTMLButtonElement; readonly label: HTMLSpanElement } {
+  const row = button(doc, '', `lightink-library-manage-row ${className}`.trim());
+  const label = doc.createElement('span');
+  label.className = 'lightink-library-manage-row-label';
+  row.append(label);
+  if (navigates) {
+    row.append(manageRowChevron(doc));
+  }
+  return { button: row, label };
+}
+
+/**
+ * 分组折叠时标题下的一行当前值摘要（同摸鱼标题「场景 · 键」的思路，
+ * 独立元素以保住 h2 纯文本与折叠隐藏规则的边界）。无内容时保持 hidden。
+ */
+function groupSummary(doc: Document): HTMLParagraphElement {
+  const el = doc.createElement('p');
+  el.className = 'lightink-library-manage-group-summary';
+  el.hidden = true;
+  return el;
+}
+
+function setGroupSummary(el: HTMLElement, text: string): void {
+  el.textContent = text;
+  el.hidden = text === '';
+}
+
+/** 翻页动画 select 各档的本地化标签（retranslate 与折叠摘要共用）。 */
+function pageTurnStyleLabels(l: LibraryManageLabels): Record<ReaderPageTurnStyle, string> {
+  return {
+    auto: l.pageTurnStyleAuto,
+    slide: l.pageTurnStyleSlide,
+    fade: l.pageTurnStyleFade,
+    curl: l.pageTurnStyleCurl,
+    none: l.pageTurnStyleNone,
+  };
 }
 
 // ── AI 提供商分组(R2)──命令封装、解析与事件广播 ──────────────────────
@@ -1154,6 +1260,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
     secondaryField.input.closest('.lightink-library-conceal-key-field') ?? secondaryField.input,
   );
   section.append(title, hint, scenes, dodge, disguise, floatGroup, exit);
+  bindRadioGroupKeys(scenes, '[role="radio"]');
 
   const paintSwatch = (value: ConcealBackgroundValue, chip: HTMLElement, prefs: ConcealPrefs): void => {
     if (value === 'theme') {
@@ -1179,6 +1286,8 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       const selected = scene === choice;
       sceneButton.setAttribute('aria-checked', String(selected));
       sceneButton.classList.toggle('is-active', selected);
+      // radiogroup 惯例：仅选中项进 Tab 序，其余走方向键。
+      sceneButton.tabIndex = selected ? 0 : -1;
     }
     customScene.classList.toggle('is-active', scene === 'custom');
     customScene.setAttribute('aria-current', scene === 'custom' ? 'true' : 'false');
@@ -1420,12 +1529,14 @@ export function createLibraryManage(
   appearance.dataset.manageGroup = 'appearance';
   const appearanceTitle = doc.createElement('h2');
   appearanceTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
+  const appearanceSummary = groupSummary(doc);
   const appearanceHint = doc.createElement('p');
   appearanceHint.className = 'lightink-library-appearance-hint';
   const themeSwatches = doc.createElement('div');
   themeSwatches.className = 'lightink-library-theme-swatches';
   themeSwatches.setAttribute('role', 'radiogroup');
-  appearance.append(appearanceTitle, appearanceHint, themeSwatches);
+  appearance.append(appearanceTitle, appearanceHint, appearanceSummary, themeSwatches);
+  bindRadioGroupKeys(themeSwatches, '.lightink-library-theme-swatch');
 
   // 阅读偏好：阅读器进度条开关，内联。
   const readerPrefs = doc.createElement('section');
@@ -1433,6 +1544,7 @@ export function createLibraryManage(
   readerPrefs.dataset.manageGroup = 'reading';
   const readerPrefsTitle = doc.createElement('h2');
   readerPrefsTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
+  const readerPrefsSummary = groupSummary(doc);
   const readerPrefsHint = doc.createElement('p');
   readerPrefsHint.className = 'lightink-library-appearance-hint';
   const progressBarLabel = doc.createElement('label');
@@ -1442,9 +1554,10 @@ export function createLibraryManage(
   progressBarInput.name = 'showProgressBar';
   const progressBarText = doc.createElement('span');
   progressBarLabel.append(progressBarInput, progressBarText);
-  // 阅读偏好：翻页动画样式（R1）——auto/slide/fade/curl/none，select 行。
+  // 阅读偏好：翻页动画样式（R1）——auto/slide/fade/curl/none；标签居左、
+  // select 居右的设置行（同 iOS/系统设置惯例，避免 select 满宽把标签挤折行）。
   const pageTurnField = doc.createElement('label');
-  pageTurnField.className = 'lightink-library-reader-pref lightink-library-page-turn-field';
+  pageTurnField.className = 'lightink-library-page-turn-field';
   const pageTurnSelect = doc.createElement('select');
   pageTurnSelect.name = 'pageTurnStyle';
   const pageTurnOptions = new Map<ReaderPageTurnStyle, HTMLOptionElement>();
@@ -1456,8 +1569,15 @@ export function createLibraryManage(
   }
   pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
   const pageTurnText = doc.createElement('span');
-  pageTurnField.append(pageTurnSelect, pageTurnText);
-  readerPrefs.append(readerPrefsTitle, readerPrefsHint, progressBarLabel, pageTurnField);
+  pageTurnText.className = 'lightink-library-page-turn-label';
+  pageTurnField.append(pageTurnText, pageTurnSelect);
+  readerPrefs.append(
+    readerPrefsTitle,
+    readerPrefsHint,
+    readerPrefsSummary,
+    progressBarLabel,
+    pageTurnField,
+  );
 
   // AI 分组(R2):唯一活动提供商——端点格式三选一(联动预填官方 base URL,
   // 可改)、base URL/模型/Key、allowHttp、测试连接(role=status 结果)、目标
@@ -1467,6 +1587,7 @@ export function createLibraryManage(
   aiGroup.dataset.manageGroup = 'ai';
   const aiTitle = doc.createElement('h2');
   aiTitle.className = 'lightink-library-manage-group-title lightink-library-appearance-title';
+  const aiSummary = groupSummary(doc);
   const aiHint = doc.createElement('p');
   aiHint.className = 'lightink-library-appearance-hint lightink-library-ai-hint';
 
@@ -1514,9 +1635,12 @@ export function createLibraryManage(
   aiKeyInput.spellcheck = false;
   aiKeyField.append(aiKeyLabelText, aiKeyInput);
   const aiKeyClear = button(doc, '', 'lightink-library-ai-key-clear');
+  // 明文/掩码切换：粘贴密钥后方便核对（aria-pressed 记录展开态）。
+  const aiKeyReveal = button(doc, '', 'lightink-library-ai-key-reveal');
+  aiKeyReveal.setAttribute('aria-pressed', 'false');
   const aiKeyRow = doc.createElement('div');
   aiKeyRow.className = 'lightink-library-ai-key-row';
-  aiKeyRow.append(aiKeyField, aiKeyClear);
+  aiKeyRow.append(aiKeyField, aiKeyReveal, aiKeyClear);
 
   const aiAllowHttpLabel = doc.createElement('label');
   aiAllowHttpLabel.className = 'lightink-library-reader-pref lightink-library-ai-allow-http';
@@ -1557,6 +1681,7 @@ export function createLibraryManage(
   aiGroup.append(
     aiTitle,
     aiHint,
+    aiSummary,
     aiEndpointField,
     aiBaseField,
     aiModelField,
@@ -1619,6 +1744,7 @@ export function createLibraryManage(
         ? l.aiUnconfigured
         : l.aiUnconfiguredGaps.replace('{missing}', summary);
     aiStatus.dataset.aiConfigured = configured ? 'true' : 'false';
+    setGroupSummary(aiSummary, aiStatus.textContent ?? '');
     const hints = aiFieldHints(l);
     aiBaseUrlInput.placeholder = hints.baseUrl;
     aiModelInput.placeholder = hints.model;
@@ -1628,7 +1754,22 @@ export function createLibraryManage(
     aiKeyInput.setAttribute('aria-invalid', String(gaps.includes('api_key')));
     aiKeyClear.hidden = !aiStatusState.hasKey;
     aiKeyClear.disabled = !aiStatusState.hasKey;
+    // 密钥框为空时无可核对内容：收起明文并禁用切换。
+    if (aiKeyInput.value === '') {
+      aiKeyInput.type = 'password';
+      aiKeyReveal.setAttribute('aria-pressed', 'false');
+      aiKeyReveal.textContent = l.aiKeyShow;
+    }
+    aiKeyReveal.disabled = aiKeyInput.value === '';
   };
+
+  aiKeyReveal.addEventListener('click', () => {
+    const reveal = aiKeyInput.type === 'password';
+    aiKeyInput.type = reveal ? 'text' : 'password';
+    aiKeyReveal.setAttribute('aria-pressed', String(reveal));
+    aiKeyReveal.textContent = reveal ? labels().aiKeyHide : labels().aiKeyShow;
+    aiKeyInput.focus();
+  });
 
   const setAiFeedback = (text: string, kind: 'info' | 'success' | 'error'): void => {
     aiFeedback.textContent = text;
@@ -1766,22 +1907,30 @@ export function createLibraryManage(
   storage.dataset.manageGroup = 'storage';
   const storageTitle = doc.createElement('h2');
   storageTitle.className = 'lightink-library-manage-group-title';
+  const storageSummary = groupSummary(doc);
   const cacheSummary = doc.createElement('div');
   cacheSummary.className = 'lightink-library-cache-summary';
   cacheSummary.hidden = true;
   const cacheUsage = doc.createElement('span');
   cacheSummary.append(cacheUsage);
-  const clearCacheButton = button(doc, '', 'lightink-library-manage-row');
-  const cacheLimitButton = button(
-    doc,
-    '',
-    'lightink-library-manage-row lightink-library-cache-limit-entry',
+  // 清理缓存是动作（弹确认后直接执行）：红色文字、无 ›；
+  // 调整缓存上限打开弹层：给 › 指示去向。
+  const clearCacheRow = manageRow(doc, 'is-danger', false);
+  const clearCacheButton = clearCacheRow.button;
+  const cacheLimitRow = manageRow(doc, 'lightink-library-cache-limit-entry', true);
+  const cacheLimitButton = cacheLimitRow.button;
+  storage.append(
+    storageTitle,
+    storageSummary,
+    cacheSummary,
+    clearCacheButton,
+    cacheLimitButton,
   );
-  storage.append(storageTitle, cacheSummary, clearCacheButton, cacheLimitButton);
 
   // 同步：WebDAV 同步入口（deps 缺省时整组抑制）。
   let sync: HTMLElement | null = null;
   let syncButton: HTMLButtonElement | null = null;
+  let syncLabel: HTMLSpanElement | null = null;
   let syncTitle: HTMLHeadingElement | null = null;
   if (options.onOpenSyncPanel !== undefined) {
     sync = doc.createElement('section');
@@ -1789,7 +1938,9 @@ export function createLibraryManage(
     sync.dataset.manageGroup = 'sync';
     syncTitle = doc.createElement('h2');
     syncTitle.className = 'lightink-library-manage-group-title';
-    syncButton = button(doc, '', 'lightink-library-manage-row lightink-library-sync-entry');
+    const syncRow = manageRow(doc, 'lightink-library-sync-entry', true);
+    syncButton = syncRow.button;
+    syncLabel = syncRow.label;
     sync.append(syncTitle, syncButton);
   }
 
@@ -1799,11 +1950,15 @@ export function createLibraryManage(
   other.dataset.manageGroup = 'other';
   const otherTitle = doc.createElement('h2');
   otherTitle.className = 'lightink-library-manage-group-title';
-  const importButton = button(doc, '', 'lightink-library-manage-row lightink-library-import-entry');
+  const importRow = manageRow(doc, 'lightink-library-import-entry', true);
+  const importButton = importRow.button;
   other.append(otherTitle, importButton);
   let editorButton: HTMLButtonElement | null = null;
+  let editorLabel: HTMLSpanElement | null = null;
   if (options.onEnterEditor !== undefined) {
-    editorButton = button(doc, '', 'lightink-library-manage-row lightink-library-editor-entry');
+    const editorRow = manageRow(doc, 'lightink-library-editor-entry', true);
+    editorButton = editorRow.button;
+    editorLabel = editorRow.label;
     other.append(editorButton);
   }
 
@@ -1879,6 +2034,7 @@ export function createLibraryManage(
   function renderThemeSwatches(): void {
     themeSwatches.replaceChildren();
     themeSwatches.setAttribute('aria-label', labels().libraryTheme);
+    setGroupSummary(appearanceSummary, options.themeLabel(currentLibraryTheme));
     for (const theme of LIBRARY_THEMES) {
       const swatch = button(doc, '', 'lightink-library-theme-swatch');
       // Not data-library-theme: that attribute republishes a preset, and the
@@ -1900,6 +2056,8 @@ export function createLibraryManage(
       swatch.setAttribute('role', 'radio');
       swatch.setAttribute('aria-checked', String(theme.id === currentLibraryTheme));
       swatch.classList.toggle('is-active', theme.id === currentLibraryTheme);
+      // radiogroup 惯例：仅选中项进 Tab 序，其余走方向键（bindRadioGroupKeys）。
+      swatch.tabIndex = theme.id === currentLibraryTheme ? 0 : -1;
       swatch.addEventListener('click', () => {
         currentLibraryTheme = saveLibraryTheme(options.themeStorage, theme.id);
         applyLibraryTheme(options.themeRoot, currentLibraryTheme);
@@ -1912,11 +2070,18 @@ export function createLibraryManage(
     }
   }
 
+  const syncReaderPrefsSummary = (): void => {
+    const l = labels();
+    const style = pageTurnStyleLabels(l)[currentReaderPrefs.pageTurnStyle];
+    setGroupSummary(readerPrefsSummary, `${l.pageTurnStyle} · ${style}`);
+  };
+
   const syncReaderPrefsFromStorage = (): void => {
     currentReaderPrefs = loadReaderPrefs(options.readerPrefsStorage);
     applyReaderPrefs(doc.documentElement, currentReaderPrefs);
     progressBarInput.checked = currentReaderPrefs.showProgressBar;
     pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
+    syncReaderPrefsSummary();
   };
 
   // 保存任一偏好都携带完整 ReaderPrefs（缺省字段会被规范化回默认值）。
@@ -1927,6 +2092,7 @@ export function createLibraryManage(
     });
     applyReaderPrefs(doc.documentElement, currentReaderPrefs);
     pageTurnSelect.value = currentReaderPrefs.pageTurnStyle;
+    syncReaderPrefsSummary();
     doc.dispatchEvent(new CustomEvent('lightink:reader-prefs', { detail: currentReaderPrefs }));
   };
 
@@ -2005,6 +2171,12 @@ export function createLibraryManage(
   });
   cacheLimitForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    // 空值/超界先走内建校验气泡（之前是静默 return，用户无从得知为何没反应）。
+    if (!cacheLimitInput.checkValidity()) {
+      cacheLimitInput.reportValidity();
+      cacheLimitInput.focus();
+      return;
+    }
     const gibibytes = cacheLimitInput.valueAsNumber;
     if (!Number.isFinite(gibibytes) || gibibytes <= 0) return;
     try {
@@ -2028,13 +2200,7 @@ export function createLibraryManage(
     pageTurnText.textContent = l.pageTurnStyle;
     pageTurnField.title = l.pageTurnStyle;
     pageTurnSelect.setAttribute('aria-label', l.pageTurnStyle);
-    const optionLabels: Record<ReaderPageTurnStyle, string> = {
-      auto: l.pageTurnStyleAuto,
-      slide: l.pageTurnStyleSlide,
-      fade: l.pageTurnStyleFade,
-      curl: l.pageTurnStyleCurl,
-      none: l.pageTurnStyleNone,
-    };
+    const optionLabels = pageTurnStyleLabels(l);
     for (const [style, option] of pageTurnOptions) {
       option.textContent = optionLabels[style];
     }
@@ -2065,23 +2231,27 @@ export function createLibraryManage(
     aiSave.textContent = l.aiSave;
     aiTest.textContent = aiTestBusy ? l.aiTesting : l.aiTest;
     aiKeyClear.textContent = l.aiKeyClear;
+    aiKeyReveal.textContent =
+      aiKeyReveal.getAttribute('aria-pressed') === 'true' ? l.aiKeyHide : l.aiKeyShow;
     syncAiState();
     void refreshAiConfig();
     storageTitle.textContent = l.storageGroup;
-    clearCacheButton.textContent = l.clearCache;
-    cacheLimitButton.textContent = l.changeCacheLimit;
+    clearCacheRow.label.textContent = l.clearCache;
+    cacheLimitRow.label.textContent = l.changeCacheLimit;
     cacheLimitButton.title = l.changeCacheLimit;
     cacheLimitButton.setAttribute('aria-label', l.changeCacheLimit);
     if (syncTitle !== null) syncTitle.textContent = l.syncGroup;
-    if (syncButton !== null) {
-      syncButton.textContent = l.webdavSync;
+    if (syncButton !== null && syncLabel !== null) {
+      syncLabel.textContent = l.webdavSync;
       syncButton.title = l.webdavSync;
       syncButton.setAttribute('aria-label', l.webdavSync);
     }
     otherTitle.textContent = l.otherGroup;
-    importButton.textContent = l.importLocal;
-    if (editorButton !== null) {
-      editorButton.textContent = l.markdownEditor;
+    importRow.label.textContent = l.importLocal;
+    importButton.title = l.importLocal;
+    importButton.setAttribute('aria-label', l.importLocal);
+    if (editorButton !== null && editorLabel !== null) {
+      editorLabel.textContent = l.markdownEditor;
       editorButton.title = l.markdownEditor;
       editorButton.setAttribute('aria-label', l.markdownEditor);
     }
@@ -2119,6 +2289,8 @@ export function createLibraryManage(
         cacheUsage.textContent = '';
       }
       cacheSummary.hidden = cacheUsage.textContent.trim() === '';
+      // 折叠态标题下的同一行摘要（为空时保持 hidden）。
+      setGroupSummary(storageSummary, cacheUsage.textContent ?? '');
     },
     retranslate,
     destroy(): void {

@@ -19,6 +19,7 @@ import {
   invokeAiTranslateConfig,
 } from '../../assistant/assistant-error.js';
 import { syncReaderTitlebarReveal } from '../../ui/window-titlebar.js';
+import { syncSystemBarsVisible } from '../system-bars.js';
 import {
   activateReaderTocPanel,
   adoptReaderOverlayTheme,
@@ -819,10 +820,19 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       closeChromePanel();
       ctx.readerChrome?.dismiss();
       syncChromeRevealAttr();
+      // 切走标签/回书架：系统栏必须恢复显示，不能停在沉浸隐藏态。
+      // 漫画会话的系统栏由 comic chrome 自己成对管理，跳过防双写。
+      if (ctx.cbzHandle === null) {
+        syncSystemBarsVisible(true);
+      }
       return;
     }
     // 切回标签时未完成的恢复重新计数重试（无待恢复时为空操作）。
     ctx.sessionProgress.retryPending();
+    // 切回阅读标签：按当前 chrome 显隐重推系统栏（chrome 藏起则回沉浸态）。
+    if (ctx.cbzHandle === null) {
+      syncSystemBarsVisible(ctx.readerChrome?.isRevealed() === true);
+    }
   };
 
   // R4：主题切换（浅↔深）时重应用 flow 帧文字色，消除深底深字/浅底浅字不可读。
@@ -1173,6 +1183,18 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       suppressProgressDock: () =>
         ctx.pageHost.dataset.comicReader === 'true' || ctx.root.dataset.comicReader === 'true',
       onSeekProgress: goToProgress,
+      // Android 16 edge-to-edge：chrome 藏起时同步隐藏系统栏进入沉浸阅读，
+      // 唤出时恢复。漫画会话的系统栏由 comic chrome 自己成对管理，跳过防双写；
+      // 标签不活跃时（切走）保持系统栏显示，由 setTabActive 统一恢复。
+      onRevealChange: (shown) => {
+        if (ctx.cbzHandle !== null || ctx.pageHost.dataset.comicReader === 'true') {
+          return;
+        }
+        if (!ctx.sessionAnnotation.tabActive()) {
+          return;
+        }
+        syncSystemBarsVisible(shown);
+      },
     });
     syncChromeProgress();
     pinChromeDocks();

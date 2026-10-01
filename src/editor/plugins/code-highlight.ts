@@ -753,7 +753,10 @@ export function createCodeBlockNodeView(
 
   const pre = document.createElement('pre');
   pre.className = 'lightink-code-pre';
+  // 代码不跑拼写检查：标识符不是自然语言，红色波浪线纯属噪音。
+  pre.spellcheck = false;
   const contentDOM = document.createElement('code');
+  contentDOM.spellcheck = false;
   pre.appendChild(contentDOM);
 
   dom.appendChild(header);

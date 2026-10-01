@@ -7,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderCbzInto } from '../formats/cbz.js';
 import {
   SET_SYSTEM_BARS_VISIBLE_COMMAND,
-  syncComicSystemBarsVisible,
-  type ComicSystemBarsHost,
-} from '../comic/comic-chrome.js';
+  syncSystemBarsVisible,
+  type SystemBarsHost,
+} from '../system-bars.js';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -2039,9 +2039,9 @@ describe('CBZ zoom render quality (R3)', () => {
 });
 
 function androidTauriHost(
-  extras: ComicSystemBarsHost = {},
-): Window & ComicSystemBarsHost {
-  return { __TAURI_INTERNALS__: {}, ...extras } as unknown as Window & ComicSystemBarsHost;
+  extras: SystemBarsHost = {},
+): Window & SystemBarsHost {
+  return { __TAURI_INTERNALS__: {}, ...extras } as unknown as Window & SystemBarsHost;
 }
 
 describe('CBZ drag-to-turn gesture (T1)', () => {
@@ -3179,9 +3179,9 @@ describe('CBZ chrome overlay and system bars (R4)', () => {
 
     expect(handle.hideChrome()).toBe(true);
     expect(invokeMock).not.toHaveBeenCalled();
-    syncComicSystemBarsVisible(
+    syncSystemBarsVisible(
       false,
-      { LightInkSystemBars: { setVisible } } as unknown as Window & ComicSystemBarsHost,
+      { LightInkSystemBars: { setVisible } } as unknown as Window & SystemBarsHost,
       document.documentElement,
     );
     expect(setVisible).not.toHaveBeenCalled();
@@ -3189,13 +3189,13 @@ describe('CBZ chrome overlay and system bars (R4)', () => {
   });
 });
 
-describe('syncComicSystemBarsVisible', () => {
+describe('syncSystemBarsVisible', () => {
   it('forwards visible=false/true to the JS bridge on Android', () => {
     document.documentElement.setAttribute('data-android', '');
     const setVisible = vi.fn();
     const host = androidTauriHost({ LightInkSystemBars: { setVisible } });
-    syncComicSystemBarsVisible(false, host, document.documentElement);
-    syncComicSystemBarsVisible(true, host, document.documentElement);
+    syncSystemBarsVisible(false, host, document.documentElement);
+    syncSystemBarsVisible(true, host, document.documentElement);
     expect(setVisible.mock.calls).toEqual([[false], [true]]);
     expect(invokeMock).not.toHaveBeenCalled();
   });
@@ -3203,8 +3203,8 @@ describe('syncComicSystemBarsVisible', () => {
   it('invokes set_system_bars_visible when Android has Tauri but no JS bridge', () => {
     document.documentElement.setAttribute('data-android', '');
     const host = androidTauriHost();
-    syncComicSystemBarsVisible(false, host, document.documentElement);
-    syncComicSystemBarsVisible(true, host, document.documentElement);
+    syncSystemBarsVisible(false, host, document.documentElement);
+    syncSystemBarsVisible(true, host, document.documentElement);
     expect(invokeMock).toHaveBeenNthCalledWith(1, SET_SYSTEM_BARS_VISIBLE_COMMAND, {
       visible: false,
     });
@@ -3222,10 +3222,10 @@ describe('syncComicSystemBarsVisible', () => {
         },
       },
     });
-    expect(() => syncComicSystemBarsVisible(false, host, document.documentElement)).not.toThrow();
+    expect(() => syncSystemBarsVisible(false, host, document.documentElement)).not.toThrow();
     invokeMock.mockRejectedValue(new Error('invoke failed'));
     expect(() =>
-      syncComicSystemBarsVisible(true, androidTauriHost(), document.documentElement),
+      syncSystemBarsVisible(true, androidTauriHost(), document.documentElement),
     ).not.toThrow();
   });
 });

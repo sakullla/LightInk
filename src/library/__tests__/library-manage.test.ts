@@ -61,6 +61,8 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiModel: 'Model',
     aiKey: 'API key',
     aiKeyClear: 'Clear key',
+    aiKeyShow: 'Show',
+    aiKeyHide: 'Hide',
     aiKeySavedPlaceholder: 'Saved on this device. Enter a new key to replace it.',
     aiAllowHttp: 'Allow HTTP address (insecure)',
     aiTargetLang: 'Translation target language',
@@ -132,6 +134,8 @@ const LABELS: Record<Locale, LibraryManageLabels> = {
     aiModel: '模型名',
     aiKey: 'API 密钥',
     aiKeyClear: '清除密钥',
+    aiKeyShow: '显示',
+    aiKeyHide: '隐藏',
     aiKeySavedPlaceholder: '已保存在本机。输入新密钥以替换。',
     aiAllowHttp: '允许 HTTP 地址（不安全）',
     aiTargetLang: '翻译目标语言',
@@ -269,8 +273,133 @@ describe('manage group collapsing', () => {
     expect(title.getAttribute('aria-expanded')).toBe('false');
     const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
     expect(css).toMatch(
-      /\.lightink-library-manage-group\[data-collapsed='true'\] > :not\(h2\)\s*\{[^}]*display:\s*none !important/,
+      /\.lightink-library-manage-group\[data-collapsed='true'\]\s*>\s*:not\(h2\):not\(\.lightink-library-manage-group-summary\)\s*\{[^}]*display:\s*none !important/,
     );
+    manage.destroy();
+  });
+
+  it('shows a one-line current-value summary under collapsed group titles', async () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    const summaryOf = (group: string) =>
+      manage.element.querySelector<HTMLElement>(
+        `[data-manage-group="${group}"] > .lightink-library-manage-group-summary`,
+      );
+
+    // 外观：当前主题名；阅读偏好：翻页样式标签；AI：配置状态。
+    expect(summaryOf('appearance')?.hidden).toBe(false);
+    expect(summaryOf('appearance')?.textContent?.trim()).not.toBe('');
+    expect(summaryOf('reading')?.hidden).toBe(false);
+    expect(summaryOf('reading')?.textContent).toContain('翻页动画');
+    expect(summaryOf('ai')?.hidden).toBe(false);
+    expect(summaryOf('ai')?.textContent).toContain('AI');
+
+    // 存储：cacheStats 就绪后回显用量。
+    await manage.refreshCache();
+    expect(summaryOf('storage')?.hidden).toBe(false);
+    expect(summaryOf('storage')?.textContent).toContain('512 MiB');
+
+    // 标题本身保持纯分组名（摘要不进 h2 文本）。
+    expect(
+      manage.element.querySelector('[data-manage-group="appearance"] h2')?.textContent,
+    ).toBe('外观');
+    manage.destroy();
+  });
+});
+
+describe('manage rows affordance', () => {
+  it('adds a chevron to navigating rows and marks destructive actions', () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    for (const selector of [
+      '.lightink-library-cache-limit-entry',
+      '.lightink-library-sync-entry',
+      '.lightink-library-import-entry',
+      '.lightink-library-editor-entry',
+    ]) {
+      const row = manage.element.querySelector<HTMLElement>(selector);
+      expect(row?.querySelector('.lightink-library-manage-row-chevron')).not.toBeNull();
+      expect(row?.querySelector('.lightink-library-manage-row-label')?.textContent).not.toBe('');
+    }
+    // 清理缓存是动作行：无 chevron，带危险着色标记。
+    const clearCache = manage.element.querySelector<HTMLElement>('.lightink-library-manage-row');
+    expect(clearCache?.classList.contains('is-danger')).toBe(true);
+    expect(clearCache?.querySelector('.lightink-library-manage-row-chevron')).toBeNull();
+    manage.destroy();
+  });
+});
+
+describe('manage radiogroup keyboard navigation', () => {
+  it('moves the theme selection with arrow keys and keeps roving tabindex', () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    const swatches = () =>
+      Array.from(
+        manage.element.querySelectorAll<HTMLElement>('.lightink-library-theme-swatch'),
+      );
+    // 初始：仅选中项进 Tab 序。
+    expect(swatches().filter((el) => el.tabIndex === 0)).toHaveLength(1);
+
+    const activeIndex = swatches().findIndex((el) => el.classList.contains('is-active'));
+    const target = swatches()[activeIndex]!;
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+
+    const next = swatches()[(activeIndex + 1) % swatches().length]!;
+    expect(next.classList.contains('is-active')).toBe(true);
+    expect(next.getAttribute('aria-checked')).toBe('true');
+    expect(next.tabIndex).toBe(0);
+    expect(document.activeElement).toBe(next);
+
+    // End 跳到末位。
+    next.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    const last = swatches()[swatches().length - 1]!;
+    expect(last.classList.contains('is-active')).toBe(true);
+    manage.destroy();
+  });
+});
+
+describe('manage AI key reveal', () => {
+  it('toggles the API key field between masked and plain text', () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+
+    const keyInput = manage.element.querySelector<HTMLInputElement>(
+      'input[name="aiApiKey"]',
+    )!;
+    const reveal = manage.element.querySelector<HTMLButtonElement>(
+      '.lightink-library-ai-key-reveal',
+    )!;
+
+    // 空密钥框没有可核对内容：禁用并收起明文。
+    expect(reveal.disabled).toBe(true);
+    expect(keyInput.type).toBe('password');
+
+    keyInput.value = 'sk-test';
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(reveal.disabled).toBe(false);
+    expect(reveal.textContent).toBe('显示');
+
+    reveal.click();
+    expect(keyInput.type).toBe('text');
+    expect(reveal.getAttribute('aria-pressed')).toBe('true');
+    expect(reveal.textContent).toBe('隐藏');
+
+    reveal.click();
+    expect(keyInput.type).toBe('password');
+    expect(reveal.getAttribute('aria-pressed')).toBe('false');
+
+    // 清空输入回到禁用+掩码。
+    keyInput.value = '';
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(reveal.disabled).toBe(true);
+    expect(keyInput.type).toBe('password');
     manage.destroy();
   });
 });

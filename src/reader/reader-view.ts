@@ -62,6 +62,7 @@ import {
 import type { ComicMetadata } from './comic-model.js';
 import { loadComicPreferences } from './comic-preferences.js';
 import { syncReaderTitlebarReveal } from '../ui/window-titlebar.js';
+import { syncSystemBarsVisible } from './system-bars.js';
 import { unpinFixedOverlay } from './reader-chrome-panels.js';
 import {
   loadReaderLayout,
@@ -555,6 +556,9 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       ctx.readerChrome?.destroy();
       ctx.readerChrome = null;
       syncReaderTitlebarReveal(ctx.root, false);
+      // 会话销毁恢复系统栏：阅读态沉浸隐藏不能带出去（MainActivity onDestroy
+      // 另有兜底；这里是前端主动销毁路径）。
+      syncSystemBarsVisible(true);
       // closeChromePanel 只在面板打开时 unpin；这里兜底 chromePanel 已为 null
       // 的销毁路径，确保 touchSheetPins 清空、键盘观察者 disconnect。
       if (readerChromeTouchMode()) {

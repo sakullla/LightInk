@@ -123,6 +123,57 @@ function collapseNonEmptySelection(view: EditorView): void {
   view.dispatch(view.state.tr.setSelection(TextSelection.atStart(view.state.doc)));
 }
 
+/**
+ * 点击文档下方/侧旁的空白画布应聚焦编辑器并把光标放到命中位置
+ * （Typora/Notion 惯例）。`.ProseMirror` 内部的点击仍交给 PM 自身处理；
+ * 源码浮层、按钮等交互控件不被接管。返回解绑函数。
+ */
+function bindBlankCanvasFocus(
+  container: HTMLElement,
+  state: MountState,
+  isEditable: () => boolean,
+): () => void {
+  const onPointerDown = (event: PointerEvent): void => {
+    if (event.button !== 0) {
+      return;
+    }
+    const view = getView(state);
+    if (view === null || !isEditable()) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (view.dom.contains(target)) {
+      return;
+    }
+    if (
+      target.closest(
+        'button, a, input, select, textarea, [contenteditable="true"], .lightink-source-overlay, .lightink-source-highlight',
+      ) !== null
+    ) {
+      return;
+    }
+    event.preventDefault();
+    // posAtCoords 的落点可能落在原子节点/块间（图片、分割线），
+    // TextSelection.create 对非内联位置会抛——回退到文档末尾。
+    let selection = TextSelection.atEnd(view.state.doc);
+    const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
+    if (hit !== null) {
+      try {
+        selection = TextSelection.create(view.state.doc, hit.pos);
+      } catch {
+        /* keep atEnd fallback */
+      }
+    }
+    view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+    view.focus();
+  };
+  container.addEventListener('pointerdown', onPointerDown);
+  return () => container.removeEventListener('pointerdown', onPointerDown);
+}
+
 /** 取得底层 ProseMirror EditorView（编辑器未就绪或异常时返回 null）。 */
 function getView(state: MountState): EditorView | null {
   if (!isCreated(state)) return null;
@@ -205,6 +256,7 @@ export async function mountEditor(
     cachedMarkdown: options.initialMarkdown ?? '',
   };
   let editable = options.editable !== false;
+  let unbindBlankFocus: (() => void) | null = null;
 
   const ready = new Promise<void>((resolve, reject) => {
     try {
@@ -323,6 +375,7 @@ export async function mountEditor(
           state.mounted = true;
           try {
             state.cursorBinding = attachCursorListeners(container);
+            unbindBlankFocus = bindBlankCanvasFocus(container, state, () => editable);
           } catch (e) {
             if (isDevEnvironment()) {
               // eslint-disable-next-line no-console
@@ -547,6 +600,8 @@ export async function mountEditor(
           state.cursorBinding.dispose();
           state.cursorBinding = null;
         }
+        unbindBlankFocus?.();
+        unbindBlankFocus = null;
         const editor = state.editor;
         if (editor !== null) {
           await editor.destroy(true);

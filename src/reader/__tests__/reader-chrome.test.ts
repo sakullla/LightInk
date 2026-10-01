@@ -273,6 +273,24 @@ describe('createReaderChrome reveal', () => {
     }
   });
 
+  it('notifies onRevealChange only on effective visibility transitions', () => {
+    const onRevealChange = vi.fn();
+    const { page, chrome } = mount({ onRevealChange });
+    // 挂载时 revealed=false 已是隐藏态，首次 syncDom 触发一次 false。
+    expect(onRevealChange).toHaveBeenLastCalledWith(false);
+    const mountCalls = onRevealChange.mock.calls.length;
+
+    clickPage(page, 120);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(onRevealChange).toHaveBeenLastCalledWith(true);
+    chrome.reveal();
+    expect(onRevealChange.mock.calls.length).toBe(mountCalls + 1);
+
+    chrome.dismiss();
+    expect(onRevealChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealChange.mock.calls.length).toBe(mountCalls + 2);
+  });
+
   it('uses English chrome labels when locale is en', () => {
     const { host, page } = mount({ locale: 'en' });
     clickPage(page, 120);

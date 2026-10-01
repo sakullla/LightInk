@@ -1227,6 +1227,21 @@ export function createAppShell(
   tabBar.id = 'lightink-tabbar';
   tabBar.setAttribute('role', 'tablist');
   tabBar.setAttribute('aria-label', actions.t('chrome.showTabs'));
+  // 纵向滚轮转横向滚动：标签溢出时无需 Shift+滚轮（VS Code/浏览器惯例）。
+  tabBar.addEventListener(
+    'wheel',
+    (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+        return;
+      }
+      if (tabBar.scrollWidth <= tabBar.clientWidth) {
+        return;
+      }
+      event.preventDefault();
+      tabBar.scrollLeft += event.deltaY;
+    },
+    { passive: false },
+  );
 
   const enterReaderHomeBtn = document.createElement('button');
   enterReaderHomeBtn.type = 'button';
@@ -1614,6 +1629,20 @@ export function createAppShell(
         if (tab.dirty) {
           item.classList.add('dirty');
         }
+        // 中键关闭（浏览器/编辑器惯例）：mousedown 先吞掉中键的
+        // autoscroll 起始，auxclick 才执行关闭。
+        item.addEventListener('mousedown', (event) => {
+          if (event.button === 1) {
+            event.preventDefault();
+          }
+        });
+        item.addEventListener('auxclick', (event) => {
+          if (event.button !== 1) {
+            return;
+          }
+          event.preventDefault();
+          callbacks.onClose(tab.id);
+        });
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'lightink-tab-button';
@@ -1670,6 +1699,14 @@ export function createAppShell(
       }),
       tabsDrag,
     );
+    // 激活标签可能因横向溢出在视野外（切换/新建时滚到它，inline:'nearest'
+    // 已在视野内则不产生位移）。
+    const activeEl = Array.from(tabBar.children).find((child) =>
+      (child as HTMLElement).classList?.contains('active'),
+    ) as HTMLElement | undefined;
+    if (activeEl !== undefined && typeof activeEl.scrollIntoView === 'function') {
+      activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
 
   return {

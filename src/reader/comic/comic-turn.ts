@@ -20,7 +20,8 @@ import { refreshCacheWindow } from './comic-cache.js';
 import { applySlotFit } from './comic-layout.js';
 import { commitZoomRaster, unpinZoomRaster } from './comic-zoom.js';
 import { clearDragTurnDom, resetDragTurn } from './comic-drag-turn.js';
-import { androidReaderRoot, updateToolbar } from './comic-chrome.js';
+import { androidReaderRoot } from '../system-bars.js';
+import { updateToolbar } from './comic-chrome.js';
 
 /** T2：触屏 paged 翻页进入 slot 的滑入时长（与文字书 slide 同曲线族）。 */
 const COMIC_SLOT_SLIDE_MS = 200;

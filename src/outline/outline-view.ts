@@ -53,6 +53,22 @@ export type OutlineVisibility = 'expanded' | 'rail' | 'hidden';
 
 const VISIBILITY_CYCLE: readonly OutlineVisibility[] = ['expanded', 'rail', 'hidden'];
 
+/** 用户开启减少动态时直切；node/测试环境无 matchMedia 按平滑处理前的默认直切。 */
+function outlineJumpBehavior(): ScrollBehavior {
+  try {
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return 'auto';
+    }
+  } catch {
+    /* 环境无 matchMedia（测试 fake），按直切。 */
+  }
+  return typeof window === 'undefined' ? 'auto' : 'smooth';
+}
+
 export interface OutlineViewDeps {
   /** 当前活动标签的宿主元素（无活动标签时返回 null）。 */
   getActiveHost(): HTMLElement | null;
@@ -299,8 +315,9 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
       const headings = host.querySelectorAll(HEADING_SELECTOR);
       const el = headings[item.anchor] as HTMLElement | undefined;
       // Source-mode overlay may hide WYSIWYG headings; never throw on missing target.
+      // 显式点击跳转用平滑滚动（跟手、可感知方向）；reduced-motion 下降为直切。
       if (el !== undefined && typeof el.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'start' });
+        el.scrollIntoView({ block: 'start', behavior: outlineJumpBehavior() });
       }
     } catch {
       // Defensive: outline jump must not break immersive shell (R4).

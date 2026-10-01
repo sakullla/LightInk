@@ -3119,17 +3119,59 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 }
 
 /* 设置分组折叠（默认收起，分组太多）：标题即开关，箭头指示展开态；
- * 折叠时仅保留标题（h2），其余子元素不渲染占位。 */
-.lightink-library-manage-group[data-collapsed='true'] > :not(h2) {
+ * 折叠时仅保留标题（h2）与一行当前值摘要，其余子元素不渲染占位。 */
+.lightink-library-manage-group[data-collapsed='true']
+  > :not(h2):not(.lightink-library-manage-group-summary) {
   display: none !important;
+}
+
+/* 折叠态下标题正下方的当前值摘要（展开时内容本身可见，摘要隐藏）。 */
+.lightink-library-manage-group-summary {
+  display: none;
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lightink-library-manage-group[data-collapsed='true']
+  > .lightink-library-manage-group-summary:not([hidden]) {
+  display: block;
+}
+
+/* 展开时内容做一次轻量淡入（reduced-motion 由全局媒体查询压到 0.01ms）。 */
+@keyframes lightink-manage-group-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.lightink-library-manage-group:not([data-collapsed='true']) > :not(h2) {
+  animation: lightink-manage-group-reveal var(--lightink-duration-base, 180ms)
+    var(--lightink-easing-standard, ease) both;
 }
 
 .lightink-library-manage-group-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
+  border-radius: var(--lightink-radius-control);
   cursor: pointer;
   user-select: none;
+}
+
+.lightink-library-manage-group-toggle:hover {
+  color: var(--lightink-accent);
+}
+
+.lightink-library-manage-group-toggle:hover::after {
+  border-color: var(--lightink-accent);
+}
+
+.lightink-library-manage-group-toggle:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
 }
 
 .lightink-library-manage-group-toggle::after {
@@ -3313,7 +3355,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   gap: 2px;
 }
 
-.lightink-library-conceal-switch input[type='checkbox'] {
+/* 主题化复选框：摸鱼开关与阅读偏好/AI 开关共用（原生默认色与主题不协调）。 */
+.lightink-library-conceal-switch input[type='checkbox'],
+.lightink-library-reader-pref input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
@@ -3329,12 +3373,14 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   background: var(--lightink-bg);
 }
 
-.lightink-library-conceal-switch input[type='checkbox']:checked {
+.lightink-library-conceal-switch input[type='checkbox']:checked,
+.lightink-library-reader-pref input[type='checkbox']:checked {
   border-color: var(--lightink-accent);
   background: var(--lightink-accent);
 }
 
-.lightink-library-conceal-switch input[type='checkbox']:checked::after {
+.lightink-library-conceal-switch input[type='checkbox']:checked::after,
+.lightink-library-reader-pref input[type='checkbox']:checked::after {
   content: '';
   width: 8px;
   height: 4px;
@@ -3343,7 +3389,14 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   transform: rotate(-45deg) translateY(-1px);
 }
 
-.lightink-library-conceal-switch input:disabled {
+:is(.lightink-library-conceal-switch, .lightink-library-reader-pref)
+  input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 2px;
+}
+
+.lightink-library-conceal-switch input:disabled,
+.lightink-library-reader-pref input[type='checkbox']:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -3375,9 +3428,60 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   color: var(--lightink-accent);
 }
 
+.lightink-library-manage-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 动作行（清理缓存）：红色文字常驻提示破坏性；hover 仍走 accent-soft 底色。 */
+.lightink-library-manage-row.is-danger {
+  color: var(--lightink-danger);
+}
+
 .lightink-library-manage-row-chevron {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
   color: var(--lightink-muted);
-  font-size: 16px;
+  transition: transform var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard, ease);
+}
+
+.lightink-library-manage-row:hover:not(:disabled) .lightink-library-manage-row-chevron,
+.lightink-library-manage-row:focus-visible .lightink-library-manage-row-chevron {
+  color: var(--lightink-accent);
+}
+
+/* 翻页动画行：标签居左、select 居右的设置行（窄屏允许折行）。 */
+.lightink-library-page-turn-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 44px;
+  color: var(--lightink-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lightink-library-page-turn-field select {
+  width: auto;
+  min-width: 10rem;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
+.lightink-library-ai-key-reveal {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--lightink-radius-control);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-ai-key-reveal {
+  min-height: 44px;
 }
 
 .lightink-modal-overlay.lightink-library-cache-limit-modal {

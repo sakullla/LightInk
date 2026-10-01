@@ -3,9 +3,6 @@
  * 与 Android 系统栏桥。行为逐字保留自拆分前 cbz.ts 的对应闭包。
  */
 
-import { invoke } from '@tauri-apps/api/core';
-
-import { isTauriRuntime } from '../../file/browser-file-store.js';
 import type { ComicMetadata } from '../comic-model.js';
 import {
   advanceComicPage,
@@ -14,54 +11,10 @@ import {
   type ComicFit,
 } from '../comic-preferences.js';
 import type { CbzRenderOptions, ComicToolbarLabels } from '../formats/cbz.js';
+import { syncSystemBarsVisible } from '../system-bars.js';
 import { comicLayoutSpreadPrefs, type ComicSession } from './comic-session.js';
 
 const COMIC_CHROME_IDLE_MS = 2800;
-
-/**
- * 系统栏桥契约（owner：MainActivity + 一条 invoke；本模块是漫画 consumer）。
- * `visible=false` 隐藏 status/navigation，并让画面贴边；`true` 再显示。
- * 桌面不调用；桥缺失或 reject 时只藏应用 chrome。
- */
-export const SET_SYSTEM_BARS_VISIBLE_COMMAND = 'set_system_bars_visible';
-
-export interface ComicSystemBarsBridge {
-  setVisible(visible: boolean): void;
-}
-
-export interface ComicSystemBarsHost {
-  LightInkSystemBars?: ComicSystemBarsBridge;
-}
-
-export function androidReaderRoot(
-  root: HTMLElement | null = typeof document === 'undefined' ? null : document.documentElement,
-): HTMLElement | null {
-  if (root === null || !root.hasAttribute('data-android')) return null;
-  return root;
-}
-
-/** 成对显隐系统栏；非 Android、桥缺失或 invoke 失败均为 no-op。 */
-export function syncComicSystemBarsVisible(
-  visible: boolean,
-  host: (Window & ComicSystemBarsHost) | null = typeof window === 'undefined'
-    ? null
-    : (window as Window & ComicSystemBarsHost),
-  root: HTMLElement | null = typeof document === 'undefined' ? null : document.documentElement,
-): void {
-  if (androidReaderRoot(root) === null) return;
-  try {
-    const bridge = host?.LightInkSystemBars;
-    if (bridge !== undefined && typeof bridge.setVisible === 'function') {
-      bridge.setVisible(visible);
-      return;
-    }
-    if (host !== null && isTauriRuntime(host)) {
-      void invoke(SET_SYSTEM_BARS_VISIBLE_COMMAND, { visible }).catch(() => undefined);
-    }
-  } catch {
-    // invoke 失败仍只藏应用 chrome，阅读不中断。
-  }
-}
 
 function toolbarButton(
   symbol: string,
@@ -350,7 +303,7 @@ export function notifyComicSystemBars(session: ComicSession, visible: boolean): 
       void Promise.resolve(session.options.setSystemBarsVisible(visible)).catch(() => undefined);
       return;
     }
-    syncComicSystemBarsVisible(visible);
+    syncSystemBarsVisible(visible);
   } catch {
     // invoke 失败仍只藏应用 chrome，阅读不中断。
   }
