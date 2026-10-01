@@ -117,6 +117,7 @@ import {
   syncComicWindowChromeClass,
   loadReaderTheme,
   readerNativeWindowChrome,
+  resetReaderTheme,
 } from './reader/reader-theme.js';
 import { applyReaderPrefs, loadReaderPrefs } from './reader/reader-prefs.js';
 import {
@@ -1454,6 +1455,26 @@ function syncMarkdownReaderChrome(): void {
   }
 }
 
+/**
+ * `#lightink-editor-area` is the one scroll pane shared by Markdown and reader
+ * tabs. Reader setup paints its paper theme inline on that pane; inline
+ * custom properties beat every `data-theme` token, so the pane would keep the
+ * last book's paper (sepia by default) after returning to Markdown and ignore
+ * View → 主题. Re-apply for the active reader tab, otherwise reset the pane so
+ * it follows the editor theme again.
+ */
+function syncEditorPanePaperTheme(): void {
+  const pane = shell?.editorArea;
+  if (pane === undefined) {
+    return;
+  }
+  if (activeReaderTab() !== null) {
+    applyReaderTheme(pane, loadReaderTheme(syncableStorage));
+    return;
+  }
+  resetReaderTheme(pane);
+}
+
 function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): void {
   applyingWorkspaceSurfaces = true;
   try {
@@ -1471,6 +1492,7 @@ function applyWorkspaceState(state: WorkspaceSnapshot = workspace.snapshot()): v
         shell.editorArea.dataset.surface = 'markdown';
       }
     }
+    syncEditorPanePaperTheme();
     shell?.applyWorkspace(state);
     const vis = workspaceVisibility(state.surface, { markdownOpen });
     setLibraryVisibility(vis.outlineHidden);
@@ -3254,6 +3276,7 @@ manager = new TabManager({
     // R3：文档身份变化即销毁编辑器助手会话（含流式中止，不跨文档写历史）。
     editorAssistant?.syncDocument();
     editorScroller.dataset.surface = tab?.kind === 'reader' ? 'reader' : 'markdown';
+    syncEditorPanePaperTheme();
     // R7×多 reader 标签：活动 chrome 可能换了实例，重驱接管态与 zones。
     concealController?.notifyZonesStale();
     syncOpenReaderConcealBars();

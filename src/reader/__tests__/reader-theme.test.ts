@@ -24,6 +24,7 @@ import {
   parseReaderTheme,
   READER_THEME_STORAGE_KEY,
   readerNativeWindowChrome,
+  resetReaderTheme,
   saveReaderTheme,
   syncComicWindowChromeClass,
 } from '../reader-theme.js';
@@ -54,6 +55,21 @@ describe('reader paper themes', () => {
     expect(root.style.colorScheme).toBe('dark');
     expect(root.style.color).toMatch(/#c8c8c8|rgb\(200,\s*200,\s*200\)/);
     expect(root.style.backgroundColor).toMatch(/#121212|rgb\(18,\s*18,\s*18\)/);
+  });
+
+  it('resets a shared pane so reader paper does not outrank editor themes', () => {
+    const pane = document.createElement('div');
+    applyReaderTheme(pane, 'sepia');
+    resetReaderTheme(pane);
+    expect(pane.dataset.readerTheme).toBeUndefined();
+    expect(pane.style.getPropertyValue('--lightink-bg')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-bg-elevated')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-fg')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-muted')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-border')).toBe('');
+    expect(pane.style.colorScheme).toBe('');
+    expect(pane.style.color).toBe('');
+    expect(pane.style.backgroundColor).toBe('');
   });
 
   it('maps paper themes onto native caption colors', () => {

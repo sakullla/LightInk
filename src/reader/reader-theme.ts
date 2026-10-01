@@ -72,6 +72,7 @@ export interface ReaderThemeRoot {
   dataset: DOMStringMap;
   style: {
     setProperty?(name: string, value: string, priority?: string): void;
+    removeProperty?(name: string): string;
     colorScheme?: string;
     color?: string;
     backgroundColor?: string;
@@ -153,6 +154,15 @@ export function saveReaderTheme(
   return next;
 }
 
+/** Inline custom properties `applyReaderTheme` writes onto a theme root. */
+export const READER_THEME_INLINE_VARS = [
+  '--lightink-bg',
+  '--lightink-bg-elevated',
+  '--lightink-fg',
+  '--lightink-muted',
+  '--lightink-border',
+] as const;
+
 export function applyReaderTheme(root: ReaderThemeRoot, theme: ReaderThemeId): ReaderThemeId {
   const next = parseReaderTheme(theme);
   const tokens = readerThemeTokens(next);
@@ -169,4 +179,25 @@ export function applyReaderTheme(root: ReaderThemeRoot, theme: ReaderThemeId): R
   root.style.color = tokens.ink;
   root.style.backgroundColor = tokens.page;
   return next;
+}
+
+/**
+ * Drop an inline paper theme again. `#lightink-editor-area` is shared by
+ * Markdown and reader tabs, so reader paper tokens must not survive a switch
+ * back to a Markdown tab: inline custom properties outrank every `data-theme`
+ * token and would freeze the pane on the last book's paper (default sepia)
+ * no matter which editor theme the user picks.
+ */
+export function resetReaderTheme(root: ReaderThemeRoot): void {
+  delete root.dataset.readerTheme;
+  const style = root.style;
+  if (typeof style.removeProperty !== 'function') {
+    return;
+  }
+  for (const name of READER_THEME_INLINE_VARS) {
+    style.removeProperty(name);
+  }
+  style.colorScheme = '';
+  style.color = '';
+  style.backgroundColor = '';
 }
