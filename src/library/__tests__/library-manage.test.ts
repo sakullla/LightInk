@@ -1348,7 +1348,7 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     customFrom: '起始色',
     customTo: '结束色',
     transparentMode: '透明模式',
-    contentOpacity: '内容不透明度',
+    contentOpacity: '不透明度（0–100%）',
     hideTop: '鼠标移出时隐藏顶栏',
     hideBody: '鼠标移出时隐藏主体',
     hideBottom: '鼠标移出时隐藏底栏',
@@ -1356,6 +1356,28 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     miniWindow: '迷你窗口',
     clickThrough: '点击穿透',
     clickThroughHint: '需开启透明模式。',
+    sceneNormalResult:
+      '页面回到主题背景；窗口不透明；正文完全不透明；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透。',
+    sceneHideOnLeaveResult:
+      '保留已选页面背景；窗口透明；正文完全不透明；鼠标离开时隐藏顶栏、正文和底栏；置顶；不是迷你窗口；点击穿透，看得见的轻墨控件仍可操作。',
+    sceneFloatingResult:
+      '保留已选页面背景；窗口透明；正文不透明度为 60；鼠标离开时不隐藏顶栏、正文或底栏；置顶；迷你窗口；点击不穿透。',
+    effectWindowTransparent: '窗口透明',
+    effectWindowOpaque: '窗口不透明',
+    effectOpacity: '正文不透明度为 {value}',
+    effectHideNone: '鼠标离开时不隐藏顶栏、正文或底栏',
+    effectHidePrefix: '鼠标离开时隐藏',
+    regionSeparator: '、',
+    regionTop: '顶栏',
+    regionBody: '正文',
+    regionBottom: '底栏',
+    effectPinned: '置顶',
+    effectNotPinned: '不置顶',
+    effectMini: '迷你窗口',
+    effectNotMini: '不是迷你窗口',
+    effectClickThrough: '点击穿透，看得见的轻墨控件仍可操作',
+    effectNoClickThrough: '点击不穿透',
+    effectSeparator: '；',
   });
 
   const englishConcealLabels = (): ConcealManageLabels => ({
@@ -1378,6 +1400,29 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     needsTransparent: 'Turn on transparent mode first.',
     gradientHidden: 'The gradient shows after transparent mode is turned off.',
     opacityScale: '100 is fully opaque, 0 is fully faded.',
+    contentOpacity: 'Content opacity (0–100%)',
+    sceneNormalResult:
+      'Page background returns to the theme; the window is opaque; text stays fully opaque; leaving does not hide the top bar, text, or bottom bar; not pinned; not a mini window; clicks do not pass through.',
+    sceneHideOnLeaveResult:
+      'Keeps the chosen page background; the window is transparent; text stays fully opaque; leaving hides the top bar, text, and bottom bar; pinned; not a mini window; clicks pass through, and visible LightInk controls still work.',
+    sceneFloatingResult:
+      'Keeps the chosen page background; the window is transparent; text opacity is 60; leaving does not hide the top bar, text, or bottom bar; pinned; mini window; clicks do not pass through.',
+    effectWindowTransparent: 'Window is transparent',
+    effectWindowOpaque: 'Window is opaque',
+    effectOpacity: 'Text opacity is {value}',
+    effectHideNone: 'Leaving does not hide the top bar, text, or bottom bar',
+    effectHidePrefix: 'Leaving hides ',
+    regionSeparator: ', ',
+    regionTop: 'the top bar',
+    regionBody: 'the text',
+    regionBottom: 'the bottom bar',
+    effectPinned: 'pinned',
+    effectNotPinned: 'not pinned',
+    effectMini: 'mini window',
+    effectNotMini: 'not a mini window',
+    effectClickThrough: 'clicks pass through, and visible LightInk controls still work',
+    effectNoClickThrough: 'clicks do not pass through',
+    effectSeparator: '; ',
     backgroundTheme: 'Theme background',
     backgroundPresets: {
       lavender: 'Lavender',
@@ -1635,6 +1680,26 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     expect(group.textContent).toContain('离开即隐');
     expect(group.textContent).toContain('悬浮看文');
     expect(group.querySelector('[data-conceal-scene="custom"]')?.textContent).toBe('自定义');
+    expect(group.querySelector('[data-conceal-scene-result="normal"]')?.textContent).toBe(
+      concealLabels().sceneNormalResult,
+    );
+    expect(group.querySelector('[data-conceal-scene-result="hideOnLeave"]')?.textContent).toBe(
+      concealLabels().sceneHideOnLeaveResult,
+    );
+    expect(group.querySelector('[data-conceal-scene-result="floating"]')?.textContent).toBe(
+      concealLabels().sceneFloatingResult,
+    );
+    expect(group.querySelector('[data-conceal-scene="hideOnLeave"]')?.contains(
+      group.querySelector('[data-conceal-scene-result="hideOnLeave"]'),
+    )).toBe(false);
+    expect(group.querySelector<HTMLElement>('[data-conceal-custom-effect]')?.hidden).toBe(true);
+    expect(group.querySelector('[data-conceal-key-name="bossPrimary"]')?.textContent).toBe(
+      '老板键（隐藏 / 恢复窗口）',
+    );
+    expect(group.querySelector('[data-conceal-key-name="bossSecondary"]')?.textContent).toBe(
+      '退出快捷键',
+    );
+    expect(group.textContent).toContain('不透明度（0–100%）');
     expect(group.textContent).toContain('100 为完全不透明，0 为完全淡出。');
 
     const english = concealDeps();
@@ -1656,6 +1721,16 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     expect(englishGroup.textContent).toContain('Floating read');
     expect(englishGroup.textContent).toContain('Custom');
     expect(englishGroup.textContent).toContain('100 is fully opaque, 0 is fully faded.');
+    expect(englishGroup.querySelector('[data-conceal-scene-result="normal"]')?.textContent).toBe(
+      englishConcealLabels().sceneNormalResult,
+    );
+    expect(englishGroup.textContent).not.toContain('页面回到主题背景');
+    expect(englishGroup.querySelector('[data-conceal-key-name="bossPrimary"]')?.textContent).toBe(
+      'Boss key (hide / restore window)',
+    );
+    expect(englishGroup.querySelector('[data-conceal-key-name="bossSecondary"]')?.textContent).toBe(
+      'Exit shortcut',
+    );
   });
 
   it('keeps the boss key free of exit wording and puts quit in its own group', () => {
@@ -1830,5 +1905,17 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
       manage.element.querySelector('[data-conceal-scene="floating"]')?.getAttribute('aria-checked'),
     ).toBe('false');
     expect(manage.element.querySelector('[data-conceal-scene="custom"]')?.tagName).toBe('SPAN');
+    expect(manage.element.querySelector('[data-conceal-scene="custom"]')?.textContent).toBe('自定义');
+    const effect = manage.element.querySelector<HTMLElement>('[data-conceal-custom-effect]');
+    expect(effect?.hidden).toBe(false);
+    expect(effect?.textContent).toBe(
+      '窗口透明；正文不透明度为 80；鼠标离开时不隐藏顶栏、正文或底栏；置顶；迷你窗口；点击不穿透',
+    );
+    expect(manage.element.querySelector('[data-conceal-scene="custom"]')?.contains(effect)).toBe(false);
+    const updatesBeforeCustom = conceal.updates.length;
+    manage.element.querySelector('[data-conceal-scene="custom"]')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    expect(conceal.updates).toHaveLength(updatesBeforeCustom);
   });
 });

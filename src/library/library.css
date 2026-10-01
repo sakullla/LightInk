@@ -3156,7 +3156,29 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
+}
+
+.lightink-library-conceal-scene-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.lightink-library-conceal-scene-result,
+.lightink-library-conceal-custom-effect,
+.lightink-library-conceal-key-name {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lightink-library-conceal-key-name {
+  color: var(--lightink-fg);
+  font-size: 13px;
 }
 
 .lightink-library-conceal-scene {

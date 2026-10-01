@@ -1322,8 +1322,39 @@ const READER_CONCEAL_LABELS: ReaderConcealBarLabels = {
   sceneHideOnLeave: '离开即隐',
   sceneFloating: '悬浮看文',
   sceneCustom: '自定义',
-  contentOpacity: '内容透明度（0–100%）',
+  contentOpacity: '不透明度（0–100%）',
   opacityScale: '100 为完全不透明，0 为完全淡出。',
+  transparentMode: '透明模式',
+  hideTop: '鼠标移出时隐藏顶栏',
+  hideBody: '鼠标移出时隐藏主体',
+  hideBottom: '鼠标移出时隐藏底栏',
+  alwaysOnTop: '窗口置顶',
+  miniWindow: '迷你窗口',
+  clickThrough: '点击穿透',
+  needsTransparent: '需要先打开透明模式。',
+  clickThroughHint: '需开启透明模式；可见顶栏、底栏按钮的点击仍由轻墨接收。',
+  sceneNormalResult:
+    '页面回到主题背景；窗口不透明；正文完全不透明；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透。',
+  sceneHideOnLeaveResult:
+    '保留已选页面背景；窗口透明；正文完全不透明；鼠标离开时隐藏顶栏、正文和底栏；置顶；不是迷你窗口；点击穿透，看得见的轻墨控件仍可操作。',
+  sceneFloatingResult:
+    '保留已选页面背景；窗口透明；正文不透明度为 60；鼠标离开时不隐藏顶栏、正文或底栏；置顶；迷你窗口；点击不穿透。',
+  effectWindowTransparent: '窗口透明',
+  effectWindowOpaque: '窗口不透明',
+  effectOpacity: '正文不透明度为 {value}',
+  effectHideNone: '鼠标离开时不隐藏顶栏、正文或底栏',
+  effectHidePrefix: '鼠标离开时隐藏',
+  regionSeparator: '、',
+  regionTop: '顶栏',
+  regionBody: '正文',
+  regionBottom: '底栏',
+  effectPinned: '置顶',
+  effectNotPinned: '不置顶',
+  effectMini: '迷你窗口',
+  effectNotMini: '不是迷你窗口',
+  effectClickThrough: '点击穿透，看得见的轻墨控件仍可操作',
+  effectNoClickThrough: '点击不穿透',
+  effectSeparator: '；',
   bossKeyActive: '当前生效：{combo}',
 };
 
@@ -1425,6 +1456,14 @@ describe('reader conceal bar', () => {
     expect(translate('zh-CN', 'conceal.exitHint')).toBe('按下会退出轻墨。');
     expect(translate('en', 'conceal.exitHint')).toBe('Pressing this quits LightInk.');
     expect(translate('zh-CN', 'conceal.opacityScale')).toBe('100 为完全不透明，0 为完全淡出。');
+    expect(translate('zh-CN', 'conceal.contentOpacity')).toBe('不透明度（0–100%）');
+    expect(translate('en', 'conceal.contentOpacity')).toBe('Content opacity (0–100%)');
+    expect(translate('zh-CN', 'conceal.sceneNormalResult')).toBe(
+      '页面回到主题背景；窗口不透明；正文完全不透明；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透。',
+    );
+    expect(translate('en', 'conceal.sceneFloatingResult')).toBe(
+      'Keeps the chosen page background; the window is transparent; text opacity is 60; leaving does not hide the top bar, text, or bottom bar; pinned; mini window; clicks do not pass through.',
+    );
     expect(translate('zh-CN', 'conceal.readerBar')).toBe('摸鱼');
     expect(translate('en', 'conceal.readerBar')).toBe('Stealth');
     expect(translate('zh-CN', 'conceal.readerBarLabel')).toBe('摸鱼调节');
@@ -1463,11 +1502,37 @@ describe('reader conceal bar', () => {
     expect(bar.onLayout).toHaveBeenCalledTimes(2);
     expect(bar.panel.querySelector('[data-reader-chrome-action]')).toBeNull();
     expect(bar.panel.textContent ?? '').not.toMatch(/字号|行距|翻页/);
-    expect([...bar.panel.querySelectorAll('input')].map((input) => input.type)).toEqual(['range']);
+    expect([...bar.panel.querySelectorAll('input')].map((input) => input.type)).toEqual([
+      'checkbox',
+      'range',
+      'checkbox',
+      'checkbox',
+      'checkbox',
+      'checkbox',
+      'checkbox',
+      'checkbox',
+    ]);
     expect(bar.panel.querySelector('[data-conceal-scene="normal"]')?.textContent).toBe('普通阅读');
     expect(bar.panel.querySelector('[data-conceal-scene="hideOnLeave"]')?.textContent).toBe('离开即隐');
     expect(bar.panel.querySelector('[data-conceal-scene="floating"]')?.textContent).toBe('悬浮看文');
+    expect(bar.panel.querySelector('[data-conceal-scene-result="hideOnLeave"]')?.textContent).toBe(
+      READER_CONCEAL_LABELS.sceneHideOnLeaveResult,
+    );
+    expect(
+      bar.panel.querySelector('[data-conceal-scene="hideOnLeave"]')?.contains(
+        bar.panel.querySelector('[data-conceal-scene-result="hideOnLeave"]'),
+      ),
+    ).toBe(false);
+    expect(bar.panel.querySelector('.lightink-reader-conceal-opacity span')?.textContent).toBe(
+      '不透明度（0–100%）',
+    );
     expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.tagName).toBe('SPAN');
+    expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.textContent).toBe('自定义');
+    const customEffect = bar.panel.querySelector<HTMLElement>('[data-conceal-custom-effect]');
+    expect(customEffect?.hidden).toBe(false);
+    expect(customEffect?.textContent).toBe(
+      '窗口不透明；正文不透明度为 40；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透',
+    );
     expect(bar.panel.querySelector('[data-conceal-reader-opacity-scale]')?.textContent).toBe(
       '100 为完全不透明，0 为完全淡出。',
     );
@@ -1479,7 +1544,7 @@ describe('reader conceal bar', () => {
     expect(bar.panel.hidden).toBe(true);
   });
 
-  it('applies the same scene prefs as the shelf and shows a refusal beside the scenes', () => {
+  it('applies the same scene prefs as the shelf and shows a refusal beside the switch', () => {
     const { chrome } = mount();
     chrome.reveal();
     const before: ConcealPrefs = {
@@ -1527,19 +1592,81 @@ describe('reader conceal bar', () => {
     expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.getAttribute('aria-current')).toBe(
       'true',
     );
+    expect(bar.panel.querySelector('[data-conceal-scene="custom"]')?.textContent).toBe('自定义');
+    expect(bar.panel.querySelector('[data-conceal-custom-effect]')?.textContent).toContain('置顶');
 
+    (bar.prefs() as { transparentMode: boolean }).transparentMode = true;
+    chrome.syncConcealBar();
     bar.notifyRefusal('miniWindow', '迷你窗口失败');
     bar.notifyRefusal('clickThrough', '穿透被拒绝');
-    const reason = bar.panel.querySelector<HTMLElement>('[data-conceal-reader-refusal]');
-    expect(reason?.hidden).toBe(false);
-    expect(bar.panel.querySelector('.lightink-reader-conceal-scenes-row')?.contains(reason!)).toBe(
-      true,
+    const miniReason = bar.panel.querySelector<HTMLElement>(
+      '[data-conceal-reader-switch-reason="miniWindow"]',
     );
-    expect(reason?.textContent).toContain('迷你窗口失败');
-    expect(reason?.textContent).toContain('穿透被拒绝');
+    const clickReason = bar.panel.querySelector<HTMLElement>(
+      '[data-conceal-reader-switch-reason="clickThrough"]',
+    );
+    expect(miniReason?.hidden).toBe(false);
+    expect(miniReason?.textContent).toBe('迷你窗口失败');
+    expect(clickReason?.hidden).toBe(false);
+    expect(clickReason?.textContent).toBe('穿透被拒绝');
+    expect(bar.panel.querySelector('.lightink-reader-conceal-scenes-row')?.contains(miniReason!)).toBe(
+      false,
+    );
+    expect(miniReason?.closest('[data-conceal-reader-switch="miniWindow"]')).not.toBeNull();
+    expect(clickReason?.closest('[data-conceal-reader-switch="clickThrough"]')).not.toBeNull();
     bar.notifyRefusal('miniWindow', '');
     bar.notifyRefusal('clickThrough', '');
-    expect(reason?.hidden).toBe(true);
+    expect(miniReason?.hidden).toBe(true);
+    expect(clickReason?.textContent).toBe(READER_CONCEAL_LABELS.clickThroughHint);
+  });
+
+  it('toggles the existing conceal switches with the full prefs', () => {
+    const { chrome } = mount();
+    chrome.reveal();
+    const bar = attachConceal(chrome, {
+      contentOpacity: 40,
+      bossPrimary: 'Alt+Z',
+      hideTop: true,
+    });
+    bar.toggle.click();
+    const input = (key: string): HTMLInputElement =>
+      bar.panel.querySelector<HTMLInputElement>(`[data-conceal-reader-toggle="${key}"]`)!;
+    const reason = (key: string): HTMLElement =>
+      bar.panel.querySelector<HTMLElement>(`[data-conceal-reader-switch-reason="${key}"]`)!;
+
+    expect(input('transparentMode').checked).toBe(false);
+    expect(input('hideTop').disabled).toBe(true);
+    expect(input('hideTop').checked).toBe(true);
+    expect(input('hideBody').disabled).toBe(true);
+    expect(input('clickThrough').disabled).toBe(true);
+    expect(input('hideBottom').disabled).toBe(false);
+    expect(reason('hideTop').textContent).toBe('需要先打开透明模式。');
+    expect(reason('hideBody').textContent).toBe('需要先打开透明模式。');
+    expect(reason('clickThrough').textContent).toBe('需要先打开透明模式。');
+    expect(reason('hideBottom').hidden).toBe(true);
+
+    input('hideTop').checked = false;
+    input('hideTop').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bar.applyPrefs).not.toHaveBeenCalled();
+    expect(input('hideTop').checked).toBe(true);
+
+    input('hideBottom').checked = true;
+    input('hideBottom').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bar.applyPrefs).toHaveBeenCalledWith({
+      ...defaultConcealPrefs(false),
+      contentOpacity: 40,
+      bossPrimary: 'Alt+Z',
+      hideTop: true,
+      hideBottom: true,
+    });
+
+    input('transparentMode').checked = true;
+    input('transparentMode').dispatchEvent(new Event('change', { bubbles: true }));
+    expect(input('hideTop').disabled).toBe(false);
+    expect(reason('hideTop').hidden).toBe(true);
+    expect(input('clickThrough').disabled).toBe(false);
+    expect(reason('clickThrough').textContent).toBe(READER_CONCEAL_LABELS.clickThroughHint);
+    expect(reason('clickThrough').classList.contains('is-error')).toBe(false);
   });
 
   it('previews opacity while dragging and keeps the committed integer after collapse', () => {

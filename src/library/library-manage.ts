@@ -28,6 +28,12 @@ import {
   type ConcealSceneChoice,
 } from '../conceal/conceal-prefs.js';
 import {
+  concealCustomEffect,
+  concealSceneResult,
+  type ConcealEffectLabels,
+  type ConcealSceneResultLabels,
+} from '../conceal/conceal-status.js';
+import {
   AI_TARGET_LANG_VALUES,
   type AiTargetLangValue,
 } from '../reader/ai-target-lang.js';
@@ -57,7 +63,7 @@ export type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
 export type ManageSubpage = 'home' | 'cache-limit';
 
 /** 摸鱼段（R2/R5–R10/R13）的显示文案（main.ts 以 i18n 装配）。 */
-export interface ConcealManageLabels {
+export interface ConcealManageLabels extends ConcealSceneResultLabels, ConcealEffectLabels {
   readonly group: string;
   readonly groupHint: string;
   readonly bossKeyHint: string;
@@ -722,6 +728,29 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       floating: '',
       custom: '',
     } as Record<ConcealScene, string>,
+    sceneResults: {
+      sceneNormalResult: '',
+      sceneHideOnLeaveResult: '',
+      sceneFloatingResult: '',
+    },
+    effects: {
+      effectWindowTransparent: '',
+      effectWindowOpaque: '',
+      effectOpacity: '',
+      effectHideNone: '',
+      effectHidePrefix: '',
+      regionSeparator: '',
+      regionTop: '',
+      regionBody: '',
+      regionBottom: '',
+      effectPinned: '',
+      effectNotPinned: '',
+      effectMini: '',
+      effectNotMini: '',
+      effectClickThrough: '',
+      effectNoClickThrough: '',
+      effectSeparator: '',
+    },
     groups: {
       dodge: '',
       disguise: '',
@@ -748,10 +777,16 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
   scenes.className = 'lightink-library-conceal-scenes';
   scenes.setAttribute('role', 'radiogroup');
   const sceneButtons = new Map<ConcealSceneChoice, HTMLButtonElement>();
+  const sceneResults = new Map<ConcealSceneChoice, HTMLElement>();
   for (const choice of CONCEAL_SCENE_CHOICES) {
+    const sceneItem = doc.createElement('div');
+    sceneItem.className = 'lightink-library-conceal-scene-item';
     const sceneButton = button(doc, '', 'lightink-library-conceal-scene');
     sceneButton.dataset.concealScene = choice;
     sceneButton.setAttribute('role', 'radio');
+    const sceneResult = doc.createElement('p');
+    sceneResult.className = 'lightink-library-conceal-scene-result';
+    sceneResult.dataset.concealSceneResult = choice;
     sceneButton.addEventListener('click', () => {
       for (const key of CONCEAL_REFUSAL_KEYS) {
         refusals.delete(key);
@@ -761,12 +796,21 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       render();
     });
     sceneButtons.set(choice, sceneButton);
-    scenes.append(sceneButton);
+    sceneResults.set(choice, sceneResult);
+    sceneItem.append(sceneButton, sceneResult);
+    scenes.append(sceneItem);
   }
+  const customItem = doc.createElement('div');
+  customItem.className = 'lightink-library-conceal-scene-item';
   const customScene = doc.createElement('span');
   customScene.className = 'lightink-library-conceal-scene is-readonly';
   customScene.dataset.concealScene = 'custom';
-  scenes.append(customScene);
+  const customEffect = doc.createElement('p');
+  customEffect.className = 'lightink-library-conceal-custom-effect';
+  customEffect.dataset.concealCustomEffect = 'true';
+  customEffect.hidden = true;
+  customItem.append(customScene, customEffect);
+  scenes.append(customItem);
 
   const subgroup = (id: 'dodge' | 'disguise' | 'float' | 'exit'): HTMLElement => {
     const group = doc.createElement('section');
@@ -824,6 +868,9 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
   const makeBossKeyField = (prefKey: 'bossPrimary' | 'bossSecondary'): ConcealKeyField => {
     const field = doc.createElement('label');
     field.className = 'lightink-library-conceal-key-field';
+    const name = doc.createElement('span');
+    name.className = 'lightink-library-conceal-key-name';
+    name.dataset.concealKeyName = prefKey;
     const input = doc.createElement('input');
     input.type = 'text';
     input.readOnly = true;
@@ -918,7 +965,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       status.textContent = state.statusBeforeRecord;
       status.classList.remove('is-error');
     });
-    field.append(input, status);
+    field.append(name, input, status);
     return state;
   };
 
@@ -1135,6 +1182,12 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
     }
     customScene.classList.toggle('is-active', scene === 'custom');
     customScene.setAttribute('aria-current', scene === 'custom' ? 'true' : 'false');
+    for (const [choice, result] of sceneResults) {
+      result.textContent = concealSceneResult(choice, texts.sceneResults);
+    }
+    const showCustomEffect = scene === 'custom';
+    customEffect.hidden = !showCustomEffect;
+    customEffect.textContent = showCustomEffect ? concealCustomEffect(prefs, texts.effects) : '';
 
     for (const field of keyFields) {
       if (registerResult !== undefined) {
@@ -1247,6 +1300,29 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
         floating: labels.sceneFloating,
         custom: labels.sceneCustom,
       };
+      texts.sceneResults = {
+        sceneNormalResult: labels.sceneNormalResult,
+        sceneHideOnLeaveResult: labels.sceneHideOnLeaveResult,
+        sceneFloatingResult: labels.sceneFloatingResult,
+      };
+      texts.effects = {
+        effectWindowTransparent: labels.effectWindowTransparent,
+        effectWindowOpaque: labels.effectWindowOpaque,
+        effectOpacity: labels.effectOpacity,
+        effectHideNone: labels.effectHideNone,
+        effectHidePrefix: labels.effectHidePrefix,
+        regionSeparator: labels.regionSeparator,
+        regionTop: labels.regionTop,
+        regionBody: labels.regionBody,
+        regionBottom: labels.regionBottom,
+        effectPinned: labels.effectPinned,
+        effectNotPinned: labels.effectNotPinned,
+        effectMini: labels.effectMini,
+        effectNotMini: labels.effectNotMini,
+        effectClickThrough: labels.effectClickThrough,
+        effectNoClickThrough: labels.effectNoClickThrough,
+        effectSeparator: labels.effectSeparator,
+      };
       texts.groups = {
         dodge: labels.groupDodge,
         disguise: labels.groupDisguise,
@@ -1289,6 +1365,14 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       primaryField.input.title = labels.bossKey1;
       secondaryField.input.setAttribute('aria-label', labels.bossKey2);
       secondaryField.input.title = labels.bossKey2;
+      const primaryName = section.querySelector<HTMLElement>('[data-conceal-key-name="bossPrimary"]');
+      const secondaryName = section.querySelector<HTMLElement>('[data-conceal-key-name="bossSecondary"]');
+      if (primaryName !== null) {
+        primaryName.textContent = labels.bossKey1;
+      }
+      if (secondaryName !== null) {
+        secondaryName.textContent = labels.bossKey2;
+      }
       backgroundText.textContent = labels.background;
       swatchRow.setAttribute('aria-label', labels.background);
       for (const [value, swatch] of swatches) {

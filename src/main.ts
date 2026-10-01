@@ -765,9 +765,35 @@ const concealQuit = createConcealQuitController({
   exitFailedMessage: (reason?: string) => i18n.t('conceal.exitFailed', { reason: reason ?? '' }),
 });
 
+/** 书架和阅读顶栏共用的场景结果句与自定义效果碎片。 */
+function concealStatusLabels() {
+  return {
+    sceneNormalResult: i18n.t('conceal.sceneNormalResult'),
+    sceneHideOnLeaveResult: i18n.t('conceal.sceneHideOnLeaveResult'),
+    sceneFloatingResult: i18n.t('conceal.sceneFloatingResult'),
+    effectWindowTransparent: i18n.t('conceal.effectWindowTransparent'),
+    effectWindowOpaque: i18n.t('conceal.effectWindowOpaque'),
+    effectOpacity: i18n.t('conceal.effectOpacity'),
+    effectHideNone: i18n.t('conceal.effectHideNone'),
+    effectHidePrefix: i18n.t('conceal.effectHidePrefix'),
+    regionSeparator: i18n.t('conceal.regionSeparator'),
+    regionTop: i18n.t('conceal.regionTop'),
+    regionBody: i18n.t('conceal.regionBody'),
+    regionBottom: i18n.t('conceal.regionBottom'),
+    effectPinned: i18n.t('conceal.effectPinned'),
+    effectNotPinned: i18n.t('conceal.effectNotPinned'),
+    effectMini: i18n.t('conceal.effectMini'),
+    effectNotMini: i18n.t('conceal.effectNotMini'),
+    effectClickThrough: i18n.t('conceal.effectClickThrough'),
+    effectNoClickThrough: i18n.t('conceal.effectNoClickThrough'),
+    effectSeparator: i18n.t('conceal.effectSeparator'),
+  };
+}
+
 /** 摸鱼设置段注入（library-manage 消费；Android 不注入即整段不渲染）。 */
 const concealManageDeps = {
   labels: () => ({
+    ...concealStatusLabels(),
     group: i18n.t('conceal.group'),
     groupHint: i18n.t('conceal.groupHint'),
     bossKeyHint: i18n.t('conceal.bossKeyHint'),
@@ -845,6 +871,7 @@ const concealManageDeps = {
 
 function readerConcealBarLabels(): ReaderConcealBarLabels {
   return {
+    ...concealStatusLabels(),
     toggle: i18n.t('conceal.readerBar'),
     toggleLabel: i18n.t('conceal.readerBarLabel'),
     sceneNormal: i18n.t('conceal.sceneNormal'),
@@ -853,6 +880,15 @@ function readerConcealBarLabels(): ReaderConcealBarLabels {
     sceneCustom: i18n.t('conceal.sceneCustom'),
     contentOpacity: i18n.t('conceal.contentOpacity'),
     opacityScale: i18n.t('conceal.opacityScale'),
+    transparentMode: i18n.t('conceal.transparentMode'),
+    hideTop: i18n.t('conceal.hideTop'),
+    hideBody: i18n.t('conceal.hideBody'),
+    hideBottom: i18n.t('conceal.hideBottom'),
+    alwaysOnTop: i18n.t('conceal.alwaysOnTop'),
+    miniWindow: i18n.t('conceal.miniWindow'),
+    clickThrough: i18n.t('conceal.clickThrough'),
+    needsTransparent: i18n.t('conceal.needsTransparent'),
+    clickThroughHint: i18n.t('conceal.clickThroughHint'),
     bossKeyActive: i18n.t('conceal.bossKeyActive'),
   };
 }
