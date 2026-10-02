@@ -633,8 +633,10 @@ export function createReaderChrome(
   let hideTimer: number | null = null;
   let attachedHost: HTMLElement | null = null;
   let destroyed = false;
-  // R7 接管态（默认 'auto' = 原机制全权）。仅 setConcealZones 写入。
+  // R7 接管态（默认 'auto' = 原机制全权）；摸鱼面板展开时临时强制为 'held'。
   let concealTop: ReaderChromeConcealZone = 'auto';
+  // 展开的摸鱼面板需要保持可操作；保存控制器请求的顶栏状态，收起后恢复。
+  let requestedConcealTop: ReaderChromeConcealZone = 'auto';
   let concealBottom: ReaderChromeConcealZone = 'auto';
 
   const overlayOpen = (): boolean => deps.isOverlayOpen?.() === true;
@@ -1117,9 +1119,10 @@ export function createReaderChrome(
     if (destroyed) {
       return;
     }
-    concealTop = top;
+    requestedConcealTop = top;
+    concealTop = concealPanel?.hidden === false ? 'held' : top;
     concealBottom = bottom;
-    if (top === 'held') {
+    if (concealTop === 'held') {
       // 仅顶带 'held' 对齐 revealed=true（切回 'auto' 后原机制从已显示态
       // 续接）；底栏 'held' 独立强制显示 footer，不影响顶栏。
       clearHideTimer();
@@ -1329,9 +1332,18 @@ export function createReaderChrome(
       commitConcealOpacity();
     }
     concealPanel.hidden = !expanded;
+    concealTop = expanded ? 'held' : requestedConcealTop;
+    if (concealTop === 'held') {
+      clearHideTimer();
+      revealed = true;
+    }
     writeAttr(concealToggle, 'aria-expanded', expanded ? 'true' : 'false');
     if (expanded) {
       renderConcealBar();
+    }
+    syncDom();
+    if (!expanded && concealTop !== 'held' && concealBottom !== 'held' && revealed && !touchMode) {
+      scheduleHide();
     }
     concealDeps?.onLayout?.();
   };

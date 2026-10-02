@@ -1741,6 +1741,29 @@ describe('reader conceal bar', () => {
     expect(bar.prefs().clickThrough).toBe(true);
   });
 
+  it('keeps the conceal panel available while hide-on-leave hides the top zone', () => {
+    vi.useFakeTimers();
+    try {
+      const { chrome } = mount();
+      const bar = attachConceal(chrome);
+      chrome.setConcealZones('held', 'auto');
+      bar.toggle.click();
+      bar.panel.querySelector<HTMLButtonElement>('[data-conceal-scene="hideOnLeave"]')?.click();
+
+      chrome.setConcealZones('hidden', 'auto');
+      expect(chrome.bar.hidden).toBe(false);
+      expect(bar.panel.hidden).toBe(false);
+      vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
+      expect(bar.panel.hidden).toBe(false);
+
+      bar.toggle.click();
+      expect(bar.panel.hidden).toBe(true);
+      expect(chrome.bar.hidden).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('describes only effects that still apply after transparent mode is turned off', () => {
     const { chrome } = mount();
     chrome.reveal();
