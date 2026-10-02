@@ -1208,7 +1208,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   overflow: hidden;
   max-width: none;
   height: 100%;
-  padding: 0.55rem var(--lightink-reader-paged-pad-x, 0.4rem) 1.65rem;
+  padding: 1.35rem var(--lightink-reader-paged-pad-x, 0.4rem) 1.65rem;
   scrollbar-width: none;
 }
 

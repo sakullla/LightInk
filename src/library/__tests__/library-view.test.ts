@@ -248,10 +248,19 @@ function libraryNav(host: ParentNode): HTMLElement {
   return nav;
 }
 
+/** Shelf filters keep the name in `.lightink-library-group-label` and the tally beside it. */
+function buttonCaption(button: Element): string {
+  const named = button.querySelector(':scope > .lightink-library-group-label');
+  if (named instanceof HTMLElement && named.textContent !== null && named.textContent.trim() !== '') {
+    return named.textContent.trim();
+  }
+  return (button.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 function navButton(host: ParentNode, label: string): HTMLButtonElement {
   const nav = libraryNav(host);
   const candidate = Array.from(nav.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === label && isShown(button),
+    (button) => buttonCaption(button) === label && isShown(button),
   );
   if (!(candidate instanceof HTMLButtonElement)) throw new Error(`nav item not found: ${label}`);
   return candidate;
@@ -279,10 +288,7 @@ function shelfFilterShown(host: ParentNode, label: string): boolean {
     return false;
   }
   return Array.from(groups.querySelectorAll<HTMLButtonElement>('[data-shelf-group]')).some(
-    (button) => {
-      const text = button.textContent?.replace(/\s+/g, ' ').trim();
-      return (text === label || text?.endsWith(label) === true) && isShown(button);
-    },
+    (button) => buttonCaption(button) === label && isShown(button),
   );
 }
 
@@ -390,11 +396,11 @@ function shownButtonWithText(root: ParentNode, text: string): HTMLButtonElement 
 function groupButton(host: ParentNode, label: string): HTMLButtonElement {
   const groups = host.querySelector('.lightink-library-groups') ?? host;
   const shelf = Array.from(groups.querySelectorAll<HTMLButtonElement>('[data-shelf-group]')).find(
-    (button) => button.textContent === label && isShown(button),
+    (button) => buttonCaption(button) === label && isShown(button),
   );
   if (shelf) return shelf;
   const within = Array.from(groups.querySelectorAll('button')).find(
-    (button) => button.textContent === label && isShown(button),
+    (button) => buttonCaption(button) === label && isShown(button),
   );
   if (within instanceof HTMLButtonElement) return within;
   return shownButtonWithText(host, label);
@@ -905,7 +911,7 @@ async function openManage(host: HTMLElement): Promise<void> {
 async function openMyBooks(host: HTMLElement): Promise<void> {
   // 「全部」快捷过滤即书库主页（原独立「我的书」导航项已与其合并）
   const navEntry = Array.from(host.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === '全部' && isShown(button),
+    (button) => buttonCaption(button) === '全部' && isShown(button),
   );
   const target = navEntry instanceof HTMLButtonElement ? navEntry : undefined;
   if (target === undefined) {
@@ -1123,7 +1129,7 @@ describe('LibraryView my-books home', () => {
     expect(importTile).not.toBeNull();
     expect(importTile?.getAttribute('aria-label')).toBe('导入本地书籍');
     expect(importTile?.title).toBe('导入本地书籍');
-    expect(importTile?.textContent?.trim()).toBe('');
+    expect(importTile?.querySelector('strong')?.textContent).toBe('导入');
     expect(tiles[tiles.length - 1]).toBe(importTile);
     expect((tiles[0] as HTMLElement | undefined)?.dataset.itemId).toBe(book.id);
 
@@ -2299,9 +2305,14 @@ describe('LibraryView my-books home', () => {
     expect(host.querySelector('.lightink-library-content .lightink-library-shelf-chips')).toBeNull();
     expect(host.querySelector('.lightink-library-tabbar')).toBeNull();
     const desktopFilterLabels = ['全部', '在读', '读完', '未读', '文字书', '漫画'].map(
-      (label) => groupButton(host, label).textContent?.replace(/\s+/g, ' ').trim(),
+      (label) => groupButton(host, label).querySelector('.lightink-library-group-label')?.textContent,
     );
     expect(desktopFilterLabels).toEqual(['全部', '在读', '读完', '未读', '文字书', '漫画']);
+    const desktopFilterCounts = ['全部', '在读', '读完', '未读', '文字书', '漫画'].map(
+      (label) => groupButton(host, label).querySelector('.lightink-library-group-count')?.textContent ?? '',
+    );
+    expect(desktopFilterCounts.every((count) => /^\d+$/.test(count))).toBe(true);
+    expect(Number(desktopFilterCounts[0])).toBeGreaterThan(0);
     expect(desktopFilterLabels.join('')).not.toContain('…');
     expect(desktopFilterLabels).not.toContain('文字…');
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
@@ -7787,7 +7798,9 @@ describe('LibraryView mobile shelf', () => {
     expectNoNowrapChipRow(host);
     const filterButtons = await openShelfFilters(host);
     expectFullFilterLabels(
-      filterButtons.map((button) => button.textContent?.replace(/\s+/g, ' ').trim()),
+      filterButtons.map(
+        (button) => button.querySelector('.lightink-library-group-label')?.textContent?.trim(),
+      ),
     );
     const filterText = filterButtons.map((button) => button.textContent ?? '').join('');
     expect(filterText).not.toContain('夏日书单');

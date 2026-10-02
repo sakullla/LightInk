@@ -73,9 +73,14 @@ export function toolbarPosition(
 ): { left: number; top: number } {
   const clamp = (value: number, low: number, high: number): number =>
     Math.min(Math.max(value, low), Math.max(low, high));
-  let top = rect.top - toolbar.height - MARGIN;
-  if (top < MARGIN) {
-    top = rect.top + rect.height + MARGIN;
+  const above = rect.top - toolbar.height - MARGIN;
+  const below = rect.top + rect.height + MARGIN;
+  let top = above >= MARGIN ? above : below;
+  const coversSelection = (candidate: number): boolean =>
+    candidate < rect.top + rect.height && candidate + toolbar.height > rect.top;
+  if (coversSelection(top)) {
+    const alternate = top < rect.top ? below : above;
+    if (!coversSelection(alternate)) top = alternate;
   }
   top = clamp(top, MARGIN, viewport.height - toolbar.height - MARGIN);
   const left = clamp(
@@ -86,22 +91,64 @@ export function toolbarPosition(
   return { left, top };
 }
 
-/**
- * CSS columns (and other fragmentation) make Range.getBoundingClientRect() a
- * union that can span both pages of a spread. Anchor the toolbar on the last
- * visible line box instead — that is where the pointer released.
- */
-export function selectionClientRect(range: Range): SelectionToolbarRect {
-  const list =
-    typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
-  const fragments = list.filter((box) => box.width > 1 && box.height > 1);
-  const box = fragments.length > 0 ? fragments[fragments.length - 1]! : range.getBoundingClientRect();
+interface SelectionBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  right: number;
+  bottom: number;
+}
+
+function selectionBox(box: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  right?: number;
+  bottom?: number;
+}): SelectionBox {
+  const right = box.right ?? box.left + box.width;
+  const bottom = box.bottom ?? box.top + box.height;
   return {
     left: box.left,
     top: box.top,
     width: box.width,
     height: box.height,
+    right,
+    bottom,
   };
+}
+
+/** Same page column: a spread's other page sits far to the side and must not widen the anchor. */
+function sharesColumn(box: SelectionBox, anchor: SelectionBox): boolean {
+  const overlap = Math.min(box.right, anchor.right) - Math.max(box.left, anchor.left);
+  return overlap > Math.min(box.width, anchor.width) * 0.35;
+}
+
+/**
+ * CSS columns make Range.getBoundingClientRect() a union that can span both
+ * pages of a spread. Keep the column where the pointer released (the last
+ * line box), and include every line of that column so the toolbar sits
+ * outside the selection instead of covering the lines above the caret.
+ */
+export function selectionClientRect(range: Range): SelectionToolbarRect {
+  const list =
+    typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  const fragments = list
+    .map((box) => selectionBox(box))
+    .filter((box) => box.width > 1 && box.height > 1);
+  if (fragments.length === 0) {
+    const box = selectionBox(range.getBoundingClientRect());
+    return { left: box.left, top: box.top, width: box.width, height: box.height };
+  }
+  const anchor = fragments[fragments.length - 1]!;
+  const column = fragments.filter((box) => sharesColumn(box, anchor));
+  const left = Math.min(...column.map((box) => box.left));
+  const top = Math.min(...column.map((box) => box.top));
+  const right = Math.max(...column.map((box) => box.right));
+  const bottom = Math.max(...column.map((box) => box.bottom));
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 /**

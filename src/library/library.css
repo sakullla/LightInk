@@ -914,6 +914,32 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   color: var(--lightink-muted);
 }
 
+.lightink-library-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lightink-library-group-count {
+  margin-left: auto;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.lightink-library-group.is-active .lightink-library-group-count,
+.lightink-library-shelf-filter-option.is-active .lightink-library-group-count {
+  color: inherit;
+  opacity: 0.72;
+}
+
+.lightink-library-shelf-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .lightink-library-nav-item:hover .lightink-library-nav-icon,
 .lightink-library-source:hover .lightink-library-nav-icon,
 .lightink-library-group:hover .lightink-library-nav-icon,
@@ -2602,14 +2628,17 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 }
 
 .lightink-library-cover-jacket-author {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
   font-size: clamp(10px, 0.72rem, 12px);
   font-weight: 500;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
   opacity: 0.78;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Progress bar: fill width comes from --lightink-library-progress-fill (set inline).
@@ -2685,6 +2714,15 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 .lightink-library-item--import:focus-visible .lightink-library-cover--import {
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library-item--import .lightink-library-item-text {
+  align-items: center;
+  text-align: center;
+}
+
+.lightink-library-item--import .lightink-library-item-text strong {
+  text-align: center;
 }
 
 .lightink-library-import-plus {
@@ -2837,12 +2875,94 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: none;
 }
 
+.lightink-library-detail-hero {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 4px;
+}
+
+.lightink-library-detail-hero .lightink-library-cover {
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  justify-self: start;
+  border-radius: 3px 6px 6px 3px;
+}
+
+.lightink-library-detail-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.lightink-library-detail-identity h3 {
+  margin: 2px 0 0;
+}
+
+.lightink-library-detail-format {
+  margin: 2px 0 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.lightink-library-detail-meter {
+  width: min(100%, 9rem);
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-library-detail-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+}
+
 .lightink-library-detail-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.lightink-library-detail-actions > .lightink-library-primary {
+  display: inline-flex;
+  flex: 1 0 100%;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.lightink-library-detail-actions > button:not(.lightink-library-primary):not(.lightink-library-danger):not(.lightink-library-icon-button) {
+  background: var(--lightink-bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--lightink-border);
+}
+
+.lightink-library-detail-actions > .lightink-library-danger {
+  display: inline-flex;
+  flex: 1 0 100%;
+  align-items: center;
+  justify-content: flex-start;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: inset 0 1px 0 var(--lightink-border);
 }
 
 /* 整本翻译入口与进度（R4）：详情动作区的进度条 + 暂停按钮。 */
@@ -6370,6 +6490,36 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:fo
 ):focus-visible {
   outline: 3px solid var(--lightink-accent);
   outline-offset: 3px;
+}
+
+.lightink-library-continue-meter {
+  display: block;
+  width: min(100%, 8.5rem);
+  height: 3px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-library-continue-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-open:hover
+  .lightink-library-item-text
+  strong,
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-open:focus-visible
+  .lightink-library-item-text
+  strong {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
 }
 
 @media (max-width: 760px) {

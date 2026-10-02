@@ -563,15 +563,42 @@ export function aiTargetLangLabel(value: AiTargetLangValue, l: LibraryManageLabe
   }
 }
 
+/**
+ * 后端有的用 snake_case（base_url），捕获/旧客户端有的用 camelCase（baseUrl）。
+ * 先收成同一种，避免摘要里「Base URL」和「baseUrl」各出现一次。
+ */
+export function canonicalAiGap(gap: string): string {
+  switch (gap) {
+    case 'baseUrl':
+    case 'base_url':
+      return 'base_url';
+    case 'apiKey':
+    case 'api_key':
+    case 'key':
+      return 'api_key';
+    case 'endpointKind':
+    case 'endpoint_kind':
+      return 'endpoint_kind';
+    case 'model':
+      return 'model';
+    default:
+      return gap;
+  }
+}
+
 /** 四要素缺口 token → 本地化字段名(后端 config_gaps 的字段名回报)。 */
 export function aiMissingSummary(l: LibraryManageLabels, missing: readonly string[]): string {
   const names: string[] = [];
+  const seen = new Set<string>();
   for (const gap of missing) {
-    if (gap === 'endpoint_kind') names.push(l.aiEndpointKind);
-    else if (gap === 'base_url') names.push(l.aiBaseUrl);
-    else if (gap === 'model') names.push(l.aiModel);
-    else if (gap === 'api_key') names.push(l.aiKey);
-    else if (gap !== '') names.push(gap);
+    const name = canonicalAiGap(gap);
+    if (name === '' || seen.has(name)) continue;
+    seen.add(name);
+    if (name === 'endpoint_kind') names.push(l.aiEndpointKind);
+    else if (name === 'base_url') names.push(l.aiBaseUrl);
+    else if (name === 'model') names.push(l.aiModel);
+    else if (name === 'api_key') names.push(l.aiKey);
+    else names.push(name);
   }
   return names.join(', ');
 }
@@ -1728,7 +1755,8 @@ export function createLibraryManage(
     if (!filled.has('model')) merged.push('model');
     if (!filled.has('api_key')) merged.push('api_key');
     for (const gap of aiStatusState.missing) {
-      if (!filled.has(gap) && !merged.includes(gap)) merged.push(gap);
+      const name = canonicalAiGap(gap);
+      if (!filled.has(name) && !merged.includes(name)) merged.push(name);
     }
     return merged;
   };

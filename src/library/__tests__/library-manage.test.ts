@@ -1214,6 +1214,30 @@ describe('createLibraryManage AI provider group (R2)', () => {
     manage.destroy();
   });
 
+  it('collapses camelCase gap tokens so baseUrl is not listed beside Base URL', async () => {
+    mockAiCommands({
+      getConfig: aiStatus({
+        baseUrl: '',
+        model: '',
+        hasKey: false,
+        configured: false,
+        missing: ['baseUrl', 'model'],
+      }),
+    });
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    await settle();
+
+    const status = manage.element.querySelector<HTMLElement>('.lightink-library-ai-status')!;
+    const text = status.textContent ?? '';
+    expect(text).not.toMatch(/baseUrl/);
+    expect(text).toContain(LABELS['zh-CN'].aiBaseUrl);
+    expect(text).toContain(LABELS['zh-CN'].aiModel);
+    expect(text.split(LABELS['zh-CN'].aiBaseUrl).length - 1).toBe(1);
+    manage.destroy();
+  });
+
   it('maps AI_STORAGE_ERROR to the dedicated storage copy, not config-invalid', async () => {
     mockAiCommands({
       saveConfigError: { code: 'AI_STORAGE_ERROR', message: 'app data dir unavailable' },

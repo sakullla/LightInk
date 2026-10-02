@@ -291,7 +291,7 @@ describe('划选工具栏（selection-toolbar）', () => {
     });
   });
 
-  it('anchors on the last line box instead of a column-spanning bounding rect', () => {
+  it('anchors on the pointer column and includes every line in that column', () => {
     const range = document.createRange();
     range.getBoundingClientRect = () =>
       ({
@@ -307,14 +307,15 @@ describe('划选工具栏（selection-toolbar）', () => {
       }) as DOMRect;
     range.getClientRects = () =>
       [
+        { left: 420, top: 80, width: 300, height: 18, right: 720, bottom: 98 },
         { left: 40, top: 80, width: 300, height: 18, right: 340, bottom: 98 },
         { left: 48, top: 100, width: 260, height: 18, right: 308, bottom: 118 },
       ] as unknown as DOMRectList;
     expect(selectionClientRect(range)).toEqual({
-      left: 48,
-      top: 100,
-      width: 260,
-      height: 18,
+      left: 40,
+      top: 80,
+      width: 300,
+      height: 38,
     });
   });
 

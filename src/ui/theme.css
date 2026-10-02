@@ -152,6 +152,24 @@ html[data-display='xuhd'] {
   }
 }
 
+/* Narrow desktop: leave a writing column beside the outline, and keep the
+   last paragraph clear of the status bar. */
+@media (max-width: 760px) {
+  html:not([data-android]):not([data-touch-primary]) {
+    --lightink-outline-width: 132px;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-tab-host {
+    padding-bottom: 4.75rem;
+  }
+
+  html:not([data-android]):not([data-touch-primary])
+    .lightink-status-bar:not([data-status-kind='reader'])
+    .lightink-status-encoding {
+    display: none;
+  }
+}
+
 ::selection {
   background: var(--lightink-selection);
 }

@@ -2980,17 +2980,10 @@ export function createLibraryView(
   let dismissedContinue = readDismissedContinue();
   let lastOpenedItemId = readLastOpenedItemId();
 
-  function matchesGroup(display: DisplayItem): boolean {
-    if (selectedSmartGroupId !== null) {
-      const smart = smartGroups.find((group) => group.id === selectedSmartGroupId);
-      return smart !== undefined && smartGroupMatches(display.item, smart.rule, progressFor(display));
-    }
-    if (selectedCustomGroupId !== null) {
-      return itemIdsForGroup(groups, memberships, selectedCustomGroupId).has(display.item.id);
-    }
+  function matchesShelfPreset(display: DisplayItem, group: ShelfGroup): boolean {
     const progress = progressFor(display);
     const kind = classifyLibraryKind(display.item);
-    switch (selectedGroup) {
+    switch (group) {
       case 'all':
         return true;
       case 'in-progress':
@@ -3004,6 +2997,37 @@ export function createLibraryView(
       case 'comic':
         return kind === 'comic';
     }
+  }
+
+  function shelfGroupCount(group: ShelfGroup): number {
+    let count = 0;
+    for (const display of shelfItems) {
+      if (matchesShelfPreset(display, group)) count += 1;
+    }
+    return count;
+  }
+
+  /** 侧栏筛选项：名称与数量分开，数量不挤进名称的可访问文本比较。 */
+  function appendFilterCaption(row: HTMLElement, caption: string, count: number): void {
+    const name = doc.createElement('span');
+    name.className = 'lightink-library-group-label';
+    name.textContent = caption;
+    const tally = doc.createElement('span');
+    tally.className = 'lightink-library-group-count';
+    tally.textContent = String(count);
+    row.append(name, tally);
+    row.title = `${caption} · ${count}`;
+  }
+
+  function matchesGroup(display: DisplayItem): boolean {
+    if (selectedSmartGroupId !== null) {
+      const smart = smartGroups.find((group) => group.id === selectedSmartGroupId);
+      return smart !== undefined && smartGroupMatches(display.item, smart.rule, progressFor(display));
+    }
+    if (selectedCustomGroupId !== null) {
+      return itemIdsForGroup(groups, memberships, selectedCustomGroupId).has(display.item.id);
+    }
+    return matchesShelfPreset(display, selectedGroup);
   }
 
   /**
@@ -3877,8 +3901,9 @@ export function createLibraryView(
     for (const group of SHELF_GROUPS) {
       const caption = groupLabel(labels(), group);
       const active = shelfGroupIsActive(group);
-      const option = button(doc, caption, 'lightink-library-groups-sheet-item');
+      const option = button(doc, '', 'lightink-library-groups-sheet-item');
       option.classList.add('lightink-library-shelf-filter-option');
+      appendFilterCaption(option, caption, shelfGroupCount(group));
       option.dataset.shelfGroup = group;
       option.setAttribute('role', 'radio');
       option.setAttribute('aria-checked', active ? 'true' : 'false');
@@ -4148,9 +4173,9 @@ export function createLibraryView(
     for (const group of SHELF_GROUPS) {
       const caption = groupLabel(labels(), group);
       const active = shelfGroupIsActive(group);
-      const row = button(doc, caption, 'lightink-library-group');
+      const row = button(doc, '', 'lightink-library-group');
       row.prepend(createNavIcon(doc, SHELF_NAV_ICONS[group]));
-      row.title = caption;
+      appendFilterCaption(row, caption, shelfGroupCount(group));
       row.dataset.shelfGroup = group;
       row.classList.toggle('is-active', active);
       if (active) row.setAttribute('aria-current', 'true');
@@ -5045,6 +5070,16 @@ export function createLibraryView(
         meta.textContent = progressText;
         text.appendChild(meta);
       }
+      const fill = coverProgressFillPercent(progress);
+      if (fill !== null) {
+        const meter = doc.createElement('span');
+        meter.className = 'lightink-library-continue-meter';
+        meter.setAttribute('aria-hidden', 'true');
+        const bar = doc.createElement('i');
+        bar.style.width = `${fill}%`;
+        meter.append(bar);
+        text.append(meter);
+      }
     }
     open.append(cover, text);
     open.addEventListener('click', () => void openSelected(latest));
@@ -5082,7 +5117,12 @@ export function createLibraryView(
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover lightink-library-cover--import';
     cover.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus, 'lightink-library-import-plus'));
-    tile.append(cover);
+    const caption = doc.createElement('span');
+    caption.className = 'lightink-library-item-text';
+    const captionText = doc.createElement('strong');
+    captionText.textContent = labels().importShort;
+    caption.append(captionText);
+    tile.append(cover, caption);
     tile.addEventListener('click', () => {
       void importLocalBook();
     });
@@ -5520,16 +5560,32 @@ export function createLibraryView(
     close.setAttribute('aria-label', labels().closeDetails);
     close.addEventListener('click', () => closeDetail());
     headerRow.append(detailHeading, close);
+    const hero = doc.createElement('div');
+    hero.className = 'lightink-library-detail-hero';
+    const cover = doc.createElement('div');
+    cover.className = 'lightink-library-cover';
+    appendCover(cover, selected);
+    const identity = doc.createElement('div');
+    identity.className = 'lightink-library-detail-identity';
     const title = doc.createElement('h3');
     title.textContent = displayBookTitle(selected.item);
-    detail.append(headerRow, title);
+    identity.append(title);
     const authorText = itemAuthors(selected.item).join(', ');
     if (authorText !== '') {
       const authors = doc.createElement('p');
       authors.className = 'lightink-library-detail-authors';
       authors.textContent = authorText;
-      detail.append(authors);
+      identity.append(authors);
     }
+    const extension = selected.item.extension?.trim();
+    if (extension !== undefined && extension !== '') {
+      const format = doc.createElement('p');
+      format.className = 'lightink-library-detail-format';
+      format.textContent = extension.toUpperCase();
+      identity.append(format);
+    }
+    hero.append(cover, identity);
+    detail.append(headerRow, hero);
     const facts: Array<[string, string | undefined]> = [
       [labels().series, selected.item.series],
       [labels().number, selected.item.number],
@@ -5608,6 +5664,20 @@ export function createLibraryView(
           progressMeta.append(term, description);
         }
         detail.appendChild(progressMeta);
+      }
+      const fill = coverProgressFillPercent(detailProgress);
+      if (fill !== null) {
+        const meter = doc.createElement('div');
+        meter.className = 'lightink-library-detail-meter';
+        meter.setAttribute('role', 'meter');
+        meter.setAttribute('aria-valuemin', '0');
+        meter.setAttribute('aria-valuemax', '100');
+        meter.setAttribute('aria-valuenow', String(fill));
+        meter.setAttribute('aria-label', labels().progress);
+        const bar = doc.createElement('span');
+        bar.style.width = `${fill}%`;
+        meter.append(bar);
+        identity.append(meter);
       }
     }
     // 详情标签：已赋标签逐枚可移除；「编辑标签」打开同一套标签编辑页。
