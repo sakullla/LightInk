@@ -8,6 +8,7 @@
  */
 
 import type { InsertElementId } from '../editor/insert-commands.js';
+import { ASSISTANT_AI_CONFIGURED_EVENT } from '../assistant/assistant-error.js';
 import { INSERT_ELEMENTS } from '../editor/insert-commands.js';
 import type { MessageKey } from '../i18n/messages.js';
 import {
@@ -223,6 +224,8 @@ export interface AppShellActions {
    * 点击唤起编辑器助手（无活动文档由宿主空操作，按钮同时随活动文档显隐）。
    */
   onOpenAssistant?(): void;
+  /** Saved provider readiness; the editor entry stays hidden until this resolves true. */
+  fetchAssistantConfigured?(): Promise<boolean>;
   /** True when reader workspace is showing an open book, not the shelf. */
   isReaderBookOpen?(): boolean;
   /** R12：列出最近打开文件路径（MRU 序）。 */
@@ -1258,8 +1261,30 @@ export function createAppShell(
   editorAssistantBtn.id = 'lightink-editor-assistant';
   editorAssistantBtn.className = 'lightink-workspace-travel lightink-editor-assistant';
   editorAssistantBtn.hidden = true;
+  let assistantConfigured = false;
+  let assistantConfigEpoch = 0;
+  const syncEditorAssistant = (): void => {
+    editorAssistantBtn.hidden = !assistantConfigured || actions.hasActiveDocument?.() === false;
+  };
+  const onAssistantConfigured = (event: Event): void => {
+    const detail = (event as CustomEvent<{ configured?: boolean }>).detail;
+    if (typeof detail?.configured !== 'boolean') return;
+    assistantConfigEpoch += 1;
+    assistantConfigured = detail.configured;
+    syncEditorAssistant();
+  };
   if (editorAssistantEnabled) {
     editorAssistantBtn.addEventListener('click', () => actions.onOpenAssistant?.());
+    document.addEventListener?.(ASSISTANT_AI_CONFIGURED_EVENT, onAssistantConfigured);
+    const epoch = assistantConfigEpoch;
+    void actions.fetchAssistantConfigured?.().then((configured) => {
+      // A newer settings event (including key removal) wins over startup IO.
+      if (epoch !== assistantConfigEpoch) return;
+      assistantConfigured = configured;
+      syncEditorAssistant();
+    }).catch(() => {
+      // Missing/unavailable backend keeps the entry hidden.
+    });
   }
 
   const readerShell = document.createElement('div');
@@ -1615,7 +1640,7 @@ export function createAppShell(
   ): void {
     if (editorAssistantEnabled) {
       // 无活动 Markdown 文档时入口不出现（宿主 hasActiveDocument 缺省视为可用）。
-      editorAssistantBtn.hidden = actions.hasActiveDocument?.() === false;
+      syncEditorAssistant();
     }
     // Always render the full open-tab list; visibility is chrome pin/reveal CSS only.
     tabBar.replaceChildren(
@@ -1733,9 +1758,11 @@ export function createAppShell(
     enterEditorButton: enterEditorBtn,
     renderTabBar,
     destroy: () => {
+      assistantConfigEpoch += 1;
       titlebar.dispose();
       if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
         document.removeEventListener('keydown', onReaderLayoutShortcut, true);
+        document.removeEventListener(ASSISTANT_AI_CONFIGURED_EVENT, onAssistantConfigured);
       }
     },
   };

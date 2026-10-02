@@ -2541,7 +2541,8 @@ describe('LibraryView my-books home', () => {
     const open = host.querySelector<HTMLButtonElement>('.lightink-library-continue-open')!;
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(true);
     expect(open.querySelector('.lightink-library-continue-cue')).toBeNull();
-    expect(open.textContent).not.toContain('继续阅读');
+    expect(open.querySelector('.lightink-library-resume-label')?.textContent).toBe('继续阅读');
+    expect(open.getAttribute('aria-label')).toBe('继续阅读: 续读小说');
     expect(open.contains(open.querySelector('.lightink-library-cover'))).toBe(true);
     expect(open.querySelector('strong')?.textContent).toBe('续读小说');
     expect(open.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
@@ -2908,7 +2909,7 @@ describe('LibraryView my-books home', () => {
     expect(open.querySelector('strong')?.textContent).toBe('在读小说');
     expect(open.querySelector('.lightink-library-item-progress')?.textContent).toBe('第 4 章');
     expect(open.textContent).not.toContain('已读');
-    expect(open.textContent).not.toContain('继续阅读');
+    expect(open.querySelector('.lightink-library-resume-label')?.textContent).toBe('继续阅读');
     expect(wallHeading(host).hidden).toBe(true);
     expect(wallHeading(host).textContent).toBe('');
     expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
@@ -8671,4 +8672,3 @@ describe('LibraryView home visual system (R2)', () => {
     view.destroy();
   });
 });
-

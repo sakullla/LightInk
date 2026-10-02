@@ -1044,7 +1044,9 @@ describe('reader chrome panels', () => {
         .querySelector(`[data-type-section="${kind}"]`)!
         .querySelector('.lightink-reader-type-label');
       expect(label, kind).not.toBeNull();
-      expect(label!.classList.contains('lightink-reader-type-label--hidden'), kind).toBe(true);
+      expect(label!.classList.contains('lightink-reader-type-label--hidden'), kind).toBe(
+        kind !== 'spacing' && kind !== 'measure',
+      );
     }
     expect(panel.querySelectorAll('.lightink-reader-theme-swatch')).toHaveLength(4);
     expect(panel.querySelectorAll('.lightink-reader-theme-page')).toHaveLength(4);

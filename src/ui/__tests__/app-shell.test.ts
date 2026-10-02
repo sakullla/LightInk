@@ -486,14 +486,14 @@ describe('createAppShell immersive chrome', () => {
     expect(shell.chrome.isRevealed('tabs')).toBe(true);
   });
 
-  it('renders the editor assistant entry only when wired, following the active document', () => {
+  it('renders the configured editor assistant entry only when wired, following the active document', async () => {
     installFakeDocument();
     const root = document.createElement('div') as unknown as HTMLElement;
     const onOpenAssistant = vi.fn();
     let hasDocument = false;
     const shell = createAppShell(
       root,
-      { ...stubActions(), onOpenAssistant, hasActiveDocument: () => hasDocument },
+      { ...stubActions(), onOpenAssistant, hasActiveDocument: () => hasDocument, fetchAssistantConfigured: async () => true },
       { shortcutBindings: () => [], storage: null, initialPinPrefs: { menu: true, tabs: true } },
     );
     const button = (root as unknown as FakeEl).querySelector('#lightink-editor-assistant');
@@ -501,6 +501,7 @@ describe('createAppShell immersive chrome', () => {
     expect(button?.hidden).toBe(true);
     expect(button?.textContent).toBe('助手');
     expect(button?.getAttribute('aria-label')).toBe('助手');
+    await Promise.resolve();
     hasDocument = true;
     shell.renderTabBar([{ id: 'tab-1', title: 'a.md', dirty: false }], 'tab-1', {
       onSwitch: () => undefined,

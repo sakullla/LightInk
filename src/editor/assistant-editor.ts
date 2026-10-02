@@ -132,6 +132,27 @@ export function createEditorAssistant(deps: EditorAssistantDeps): EditorAssistan
       openSettings: deps.openSettings,
       systemPrompt: () => deps.t('editor.assistant.systemPrompt'),
       placeholder: deps.t('editor.assistant.placeholder'),
+      actions: [
+        {
+          id: 'chapterSummary',
+          label: deps.t('editor.assistant.action.summary'),
+          prompt: deps.t('editor.assistant.prompt.summary'),
+          requiresContext: true,
+          historyAction: 'chapterSummary',
+        },
+        {
+          id: 'outline',
+          label: deps.t('editor.assistant.action.outline'),
+          prompt: deps.t('editor.assistant.prompt.outline'),
+          requiresContext: true,
+        },
+        {
+          id: 'polish',
+          label: deps.t('editor.assistant.action.polish'),
+          prompt: deps.t('editor.assistant.prompt.polish'),
+          requiresContext: true,
+        },
+      ],
       // 只读：摘要不落标注、不写文档；有提示通道时告知用户未保存。
       saveAnnotation: (text) => {
         if (text.trim() === '') {

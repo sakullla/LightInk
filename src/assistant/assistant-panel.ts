@@ -1375,6 +1375,17 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   messagesHost.className = 'lightink-reader-assistant-messages';
   messagesHost.setAttribute('aria-live', 'polite');
   messagesHost.setAttribute('aria-label', t('reader.assistant.title'));
+  const welcome = document.createElement('div');
+  welcome.className = 'lightink-reader-assistant-welcome';
+  const welcomeTitle = document.createElement('h2');
+  welcomeTitle.textContent = t('reader.assistant.welcomeTitle');
+  const welcomeHint = document.createElement('p');
+  welcomeHint.textContent = t(deps.showQuote === false
+    ? 'reader.assistant.welcomeLibrary'
+    : deps.showPermissionMode === false
+      ? 'reader.assistant.welcomeDocument'
+      : 'reader.assistant.welcomeChapter');
+  welcome.append(welcomeTitle, welcomeHint);
   const jumpBottom = document.createElement('button');
   jumpBottom.type = 'button';
   jumpBottom.className = 'lightink-reader-assistant-jump-bottom';
@@ -2231,7 +2242,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const renderMessages = (): void => {
     streamingText = null;
     if (messages.length === 0) {
-      messagesHost.replaceChildren();
+      messagesHost.replaceChildren(welcome);
       scrollMessagesBottom(true);
       return;
     }
@@ -3021,7 +3032,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
 
   const syncComposer = (): void => {
     send.hidden = streaming;
-    send.disabled = streaming || editingIndex !== null;
+    send.disabled = streaming || editingIndex !== null || input.value.trim() === '';
     stop.hidden = !streaming;
     stop.disabled = !streaming;
     syncQuoteButton();
@@ -3822,6 +3833,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   });
   input.addEventListener('input', () => {
     resizeInput();
+    syncComposer();
   });
   quoteButton.addEventListener('click', (event) => {
     event.preventDefault();

@@ -227,6 +227,9 @@ describe('createEditorAssistant read-only document context', () => {
       '[data-assistant-action="chapterSummary"]',
     );
     expect(action).not.toBeNull();
+    expect(action!.textContent).toBe('文档摘要');
+    expect(panelElement()!.querySelector('[data-assistant-action="outline"]')?.textContent).toBe('梳理结构');
+    expect(panelElement()!.querySelector('[data-assistant-action="polish"]')?.textContent).toBe('润色建议');
     action!.click();
     await flushUntil(
       () => panelElement()!.querySelector('.lightink-reader-assistant-save') !== null,

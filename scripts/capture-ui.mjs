@@ -6,6 +6,8 @@
  *   node scripts/capture-ui.mjs
  *   LIGHTINK_CAPTURE_WIDTHS=1440,1024 node scripts/capture-ui.mjs
  *   LIGHTINK_CAPTURE_THEMES=warm-light,midnight node scripts/capture-ui.mjs
+ *   LIGHTINK_CAPTURE_AI=1 node scripts/capture-ui.mjs
+ * AI 模式使用内存配置、模拟流式回复与翻译，不读取密钥、不访问 AI 服务。
  *
  * 书架与阅读器纸张主题独立于编辑器主题：深色编辑器主题（dark / midnight /
  * *-dark）默认截取 ink 书架与 night 纸张，浅色默认 gallery / sepia。可用
@@ -27,9 +29,11 @@ const locale = process.env.LIGHTINK_CAPTURE_LOCALE ?? 'zh-CN';
 const widths = (process.env.LIGHTINK_CAPTURE_WIDTHS ?? '1280,900,640').split(',').map(Number);
 const themes = (process.env.LIGHTINK_CAPTURE_THEMES ?? 'warm-light,dark').split(',');
 const headless = process.env.LIGHTINK_CAPTURE_HEADED !== '1';
+const aiConfigured = process.env.LIGHTINK_CAPTURE_AI === '1';
 fs.mkdirSync(out, { recursive: true });
 
 const failures = [];
+const captures = [];
 const record = (entry) => {
   failures.push(entry);
   console.log('FAIL', JSON.stringify(entry));
@@ -269,12 +273,16 @@ export function installFixtures({
   bookText,
   libraryTheme,
   readerTheme,
+  aiConfigured = false,
 }) {
   const encoder = new TextEncoder();
   const bookBytes = encoder.encode(bookText);
   const now = Date.now();
   const callbacks = new Map();
   let callbackId = 0;
+  const histories = new Map();
+  // Capture-only controls; each page gets an isolated in-memory AI session.
+  window.__LIGHTINK_CAPTURE_AI__ = { scenario: 'reply' };
 
   localStorage.setItem('lightink.locale', locale);
   if (theme !== undefined && theme !== '') {
@@ -402,14 +410,17 @@ export function installFixtures({
           const book = books.find((entry) => entry.id === args.itemId) ?? books[0];
           return { itemId: book.id, path: book.localPath, availability: 'local' };
         }
-        case 'library_create_group':
-          return {
-            id: `group-new-${Math.random().toString(36).slice(2, 7)}`,
+        case 'library_create_group': {
+          const group = {
+            id: `group-new-${groups.length}`,
             parentId: args.parentId,
             name: args.name,
             kind: 'custom',
             sortOrder: 9,
           };
+          groups.push(group);
+          return group;
+        }
         case 'library_update_group':
           return { id: args.groupId, name: args.name, kind: 'custom', sortOrder: 0 };
         case 'library_create_tag':
@@ -434,9 +445,16 @@ export function installFixtures({
         case 'content_hash':
           return 'capture-hash';
         case 'read_annotations':
-        case 'assistant_read_history':
         case 'book_translation_read_state':
           return '';
+        case 'assistant_read_history':
+          return histories.get(args.contentHash) ?? '';
+        case 'assistant_write_history':
+          histories.set(args.contentHash, args.json);
+          return null;
+        case 'assistant_clear_history':
+          histories.delete(args.contentHash);
+          return null;
         case 'sync_get_profile':
           return null;
         case 'sync_device_id':
@@ -462,15 +480,50 @@ export function installFixtures({
         case 'ai_get_config':
           return {
             endpointKind: 'openai-chat',
-            baseUrl: '',
-            model: '',
+            baseUrl: aiConfigured ? 'https://ai.example.test/v1' : '',
+            model: aiConfigured ? 'capture-model' : '',
             allowHttp: false,
             targetLang: undefined,
-            hasKey: false,
-            configured: false,
-            missing: ['baseUrl', 'model'],
+            hasKey: aiConfigured,
+            configured: aiConfigured,
+            missing: aiConfigured ? [] : ['baseUrl', 'model'],
             defaults: [{ endpointKind: 'openai-chat', baseUrl: 'https://api.openai.com/v1' }],
           };
+        case 'ai_test_connection':
+          return { latencyMs: 248, reply: 'OK' };
+        case 'ai_translate_selection':
+          if (!aiConfigured) throw new Error('AI_NOT_CONFIGURED');
+          return {
+            text: 'At dusk, the sea was like a sheet of slowly breathing metal. As the tide receded, delicate patterns remained on the shore, carrying away the warmth of the day.',
+            targetLang: args.targetLang,
+            truncated: false,
+          };
+        case 'ai_chat_stream': {
+          if (!aiConfigured) throw new Error('AI_NOT_CONFIGURED');
+          const scenario = window.__LIGHTINK_CAPTURE_AI__.scenario;
+          await new Promise((resolve) => setTimeout(resolve, 450));
+          if (scenario === 'error') throw new Error('AI_NETWORK_ERROR');
+          if (scenario === 'tool-search' || scenario === 'tool-pending') {
+            window.__LIGHTINK_CAPTURE_AI__.scenario = 'reply';
+            const call = scenario === 'tool-search'
+              ? { id: 'capture-search', name: 'library_search', arguments: JSON.stringify({ action: 'books', query: '沙丘' }) }
+              : { id: 'capture-group', name: 'library_create_group', arguments: JSON.stringify({ name: 'AI 阅读计划' }) };
+            window.__TAURI_INTERNALS__.runCallback(args.onEvent.id, { index: 0, message: { type: 'tool_call', ...call } });
+            window.__TAURI_INTERNALS__.runCallback(args.onEvent.id, { index: 1, end: true });
+            return { finish: 'tool_calls', totalChars: 0, toolCalls: [call] };
+          }
+          const reply = locale === 'en'
+            ? '### Reading notes\n\nThe passage connects **tides, light, and memory**.\n\n- The tide suggests change and renewal.\n- The lighthouse gives the traveller a sense of direction.\n- Writing preserves the journey.\n\n> Writing it down is a way of finding the shore.\n\nYou can ask about the imagery or make a short reading plan.'
+            : '### 阅读笔记\n\n这段文字围绕**潮汐、灯光与记忆**展开。\n\n- **潮汐**：用反复涨落表现时间与变化。\n- **灯塔**：为旅人提供方向，也象征人与人的联系。\n- **记录**：把短暂的见闻变成可以重温的记忆。\n\n> 记下来，就是岸。\n\n可以继续讨论其中的意象，或整理成简短的读书笔记。';
+          let index = 0;
+          for (const text of reply.match(/.{1,18}|\n/g) ?? []) {
+            if (!callbacks.has(args.onEvent.id)) throw new Error('AI_STREAM_ABORTED');
+            window.__TAURI_INTERNALS__.runCallback(args.onEvent.id, { index: index++, message: { type: 'delta', text } });
+            await new Promise((resolve) => setTimeout(resolve, scenario === 'slow' ? 180 : 18));
+          }
+          window.__TAURI_INTERNALS__.runCallback(args.onEvent.id, { index, end: true });
+          return { finish: 'stop', totalChars: reply.length, toolCalls: [] };
+        }
         case 'conceal_get_status':
           return { trayAvailable: false, trayError: null, bossPrimary: null, bossSecondary: null };
         case 'conceal_register_boss_keys':
@@ -538,6 +591,7 @@ async function shoot(page, width, theme, name) {
   }, theme);
   const path = `${out}/${name}-${theme}-${width}.png`;
   await page.screenshot({ path });
+  captures.push({ name, theme, width, path });
   const overflow = await page.evaluate(() =>
     [...document.querySelectorAll('main,section,article,input,textarea,select,button,a,label,h1,h2,h3')]
       .filter((el) => el.getClientRects().length && el.getBoundingClientRect().right > innerWidth + 1)
@@ -557,7 +611,7 @@ async function warmUp(browser, fixtureArgs) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(6_000);
   await page.addInitScript(installFixtures, fixtureArgs);
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await attempt('warmup:recovery', async () => {
     const dialog = page.locator('.lightink-modal-dialog:visible').first();
     await dialog.waitFor({ timeout: 20_000 });
@@ -630,7 +684,7 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
   await page.addInitScript(installFixtures, { ...fixtureArgs, theme, ...fixtureSurfaceThemes(theme) });
 
   // 启动：先出现崩溃恢复确认对话框，再进入书架。
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await step('boot:recovery-dialog', async () => {
     const dialog = page.locator('.lightink-modal-dialog:visible').first();
     await dialog.waitFor({ timeout: 20_000 });
@@ -655,6 +709,59 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
 
   // 书架
   await shot('shelf');
+  const assistant = () => page.locator('.lightink-reader-assistant-panel:visible').first();
+  const closeAssistant = async () => {
+    if (await assistant().count()) await assistant().locator('.lightink-reader-assistant-close').click();
+  };
+  const askAssistant = async (prompt, scenario = 'reply') => {
+    await page.evaluate((value) => { window.__LIGHTINK_CAPTURE_AI__.scenario = value; }, scenario);
+    await assistant().locator('.lightink-reader-assistant-input').fill(prompt);
+    await assistant().locator('.lightink-reader-assistant-send').click();
+  };
+  const waitForReply = () => assistant().locator('.is-assistant').last().and(
+    assistant().locator('[data-status="done"]'),
+  ).waitFor({ timeout: 12_000 });
+  if (aiConfigured) await step('ai:shelf', async () => {
+    try {
+      await page.locator('.lightink-library-header-assistant').click();
+      await assistant().locator('.lightink-reader-assistant-input').waitFor();
+      await shot('ai-shelf-empty');
+      await askAssistant(locale === 'en' ? 'Suggest a reading plan.' : '帮我安排本周的阅读计划。', 'slow');
+      await assistant().locator('[data-status="streaming"]').waitFor();
+      await shot('ai-shelf-streaming');
+      await waitForReply();
+      await shot('ai-shelf-reply');
+      await assistant().locator('.lightink-reader-assistant-history-toggle').click();
+      await shot('ai-history');
+      await assistant().locator('.lightink-reader-assistant-history-toggle').click();
+      await askAssistant(locale === 'en' ? 'Summarize the key points.' : '再归纳一下重点。', 'error');
+      await assistant().locator('[data-status="error"]').waitFor();
+      await shot('ai-error');
+      await page.evaluate(() => { window.__LIGHTINK_CAPTURE_AI__.scenario = 'reply'; });
+      await assistant().locator('.lightink-reader-assistant-retry').last().click();
+      await waitForReply();
+      await shot('ai-retry');
+      await askAssistant(locale === 'en' ? 'Expand the reading notes.' : '详细展开这些读书笔记。', 'slow');
+      await assistant().locator('[data-status="streaming"]').waitFor();
+      await assistant().locator('.lightink-reader-assistant-stop').click();
+      await assistant().locator('[data-status="stopped"]').waitFor();
+      await shot('ai-stopped');
+      await askAssistant(locale === 'en' ? 'Find Dune in my library.' : '在书库里查找沙丘。', 'tool-search');
+      await waitForReply();
+      await assistant().locator('.lightink-reader-assistant-tool-head').last().click();
+      await shot('ai-tool-search');
+      await askAssistant(locale === 'en' ? 'Create a collection called AI 阅读计划.' : '创建一个名为 AI 阅读计划 的分组。', 'tool-pending');
+      await assistant().locator('.lightink-reader-assistant-pending:not([hidden])').waitFor();
+      await waitForReply();
+      await shot('ai-tool-confirmation');
+      await assistant().locator('.lightink-reader-assistant-pending-confirm').click();
+      await assistant().locator('.is-assistant[data-status="waiting"], .is-assistant[data-status="streaming"]').waitFor();
+      await waitForReply();
+      await shot('ai-tool-confirmed');
+    } finally {
+      await closeAssistant();
+    }
+  });
   await step('shelf:menu', async () => {
     await page.locator('.lightink-library-item--cover').first().click({ button: 'right' });
     const menu = page.locator('[role="menu"]:visible').first();
@@ -820,6 +927,11 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await group(/^AI/).click();
     await page.waitForTimeout(250);
     await shot('manage-ai');
+    if (aiConfigured) {
+      await page.locator('.lightink-library-ai-test').click();
+      await page.locator('.lightink-library-ai-feedback').filter({ hasText: /连接成功|Connection succeeded/ }).waitFor();
+      await shot('ai-connection');
+    }
     await group(/^AI/).click();
     // 「其他」分组里是 Markdown 编辑入口，展开后交给下一步。
     await group(/其他|Other/).click();
@@ -835,6 +947,7 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
       await page.evaluate(() => document.getElementById('lightink-enter-editor')?.click());
     }
     await page.waitForSelector('.lightink-tab-host[role="tabpanel"] .ProseMirror', { timeout: 15_000 });
+    await page.locator('#lightink-editor-assistant').waitFor({ state: aiConfigured ? 'visible' : 'hidden' });
     await page.waitForTimeout(600);
     await shot('editor');
   });
@@ -862,6 +975,18 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await page.waitForTimeout(200);
     await shot('editor-find');
     await page.keyboard.press('Escape');
+  });
+  if (aiConfigured) await step('ai:editor', async () => {
+    try {
+      await page.locator('#lightink-editor-assistant').click();
+      await assistant().locator('.lightink-reader-assistant-input').waitFor();
+      await shot('ai-editor-context');
+      await askAssistant(locale === 'en' ? 'Summarize this document.' : '总结这份文档的重点。');
+      await waitForReply();
+      await shot('ai-editor-reply');
+    } finally {
+      await closeAssistant();
+    }
   });
   await step('editor:format-toolbar', async () => {
     const host = await activeHost();
@@ -989,10 +1114,21 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await revealReaderChrome();
     await page.locator('.lightink-reader-chrome-action--typography').click();
     await readerPanel('typography').waitFor({ state: 'visible' });
+    // Viewport overflow alone misses controls clipped inside a popover.
+    const clipped = await readerPanel('typography').evaluate((panel) => {
+      const box = panel.getBoundingClientRect();
+      return [...panel.querySelectorAll('.lightink-reader-type-step')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          return rect.left < box.left || rect.right > box.right;
+        })
+        .map((button) => button.getAttribute('aria-label'));
+    });
+    if (clipped.length) record({ label: 'reader:typography-clipped', theme, width, clipped });
     await shot('reader-typography');
     await closeReaderPanel('typography');
   });
-  await step('reader:selection', async () => {
+  const selectReaderText = async () => {
     await revealReaderChrome();
     // 章节正文在 sandbox iframe 内：在帧内建立 Range 选区，避免长会话下
     // 逐点拖动与遮蔽层动画的时序耦合。
@@ -1011,8 +1147,41 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     });
     await page.waitForTimeout(300);
     await page.locator('.lightink-reader-selection-toolbar').waitFor({ state: 'visible', timeout: 5_000 });
+  };
+  await step('reader:selection', async () => {
+    await selectReaderText();
     await shot('reader-selection');
   });
+
+  if (aiConfigured) {
+    await step('ai:translation', async () => {
+      try {
+        await page.locator('.lightink-reader-selection-action--aiTranslate').click();
+        await page.locator('.lightink-reader-lookup-lang').selectOption('en');
+        await page.locator('.lightink-reader-lookup-line').filter({ hasText: 'At dusk' }).waitFor();
+        await shot('ai-translation');
+      } finally {
+        const close = page.locator('.lightink-reader-lookup-close:visible');
+        if (await close.count()) await close.click();
+      }
+    });
+    await step('ai:reader-explain', async () => {
+      try {
+        await selectReaderText();
+        await page.evaluate(() => { window.__LIGHTINK_CAPTURE_AI__.scenario = 'reply'; });
+        await page.locator('.lightink-reader-selection-action--explain').click();
+        await waitForReply();
+        await shot('ai-reader-explain');
+        await assistant().locator('.lightink-reader-assistant-new').click();
+        await shot('ai-reader-new');
+        await assistant().locator('.lightink-reader-assistant-action').first().click();
+        await waitForReply();
+        await shot('ai-reader-summary');
+      } finally {
+        await closeAssistant();
+      }
+    });
+  }
 
   await page.close();
 }
@@ -1026,6 +1195,7 @@ export function buildFixtureArgs(targetLocale = locale) {
     })),
     draft: DRAFT_CONTENT,
     bookText: BOOK_TEXT,
+    aiConfigured,
   };
 }
 
@@ -1041,6 +1211,8 @@ async function main() {
         await captureMatrix(browser, width, theme, fixtureArgs);
       }
     }
+  } catch (error) {
+    record({ label: 'capture:fatal', error: String(error).slice(0, 600) });
   } finally {
     await browser.close();
     if (server !== null) {
@@ -1050,6 +1222,7 @@ async function main() {
   }
 
   console.log(JSON.stringify({ failures }, null, 2));
+  fs.writeFileSync(`${out}/report.json`, JSON.stringify({ locale, aiConfigured, widths, themes, captures, failures }, null, 2));
   if (failures.length) process.exitCode = 1;
 }
 

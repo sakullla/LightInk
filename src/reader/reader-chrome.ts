@@ -520,6 +520,7 @@ export function createReaderChrome(
     button.dataset.readerChromeAction = action;
     button.textContent = label;
     button.setAttribute('aria-label', label);
+    button.title = label;
     if (action === 'toc' || action === 'typography' || action === 'assistant') {
       button.setAttribute('aria-haspopup', 'dialog');
       button.setAttribute('aria-expanded', 'false');

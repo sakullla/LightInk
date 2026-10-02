@@ -478,6 +478,45 @@ describe('createAssistantPanel unconfigured guide (R5)', () => {
 });
 
 describe('createAssistantPanel streaming conversation', () => {
+  it.each([
+    [{ showQuote: false }, 'reader.assistant.welcomeLibrary'],
+    [{ showPermissionMode: false }, 'reader.assistant.welcomeDocument'],
+    [{}, 'reader.assistant.welcomeChapter'],
+  ] as const)('shows contextual guidance for a new conversation (%j)', async (options, key) => {
+    const { panel } = mountPanel(options);
+    panel.open();
+    await flush();
+    expect(panel.element.querySelector('.lightink-reader-assistant-welcome')?.textContent).toContain(t(key));
+    submitQuestion(panel, '你好');
+    await flush();
+    expect(panel.element.querySelector('.lightink-reader-assistant-welcome')).toBeNull();
+    panel.element.querySelector<HTMLButtonElement>('[data-assistant-new-conversation]')!.click();
+    await flush();
+    expect(panel.element.querySelector('.lightink-reader-assistant-welcome')?.textContent).toContain(t(key));
+    panel.destroy();
+  });
+
+  it('enables send only for a nonblank question and resets after sending', async () => {
+    const { panel, invoke } = mountPanel();
+    panel.open();
+    await flush();
+    const input = panel.element.querySelector<HTMLTextAreaElement>('.lightink-reader-assistant-input')!;
+    const send = panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-send')!;
+    expect(send.disabled).toBe(true);
+    input.value = '  \n ';
+    input.dispatchEvent(new Event('input'));
+    expect(send.disabled).toBe(true);
+    input.value = '解释一下';
+    input.dispatchEvent(new Event('input'));
+    expect(send.disabled).toBe(false);
+    send.click();
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('');
+    expect(send.disabled).toBe(true);
+    panel.destroy();
+  });
+
   it('streams an answer progressively and persists the exchange per book hash', async () => {
     const { panel, invoke, deps } = mountPanel({
       historyKey: '0123456789abcdef',
@@ -2171,7 +2210,7 @@ describe('createAssistantPanel minimal typographic flow (T4)', () => {
     const assistantTextRule = ruleBody(
       /\.lightink-reader-assistant-message\.is-assistant\s+\.lightink-reader-assistant-message-text\s*\{([^}]*)\}/,
     );
-    expect(assistantTextRule).toMatch(/line-height:\s*1\.55/);
+    expect(assistantTextRule).toMatch(/line-height:\s*1\.75/);
     expect(css).toMatch(
       /\.lightink-reader-assistant-message-text a\s*\{[^}]*color:\s*var\(--lightink-accent\)[^}]*text-decoration:\s*underline/,
     );

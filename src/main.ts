@@ -110,6 +110,7 @@ import {
   syncAssistantHostTheme,
   type AssistantSurfaceDeps,
 } from './assistant/assistant-panel.js';
+import { invokeAiTranslateConfig } from './assistant/assistant-error.js';
 import {
   applyReaderTheme,
   COMIC_NATIVE_WINDOW_CHROME,
@@ -2602,7 +2603,10 @@ shell = createAppShell(
     onEnterEditor: () => workspace.enterEditor(),
     isEditorEntrySuppressed: () => isAndroidApp,
     // R3：编辑器 chrome 助手入口（Android 编辑器被裁剪，不接线）。
-    ...(isAndroidApp ? {} : { onOpenAssistant: () => openEditorAssistant() }),
+    ...(isAndroidApp ? {} : {
+      onOpenAssistant: () => openEditorAssistant(),
+      fetchAssistantConfigured: async () => (await invokeAiTranslateConfig()).configured,
+    }),
     onEnterReaderHome: () => {
       workspace.enterReaderHome();
       if (isAndroidApp || isTouchPrimary) {

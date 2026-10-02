@@ -245,6 +245,32 @@ afterEach(() => {
 });
 
 describe('manage group collapsing', () => {
+  it('navigates group headings with arrows and Home/End, then toggles with the keyboard', () => {
+    const { options } = manageOptions();
+    const manage = createLibraryManage(document, options);
+    document.body.appendChild(manage.element);
+    const titles = [...manage.element.querySelectorAll<HTMLElement>('.lightink-library-manage-group-toggle')];
+    const press = (key: string): void => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    };
+    titles[0]!.focus();
+    press('ArrowUp');
+    expect(document.activeElement).toBe(titles[titles.length - 1]);
+    press('ArrowDown');
+    expect(document.activeElement).toBe(titles[0]);
+    press('End');
+    expect(document.activeElement).toBe(titles[titles.length - 1]);
+    press('Home');
+    press('ArrowDown');
+    expect(document.activeElement).toBe(titles[1]);
+    expect(titles[1]!.getAttribute('aria-expanded')).toBe('false');
+    press('Enter');
+    expect(titles[1]!.getAttribute('aria-expanded')).toBe('true');
+    press(' ');
+    expect(titles[1]!.getAttribute('aria-expanded')).toBe('false');
+    manage.destroy();
+  });
+
   it('groups always start collapsed; clicking a title toggles without persisting', () => {
     const storage = memoryStorage();
     const { options } = manageOptions({ themeStorage: storage });

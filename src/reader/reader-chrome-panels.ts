@@ -1691,7 +1691,7 @@ function sliderRow(
     glyph: HTMLElement;
   }[],
 ): HTMLElement {
-  const block = section(label, kind, true);
+  const block = section(label, kind);
   block.classList.add('lightink-reader-type-slider');
   const track = document.createElement('div');
   track.className = 'lightink-reader-type-track';

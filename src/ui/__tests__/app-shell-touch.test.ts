@@ -130,4 +130,49 @@ describe('app-shell touch-primary chrome', () => {
     // 桌面点击不切换关闭（收起由 pointerleave/快捷键负责）。
     expect(shell.chrome.isRevealed('menu')).toBe(true);
   });
+
+  it('hides the assistant until configured and responds to saved configuration changes', async () => {
+    let resolveConfig!: (value: boolean) => void;
+    const root = document.createElement('div');
+    document.body.append(root);
+    const shell = createAppShell(root, {
+      ...stubActions(),
+      onOpenAssistant: () => undefined,
+      hasActiveDocument: () => true,
+      fetchAssistantConfigured: () => new Promise<boolean>((resolve) => { resolveConfig = resolve; }),
+    }, { shortcutBindings: () => [], storage: null });
+    shells.push(shell);
+    const button = root.querySelector<HTMLButtonElement>('#lightink-editor-assistant')!;
+    const configure = (configured: boolean): void => {
+      document.dispatchEvent(new CustomEvent('lightink:reader-ai-configured', { detail: { configured } }));
+    };
+    expect(button.hidden).toBe(true);
+    configure(true);
+    expect(button.hidden).toBe(false);
+    configure(false);
+    expect(button.hidden).toBe(true);
+    resolveConfig(true);
+    await Promise.resolve();
+    expect(button.hidden).toBe(true);
+    configure(true);
+    expect(button.hidden).toBe(false);
+    shell.destroy();
+    configure(false);
+    expect(button.hidden).toBe(false);
+  });
+
+  it('keeps the assistant hidden when reading configuration fails', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const shell = createAppShell(root, {
+      ...stubActions(),
+      onOpenAssistant: () => undefined,
+      hasActiveDocument: () => true,
+      fetchAssistantConfigured: async () => { throw new Error('unavailable'); },
+    }, { shortcutBindings: () => [], storage: null });
+    shells.push(shell);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(root.querySelector<HTMLButtonElement>('#lightink-editor-assistant')!.hidden).toBe(true);
+  });
 });

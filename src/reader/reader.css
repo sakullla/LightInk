@@ -155,6 +155,23 @@
   mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
 }
 
+.lightink-reader-chrome-action--assistant::before {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z'/></svg>");
+}
+
+/* Keep localized desktop tools clear of the native window controls. Their
+   accessible names and title tooltips remain available in the compact row. */
+@media (max-width: 800px) {
+  html:not([data-android]):not([data-touch-primary]) .lightink-reader-chrome-tools .lightink-reader-chrome-action {
+    justify-content: center;
+    width: 34px;
+    padding: 0.2rem;
+    gap: 0;
+    font-size: 0;
+  }
+}
+
 .lightink-reader-chrome-action:hover {
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
 }

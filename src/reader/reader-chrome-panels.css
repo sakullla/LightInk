@@ -371,7 +371,7 @@
 
 .lightink-reader-type-hero {
   display: grid;
-  grid-template-columns: 2.6rem 1fr 2.6rem;
+  grid-template-columns: 2.6rem minmax(0, 1fr) 2.6rem;
   align-items: center;
   gap: 0.15rem;
 }
@@ -607,6 +607,7 @@
 
 .lightink-reader-type-size-track {
   height: 1.8rem;
+  min-width: 0;
 }
 
 .lightink-reader-type-size-track::before,
@@ -649,6 +650,8 @@
 
 .lightink-reader-type-size-track .lightink-reader-type-tick {
   width: 1.1rem;
+  min-width: 0;
+  flex: 1 1 0;
   height: 1.8rem;
 }
 
@@ -887,7 +890,7 @@
 
 /* ---- 字号：A ——●—— A ---- */
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-hero {
-  grid-template-columns: 2.75rem 1fr 2.75rem;
+  grid-template-columns: 2.75rem minmax(0, 1fr) 2.75rem;
   gap: 0.5rem;
   padding: 0 0.1rem;
 }

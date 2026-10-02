@@ -717,6 +717,7 @@ function aiFieldHints(l: LibraryManageLabels): { baseUrl: string; model: string;
  * 展开态——每次打开设置一律从全折叠开始，会话内的展开由 DOM 自身保持。
  */
 function setupManageGroupCollapsing(home: HTMLElement): void {
+  const titles: HTMLElement[] = [];
   for (const group of home.querySelectorAll<HTMLElement>('.lightink-library-manage-group')) {
     const title = group.querySelector<HTMLElement>(':scope > h2');
     if (title === null) {
@@ -737,11 +738,19 @@ function setupManageGroupCollapsing(home: HTMLElement): void {
     title.classList.add('lightink-library-manage-group-toggle');
     title.setAttribute('role', 'button');
     title.setAttribute('tabindex', '0');
+    titles.push(title);
     title.addEventListener('click', toggle);
     title.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         toggle();
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const current = titles.indexOf(title);
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? titles.length - 1
+            : (current + (event.key === 'ArrowDown' ? 1 : -1) + titles.length) % titles.length;
+        titles[next]?.focus();
       }
     });
   }

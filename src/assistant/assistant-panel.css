@@ -37,10 +37,10 @@
   font-size: var(--lightink-font-size-ui, 0.8rem);
   line-height: 1.45;
   /* 面板内统一刻度：头部/消息/工具/确认/上下文/composer 共用，控件不再各自定档。 */
-  --assistant-font-xs: 0.68rem;
-  --assistant-font-sm: 0.72rem;
-  --assistant-font-md: 0.78rem;
-  --assistant-font-lg: 0.82rem;
+  --assistant-font-xs: 0.75rem;
+  --assistant-font-sm: 0.8125rem;
+  --assistant-font-md: 0.875rem;
+  --assistant-font-lg: 0.9375rem;
   --assistant-space-1: 0.2rem;
   --assistant-space-2: 0.35rem;
   --assistant-space-3: 0.6rem;
@@ -448,6 +448,27 @@
   gap: var(--assistant-space-4);
   scrollbar-width: thin;
   scrollbar-color: var(--lightink-border) transparent;
+  font-size: var(--assistant-font-md);
+}
+
+.lightink-reader-assistant-welcome {
+  max-width: 24rem;
+  margin: auto;
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+
+.lightink-reader-assistant-welcome h2 {
+  margin: 0 0 0.75rem;
+  color: var(--lightink-fg);
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+
+.lightink-reader-assistant-welcome p {
+  margin: 0;
+  color: var(--lightink-muted);
+  line-height: 1.8;
 }
 
 /* 流式重渲染只在消息流末尾生长:不做滚动锚定,已完成消息不随之跳动(R6/ADR-6)。 */
@@ -518,7 +539,7 @@
 /* ===== 面板内 markdown 收敛：标题按级降档；正文/列表/引用/代码/表格同节奏 ===== */
 
 .lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text {
-  line-height: 1.55;
+  line-height: 1.75;
 }
 
 .lightink-reader-assistant-message.is-assistant .lightink-reader-assistant-message-text
@@ -1018,7 +1039,8 @@
 }
 
 .lightink-reader-assistant-composer-box:focus-within {
-  border-color: color-mix(in srgb, var(--lightink-fg) 35%, transparent);
+  border-color: var(--lightink-accent);
+  box-shadow: 0 0 0 2px var(--lightink-accent-soft);
 }
 
 .lightink-reader-assistant-input {
@@ -1033,6 +1055,7 @@
   background: transparent;
   color: var(--lightink-fg);
   font: inherit;
+  font-size: var(--assistant-font-md);
   line-height: 1.4;
   overflow-y: auto;
   resize: none;

@@ -5053,15 +5053,18 @@ export function createLibraryView(
     const titleText = displayBookTitle(latest.item);
     open.dataset.itemId = latest.item.id;
     if (progress !== null) open.dataset.progressStatus = progress.status;
-    open.setAttribute('aria-label', titleText === '' ? labels().open : titleText);
+    open.setAttribute('aria-label', `${labels().continueReading}: ${titleText}`);
     const cover = doc.createElement('div');
     cover.className = 'lightink-library-cover';
     appendCover(cover, latest, true);
     const text = doc.createElement('span');
     text.className = 'lightink-library-item-text';
+    const cue = doc.createElement('span');
+    cue.className = 'lightink-library-resume-label';
+    cue.textContent = labels().continueReading;
     const title = doc.createElement('strong');
     title.textContent = titleText;
-    text.append(title);
+    text.append(cue, title);
     if (progress !== null) {
       const progressText = homeProgressLabel(progress);
       if (progressText !== '') {
