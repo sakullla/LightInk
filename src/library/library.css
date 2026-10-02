@@ -591,8 +591,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   user-select: none;
 }
 
-.lightink-library-pane-heading > .lightink-library-collapse-toggle,
-.lightink-library-smart-type-heading > .lightink-library-collapse-toggle {
+/* 分区标题在桌面不画三角：折叠态由 hover 露出的筛选按钮展开。
+   智能分组的「格式 / 作者 / 系列」没有筛选入口，若同样隐藏三角就永远无法展开。 */
+.lightink-library-pane-heading > .lightink-library-collapse-toggle {
   display: none !important;
   width: 0 !important;
   min-width: 0 !important;
@@ -1346,6 +1347,12 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   place-items: center;
   padding: 20px;
   background: var(--lightink-overlay);
+}
+
+/* 浮层经 mountLibraryOverlay 挂到 body，脱离 `.lightink-library [hidden]` 作用域；
+   必须自带 hidden 规则，否则关闭后仍以 display: grid 覆盖全屏并拦截所有点击。 */
+.lightink-library-membership-overlay[hidden] {
+  display: none;
 }
 
 .lightink-library-membership-dialog {
