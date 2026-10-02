@@ -1,5 +1,5 @@
 /**
- * 流式网文唯一行首标题 / 假目录 / 不足 4 章篇幅切开 owner。
+ * 流式网文唯一行首标题 / 假目录 / 无明确多章结构时的篇幅切开 owner。
  *
  * TXT 必走；FB2 / MOBI / 瘦 EPUB 仅在原生结构章数 < 4 时把抽出的纯文本交给这里。
  * 打开期只扫边界并填 title；章数 > 8 时仅前 EAGER_CHAPTER_COUNT 章急切 html，
@@ -13,7 +13,10 @@ import type { ReaderChapter, ReaderContent } from './types.js';
 export const EAGER_CHAPTER_COUNT = 2;
 
 const MAX_HEADING_CHARS = 30;
-const MIN_HEADING_CHAPTERS = 4;
+// Two validated headings are enough to establish an explicit chapter spine.
+// Requiring four caused ordinary two- or three-chapter TXT files to be treated
+// as one long chapter, so paginated reading could never follow their headings.
+const MIN_HEADING_CHAPTERS = 2;
 const LENGTH_SPLIT_CHARS = 8000;
 const MIN_FAKE_TOC_RUN = 3;
 const NUMBER_CLASS = '零〇一二三四五六七八九十百千万两0-9';
@@ -40,7 +43,7 @@ interface ChapterRange {
  * 序章|序言|楔子|引子|前言|后记|尾声|番外、行首 Chapter X。
  * 第X卷只作分界（假目录/卷首），合并进随后的章，不单独占一章、不计入章数。
  * 不切句中第X章；排除 部分/节课/部门/部队/集合 与 前言不搭后语。
- * 有效标题 < 4：在段落边界按约 8000 汉字切开。扉页保留。书前假目录不切空章。
+ * 有效标题 < 2：在段落边界按约 8000 汉字切开。扉页保留。书前假目录不切空章。
  * 章数 > 8：仅前 EAGER_CHAPTER_COUNT 章 html 非空，其余 html==='' 且提供幂等 load()。
  */
 export function splitPlainTextChapters(text: string): ReaderContent {

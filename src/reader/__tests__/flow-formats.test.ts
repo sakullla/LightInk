@@ -209,6 +209,25 @@ describe('parseTxt', () => {
     expect(first.html).not.toContain('正文乙');
   });
 
+  it('TXT 有两到三章明确标题时按章节切分，而不是合并成篇幅分块', async () => {
+    for (const chapterCount of [2, 3]) {
+      const headings = ['第一章 开始', '第二章 继续', '第三章 收尾'];
+      const text = Array.from({ length: chapterCount }, (_, index) =>
+        `${headings[index]}\n正文${index + 1}。`,
+      ).join('\n\n');
+      const content = parseTxt(enc(text));
+
+      expect(content.chapters.map((chapter) => chapter.title)).toEqual(
+        headings.slice(0, chapterCount),
+      );
+      for (let index = 0; index < chapterCount; index += 1) {
+        await content.chapters[index]!.load?.();
+        expect(content.chapters[index]!.html).toContain(`正文${index + 1}`);
+        expect(content.chapters[index]!.html).not.toContain(`正文${index + 2}`);
+      }
+    }
+  });
+
   it('把第X卷并进随后的章，不单独占一章也不计入章数', async () => {
     const text = [
       '第一卷 浪迹天涯',

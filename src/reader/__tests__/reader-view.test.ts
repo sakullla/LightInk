@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 import { createReaderView } from '../reader-view.js';
+import { parseTxt } from '../formats/txt.js';
 import {
   applyFrameWheelToScroller,
   createFlowRenderer,
@@ -2962,6 +2963,7 @@ describe('导航会话接线（session-navigation：翻页模式门面路径）'
   // 经门面覆盖。此处补翻页模式（偏好存储接线）的门面路径。
   const loadPaginatedBook = async (
     chapters: Array<{ title: string; html: string }>,
+    path = 'book.epub',
   ): Promise<{
     host: HTMLDivElement;
     view: ReturnType<typeof createReaderView>;
@@ -2980,7 +2982,7 @@ describe('导航会话接线（session-navigation：翻页模式门面路径）'
         },
       },
     });
-    await view.load('book.epub');
+    await view.load(path);
     for (const frame of host.querySelectorAll<HTMLIFrameElement>('.lightink-reader-chapter-frame')) {
       frame.dispatchEvent(new Event('load'));
     }
@@ -3013,6 +3015,20 @@ describe('导航会话接线（session-navigation：翻页模式门面路径）'
         '.lightink-reader-chapter.is-active .lightink-reader-chapter-frame',
       )?.dataset.pagedRestore,
     ).toBeUndefined();
+    await view.destroy();
+  });
+
+  it('TXT 的两个显式章节标题可在翻页模式进入下一章', async () => {
+    vi.useFakeTimers();
+    const content = parseTxt(
+      new TextEncoder().encode('第一章 开始\n正文一。\n\n第二章 继续\n正文二。'),
+    );
+    const { view, activeChapter } = await loadPaginatedBook(content.chapters, 'book.txt');
+
+    expect(activeChapter()).toBe('0');
+    expect(view.getOutline().map((item) => item.text)).toEqual(['第一章 开始', '第二章 继续']);
+    expect(view.advanceReading(1)).toBe(true);
+    expect(activeChapter()).toBe('1');
     await view.destroy();
   });
 
