@@ -7,12 +7,16 @@
  *   LIGHTINK_CAPTURE_WIDTHS=1440,1024 node scripts/capture-ui.mjs
  *   LIGHTINK_CAPTURE_THEMES=warm-light,midnight node scripts/capture-ui.mjs
  *
+ * 书架与阅读器纸张主题独立于编辑器主题：深色编辑器主题（dark / midnight /
+ * *-dark）默认截取 ink 书架与 night 纸张，浅色默认 gallery / sepia。可用
+ * LIGHTINK_CAPTURE_LIBRARY_THEME 与 LIGHTINK_CAPTURE_READER_THEME 覆盖。
+ *
  * 未检测到 dev server 时脚本会自行启动 `npm run dev`（端口 1420）并在结束时关闭。
  * 输出目录：docs/verification/ui（可用 LIGHTINK_CAPTURE_OUT 覆盖）。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
@@ -257,7 +261,15 @@ const svgCover = (title, author, from, to) =>
 // 页面内 mock：window.__TAURI_INTERNALS__（Tauri v2 IPC 表面）
 // ---------------------------------------------------------------------------
 
-function installFixtures({ theme, locale, books, draft, bookText }) {
+export function installFixtures({
+  theme,
+  locale,
+  books,
+  draft,
+  bookText,
+  libraryTheme,
+  readerTheme,
+}) {
   const encoder = new TextEncoder();
   const bookBytes = encoder.encode(bookText);
   const now = Date.now();
@@ -265,7 +277,15 @@ function installFixtures({ theme, locale, books, draft, bookText }) {
   let callbackId = 0;
 
   localStorage.setItem('lightink.locale', locale);
-  localStorage.setItem('lightink.theme', theme);
+  if (theme !== undefined && theme !== '') {
+    localStorage.setItem('lightink.theme', theme);
+  }
+  if (libraryTheme !== undefined && libraryTheme !== '') {
+    localStorage.setItem('lightink.library.theme', libraryTheme);
+  }
+  if (readerTheme !== undefined && readerTheme !== '') {
+    localStorage.setItem('lightink.reader.theme', readerTheme);
+  }
   localStorage.setItem('lightink.statusBar.visible', 'true');
   localStorage.setItem('lightink.chrome.pinned', JSON.stringify({ menu: true, tabs: true }));
   for (const book of books) {
@@ -466,13 +486,30 @@ function installFixtures({ theme, locale, books, draft, bookText }) {
 // 采集
 // ---------------------------------------------------------------------------
 
-async function ensureDevServer() {
-  if (process.env.LIGHTINK_PREVIEW_URL !== undefined) return null;
+/**
+ * `lightink` = 本仓库 dev server；`foreign` = 端口被其他应用占用（此时绝不能截图）；
+ * `down` = 没有服务在监听。
+ */
+async function probeDevServer() {
   try {
     const response = await fetch(baseUrl, { signal: AbortSignal.timeout(1500) });
-    if (response.ok || response.status < 500) return null;
+    if (!(response.ok || response.status < 500)) return 'foreign';
+    const html = await response.text();
+    return html.includes('src="/src/main.ts"') ? 'lightink' : 'foreign';
   } catch {
-    /* 未启动，继续 */
+    return 'down';
+  }
+}
+
+export async function ensureDevServer() {
+  if (process.env.LIGHTINK_PREVIEW_URL !== undefined) return null;
+  const probe = await probeDevServer();
+  if (probe === 'lightink') return null;
+  if (probe === 'foreign') {
+    throw new Error(
+      `${baseUrl} 被其他进程占用（返回的 HTML 不是 LightInk）。请先释放 1420 端口，` +
+        '或用 LIGHTINK_PREVIEW_URL 指向 LightInk dev server，避免截到其他应用。',
+    );
   }
   console.log('dev server 未运行，正在启动 vite ...');
   const child = spawn(
@@ -489,12 +526,7 @@ async function ensureDevServer() {
       child.kill();
       throw new Error('dev server 启动超时');
     }
-    try {
-      const response = await fetch(baseUrl, { signal: AbortSignal.timeout(1500) });
-      if (response.ok || response.status < 500) return child;
-    } catch {
-      /* 继续等待 */
-    }
+    if ((await probeDevServer()) === 'lightink') return child;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
@@ -542,6 +574,15 @@ async function warmUp(browser, fixtureArgs) {
   await page.close();
 }
 
+/** 编辑器主题 → 书架/阅读器主题，让暗色矩阵截到暗色表面。 */
+function fixtureSurfaceThemes(theme) {
+  const dark = theme === 'dark' || theme === 'midnight' || theme.endsWith('-dark');
+  return {
+    libraryTheme: process.env.LIGHTINK_CAPTURE_LIBRARY_THEME ?? (dark ? 'ink' : 'gallery'),
+    readerTheme: process.env.LIGHTINK_CAPTURE_READER_THEME ?? (dark ? 'night' : 'sepia'),
+  };
+}
+
 async function captureMatrix(browser, width, theme, fixtureArgs) {
   const page = await browser.newPage({ viewport: { width, height: 1000 } });
   // 交互失败快速失败，避免一个卡住的点击拖垮整套矩阵。
@@ -586,7 +627,7 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     if (text.includes('Outdated Optimize Dep')) return;
     record({ label: 'console', theme, width, error: text.slice(0, 300) });
   });
-  await page.addInitScript(installFixtures, { ...fixtureArgs, theme });
+  await page.addInitScript(installFixtures, { ...fixtureArgs, theme, ...fixtureSurfaceThemes(theme) });
 
   // 启动：先出现崩溃恢复确认对话框，再进入书架。
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
@@ -976,32 +1017,42 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
   await page.close();
 }
 
-const server = await ensureDevServer();
-const browser = await chromium.launch({ headless });
-const fixtureArgs = {
-  locale,
-  books: BOOKS.map((book) => ({
-    ...book,
-    cover: svgCover(book.title, book.author, book.cover[0], book.cover[1]),
-  })),
-  draft: DRAFT_CONTENT,
-  bookText: BOOK_TEXT,
-};
-try {
-  await warmUp(browser, fixtureArgs);
-  for (const width of widths) {
-    for (const theme of themes) {
-      console.log(`--- ${width}px · ${theme} ---`);
-      await captureMatrix(browser, width, theme, fixtureArgs);
-    }
-  }
-} finally {
-  await browser.close();
-  if (server !== null) {
-    server.kill();
-    console.log('已关闭 dev server');
-  }
+export function buildFixtureArgs(targetLocale = locale) {
+  return {
+    locale: targetLocale,
+    books: BOOKS.map((book) => ({
+      ...book,
+      cover: svgCover(book.title, book.author, book.cover[0], book.cover[1]),
+    })),
+    draft: DRAFT_CONTENT,
+    bookText: BOOK_TEXT,
+  };
 }
 
-console.log(JSON.stringify({ failures }, null, 2));
-if (failures.length) process.exitCode = 1;
+async function main() {
+  const server = await ensureDevServer();
+  const browser = await chromium.launch({ headless });
+  const fixtureArgs = buildFixtureArgs();
+  try {
+    await warmUp(browser, fixtureArgs);
+    for (const width of widths) {
+      for (const theme of themes) {
+        console.log(`--- ${width}px · ${theme} ---`);
+        await captureMatrix(browser, width, theme, fixtureArgs);
+      }
+    }
+  } finally {
+    await browser.close();
+    if (server !== null) {
+      server.kill();
+      console.log('已关闭 dev server');
+    }
+  }
+
+  console.log(JSON.stringify({ failures }, null, 2));
+  if (failures.length) process.exitCode = 1;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  await main();
+}

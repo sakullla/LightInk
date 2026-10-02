@@ -6747,6 +6747,19 @@ export function createLibraryView(
     }
     void search();
   });
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (searchInput.value !== '') {
+      event.preventDefault();
+      event.stopPropagation();
+      searchInput.value = '';
+      syncSearchClear();
+      clearCatalogSearchTimer();
+      void search();
+      return;
+    }
+    searchInput.blur();
+  });
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     syncSearchClear();

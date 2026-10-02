@@ -3283,6 +3283,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 0;
+  margin: -4px 0;
   border-radius: var(--lightink-radius-control);
   cursor: pointer;
   user-select: none;

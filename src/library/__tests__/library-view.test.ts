@@ -1965,6 +1965,37 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
+  it('clears the shelf search on the first Escape and blurs on the second', async () => {
+    const comic = comicItem();
+    const deps = dependencies({
+      library: { ...dependencies().library, listItems: vi.fn(async () => [comic]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+    const input = host.querySelector<HTMLInputElement>('.lightink-library-search input')!;
+    input.focus();
+    input.value = '不存在的书';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(host.querySelector(`[data-item-id="${comic.id}"]`)).toBeNull();
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(input.value).toBe('');
+    expect(itemRow(host, comic.id)).toBeTruthy();
+
+    input.focus();
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).not.toBe(input);
+    view.destroy();
+  });
+
   it('clears the shelf search from the empty-state CTA', async () => {
     const comic = comicItem();
     const deps = dependencies({

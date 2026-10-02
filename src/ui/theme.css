@@ -842,6 +842,11 @@ body.lightink-outline-resizing * {
 }
 
 .lightink-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   border: 1px solid transparent;
   border-radius: var(--lightink-radius-control);
   background: transparent;
@@ -886,6 +891,7 @@ body.lightink-outline-resizing * {
 }
 
 .lightink-outline-fold {
+  position: relative;
   flex: 0 0 auto;
   display: inline-grid;
   place-items: center;
@@ -902,6 +908,13 @@ body.lightink-outline-resizing * {
   line-height: 1;
   cursor: pointer;
   pointer-events: auto;
+}
+
+/* Hit target larger than the glyph; the row keeps its compact height. */
+.lightink-outline-fold::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
 }
 
 .lightink-outline-item:hover {
@@ -2029,10 +2042,10 @@ html[data-reading-layout='scroll']:has(
 .lightink-task-checkbox {
   position: absolute;
   left: 0;
-  top: 0.28em;
+  top: 0.24em;
   box-sizing: border-box;
-  width: 1.05em;
-  height: 1.05em;
+  width: 1.2em;
+  height: 1.2em;
   margin: 0;
   padding: 0;
   border: 1.5px solid color-mix(in srgb, var(--lightink-muted) 70%, var(--lightink-border));
@@ -2054,10 +2067,17 @@ html[data-reading-layout='scroll']:has(
   -webkit-user-select: none;
 }
 
+/* Enlarge the hit target past the visual box (WCAG 2.5.8) without moving it. */
+.lightink-task-checkbox::before {
+  content: '';
+  position: absolute;
+  inset: -0.34em;
+}
+
 .lightink-task-checkbox::after {
   content: '';
-  width: 0.42em;
-  height: 0.22em;
+  width: 0.5em;
+  height: 0.26em;
   border-left: 1.8px solid currentColor;
   border-bottom: 1.8px solid currentColor;
   transform: rotate(-45deg) translate(0.02em, -0.06em);

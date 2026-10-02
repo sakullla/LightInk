@@ -39,7 +39,7 @@ export const READER_THEMES: readonly ReaderThemeTokens[] = [
     page: '#fbf0d9',
     elevated: '#f4e4c4',
     ink: '#5c4a32',
-    muted: '#8a7355',
+    muted: '#7a6247',
     border: 'rgba(92, 74, 50, 0.18)',
     colorScheme: 'light',
   },
