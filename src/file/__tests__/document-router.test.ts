@@ -87,6 +87,25 @@ describe('openDocumentPath', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it('forwards the library title so the reader bar is not the filename', async () => {
+    const load = vi.fn(async () => undefined);
+    const created = {
+      kind: 'reader',
+      id: 'reader-title',
+      filePath: 'C:/Books/dune.txt',
+      reader: { load, state: { phase: 'ready' } },
+    } as unknown as ReaderTabState;
+    const deps = {
+      manager: manager({ openReader: vi.fn(async () => created) }),
+      onReaderOpenError: vi.fn(),
+      onReaderLoadError: vi.fn(),
+      bookTitle: ' 沙丘 ',
+    };
+
+    await expect(openDocumentPath('C:/Books/dune.txt', deps)).resolves.toBe(created);
+    expect(load).toHaveBeenCalledWith('C:/Books/dune.txt', { bookTitle: '沙丘' });
+  });
+
   it('closes a newly-created Reader tab before reporting a load failure', async () => {
     const order: string[] = [];
     const failure = new Error('invalid book');

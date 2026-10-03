@@ -1109,6 +1109,8 @@ export function createReaderChrome(
     const bookTitle = (snapshot.bookTitle ?? '').trim();
     barTitle.textContent = bookTitle;
     barTitle.dataset.hasTitle = bookTitle === '' ? 'false' : 'true';
+    if (bookTitle === '') barTitle.removeAttribute('title');
+    else barTitle.title = bookTitle;
     const percent = formatReaderPercent(snapshot.progress);
     const ratio = Number.isFinite(snapshot.progress) ? Math.min(1, Math.max(0, snapshot.progress)) : 0;
     footerChapter.textContent = title;

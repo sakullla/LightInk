@@ -116,4 +116,9 @@ export interface ReaderInstance {
 export interface ReaderLoadOptions {
   /** Optional caller cancellation, combined with the Reader's own supersession signal. */
   signal?: AbortSignal;
+  /**
+   * Shelf title to show in the reader bar. Local files otherwise fall back
+   * to the filename (`dune.txt`), which is not the name the reader picked.
+   */
+  bookTitle?: string;
 }

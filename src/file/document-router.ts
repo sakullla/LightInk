@@ -9,6 +9,8 @@ export interface DocumentRouterDeps {
   readonly onReaderOpenError: (path: string, error: unknown) => void;
   readonly onReaderLoadError: (error: unknown) => void;
   readonly signal?: AbortSignal;
+  /** Library title for the reader bar. Omitted for File → Open, which keeps the filename. */
+  readonly bookTitle?: string;
 }
 
 /** Route a local path to the editor or Reader while owning failed-tab cleanup. */
@@ -35,11 +37,16 @@ export async function openDocumentPath(
     return tab;
   }
 
+  const bookTitle = deps.bookTitle?.trim() ?? '';
+  const loadOptions = {
+    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
+    ...(bookTitle === '' ? {} : { bookTitle }),
+  };
   try {
-    if (deps.signal === undefined) {
+    if (deps.signal === undefined && bookTitle === '') {
       await tab.reader.load(path);
     } else {
-      await tab.reader.load(path, { signal: deps.signal });
+      await tab.reader.load(path, loadOptions);
     }
   } catch (error) {
     await deps.manager.closeTab(tab.id).catch(() => false);

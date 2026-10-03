@@ -1288,6 +1288,7 @@ async function openPathByKind(
     const tab = await openDocumentPath(path, {
       manager,
       signal: controller.signal,
+      bookTitle: options.title,
       onReaderOpenError: (failedPath, error) => {
         // eslint-disable-next-line no-console
         console.error(`[lightink] 打开阅读文件失败: ${failedPath}`, error);

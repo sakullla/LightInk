@@ -211,7 +211,9 @@ textarea,
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-width: 0;
   min-height: 24px;
+  overflow: hidden;
   padding: 2px 10px;
   border-top: 1px solid var(--lightink-border);
   border-radius: 0;
@@ -270,7 +272,9 @@ textarea,
 }
 
 .lightink-status-details {
+  flex: 1 1 auto;
   justify-content: flex-end;
+  min-width: 0;
   gap: 8px;
   overflow: hidden;
   text-overflow: ellipsis;

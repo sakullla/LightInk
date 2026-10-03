@@ -2755,6 +2755,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   font-size: 12px;
 }
 
+.lightink-library-detail-authors {
+  margin: 0;
+  max-width: 100%;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .lightink-library-item-progress {
   line-height: 1.3;
 }
@@ -4199,6 +4206,14 @@ html[data-display='xuhd'] .lightink-library {
     inset: 42px 0 0 var(--lightink-library-nav-width);
     z-index: 2;
     background: var(--lightink-bg);
+  }
+
+  /* The detail panel is taken out of flow above. Keeping a second grid
+     track still reserves ~200px and crushes the cover wall and the
+     continue-reading title down to a single glyph. */
+  .lightink-library[data-library-nav='shelf'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])),
+  .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .lightink-library[data-library-nav-collapsed='true'] .lightink-library-detail {
@@ -6342,6 +6357,17 @@ html:not([data-android]):not([data-touch-primary])
   aspect-ratio: 2 / 3;
   border-radius: 4px;
   transition: none;
+  transform: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover--import {
+  border: 1.5px dashed color-mix(in srgb, var(--lightink-fg) 32%, transparent);
+  box-shadow: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:hover .lightink-library-cover--import,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:focus-visible .lightink-library-cover--import {
+  box-shadow: none;
   transform: none;
 }
 

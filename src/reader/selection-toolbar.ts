@@ -66,33 +66,84 @@ export interface SelectionToolbar {
 /** 工具栏外边距（选区与视口边）。 */
 const MARGIN = 4;
 
+/** 阅读顶栏、底栏等已经占用的区域。工具栏应让开，而不是盖住目录和排版。 */
+export interface ToolbarObstacle {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function overlapsBox(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  obstacle: ToolbarObstacle,
+): boolean {
+  return (
+    left < obstacle.right &&
+    left + width > obstacle.left &&
+    top < obstacle.bottom &&
+    top + height > obstacle.top
+  );
+}
+
 /**
  * 计算工具栏位置：优先选区上方，越顶则下移到选区下方；水平居中于选区并夹在视口内。
- * 纯函数，node 可测。
+ * 与阅读顶栏/底栏重叠时改放到另一侧。纯函数，node 可测。
  */
 export function toolbarPosition(
   rect: SelectionToolbarRect,
   toolbar: { width: number; height: number },
   viewport: { width: number; height: number },
+  obstacles: readonly ToolbarObstacle[] = [],
 ): { left: number; top: number } {
   const clamp = (value: number, low: number, high: number): number =>
     Math.min(Math.max(value, low), Math.max(low, high));
   const above = rect.top - toolbar.height - MARGIN;
   const below = rect.top + rect.height + MARGIN;
-  let top = above >= MARGIN ? above : below;
   const coversSelection = (candidate: number): boolean =>
     candidate < rect.top + rect.height && candidate + toolbar.height > rect.top;
-  if (coversSelection(top)) {
-    const alternate = top < rect.top ? below : above;
-    if (!coversSelection(alternate)) top = alternate;
-  }
-  top = clamp(top, MARGIN, viewport.height - toolbar.height - MARGIN);
   const left = clamp(
     rect.left + rect.width / 2 - toolbar.width / 2,
     MARGIN,
     Math.max(MARGIN, viewport.width - toolbar.width - MARGIN),
   );
+  const hitsObstacle = (candidate: number): boolean =>
+    obstacles.some((obstacle) => overlapsBox(left, candidate, toolbar.width, toolbar.height, obstacle));
+  let top = above >= MARGIN ? above : below;
+  if (coversSelection(top)) {
+    const alternate = top < rect.top ? below : above;
+    if (!coversSelection(alternate)) top = alternate;
+  }
+  if (hitsObstacle(top)) {
+    const alternate = top < rect.top ? below : above;
+    if (!hitsObstacle(alternate) && !coversSelection(alternate)) {
+      top = alternate;
+    } else {
+      const floor = obstacles.reduce((lowest, obstacle) => Math.max(lowest, obstacle.bottom), 0) + MARGIN;
+      if (!coversSelection(floor) && !hitsObstacle(floor)) top = floor;
+    }
+  }
+  top = clamp(top, MARGIN, viewport.height - toolbar.height - MARGIN);
   return { left, top };
+}
+
+function visibleChromeObstacles(anchor: HTMLElement): ToolbarObstacle[] {
+  // The toolbar is portaled to document.body, so it is not inside .lightink-reader.
+  const scope = anchor.ownerDocument;
+  if (scope === null) return [];
+  const obstacles: ToolbarObstacle[] = [];
+  for (const node of scope.querySelectorAll('.lightink-reader-chrome-bar, .lightink-reader-chrome-footer')) {
+    if (!(node instanceof HTMLElement) || node.hidden) continue;
+    const style = getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+    const box = node.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) continue;
+    obstacles.push({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+  }
+  return obstacles;
 }
 
 interface SelectionBox {
@@ -330,6 +381,7 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
         rect,
         { width: box.width, height: box.height },
         viewport,
+        visibleChromeObstacles(root),
       );
       root.style.left = `${position.left}px`;
       root.style.top = `${position.top}px`;

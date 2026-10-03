@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
-import { createReaderView } from '../reader-view.js';
+import { createReaderView, loadedReaderTitle } from '../reader-view.js';
 import { parseTxt } from '../formats/txt.js';
 import {
   applyFrameWheelToScroller,
@@ -290,6 +290,52 @@ describe('划选工具栏（selection-toolbar）', () => {
       left: 4,
       top: 264,
     });
+    // 选区贴在顶栏下沿：上方会盖住目录/排版，改放到选区下方。
+    const chrome = { left: 0, top: 0, right: 1280, bottom: 48 };
+    expect(
+      toolbarPosition({ left: 80, top: 56, width: 420, height: 48 }, toolbarSize, viewport, [chrome]),
+    ).toEqual({ left: 210, top: 108 });
+  });
+
+  it('keeps a body-ported toolbar below the reader bar', () => {
+    const bar = document.createElement('div');
+    bar.className = 'lightink-reader-chrome-bar';
+    bar.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 800,
+        bottom: 48,
+        width: 800,
+        height: 48,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    document.body.appendChild(bar);
+    const toolbar = createSelectionToolbar({ t: (key) => key, onAction: () => undefined });
+    document.body.appendChild(toolbar.element);
+    toolbar.element.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 160,
+        bottom: 32,
+        width: 160,
+        height: 32,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    toolbar.showAt({ left: 80, top: 56, width: 200, height: 24 }, { canRemoveHighlight: false });
+    expect(Number.parseFloat(toolbar.element.style.top)).toBe(84);
+    toolbar.destroy();
+  });
+
+  it('uses the shelf title in the reader bar and falls back to the filename', () => {
+    expect(loadedReaderTitle('沙丘', 'dune.txt')).toBe('沙丘');
+    expect(loadedReaderTitle('  ', 'dune.txt')).toBe('dune.txt');
+    expect(loadedReaderTitle(undefined, 'dune.txt')).toBe('dune.txt');
   });
 
   it('anchors on the pointer column and includes every line in that column', () => {

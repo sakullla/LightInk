@@ -180,16 +180,16 @@ export interface ReaderPageSpread {
 /**
  * Readium/Thorium page metrics.
  * The paper and the text columns fill the window. A second column opens
- * once the pane can hold two readable columns (~16rem), not two copies of
- * the stored line-length — otherwise a desktop window stays one column
- * with an empty facing page. Two columns split the page evenly so
- * `column-count: 2` cannot leak a leftover sliver.
+ * once each side can hold a readable line (~22rem). A shorter minimum
+ * paints two skinny columns and, on a short chapter, a blank facing page.
+ * Two columns split the page evenly so `column-count: 2` cannot leak a
+ * leftover sliver.
  *
  * Compact / touch never uses that desktop pair threshold: an inflated
  * iframe width would paint two overlapping columns and skip a page.
  * Force one full-width column (`column-width: 100%`) and step by that width.
  */
-export const READER_SPREAD_MIN_COLUMN_REM = 16;
+export const READER_SPREAD_MIN_COLUMN_REM = 22;
 
 export function readerPageSpread(
   containerWidth: number,

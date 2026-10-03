@@ -43,6 +43,12 @@ import type {
   ReaderLoadOptions,
 } from './types.js';
 import { extOfPath } from '../file/path-ext.js';
+
+/** Shelf title wins over the filename so the reader bar shows the book, not `dune.txt`. */
+export function loadedReaderTitle(requested: string | undefined, displayName: string): string {
+  const preferred = requested?.trim() ?? '';
+  return preferred !== '' ? preferred : displayName;
+}
 import { advanceScrolledScroller } from '../ui/reading-layout.js';
 import { pagingShouldIgnoreTarget } from '../ui/shortcuts.js';
 import { playReaderPageTurn } from './reader-progress-ui.js';
@@ -430,6 +436,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
     ctx.sessionProgress.notifyProgressBound(target);
   };
 
+  let requestedBookTitle = '';
   ctx.sessionLoad = createReaderSessionLoad({
     flow: ctx.flow.flowSessionAdapter,
     paged: ctx.paged.pagedSessionAdapter,
@@ -456,7 +463,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       },
       beforeCommit: (request) => {
         ctx.loadedExt = request.ext;
-        ctx.loadedTitle = request.target.displayName;
+        ctx.loadedTitle = loadedReaderTitle(requestedBookTitle, request.target.displayName);
         ctx.annotations = [];
         ctx.sessionAnnotation.beginSession(request.ext, request.target);
         ctx.sidebar?.render(ctx.annotations);
@@ -486,6 +493,7 @@ export function createReaderView(host: HTMLElement, deps: ReaderViewDeps = {}): 
       if (ctx.destroyed) {
         throw new Error('reader-view has been destroyed');
       }
+      requestedBookTitle = options.bookTitle ?? '';
       const target = normalizeReaderTarget(targetOrPath);
       const filePath = target.kind === 'local' ? target.path : target.displayName;
       const nextExt = (target.extension || extOfPath(filePath)).toLowerCase();

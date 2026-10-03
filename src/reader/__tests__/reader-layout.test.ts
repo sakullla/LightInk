@@ -1102,6 +1102,13 @@ describe('readerPageSpread compact / narrow (R5)', () => {
     expectSingleFullWidthColumn(readerPageSpread(390, 16, 22), 390);
   });
 
+  it('keeps one full-width column when a second column would be a short line', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 640 });
+    expect(readerSurfaceIsCompact()).toBe(false);
+    expectSingleFullWidthColumn(readerPageSpread(536, 15, 22), 536);
+    expectSingleFullWidthColumn(readerPageSpread(640, 16, 22), 640);
+  });
+
   it('keeps two filling columns on a desktop-wide pane without compact flags', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
     expect(readerSurfaceIsCompact()).toBe(false);
