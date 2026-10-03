@@ -78,6 +78,7 @@ import { type ProgressStorage } from '../reader/reading-progress.js';
 import type { ReaderPrefsStorage } from '../reader/reader-prefs.js';
 import { createContextMenu, type MenuItem } from '../ui/context-menu.js';
 import { showConfirmDialog } from '../ui/confirm-dialog.js';
+import { labelModal } from '../ui/modal-focus.js';
 import { beginOpenProgress } from '../ui/open-progress.js';
 import { bindLongPress } from '../ui/touch/long-press.js';
 import { bindSheetDrag } from '../ui/touch/sheet-drag.js';
@@ -1361,6 +1362,7 @@ const NAV_ICON_PATHS = {
   ],
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
   plus: ['M12 5v14', 'M5 12h14'],
+  close: ['M18 6 6 18', 'M6 6l12 12'],
 } as const;
 
 const SHELF_NAV_ICONS: Record<ShelfGroup, readonly string[]> = {
@@ -1655,6 +1657,18 @@ export function createLibraryView(
   groupDialog.className = 'lightink-modal-dialog';
   groupDialog.setAttribute('role', 'dialog');
   groupDialog.setAttribute('aria-modal', 'true');
+  const groupModalHead = doc.createElement('div');
+  groupModalHead.className = 'lightink-modal-head';
+  const groupDialogTitle = doc.createElement('div');
+  groupDialogTitle.className = 'lightink-modal-title';
+  const groupDismiss = button(
+    doc,
+    '',
+    'lightink-library-icon-button lightink-modal-dismiss',
+  );
+  groupDismiss.appendChild(createNavIcon(doc, NAV_ICON_PATHS.close));
+  groupDismiss.addEventListener('click', () => closeGroupEditor());
+  groupModalHead.append(groupDialogTitle, groupDismiss);
   const groupEditor = doc.createElement('form');
   groupEditor.className = 'lightink-library-group-form';
   const groupNameLabel = doc.createElement('label');
@@ -1678,7 +1692,7 @@ export function createLibraryView(
   const groupEditorCancel = button(doc, '');
   groupEditorActions.append(groupEditorSave, groupEditorCancel);
   groupEditor.append(groupNameLabel, groupParentLabel, groupEditorActions);
-  groupDialog.appendChild(groupEditor);
+  groupDialog.append(groupModalHead, groupEditor);
   groupOverlay.appendChild(groupDialog);
   const sourcePane = doc.createElement('section');
   sourcePane.className = 'lightink-library-sources lightink-library-nav-section';
@@ -1768,9 +1782,21 @@ export function createLibraryView(
   sourceDialog.className = 'lightink-modal-dialog';
   sourceDialog.setAttribute('role', 'dialog');
   sourceDialog.setAttribute('aria-modal', 'true');
+  const sourceModalHead = doc.createElement('div');
+  sourceModalHead.className = 'lightink-modal-head';
+  const sourceDialogTitle = doc.createElement('div');
+  sourceDialogTitle.className = 'lightink-modal-title';
+  const sourceDismiss = button(
+    doc,
+    '',
+    'lightink-library-icon-button lightink-modal-dismiss',
+  );
+  sourceDismiss.appendChild(createNavIcon(doc, NAV_ICON_PATHS.close));
+  sourceDismiss.addEventListener('click', () => closeSourceForm());
+  sourceModalHead.append(sourceDialogTitle, sourceDismiss);
   const sourceForm = doc.createElement('form');
   sourceForm.className = 'lightink-library-source-form';
-  sourceDialog.appendChild(sourceForm);
+  sourceDialog.append(sourceModalHead, sourceForm);
   sourceOverlay.appendChild(sourceDialog);
 
   const content = doc.createElement('main');
@@ -1943,7 +1969,19 @@ export function createLibraryView(
   membershipForm.className = 'lightink-library-membership-dialog';
   membershipForm.setAttribute('role', 'dialog');
   membershipForm.setAttribute('aria-modal', 'true');
+  membershipForm.setAttribute('aria-labelledby', 'lightink-library-membership-title');
+  const membershipHeader = doc.createElement('div');
+  membershipHeader.className = 'lightink-library-membership-head';
   const membershipTitle = doc.createElement('h2');
+  membershipTitle.id = 'lightink-library-membership-title';
+  const membershipDismiss = button(
+    doc,
+    '',
+    'lightink-library-icon-button lightink-library-membership-dismiss',
+  );
+  membershipDismiss.appendChild(createNavIcon(doc, NAV_ICON_PATHS.close));
+  membershipDismiss.addEventListener('click', () => closeMembershipEditor());
+  membershipHeader.append(membershipTitle, membershipDismiss);
   const membershipOptions = doc.createElement('div');
   membershipOptions.className = 'lightink-library-membership-options';
   const membershipActions = doc.createElement('div');
@@ -1952,7 +1990,7 @@ export function createLibraryView(
   membershipSave.type = 'submit';
   const membershipCancel = button(doc, '');
   membershipActions.append(membershipSave, membershipCancel);
-  membershipForm.append(membershipTitle, membershipOptions, membershipActions);
+  membershipForm.append(membershipHeader, membershipOptions, membershipActions);
   membershipOverlay.appendChild(membershipForm);
   // 标签编辑页：侧栏、详情和书籍右键共用这一页，不再使用勾选弹层。
   const tagEditor: TagEditor = createTagEditor(doc);
@@ -3332,10 +3370,13 @@ export function createLibraryView(
       closeGroupEditor();
       return;
     }
-    groupDialog.setAttribute(
-      'aria-label',
-      mode.kind === 'rename' ? labels().renameGroup : labels().newGroup,
-    );
+    const groupDialogLabel =
+      mode.kind === 'rename' ? labels().renameGroup : labels().newGroup;
+    groupDialogTitle.textContent = groupDialogLabel;
+    groupDialog.removeAttribute('aria-label');
+    labelModal(groupDialog, groupDialogTitle);
+    groupDismiss.title = labels().cancel;
+    groupDismiss.setAttribute('aria-label', labels().cancel);
     showGroupOverlay();
     groupNameInput.value = editing?.name ?? '';
     groupParentSelect.replaceChildren();
@@ -4853,6 +4894,9 @@ export function createLibraryView(
     membershipTitle.textContent = `${labels().organizeBook}: ${
       display === undefined ? '' : displayBookTitle(display.item)
     }`;
+    membershipTitle.id = 'lightink-library-membership-title';
+    membershipForm.setAttribute('aria-labelledby', membershipTitle.id);
+    membershipForm.removeAttribute('aria-label');
     membershipOptions.replaceChildren();
     if (canPin && display !== undefined) {
       const pinLabel = doc.createElement('label');
@@ -4884,6 +4928,8 @@ export function createLibraryView(
     }
     membershipSave.textContent = labels().saveGroups;
     membershipCancel.textContent = labels().cancel;
+    membershipDismiss.title = labels().cancel;
+    membershipDismiss.setAttribute('aria-label', labels().cancel);
     mountLibraryOverlay(membershipOverlay, root);
     membershipOverlay.hidden = false;
     header.setAttribute('inert', '');
@@ -6457,7 +6503,12 @@ export function createLibraryView(
     formStatus.setAttribute('role', 'status');
     formStatus.hidden = true;
     const editLabel = isWebDav ? labels().editWebDav : labels().editSource;
-    sourceForm.setAttribute('aria-label', source === undefined ? labels().addSource : editLabel);
+    const sourceLabel = source === undefined ? labels().addSource : editLabel;
+    sourceDialogTitle.textContent = sourceLabel;
+    sourceDialog.removeAttribute('aria-label');
+    labelModal(sourceDialog, sourceDialogTitle);
+    sourceDismiss.title = labels().cancel;
+    sourceDismiss.setAttribute('aria-label', labels().cancel);
     sourceForm.append(
       ...fields,
       labeled(title, labels().title),

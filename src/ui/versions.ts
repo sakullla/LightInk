@@ -155,9 +155,18 @@ export function showVersionsModal(
   dialog.className = 'lightink-modal-dialog lightink-versions-dialog';
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
+  const head = doc.createElement('div');
+  head.className = 'lightink-modal-head';
   const title = doc.createElement('div');
   title.className = 'lightink-modal-title';
   title.textContent = L.title;
+  const cornerClose = doc.createElement('button');
+  cornerClose.type = 'button';
+  cornerClose.className = 'lightink-modal-dismiss';
+  cornerClose.setAttribute('aria-label', L.close);
+  cornerClose.title = L.close;
+  cornerClose.textContent = '×';
+  head.append(title, cornerClose);
   labelModal(dialog, title);
 
   // 双栏主体：左版本列表 / 右内容预览。
@@ -190,7 +199,7 @@ export function showVersionsModal(
   const footer = doc.createElement('div');
   footer.className = 'lightink-modal-actions';
   footer.append(saveBtn, closeBtn, restoreBtn);
-  dialog.append(title, body, footer);
+  dialog.append(head, body, footer);
   overlay.appendChild(dialog);
 
   let selectedId: string | null = null;
@@ -205,6 +214,7 @@ export function showVersionsModal(
     }
   });
   closeBtn.addEventListener('click', dismiss);
+  cornerClose.addEventListener('click', dismiss);
   restoreBtn.addEventListener('click', () => {
     if (selectedId === null) {
       return;

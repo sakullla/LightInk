@@ -1394,9 +1394,26 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   box-shadow: var(--lightink-shadow-strong);
 }
 
-.lightink-library-membership-dialog h2 {
+/* Header row: title + explicit close affordance (top-right ×). */
+.lightink-library-membership-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lightink-library-membership-head h2 {
   margin: 0;
   font-size: 15px;
+}
+
+.lightink-library-membership-dismiss {
+  margin: -4px -4px 0 0;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-membership-dismiss:hover {
+  color: var(--lightink-fg);
 }
 
 .lightink-library-membership-options {

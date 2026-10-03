@@ -312,11 +312,17 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
   const header = doc.createElement('header');
-  header.className = 'lightink-sync-header';
+  header.className = 'lightink-sync-header lightink-modal-head';
   const title = doc.createElement('div');
   title.className = 'lightink-modal-title';
   title.textContent = L.title;
-  header.append(title);
+  const closeBtn = doc.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'lightink-modal-dismiss';
+  closeBtn.setAttribute('aria-label', L.close);
+  closeBtn.title = L.close;
+  closeBtn.textContent = '×';
+  header.append(title, closeBtn);
   labelModal(dialog, title);
 
   const form = doc.createElement('form');
@@ -484,6 +490,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     deps.onClose?.();
   };
   close.addEventListener('click', closePanel);
+  closeBtn.addEventListener('click', closePanel);
   overlay.addEventListener('pointerdown', (event) => {
     if (event.target === overlay && progress.hidden) closePanel();
   });

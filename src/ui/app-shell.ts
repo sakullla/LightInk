@@ -1607,15 +1607,24 @@ export function createAppShell(
     dialog.className = 'lightink-modal-dialog';
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
+    const head = document.createElement('div');
+    head.className = 'lightink-modal-head';
     const title = document.createElement('div');
     title.className = 'lightink-modal-title';
     title.textContent = actions.t('help.cheatsheet');
+    const cornerClose = document.createElement('button');
+    cornerClose.type = 'button';
+    cornerClose.className = 'lightink-modal-dismiss';
+    cornerClose.setAttribute('aria-label', actions.t('dialog.close'));
+    cornerClose.title = actions.t('dialog.close');
+    cornerClose.textContent = '×';
+    head.append(title, cornerClose);
     labelModal(dialog, title);
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'lightink-modal-close';
     close.textContent = actions.t('dialog.close');
-    dialog.append(title, renderCheatsheet(bindings), close);
+    dialog.append(head, renderCheatsheet(bindings), close);
     overlay.appendChild(dialog);
     let releaseModal = (): void => overlay.remove();
     function dismiss(): void {
@@ -1627,6 +1636,7 @@ export function createAppShell(
       }
     });
     close.addEventListener('click', dismiss);
+    cornerClose.addEventListener('click', dismiss);
     releaseModal = mountModalFocus(document, overlay, dialog, {
       initialFocus: close,
       onEscape: dismiss,

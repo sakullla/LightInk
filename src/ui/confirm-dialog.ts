@@ -133,9 +133,21 @@ export function showConfirmDialog(doc: Document, spec: ConfirmDialogSpec): Promi
     dialog.setAttribute('role', 'alertdialog');
     dialog.setAttribute('aria-modal', 'true');
 
+    const head = doc.createElement('div');
+    head.className = 'lightink-modal-head';
     const title = doc.createElement('div');
     title.className = 'lightink-modal-title';
     title.textContent = spec.title;
+    const cancelId = resolveCancelId(spec);
+    const cancelLabel = spec.buttons.find((b) => b.id === cancelId)?.label ?? '';
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'lightink-modal-dismiss';
+    dismiss.setAttribute('aria-label', cancelLabel === '' ? 'Close' : cancelLabel);
+    dismiss.title = cancelLabel === '' ? 'Close' : cancelLabel;
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => settle(resolveCancelId(spec)));
+    head.append(title, dismiss);
     const message = doc.createElement('div');
     message.className = 'lightink-modal-message';
     message.textContent = spec.message;
@@ -157,7 +169,7 @@ export function showConfirmDialog(doc: Document, spec: ConfirmDialogSpec): Promi
       actions.appendChild(el);
     }
 
-    dialog.append(title, message, actions);
+    dialog.append(head, message, actions);
     overlay.appendChild(dialog);
 
     const onKey = (event: KeyboardEvent): void => {

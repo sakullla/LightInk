@@ -64,9 +64,19 @@ export function showLinkDialog(
     dialog.setAttribute('aria-modal', 'true');
     const L = spec.labels ?? {};
 
+    const head = doc.createElement('div');
+    head.className = 'lightink-modal-head';
     const heading = doc.createElement('div');
     heading.className = 'lightink-modal-title';
     heading.textContent = spec.title ?? 'Edit link';
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'lightink-modal-dismiss';
+    dismiss.setAttribute('aria-label', spec.labels?.cancel ?? 'Cancel');
+    dismiss.title = spec.labels?.cancel ?? 'Cancel';
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => settle(null));
+    head.append(heading, dismiss);
     labelModal(dialog, heading);
 
     const form = doc.createElement('div');
@@ -111,7 +121,7 @@ export function showLinkDialog(
     });
 
     actions.append(cancelBtn, okBtn);
-    dialog.append(heading, form, actions);
+    dialog.append(head, form, actions);
     overlay.appendChild(dialog);
 
     const onKey = (event: KeyboardEvent): void => {
@@ -181,9 +191,19 @@ export function showOpenLinkConfirm(
     dialog.setAttribute('role', 'alertdialog');
     dialog.setAttribute('aria-modal', 'true');
 
+    const head = doc.createElement('div');
+    head.className = 'lightink-modal-head';
     const title = doc.createElement('div');
     title.className = 'lightink-modal-title';
     title.textContent = labels.title ?? 'Open Link';
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'lightink-modal-dismiss';
+    dismiss.setAttribute('aria-label', labels.cancelLabel ?? 'Cancel');
+    dismiss.title = labels.cancelLabel ?? 'Cancel';
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => settle(false));
+    head.append(title, dismiss);
 
     const message = doc.createElement('div');
     message.className = 'lightink-modal-message';
@@ -211,7 +231,7 @@ export function showOpenLinkConfirm(
     okBtn.addEventListener('click', () => settle(true));
 
     actions.append(cancelBtn, okBtn);
-    dialog.append(title, message, target, actions);
+    dialog.append(head, message, target, actions);
     overlay.appendChild(dialog);
 
     const onKey = (event: KeyboardEvent): void => {

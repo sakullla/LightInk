@@ -3156,10 +3156,51 @@ html[data-reading-layout='scroll']:has(
   border: 1px solid var(--lightink-border);
 }
 
+/* Title + corner close affordance shared by library/sync dialogs. */
+.lightink-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lightink-modal-head .lightink-modal-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .lightink-modal-title {
   font-size: 15px;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+/* Corner dismiss: ghost icon button, muted until hover. */
+.lightink-modal-dismiss {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -6px -6px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightink-modal-dismiss:hover {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+}
+
+.lightink-modal-dismiss:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
 }
 
 .lightink-modal-close {

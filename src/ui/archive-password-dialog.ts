@@ -76,9 +76,19 @@ export function showArchivePasswordDialog(
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
 
+    const head = doc.createElement('div');
+    head.className = 'lightink-modal-head';
     const title = doc.createElement('div');
     title.className = 'lightink-modal-title';
     title.textContent = spec.t('reader.archivePassword.title');
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'lightink-modal-dismiss';
+    dismiss.setAttribute('aria-label', spec.t('dialog.cancel'));
+    dismiss.title = spec.t('dialog.cancel');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => settle(null));
+    head.append(title, dismiss);
 
     const message = doc.createElement('div');
     message.className = 'lightink-modal-message';
@@ -125,7 +135,7 @@ export function showArchivePasswordDialog(
       settle(input.value);
     });
     actions.append(cancel, confirm);
-    dialog.append(title, message, form, actions);
+    dialog.append(head, message, form, actions);
     overlay.appendChild(dialog);
     applyArchivePasswordKeyboardInset(overlay, dialog, input, actions);
     overlay.addEventListener('pointerdown', (event) => {
