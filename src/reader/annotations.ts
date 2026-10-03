@@ -15,6 +15,26 @@ export const ANNOTATION_COLORS = [
 
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
 
+/**
+ * i18n key for each palette swatch, aligned by index with ANNOTATION_COLORS.
+ * Used for accessible names / tooltips so a screen reader hears "Yellow"
+ * instead of a bare hex code, and export can print a friendly color name.
+ */
+export const ANNOTATION_COLOR_KEYS = [
+  'annotation.color.yellow',
+  'annotation.color.green',
+  'annotation.color.blue',
+  'annotation.color.pink',
+] as const;
+
+type AnnotationColorKey = (typeof ANNOTATION_COLOR_KEYS)[number];
+
+/** Resolve a palette hex to its i18n key; unknown hex falls back to the first swatch. */
+export function annotationColorKey(color: string): AnnotationColorKey {
+  const index = ANNOTATION_COLORS.indexOf(color as AnnotationColor);
+  return ANNOTATION_COLOR_KEYS[Math.max(0, index)];
+}
+
 const ANNOTATION_COLOR_SET: ReadonlySet<string> = new Set(ANNOTATION_COLORS);
 
 export interface TextQuoteAnchor {

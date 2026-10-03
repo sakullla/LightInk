@@ -137,6 +137,7 @@ interface Labels {
   emptyCatalog: string;
   emptySearch: string;
   emptyFilter: string;
+  emptyFilterHint: string;
   emptySources: string;
   loading: string;
   searching: string;
@@ -333,6 +334,7 @@ const LABELS: Record<Locale, Labels> = {
     emptyCatalog: 'No books in this folder. Search, or open a folder.',
     emptySearch: 'No matching books',
     emptyFilter: 'Nothing in this view',
+    emptyFilterHint: 'Try a different group or tag, or clear the filter.',
     emptySources: 'No library sources yet. Use + to add one.',
     loading: 'Loading…',
     searching: 'Searching…',
@@ -526,6 +528,7 @@ const LABELS: Record<Locale, Labels> = {
     emptyCatalog: '此目录没有书籍。可以搜索，或打开文件夹。',
     emptySearch: '没有匹配的作品',
     emptyFilter: '这一组还没有作品',
+    emptyFilterHint: '换个分组或标签试试，或清除筛选。',
     emptySources: '还没有书库源，点 + 添加。',
     loading: '正在加载…',
     searching: '正在搜索…',
@@ -5224,20 +5227,27 @@ export function createLibraryView(
             : filtered
               ? labels().emptyFilter
               : labels().empty;
+      // 筛选（非搜索）导致的空态附带恢复动作：清掉分组/标签/智能分组回到全部。
+      const filterOnly = filtered && query === '';
+      const emptyActions: EmptyStateAction[] = [];
+      if (query !== '') {
+        emptyActions.push({
+          label: translate(deps.getLocale(), 'library.empty.clearSearch'),
+          onClick: () => searchClear.click(),
+        });
+      } else if (filterOnly && !catalogActive()) {
+        emptyActions.push({
+          label: translate(deps.getLocale(), 'library.empty.clearFilter'),
+          onClick: () => selectShelfGroup('all'),
+        });
+      }
       itemList.appendChild(
         renderEmptyState(doc, {
           icon: emptyIcon,
           className: `lightink-library-empty${filtered ? ' lightink-library-empty--filtered' : ''}`,
           title: emptyTitle,
-          actions:
-            query !== ''
-              ? [
-                  {
-                    label: translate(deps.getLocale(), 'library.empty.clearSearch'),
-                    onClick: () => searchClear.click(),
-                  },
-                ]
-              : [],
+          description: filterOnly ? labels().emptyFilterHint : undefined,
+          actions: emptyActions,
         }),
       );
       detail.hidden = true;

@@ -2035,10 +2035,22 @@ describe('LibraryView my-books home', () => {
     const filteredEmpty = host.querySelector('.lightink-library-empty')!;
     expect(filteredEmpty.querySelector('.lightink-empty-title')?.textContent).toBe('这一组还没有作品');
     expect(filteredEmpty.querySelector('.lightink-empty-icon svg')).not.toBeNull();
-    expect(filteredEmpty.querySelector('.lightink-empty-action')).toBeNull();
+    // 筛选空态给出恢复动作：清除筛选回到全部。
+    const clearAction = filteredEmpty.querySelector<HTMLButtonElement>('.lightink-empty-action');
+    expect(clearAction?.textContent).toBe('清除筛选');
+    expect(
+      filteredEmpty.querySelector('.lightink-empty-description')?.textContent,
+    ).toBe('换个分组或标签试试，或清除筛选。');
     expect(wallHeading(host).textContent).toBe('在读 · 0');
     expect(host.querySelector(`[data-item-id="${unread.id}"]`)).toBeNull();
     expect(isShown(host.querySelector('.lightink-library-continue'))).toBe(false);
+
+    // 点「清除筛选」回到全部并显示作品。
+    clearAction!.click();
+    await settle();
+    expect(wallHeading(host).hidden).toBe(true);
+    expect(host.querySelector(`[data-item-id="${unread.id}"]`)).not.toBeNull();
+    expect(host.querySelector('.lightink-library-empty')).toBeNull();
     view.destroy();
   });
 
@@ -2785,7 +2797,8 @@ describe('LibraryView my-books home', () => {
     const filteredEmpty = host.querySelector('.lightink-library-empty')!;
     expect(filteredEmpty.querySelector('.lightink-empty-title')?.textContent).toBe('这一组还没有作品');
     expect(filteredEmpty.querySelector('.lightink-empty-icon svg')).not.toBeNull();
-    expect(filteredEmpty.querySelector('.lightink-empty-action')).toBeNull();
+    // 分组空态给恢复动作：清除筛选。
+    expect(filteredEmpty.querySelector('.lightink-empty-action')?.textContent).toBe('清除筛选');
 
     groupButton(host, '全部').click();
     await settle();

@@ -292,6 +292,7 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
     const ticks = readerProgressTickFractions(ctx.readerOutline, total, kind, ctx.annotations);
     ctx.readerChrome?.setProgress({
       chapterTitle: resolveReaderChapterTitle(ctx.readerState, ctx.readerOutline, locationFallback),
+      bookTitle: ctx.loadedTitle,
       location,
       progress: ctx.readerState.progress,
       ticks: ticks.chapters,

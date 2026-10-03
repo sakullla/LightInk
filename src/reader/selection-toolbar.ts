@@ -8,7 +8,11 @@
  */
 
 import type { MessageKey } from '../i18n/messages.js';
-import { ANNOTATION_COLORS, type AnnotationColor } from './annotations.js';
+import {
+  ANNOTATION_COLORS,
+  annotationColorKey,
+  type AnnotationColor,
+} from './annotations.js';
 import { concealSheet, revealSheet } from '../ui/touch/sheet-transition.js';
 
 export type SelectionToolbarAction =
@@ -188,8 +192,10 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     swatch.type = 'button';
     swatch.className = 'lightink-reader-selection-color';
     swatch.dataset.annotationColor = color;
-    swatch.setAttribute('aria-label', deps.t('annotation.highlight'));
-    swatch.title = deps.t('annotation.highlight');
+    // Named color, not the raw hex: screen reader + hover tooltip both say e.g. "高亮 · 黄色".
+    const colorName = deps.t(annotationColorKey(color));
+    swatch.setAttribute('aria-label', `${deps.t('annotation.highlight')} · ${colorName}`);
+    swatch.title = colorName;
     // background-color 长属性而非 background 简写：简写会把内联
     // background-clip 重置为 border-box（内联优先级压过触屏 48px 热区规则的
     // content-box 裁剪），见 reader.css 触屏热区规则。

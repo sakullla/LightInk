@@ -13,7 +13,12 @@
  * 不产生文件；用户取消对话框安静返回不落盘；写失败经 reportError 上报。
  */
 
-import { filterAnnotations, resolveAnnotationColor, type Annotation } from './annotations.js';
+import {
+  annotationColorKey,
+  filterAnnotations,
+  resolveAnnotationColor,
+  type Annotation,
+} from './annotations.js';
 import { annotationLocationText, byDocumentPosition } from './annotation-panel.js';
 import type { MessageKey } from '../i18n/messages.js';
 
@@ -95,8 +100,9 @@ export function buildAnnotationsMarkdown(input: AnnotationsMarkdownInput): strin
       lines.push(`${input.t('annotation.note')}: ${note}`, '');
     }
     if (annotation.kind === 'highlight') {
+      const color = resolveAnnotationColor(annotation.color);
       lines.push(
-        `${input.t('annotation.export.color')}: ${resolveAnnotationColor(annotation.color)}`,
+        `${input.t('annotation.export.color')}: ${input.t(annotationColorKey(color))} (${color})`,
         '',
       );
     }

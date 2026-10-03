@@ -68,6 +68,8 @@ export interface ReaderChromeLabels {
 
 export interface ReaderChromeProgress {
   readonly chapterTitle: string;
+  /** Book-level title shown in the top bar; empty keeps the bar title-free. */
+  readonly bookTitle?: string;
   readonly location: string;
   readonly progress: number;
   readonly ticks?: readonly number[];
@@ -550,6 +552,11 @@ export function createReaderChrome(
   drag.className = 'lightink-reader-chrome-drag';
   drag.setAttribute('data-tauri-drag-region', '');
   drag.setAttribute('aria-hidden', 'true');
+  // 书名胶囊：夹在返回与工具之间，桌面可见当前在读哪本书。
+  // 空字符串时不占布局；setProgress 时随 bookTitle 填充。
+  const barTitle = document.createElement('span');
+  barTitle.className = 'lightink-reader-chrome-title';
+  barTitle.setAttribute('aria-hidden', 'true');
   const tools = document.createElement('div');
   tools.className = 'lightink-reader-chrome-tools';
   tools.append(tocButton, typographyButton, bookmarkButton, searchButton, assistantButton);
@@ -566,7 +573,7 @@ export function createReaderChrome(
     element.style.setProperty('--lightink-reader-chrome-gap', gap);
     bar.append(backButton, drag);
   } else {
-    bar.append(backButton, tools, drag);
+    bar.append(backButton, barTitle, tools, drag);
   }
   if (editButton !== null) {
     backButton.after(editButton);
@@ -743,6 +750,7 @@ export function createReaderChrome(
     ]) {
       button.hidden = !barShown;
     }
+    barTitle.hidden = !barShown || barTitle.dataset.hasTitle === 'false';
     if (editButton !== null) {
       const editing = deps.markdownEditing?.() === true;
       const label = editing ? labels.done : labels.edit;
@@ -1098,6 +1106,9 @@ export function createReaderChrome(
   const setProgress = (snapshot: ReaderChromeProgress): void => {
     const title = snapshot.chapterTitle.trim();
     const location = snapshot.location.trim();
+    const bookTitle = (snapshot.bookTitle ?? '').trim();
+    barTitle.textContent = bookTitle;
+    barTitle.dataset.hasTitle = bookTitle === '' ? 'false' : 'true';
     const percent = formatReaderPercent(snapshot.progress);
     const ratio = Number.isFinite(snapshot.progress) ? Math.min(1, Math.max(0, snapshot.progress)) : 0;
     footerChapter.textContent = title;

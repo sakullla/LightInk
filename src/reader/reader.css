@@ -94,6 +94,24 @@
   min-width: 0;
 }
 
+/* Book title between back and tools: muted, single-line, clipped. The left
+   drag region still fills remaining space so the bar stays draggable. */
+.lightink-reader-chrome-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 0.5rem;
+  overflow: hidden;
+  color: var(--lightink-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-reader-chrome-title[hidden] {
+  display: none;
+}
+
 .lightink-reader-chrome-action {
   display: inline-flex;
   align-items: center;

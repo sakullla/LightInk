@@ -28,6 +28,7 @@
 
 import {
   ANNOTATION_COLORS,
+  annotationColorKey,
   filterAnnotations,
   resolveAnnotationColor,
   type Annotation,
@@ -385,8 +386,8 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       {
         className: 'lightink-reader-sidebar-search-scope-color lightink-reader-sidebar-color-filter',
         dataset: { color },
-        ariaLabel: color,
-        title: color,
+        ariaLabel: deps.t(annotationColorKey(color)),
+        title: deps.t(annotationColorKey(color)),
         swatchColor: color,
       },
       () => {

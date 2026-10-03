@@ -95,7 +95,8 @@ describe('buildAnnotationsMarkdown', () => {
     expect(markdown).toContain('> 页二片段');
     expect(markdown).toContain('annotation.note: 页二备注');
     expect(markdown).toContain('annotation.note: 高亮备注');
-    expect(markdown).toContain('annotation.export.color: #86c28b');
+    // 颜色导出名走 i18n 键 + 保留原 hex（t 是 echo key 的测试替身）。
+    expect(markdown).toContain('annotation.export.color: annotation.color.green (#86c28b)');
     expect(markdown.endsWith('\n')).toBe(true);
   });
 
@@ -114,7 +115,7 @@ describe('buildAnnotationsMarkdown', () => {
     expect(markdown).not.toContain('第 2 页摘录');
     expect(markdown).toContain('> 第 3 页摘录');
     expect(markdown).not.toContain('annotation.note:');
-    expect(markdown).toContain('annotation.export.color: #f2d675');
+    expect(markdown).toContain('annotation.export.color: annotation.color.yellow (#f2d675)');
     const bookmarkStart = markdown.indexOf('## annotation.kind.bookmark');
     const bookmarkEnd = markdown.indexOf('## ', bookmarkStart + 1);
     const bookmarkSection = markdown.slice(bookmarkStart, bookmarkEnd === -1 ? undefined : bookmarkEnd);
