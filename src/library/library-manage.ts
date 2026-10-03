@@ -66,6 +66,9 @@ export type ManageSubpage = 'home' | 'cache-limit';
 export interface ConcealManageLabels extends ConcealSceneResultLabels, ConcealEffectLabels {
   readonly group: string;
   readonly groupHint: string;
+  /** R15 摸鱼总开关与提示（关闭后整段其余控件隐藏、全部效果撤销）。 */
+  readonly enabled: string;
+  readonly enabledHint: string;
   readonly bossKeyHint: string;
   readonly macBossKeyHint: string;
   readonly bossKey1: string;
@@ -836,6 +839,8 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
   const texts = {
     group: '',
     groupHint: '',
+    enabled: '',
+    enabledHint: '',
     bossKeyHint: '',
     macBossKeyHint: '',
     bossKey1: '',
@@ -914,6 +919,29 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
   title.className = 'lightink-library-manage-group-title';
   const hint = doc.createElement('p');
   hint.className = 'lightink-library-appearance-hint';
+
+  // R15 总开关：折叠为组内第一行；关闭时其余控件整体隐藏。
+  const enabledWrap = doc.createElement('div');
+  enabledWrap.className = 'lightink-library-conceal-switch';
+  enabledWrap.dataset.concealSwitch = 'enabled';
+  const enabledLabel = doc.createElement('label');
+  enabledLabel.className = 'lightink-library-reader-pref';
+  const enabledInput = doc.createElement('input');
+  enabledInput.type = 'checkbox';
+  enabledInput.dataset.concealEnabled = 'true';
+  const enabledText = doc.createElement('span');
+  enabledLabel.append(enabledInput, enabledText);
+  const enabledHint = doc.createElement('p');
+  enabledHint.className = 'lightink-library-appearance-hint';
+  enabledHint.dataset.concealEnabledHint = 'true';
+  enabledWrap.append(enabledLabel, enabledHint);
+  enabledInput.addEventListener('change', () => {
+    deps.update({ enabled: enabledInput.checked });
+    render();
+  });
+
+  const body = doc.createElement('div');
+  body.className = 'lightink-library-conceal-body';
 
   const scenes = doc.createElement('div');
   scenes.className = 'lightink-library-conceal-scenes';
@@ -1295,7 +1323,8 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
     exitHint,
     secondaryField.input.closest('.lightink-library-conceal-key-field') ?? secondaryField.input,
   );
-  section.append(title, hint, scenes, dodge, disguise, floatGroup, exit);
+  body.append(scenes, dodge, disguise, floatGroup, exit);
+  section.append(title, hint, enabledWrap, body);
   bindRadioGroupKeys(scenes, '[role="radio"]');
 
   const paintSwatch = (value: ConcealBackgroundValue, chip: HTMLElement, prefs: ConcealPrefs): void => {
@@ -1316,6 +1345,8 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
 
   function render(registerResult?: ConcealBossKeysStatus): void {
     const prefs = deps.getPrefs();
+    enabledInput.checked = prefs.enabled;
+    body.hidden = !prefs.enabled;
     const scene = concealSceneOf(prefs);
     title.textContent = `${texts.group} · ${texts.scenes[scene]} · ${prefs.bossPrimary}`;
     for (const [choice, sceneButton] of sceneButtons) {
@@ -1411,6 +1442,11 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       const labels = deps.labels();
       texts.group = labels.group;
       texts.groupHint = labels.groupHint;
+      texts.enabled = labels.enabled;
+      texts.enabledHint = labels.enabledHint;
+      enabledText.textContent = labels.enabled;
+      enabledHint.textContent = labels.enabledHint;
+      enabledInput.setAttribute('aria-label', labels.enabled);
       texts.bossKeyHint = labels.bossKeyHint;
       texts.macBossKeyHint = labels.macBossKeyHint;
       texts.bossKey1 = labels.bossKey1;

@@ -1792,3 +1792,30 @@ describe('reader conceal bar', () => {
     expect(parseReaderConcealOpacity('nope')).toBeNull();
   });
 });
+
+describe('reader conceal bar R15 detach', () => {
+  it('removes toggle+panel and restores bar children; reattach works', () => {
+    const { chrome } = mount();
+    chrome.reveal();
+    const bar = attachConceal(chrome, { alwaysOnTop: true });
+    bar.toggle.click();
+    expect(chrome.bar.querySelector('[data-conceal-reader-bar]')).toBeTruthy();
+    // attach 把原内容合入一行 + 追加面板，bar 只剩 row+panel 两个直接子级。
+    expect(chrome.bar.children.length).toBe(2);
+
+    chrome.detachConcealBar();
+
+    expect(chrome.bar.querySelector('[data-conceal-reader-bar]')).toBeNull();
+    expect(chrome.bar.querySelector('[data-conceal-reader-toggle]')).toBeNull();
+    // 合入的包裹行已移除，原按钮回到 bar 直接子级。
+    expect(chrome.bar.querySelector('.lightink-reader-chrome-bar-row')).toBeNull();
+    expect(chrome.bar.children.length).toBeGreaterThan(2);
+
+    // 幂等：未挂载时无操作。
+    chrome.detachConcealBar();
+
+    // 重新挂载恢复完整调节条。
+    const reattached = attachConceal(chrome, { alwaysOnTop: true });
+    expect(reattached.panel.querySelector('[data-conceal-scene]')).toBeTruthy();
+  });
+});

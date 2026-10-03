@@ -320,6 +320,12 @@ export interface ReaderChrome {
   setConcealZones(top: ReaderChromeConcealZone, bottom: ReaderChromeConcealZone): void;
   /** 桌面阅读器顶栏的摸鱼调节条。不调用则不渲染。 */
   attachConcealBar(deps: ReaderConcealBarDeps): void;
+  /**
+   * R15 总开关关闭：卸载调节条（移除按钮与面板、还原顶/底带接管、
+   * 退订拒绝回调）；bar 内原有子节点放回 attach 前的直接位置。
+   * 未挂载时无操作。
+   */
+  detachConcealBar(): void;
   /** 重读调节条文案和当前偏好。未挂载时无操作。 */
   syncConcealBar(): void;
   /**
@@ -1535,6 +1541,56 @@ export function createReaderChrome(
     next.onLayout?.();
   };
 
+  /**
+   * R15：调节条整体卸载。挂起时合入的包裹行（row）与面板一并移除，
+   * 按钮原位置回 bar 直接子级；若面板处于展开/held，接管还原因
+   * concealTop/concealBottom 归零而回到 'auto' 语义。
+   */
+  const detachConcealBar = (): void => {
+    concealUnsubscribe?.();
+    concealUnsubscribe = null;
+    concealDeps = null;
+    concealRefusals.clear();
+    if (!concealMounted) {
+      return;
+    }
+    const row = concealToggle?.parentElement ?? null;
+    if (row !== null && row.classList.contains('lightink-reader-chrome-bar-row')) {
+      while (row.firstChild !== null) {
+        if (row.firstChild === concealToggle) {
+          row.removeChild(row.firstChild);
+          continue;
+        }
+        bar.insertBefore(row.firstChild, row);
+      }
+      row.remove();
+    } else {
+      concealToggle?.remove();
+    }
+    concealPanel?.remove();
+    concealMounted = false;
+    concealToggle = null;
+    concealPanel = null;
+    concealOpacity = null;
+    concealOpacityText = null;
+    concealOpacityScale = null;
+    concealCustom = null;
+    concealCustomEffectNode = null;
+    concealBoss = null;
+    concealSceneButtons.clear();
+    concealSceneResults.clear();
+    concealToggles.clear();
+    concealLayoutKey = '';
+    concealOpacityDirty = false;
+    concealOpacityDragging = false;
+    concealTop = 'auto';
+    concealBottom = 'auto';
+    requestedConcealTop = 'auto';
+    delete bar.dataset.concealReaderBarHost;
+    bar.style.flexWrap = '';
+    syncDom();
+  };
+
   syncDom();
 
   if (initialHost !== undefined) {
@@ -1567,6 +1623,7 @@ export function createReaderChrome(
     },
     setConcealZones,
     attachConcealBar,
+    detachConcealBar,
     syncConcealBar: () => {
       renderConcealBar();
     },

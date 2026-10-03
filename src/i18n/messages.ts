@@ -719,6 +719,9 @@ const en = {
   'conceal.group': 'Stealth reading',
   'conceal.groupHint':
     'Applies to the shelf and the reader only; the editor always keeps its normal look.',
+  'conceal.enabled': 'Enable stealth mode',
+  'conceal.enabledHint':
+    'Off: every stealth effect is undone, boss keys and the tray are removed, and the controls below disappear until you turn it back on.',
   'conceal.bossKeyHint':
     'Global shortcuts take effect system-wide once registered and may clash with the same keys in other apps. You can change them at any time.',
   'conceal.macBossKeyHint':
@@ -1480,6 +1483,9 @@ const zhCN = {
 
   'conceal.group': '摸鱼',
   'conceal.groupHint': '仅在书架与阅读器界面生效；编辑器始终保持原有外观。',
+  'conceal.enabled': '启用摸鱼模式',
+  'conceal.enabledHint':
+    '关闭后撤销全部摸鱼效果、注销老板键并移除托盘；下方设置项随之隐藏，重新开启即恢复。',
   'conceal.bossKeyHint':
     '全局快捷键注册成功后系统级生效，可能影响其他应用的同名按键，可随时改键。',
   'conceal.macBossKeyHint': 'macOS 默认使用 Ctrl（Control）+Z / Ctrl+X，与 Windows、Linux 的 Alt 默认键对应。',

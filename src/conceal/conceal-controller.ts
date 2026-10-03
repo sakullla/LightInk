@@ -128,6 +128,14 @@ export interface ConcealController {
   init(): void;
   /** R1：表面切换。editor 全撤；shelf/reader 按保存的开关重放。 */
   setSurface(surface: ConcealSurface): void;
+  /**
+   * R15 摸鱼总开关：关闭时撤销全部窗口效果（restoreWindowBaseline）并清
+   * 全部 DOM 输出；已存偏好逐项保留，重新开启后按原开关重放。调用方
+   * 负责持久化 enabled 字段与老板键/托盘的摘挂。
+   */
+  setEnabled(enabled: boolean): void;
+  /** R15 当前总开关（未被命令失败等路径改写）。 */
+  isEnabled(): boolean;
   /** 设置改动：合并 → 校验持久化 → 即时生效（R10）。返回生效后的偏好。 */
   applyPrefs(update: Partial<ConcealPrefs>): ConcealPrefs;
   /** 当前生效偏好（打开被拒的开关已写回关闭）。 */
@@ -155,6 +163,7 @@ export interface ConcealController {
 export function createConcealController(deps: ConcealControllerDeps): ConcealController {
   const { client, doc } = deps;
   let effective: ConcealPrefs = { ...deps.prefs };
+  let enabled = deps.prefs.enabled;
   let surface: ConcealSurface | null = null;
   let pointerZone: ConcealPointerZoneName | null = null;
   const zoneCache = new Map<'top' | 'bottom', ConcealZone>();
@@ -234,7 +243,11 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
   };
 
   const clickThroughActive = (): boolean =>
-    surface !== null && surface !== 'editor' && effective.clickThrough && effective.transparentMode;
+    surface !== null &&
+    surface !== 'editor' &&
+    enabled &&
+    effective.clickThrough &&
+    effective.transparentMode;
 
   // ── 穿透激活期间的低频 zones 复测 ────────────────────────────
   // zones-stale 事件只覆盖 resize/DPI/mini/表面切换；overlay 开合（助手
@@ -348,8 +361,11 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     if (surface === null) {
       return;
     }
-    if (surface === 'editor') {
-      setAttr(root, 'data-conceal-surface', 'editor');
+    if (surface === 'editor' || !enabled) {
+      // R1 editor 与 R15 关闭态共用同一条「全清」路径：不命中透明/渐变/
+      // 三区隐藏的任何 CSS，chrome 接管还原 'auto'。R15 关闭态连
+      // data-conceal-surface 也不写（CSS 两侧都不含 disabled 概念）。
+      setAttr(root, 'data-conceal-surface', enabled ? 'editor' : null);
       setAttr(root, 'data-conceal-transparent', null);
       setAttr(root, 'data-conceal-page-background', null);
       root.style.removeProperty('--lightink-conceal-page-background');
@@ -435,7 +451,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
   };
 
   const applyWindowEffects = (): void => {
-    if (surface === null || surface === 'editor') {
+    if (surface === null || surface === 'editor' || !enabled) {
       return;
     }
     if (effective.alwaysOnTop && !appliedAlwaysOnTop) {
@@ -519,7 +535,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       return;
     }
     pointerZone = zone;
-    if (surface === null || surface === 'editor') {
+    if (surface === null || surface === 'editor' || !enabled) {
       return;
     }
     sync();
@@ -545,6 +561,37 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     setPointerZone('body');
   };
 
+  // R15 总开关：撤销全部窗口效果（后端 baseline 幂等）或按仍保存的
+  // 偏好重放。applyPrefs 检测到 enabled 字段时汇入这条单一路径。
+  const setEnabled = (next: boolean): void => {
+    if (next === enabled) {
+      return;
+    }
+    enabled = next;
+    pointerZone = null;
+    opacityPreview = null;
+    if (!enabled) {
+      stopZonePoll();
+      track(client.restoreWindowBaseline()).catch((error: unknown) => {
+        deps.onNotice('baselineFailed', errorText(error));
+      });
+      appliedAlwaysOnTop = false;
+      appliedTransparent = false;
+      appliedMiniWindow = false;
+      appliedClickThrough = false;
+      clickThroughRevoked = true;
+      pushedClickThroughKey = '';
+      applyDomState();
+      return;
+    }
+    if (surface !== null && surface !== 'editor') {
+      applyWindowEffects();
+      sync();
+      return;
+    }
+    applyDomState();
+  };
+
   const applyPrefs = (update: Partial<ConcealPrefs>): ConcealPrefs => {
     const merged: ConcealPrefs = { ...effective, ...update };
     if (!isConcealPrefsValid(merged)) {
@@ -554,13 +601,18 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       opacityPreview = null;
     }
     effective = deps.persist(merged, effective);
+    if (Object.prototype.hasOwnProperty.call(update, 'enabled')) {
+      // R15：总开关翻转走 setEnabled 单一路径（撤销基线 / 重放效果）。
+      setEnabled(effective.enabled);
+      return effective;
+    }
     applyWindowEffects();
     sync();
     return effective;
   };
 
   const previewContentOpacity = (value: number): void => {
-    if (surface === null || surface === 'editor') {
+    if (surface === null || surface === 'editor' || !enabled) {
       return;
     }
     if (!isOpacityInRange(value)) {
@@ -587,6 +639,8 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
       setSurface(surface ?? 'shelf');
     },
     setSurface,
+    setEnabled,
+    isEnabled: () => enabled,
     applyPrefs,
     previewContentOpacity,
     commitContentOpacity,
@@ -618,7 +672,7 @@ export function createConcealController(deps: ConcealControllerDeps): ConcealCon
     handlePointerMove,
     handlePointerZone: setPointerZone,
     notifyZonesStale() {
-      if (surface === null || surface === 'editor') {
+      if (surface === null || surface === 'editor' || !enabled) {
         return;
       }
       sync();

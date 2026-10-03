@@ -45,6 +45,7 @@ describe('conceal prefs defaults (R2/R5/R6/R7/R8/R9/R13)', () => {
 
   it('keeps every effect switch off and opacity at 100 by default', () => {
     const prefs = defaultConcealPrefs(false);
+    expect(prefs.enabled).toBe(true);
     expect(prefs.transparentMode).toBe(false);
     expect(prefs.contentOpacity).toBe(100);
     expect(prefs.background).toEqual({ kind: 'theme' });
@@ -178,6 +179,22 @@ describe('save → load round trip (R10)', () => {
 
   it('falls back to defaults on a missing key', () => {
     expect(loadConcealPrefs(memoryStorage(), false)).toEqual(defaultConcealPrefs(false));
+  });
+
+  it('R15: restores a stored enabled=false and defaults missing field to true', () => {
+    const off = { ...defaultConcealPrefs(false), enabled: false };
+    const storage = memoryStorage({
+      [CONCEAL_PREFS_STORAGE_KEY]: JSON.stringify(off),
+    });
+    expect(loadConcealPrefs(storage, false).enabled).toBe(false);
+
+    // 旧版本存储没有 enabled 字段 → 回 true（行为与升级前一致）。
+    const legacy = { ...off } as Record<string, unknown>;
+    delete legacy.enabled;
+    const legacyStorage = memoryStorage({
+      [CONCEAL_PREFS_STORAGE_KEY]: JSON.stringify(legacy),
+    });
+    expect(loadConcealPrefs(legacyStorage, false).enabled).toBe(true);
   });
 
   it('falls back to defaults on corrupt JSON', () => {

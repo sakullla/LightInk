@@ -820,6 +820,8 @@ const concealManageDeps = {
     ...concealStatusLabels(),
     group: i18n.t('conceal.group'),
     groupHint: i18n.t('conceal.groupHint'),
+    enabled: i18n.t('conceal.enabled'),
+    enabledHint: i18n.t('conceal.enabledHint'),
     bossKeyHint: i18n.t('conceal.bossKeyHint'),
     macBossKeyHint: i18n.t('conceal.macBossKeyHint'),
     bossKey1: i18n.t('conceal.bossKey1'),
@@ -869,9 +871,13 @@ const concealManageDeps = {
   update: (update: Partial<ConcealPrefs>) => {
     if (concealController !== null) {
       concealController.applyPrefs(update);
-      return;
+    } else {
+      concealApplyPrefsLocal(update);
     }
-    concealApplyPrefsLocal(update);
+    if (Object.prototype.hasOwnProperty.call(update, 'enabled')) {
+      void applyConcealEnabled(concealPrefsCurrent().enabled);
+    }
+    notifyConcealPrefsRefresh();
   },
   updateBossKeys: (primary: string, secondary: string) =>
     concealController?.updateBossKeys(primary, secondary) ??
@@ -926,6 +932,69 @@ function syncOpenReaderConcealBars(): void {
     if (tab.kind === 'reader') {
       tab.reader.getChrome?.()?.syncConcealBar();
     }
+  }
+}
+
+/**
+ * R15 摸鱼总开关（设置段唯一写入口）：关闭时撤销全部窗口效果、注销老板键、
+ * 摘除托盘，并卸掉阅读器顶栏调节条；开启时按仍保存的偏好重放（效果由
+ * 控制器负责，老板键用已存组合重注册，托盘由后端 conceal_remove_tray 的
+ * 幂等摘除保持不在场——重新建托盘需要重启或保留命令，本轮采用「关闭即
+ * 永久摘除至下次启动」口径）。
+ */
+async function applyConcealEnabled(enabled: boolean): Promise<void> {
+  concealClient.setConcealActive(enabled);
+  concealController?.setEnabled(enabled);
+  for (const tab of manager?.tabList ?? []) {
+    if (tab.kind !== 'reader') {
+      continue;
+    }
+    const chrome = tab.reader.getChrome?.() ?? null;
+    if (chrome === null) {
+      continue;
+    }
+    if (enabled) {
+      attachReaderConcealBar(chrome);
+    } else {
+      chrome.detachConcealBar();
+    }
+  }
+  if (concealController === null) {
+    return; // 浏览器预览：无后端可摘。
+  }
+  if (enabled) {
+    const prefs = concealPrefsCurrent();
+    const registered = await concealClient.registerBossKeys({
+      primary: prefs.bossPrimary,
+      secondary: prefs.bossSecondary,
+    });
+    if (registered.primaryError !== null || registered.secondaryError !== null) {
+      // eslint-disable-next-line no-console
+      console.warn('[lightink/conceal] boss keys not re-registered', registered);
+    }
+    try {
+      await concealClient.ensureTray();
+      concealTrayAvailable = true;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('[lightink/conceal] ensure tray failed', error);
+    }
+    return;
+  }
+  // 关闭路径：先停输入层，再撤窗口效果已由控制器完成；这里注销老板键、
+  // 摘托盘，失败只记日志（开关已关，下次启动不再回摆）。
+  try {
+    await concealClient.unregisterBossKeys();
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[lightink/conceal] unregister boss keys failed', error);
+  }
+  try {
+    await concealClient.removeTray();
+    concealTrayAvailable = false;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[lightink/conceal] remove tray failed', error);
   }
 }
 
@@ -1014,6 +1083,21 @@ async function initConceal(): Promise<void> {
   }
   const status = await concealClient.getStatus();
   concealTrayAvailable = status.trayAvailable;
+  // R15：启动时沿用已存总开关——上次关闭后本次启动不注册老板键、摘除
+  // setup 期已建的托盘，DOM 与窗口效果也不重放（已存偏好原样保留）。
+  concealClient.setConcealActive(concealPrefsInitial.enabled);
+  if (!concealPrefsInitial.enabled) {
+    try {
+      await concealClient.unregisterBossKeys();
+      await concealClient.removeTray();
+      concealTrayAvailable = false;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('[lightink/conceal] startup disable cleanup failed', error);
+    }
+    concealController.init();
+    return;
+  }
   const registered = await concealClient.registerBossKeys({
     primary: concealPrefsInitial.bossPrimary,
     secondary: concealPrefsInitial.bossSecondary,
@@ -3209,7 +3293,7 @@ manager = new TabManager({
     if (
       chrome !== null &&
       shouldAttachReaderConcealBar({
-        concealEnabled: concealClient.isEnabled(),
+        concealEnabled: concealClient.isConcealActive(),
         android: isAndroidApp,
         surface: 'reader',
       })
@@ -4963,7 +5047,7 @@ function installApplicationCloseProtection(): void {
     // 时只提示不收起不退出。浏览器回退路径（isNative=false）不受影响。
     ...(isTauriRuntime() && !isAndroidApp
       ? {
-          closeToTray: () => concealTrayAvailable,
+          closeToTray: () => concealTrayAvailable && concealClient.isConcealActive(),
           hideToTray: () => concealClient.hideToTray().then(() => undefined),
           trayUnavailableNotice: () => {
             void showAppAlert(i18n.t('conceal.trayUnavailable'));

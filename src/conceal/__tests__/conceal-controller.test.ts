@@ -38,6 +38,20 @@ function makeClient(overrides: {
         secondaryError: null,
       };
     },
+    unregisterBossKeys: async () => {
+      calls.push({ cmd: 'conceal_unregister_boss_keys', args: {} });
+      return null;
+    },
+    removeTray: async () => {
+      calls.push({ cmd: 'conceal_remove_tray', args: {} });
+      return null;
+    },
+    ensureTray: async () => {
+      calls.push({ cmd: 'conceal_ensure_tray', args: {} });
+      return null;
+    },
+    isConcealActive: () => true,
+    setConcealActive: () => undefined,
     setAlwaysOnTop: async (enabled) => {
       calls.push({ cmd: 'conceal_set_always_on_top', args: { enabled } });
       const fail = overrides.fail?.('conceal_set_always_on_top');
@@ -919,5 +933,116 @@ describe('conceal controller R5 content opacity preview', () => {
     await h.controller.settled();
     expect(opacityOf(h)).toBe('0.7');
     expect(h.prefs.contentOpacity).toBe(70);
+  });
+});
+
+describe('conceal controller R15 master switch', () => {
+  it('disabling clears every data attribute and calls restoreWindowBaseline without rewriting prefs', async () => {
+    const h = makeHarness({
+      transparentMode: true,
+      alwaysOnTop: true,
+      hideTop: true,
+      clickThrough: true,
+    });
+    h.controller.setSurface('reader');
+    h.controller.handlePointerZone('outside');
+    await h.controller.settled();
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBe('on');
+    expect(h.dom.app.getAttribute('data-conceal-top')).toBe('hidden');
+    const before = h.client.calls.length;
+    const persistBefore = h.persistWrites();
+
+    h.controller.setEnabled(false);
+    await h.controller.settled();
+
+    expect(h.controller.isEnabled()).toBe(false);
+    const calls = h.client.calls.slice(before).map((c) => c.cmd);
+    // 后端 baseline 幂等撤销含穿透轮询在内的全部窗口效果，无残留。
+    expect(calls).toContain('conceal_restore_window_baseline');
+    // R15 不改写任何已存偏好（与 R1 基线失败的 miniWindow 回写不同）。
+    expect(h.persistWrites()).toBe(persistBefore);
+    expect(h.prefs.transparentMode).toBe(true);
+    expect(h.prefs.alwaysOnTop).toBe(true);
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBeNull();
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBeNull();
+    expect(h.dom.html.getAttribute('data-conceal-page-background')).toBeNull();
+    expect(h.dom.app.getAttribute('data-conceal-top')).toBeNull();
+    expect(h.dom.app.getAttribute('data-conceal-body')).toBeNull();
+    expect(h.dom.app.getAttribute('data-conceal-bottom')).toBeNull();
+    expect(h.chrome.setConcealZones).toHaveBeenLastCalledWith('auto', 'auto');
+  });
+
+  it('re-enabling replays saved switches and restores surface attributes', async () => {
+    const h = makeHarness({ alwaysOnTop: true, transparentMode: true });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    h.controller.setEnabled(false);
+    await h.controller.settled();
+    const disabledCalls = h.client.calls.length;
+
+    h.controller.setEnabled(true);
+    await h.controller.settled();
+
+    expect(h.controller.isEnabled()).toBe(true);
+    const replayed = h.client.calls.slice(disabledCalls).map((c) => c.cmd);
+    expect(replayed).toContain('conceal_set_always_on_top');
+    expect(replayed).toContain('conceal_set_transparent');
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBe('reader');
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBe('on');
+  });
+
+  it('disabled controller ignores pointer zones and never reapplies DOM', async () => {
+    const h = makeHarness({ transparentMode: true, hideTop: true });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+    h.controller.setEnabled(false);
+    await h.controller.settled();
+
+    h.controller.handlePointerZone('outside');
+    h.controller.handlePointerMove(10);
+    h.controller.notifyZonesStale();
+    await h.controller.settled();
+
+    expect(h.dom.html.getAttribute('data-conceal-top')).toBeNull();
+    expect(h.dom.app.getAttribute('data-conceal-top')).toBeNull();
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBeNull();
+  });
+
+  it('starting disabled keeps DOM clean even when switches are saved on', async () => {
+    const h = makeHarness({
+      enabled: false,
+      transparentMode: true,
+      alwaysOnTop: true,
+      miniWindow: true,
+    });
+    h.controller.init();
+    await h.controller.settled();
+    expect(h.dom.html.getAttribute('data-conceal-transparent')).toBeNull();
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBeNull();
+    expect(h.client.calls.filter((c) => c.cmd === 'conceal_set_always_on_top')).toHaveLength(0);
+  });
+});
+
+describe('conceal controller R15 applyPrefs enabled field', () => {
+  it('routes enabled flips through setEnabled (baseline on off, replay on on)', async () => {
+    const h = makeHarness({ alwaysOnTop: true });
+    h.controller.setSurface('reader');
+    await h.controller.settled();
+
+    h.controller.applyPrefs({ enabled: false });
+    await h.controller.settled();
+    expect(h.controller.isEnabled()).toBe(false);
+    expect(h.prefs.enabled).toBe(false);
+    expect(h.client.calls.map((c) => c.cmd)).toContain('conceal_restore_window_baseline');
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBeNull();
+
+    const before = h.client.calls.length;
+    h.controller.applyPrefs({ enabled: true });
+    await h.controller.settled();
+    expect(h.controller.isEnabled()).toBe(true);
+    expect(
+      h.client.calls.slice(before).map((c) => c.cmd),
+    ).toContain('conceal_set_always_on_top');
+    expect(h.dom.html.getAttribute('data-conceal-surface')).toBe('reader');
   });
 });

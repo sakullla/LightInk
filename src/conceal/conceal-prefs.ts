@@ -22,6 +22,13 @@ export type ConcealBackground =
   | { readonly kind: 'custom'; readonly from: string; readonly to: string };
 
 export interface ConcealPrefs {
+  /**
+   * R15 摸鱼总开关（默认 true；旧存储缺字段回 true，行为与升级前一致）。
+   * false：书架设置段只剩总开关、阅读器顶栏调节条移除、全部窗口效果
+   * （置顶/透明/迷你/穿透/分区隐藏）撤销、老板键注销、托盘摘除——
+   * 已存偏好原样保留，重新打开即恢复。
+   */
+  readonly enabled: boolean;
   /** R2 老板键 1（accelerator 串，修饰键在前 + 恰好一个主键）。 */
   readonly bossPrimary: string;
   /** R2 老板键 2。 */
@@ -115,6 +122,7 @@ export function defaultBossKeys(mac: boolean): { primary: string; secondary: str
 export function defaultConcealPrefs(mac: boolean): ConcealPrefs {
   const boss = defaultBossKeys(mac);
   return {
+    enabled: true,
     bossPrimary: boss.primary,
     bossSecondary: boss.secondary,
     background: { kind: 'theme' },
@@ -173,6 +181,7 @@ export function loadConcealPrefs(
     const parsed = JSON.parse(raw) as Partial<ConcealPrefs>;
     const opacityRaw = parsed.contentOpacity;
     return {
+      enabled: parseBoolean(parsed.enabled, defaults.enabled),
       bossPrimary:
         typeof parsed.bossPrimary === 'string' && isValidHotkeyCombo(parsed.bossPrimary)
           ? parsed.bossPrimary

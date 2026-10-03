@@ -759,6 +759,19 @@ pub fn conceal_register_boss_keys(
     }
 }
 
+/// R15 总开关关闭：注销当前老板键组（unregister_all 幂等；无注册时同样 Ok）。
+#[tauri::command]
+pub fn conceal_unregister_boss_keys(
+    app: AppHandle,
+    state: State<'_, ConcealState>,
+) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| format!("注销组合失败：{e}"))?;
+    *lock(&state.boss) = BossRegistration::default();
+    Ok(())
+}
+
 // ── R8/R6 简单窗口开关命令 ──────────────────────────────────────────
 
 /// R8 置顶：失败返回系统错误文本（前端把开关回 false 并提示）。
@@ -1284,6 +1297,45 @@ pub fn conceal_hide_to_tray(window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 pub fn conceal_restore_from_tray(window: WebviewWindow) -> Result<(), String> {
     restore_window(&window)
+}
+
+/// R15 总开关关闭：摘除托盘图标并广播不可用（幂等；托盘本就不在时同样 Ok）。
+/// 托盘菜单的退出/显隐入口随图标消失而失效，无残留窗口效果。
+#[tauri::command]
+pub fn conceal_remove_tray(app: AppHandle, state: State<'_, ConcealState>) -> Result<(), String> {
+    let _ = app.remove_tray_by_id(TRAY_ID);
+    let status = TrayStatus {
+        available: false,
+        error: None,
+    };
+    *lock(&state.tray) = status.clone();
+    let _ = app.emit_to(MAIN_WINDOW, EVENT_TRAY_STATUS, status.event());
+    Ok(())
+}
+
+/// R15 重新开启：托盘缺位时原地重建（幂等；已存在直接 Ok），结果经
+/// conceal-tray-status 事件与 conceal_get_status 双通道同步给前端。
+#[tauri::command]
+pub fn conceal_ensure_tray(app: AppHandle, state: State<'_, ConcealState>) -> Result<(), String> {
+    if lock(&state.tray).available {
+        return Ok(()); // 已在：幂等
+    }
+    let status = match build_tray(&app) {
+        Ok(()) => TrayStatus {
+            available: true,
+            error: None,
+        },
+        Err(error) => TrayStatus {
+            available: false,
+            error: Some(error),
+        },
+    };
+    *lock(&state.tray) = status.clone();
+    let _ = app.emit_to(MAIN_WINDOW, EVENT_TRAY_STATUS, status.event());
+    match status.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// 启动与托盘状态同步的唯一权威来源。

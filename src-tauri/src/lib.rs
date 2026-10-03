@@ -247,6 +247,8 @@ pub fn run() {
             #[cfg(desktop)]
             conceal::conceal_register_boss_keys,
             #[cfg(desktop)]
+            conceal::conceal_unregister_boss_keys,
+            #[cfg(desktop)]
             conceal::conceal_set_always_on_top,
             #[cfg(desktop)]
             conceal::conceal_set_transparent,
@@ -262,6 +264,10 @@ pub fn run() {
             conceal::conceal_restore_from_tray,
             #[cfg(desktop)]
             conceal::conceal_get_status,
+            #[cfg(desktop)]
+            conceal::conceal_remove_tray,
+            #[cfg(desktop)]
+            conceal::conceal_ensure_tray,
             #[cfg(desktop)]
             conceal::conceal_exit_app,
         ])

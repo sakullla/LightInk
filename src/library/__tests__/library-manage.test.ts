@@ -1492,6 +1492,8 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
   const concealLabels = (): ConcealManageLabels => ({
     group: '摸鱼',
     groupHint: '仅在书架与阅读器界面生效。',
+    enabled: '启用摸鱼模式',
+    enabledHint: '关闭后撤销全部摸鱼效果，重新开启即恢复。',
     bossKeyHint: '全局快捷键注册成功后系统级生效，可能影响其他应用的同名按键，可随时改键。',
     macBossKeyHint: 'macOS 默认使用 Ctrl+Z / Ctrl+X。',
     bossKey1: '老板键（隐藏 / 恢复窗口）',
@@ -1686,6 +1688,34 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
 
     const plain = createLibraryManage(document, manageOptions().options);
     expect(groupTitles(plain.element)).not.toContain('conceal');
+  });
+
+  it('R15 master switch hides the rest of the section and updates prefs', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(
+      document,
+      manageOptions({ conceal: conceal.deps }).options,
+    );
+    const group = manage.element.querySelector<HTMLElement>('[data-manage-group="conceal"]')!;
+    const enabledInput = group.querySelector<HTMLInputElement>('[data-conceal-enabled]')!;
+    const body = group.querySelector<HTMLElement>('.lightink-library-conceal-body')!;
+
+    // 默认开启：总开关勾选、其余控件可见。
+    expect(enabledInput.checked).toBe(true);
+    expect(body.hidden).toBe(false);
+    expect(group.querySelector('[data-conceal-toggle="transparentMode"]')).toBeTruthy();
+
+    // 关闭总开关：其余控件整体隐藏，偏好写回 enabled:false。
+    enabledInput.checked = false;
+    enabledInput.dispatchEvent(new Event('change'));
+    expect(conceal.updates).toContainEqual({ enabled: false });
+    expect(body.hidden).toBe(true);
+
+    // 重新开启：控件恢复，偏好写回 enabled:true。
+    enabledInput.checked = true;
+    enabledInput.dispatchEvent(new Event('change'));
+    expect(conceal.updates).toContainEqual({ enabled: true });
+    expect(body.hidden).toBe(false);
   });
 
   it('shows the global-shortcut impact hint and the macOS Ctrl default note only on mac', () => {

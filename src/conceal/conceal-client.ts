@@ -2,11 +2,12 @@
  * `conceal-client` — 摸鱼后端命令/事件的 typed 前端封装。
  *
  * 契约（与后端 src-tauri/src/conceal.rs 并行编码，字段名一字不差）：
- *   命令：conceal_register_boss_keys / conceal_set_always_on_top /
- *         conceal_set_transparent / conceal_set_mini_window /
- *         conceal_restore_window_baseline / conceal_set_click_through /
- *         conceal_hide_to_tray / conceal_restore_from_tray /
- *         conceal_get_status / conceal_exit_app
+ *   命令：conceal_register_boss_keys / conceal_unregister_boss_keys /
+ *         conceal_set_always_on_top / conceal_set_transparent /
+ *         conceal_set_mini_window / conceal_restore_window_baseline /
+ *         conceal_set_click_through / conceal_hide_to_tray /
+ *         conceal_restore_from_tray / conceal_get_status /
+ *         conceal_remove_tray / conceal_ensure_tray / conceal_exit_app
  *   事件：conceal-quit-requested / conceal-tray-status /
  *         conceal-pointer-zone / conceal-zones-stale
  *
@@ -114,6 +115,12 @@ async function resolveListen(): Promise<ListenLike> {
 export interface ConcealClient {
   /** R2：注册（或改注册）老板键。失败时返回错误串，绝不 reject。 */
   registerBossKeys(payload: { primary: string; secondary: string }): Promise<ConcealBossKeysStatus>;
+  /** R15 总开关关闭：注销当前老板键组（后端幂等，unregister_all）。 */
+  unregisterBossKeys(): Promise<null>;
+  /** R15 总开关关闭：摘除托盘图标（后端幂等）。 */
+  removeTray(): Promise<null>;
+  /** R15 重新开启：托盘缺位时原地重建（后端幂等）。 */
+  ensureTray(): Promise<null>;
   /** R8 置顶；Err → reject（前端回退开关并提示）。 */
   setAlwaysOnTop(enabled: boolean): Promise<null>;
   /** R6 窗口层透明（视觉透明由前端 CSS 承担）。 */
@@ -141,12 +148,20 @@ export interface ConcealClient {
   onZonesStale(handler: () => void): Promise<() => void>;
   /** 当前是否启用（桌面 Tauri 且非 Android）。 */
   isEnabled(): boolean;
+  /** R15 运行期用户总开关（setConcealActive 维护；默认 true）。 */
+  isConcealActive(): boolean;
+  /** R15：通知 client 当前用户总开关（影响 isConcealActive；命令不受门禁）。 */
+  setConcealActive(active: boolean): void;
 }
 
 export function createConcealClient(deps: ConcealClientDeps = {}): ConcealClient {
   const isTauri = deps.isTauri ?? ((): boolean => isTauriRuntime());
   const isAndroid = deps.isAndroid ?? ((): boolean => isAndroidApp);
   const enabled = (): boolean => isTauri() && !isAndroid();
+  // R15 用户总开关：命令仍按平台门禁透传（禁用路径要发 unregister/
+  // removeTray/baseline），仅 isConcealActive 供上层（R14 托盘关闭判定）
+  // 查询；默认 true 与 ConcealPrefs.enabled 默认一致。
+  let concealActive = true;
 
   const invokeFn: InvokeLike =
     deps.invoke ?? ((command, args) => resolveInvoke().then((fn) => fn(command, args)));
@@ -162,6 +177,10 @@ export function createConcealClient(deps: ConcealClientDeps = {}): ConcealClient
 
   return {
     isEnabled: enabled,
+    isConcealActive: () => enabled() && concealActive,
+    setConcealActive(active) {
+      concealActive = active;
+    },
     registerBossKeys: async (payload) => {
       if (!enabled()) {
         return { primary: null, secondary: null, primaryError: null, secondaryError: null };
@@ -176,6 +195,9 @@ export function createConcealClient(deps: ConcealClientDeps = {}): ConcealClient
     },
     setAlwaysOnTop: (on) => run<null>('conceal_set_always_on_top', { enabled: on }),
     setTransparent: (on) => run<null>('conceal_set_transparent', { enabled: on }),
+    unregisterBossKeys: () => run<null>('conceal_unregister_boss_keys', {}),
+    removeTray: () => run<null>('conceal_remove_tray', {}),
+    ensureTray: () => run<null>('conceal_ensure_tray', {}),
     setMiniWindow: (on) => run<null>('conceal_set_mini_window', { enabled: on }),
     restoreWindowBaseline: () => run<null>('conceal_restore_window_baseline', {}),
     setClickThrough: (args) =>
