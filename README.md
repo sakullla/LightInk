@@ -2,6 +2,20 @@
 
 一款轻量的本地电子书阅读器与 Markdown 编辑器 —— 冷启动进入书架封面墙，也可进入 Typora 式单栏所见即所得编辑；集成 OPDS 书库和按需漫画/小说阅读，基于 Tauri v2 + Milkdown 构建。
 
+## 下载
+
+安装包托管在 [GitHub Releases 最新版](https://github.com/sakullla/LightInk/releases/latest)；也可访问[产品主页](https://sakullla.github.io/LightInk/) 查看中英文介绍、各平台安装说明与 macOS Gatekeeper 首次启动指引。
+
+| Windows | macOS | Linux | Android |
+| --- | --- | --- | --- |
+| NSIS / MSI（x64） | DMG（Apple Silicon，macOS 11.0+） | deb / AppImage | APK（ARM64-v8a） |
+
+![书架封面墙](website/assets/shelf-warm-light-1280.png)
+
+![Markdown 编辑器](website/assets/editor-warm-light-1280.png)
+
+![阅读视图](website/assets/reader-warm-light-1280.png)
+
 ## 特性
 
 - **所见即所得**：单栏渲染态编辑，光标进入元素才显示源码
@@ -98,7 +112,7 @@ npm run tauri:build
 
 ### macOS / Linux
 
-`src-tauri/tauri.conf.json` 已包含 `bundle.macOS`（minimumSystemVersion 10.15）与 `bundle.linux`（deb/appimage 依赖声明）配置，`bundle.targets` 为 `all`。推送 tag 后 GitHub Actions 会在三平台并行构建；本地手动构建需在对应平台执行 `npm run tauri:build`（Rust 不支持交叉编译 GUI 应用）。
+`src-tauri/tauri.conf.json` 已包含 `bundle.macOS`（minimumSystemVersion 11.0）与 `bundle.linux`（deb/appimage 依赖声明）配置，`bundle.targets` 为 `all`。推送 tag 后 GitHub Actions 会在三平台并行构建；本地手动构建需在对应平台执行 `npm run tauri:build`（Rust 不支持交叉编译 GUI 应用）。
 
 macOS 包使用 Tauri 的显式 ad-hoc 签名（`bundle.macOS.signingIdentity: "-"`），无需 Apple 证书。CI 会用 `codesign` 校验整个 `.app` 的签名完整性，避免只依赖 Apple Silicon 链接器为单个可执行文件生成的临时签名。
 
