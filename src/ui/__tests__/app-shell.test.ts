@@ -18,7 +18,9 @@ import {
   type ReaderTypography,
 } from '../../reader/reader-typography.js';
 import type { BuiltinThemeId } from '../../theme/theme-service.js';
+import { OPEN_ABOUT_EVENT } from '../about-dialog.js';
 import { FONT_SCALE_STORAGE_KEY } from '../font-scale.js';
+import { OPEN_HELP_GUIDE_EVENT } from '../help-guide.js';
 import {
   abbreviatePath,
   buildMenus,
@@ -1328,6 +1330,47 @@ describe('buildMenus 生产结构', () => {
     expect(doc.documentElement.classList.contains('is-paginated')).toBe(false);
     expect(store['lightink.reader.flow.layout']).toBe('paginated');
     shell.destroy();
+  });
+
+  it('R2：帮助菜单含 使用指南/快捷键速查/关于 + 语言切换（zh/en 标签齐备）', () => {
+    for (const locale of ['en', 'zh-CN'] as const) {
+      const help = buildMenus({
+        ...stubActions(),
+        getLocale: () => locale,
+        t: (key: MessageKey) => translate(locale, key),
+      }).find((m) => m.id === 'help');
+      const ids = help?.items.filter((i) => i.separator !== true).map((i) => i.id);
+      expect(ids).toEqual([
+        'help-onboarding',
+        'help-guide',
+        'help-cheatsheet',
+        'help-about',
+        'help-lang-en',
+        'help-lang-zh',
+      ]);
+      const labelOf = (id: string): string => {
+        const item = help?.items.find((i) => i.id === id);
+        return typeof item?.label === 'function' ? item.label() : String(item?.label);
+      };
+      expect(labelOf('help-guide')).toBe(translate(locale, 'help.guide'));
+      expect(labelOf('help-guide')).toMatch(locale === 'zh-CN' ? /使用指南/ : /Usage Guide/);
+      expect(labelOf('help-about')).toBe(translate(locale, 'help.about'));
+      expect(labelOf('help-about')).toMatch(locale === 'zh-CN' ? /^关于$/ : /^About$/);
+      // 快捷键速查与语言切换保留（R2 不回退既有入口）。
+      expect(labelOf('help-cheatsheet')).toBe(translate(locale, 'help.cheatsheet'));
+    }
+  });
+
+  it('R2：使用指南/关于菜单项派发 document 事件（对话框由 main.ts 挂载）', () => {
+    const doc = installFakeDocument();
+    const seen: string[] = [];
+    doc.addEventListener(OPEN_HELP_GUIDE_EVENT, () => seen.push(OPEN_HELP_GUIDE_EVENT));
+    doc.addEventListener(OPEN_ABOUT_EVENT, () => seen.push(OPEN_ABOUT_EVENT));
+    const help = buildMenus(stubActions()).find((m) => m.id === 'help');
+    help?.items.find((i) => i.id === 'help-guide')!.action();
+    help?.items.find((i) => i.id === 'help-about')!.action();
+    expect(seen).toEqual([OPEN_HELP_GUIDE_EVENT, OPEN_ABOUT_EVENT]);
+    restoreDocument();
   });
 });
 

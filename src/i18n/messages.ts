@@ -615,6 +615,34 @@ const en = {
 
   'help.cheatsheet': 'Keyboard Shortcuts',
   'help.onboarding': 'Getting Started',
+  'help.guide': 'Usage Guide',
+  'help.about': 'About',
+  'help.guide.title': 'LightInk Usage Guide',
+  'help.guide.intro':
+    'A quick tour of the core tasks: import books, add sources, set up the AI assistant, sync over WebDAV, read discreetly, and export.',
+  'help.guide.import.title': 'Import local books',
+  'help.guide.import.body':
+    'From the shelf, choose “Import local books” to add EPUB, CBZ, PDF, or TXT files. Imported books show up on the shelf and open in the reader; reading progress and bookmarks are kept per book.',
+  'help.guide.sources.title': 'Add OPDS / custom sources',
+  'help.guide.sources.body':
+    'Open the Sources page of the library to add OPDS or WebDAV catalogs, or import rule-based custom book sources. Browse and search a catalog, then download books to the shelf for offline reading.',
+  'help.guide.ai.title': 'Set up the AI assistant',
+  'help.guide.ai.body':
+    'Open the assistant panel or the Manage page AI group to run the guided setup: pick a provider preset, enter the API key (stored only in the system keychain), test the connection, and save. Once configured, you can ask about chapters, summarize, translate a selection, or translate a whole book from the cover menu.',
+  'help.guide.sync.title': 'Sync over WebDAV',
+  'help.guide.sync.body':
+    'Choose File → “WebDAV sync…”, enter your server and account, then test and save. In the editor, “Add to sync space” keeps documents in sync across devices; application state follows along, and conflicts open a side-by-side resolution panel.',
+  'help.guide.stealth.title': 'Stealth (moyu) mode',
+  'help.guide.stealth.body':
+    'Enable stealth mode on the Manage page. The boss key hides or restores the window system-wide, the exit shortcut leaves quickly, and scenes such as “Hide on leave” or “Floating read” keep the shelf and reader discreet.',
+  'help.guide.export.title': 'Export HTML / PDF',
+  'help.guide.export.body':
+    'In the editor, use File → “Export HTML…” or “Export PDF…” for the current document. In the reader, use “Export annotations” in the annotation panel to save your notes.',
+  'about.title': 'About LightInk',
+  'about.version': 'Version',
+  'about.license': 'License',
+  'about.repository': 'Project home',
+  'about.copyHint': 'Click to copy',
   'dialog.close': 'Close',
   'dialog.open': 'Open',
   'dialog.ok': 'OK',
@@ -1473,6 +1501,34 @@ const zhCN = {
 
   'help.cheatsheet': '快捷键速查',
   'help.onboarding': '上手引导',
+  'help.guide': '使用指南',
+  'help.about': '关于',
+  'help.guide.title': '轻墨使用指南',
+  'help.guide.intro':
+    '核心任务一页速览：导入书籍、添加书源、配置 AI 助手、WebDAV 同步、摸鱼模式与导出。',
+  'help.guide.import.title': '导入本地书籍',
+  'help.guide.import.body':
+    '在书架点「导入本地书籍」，选择 EPUB / CBZ / PDF / TXT 文件加入书库；导入后从书架打开阅读，进度与书签按书保留。',
+  'help.guide.sources.title': '添加 OPDS / 自定义书源',
+  'help.guide.sources.body':
+    '打开书库的「源」页添加 OPDS 或 WebDAV 目录，也可导入规则自定义书源；浏览、搜索目录后下载整本到书架离线阅读。',
+  'help.guide.ai.title': '配置 AI 助手',
+  'help.guide.ai.body':
+    '打开助手面板或管理页的「AI」分组运行引导式配置：选择服务商预设、填写 API key（仅存系统钥匙串）、测试连接后保存。配置后可进行章节问答与摘要、划线翻译，也可从封面菜单发起整本翻译。',
+  'help.guide.sync.title': 'WebDAV 同步',
+  'help.guide.sync.body':
+    '文件 →「WebDAV 同步…」填写服务器与账号，测试连接后保存；编辑器内「加入同步空间」的文档随同步在多设备间保持一致，应用状态一并跟随，冲突进入对照面板处理。',
+  'help.guide.stealth.title': '摸鱼（隐身）模式',
+  'help.guide.stealth.body':
+    '在管理页启用摸鱼模式：老板键全局一键隐藏/恢复窗口，退出快捷键随时离开；「离开即隐」「悬浮阅读」等场景让书架与阅读器保持低调。',
+  'help.guide.export.title': '导出 HTML / PDF',
+  'help.guide.export.body':
+    '编辑器中用 文件 →「导出 HTML…」「导出 PDF…」导出当前文档；阅读器内可通过标注面板「导出标注」保存笔记。',
+  'about.title': '关于轻墨',
+  'about.version': '版本',
+  'about.license': '开源许可',
+  'about.repository': '项目主页',
+  'about.copyHint': '点击复制',
   'dialog.close': '关闭',
   'dialog.open': '打开',
   'dialog.ok': '确定',

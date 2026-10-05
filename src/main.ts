@@ -274,6 +274,18 @@ import { showSyncPanel, SYNC_ERROR_TITLES } from './sync/sync-panel.js';
 import { friendlyError } from './ui/friendly-error.js';
 import { showToast, type ToastKind } from './ui/toast.js';
 import {
+  OPEN_HELP_GUIDE_EVENT,
+  buildHelpGuideLabels,
+  openHelpGuide,
+  type HelpGuideHandle,
+} from './ui/help-guide.js';
+import {
+  OPEN_ABOUT_EVENT,
+  buildAboutDialogLabels,
+  openAboutDialog,
+  type AboutDialogHandle,
+} from './ui/about-dialog.js';
+import {
   createBoundVersionActions,
   showVersionsModal,
   type VersionMeta,
@@ -282,6 +294,7 @@ import './theme/tokens.css';
 import './theme/prose.css';
 import './ui/theme.css';
 import './ui/toast.css';
+import './ui/help-guide.css';
 import './ui/window-titlebar.css';
 import './library/library.css';
 import './conceal/conceal.css';
@@ -507,6 +520,9 @@ function refreshLocalizedSurfaces(revealMenu = false): void {
   if (revealMenu) shell?.revealMenu();
   outline?.retranslate();
   libraryView?.retranslate();
+  // R2：帮助菜单打开中的指南/关于对话框随语言切换重渲染（已关闭则空操作）。
+  helpGuideDialog?.retranslate();
+  aboutDialog?.retranslate();
   syncOpenReaderConcealBars();
   statusBar?.refresh(getActiveStatusSnapshot);
   const tab = manager?.activeTab ?? null;
@@ -3995,6 +4011,26 @@ document.addEventListener('lightink:open-manage', () => {
 document.addEventListener(OPEN_ONBOARDING_EVENT, () => {
   workspace.returnToShelf();
   ensureLibraryView().openOnboarding();
+});
+
+// R2：帮助菜单「使用指南」/「关于」——由 app-shell 派发事件，main 统一以
+// i18n labels 挂载（离线内容，messages.ts 单一来源）；重复打开替换旧实例，
+// 语言切换经 refreshLocalizedSurfaces 的 retranslate 覆盖。
+let helpGuideDialog: HelpGuideHandle | null = null;
+document.addEventListener(OPEN_HELP_GUIDE_EVENT, () => {
+  helpGuideDialog?.destroy();
+  helpGuideDialog = openHelpGuide(document, {
+    labels: () => buildHelpGuideLabels((key, vars) => i18n.t(key, vars)),
+  });
+});
+
+let aboutDialog: AboutDialogHandle | null = null;
+document.addEventListener(OPEN_ABOUT_EVENT, () => {
+  aboutDialog?.destroy();
+  aboutDialog = openAboutDialog(document, {
+    labels: () => buildAboutDialogLabels((key, vars) => i18n.t(key, vars)),
+    locale: i18n.locale,
+  });
 });
 
 // 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。

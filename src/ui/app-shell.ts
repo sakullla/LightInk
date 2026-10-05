@@ -4,7 +4,8 @@
  *
  * 顶部为下拉菜单（文件/编辑/插入/视图/帮助），菜单项标注快捷键。
  * 插入菜单与斜杠命令共用 `insert-commands` 元素目录。
- * 帮助菜单的快捷键速查动态读取快捷键注册表。
+ * 帮助菜单的快捷键速查动态读取快捷键注册表；使用指南/关于经 document
+ * 事件交 main.ts 挂载对话框（同上手引导先例）。
  */
 
 import type { InsertElementId } from '../editor/insert-commands.js';
@@ -38,6 +39,7 @@ import {
   type ReaderTypography,
 } from '../reader/reader-typography.js';
 import { BUILTIN_THEMES, type BuiltinThemeId } from '../theme/theme-service.js';
+import { OPEN_ABOUT_EVENT } from './about-dialog.js';
 import { createChromeController, type ChromeController } from './chrome-controller.js';
 import {
   loadChromePinPrefs,
@@ -47,6 +49,7 @@ import {
 } from './chrome-prefs.js';
 import { DEFAULT_FONT_SCALE, formatFontScaleLabel } from './font-scale.js';
 import { renderCheatsheet, type CheatBinding } from './help-cheatsheet.js';
+import { OPEN_HELP_GUIDE_EVENT } from './help-guide.js';
 import { createMenuBar, type Menu, type MenuItem } from './menus.js';
 import { labelModal, mountModalFocus } from './modal-focus.js';
 import { matchEvent } from './shortcuts.js';
@@ -1056,7 +1059,16 @@ export function buildMenus(actions: AppShellActions): Menu[] {
           if (typeof document === 'undefined') return;
           document.dispatchEvent(new CustomEvent(OPEN_ONBOARDING_EVENT));
         }),
+        // R2：使用指南 / 关于（标签走 messages.ts；事件由 main.ts 监听挂载对话框）。
+        menuItem('help-guide', () => t('help.guide'), () => {
+          if (typeof document === 'undefined') return;
+          document.dispatchEvent(new CustomEvent(OPEN_HELP_GUIDE_EVENT));
+        }),
         menuItem('help-cheatsheet', () => t('help.cheatsheet'), () => undefined),
+        menuItem('help-about', () => t('help.about'), () => {
+          if (typeof document === 'undefined') return;
+          document.dispatchEvent(new CustomEvent(OPEN_ABOUT_EVENT));
+        }),
         separator('help-lang-sep'),
         menuItem(
           'help-lang-en',
