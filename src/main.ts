@@ -228,7 +228,7 @@ import {
 } from './ui/window-chrome.js';
 import { formatDocumentTitle } from './ui/window-title.js';
 import { readerTabToReveal } from './tabs/reader-tab-reveal.js';
-import { installWindowCloseProtection } from './ui/window-lifecycle.js';
+import { installWindowCloseProtection, type CloseToTrayDecision } from './ui/window-lifecycle.js';
 import { libraryClient, type ManagedItemLocation } from './library/library-client.js';
 import {
   bindLibraryProgress,
@@ -865,6 +865,8 @@ const concealManageDeps = {
     miniWindow: i18n.t('conceal.miniWindow'),
     clickThrough: i18n.t('conceal.clickThrough'),
     clickThroughHint: i18n.t('conceal.clickThroughHint'),
+    runInBackground: i18n.t('conceal.runInBackground'),
+    runInBackgroundHint: i18n.t('conceal.runInBackgroundHint'),
   }),
   isMac: concealMac,
   getPrefs: concealPrefsCurrent,
@@ -5044,11 +5046,17 @@ function installApplicationCloseProtection(): void {
     },
     closeAllTabs: (action) => manager.closeAllTabs(action),
     flushDirtySnapshots: () => manager.flushDirtySnapshots(),
-    // R14：桌面托盘常驻——点关闭收起到托盘（脏文档也不弹确认）；托盘不可用
-    // 时只提示不收起不退出。浏览器回退路径（isNative=false）不受影响。
+    // R14：后台运行为摸鱼配置项（默认关闭）——开启后点关闭收起到托盘（脏文档
+    // 也不弹确认），托盘不可用时只提示不收起不退出；未开启（null）走原有
+    // 退出确认。浏览器回退路径（isNative=false）不受影响。
     ...(isTauriRuntime() && !isAndroidApp
       ? {
-          closeToTray: () => concealTrayAvailable && concealClient.isConcealActive(),
+          closeToTray: (): CloseToTrayDecision => {
+            if (!concealPrefsCurrent().runInBackground || !concealClient.isConcealActive()) {
+              return null;
+            }
+            return concealTrayAvailable ? 'tray' : 'tray-unavailable';
+          },
           hideToTray: () => concealClient.hideToTray().then(() => undefined),
           trayUnavailableNotice: () => {
             void showAppAlert(i18n.t('conceal.trayUnavailable'));

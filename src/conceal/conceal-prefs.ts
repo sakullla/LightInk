@@ -49,6 +49,11 @@ export interface ConcealPrefs {
   readonly miniWindow: boolean;
   /** R13 点击穿透（依赖透明模式才生效）。 */
   readonly clickThrough: boolean;
+  /**
+   * 后台运行（默认 false）：点关闭收起到托盘继续运行，而非走退出确认。
+   * 不参与场景匹配——场景只描述窗口效果，关闭行为独立保留。
+   */
+  readonly runInBackground: boolean;
 }
 
 export const CONCEAL_PREFS_STORAGE_KEY = 'lightink.conceal.prefs';
@@ -134,6 +139,7 @@ export function defaultConcealPrefs(mac: boolean): ConcealPrefs {
     alwaysOnTop: false,
     miniWindow: false,
     clickThrough: false,
+    runInBackground: false,
   };
 }
 
@@ -202,6 +208,7 @@ export function loadConcealPrefs(
       alwaysOnTop: parseBoolean(parsed.alwaysOnTop, defaults.alwaysOnTop),
       miniWindow: parseBoolean(parsed.miniWindow, defaults.miniWindow),
       clickThrough: parseBoolean(parsed.clickThrough, defaults.clickThrough),
+      runInBackground: parseBoolean(parsed.runInBackground, defaults.runInBackground),
     };
   } catch {
     return defaults;

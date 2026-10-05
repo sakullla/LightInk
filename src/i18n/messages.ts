@@ -793,6 +793,9 @@ const en = {
   'conceal.clickThrough': 'Click-through',
   'conceal.clickThroughHint':
     'Requires transparent mode; clicks on the visible bars still land in LightInk.',
+  'conceal.runInBackground': 'Run in background',
+  'conceal.runInBackgroundHint':
+    'Closing the window hides LightInk to the tray instead of quitting; reopen it from the tray, and quit via the tray menu or the exit shortcut.',
   'conceal.alwaysOnTopFailed': 'Always-on-top was refused; the switch is back off. {reason}',
   'conceal.miniWindowFailed': 'Mini window failed; the switch is back off. {reason}',
   'conceal.transparentFailed': 'Transparent mode failed; the switch is back off. {reason}',
@@ -1560,6 +1563,9 @@ const zhCN = {
   'conceal.miniWindow': '迷你窗口',
   'conceal.clickThrough': '点击穿透',
   'conceal.clickThroughHint': '需开启透明模式；可见顶栏、底栏按钮的点击仍由轻墨接收。',
+  'conceal.runInBackground': '后台运行',
+  'conceal.runInBackgroundHint':
+    '关闭窗口时收起到托盘继续运行，不再弹出退出确认；从托盘点按恢复窗口，用托盘菜单或退出快捷键退出。',
   'conceal.alwaysOnTopFailed': '置顶被系统拒绝，开关已回退。{reason}',
   'conceal.miniWindowFailed': '迷你窗口失败，开关已回退。{reason}',
   'conceal.transparentFailed': '透明模式失败，开关已回退。{reason}',

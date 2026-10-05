@@ -171,7 +171,7 @@ describe('R14 tray-first close path', () => {
       closeAllTabs,
       flushDirtySnapshots: vi.fn(),
       closeWindow: vi.fn(async () => undefined),
-      closeToTray: () => true,
+      closeToTray: () => 'tray',
       hideToTray,
     });
     const event = closeEvent();
@@ -195,7 +195,7 @@ describe('R14 tray-first close path', () => {
       closeAllTabs: vi.fn(),
       flushDirtySnapshots: vi.fn(),
       closeWindow: vi.fn(async () => undefined),
-      closeToTray: () => true,
+      closeToTray: () => 'tray',
       hideToTray,
     });
     const event = closeEvent();
@@ -208,6 +208,33 @@ describe('R14 tray-first close path', () => {
     expect(hideToTray).toHaveBeenCalledOnce();
   });
 
+  it('returns to the legacy exit flow when run-in-background is off', async () => {
+    const confirmExit = vi.fn(async () => 'cancel' as const);
+    const hideToTray = vi.fn(async () => undefined);
+    const trayUnavailableNotice = vi.fn();
+    const guard = createWindowCloseGuard({
+      hasUnsavedChanges: () => true,
+      confirmExit,
+      closeAllTabs: vi.fn(async () => false),
+      flushDirtySnapshots: vi.fn(),
+      closeWindow: vi.fn(async () => undefined),
+      closeToTray: () => null,
+      hideToTray,
+      trayUnavailableNotice,
+    });
+    const event = closeEvent();
+
+    const pending = guard.handleCloseRequested(event);
+    await Promise.resolve();
+    await pending;
+
+    // 后台运行未开启：不收起、不提示托盘，回到退出确认（含脏文档路径）。
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(hideToTray).not.toHaveBeenCalled();
+    expect(trayUnavailableNotice).not.toHaveBeenCalled();
+    expect(confirmExit).toHaveBeenCalledOnce();
+  });
+
   it('keeps the window visible and notifies when the tray is unavailable', async () => {
     const hideToTray = vi.fn(async () => undefined);
     const trayUnavailableNotice = vi.fn();
@@ -218,7 +245,7 @@ describe('R14 tray-first close path', () => {
       closeAllTabs: vi.fn(async () => false),
       flushDirtySnapshots: vi.fn(),
       closeWindow: vi.fn(async () => undefined),
-      closeToTray: () => false,
+      closeToTray: () => 'tray-unavailable',
       hideToTray,
       trayUnavailableNotice,
     });
@@ -243,7 +270,7 @@ describe('R14 tray-first close path', () => {
       closeAllTabs: vi.fn(),
       flushDirtySnapshots: vi.fn(),
       closeWindow: vi.fn(async () => undefined),
-      closeToTray: () => true,
+      closeToTray: () => 'tray',
       hideToTray: vi.fn(async () => {
         throw new Error('tray gone');
       }),

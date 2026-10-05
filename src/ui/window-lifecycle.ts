@@ -8,6 +8,9 @@ export interface BeforeUnloadEventLike extends CloseRequestEventLike {
   returnValue: string;
 }
 
+/** R14 关闭决策：'tray' 收起到托盘；'tray-unavailable' 提示并保持打开；null 走原有退出流程。 */
+export type CloseToTrayDecision = 'tray' | 'tray-unavailable' | null;
+
 export interface WindowCloseGuardDeps {
   hasUnsavedChanges(): boolean;
   confirmExit(): Promise<ExitChoice>;
@@ -18,10 +21,12 @@ export interface WindowCloseGuardDeps {
   shutdown?(): void;
   reportError?: (error: unknown) => void;
   /**
-   * R14：托盘是否可用（conceal_get_status 缓存）。提供时点关闭一律收起到
-   * 托盘——含脏文档也不弹确认（进度/未保存编辑/界面全保留，进程不退）。
+   * R14：后台运行决策。'tray'：收起到托盘——含脏文档也不弹确认（进度/
+   * 未保存编辑/界面全保留，进程不退）；'tray-unavailable'：已开启后台运行
+   * 但托盘不可用，提示且不收起不退出；null：后台运行未开启（或非桌面），
+   * 走原有退出确认流程。
    */
-  closeToTray?(): boolean;
+  closeToTray?(): CloseToTrayDecision;
   /** R14：收起到托盘（conceal_hide_to_tray 封装）。 */
   hideToTray?(): Promise<void>;
   /** R14：托盘不可用时的一次性提示（关闭按钮既不收起也不退出）。 */
@@ -91,18 +96,21 @@ export function createWindowCloseGuard(deps: WindowCloseGuardDeps): WindowCloseG
 
   return {
     handleCloseRequested(event) {
-      // R14 首判托盘路径：可用→preventDefault + 收起到托盘（脏文档也不弹
-      // 确认）；不可用→preventDefault + 提示，不走退出确认/销毁（退出经
-      // File 菜单/老板键 2）。浏览器回退路径（closeToTray 未接线）不变。
-      if (deps.closeToTray !== undefined) {
+      // R14 首判托盘路径：'tray'→preventDefault + 收起到托盘（脏文档也不弹
+      // 确认）；'tray-unavailable'→preventDefault + 提示，不走退出确认/销毁
+      // （退出经 File 菜单/老板键 2）；null→后台运行未开启，回落原有退出
+      // 确认流程。浏览器回退路径（closeToTray 未接线）不变。
+      const trayDecision = deps.closeToTray?.() ?? null;
+      if (trayDecision === 'tray') {
         event.preventDefault();
-        if (deps.closeToTray()) {
-          void deps
-            .hideToTray?.()
-            .then(() => undefined)
-            .catch(reportError);
-          return null;
-        }
+        void deps
+          .hideToTray?.()
+          .then(() => undefined)
+          .catch(reportError);
+        return null;
+      }
+      if (trayDecision === 'tray-unavailable') {
+        event.preventDefault();
         deps.trayUnavailableNotice?.();
         return null;
       }

@@ -1537,6 +1537,8 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     miniWindow: '迷你窗口',
     clickThrough: '点击穿透',
     clickThroughHint: '需开启透明模式。',
+    runInBackground: '后台运行',
+    runInBackgroundHint: '关闭窗口时收起到托盘继续运行。',
     sceneNormalResult:
       '页面回到主题背景；窗口不透明；正文完全不透明；鼠标离开时不隐藏顶栏、正文或底栏；不置顶；不是迷你窗口；点击不穿透。',
     sceneHideOnLeaveResult:
@@ -1783,7 +1785,7 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     const conceal = concealDeps();
     const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
     const toggles = manage.element.querySelectorAll<HTMLInputElement>('[data-conceal-toggle]');
-    expect(toggles.length).toBe(7);
+    expect(toggles.length).toBe(8);
 
     const transparent = [...toggles].find((t) => t.dataset.concealToggle === 'transparentMode')!;
     transparent.checked = true;
@@ -1828,6 +1830,29 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     )!;
     expect(reason.hidden).toBe(false);
     expect(reason.textContent).toContain('没有生效');
+  });
+
+  it('后台运行: renders off by default in the exit group and updates through update()', () => {
+    const conceal = concealDeps();
+    const manage = createLibraryManage(document, manageOptions({ conceal: conceal.deps }).options);
+    const toggle = manage.element.querySelector<HTMLInputElement>(
+      '[data-conceal-toggle="runInBackground"]',
+    )!;
+    // 默认不启用；开关位于「退出」子组。
+    expect(toggle.checked).toBe(false);
+    expect(toggle.closest('[data-conceal-group="exit"]')).not.toBeNull();
+    // 关闭状态下不显示行为提示。
+    const reason = manage.element.querySelector<HTMLElement>(
+      '[data-conceal-switch-reason="runInBackground"]',
+    )!;
+    expect(reason.hidden).toBe(true);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(conceal.updates).toContainEqual({ runInBackground: true });
+    // 开启后贴出行为提示（收起到托盘而非退出）。
+    expect(reason.hidden).toBe(false);
+    expect(reason.textContent).toContain('托盘');
   });
 
   it('out-of-range opacity is not saved and falls back to the effective value (R6)', () => {

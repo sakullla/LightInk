@@ -55,6 +55,8 @@ describe('conceal prefs defaults (R2/R5/R6/R7/R8/R9/R13)', () => {
     expect(prefs.alwaysOnTop).toBe(false);
     expect(prefs.miniWindow).toBe(false);
     expect(prefs.clickThrough).toBe(false);
+    // 后台运行默认关闭：点关闭走原有退出流程，不收起到托盘。
+    expect(prefs.runInBackground).toBe(false);
   });
 });
 
@@ -195,6 +197,22 @@ describe('save → load round trip (R10)', () => {
       [CONCEAL_PREFS_STORAGE_KEY]: JSON.stringify(legacy),
     });
     expect(loadConcealPrefs(legacyStorage, false).enabled).toBe(true);
+  });
+
+  it('后台运行: restores a stored true and defaults a missing field to false', () => {
+    const on = { ...defaultConcealPrefs(false), runInBackground: true };
+    const storage = memoryStorage({
+      [CONCEAL_PREFS_STORAGE_KEY]: JSON.stringify(on),
+    });
+    expect(loadConcealPrefs(storage, false).runInBackground).toBe(true);
+
+    // 旧版本存储没有 runInBackground 字段 → 回 false（默认不后台运行）。
+    const legacy = { ...on } as Record<string, unknown>;
+    delete legacy.runInBackground;
+    const legacyStorage = memoryStorage({
+      [CONCEAL_PREFS_STORAGE_KEY]: JSON.stringify(legacy),
+    });
+    expect(loadConcealPrefs(legacyStorage, false).runInBackground).toBe(false);
   });
 
   it('falls back to defaults on corrupt JSON', () => {
@@ -358,6 +376,13 @@ describe('conceal scenes (R1)', () => {
     for (const scene of CONCEAL_SCENE_CHOICES) {
       const applied = applyConcealScene(seed, scene);
       expect(concealSceneOf({ ...applied, bossPrimary: 'Alt+P', bossSecondary: 'Alt+Q' })).toBe(scene);
+    }
+  });
+
+  it('ignores runInBackground when deriving the scene', () => {
+    for (const scene of CONCEAL_SCENE_CHOICES) {
+      const applied = applyConcealScene(seed, scene);
+      expect(concealSceneOf({ ...applied, runInBackground: true })).toBe(scene);
     }
   });
 

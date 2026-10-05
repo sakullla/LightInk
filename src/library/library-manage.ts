@@ -93,6 +93,9 @@ export interface ConcealManageLabels extends ConcealSceneResultLabels, ConcealEf
   readonly miniWindow: string;
   readonly clickThrough: string;
   readonly clickThroughHint: string;
+  /** 后台运行开关与开启后的行为提示。 */
+  readonly runInBackground: string;
+  readonly runInBackgroundHint: string;
   readonly sceneNormal: string;
   readonly sceneHideOnLeave: string;
   readonly sceneFloating: string;
@@ -775,6 +778,7 @@ const CONCEAL_TOGGLE_KEYS = [
   'alwaysOnTop',
   'miniWindow',
   'clickThrough',
+  'runInBackground',
 ] as const;
 
 type ConcealToggleKey = (typeof CONCEAL_TOGGLE_KEYS)[number];
@@ -868,6 +872,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
     needsTransparent: '',
     gradientHidden: '',
     clickThroughHint: '',
+    runInBackgroundHint: '',
     exitHint: '',
     scenes: {
       normal: '',
@@ -912,6 +917,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       alwaysOnTop: '',
       miniWindow: '',
       clickThrough: '',
+      runInBackground: '',
     } as Record<ConcealToggleKey, string>,
   };
 
@@ -1320,6 +1326,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
     toggleWrap('clickThrough'),
   );
   exit.append(
+    toggleWrap('runInBackground'),
     exitHint,
     secondaryField.input.closest('.lightink-library-conceal-key-field') ?? secondaryField.input,
   );
@@ -1420,6 +1427,8 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
         error = true;
       } else if (prefKey === 'clickThrough' && prefs.transparentMode) {
         reason = texts.clickThroughHint;
+      } else if (prefKey === 'runInBackground' && prefs.runInBackground) {
+        reason = texts.runInBackgroundHint;
       }
       toggle.reason.hidden = reason === '';
       toggle.reason.textContent = reason;
@@ -1474,6 +1483,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
       texts.needsTransparent = labels.needsTransparent;
       texts.gradientHidden = labels.gradientHidden;
       texts.clickThroughHint = labels.clickThroughHint;
+      texts.runInBackgroundHint = labels.runInBackgroundHint;
       texts.exitHint = labels.exitHint;
       texts.scenes = {
         normal: labels.sceneNormal,
@@ -1518,6 +1528,7 @@ function mountConcealSection(doc: Document, deps: ConcealManageDeps): ConcealSec
         alwaysOnTop: labels.alwaysOnTop,
         miniWindow: labels.miniWindow,
         clickThrough: labels.clickThrough,
+        runInBackground: labels.runInBackground,
       };
       hint.textContent = labels.groupHint;
       scenes.setAttribute('aria-label', labels.group);

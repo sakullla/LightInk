@@ -933,6 +933,15 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
       await shot('ai-connection');
     }
     await group(/^AI/).click();
+    // 摸鱼组：后台运行开关位于「退出」子组，默认关闭。
+    await group(/摸鱼|Stealth/).click();
+    await page.waitForTimeout(250);
+    await shot('manage-conceal');
+    const exitHeading = page.locator('[data-conceal-group="exit"] h3').first();
+    await exitHeading.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(150);
+    await shot('manage-conceal-exit');
+    await group(/摸鱼|Stealth/).click();
     // 「其他」分组里是 Markdown 编辑入口，展开后交给下一步。
     await group(/其他|Other/).click();
     await page.waitForTimeout(250);
