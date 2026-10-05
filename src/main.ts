@@ -4029,7 +4029,6 @@ document.addEventListener(OPEN_ABOUT_EVENT, () => {
   aboutDialog?.destroy();
   aboutDialog = openAboutDialog(document, {
     labels: () => buildAboutDialogLabels((key, vars) => i18n.t(key, vars)),
-    locale: i18n.locale,
   });
 });
 

@@ -125,6 +125,12 @@
   font-size: 11.5px;
 }
 
+/* 复制成功的内联反馈：短暂高亮（toast 分层低于模态遮罩，不能用于本对话框）。 */
+.lightink-about-copy-hint[data-about-copy-state='copied'] {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
 .lightink-about-footer {
   justify-content: flex-end;
 }
