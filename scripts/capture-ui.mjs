@@ -9,6 +9,14 @@
  *   LIGHTINK_CAPTURE_AI=1 node scripts/capture-ui.mjs
  * AI 模式使用内存配置、模拟流式回复与翻译，不读取密钥、不访问 AI 服务。
  *
+ * 默认矩阵还覆盖：首次运行引导（onboarding 场景在独立页面清除完成标记，
+ * 验证首跑自动弹出、跳过写标记与帮助菜单重开）、帮助菜单 / 使用指南 /
+ * 关于对话框、错误 toast（含「技术详情」展开）、未配置整本翻译入口徽标与
+ * AI 配置向导（preset → key → test → save 全程，保存后入口转正的刷新）。
+ * 向导与未配置入口场景只在未配置（非 LIGHTINK_CAPTURE_AI）时运行：AI 模式
+ * 下这些入口转为已配置翻译流程，由既有 ai:* 场景覆盖；AI 模式仍沿用独立
+ * LIGHTINK_CAPTURE_OUT 目录约定。
+ *
  * 书架与阅读器纸张主题独立于编辑器主题：深色编辑器主题（dark / midnight /
  * *-dark）默认截取 ink 书架与 night 纸张，浅色默认 gallery / sepia。可用
  * LIGHTINK_CAPTURE_LIBRARY_THEME 与 LIGHTINK_CAPTURE_READER_THEME 覆盖。
@@ -103,6 +111,39 @@ async function clearStrayModals(page, shot, step) {
       await page.waitForTimeout(150);
     }
   }
+}
+
+/** 统一页面诊断：pageerror 与 console error 过滤（矩阵页与 onboarding 页共用）。 */
+function attachPageDiagnostics(page, theme, width) {
+  page.on('pageerror', (error) => record({ label: 'pageerror', theme, width, error: String(error).slice(0, 300) }));
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    const text = message.text();
+    if (text.includes('favicon') || text.includes('Failed to load resource: the server responded with a status of 404')) return;
+    // 章节 iframe 使用 sandbox srcdoc（不含 allow-scripts），Chromium 会输出该拦截提示。
+    if (text.includes("Blocked script execution in 'about:srcdoc'")) return;
+    // dev server 重启期间的 HMR 重连噪音与页面状态无关。
+    if (text.includes('[vite]') || text.includes('WebSocket connection to')) return;
+    // 首次访问触发的依赖重优化（504 Outdated Optimize Dep）是 dev server 冷启动产物。
+    if (text.includes('Outdated Optimize Dep')) return;
+    record({ label: 'console', theme, width, error: text.slice(0, 300) });
+  });
+}
+
+/** 步骤包装：失败记录 + 遮蔽报告 + 意外弹窗清理（矩阵页与 onboarding 页共用）。 */
+function bindPageSteps(page, shot, theme, width) {
+  return async function step(label, fn) {
+    const started = Date.now();
+    const ok = await attempt(label, fn);
+    if (!ok) {
+      await attempt(`${label}:obstruction`, async () => {
+        record({ label: `${label}:obstruction`, theme, width, ...(await obstructionReport(page)) });
+      });
+    }
+    await clearStrayModals(page, shot, label);
+    console.log(`  · ${label} ${ok ? 'ok' : 'FAIL'} (${Date.now() - started}ms)`);
+    return ok;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +315,7 @@ export function installFixtures({
   libraryTheme,
   readerTheme,
   aiConfigured = false,
+  onboardingDone = true,
 }) {
   const encoder = new TextEncoder();
   const bookBytes = encoder.encode(bookText);
@@ -283,6 +325,8 @@ export function installFixtures({
   const histories = new Map();
   // Capture-only controls; each page gets an isolated in-memory AI session.
   window.__LIGHTINK_CAPTURE_AI__ = { scenario: 'reply' };
+  // 场景按需注入的命令失败（toast 场景）：命中集合的 invoke 直接抛错。
+  window.__LIGHTINK_CAPTURE_FAIL__ = new Set();
 
   localStorage.setItem('lightink.locale', locale);
   if (theme !== undefined && theme !== '') {
@@ -296,6 +340,13 @@ export function installFixtures({
   }
   localStorage.setItem('lightink.statusBar.visible', 'true');
   localStorage.setItem('lightink.chrome.pinned', JSON.stringify({ menu: true, tabs: true }));
+  // 首次运行引导默认视为已完成（warmUp 与基线矩阵不弹引导对话框）；
+  // 专用 onboarding 场景传 onboardingDone=false 显式清除标记触发首跑路径。
+  if (onboardingDone) {
+    localStorage.setItem('lightink.onboarding.done', '1');
+  } else {
+    localStorage.removeItem('lightink.onboarding.done');
+  }
   for (const book of books) {
     if (book.progress !== null) {
       localStorage.setItem(
@@ -351,6 +402,26 @@ export function installFixtures({
     { tagId: 'tag-trip', itemId: 'book-mist' },
   ];
 
+  // 可变 AI 配置状态：向导的 storeKey / saveConfig / forgetKey 与取消回滚都
+  // 经这些命令落态，ai_get_config 始终返回当前值（向导测试步会先落草稿配置
+  // 再试连，取消时回滚到打开向导时的快照）。
+  const AI_ENDPOINT_KINDS_FIXTURE = ['openai-responses', 'openai-chat', 'claude-messages'];
+  const aiDefaults = [{ endpointKind: 'openai-chat', baseUrl: 'https://api.openai.com/v1' }];
+  const aiConfig = {
+    endpointKind: 'openai-chat',
+    baseUrl: aiConfigured ? 'https://ai.example.test/v1' : '',
+    model: aiConfigured ? 'capture-model' : '',
+    allowHttp: false,
+    targetLang: undefined,
+    hasKey: aiConfigured,
+  };
+  const aiStatus = () => {
+    const missing = [];
+    if (aiConfig.baseUrl === '') missing.push('baseUrl');
+    if (aiConfig.model === '') missing.push('model');
+    return { ...aiConfig, configured: missing.length === 0, missing, defaults: aiDefaults };
+  };
+
   const fallback = () => null;
 
   window.__TAURI_INTERNALS__ = {
@@ -375,6 +446,9 @@ export function installFixtures({
       if (callback) callback(data);
     },
     async invoke(command, args = {}) {
+      if (window.__LIGHTINK_CAPTURE_FAIL__.has(command)) {
+        throw new Error('CAPTURE_INJECTED_FAILURE');
+      }
       if (command.startsWith('plugin:event|')) return 1;
       if (command.startsWith('plugin:dialog|open')) return 'C:/Notes/lightink-design.md';
       if (command.startsWith('plugin:dialog|save')) return 'C:/Exports/out.html';
@@ -478,28 +552,36 @@ export function installFixtures({
         case 'create_version':
           return { id: 'v-4', created_at_ms: now };
         case 'ai_get_config':
-          return {
-            endpointKind: 'openai-chat',
-            baseUrl: aiConfigured ? 'https://ai.example.test/v1' : '',
-            model: aiConfigured ? 'capture-model' : '',
-            allowHttp: false,
-            targetLang: undefined,
-            hasKey: aiConfigured,
-            configured: aiConfigured,
-            missing: aiConfigured ? [] : ['baseUrl', 'model'],
-            defaults: [{ endpointKind: 'openai-chat', baseUrl: 'https://api.openai.com/v1' }],
-          };
+          return aiStatus();
+        case 'ai_store_key':
+          if (typeof args.key === 'string' && args.key !== '') aiConfig.hasKey = true;
+          return aiStatus();
+        case 'ai_forget_key':
+          aiConfig.hasKey = false;
+          return aiStatus();
+        case 'ai_save_config': {
+          const input = args.input ?? {};
+          if (AI_ENDPOINT_KINDS_FIXTURE.includes(input.endpointKind)) {
+            aiConfig.endpointKind = input.endpointKind;
+          }
+          aiConfig.baseUrl = typeof input.baseUrl === 'string' ? input.baseUrl : '';
+          aiConfig.model = typeof input.model === 'string' ? input.model : '';
+          aiConfig.allowHttp = input.allowHttp === true;
+          aiConfig.targetLang =
+            typeof input.targetLang === 'string' && input.targetLang !== '' ? input.targetLang : undefined;
+          return aiStatus();
+        }
         case 'ai_test_connection':
           return { latencyMs: 248, reply: 'OK' };
         case 'ai_translate_selection':
-          if (!aiConfigured) throw new Error('AI_NOT_CONFIGURED');
+          if (!aiStatus().configured) throw new Error('AI_NOT_CONFIGURED');
           return {
             text: 'At dusk, the sea was like a sheet of slowly breathing metal. As the tide receded, delicate patterns remained on the shore, carrying away the warmth of the day.',
             targetLang: args.targetLang,
             truncated: false,
           };
         case 'ai_chat_stream': {
-          if (!aiConfigured) throw new Error('AI_NOT_CONFIGURED');
+          if (!aiStatus().configured) throw new Error('AI_NOT_CONFIGURED');
           const scenario = window.__LIGHTINK_CAPTURE_AI__.scenario;
           await new Promise((resolve) => setTimeout(resolve, 450));
           if (scenario === 'error') throw new Error('AI_NETWORK_ERROR');
@@ -641,19 +723,11 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
   const page = await browser.newPage({ viewport: { width, height: 1000 } });
   // 交互失败快速失败，避免一个卡住的点击拖垮整套矩阵。
   page.setDefaultTimeout(6_000);
+  // About 对话框「复制主页地址」依赖 navigator.clipboard：预授权避免无权限
+  // 环境把复制反馈误报为失败（授权失败时静默降级，由复制按钮的兜底路径覆盖）。
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => undefined);
   const shot = (name) => shoot(page, width, theme, name);
-  const step = async (label, fn) => {
-    const started = Date.now();
-    const ok = await attempt(label, fn);
-    if (!ok) {
-      await attempt(`${label}:obstruction`, async () => {
-        record({ label: `${label}:obstruction`, theme, width, ...(await obstructionReport(page)) });
-      });
-    }
-    await clearStrayModals(page, shot, label);
-    console.log(`  · ${label} ${ok ? 'ok' : 'FAIL'} (${Date.now() - started}ms)`);
-    return ok;
-  };
+  const step = bindPageSteps(page, shot, theme, width);
   const openMenu = async (menuId) => {
     await page.keyboard.press('Escape');
     await page.locator(`.lightink-menu-trigger[data-menu-id="${menuId}"]`).click();
@@ -668,19 +742,7 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
       .getAttribute('aria-controls');
     return id === null ? null : `#${id}`;
   };
-  page.on('pageerror', (error) => record({ label: 'pageerror', theme, width, error: String(error).slice(0, 300) }));
-  page.on('console', (message) => {
-    if (message.type() !== 'error') return;
-    const text = message.text();
-    if (text.includes('favicon') || text.includes('Failed to load resource: the server responded with a status of 404')) return;
-    // 章节 iframe 使用 sandbox srcdoc（不含 allow-scripts），Chromium 会输出该拦截提示。
-    if (text.includes("Blocked script execution in 'about:srcdoc'")) return;
-    // dev server 重启期间的 HMR 重连噪音与页面状态无关。
-    if (text.includes('[vite]') || text.includes('WebSocket connection to')) return;
-    // 首次访问触发的依赖重优化（504 Outdated Optimize Dep）是 dev server 冷启动产物。
-    if (text.includes('Outdated Optimize Dep')) return;
-    record({ label: 'console', theme, width, error: text.slice(0, 300) });
-  });
+  attachPageDiagnostics(page, theme, width);
   await page.addInitScript(installFixtures, { ...fixtureArgs, theme, ...fixtureSurfaceThemes(theme) });
 
   // 启动：先出现崩溃恢复确认对话框，再进入书架。
@@ -850,7 +912,8 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(120);
     if ((await page.locator('[role="menu"]:visible').count()) > 0) {
-      await page.mouse.click(width / 2, height - 160);
+      const viewportHeight = (await page.viewportSize())?.height ?? 1000;
+      await page.mouse.click(width / 2, viewportHeight - 160);
       await page.waitForTimeout(150);
     }
   };
@@ -914,6 +977,37 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
       .locator('.lightink-library-membership-overlay:not([hidden])')
       .first()
       .waitFor({ state: 'hidden', timeout: 3_000 });
+  });
+  await step('toast:error', async () => {
+    // R4：注入一次分组重命名失败 → 书库错误走非阻塞 toast（本地化主文案 +
+    // 可展开「技术详情」）。先关分组弹窗再截图：toast 分层低于模态遮罩。
+    await page.evaluate(() => window.__LIGHTINK_CAPTURE_FAIL__.add('library_update_group'));
+    try {
+      await openGroupMenu('group-fiction');
+      const menu = page.locator('[role="menu"]:visible').first();
+      await menu.locator('[role="menuitem"]', { hasText: /重命名分组|Rename group/ }).first().click();
+      const nameInput = page.locator('.lightink-library-group-form input[name="name"]');
+      await nameInput.waitFor();
+      await nameInput.fill('星海');
+      await page.locator('.lightink-library-group-form-actions button').first().click();
+      const toast = page.locator('.lightink-toast-region .lightink-toast--error').first();
+      await toast.waitFor({ timeout: 5_000 });
+      // 失败后分组弹窗保留：显式取消（避免遗留遮罩触发 stray-modal），toast
+      // 有 8s 自动消失窗口，取消动作要快。
+      await page.locator('.lightink-library-group-form-actions button').last().click();
+      await page.locator('.lightink-library-group-modal').first().waitFor({ state: 'hidden', timeout: 3_000 });
+      await shot('toast');
+      const summary = toast.locator('.lightink-toast-detail summary');
+      if ((await summary.count()) > 0 && (await toast.isVisible().catch(() => false))) {
+        await summary.click();
+        await page.waitForTimeout(150);
+        await shot('toast-detail');
+      }
+      const close = toast.locator('.lightink-toast-close');
+      if (await close.isVisible().catch(() => false)) await close.click();
+    } finally {
+      await page.evaluate(() => window.__LIGHTINK_CAPTURE_FAIL__.delete('library_update_group'));
+    }
   });
   await step('shelf:manage', async () => {
     await page.locator('.lightink-library-manage-entry').click();
@@ -1027,6 +1121,43 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await shot('cheatsheet');
     await page.keyboard.press('Escape');
     await page.locator('.lightink-modal-overlay:visible').first().waitFor({ state: 'hidden' });
+  });
+  await step('help:guide', async () => {
+    // R2：帮助菜单新增「使用指南」；指南六类任务章节离线渲染。
+    await openMenu('help');
+    await shot('help-menu');
+    await clickMenuItem('help-guide');
+    const overlay = page.locator('.lightink-help-guide-overlay:visible').first();
+    await overlay.waitFor();
+    const sections = await overlay.locator('[data-help-section]').count();
+    if (sections !== 6) {
+      record({ label: 'help:guide-sections', theme, width, sections });
+    }
+    await shot('help-guide');
+    await page.keyboard.press('Escape');
+    await page.locator('.lightink-help-guide-overlay').first().waitFor({ state: 'hidden', timeout: 3_000 });
+  });
+  await step('help:about', async () => {
+    // R2：「关于」对话框：版本（capture fixture 命中 (dev) 回退）、许可与
+    // 项目主页；点击主页地址走剪贴板复制并给出内联反馈。
+    await openMenu('help');
+    await clickMenuItem('help-about');
+    const overlay = page.locator('.lightink-about-overlay:visible').first();
+    await overlay.waitFor();
+    await page.waitForTimeout(150);
+    await shot('about');
+    await overlay.locator('.lightink-about-repository').click();
+    const copied = await overlay
+      .locator('[data-about-copy-state="copied"]')
+      .waitFor({ timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!copied) {
+      record({ label: 'help:about-copy-feedback', theme, width });
+    }
+    await shot('about-copied');
+    await page.keyboard.press('Escape');
+    await page.locator('.lightink-about-overlay').first().waitFor({ state: 'hidden', timeout: 3_000 });
   });
   await step('editor:versions', async () => {
     await openMenu('file');
@@ -1192,6 +1323,155 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     });
   }
 
+  // R3 未配置补充场景：书架助手未配置引导、整本翻译入口「需先配置」徽标与
+  // AI 配置向导（preset → key → test → save，保存后配置事件把入口转正）。
+  // 只在默认未配置跑：AI 模式下这些入口转为已配置翻译流程，由上方 ai:* 场景
+  // 覆盖（沿用 LIGHTINK_CAPTURE_AI 门控约定）。
+  if (!aiConfigured) {
+    const backToShelf = async () => {
+      // reader:selection 留下的划选状态会以整面 dismiss 层拦截后续点击：
+      // 先点掉它（pointerdown 即收起工具栏），再回书架。
+      const dismiss = page.locator('.lightink-reader-selection-dismiss:not([hidden])');
+      if ((await dismiss.count()) > 0) {
+        await dismiss.first().click({ force: true, timeout: 2_000 }).catch(() => undefined);
+        await page.waitForTimeout(250);
+      }
+      const back = page.locator('#lightink-enter-reader-home');
+      if (await back.isVisible().catch(() => false)) {
+        await back.click();
+      } else {
+        await page.evaluate(() => document.getElementById('lightink-enter-reader-home')?.click());
+      }
+      await page.waitForSelector('.lightink-library:not([hidden])', { timeout: 10_000 });
+      await page
+        .locator('.lightink-library-group[data-shelf-group="all"]')
+        .first()
+        .click({ timeout: 5_000 })
+        .catch(() => undefined);
+      await page.waitForSelector('.lightink-library-items', { timeout: 10_000 });
+    };
+    const openDuneMenu = async () => {
+      // 沙丘是本地 txt（flow 会话，支持整本翻译）；优先继续阅读 hero，回退封面卡。
+      const hero = page.locator('.lightink-library-continue-open[data-item-id="book-dune"]');
+      const card = page.locator('.lightink-library-item--cover[data-item-id="book-dune"]');
+      if ((await hero.count()) > 0) await hero.first().click({ button: 'right' });
+      else if ((await card.count()) > 0) await card.first().click({ button: 'right' });
+      else await page.locator('.lightink-library-item--cover').first().click({ button: 'right' });
+      const menu = page.locator('[role="menu"]:visible').first();
+      await menu.waitFor();
+      return menu;
+    };
+    await step('ai:unconfigured-guide', async () => {
+      try {
+        await backToShelf();
+        await page.locator('.lightink-library-header-assistant').click();
+        await assistant().locator('.lightink-reader-assistant-guide').waitFor();
+        await shot('ai-unconfigured-guide');
+        // 主入口直接开向导；此处取消返回（保存前取消不落任何配置）。
+        await assistant().locator('.lightink-reader-assistant-setup').click();
+        await page.locator('.lightink-ai-wizard-overlay:visible').first().waitFor();
+        await page.keyboard.press('Escape');
+        await page.locator('.lightink-ai-wizard-overlay').first().waitFor({ state: 'hidden', timeout: 3_000 });
+      } finally {
+        await closeAssistant();
+      }
+    });
+    await step('ai:wizard', async () => {
+      const menu = await openDuneMenu();
+      const entry = menu.locator('[role="menuitem"]', { hasText: /整本翻译|Translate whole book/ }).first();
+      await entry.waitFor();
+      if ((await entry.locator('.lightink-context-menu__badge').count()) === 0) {
+        record({ label: 'translation:entry-badge-missing', theme, width });
+      }
+      await shot('translation-entry-unconfigured');
+      await entry.click();
+      await page.locator('.lightink-ai-wizard-overlay:visible').first().waitFor();
+      await page.locator('[data-wizard-pane="preset"]:visible').first().waitFor();
+      await shot('ai-wizard-preset');
+      await page.locator('input[name="wizardBaseUrl"]').fill('https://ai.example.test/v1');
+      await page.locator('input[name="wizardModel"]').fill('capture-model');
+      await page.locator('.lightink-ai-wizard-next').click();
+      await page.locator('[data-wizard-pane="key"]:visible').first().waitFor();
+      await shot('ai-wizard-key');
+      await page.locator('input[name="wizardApiKey"]').fill('sk-capture-key');
+      await page.locator('.lightink-ai-wizard-next').click();
+      await page.locator('[data-wizard-pane="test"]:visible').first().waitFor();
+      await shot('ai-wizard-test');
+      await page.locator('.lightink-ai-wizard-test').click();
+      await page.locator('.lightink-ai-wizard-status[data-kind="success"]:visible').waitFor({ timeout: 8_000 });
+      await shot('ai-wizard-test-ok');
+      await page.locator('.lightink-ai-wizard-next').click();
+      await page.locator('[data-wizard-pane="save"]:visible').first().waitFor();
+      await shot('ai-wizard-save');
+      await page.locator('.lightink-ai-wizard-save').click();
+      await page.locator('.lightink-ai-wizard-overlay').first().waitFor({ state: 'hidden', timeout: 5_000 });
+      // 保存派发配置事件：右键重开菜单，入口应已去掉「需先配置」徽标。
+      const menuAfter = await openDuneMenu();
+      const entryAfter = menuAfter
+        .locator('[role="menuitem"]', { hasText: /整本翻译|Translate whole book/ })
+        .first();
+      await entryAfter.waitFor();
+      if ((await entryAfter.locator('.lightink-context-menu__badge').count()) !== 0) {
+        record({ label: 'translation:entry-badge-lingering', theme, width });
+      }
+      await shot('translation-entry-configured');
+      await dismissMenus();
+    });
+  }
+
+  await page.close();
+}
+
+/**
+ * 首次运行引导专用页面：fixture 显式清除 onboarding 完成标记（onboardingDone
+ * = false），验证首跑自动弹出 → 跳过写标记 → 帮助菜单重开三条路径。独立页面
+ * 隔离标记状态，主矩阵页与 warmUp 仍按默认「已完成」运行不受影响。
+ */
+async function captureOnboarding(browser, width, theme, fixtureArgs) {
+  const page = await browser.newPage({ viewport: { width, height: 1000 } });
+  page.setDefaultTimeout(6_000);
+  const shot = (name) => shoot(page, width, theme, name);
+  const step = bindPageSteps(page, shot, theme, width);
+  attachPageDiagnostics(page, theme, width);
+  await page.addInitScript(installFixtures, {
+    ...fixtureArgs,
+    theme,
+    onboardingDone: false,
+    ...fixtureSurfaceThemes(theme),
+  });
+
+  // 启动顺序与主矩阵一致：先崩溃恢复确认对话框，接受后首次书架渲染触发引导。
+  // 恢复接受与首跑引导必须同处一步：步骤收尾的 clearStrayModals 会把跨步骤
+  // 停留的引导对话框当成遗留遮罩清掉。
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await step('onboarding:first-run', async () => {
+    const dialog = page.locator('.lightink-modal-dialog:visible').first();
+    await dialog.waitFor({ timeout: 20_000 });
+    await dialog.locator('.lightink-modal-btn--primary').click();
+    const overlay = page.locator('.lightink-onboarding-overlay:visible').first();
+    await overlay.waitFor({ timeout: 8_000 });
+    await shot('onboarding');
+    await page.locator('.lightink-onboarding-skip').click();
+    await page.locator('.lightink-onboarding-overlay').first().waitFor({ state: 'hidden', timeout: 3_000 });
+    const marker = await page.evaluate(() => window.localStorage.getItem('lightink.onboarding.done'));
+    if (marker === null) {
+      record({ label: 'onboarding:marker-missing', theme, width });
+    }
+    await shot('onboarding-skipped');
+  });
+  await step('onboarding:reopen', async () => {
+    // 帮助菜单「上手引导」重开：回书架重开对话框（不检查完成标记）。
+    await page.evaluate(() => document.getElementById('lightink-enter-editor')?.click());
+    await page.waitForSelector('.ProseMirror', { timeout: 15_000 });
+    await page.locator('.lightink-menu-trigger[data-menu-id="help"]').click();
+    await page.locator('.lightink-menu-panel[data-menu-id="help"]').waitFor({ state: 'visible' });
+    await page.locator('.lightink-menu-item[data-item-id="help-onboarding"]:visible').first().click();
+    const overlay = page.locator('.lightink-onboarding-overlay:visible').first();
+    await overlay.waitFor({ timeout: 5_000 });
+    await shot('onboarding-reopen');
+    await page.keyboard.press('Escape');
+    await page.locator('.lightink-onboarding-overlay').first().waitFor({ state: 'hidden', timeout: 3_000 });
+  });
   await page.close();
 }
 
@@ -1218,6 +1498,7 @@ async function main() {
       for (const theme of themes) {
         console.log(`--- ${width}px · ${theme} ---`);
         await captureMatrix(browser, width, theme, fixtureArgs);
+        await captureOnboarding(browser, width, theme, fixtureArgs);
       }
     }
   } catch (error) {
