@@ -3877,6 +3877,40 @@ html[data-reading-layout='scroll']:has(
   color: var(--lightink-danger);
 }
 
+/* R4：原始错误信息的「技术详情」折叠区（消息条与状态行共用形态）。 */
+.lightink-sync-message-detail,
+.lightink-sync-status-detail {
+  margin-top: 4px;
+  white-space: normal;
+}
+
+.lightink-sync-message-detail summary,
+.lightink-sync-status-detail summary {
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.85;
+}
+
+.lightink-sync-message-detail pre,
+.lightink-sync-status-detail pre {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-code-bg, transparent);
+  font-family: var(--lightink-font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9em;
+  overflow-y: auto;
+}
+
+.lightink-sync-status-detail {
+  flex-basis: 100%;
+}
+
 .lightink-sync-status {
   display: flex;
   flex-wrap: wrap;

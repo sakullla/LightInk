@@ -181,6 +181,8 @@ interface Labels {
   next: string;
   noAcquisition: string;
   offline: string;
+  /** R4：失败通知的通用主文案；原始错误只进可展开技术详情。 */
+  operationFailed: string;
   /** OPDS/WebDAV source list failed. Not a local-library or catalog failure. */
   sourceListFailed: string;
   /** Local library failed to load. Not a catalog-source connection error. */
@@ -378,6 +380,7 @@ const LABELS: Record<Locale, Labels> = {
     next: 'Next',
     noAcquisition: 'No supported acquisition link',
     offline: 'Could not reach this source.',
+    operationFailed: 'Operation failed',
     sourceListFailed: 'Could not open the source list.',
     libraryLoadFailed: 'Could not open the library.',
     details: 'Book details',
@@ -572,6 +575,7 @@ const LABELS: Record<Locale, Labels> = {
     next: '下一页',
     noAcquisition: '没有可用的获取链接',
     offline: '无法连接此书库源。',
+    operationFailed: '操作失败',
     sourceListFailed: '无法打开书源列表。',
     libraryLoadFailed: '无法打开书库。',
     details: '作品详情',
@@ -740,7 +744,11 @@ export interface LibraryViewDependencies {
   /** Download a synced managed book body and return its local materialized path. */
   readonly onDownload?: (item: LibraryItem, signal?: AbortSignal) => Promise<string | void>;
   readonly onImportLocal: () => Promise<LibraryItem | null>;
-  readonly notify: (message: string, kind?: 'error' | 'warning') => void;
+  /**
+   * R4：`message` 必须是本地化主文案；原始错误信息放 `detail`，
+   * 由宿主接线渲染为 toast 的可展开「技术详情」。
+   */
+  readonly notify: (message: string, kind?: 'error' | 'warning', detail?: string) => void;
   /** Schedule the debounced snapshot sync after a library metadata mutation. */
   readonly onLocalChange?: () => void;
   readonly onVisibilityChange?: (visible: boolean) => void;
@@ -1040,10 +1048,9 @@ function formatReadingClock(clock: number, locale: Locale): string {
   }
 }
 
-function errorText(error: unknown, fallback: string): string {
-  if (typeof error === 'string' && error.trim() !== '') {
-    return isTransportError(error) ? fallback : error;
-  }
+/** 原始错误文本（无兜底替换）；空错误返回空串。 */
+function errorMessageOf(error: unknown): string {
+  if (typeof error === 'string' && error.trim() !== '') return error;
   let message = '';
   if (error !== null && typeof error === 'object') {
     const value = error as Record<string, unknown>;
@@ -1054,6 +1061,11 @@ function errorText(error: unknown, fallback: string): string {
   if (message === '' && error instanceof Error && error.message !== '') {
     message = error.message;
   }
+  return message;
+}
+
+function errorText(error: unknown, fallback: string): string {
+  const message = errorMessageOf(error);
   if (message === '' || isTransportError(message)) {
     return fallback;
   }
@@ -2166,6 +2178,17 @@ export function createLibraryView(
 
   const labels = (): Labels => LABELS[deps.getLocale()];
 
+  /**
+   * R4：失败通知的主文案一律本地化（离线/域兜底），原始错误只作为
+   * `detail` 交给宿主的 toast「技术详情」展开，不再裸奔为首屏文案。
+   */
+  function notifyError(error: unknown, fallback?: string): void {
+    const raw = errorMessageOf(error);
+    const offlineLike = raw === '' || isTransportError(raw);
+    const title = offlineLike ? (fallback ?? labels().offline) : labels().operationFailed;
+    deps.notify(title, 'error', raw === '' ? undefined : raw);
+  }
+
   function libraryViewportIsNarrow(): boolean {
     const view = doc.defaultView;
     if (view === null || typeof view.matchMedia !== 'function') return true;
@@ -2341,13 +2364,12 @@ export function createLibraryView(
         await showMyBooks();
       }
     } catch (error) {
-      const message = errorText(error, labels().offline);
       if (items.length === 0) {
-        emptyFailure = message;
+        emptyFailure = errorText(error, labels().offline);
         renderItems();
         return;
       }
-      deps.notify(message, 'error');
+      notifyError(error);
     }
   }
 
@@ -2797,7 +2819,7 @@ export function createLibraryView(
       tagEditor.focusField('create');
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -2825,7 +2847,7 @@ export function createLibraryView(
         refreshTagSurfaces();
         deps.onLocalChange?.();
       } catch (error) {
-        deps.notify(errorText(error, labels().offline), 'error');
+        notifyError(error);
       }
       return;
     }
@@ -2843,7 +2865,7 @@ export function createLibraryView(
         refreshTagSurfaces();
         deps.onLocalChange?.();
       } catch (error) {
-        deps.notify(errorText(error, labels().offline), 'error');
+        notifyError(error);
       }
       return;
     }
@@ -2860,7 +2882,7 @@ export function createLibraryView(
         refreshTagSurfaces();
         deps.onLocalChange?.();
       } catch (error) {
-        deps.notify(errorText(error, labels().offline), 'error');
+        notifyError(error);
       }
       return;
     }
@@ -2875,7 +2897,7 @@ export function createLibraryView(
       refreshTagSurfaces();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -2892,7 +2914,7 @@ export function createLibraryView(
       refreshTagSurfaces();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -3437,7 +3459,7 @@ export function createLibraryView(
       await reloadGroups();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().invalidGroupMove), 'error');
+      notifyError(error, labels().invalidGroupMove);
     }
   }
 
@@ -3463,7 +3485,7 @@ export function createLibraryView(
       await reloadGroups();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -3483,7 +3505,7 @@ export function createLibraryView(
       renderItems();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -4710,7 +4732,7 @@ export function createLibraryView(
       renderItems();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -5555,7 +5577,7 @@ export function createLibraryView(
       activeOperations.delete(controller);
       hide({ notifyVisibility: false });
     } catch (error) {
-      if (!controller.signal.aborted) deps.notify(errorText(error, labels().offline), 'error');
+      if (!controller.signal.aborted) notifyError(error);
     } finally {
       progress.close();
       activeOperations.delete(controller);
@@ -5857,7 +5879,7 @@ export function createLibraryView(
           renderDetail();
           renderItems();
         } catch (error) {
-          if (!controller.signal.aborted) deps.notify(errorText(error, labels().offline), 'error');
+          if (!controller.signal.aborted) notifyError(error);
         } finally {
           activeOperations.delete(controller);
           if (download.isConnected) {
@@ -5887,7 +5909,7 @@ export function createLibraryView(
         } catch (error) {
           pin.checked = !nextPinned;
           pinText.textContent = pin.checked ? labels().removeOffline : labels().keepOffline;
-          deps.notify(errorText(error, labels().offline), 'error');
+          notifyError(error);
         } finally {
           pin.disabled = false;
         }
@@ -5910,7 +5932,7 @@ export function createLibraryView(
           await deps.onCache(requestFor(selected), controller.signal);
           await manage.refreshCache();
         } catch (error) {
-          if (!controller.signal.aborted) deps.notify(errorText(error, labels().offline), 'error');
+          if (!controller.signal.aborted) notifyError(error);
         } finally {
           activeOperations.delete(controller);
           cache.disabled = false;
@@ -6625,7 +6647,7 @@ export function createLibraryView(
       if (selectedSourceId === source.id) closeCatalog();
       else renderSources();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -6657,7 +6679,7 @@ export function createLibraryView(
       renderDetail();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   }
 
@@ -7065,7 +7087,7 @@ export function createLibraryView(
       await reloadGroups();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   });
   groupEditorCancel.addEventListener('click', () => closeGroupEditor());
@@ -7149,7 +7171,7 @@ export function createLibraryView(
       renderItems();
       deps.onLocalChange?.();
     } catch (error) {
-      deps.notify(errorText(error, labels().offline), 'error');
+      notifyError(error);
     }
   });
   membershipCancel.addEventListener('click', () => closeMembershipEditor());

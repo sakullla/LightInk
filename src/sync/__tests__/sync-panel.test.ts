@@ -305,6 +305,100 @@ describe('sync panel', () => {
     expect(dialog.textContent).toContain('disk is read-only');
   });
 
+  it('maps WebDavError codes to localized titles and keeps the raw message in an expandable detail', async () => {
+    const panelDeps = createDeps();
+    panelDeps.webdav.saveProfile = vi.fn(async () => {
+      // Tauri 序列化 WebDavError 的真实形状：{code, message, status}。
+      throw { code: 'SYNC_URL_INVALID', message: 'WebDAV 地址格式无效', status: null };
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const fields = dialog.querySelectorAll<HTMLInputElement>('.lightink-sync-field input');
+    fields[0]!.value = 'Nextcloud';
+    fields[1]!.value = 'not-a-url';
+    fields[2]!.value = 'me';
+    fields[3]!.value = 'app-password';
+    button(dialog, '保存配置').click();
+    await settle();
+
+    const message = dialog.querySelector<HTMLElement>('.lightink-sync-message')!;
+    const title = message.querySelector('.lightink-sync-message-text')!.textContent ?? '';
+    const detail = message.querySelector<HTMLDetailsElement>('.lightink-sync-message-detail');
+    expect(title).toBe('WebDAV 地址无效。');
+    expect(detail).not.toBeNull();
+    expect(detail!.querySelector('summary')?.textContent).toBe('技术详情');
+    expect(detail!.querySelector('pre')?.textContent).toBe('WebDAV 地址格式无效');
+    expect(message.dataset.kind).toBe('error');
+    button(dialog, '关闭').click();
+  });
+
+  it('localizes test-connection failures from the error code, not the raw message', async () => {
+    const panelDeps = createDeps();
+    panelDeps.webdav.testProfile = vi.fn(async () => {
+      throw { code: 'SYNC_NETWORK_ERROR', message: 'error sending request for url (...)' };
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    button(dialog, '测试连接').click();
+    await settle();
+    const message = dialog.querySelector<HTMLElement>('.lightink-sync-message')!;
+    expect(message.querySelector('.lightink-sync-message-text')?.textContent).toBe(
+      '无法连接 WebDAV 服务器，请检查地址与网络。',
+    );
+    expect(message.querySelector('.lightink-sync-message-detail pre')?.textContent).toContain(
+      'error sending request',
+    );
+    button(dialog, '关闭').click();
+  });
+
+  it('keeps unknown sync failures on the fallback title with the raw text as detail', async () => {
+    const panelDeps = createDeps();
+    panelDeps.webdav.saveProfile = vi.fn(async () => {
+      throw new Error('disk is read-only');
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const fields = dialog.querySelectorAll<HTMLInputElement>('.lightink-sync-field input');
+    fields[0]!.value = 'Nextcloud';
+    fields[1]!.value = 'https://dav.example/remote.php/dav/files/me';
+    fields[2]!.value = 'me';
+    fields[3]!.value = 'app-password';
+    button(dialog, '保存配置').click();
+    await settle();
+    const message = dialog.querySelector<HTMLElement>('.lightink-sync-message')!;
+    expect(message.querySelector('.lightink-sync-message-text')?.textContent).toBe('同步失败');
+    expect(message.querySelector('.lightink-sync-message-detail')?.textContent).toContain(
+      'disk is read-only',
+    );
+    button(dialog, '关闭').click();
+  });
+
+  it('shows the localized status-line title for an error state and expands lastError as detail', async () => {
+    const panelDeps = createDeps();
+    panelDeps.sync.status = vi.fn(async () => ({
+      state: 'error' as const,
+      uploaded: 0,
+      downloaded: 0,
+      conflicts: 0,
+      lastError: '无法读取同步记录: database is locked',
+    }));
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const status = dialog.querySelector<HTMLElement>('.lightink-sync-status')!;
+    expect(status.querySelector('.lightink-sync-status-state')?.textContent).toBe('同步失败');
+    const detail = status.querySelector<HTMLDetailsElement>('.lightink-sync-status-detail');
+    expect(detail).not.toBeNull();
+    expect(detail!.hidden).toBe(false);
+    expect(detail!.querySelector('pre')?.textContent).toBe(
+      '无法读取同步记录: database is locked',
+    );
+    button(dialog, '关闭').click();
+  });
+
   it('paints the dialog with the shelf theme instead of editor cream', () => {
     const host = document.createElement('div');
     host.className = 'lightink-library';

@@ -1,5 +1,7 @@
 import { labelModal, mountModalFocus } from '../ui/modal-focus.js';
 import { adoptDialogSurfaceTheme, inferDialogThemeHost } from '../ui/confirm-dialog.js';
+import { friendlyError, type FriendlyErrorLabels } from '../ui/friendly-error.js';
+import { translate, type MessageKey } from '../i18n/messages.js';
 import {
   applyLibraryTheme,
   loadLibraryTheme,
@@ -82,6 +84,7 @@ type Labels = {
   authHintBasic: string;
   authHintBearer: string;
   progressTitle: string;
+  technicalDetails: string;
 };
 
 const LABELS: Record<'en' | 'zh-CN', Labels> = {
@@ -128,6 +131,7 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     authHintBasic: 'Use the username plus an app-specific password from your provider — not the web login password.',
     authHintBearer: 'Paste the access token only. Username and password are not used.',
     progressTitle: 'Syncing',
+    technicalDetails: 'Technical details',
   },
   'zh-CN': {
     title: 'WebDAV 同步',
@@ -172,6 +176,7 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     authHintBasic: '填写网盘用户名，以及单独生成的应用密码，不是网页登录密码。',
     authHintBearer: '只需粘贴访问令牌，不用填写用户名和密码。',
     progressTitle: '正在同步',
+    technicalDetails: '技术详情',
   },
 };
 
@@ -202,8 +207,35 @@ const PHASE_LABELS: Record<'en' | 'zh-CN', Record<string, string>> = {
   },
 };
 
-function textOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error ?? '');
+/**
+ * R4：WebDAV 同步域码表。code 全集枚举自 `src-tauri/src/webdav.rs` 与
+ * `src-tauri/src/sync.rs` 的 `WebDavError::new(...)`；不扩 reader 域码表。
+ */
+export const SYNC_ERROR_TITLES: Readonly<Record<string, MessageKey>> = {
+  SYNC_PROFILE_INVALID: 'sync.error.profileInvalid',
+  SYNC_CREDENTIAL_INVALID: 'sync.error.credentialInvalid',
+  SYNC_URL_INVALID: 'sync.error.urlInvalid',
+  SYNC_PROFILE_MISSING: 'sync.error.profileMissing',
+  SYNC_CONFIG_INVALID: 'sync.error.configInvalid',
+  SYNC_STORAGE_ERROR: 'sync.error.storage',
+  SYNC_STATE_UNAVAILABLE: 'sync.error.stateUnavailable',
+  SYNC_NETWORK_ERROR: 'sync.error.network',
+  SYNC_CANCELLED: 'sync.error.cancelled',
+  SYNC_MERGE_ERROR: 'sync.error.merge',
+  SYNC_PATH_INVALID: 'sync.error.pathInvalid',
+  SYNC_DEPTH_INVALID: 'sync.error.depthInvalid',
+  SYNC_HASH_INVALID: 'sync.error.hashInvalid',
+  SYNC_REMOTE_SNAPSHOT_INVALID: 'sync.error.remoteSnapshotInvalid',
+  SYNC_BLOB_TOO_LARGE: 'sync.error.blobTooLarge',
+};
+
+/** 把后端失败映射为友好标题；原始 message 只进可展开的技术详情。 */
+function syncFriendlyError(locale: 'en' | 'zh-CN', error: unknown): FriendlyErrorLabels {
+  return friendlyError(error, {
+    codeTitles: SYNC_ERROR_TITLES,
+    fallbackTitle: 'sync.error.fallback',
+    t: (key, vars) => translate(locale, key, vars),
+  });
 }
 
 function phaseCaption(locale: 'en' | 'zh-CN', value: SyncStatus, fallback: string): string {
@@ -387,6 +419,14 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   const statusState = doc.createElement('span');
   statusState.className = 'lightink-sync-status-state';
   statusMain.append(statusDot, statusState);
+  // R4：lastError 原文只进可展开的「技术详情」，状态行主文案为友好标题。
+  const statusDetail = doc.createElement('details');
+  statusDetail.className = 'lightink-sync-status-detail';
+  statusDetail.hidden = true;
+  const statusDetailSummary = doc.createElement('summary');
+  statusDetailSummary.textContent = L.technicalDetails;
+  const statusDetailText = doc.createElement('pre');
+  statusDetail.append(statusDetailSummary, statusDetailText);
   const metrics = doc.createElement('div');
   metrics.className = 'lightink-sync-metrics';
   const statusUploaded = doc.createElement('span');
@@ -404,7 +444,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
   const cancelSync = button(doc, L.cancelSync, 'danger');
   cancelSync.hidden = true;
   statusActions.append(sync, cancelSync);
-  status.append(statusMain, metrics, statusActions);
+  status.append(statusMain, statusDetail, metrics, statusActions);
 
   const conflicts = doc.createElement('div');
   conflicts.className = 'lightink-sync-conflicts';
@@ -550,9 +590,27 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       else input.removeAttribute('aria-invalid');
     }
   };
-  const setMessage = (text: string, kind: 'info' | 'success' | 'error' = 'info'): void => {
-    message.textContent = text;
-    message.hidden = text === '';
+  const setMessage = (
+    text: string,
+    kind: 'info' | 'success' | 'error' = 'info',
+    detail?: string,
+  ): void => {
+    message.replaceChildren();
+    const line = doc.createElement('span');
+    line.className = 'lightink-sync-message-text';
+    line.textContent = text;
+    message.append(line);
+    if (detail !== undefined && detail !== '') {
+      const details = doc.createElement('details');
+      details.className = 'lightink-sync-message-detail';
+      const summary = doc.createElement('summary');
+      summary.textContent = L.technicalDetails;
+      const pre = doc.createElement('pre');
+      pre.textContent = detail;
+      details.append(summary, pre);
+      message.append(details);
+    }
+    message.hidden = text === '' && (detail === undefined || detail === '');
     message.dataset.kind = kind;
   };
   const renderProgress = (value: SyncStatus): void => {
@@ -594,7 +652,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     if (running) {
       statusState.textContent = phaseCaption(locale, value, L.running);
     } else if (value.state === 'error') {
-      statusState.textContent = value.lastError ? `${L.failed}: ${value.lastError}` : L.failed;
+      const friendly = syncFriendlyError(locale, value.lastError ?? '');
+      statusState.textContent = friendly.title;
     } else if (value.state === 'cancelled') {
       statusState.textContent = L.cancelled;
     } else if (value.state === 'success') {
@@ -602,6 +661,9 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     } else {
       statusState.textContent = L.ready;
     }
+    const lastError = value.state === 'error' ? (value.lastError ?? '') : '';
+    statusDetailText.textContent = lastError;
+    statusDetail.hidden = lastError === '';
     status.title = value.lastError ?? '';
     statusUploaded.textContent = `↑${uploadCount(value)}`;
     statusDownloaded.textContent = `↓${value.downloaded}`;
@@ -624,6 +686,7 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     } catch {
       statusState.textContent = L.failed;
       status.classList.add('is-error');
+      statusDetail.hidden = true;
       progress.hidden = true;
     }
   };
@@ -708,7 +771,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       setMessage(profile.needsCredential ? L.needsCredential : L.saved, profile.needsCredential ? 'info' : 'success');
       await refreshStatus();
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
     } finally {
       save.disabled = false;
     }
@@ -731,7 +795,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       );
       profile = await deps.webdav.getProfile();
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
     } finally {
       test.disabled = false;
     }
@@ -758,7 +823,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       }
       await renderConflicts();
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
       await refreshStatus();
     }
   });
@@ -777,7 +843,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       url.value = '';
       setMessage(L.saved, 'success');
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
     } finally {
       forget.disabled = false;
     }
@@ -788,7 +855,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     try {
       renderMigration(await deps.migration.preview());
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
     } finally {
       previewButton.disabled = false;
     }
@@ -804,7 +872,8 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       setMessage(`${L.saved}: ${result.migrated}`, 'success');
       await deps.migration.preview().then(renderMigration).catch(() => undefined);
     } catch (error) {
-      setMessage(`${L.failed}: ${textOf(error)}`, 'error');
+      const friendly = syncFriendlyError(locale, error);
+      setMessage(friendly.title, 'error', friendly.detail);
     } finally {
       applyButton.disabled =
         migrationList.querySelectorAll<HTMLInputElement>('input:checked').length === 0;

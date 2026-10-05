@@ -1,0 +1,134 @@
+/* ===== toast：非阻塞瞬时通知（R4 / ADR-5）=============================
+   屏幕角落堆叠；不 inert、不抢焦点；z-index 低于模态弹层
+   （--lightink-z-dialog），悬停或点击不被阅读正文拦截。 ================== */
+
+.lightink-toast-region {
+  position: fixed;
+  right: max(16px, var(--lightink-safe-right, 0px));
+  bottom: max(16px, var(--lightink-safe-bottom, 0px));
+  z-index: calc(var(--lightink-z-dialog, 100) - 10);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.lightink-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title close'
+    'detail close';
+  align-items: start;
+  column-gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--lightink-border);
+  border-left-width: 3px;
+  border-left-style: solid;
+  border-radius: var(--lightink-radius-panel, 10px);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong);
+  color: var(--lightink-fg);
+  font-size: var(--lightink-font-size-ui, 13px);
+  line-height: 1.6;
+  animation: lightink-toast-in var(--lightink-duration-base, 180ms)
+    var(--lightink-easing-standard);
+}
+
+.lightink-toast-title {
+  grid-area: title;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lightink-toast-close {
+  grid-area: close;
+  margin: 0;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--lightink-radius-control, 6px);
+  background: transparent;
+  color: var(--lightink-muted);
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: pointer;
+  min-height: 28px;
+  min-width: 32px;
+}
+
+.lightink-toast-close:hover {
+  color: var(--lightink-fg);
+  background: var(--lightink-selection);
+}
+
+.lightink-toast-detail {
+  grid-area: detail;
+  margin: 4px 0 0;
+}
+
+.lightink-toast-detail summary {
+  color: var(--lightink-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.lightink-toast-detail pre {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control, 6px);
+  background: var(--lightink-code-bg, transparent);
+  color: var(--lightink-code-fg, var(--lightink-fg));
+  font-family: var(--lightink-font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9em;
+  overflow-y: auto;
+}
+
+.lightink-toast--info,
+.lightink-toast--success {
+  border-left-color: var(--lightink-accent);
+}
+
+.lightink-toast--warning {
+  border-left-color: var(--lightink-accent);
+  background: color-mix(in srgb, var(--lightink-accent-soft) 55%, var(--lightink-bg-elevated));
+}
+
+.lightink-toast--error {
+  border-left-color: var(--lightink-danger);
+}
+
+@keyframes lightink-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .lightink-toast-region {
+    left: max(12px, var(--lightink-safe-left, 0px));
+    right: max(12px, var(--lightink-safe-right, 0px));
+    align-items: stretch;
+    max-width: none;
+  }
+
+  .lightink-toast {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .lightink-toast-close {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

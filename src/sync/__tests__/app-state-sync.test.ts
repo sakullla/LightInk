@@ -207,4 +207,47 @@ describe('ApplicationStateSync', () => {
       vi.useRealTimers();
     }
   });
+
+  it('reports each settled sync to onSettled for background toasts (R4)', async () => {
+    const { storage } = makeStorage({ 'lightink.theme': 'dark' });
+    const fake = fakeRecords();
+    const onSettled = vi.fn();
+    const coordinator = new ApplicationStateSync({
+      storage,
+      records: {
+        ...fake.client,
+        run: vi.fn(async () => {
+          throw { code: 'SYNC_NETWORK_ERROR', message: 'offline' };
+        }),
+      },
+      onSettled,
+    });
+    await coordinator.syncNow().catch(() => undefined);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith({ ok: false, status: null, error: expect.anything() });
+
+    const ok = new ApplicationStateSync({ storage, records: fake.client, onSettled });
+    await ok.syncNow();
+    const outcomes = onSettled.mock.calls.map((call) => call[0]!.ok);
+    expect(outcomes).toEqual([false, true]);
+    const settledStatus = onSettled.mock.calls[1]![0]!.status;
+    expect(settledStatus?.state).toBe('success');
+    ok.dispose();
+    coordinator.dispose();
+  });
+
+  it('does not notify onSettled when no sync target is configured', async () => {
+    const { storage } = makeStorage({ 'lightink.theme': 'dark' });
+    const fake = fakeRecords();
+    const onSettled = vi.fn();
+    const coordinator = new ApplicationStateSync({
+      storage,
+      records: fake.client,
+      getProfile: async () => null,
+      onSettled,
+    });
+    await coordinator.syncNow();
+    expect(onSettled).not.toHaveBeenCalled();
+    coordinator.dispose();
+  });
 });

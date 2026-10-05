@@ -3675,6 +3675,53 @@ describe('LibraryView reading management (R4)', () => {
     view.destroy();
   });
 
+  it('routes a failed managed-body download to a localized title with the raw error as detail (R4)', async () => {
+    // 断网验收路径：原始 transport 报错不再作首屏文案——标题走离线兜底，
+    // 原文进 detail 由宿主 toast 的「技术详情」展开。
+    const book = localItem({
+      id: 'managed:abc',
+      sourceKind: 'managed',
+      blobHash: 'hash-1',
+      title: '云端小说',
+      localPath: undefined,
+      availability: undefined,
+    });
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => [book]) },
+      onDownload: vi.fn(async () => {
+        throw 'error sending request for url (https://dav.example/remote.php/dav/files/me/book.epub)';
+      }),
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    itemRow(host, book.id).dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 8, clientY: 8 }),
+    );
+    await settle();
+    contextMenuItem('作品详情').click();
+    await settle();
+    const pane = host.querySelector<HTMLElement>('.lightink-library-detail')!;
+    expect(isShown(pane)).toBe(true);
+    const download = Array.from(pane.querySelectorAll('button')).find(
+      (button) => button.textContent === '下载正文',
+    );
+    if (!(download instanceof HTMLButtonElement)) throw new Error('download button not found');
+    download.click();
+    await settle();
+
+    expect(deps.onDownload).toHaveBeenCalledTimes(1);
+    expect(deps.notify).toHaveBeenCalledWith(
+      '无法连接此书库源。',
+      'error',
+      'error sending request for url (https://dav.example/remote.php/dav/files/me/book.epub)',
+    );
+    view.destroy();
+  });
+
   it('does not offer a manual status change for a book without a record', async () => {
     const storage = memoryProgressStorage();
     const base = dependencies();
@@ -5723,7 +5770,8 @@ describe('LibraryView shelf collections', () => {
       .querySelector('form')!
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
-    expect(deps.notify).toHaveBeenCalledWith('save failed', 'error');
+    // R4：失败主文案本地化，原始错误进 detail（toast 技术详情）。
+    expect(deps.notify).toHaveBeenCalledWith('操作失败', 'error', 'save failed');
     expect(isShown(overlay)).toBe(true);
     expect(checkbox.checked).toBe(true);
     expect(overlay.textContent).toContain('海猫');
@@ -6567,7 +6615,7 @@ describe('LibraryView book tags (R6)', () => {
       .querySelector('form')!
       .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
     await settle();
-    expect(deps.notify).toHaveBeenCalledWith('标签名称已存在', 'error');
+    expect(deps.notify).toHaveBeenCalledWith('操作失败', 'error', '标签名称已存在');
     expect(tagNavButton(host, '科幻')).toBeTruthy();
     view.destroy();
   });

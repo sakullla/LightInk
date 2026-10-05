@@ -269,7 +269,9 @@ import { documentClient } from './sync/document-client.js';
 import { syncRecordClient } from './sync/sync-client.js';
 import { currentSyncRecords, ApplicationStateSync } from './sync/app-state-sync.js';
 import { webDavClient } from './sync/webdav-client.js';
-import { showSyncPanel } from './sync/sync-panel.js';
+import { showSyncPanel, SYNC_ERROR_TITLES } from './sync/sync-panel.js';
+import { friendlyError } from './ui/friendly-error.js';
+import { showToast, type ToastKind } from './ui/toast.js';
 import {
   createBoundVersionActions,
   showVersionsModal,
@@ -278,6 +280,7 @@ import {
 import './theme/tokens.css';
 import './theme/prose.css';
 import './ui/theme.css';
+import './ui/toast.css';
 import './ui/window-titlebar.css';
 import './library/library.css';
 import './conceal/conceal.css';
@@ -408,6 +411,11 @@ function showAppAlert(message: string, title = i18n.t('app.name')): Promise<void
     message,
     okLabel: i18n.t('dialog.ok'),
   });
+}
+
+/** R4：非阻塞 toast 入口（跟随界面语言；原始错误只进可展开技术详情）。 */
+function appToast(kind: ToastKind, title: string, detail?: string): void {
+  showToast(kind, title, detail, { locale: i18n.locale });
 }
 
 type RecentMutationCommand = 'add_recent' | 'remove_recent' | 'clear_recents';
@@ -1354,8 +1362,9 @@ async function openExternalAssociationPath(
       return null;
     },
     workspace,
-    notify: (message) => {
-      void showAppAlert(message);
+    notify: (message, kind) => {
+      // R4：外部关联打开的结果是瞬时通知，走 toast 而非打断式模态。
+      appToast(kind ?? 'info', message);
     },
     reportOpenFailure: (filePath) => {
       // Reader load/open already used reportReaderLoadError inside openPathByKind.
@@ -2643,11 +2652,18 @@ async function runActiveExport(kind: 'html' | 'pdf'): Promise<void> {
   }
 }
 
+/** R4：后台同步 toast 只在面板关闭时呈现（面板内维持既有状态行）。 */
+let syncPanelOpen = false;
+
 function openWebDavSyncPanel(): void {
+  syncPanelOpen = true;
   showSyncPanel({
     doc: document,
     webdav: webDavClient,
     sync: syncRecordClient,
+    onClose: () => {
+      syncPanelOpen = false;
+    },
     themeHost:
       document.querySelector<HTMLElement>('.lightink-library:not([hidden])') ??
       document.querySelector<HTMLElement>('.lightink-reader:not([hidden])') ??
@@ -3726,8 +3742,9 @@ function ensureLibraryView(): LibraryView {
     },
     onImportLocal: importLocalLibraryItem,
     onLocalChange: () => applicationStateSync?.schedule(),
-    notify: (message) => {
-      void showAppAlert(message);
+    notify: (message, kind, detail) => {
+      // R4：书库提示为非阻塞 toast（错误/警告带可展开技术详情）。
+      appToast(kind ?? 'info', message, detail);
     },
     confirmGroupDelete: async (_group, message) =>
       (await showConfirmDialog(document, {
@@ -3891,7 +3908,15 @@ function ensureShelfAssistant(): ShelfAssistant {
         return {
           ...(state.importedItemId !== undefined ? { itemId: state.importedItemId } : {}),
           phase: state.phase,
-          ...(state.message !== undefined ? { message: state.message } : {}),
+          ...(state.message !== undefined
+            ? {
+                // R4：主文案是友好标题，括号内附原始错误供助手诊断书源规则。
+                message:
+                  state.messageDetail !== undefined && state.messageDetail !== ''
+                    ? `${state.message}（${state.messageDetail}）`
+                    : state.message,
+              }
+            : {}),
         };
         } finally {
           releaseCancel();
@@ -4001,6 +4026,19 @@ applicationStateSync = new ApplicationStateSync({
     // Automatic sync is intentionally quiet; the sync status surface can
     // present the backend error without interrupting editing.
     console.warn('[lightink/sync] automatic state sync failed', error);
+  },
+  onSettled: ({ ok, error }) => {
+    if (syncPanelOpen) return; // 面板打开时由面板状态行呈现结果。
+    if (ok) {
+      appToast('success', i18n.t('sync.backgroundCompleted'));
+      return;
+    }
+    const friendly = friendlyError(error, {
+      codeTitles: SYNC_ERROR_TITLES,
+      fallbackTitle: 'sync.error.fallback',
+      t: (key, vars) => i18n.t(key, vars),
+    });
+    appToast('error', friendly.title, friendly.detail);
   },
 });
 applicationStateSync.start();

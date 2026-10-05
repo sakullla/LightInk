@@ -104,6 +104,8 @@ interface BookSourcePanelLabels {
   downloadClose: string;
   downloadImported: string;
   downloadTocFailed: string;
+  /** R4：失败原文（技术详情）折叠区标题。 */
+  technicalDetails: string;
   downloadPreparing: string;
   downloadDownloading: string;
   downloadPaused: string;
@@ -167,6 +169,7 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     downloadClose: 'Close',
     downloadImported: 'Imported to the library; open it from the shelf',
     downloadTocFailed: 'Failed to load the chapter list',
+    technicalDetails: 'Technical details',
     downloadPreparing: 'Preparing…',
     downloadDownloading: 'Downloading…',
     downloadPaused: 'Paused; resuming fills only missing chapters',
@@ -228,6 +231,7 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     downloadClose: '关闭',
     downloadImported: '已入库，可在书架打开阅读',
     downloadTocFailed: '无法读取目录',
+    technicalDetails: '技术详情',
     downloadPreparing: '准备下载…',
     downloadDownloading: '下载中…',
     downloadPaused: '已暂停，继续时只补缺失章节',
@@ -479,6 +483,13 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   downloadStatus.className = 'lightink-library-book-source-editor-status';
   downloadStatus.setAttribute('role', 'status');
   downloadStatus.hidden = true;
+  // R4：原始错误只进可展开的「技术详情」，主文案为友好标题。
+  const downloadStatusDetail = doc.createElement('details');
+  downloadStatusDetail.className = 'lightink-library-book-source-download-detail';
+  downloadStatusDetail.hidden = true;
+  const downloadStatusDetailSummary = doc.createElement('summary');
+  const downloadStatusDetailText = doc.createElement('pre');
+  downloadStatusDetail.append(downloadStatusDetailSummary, downloadStatusDetailText);
   const downloadChapterList = doc.createElement('div');
   downloadChapterList.className = 'lightink-library-book-source-download-chapters';
   const downloadActions = doc.createElement('div');
@@ -488,6 +499,7 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
     downloadInfo,
     downloadProgress,
     downloadStatus,
+    downloadStatusDetail,
     downloadChapterList,
     downloadActions,
   );
@@ -919,6 +931,9 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
     downloadStatus.textContent = l.downloadPreparing;
     downloadStatus.dataset.status = '';
     downloadStatus.hidden = false;
+    downloadStatusDetailSummary.textContent = l.technicalDetails;
+    downloadStatusDetailText.textContent = '';
+    downloadStatusDetail.hidden = true;
     downloadChapterList.replaceChildren();
     downloadActions.replaceChildren();
     downloadSection.hidden = false;
@@ -928,9 +943,12 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
         downloadPrep = { result, chapters, format: 'txt' };
         renderDownload();
       } catch (error) {
-        downloadStatus.textContent = `${l.downloadTocFailed}: ${errorText(error, '')}`.trim();
+        downloadStatus.textContent = l.downloadTocFailed;
         downloadStatus.dataset.status = 'error';
         downloadStatus.hidden = false;
+        const raw = errorText(error, '');
+        downloadStatusDetailText.textContent = raw;
+        downloadStatusDetail.hidden = raw === '';
       }
     })();
   }
@@ -991,6 +1009,10 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
     const message = phase === 'done' ? l.downloadImported : (state.message ?? phaseText[phase]);
     downloadStatus.textContent = message ?? '';
     downloadStatus.hidden = message === undefined || message === '';
+    const detail = phase === 'done' ? '' : (state.messageDetail ?? '');
+    downloadStatusDetailSummary.textContent = l.technicalDetails;
+    downloadStatusDetailText.textContent = detail;
+    downloadStatusDetail.hidden = detail === '';
     if (message === undefined || message === '') {
       delete downloadStatus.dataset.status;
     } else if (phase === 'done') {

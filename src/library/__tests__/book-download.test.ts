@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  bookDownloadFriendlyError,
   buildDownloadEpub,
   chapterFailed,
   chapterProgress,
@@ -239,6 +240,7 @@ describe('download controller (orchestration)', () => {
     expect(controller.state.chapters[1]).toMatchObject({ status: 'failed', error: '章节抓取失败' });
     expect(controller.state.chapters[0]).toMatchObject({ status: 'done' });
     expect(controller.state.chapters[2]).toMatchObject({ status: 'done' });
+    expect(controller.state.messageDetail).toBe('章节抓取失败');
     expect(client.finalize).not.toHaveBeenCalled();
 
     fetchChapter.mockResolvedValue(persistedChapter(1, 'done', { content: '乙' }));
@@ -334,7 +336,9 @@ describe('download controller (orchestration)', () => {
     );
 
     expect(controller.state.phase).toBe('ready');
-    expect(controller.state.message).toContain('入库失败');
+    // R4：主文案为友好标题，原始错误只进 messageDetail。
+    expect(controller.state.message).toBe('书籍下载失败');
+    expect(controller.state.messageDetail).toBe('入库失败');
     // 章节保持完成：重建不需要重新下载。
     expect(client.fetchChapter).toHaveBeenCalledTimes(1);
 
@@ -354,7 +358,8 @@ describe('download controller (orchestration)', () => {
     await controller.start(startInput());
 
     expect(controller.state.phase).toBe('incomplete');
-    expect(controller.state.message).toContain('无法创建作业');
+    expect(controller.state.message).toBe('书籍下载失败');
+    expect(controller.state.messageDetail).toContain('无法创建作业');
     expect(client.fetchChapter).not.toHaveBeenCalled();
   });
 
@@ -366,6 +371,72 @@ describe('download controller (orchestration)', () => {
     );
     controller.dismiss();
     expect(controller.state).toEqual(INITIAL_DOWNLOAD_STATE);
+  });
+});
+
+// ── R4：失败主文案走 BOOK_SOURCE_*/BOOK_DOWNLOAD_* 域码表 ──────────────
+
+describe('download failure friendly mapping (R4)', () => {
+  it('maps a RemoteError code to the localized title with the original message as detail', async () => {
+    const client = mockClient({
+      createJob: vi.fn(async () => {
+        throw { code: 'BOOK_SOURCE_NETWORK_ERROR', message: '书源请求失败', status: null };
+      }),
+    });
+    const controller = createBookDownloadController({ client });
+    await controller.start(startInput());
+
+    expect(controller.state.phase).toBe('incomplete');
+    expect(controller.state.message).toBe('无法连接书源，请检查网络。');
+    expect(controller.state.messageDetail).toBe('书源请求失败');
+  });
+
+  it('localizes titles per the injected locale and interpolates HTTP status', async () => {
+    const client = mockClient({
+      fetchChapter: vi.fn(async () => {
+        throw { code: 'BOOK_SOURCE_HTTP_ERROR', message: 'HTTP 503', status: 503 };
+      }),
+    });
+    const controller = createBookDownloadController({ client, retryDelayMs: 0, locale: 'en' });
+    await controller.start(
+      startInput({ chapters: [{ title: 'Ch.1', url: 'https://books.example/ch/0' }] }),
+    );
+
+    expect(controller.state.phase).toBe('incomplete');
+    expect(controller.state.message).toBe('The book source returned HTTP 503.');
+    expect(controller.state.messageDetail).toBe('HTTP 503');
+  });
+
+  it('maps BOOK_DOWNLOAD_* codes and keeps the fallback for unknown codes', async () => {
+    const notFound = bookDownloadFriendlyError(
+      { code: 'BOOK_DOWNLOAD_NOT_FOUND', message: '下载作业不存在' },
+      'zh-CN',
+    );
+    expect(notFound.title).toBe('下载作业不存在。');
+    expect(notFound.detail).toBe('下载作业不存在');
+
+    const unknown = bookDownloadFriendlyError({ code: 'SOMETHING_ELSE', message: 'boom' });
+    expect(unknown.title).toBe('书籍下载失败');
+    expect(unknown.detail).toBe('boom');
+  });
+
+  it('clears the stale detail when a retry succeeds', async () => {
+    const finalize = vi
+      .fn<() => Promise<{ itemId: string; duplicate: boolean }>>()
+      .mockRejectedValueOnce({ code: 'BOOK_DOWNLOAD_STORAGE_ERROR', message: 'disk full' })
+      .mockResolvedValue({ itemId: 'managed:abc', duplicate: false });
+    const client = mockClient({ finalize });
+    const controller = createBookDownloadController({ client });
+    await controller.start(
+      startInput({ chapters: [{ title: '第1章', url: 'https://books.example/ch/0' }] }),
+    );
+    expect(controller.state.messageDetail).toBe('disk full');
+
+    controller.retryFinalize();
+    await settle();
+    expect(controller.state.phase).toBe('done');
+    expect(controller.state.message).toBeUndefined();
+    expect(controller.state.messageDetail).toBeUndefined();
   });
 });
 
@@ -572,6 +643,46 @@ describe('book source panel download entry', () => {
     )!;
     expect(section.textContent).toContain('无法读取目录');
     expect(downloads.createJob).not.toHaveBeenCalled();
+    panel.destroy();
+  });
+
+  it('renders a failed job as a friendly title with the raw error only in the expandable detail (R4)', async () => {
+    const { panel, downloads } = await mountPanel();
+    (downloads.createJob as ReturnType<typeof vi.fn>).mockRejectedValue({
+      code: 'BOOK_SOURCE_NETWORK_ERROR',
+      message: '书源请求失败',
+      status: null,
+    });
+
+    const row = panel.element.querySelector<HTMLElement>('[data-source-id="source-1"]')!;
+    buttonByText(row, '搜索').click();
+    const searchSection = panel.element.querySelector<HTMLElement>(
+      '.lightink-library-book-source-search',
+    )!;
+    searchSection.querySelector<HTMLInputElement>('input')!.value = '关键词';
+    searchSection.querySelector<HTMLButtonElement>('.lightink-library-primary')!.click();
+    await settle();
+    const result = panel.element.querySelector<HTMLElement>('.lightink-library-book-source-result')!;
+    buttonByText(result, '下载').click();
+    await settle();
+    const section = panel.element.querySelector<HTMLElement>(
+      '.lightink-library-book-source-download',
+    )!;
+    buttonByText(section, '开始下载').click();
+    await settle();
+    await settle();
+
+    const status = section.querySelector<HTMLElement>(
+      '.lightink-library-book-source-editor-status',
+    )!;
+    expect(status.textContent).toBe('无法连接书源，请检查网络。');
+    const detail = section.querySelector<HTMLDetailsElement>(
+      '.lightink-library-book-source-download-detail',
+    );
+    expect(detail).not.toBeNull();
+    expect(detail!.hidden).toBe(false);
+    expect(detail!.querySelector('summary')?.textContent).toBe('技术详情');
+    expect(detail!.querySelector('pre')?.textContent).toBe('书源请求失败');
     panel.destroy();
   });
 });

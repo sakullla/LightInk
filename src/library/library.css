@@ -6732,6 +6732,32 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   color: var(--lightink-accent);
 }
 
+/* R4：下载失败的「技术详情」折叠区——原始错误只在这里展开显示。 */
+.lightink-library-book-source-download-detail {
+  margin: 4px 0 0;
+}
+
+.lightink-library-book-source-download-detail summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--lightink-muted);
+}
+
+.lightink-library-book-source-download-detail pre {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-code-bg, transparent);
+  font-family: var(--lightink-font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9em;
+  overflow-y: auto;
+}
+
 .lightink-library-book-sources-body {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);

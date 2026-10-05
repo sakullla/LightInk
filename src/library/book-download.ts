@@ -14,6 +14,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { escapeXmlText } from './book-translation/blocks.js';
 import { buildTranslatedEpub } from './book-translation/epub-builder.js';
 import type { TranslationUnit } from './book-translation/types.js';
+import { friendlyError, type FriendlyErrorLabels } from '../ui/friendly-error.js';
+import { translate, type LocaleId, type MessageKey } from '../i18n/messages.js';
 
 export type BookDownloadFormat = 'txt' | 'epub';
 
@@ -46,6 +48,8 @@ export interface BookDownloadState {
   readonly chapters: readonly BookDownloadChapterRuntime[];
   readonly importedItemId?: string;
   readonly message?: string;
+  /** R4：原始错误信息，仅作「技术详情」展开显示；主文案见 `message`。 */
+  readonly messageDetail?: string;
 }
 
 export const INITIAL_DOWNLOAD_STATE: BookDownloadState = {
@@ -158,6 +162,46 @@ export function createBookDownloadClient(invoker: {
 
 /** 默认 Tauri 客户端；测试/降级环境注入 mock 替代。 */
 export const bookDownloadClient: BookDownloadPanelClient = createBookDownloadClient({ invoke });
+
+// ── R4：书源下载域错误码表（code 全集枚举自 book_source.rs / managed.rs） ──
+
+const BOOK_DOWNLOAD_ERROR_TITLES: Readonly<Record<string, MessageKey>> = {
+  BOOK_DOWNLOAD_INVALID: 'bookDownload.error.downloadInvalid',
+  BOOK_DOWNLOAD_NOT_FOUND: 'bookDownload.error.downloadNotFound',
+  BOOK_DOWNLOAD_STORAGE_ERROR: 'bookDownload.error.downloadStorage',
+  BOOK_SOURCE_CONTENT_MISSING: 'bookDownload.error.sourceContentMissing',
+  BOOK_SOURCE_DISABLED: 'bookDownload.error.sourceDisabled',
+  BOOK_SOURCE_EXPORT_FAILED: 'bookDownload.error.sourceExportFailed',
+  BOOK_SOURCE_FETCH_TARGET: 'bookDownload.error.sourceFetchTarget',
+  BOOK_SOURCE_HTTP_ERROR: 'bookDownload.error.sourceHttpError',
+  BOOK_SOURCE_IMPORT_INVALID: 'bookDownload.error.sourceImportInvalid',
+  BOOK_SOURCE_INVALID: 'bookDownload.error.sourceInvalid',
+  BOOK_SOURCE_NETWORK_ERROR: 'bookDownload.error.sourceNetworkError',
+  BOOK_SOURCE_NOT_FOUND: 'bookDownload.error.sourceNotFound',
+  BOOK_SOURCE_QUERY_EMPTY: 'bookDownload.error.sourceQueryEmpty',
+  BOOK_SOURCE_RULE_INVALID: 'bookDownload.error.sourceRuleInvalid',
+  BOOK_SOURCE_STATE_UNAVAILABLE: 'bookDownload.error.sourceStateUnavailable',
+  BOOK_SOURCE_STORAGE_ERROR: 'bookDownload.error.sourceStorage',
+  BOOK_SOURCE_TOC_EMPTY: 'bookDownload.error.sourceTocEmpty',
+  BOOK_SOURCE_TOC_MISSING: 'bookDownload.error.sourceTocMissing',
+  BOOK_SOURCE_TOO_LARGE: 'bookDownload.error.sourceTooLarge',
+  BOOK_SOURCE_URL_INVALID: 'bookDownload.error.sourceUrlInvalid',
+};
+
+/**
+ * 把下载/合成失败映射为友好标题；原始 message 只作 detail。
+ * 面板与助手把 `message` 当主文案、`messageDetail` 放进可展开详情。
+ */
+export function bookDownloadFriendlyError(
+  error: unknown,
+  locale: LocaleId = 'zh-CN',
+): FriendlyErrorLabels {
+  return friendlyError(error, {
+    codeTitles: BOOK_DOWNLOAD_ERROR_TITLES,
+    fallbackTitle: 'bookDownload.error.fallback',
+    t: (key, vars) => translate(locale, key, vars),
+  });
+}
 
 // ── 纯状态转移 ────────────────────────────────────────────────────────
 
@@ -281,24 +325,32 @@ export function chapterRetried(state: BookDownloadState, indexNo: number): BookD
   }));
 }
 
-export function downloadIncomplete(state: BookDownloadState, message: string): BookDownloadState {
-  return { ...state, phase: 'incomplete', message };
+export function downloadIncomplete(
+  state: BookDownloadState,
+  message: string,
+  detail?: string,
+): BookDownloadState {
+  return { ...state, phase: 'incomplete', message, ...(detail === undefined ? {} : { messageDetail: detail }) };
 }
 
 export function composeStarted(state: BookDownloadState): BookDownloadState {
-  return { ...state, phase: 'composing', message: undefined };
+  return { ...state, phase: 'composing', message: undefined, messageDetail: undefined };
 }
 
 export function composeSucceeded(
   state: BookDownloadState,
   itemId: string,
 ): BookDownloadState {
-  return { ...state, phase: 'done', importedItemId: itemId, message: undefined };
+  return { ...state, phase: 'done', importedItemId: itemId, message: undefined, messageDetail: undefined };
 }
 
 /** 合成失败：章节保持完成态、作业可重试（半成品由 Rust 侧回滚保证不落库）。 */
-export function composeFailed(state: BookDownloadState, message: string): BookDownloadState {
-  return { ...state, phase: 'ready', message };
+export function composeFailed(
+  state: BookDownloadState,
+  message: string,
+  detail?: string,
+): BookDownloadState {
+  return { ...state, phase: 'ready', message, ...(detail === undefined ? {} : { messageDetail: detail }) };
 }
 
 // ── EPUB 合成（前端 epub-builder → base64 交窄命令） ──────────────────
@@ -371,6 +423,8 @@ export interface BookDownloadControllerOptions {
   readonly onState?: (state: BookDownloadState) => void;
   /** 章内重试间隔。测试可传 0。 */
   readonly retryDelayMs?: number;
+  /** 失败主文案的本地化语言（R4）；缺省 zh-CN。 */
+  readonly locale?: LocaleId;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -390,6 +444,13 @@ export function createBookDownloadController(
   let cancelRequested = false;
   let running = false;
   let epubLanguage = 'zh';
+  // R4：最近一次章节抓取失败的原对象（含 code），供 incomplete 文案映射。
+  let lastFailureError: unknown;
+
+  /** R4：失败主文案走域码表友好标题，原始 message 只进 detail。 */
+  function failureOf(error: unknown): FriendlyErrorLabels {
+    return bookDownloadFriendlyError(error, options.locale);
+  }
 
   function emit(): void {
     options.onState?.(state);
@@ -413,7 +474,8 @@ export function createBookDownloadController(
       const result = await client.finalize(jobId, epubBase64);
       setState(composeSucceeded(state, result.itemId));
     } catch (error) {
-      setState(composeFailed(state, errorMessage(error, '合成入库失败')));
+      const friendly = failureOf(error);
+      setState(composeFailed(state, friendly.title, friendly.detail));
     }
   }
 
@@ -433,6 +495,7 @@ export function createBookDownloadController(
         return;
       } catch (error) {
         lastError = errorMessage(error, '章节下载失败');
+        lastFailureError = error;
       }
     }
     if (!cancelRequested) {
@@ -464,11 +527,12 @@ export function createBookDownloadController(
         setState(downloadPaused(state));
         return;
       }
-      const { done, failed, total } = chapterProgress(state);
+      const { failed } = chapterProgress(state);
       if (failed > 0) {
-        setState(
-          downloadIncomplete(state, `${done}/${total}，${failed} 章失败。已完成的不会重下，可重试失败章。`),
-        );
+        // R4：主文案 = 域码表友好标题；进度计数仍由 formatDownloadProgress
+        // 呈现（面板 downloadInfo 行），原始错误只进 messageDetail。
+        const friendly = failureOf(lastFailureError);
+        setState(downloadIncomplete(state, friendly.title, friendly.detail));
         return;
       }
       await finalize();
@@ -493,9 +557,8 @@ export function createBookDownloadController(
         }
         setState(runtimeFromPersisted(job));
       } catch (error) {
-        setState(
-          downloadIncomplete(state, errorMessage(error, '无法创建下载作业')),
-        );
+        const friendly = failureOf(error);
+        setState(downloadIncomplete(state, friendly.title, friendly.detail));
         return;
       }
       await runLoop();
@@ -507,9 +570,8 @@ export function createBookDownloadController(
         const job = await client.getJob(jobId);
         setState(runtimeFromPersisted(job));
       } catch (error) {
-        setState(
-          downloadIncomplete(state, errorMessage(error, '无法读取下载作业')),
-        );
+        const friendly = failureOf(error);
+        setState(downloadIncomplete(state, friendly.title, friendly.detail));
         return;
       }
       await runLoop();

@@ -37,6 +37,17 @@ export interface ApplicationStateSyncOptions {
   readonly onStorageApplied?: (records: readonly SyncRecord[]) => void;
   readonly onRecordsApplied?: (records: readonly SyncRecord[]) => void | Promise<void>;
   readonly onError?: (error: unknown) => void;
+  /**
+   * R4：每次后台同步落定（成功/失败）回调一次，宿主据此在同步面板
+   * 关闭时以 toast 呈现结果。未配置目标（返回 null）不通知。
+   */
+  readonly onSettled?: (outcome: ApplicationStateSyncOutcome) => void;
+}
+
+export interface ApplicationStateSyncOutcome {
+  readonly ok: boolean;
+  readonly status: SyncStatus | null;
+  readonly error?: unknown;
 }
 
 type StoredValue = string | null;
@@ -194,6 +205,17 @@ export class ApplicationStateSync {
     if (this.options.getProfile !== undefined && (await this.options.getProfile()) === null) {
       return null;
     }
+    try {
+      const status = await this.runSync();
+      this.options.onSettled?.({ ok: true, status });
+      return status;
+    } catch (error) {
+      this.options.onSettled?.({ ok: false, status: null, error });
+      throw error;
+    }
+  }
+
+  private async runSync(): Promise<SyncStatus | null> {
     let records = await this.options.records.listRecords();
     let status: SyncStatus | null = null;
 
