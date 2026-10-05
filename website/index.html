@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="轻墨 LightInk — 轻量的本地电子书阅读器与 Markdown 编辑器。Windows / macOS / Linux / Android 全平台下载。">
+  <title>轻墨 LightInk — 本地电子书阅读器与 Markdown 编辑器</title>
+  <!-- 内联 data URI 图标：不发起任何网络请求 -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f4efe6'/%3E%3Cpath d='M32 10c9 11 16 19 16 27a16 16 0 1 1-32 0c0-8 7-16 16-27z' fill='%232f2b24'/%3E%3C/svg%3E">
+  <style>
+    /* 配色与应用内置主题令牌一致（src/theme/tokens.css）：warm-light / dark */
+    :root {
+      color-scheme: light;
+      --bg: #f4efe6;
+      --bg-elevated: #fbf7f0;
+      --fg: #2f2b24;
+      --muted: #6f6758;
+      --accent: #9a5828;
+      --accent-soft: #efe2cc;
+      --border: #d9d0bc;
+      --shadow: 0 4px 16px rgba(47, 43, 36, 0.1);
+      --shadow-strong: 0 12px 32px rgba(47, 43, 36, 0.14), 0 2px 8px rgba(47, 43, 36, 0.06);
+      --font-ui: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+        "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #1e1c19;
+        --bg-elevated: #282622;
+        --fg: #e0d8c8;
+        --muted: #9a9180;
+        --accent: #d4a066;
+        --accent-soft: #3a342a;
+        --border: #3f3a32;
+        --shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        --shadow-strong: 0 12px 32px rgba(0, 0, 0, 0.45);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-ui);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    a { color: var(--accent); }
+
+    /* ---------- 页头 ---------- */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .site-header .container {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 60px;
+    }
+
+    .brand {
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: 0.02em;
+      margin-right: auto;
+      white-space: nowrap;
+    }
+
+    .lang-switch {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .lang-switch button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.9rem;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+
+    .lang-switch button[aria-pressed="true"] {
+      background: var(--accent-soft);
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    .header-link {
+      font-size: 0.9rem;
+      text-decoration: none;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .header-link:hover { color: var(--accent); }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      text-align: center;
+      padding: 72px 0 56px;
+    }
+
+    .hero h1 {
+      margin: 0 0 6px;
+      font-size: clamp(2.2rem, 6vw, 3.4rem);
+      letter-spacing: 0.04em;
+    }
+
+    .hero .tagline {
+      margin: 0 0 18px;
+      font-size: clamp(1.05rem, 3vw, 1.3rem);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .hero .desc {
+      margin: 0 auto 30px;
+      max-width: 720px;
+      color: var(--muted);
+    }
+
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 30px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg-elevated);
+      box-shadow: var(--shadow);
+    }
+
+    .btn-primary:hover { filter: brightness(1.08); }
+
+    .btn-ghost {
+      border-color: var(--border);
+      color: var(--fg);
+      background: var(--bg-elevated);
+    }
+
+    .btn-ghost:hover { border-color: var(--accent); }
+
+    .hero .note {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    /* ---------- 分节 ---------- */
+    section { padding: 48px 0; }
+
+    section h2 {
+      margin: 0 0 8px;
+      font-size: clamp(1.5rem, 4vw, 2rem);
+    }
+
+    .section-desc {
+      margin: 0 0 32px;
+      color: var(--muted);
+      max-width: 720px;
+    }
+
+    /* ---------- 平台卡片 ---------- */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+    }
+
+    .card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px 20px 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .card .os-name {
+      margin: 0;
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .card .os-desc {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+      flex: 1;
+    }
+
+    .card .btn {
+      text-align: center;
+      padding: 10px 14px;
+      font-size: 0.95rem;
+    }
+
+    .card.is-current {
+      border-color: var(--accent);
+      box-shadow: var(--shadow-strong);
+    }
+
+    .card .current-badge {
+      display: none;
+      position: absolute;
+      top: -12px;
+      right: 14px;
+      background: var(--accent);
+      color: var(--bg-elevated);
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 999px;
+      padding: 3px 10px;
+    }
+
+    .card.is-current .current-badge { display: inline-block; }
+
+    /* ---------- 特性 ---------- */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .feature {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+    }
+
+    .feature h3 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .feature p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    /* ---------- 截图 ---------- */
+    .shots {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .shot {
+      margin: 0;
+    }
+
+    .shot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      background: var(--bg-elevated);
+    }
+
+    .shot figcaption {
+      margin-top: 8px;
+      font-size: 0.88rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* ---------- FAQ ---------- */
+    .faq {
+      max-width: 780px;
+    }
+
+    .faq details {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0 20px;
+      margin-bottom: 12px;
+    }
+
+    .faq summary {
+      cursor: pointer;
+      font-weight: 600;
+      padding: 16px 0;
+      list-style-position: outside;
+    }
+
+    .faq details[open] summary { color: var(--accent); }
+
+    .faq .answer {
+      padding: 0 0 18px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .faq .answer code {
+      background: var(--accent-soft);
+      color: var(--fg);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.88em;
+    }
+
+    /* ---------- 页脚 ---------- */
+    .site-footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 0 40px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      text-align: center;
+    }
+
+    .site-footer p { margin: 6px 0; }
+
+    /* ---------- 响应式 ---------- */
+    @media (max-width: 960px) {
+      .cards { grid-template-columns: repeat(2, 1fr); }
+      .features { grid-template-columns: repeat(2, 1fr); }
+      .shots { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 620px) {
+      .hero { padding: 48px 0 40px; }
+      .cards { grid-template-columns: 1fr; }
+      .features { grid-template-columns: 1fr; }
+      .shots { grid-template-columns: 1fr; }
+      .site-header .container { flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <div class="brand">轻墨 LightInk</div>
+      <div class="lang-switch" role="group" aria-label="Language / 语言">
+        <button type="button" id="lang-zh" aria-pressed="true">中文</button>
+        <button type="button" id="lang-en" aria-pressed="false">English</button>
+      </div>
+      <a class="header-link" href="https://github.com/sakullla/LightInk" target="_blank" rel="noopener" data-i18n="nav.github">GitHub 仓库</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero container" id="top">
+      <h1>轻墨 LightInk</h1>
+      <p class="tagline" data-i18n="hero.tagline"></p>
+      <p class="desc" data-i18n="hero.desc"></p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="hero.download"></a>
+        <a class="btn btn-ghost" href="https://github.com/sakullla/LightInk" target="_blank" rel="noopener" data-i18n="hero.source"></a>
+      </div>
+      <p class="note" data-i18n="hero.note"></p>
+    </section>
+
+    <!-- 下载 -->
+    <section class="container" id="download">
+      <h2 data-i18n="dl.title"></h2>
+      <p class="section-desc" data-i18n="dl.desc"></p>
+      <div class="cards">
+        <div class="card" data-os="windows">
+          <span class="current-badge" data-i18n="dl.badge"></span>
+          <h3 class="os-name">Windows</h3>
+          <p class="os-desc" data-i18n="dl.win.desc"></p>
+          <a class="btn btn-primary" href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="dl.win.cta"></a>
+        </div>
+        <div class="card" data-os="macos">
+          <span class="current-badge" data-i18n="dl.badge"></span>
+          <h3 class="os-name">macOS</h3>
+          <p class="os-desc" data-i18n="dl.mac.desc"></p>
+          <a class="btn btn-primary" href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="dl.mac.cta"></a>
+        </div>
+        <div class="card" data-os="linux">
+          <span class="current-badge" data-i18n="dl.badge"></span>
+          <h3 class="os-name">Linux</h3>
+          <p class="os-desc" data-i18n="dl.linux.desc"></p>
+          <a class="btn btn-primary" href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="dl.linux.cta"></a>
+        </div>
+        <div class="card" data-os="android">
+          <span class="current-badge" data-i18n="dl.badge"></span>
+          <h3 class="os-name">Android</h3>
+          <p class="os-desc" data-i18n="dl.android.desc"></p>
+          <a class="btn btn-primary" href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="dl.android.cta"></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 特性 -->
+    <section class="container" id="features">
+      <h2 data-i18n="feat.title"></h2>
+      <div class="features">
+        <div class="feature">
+          <h3 data-i18n="feat.1.title"></h3>
+          <p data-i18n="feat.1.desc"></p>
+        </div>
+        <div class="feature">
+          <h3 data-i18n="feat.2.title"></h3>
+          <p data-i18n="feat.2.desc"></p>
+        </div>
+        <div class="feature">
+          <h3 data-i18n="feat.3.title"></h3>
+          <p data-i18n="feat.3.desc"></p>
+        </div>
+        <div class="feature">
+          <h3 data-i18n="feat.4.title"></h3>
+          <p data-i18n="feat.4.desc"></p>
+        </div>
+        <div class="feature">
+          <h3 data-i18n="feat.5.title"></h3>
+          <p data-i18n="feat.5.desc"></p>
+        </div>
+        <div class="feature">
+          <h3 data-i18n="feat.6.title"></h3>
+          <p data-i18n="feat.6.desc"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 截图 -->
+    <section class="container" id="screenshots">
+      <h2 data-i18n="shots.title"></h2>
+      <p class="section-desc" data-i18n="shots.desc"></p>
+      <div class="shots">
+        <figure class="shot">
+          <img src="assets/shelf-warm-light-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.shelf.light.alt">
+          <figcaption><span data-i18n="shots.shelf.label"></span> · <span data-i18n="shots.theme.light"></span></figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/shelf-dark-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.shelf.dark.alt">
+          <figcaption><span data-i18n="shots.shelf.label"></span> · <span data-i18n="shots.theme.dark"></span></figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/editor-warm-light-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.editor.light.alt">
+          <figcaption><span data-i18n="shots.editor.label"></span> · <span data-i18n="shots.theme.light"></span></figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/editor-dark-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.editor.dark.alt">
+          <figcaption><span data-i18n="shots.editor.label"></span> · <span data-i18n="shots.theme.dark"></span></figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/reader-warm-light-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.reader.light.alt">
+          <figcaption><span data-i18n="shots.reader.label"></span> · <span data-i18n="shots.theme.light"></span></figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/reader-dark-1280.png" width="1280" height="1000" loading="lazy"
+               alt="" data-i18n-attr="alt:shots.reader.dark.alt">
+          <figcaption><span data-i18n="shots.reader.label"></span> · <span data-i18n="shots.theme.dark"></span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="container" id="faq">
+      <h2 data-i18n="faq.title"></h2>
+      <div class="faq">
+        <details>
+          <summary data-i18n="faq.q1.q"></summary>
+          <div class="answer" data-i18n="faq.q1.a"></div>
+        </details>
+        <details>
+          <summary data-i18n="faq.q2.q"></summary>
+          <div class="answer" data-i18n="faq.q2.a"></div>
+        </details>
+        <details>
+          <summary data-i18n="faq.q3.q"></summary>
+          <div class="answer" data-i18n="faq.q3.a"></div>
+        </details>
+        <details>
+          <summary data-i18n="faq.q4.q"></summary>
+          <div class="answer" data-i18n="faq.q4.a"></div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p data-i18n="footer.license"></p>
+      <p>
+        <a href="https://github.com/sakullla/LightInk" target="_blank" rel="noopener">GitHub</a>
+        ·
+        <a href="https://github.com/sakullla/LightInk/releases/latest" target="_blank" rel="noopener" data-i18n="footer.releases"></a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    'use strict';
+
+    var RELEASES_URL = 'https://github.com/sakullla/LightInk/releases/latest';
+    /* 站点独立于应用前端的 lightink.locale（ADR-6），只记住本页的手动语言选择 */
+    var STORAGE_KEY = 'lightink.site.locale';
+
+    var I18N = {
+      'zh-CN': {
+        'meta.title': '轻墨 LightInk — 本地电子书阅读器与 Markdown 编辑器',
+        'nav.github': 'GitHub 仓库',
+        'hero.tagline': '轻量的本地电子书阅读器与 Markdown 编辑器',
+        'hero.desc': '冷启动进入书架封面墙，一键进入 Typora 式所见即所得编辑；支持 EPUB / PDF / CBZ 与漫画压缩包、OPDS 书库、WebDAV 同步，数据全部留在本机。基于 Tauri v2 构建，Windows 安装包仅约 4–5 MB，冷启动不足 1 秒。',
+        'hero.download': '前往下载',
+        'hero.source': '查看源码',
+        'hero.note': '免费开源（GPL-3.0）。所有平台的安装包都发布在 GitHub Releases 的最新版页面。',
+        'dl.title': '选择你的平台',
+        'dl.desc': 'Windows、macOS、Linux 与 Android 的安装包都在 GitHub Releases 的 latest 页面，进入后选择对应文件下载即可。',
+        'dl.badge': '当前系统',
+        'dl.win.desc': 'NSIS（.exe）与 MSI 双格式安装包，约 4–5 MB；NSIS 按当前用户安装，无需管理员权限。',
+        'dl.win.cta': '下载 Windows 版',
+        'dl.mac.desc': 'DMG 镜像（Apple Silicon）。需要 macOS 11.0 或更高版本；应用未公证，首次启动请见下方说明。',
+        'dl.mac.cta': '下载 macOS 版',
+        'dl.linux.desc': 'deb 与 AppImage（x86_64）。AppImage 下载后添加可执行权限即可运行。',
+        'dl.linux.cta': '下载 Linux 版',
+        'dl.android.desc': '已签名 ARM64-v8a APK，需手动安装（见下方说明）。',
+        'dl.android.cta': '下载 Android 版',
+        'feat.title': '特性',
+        'feat.1.title': '所见即所得编辑',
+        'feat.1.desc': 'Typora 式单栏渲染态编辑，光标进入元素才显示源码；支持表格、代码高亮、LaTeX 公式与 mermaid 图形。',
+        'feat.2.title': '统一书库',
+        'feat.2.desc': '本地书籍与 OPDS 1.x/2.0 书源集中在封面墙，支持嵌套分组、规则智能分组、搜索与分页。',
+        'feat.3.title': '深度阅读',
+        'feat.3.desc': 'EPUB、PDF 与 CBZ/CBR/CB7/RAR/7z 漫画归档；远程书籍按需区间读取，不把整本书读进内存。',
+        'feat.4.title': 'WebDAV 同步',
+        'feat.4.desc': '书籍元数据、阅读进度与受管文档经一个 WebDAV 目标在多设备间同步，正文默认按需下载。',
+        'feat.5.title': '护眼主题',
+        'feat.5.desc': '暖纸浅色与墨夜深色一键切换（Ctrl+J），并支持自定义主题 CSS 热替换。',
+        'feat.6.title': '轻量与隐私',
+        'feat.6.desc': 'Windows 安装包约 4–5 MB、冷启动低于 1 秒；数据与凭据只保存在本机与系统钥匙串。',
+        'shots.title': '界面一览',
+        'shots.desc': '截图由仓库内置的界面采集脚本生成，与应用实际界面一致（浅色为默认暖纸主题）。',
+        'shots.shelf.label': '书架',
+        'shots.editor.label': '编辑器',
+        'shots.reader.label': '阅读器',
+        'shots.theme.light': '暖色浅色',
+        'shots.theme.dark': '深色',
+        'shots.shelf.light.alt': 'LightInk 书架封面墙，暖色浅色主题',
+        'shots.shelf.dark.alt': 'LightInk 书架封面墙，深色主题',
+        'shots.editor.light.alt': 'LightInk Markdown 编辑器，暖色浅色主题',
+        'shots.editor.dark.alt': 'LightInk Markdown 编辑器，深色主题',
+        'shots.reader.light.alt': 'LightInk 阅读器，暖色浅色主题',
+        'shots.reader.dark.alt': 'LightInk 阅读器，深色主题',
+        'faq.title': '常见问题',
+        'faq.q1.q': 'macOS 首次启动被 Gatekeeper 拦截怎么办？',
+        'faq.q1.a': '安装包为 ad-hoc 签名、未经过 Apple 公证，首次打开会被拦截。请在 Finder 中找到 LightInk.app，按住 Control 点按（或右键）并选择「打开」，在弹出的对话框中再点一次「打开」；也可以先双击，被拦后前往「系统设置 → 隐私与安全性」，在底部找到关于 LightInk 的提示并点「仍要打开」。两种方式都只需操作一次。',
+        'faq.q2.q': 'Windows 的 NSIS（.exe）和 MSI 装哪个？',
+        'faq.q2.a': '日常使用选 NSIS（<code>.exe</code>）：按当前用户安装、不需要管理员权限、体积更小。MSI（<code>.msi</code>）适合企业环境统一部署与组策略管理。两者功能完全一致，任选其一即可。',
+        'faq.q3.q': 'Android APK 如何安装？',
+        'faq.q3.a': '从 Releases 页面下载 arm64-v8a 版 APK 后直接打开安装；系统会要求先允许来源应用（浏览器或文件管理器）的「安装未知应用」权限，按提示授权即可。仅提供 64 位（ARM64）架构包。',
+        'faq.q4.q': '系统要求是什么？',
+        'faq.q4.a': 'macOS 需要 11.0（Big Sur）或更高版本；Windows 提供 x64 安装包；Linux 提供 x86_64 的 deb 与 AppImage；Android 需 ARM64 设备。所有平台的安装包都在 Releases 的 latest 页面。',
+        'footer.license': '轻墨 LightInk 是 GPL-3.0 开源软件。本站为纯静态页面，可离线打开。',
+        'footer.releases': 'Releases'
+      },
+      'en': {
+        'meta.title': 'LightInk — Local e-book reader and Markdown editor',
+        'nav.github': 'GitHub repository',
+        'hero.tagline': 'A lightweight local e-book reader and Markdown editor',
+        'hero.desc': 'Launches straight into a cover-wall bookshelf, then flips into a Typora-style WYSIWYG editor. Reads EPUB / PDF / CBZ and comic archives, browses OPDS catalogs, syncs over WebDAV, and keeps every byte of your data on your own machine. Built on Tauri v2: the Windows installer is about 4–5 MB with a sub-second cold start.',
+        'hero.download': 'Get LightInk',
+        'hero.source': 'View source',
+        'hero.note': 'Free and open source (GPL-3.0). Every platform build is published on the latest GitHub Releases page.',
+        'dl.title': 'Choose your platform',
+        'dl.desc': 'Installers for Windows, macOS, Linux, and Android all live on the GitHub Releases latest page — pick the file matching your platform there.',
+        'dl.badge': 'Your system',
+        'dl.win.desc': 'NSIS (.exe) and MSI installers, about 4–5 MB; NSIS installs per-user without administrator rights.',
+        'dl.win.cta': 'Download for Windows',
+        'dl.mac.desc': 'DMG image (Apple Silicon). Requires macOS 11.0 or later; the app is not notarized — see the Gatekeeper note below.',
+        'dl.mac.cta': 'Download for macOS',
+        'dl.linux.desc': 'deb and AppImage (x86_64). Make the AppImage executable after download and run it.',
+        'dl.linux.cta': 'Download for Linux',
+        'dl.android.desc': 'Signed ARM64-v8a APK, installed manually (see the note below).',
+        'dl.android.cta': 'Download for Android',
+        'feat.title': 'Features',
+        'feat.1.title': 'WYSIWYG editing',
+        'feat.1.desc': 'Typora-style single-column editing that reveals source only where the cursor lands; tables, syntax highlighting, LaTeX math, and mermaid diagrams.',
+        'feat.2.title': 'Unified library',
+        'feat.2.desc': 'Local books and OPDS 1.x/2.0 catalogs meet on one cover wall, with nested groups, rule-based smart groups, search, and paging.',
+        'feat.3.title': 'Deep reading',
+        'feat.3.desc': 'EPUB, PDF, and CBZ/CBR/CB7/RAR/7z comic archives; remote books stream by HTTP ranges instead of loading whole files into memory.',
+        'feat.4.title': 'WebDAV sync',
+        'feat.4.desc': 'Book metadata, reading progress, and managed documents sync across devices through a single WebDAV target; content downloads on demand.',
+        'feat.5.title': 'Eye-friendly themes',
+        'feat.5.desc': 'Warm paper light and ink-night dark themes one keystroke apart (Ctrl+J), plus hot-swappable custom theme CSS.',
+        'feat.6.title': 'Light and private',
+        'feat.6.desc': 'Roughly 4–5 MB Windows installer, sub-second cold start; data and credentials stay on your machine and in the system keychain.',
+        'shots.title': 'A look inside',
+        'shots.desc': 'Screenshots come from the capture pipeline built into the repository and match the real UI (light shots use the default warm paper theme).',
+        'shots.shelf.label': 'Shelf',
+        'shots.editor.label': 'Editor',
+        'shots.reader.label': 'Reader',
+        'shots.theme.light': 'Warm light',
+        'shots.theme.dark': 'Dark',
+        'shots.shelf.light.alt': 'LightInk shelf cover wall, warm light theme',
+        'shots.shelf.dark.alt': 'LightInk shelf cover wall, dark theme',
+        'shots.editor.light.alt': 'LightInk Markdown editor, warm light theme',
+        'shots.editor.dark.alt': 'LightInk Markdown editor, dark theme',
+        'shots.reader.light.alt': 'LightInk reader, warm light theme',
+        'shots.reader.dark.alt': 'LightInk reader, dark theme',
+        'faq.title': 'FAQ',
+        'faq.q1.q': 'macOS blocks the first launch — how do I get past Gatekeeper?',
+        'faq.q1.a': 'The app is ad-hoc signed and not notarized, so Gatekeeper challenges the first launch. In Finder, Control-click (or right-click) LightInk.app and choose “Open”, then confirm “Open” in the dialog. Alternatively, double-click once, then go to “System Settings → Privacy & Security”, scroll to the LightInk notice, and click “Open Anyway”. Either path is needed only once.',
+        'faq.q2.q': 'Windows: NSIS (.exe) or MSI — which one?',
+        'faq.q2.a': 'For everyday use pick NSIS (<code>.exe</code>): it installs per-user, needs no administrator rights, and is smaller. The MSI (<code>.msi</code>) suits enterprise deployment and Group Policy. Both carry identical features — choose either.',
+        'faq.q3.q': 'How do I install the Android APK?',
+        'faq.q3.a': 'Download the arm64-v8a APK from the Releases page and open it to install. Android will ask you to allow “install unknown apps” for the source app (your browser or file manager) first — follow the prompt. Only 64-bit (ARM64) builds are provided.',
+        'faq.q4.q': 'What are the system requirements?',
+        'faq.q4.a': 'macOS requires 11.0 (Big Sur) or later; Windows ships an x64 installer; Linux ships x86_64 deb and AppImage; Android requires an ARM64 device. Installers for every platform live on the Releases latest page.',
+        'footer.license': 'LightInk is open-source software under the GPL-3.0. This site is fully static and works offline.',
+        'footer.releases': 'Releases'
+      }
+    };
+
+    function readStoredLocale() {
+      try {
+        var value = window.localStorage.getItem(STORAGE_KEY);
+        return value === 'zh-CN' || value === 'en' ? value : null;
+      } catch (error) {
+        return null; /* file:// 或隐私模式下 localStorage 可能不可用 */
+      }
+    }
+
+    function storeLocale(locale) {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, locale);
+      } catch (error) {
+        /* 记忆失败时本次会话仍生效，只是下次访问回到自动检测 */
+      }
+    }
+
+    function detectInitialLocale() {
+      var stored = readStoredLocale();
+      if (stored) return stored;
+      var languages = navigator.languages && navigator.languages.length
+        ? navigator.languages
+        : [navigator.language || ''];
+      for (var i = 0; i < languages.length; i += 1) {
+        if (/^zh\b/i.test(languages[i])) return 'zh-CN';
+      }
+      return 'en';
+    }
+
+    function applyLocale(locale) {
+      var dict = I18N[locale];
+      document.documentElement.lang = locale;
+      document.title = dict['meta.title'];
+
+      var nodes = document.querySelectorAll('[data-i18n]');
+      for (var i = 0; i < nodes.length; i += 1) {
+        nodes[i].innerHTML = dict[nodes[i].getAttribute('data-i18n')];
+      }
+
+      var attrNodes = document.querySelectorAll('[data-i18n-attr]');
+      for (var j = 0; j < attrNodes.length; j += 1) {
+        var spec = attrNodes[j].getAttribute('data-i18n-attr').split(':');
+        attrNodes[j].setAttribute(spec[0], dict[spec[1]]);
+      }
+
+      document.getElementById('lang-zh').setAttribute('aria-pressed', String(locale === 'zh-CN'));
+      document.getElementById('lang-en').setAttribute('aria-pressed', String(locale === 'en'));
+    }
+
+    /* 访客系统检测：仅用于高亮卡片，与任何下载链接无关（链接统一指向 releases/latest） */
+    function detectVisitorOS() {
+      var ua = navigator.userAgent;
+      if (/Android/i.test(ua)) return 'android';
+      if (/Windows|Win64|Win32|IEMobile/i.test(ua)) return 'windows';
+      if (/Macintosh|Mac OS X|MacIntel/i.test(ua)) return 'macos';
+      if (/CrOS/i.test(ua)) return null; /* ChromeOS 无对应安装包，不高亮 */
+      if (/Linux|X11/i.test(ua)) return 'linux';
+      return null;
+    }
+
+    function highlightCurrentOS() {
+      var current = detectVisitorOS();
+      if (!current) return;
+      var card = document.querySelector('.card[data-os="' + current + '"]');
+      if (card) card.classList.add('is-current');
+    }
+
+    document.getElementById('lang-zh').addEventListener('click', function () {
+      applyLocale('zh-CN');
+      storeLocale('zh-CN');
+    });
+
+    document.getElementById('lang-en').addEventListener('click', function () {
+      applyLocale('en');
+      storeLocale('en');
+    });
+
+    applyLocale(detectInitialLocale());
+    highlightCurrentOS();
+  </script>
+</body>
+</html>
