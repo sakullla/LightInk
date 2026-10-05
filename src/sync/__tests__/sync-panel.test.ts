@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { showSyncPanel } from '../sync-panel.js';
+import { showSyncPanel, SYNC_ERROR_TITLES } from '../sync-panel.js';
 import type { SyncPanelDeps } from '../sync-panel.js';
 import type { SyncStatus } from '../sync-client.js';
 import type { SyncProfileInput } from '../webdav-client.js';
@@ -397,6 +397,86 @@ describe('sync panel', () => {
       '无法读取同步记录: database is locked',
     );
     button(dialog, '关闭').click();
+  });
+
+  it('localizes rejected credentials (401) instead of degrading to the generic title', async () => {
+    const panelDeps = createDeps();
+    // R4 验收场景：密码错误 → 后端 401 → SYNC_AUTH_REQUIRED（response_error 家族）。
+    panelDeps.webdav.testProfile = vi.fn(async () => {
+      throw { code: 'SYNC_AUTH_REQUIRED', message: 'WebDAV 需要重新输入凭据', status: 401 };
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    button(dialog, '测试连接').click();
+    await settle();
+    const message = dialog.querySelector<HTMLElement>('.lightink-sync-message')!;
+    expect(message.querySelector('.lightink-sync-message-text')?.textContent).toBe(
+      'WebDAV 服务器拒绝了登录，请检查用户名和密码。',
+    );
+    expect(message.querySelector('.lightink-sync-message-detail pre')?.textContent).toBe(
+      'WebDAV 需要重新输入凭据',
+    );
+    button(dialog, '关闭').click();
+  });
+
+  it('interpolates the HTTP status into the SYNC_HTTP_ERROR title', async () => {
+    const panelDeps = createDeps();
+    panelDeps.webdav.testProfile = vi.fn(async () => {
+      throw { code: 'SYNC_HTTP_ERROR', message: '创建 WebDAV 目录失败', status: 507 };
+    });
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    button(dialog, '测试连接').click();
+    await settle();
+    const message = dialog.querySelector<HTMLElement>('.lightink-sync-message')!;
+    expect(message.querySelector('.lightink-sync-message-text')?.textContent).toBe(
+      'WebDAV 服务器返回 HTTP 507。',
+    );
+    button(dialog, '关闭').click();
+  });
+
+  it('maps the status-line title from lastErrorCode and keeps lastError as detail', async () => {
+    const panelDeps = createDeps();
+    panelDeps.sync.status = vi.fn(async () => ({
+      state: 'error' as const,
+      uploaded: 0,
+      downloaded: 0,
+      conflicts: 0,
+      lastError: '无法读取同步记录: database is locked',
+      lastErrorCode: 'SYNC_NETWORK_ERROR',
+    }));
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const status = dialog.querySelector<HTMLElement>('.lightink-sync-status')!;
+    expect(status.querySelector('.lightink-sync-status-state')?.textContent).toBe(
+      '无法连接 WebDAV 服务器，请检查地址与网络。',
+    );
+    const detail = status.querySelector<HTMLDetailsElement>('.lightink-sync-status-detail');
+    expect(detail).not.toBeNull();
+    expect(detail!.hidden).toBe(false);
+    expect(detail!.querySelector('pre')?.textContent).toBe(
+      '无法读取同步记录: database is locked',
+    );
+    button(dialog, '关闭').click();
+  });
+
+  it('covers every SYNC_* error code emitted by the backend sources', () => {
+    // 完备性守护：从 webdav.rs / sync.rs 提取全部引号字面量 SYNC_* 错误码，
+    // 码表缺码或后端新增码未登记都会在此失败（A1 review P1 根因）。
+    const sources = ['src-tauri/src/webdav.rs', 'src-tauri/src/sync.rs'].map((path) =>
+      readFileSync(resolve(process.cwd(), path), 'utf-8'),
+    );
+    const emitted = new Set<string>();
+    for (const source of sources) {
+      for (const match of source.matchAll(/"SYNC_[A-Z_]+"/g)) {
+        emitted.add(match[0].slice(1, -1));
+      }
+    }
+    expect(emitted.size).toBeGreaterThan(0);
+    expect(Object.keys(SYNC_ERROR_TITLES).sort()).toEqual([...emitted].sort());
   });
 
   it('paints the dialog with the shelf theme instead of editor cream', () => {

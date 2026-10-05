@@ -208,8 +208,10 @@ const PHASE_LABELS: Record<'en' | 'zh-CN', Record<string, string>> = {
 };
 
 /**
- * R4：WebDAV 同步域码表。code 全集枚举自 `src-tauri/src/webdav.rs` 与
- * `src-tauri/src/sync.rs` 的 `WebDavError::new(...)`；不扩 reader 域码表。
+ * R4：WebDAV 同步域码表。覆盖 `src-tauri/src/webdav.rs` 与
+ * `src-tauri/src/sync.rs` 抛出的全部 `SYNC_*` 错误码（含 `response_error`
+ * 的 401/403/HTTP 家族与 put/get/snapshot 系守卫）；完备性由
+ * `sync-panel.test.ts` 的后端源码扫描测试守护。不扩 reader 域码表。
  */
 export const SYNC_ERROR_TITLES: Readonly<Record<string, MessageKey>> = {
   SYNC_PROFILE_INVALID: 'sync.error.profileInvalid',
@@ -227,6 +229,19 @@ export const SYNC_ERROR_TITLES: Readonly<Record<string, MessageKey>> = {
   SYNC_HASH_INVALID: 'sync.error.hashInvalid',
   SYNC_REMOTE_SNAPSHOT_INVALID: 'sync.error.remoteSnapshotInvalid',
   SYNC_BLOB_TOO_LARGE: 'sync.error.blobTooLarge',
+  SYNC_AUTH_REQUIRED: 'sync.error.authRequired',
+  SYNC_FORBIDDEN: 'sync.error.forbidden',
+  SYNC_HTTP_ERROR: 'sync.error.httpError',
+  SYNC_HTTP_NOT_ALLOWED: 'sync.error.httpNotAllowed',
+  SYNC_SCHEME_UNSUPPORTED: 'sync.error.schemeUnsupported',
+  SYNC_RESPONSE_INVALID: 'sync.error.responseInvalid',
+  SYNC_RESPONSE_TOO_LARGE: 'sync.error.responseTooLarge',
+  SYNC_HASH_MISMATCH: 'sync.error.hashMismatch',
+  SYNC_CAPABILITY_UNSUPPORTED: 'sync.error.capabilityUnsupported',
+  SYNC_CLIENT_ERROR: 'sync.error.clientError',
+  SYNC_DEVICE_ID_INVALID: 'sync.error.deviceIdInvalid',
+  SYNC_SNAPSHOT_INVALID: 'sync.error.snapshotInvalid',
+  SYNC_SNAPSHOT_TOO_LARGE: 'sync.error.snapshotTooLarge',
 };
 
 /** 把后端失败映射为友好标题；原始 message 只进可展开的技术详情。 */
@@ -652,7 +667,12 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     if (running) {
       statusState.textContent = phaseCaption(locale, value, L.running);
     } else if (value.state === 'error') {
-      const friendly = syncFriendlyError(locale, value.lastError ?? '');
+      // R4：状态行走 lastErrorCode 域码表命中（后端 finish_task 记录），
+      // 旧载荷无 code 时退化为兜底标题，原始 message 仍只进可展开详情。
+      const friendly = syncFriendlyError(locale, {
+        code: value.lastErrorCode ?? '',
+        message: value.lastError ?? '',
+      });
       statusState.textContent = friendly.title;
     } else if (value.state === 'cancelled') {
       statusState.textContent = L.cancelled;

@@ -63,6 +63,8 @@ export interface SyncStatus {
   readonly startedAt?: number;
   readonly finishedAt?: number;
   readonly lastError?: string;
+  /** R4：失败错误码（后端 finish_task 记录），状态行据此映射友好标题。 */
+  readonly lastErrorCode?: string;
   readonly uploaded: number;
   readonly downloaded: number;
   readonly conflicts: number;

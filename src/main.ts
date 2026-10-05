@@ -3908,14 +3908,11 @@ function ensureShelfAssistant(): ShelfAssistant {
         return {
           ...(state.importedItemId !== undefined ? { itemId: state.importedItemId } : {}),
           phase: state.phase,
-          ...(state.message !== undefined
-            ? {
-                // R4：主文案是友好标题，括号内附原始错误供助手诊断书源规则。
-                message:
-                  state.messageDetail !== undefined && state.messageDetail !== ''
-                    ? `${state.message}（${state.messageDetail}）`
-                    : state.message,
-              }
+          ...(state.message !== undefined ? { message: state.message } : {}),
+          // R4：原始错误只作 messageDetail 字段随工具结果交给模型诊断书源规则，
+          // 不再拼进 message——助手芯片主文案（result.message）保持友好标题。
+          ...(state.messageDetail !== undefined && state.messageDetail !== ''
+            ? { messageDetail: state.messageDetail }
             : {}),
         };
         } finally {

@@ -40,6 +40,9 @@ pub struct SyncStatus {
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub last_error: Option<String>,
+    /// R4：失败错误码，前端状态行据此映射友好标题；缺省兼容旧序列化载荷。
+    #[serde(default)]
+    pub last_error_code: Option<String>,
     pub uploaded: u64,
     pub downloaded: u64,
     pub conflicts: u64,
@@ -66,6 +69,7 @@ impl Default for SyncStatus {
             started_at: None,
             finished_at: None,
             last_error: None,
+            last_error_code: None,
             uploaded: 0,
             downloaded: 0,
             conflicts: 0,
@@ -166,6 +170,7 @@ fn finish_task(state: &SyncTaskState, task_id: &str, result: &Result<SyncStatus,
                 };
                 status.finished_at = Some(library::now_ms());
                 status.last_error = Some(error.message.clone());
+                status.last_error_code = Some(error.code.clone());
             }
         }
     }
@@ -187,10 +192,15 @@ impl<'a> SyncRunGuard<'a> {
         }
     }
 
-    fn finish(mut self, result: Result<SyncStatus, WebDavError>) -> Result<SyncStatus, String> {
+    /// 保留 `WebDavError`（可序列化）让 Tauri 以 `{code,message,status}` 对象
+    /// 拒绝前端 invoke，调用方才能按域码表映射友好标题（R4）。
+    fn finish(
+        mut self,
+        result: Result<SyncStatus, WebDavError>,
+    ) -> Result<SyncStatus, WebDavError> {
         self.completed = true;
         finish_task(self.state, &self.task_id, &result);
-        result.map_err(|error| error.message)
+        result
     }
 }
 
@@ -3339,6 +3349,7 @@ async fn sync_once(
         started_at,
         finished_at: Some(library::now_ms()),
         last_error: None,
+        last_error_code: None,
         uploaded: if uploaded > 0 {
             uploaded
         } else {
@@ -3367,8 +3378,9 @@ pub async fn sync_run(
     app: AppHandle,
     webdav_state: State<'_, WebDavState>,
     state: State<'_, SyncTaskState>,
-) -> Result<SyncStatus, String> {
-    let (task_id, token) = start_task(state.inner())?;
+) -> Result<SyncStatus, WebDavError> {
+    let (task_id, token) = start_task(state.inner())
+        .map_err(|error| WebDavError::new("SYNC_STATE_UNAVAILABLE", error))?;
     let guard = SyncRunGuard::new(state.inner(), task_id);
     let result = sync_once(&app, webdav_state.inner(), state.inner(), &token).await;
     guard.finish(result)
@@ -4422,6 +4434,58 @@ mod tests {
                 .map(|(id, _)| id.as_str()),
             Some(new_id.as_str())
         );
+    }
+
+    #[test]
+    fn finish_task_error_records_code_for_status_line() {
+        let state = SyncTaskState::default();
+        let (task_id, _) = start_task(&state).unwrap();
+        finish_task(
+            &state,
+            &task_id,
+            &Err(WebDavError::new(
+                "SYNC_AUTH_REQUIRED",
+                "WebDAV 需要重新输入凭据",
+            )),
+        );
+        let status = status_snapshot(&state).unwrap();
+        assert_eq!(status.state, SyncRunState::Error);
+        assert_eq!(
+            status.last_error_code.as_deref(),
+            Some("SYNC_AUTH_REQUIRED")
+        );
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("WebDAV 需要重新输入凭据")
+        );
+    }
+
+    #[test]
+    fn cancelled_finish_keeps_the_code_and_success_finish_clears_it() {
+        let state = SyncTaskState::default();
+        let (first_id, _) = start_task(&state).unwrap();
+        finish_task(
+            &state,
+            &first_id,
+            &Err(WebDavError::new("SYNC_CANCELLED", "同步已取消")),
+        );
+        assert_eq!(
+            status_snapshot(&state).unwrap().last_error_code.as_deref(),
+            Some("SYNC_CANCELLED")
+        );
+        let (second_id, _) = start_task(&state).unwrap();
+        finish_task(
+            &state,
+            &second_id,
+            &Ok(SyncStatus {
+                state: SyncRunState::Success,
+                ..SyncStatus::default()
+            }),
+        );
+        let status = status_snapshot(&state).unwrap();
+        assert_eq!(status.state, SyncRunState::Success);
+        assert_eq!(status.last_error_code, None);
+        assert_eq!(status.last_error, None);
     }
 
     #[test]
