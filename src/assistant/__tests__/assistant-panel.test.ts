@@ -334,6 +334,7 @@ interface MountOptions {
   readonly showQuote?: boolean;
   readonly permissionStorage?: AssistantPermissionStorage | null;
   readonly jumpToLocator?: (target: { chapter?: number; page?: number }) => void;
+  readonly provideOpenAiWizard?: boolean;
 }
 
 function mountPanel(options: MountOptions = {}): {
@@ -341,6 +342,7 @@ function mountPanel(options: MountOptions = {}): {
   invoke: InvokeMock;
   deps: {
     openSettings: ReturnType<typeof vi.fn>;
+    openAiWizard: ReturnType<typeof vi.fn>;
     saveAnnotation: ReturnType<typeof vi.fn>;
     readHistory: ReturnType<typeof vi.fn>;
     writeHistory: ReturnType<typeof vi.fn>;
@@ -356,6 +358,7 @@ function mountPanel(options: MountOptions = {}): {
   const stream = fakeStream(script);
   const calls = {
     openSettings: vi.fn(),
+    openAiWizard: vi.fn(),
     saveAnnotation: vi.fn(),
     readHistory: vi.fn(async () => options.historyJson ?? ''),
     writeHistory: vi.fn(async () => undefined),
@@ -366,6 +369,7 @@ function mountPanel(options: MountOptions = {}): {
     host: () => host,
     chapterContext: () => options.chapter ?? null,
     openSettings: calls.openSettings,
+    ...(options.provideOpenAiWizard === true ? { openAiWizard: calls.openAiWizard } : {}),
     saveAnnotation: calls.saveAnnotation,
     fetchConfig: async () => ({
       configured: options.configured ?? true,
@@ -441,6 +445,38 @@ describe('createAssistantPanel unconfigured guide (R5)', () => {
     expect(main?.hidden).toBe(true);
     panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-settings')?.click();
     expect(deps.openSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the setup wizard directly and keeps the manage page as a secondary path (R3)', async () => {
+    const { panel, deps } = mountPanel({ configured: false, provideOpenAiWizard: true });
+    panel.open();
+    await flush();
+    const wizard = panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-setup');
+    expect(wizard?.textContent).toBe(t('reader.assistant.openWizard'));
+    wizard?.click();
+    expect(deps.openAiWizard).toHaveBeenCalledTimes(1);
+    expect(deps.openSettings).not.toHaveBeenCalled();
+    const secondary = panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-settings');
+    expect(secondary?.textContent).toBe(t('reader.assistant.advancedSettings'));
+    secondary?.click();
+    expect(deps.openSettings).toHaveBeenCalledTimes(1);
+    panel.destroy();
+  });
+
+  it('falls back to opening the wizard module itself when no openAiWizard dep is injected', async () => {
+    const { panel, deps } = mountPanel({ configured: false });
+    panel.open();
+    await flush();
+    panel.element.querySelector<HTMLButtonElement>('.lightink-reader-assistant-setup')?.click();
+    await flush();
+    expect(deps.openAiWizard).not.toHaveBeenCalled();
+    expect(document.querySelector('.lightink-ai-wizard-overlay')).not.toBeNull();
+    // 必须走正式关闭：modal-focus 的捕获监听（Esc/Tab 圈定）挂在 document 上，
+    // 直接 remove 节点会泄漏并吞掉后续用例的 Escape。
+    document.querySelector<HTMLButtonElement>('.lightink-ai-wizard-cancel')?.click();
+    await flush();
+    expect(document.querySelector('.lightink-ai-wizard-overlay')).toBeNull();
+    panel.destroy();
   });
 
   it('switches to the chat view when the configured event arrives', async () => {

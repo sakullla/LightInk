@@ -43,11 +43,11 @@ import { isShelfCoverUrl } from './local-book-meta.js';
 import {
   bytesLabel,
   createLibraryManage,
-  invokeAiGetConfig,
-  READER_AI_CONFIGURED_EVENT,
   type ConcealManageDeps,
   type LibraryManageLabels,
 } from './library-manage.js';
+import { invokeAiGetConfig, READER_AI_CONFIGURED_EVENT } from './ai-config-shared.js';
+import { aiWizardLabels, openAiConfigWizard } from '../assistant/ai-config-wizard.js';
 import { translate, type MessageKey } from '../i18n/messages.js';
 import type { BookTranslationController } from './book-translation/controller.js';
 import type { BookTranslationStatus } from './book-translation/types.js';
@@ -2118,7 +2118,9 @@ export function createLibraryView(
       renderDetail();
     }
   });
-  // AI 入口（整本翻译）仅在密钥配置完成后出现；Manage 保存后经事件即时刷新。
+  // AI 配置态（R3）：整本翻译入口恒显于支持的本地书，未配置时带「需先配置」
+  // 徽标并打开配置向导；配置完成后同一入口直接走既有翻译编排。Manage/向导保存
+  // 后经事件即时刷新，无需重载。
   let aiConfigured = false;
   const refreshAiConfigured = (): void => {
     void invokeAiGetConfig()
@@ -4756,7 +4758,6 @@ export function createLibraryView(
   function canTranslateDisplay(display: DisplayItem): boolean {
     const path = display.item.localPath;
     return (
-      aiConfigured &&
       deps.bookTranslation !== undefined &&
       isLocalItem(display.item) &&
       path != null &&
@@ -4817,14 +4818,31 @@ export function createLibraryView(
       const path = display.item.localPath ?? '';
       const status = deps.bookTranslation?.statusFor(path);
       const resumable = status?.phase === 'paused' || status?.phase === 'error';
-      reading.push({
-        id: 'translate-book',
-        label: translate(
-          deps.getLocale(),
-          resumable ? 'library.translate.resume' : 'library.translate.entry',
-        ),
-        action: () => launchBookTranslation(display),
-      });
+      if (aiConfigured) {
+        reading.push({
+          id: 'translate-book',
+          label: translate(
+            deps.getLocale(),
+            resumable ? 'library.translate.resume' : 'library.translate.entry',
+          ),
+          action: () => launchBookTranslation(display),
+        });
+      } else {
+        // R3：未配置不再隐藏入口——徽标点明缺前置条件，点击进配置向导；
+        // 配置事件后既有重绘链路把这一项转成正常翻译入口。
+        reading.push({
+          id: 'translate-book',
+          label: translate(deps.getLocale(), 'library.translate.entry'),
+          badge: translate(deps.getLocale(), 'library.translate.needsConfig'),
+          action: () => {
+            openAiConfigWizard(doc, {
+              labels: () =>
+                aiWizardLabels((key, vars) => translate(deps.getLocale(), key, vars)),
+              themeHost: root,
+            });
+          },
+        });
+      }
     }
     const organize: MenuItem[] = [];
     if (deps.library.setItemTags !== undefined) {

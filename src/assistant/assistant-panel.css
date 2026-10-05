@@ -295,7 +295,8 @@
   color: var(--lightink-muted);
 }
 
-.lightink-reader-assistant-settings {
+/* R3：未配置引导主入口「立即配置 AI」沿用原胶囊按钮语言（打开向导）。 */
+.lightink-reader-assistant-setup {
   align-self: flex-start;
   padding: 0.4rem 0.9rem;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 24%, transparent);
@@ -305,6 +306,32 @@
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+.lightink-reader-assistant-setup:hover {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-assistant-setup:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+/* 「高级设置」降为次入口：管理页 AI 分组的安静文字链接。 */
+.lightink-reader-assistant-settings {
+  align-self: flex-start;
+  padding: 0.2rem 0;
+  border: none;
+  background: transparent;
+  color: var(--lightink-muted);
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+}
+
+.lightink-reader-assistant-settings:hover {
+  color: var(--lightink-fg);
+  text-decoration: underline;
 }
 
 .lightink-reader-assistant-settings:hover {
@@ -1530,7 +1557,7 @@
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-history-delete:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-quote-chip-clear:active,
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-history-open:active,
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-settings:active,
+:is(html[data-android], html[data-touch-primary]) .lightink-reader-assistant-setup:active,
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-context-chip-action:active,
 :is(html[data-android], html[data-touch-primary])
@@ -1608,7 +1635,7 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-action:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-settings:hover:not(:active) {
+  .lightink-reader-assistant-setup:hover:not(:active) {
   background: var(--lightink-bg-elevated);
 }
 
@@ -1652,4 +1679,151 @@
   .lightink-reader-assistant-quote.is-ready:hover:not(:disabled):not(:active) {
   background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
   color: var(--lightink-fg);
+}
+
+/* ===== AI 配置向导（R3 / assistant/ai-config-wizard） =====
+   body 挂载的全局模态：骨架/按钮复用 theme.css 的 lightink-modal-* 语言，
+   主题令牌由 adoptDialogSurfaceTheme 从当前 library/reader 表面复制到
+   overlay 上；此处只补步骤条、表单与状态区的向导专属布局。 */
+
+.lightink-ai-wizard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: min(30rem, calc(100vw - 2.5rem));
+}
+
+.lightink-ai-wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lightink-ai-wizard-steps li {
+  color: var(--lightink-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.lightink-ai-wizard-steps li.is-done {
+  color: var(--lightink-fg);
+}
+
+.lightink-ai-wizard-steps li.is-active {
+  color: var(--lightink-accent);
+  font-weight: 600;
+}
+
+.lightink-ai-wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: min(52vh, 26rem);
+  overflow-y: auto;
+}
+
+.lightink-ai-wizard-body section[hidden] {
+  display: none;
+}
+
+.lightink-ai-wizard-body section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.lightink-ai-wizard-hint {
+  margin: 0;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.lightink-ai-wizard input:not([type='checkbox']),
+.lightink-ai-wizard select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.lightink-ai-wizard-key-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.lightink-ai-wizard-key-row .lightink-ai-wizard-key {
+  flex: 1 1 auto;
+}
+
+.lightink-ai-wizard-key-reveal {
+  flex: none;
+  padding: 7px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lightink-ai-wizard-key-reveal:hover:not(:disabled) {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-ai-wizard-key-reveal:disabled {
+  color: var(--lightink-muted);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lightink-ai-wizard-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+
+.lightink-ai-wizard-summary dt {
+  color: var(--lightink-muted);
+  font-size: 12px;
+}
+
+.lightink-ai-wizard-summary dd {
+  margin: 0;
+  color: var(--lightink-fg);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+.lightink-ai-wizard-status {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.lightink-ai-wizard-status[data-kind='error'] {
+  color: var(--lightink-danger);
+}
+
+.lightink-ai-wizard-status[data-kind='success'] {
+  color: var(--lightink-fg);
+}
+
+.lightink-ai-wizard-actions {
+  flex-wrap: wrap;
+}
+
+.lightink-ai-wizard-cancel {
+  margin-right: auto;
 }

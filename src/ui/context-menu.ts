@@ -23,6 +23,11 @@ export interface MenuItem {
   enabled?: () => boolean;
   /** 为 true 时渲染为分隔线，忽略其余字段。 */
   separator?: boolean;
+  /**
+   * 右端的状态徽标（R3「需先配置」等）：与 shortcut 同位渲染为小圆角胶囊，
+   * 用说明性文字而非禁用表达「可用但缺前置条件」。
+   */
+  badge?: string;
 }
 
 export interface ContextMenuHandle {
@@ -82,6 +87,12 @@ export function createContextMenu(
       hint.className = 'lightink-context-menu__shortcut';
       hint.textContent = item.shortcut;
       btn.appendChild(hint);
+    }
+    if (item.badge !== undefined && item.badge !== '') {
+      const badge = doc.createElement('span');
+      badge.className = 'lightink-context-menu__badge';
+      badge.textContent = item.badge;
+      btn.appendChild(badge);
     }
     const isEnabled = item.enabled ? item.enabled() : true;
     btn.disabled = !isEnabled;

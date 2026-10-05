@@ -21,6 +21,7 @@ import {
   type AssistantPermissionStorage,
 } from './assistant-permission.js';
 import { cancelActiveDownload } from '../library/book-download.js';
+import { aiWizardLabels, openAiConfigWizard } from './ai-config-wizard.js';
 import { READER_LIMITS } from '../reader/reader-limits.js';
 import {
   ASSISTANT_AI_CONFIGURED_EVENT,
@@ -961,7 +962,12 @@ export interface AssistantPanelDeps {
   placeholder?: string;
   /** Surface 挂载/钉位/触屏注入；缺省 body portal + 不钉位。 */
   surface?: AssistantSurfaceDeps;
-  /** 未配置引导「前往配置」（宿主：回书架并打开 Manage 的 AI 分组）。 */
+  /**
+   * 未配置引导主入口（R3）：直接打开配置向导。缺省面板自开
+   * `assistant/ai-config-wizard` 全局模态，宿主无需接线。
+   */
+  openAiWizard?: () => void;
+  /** 未配置引导的次入口：管理页 AI 分组（高级手动配置保留不变）。 */
   openSettings: () => void;
   /** 摘要保存为标注（章节级锚点由宿主实现）。 */
   saveAnnotation: (text: string) => void;
@@ -1204,6 +1210,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const surface = deps.surface ?? {};
   const disposed = { value: false };
 
+  /** 未配置引导缺省动作：面板自开配置向导全局模态（R3；宿主可注入替换）。 */
+  const defaultOpenAiWizard = (): void => {
+    openAiConfigWizard(document, { labels: () => aiWizardLabels(t) });
+  };
+
   /** 触屏策略：宿主注入优先，缺省与 CSS 门控同源读 html 属性。 */
   const surfaceTouchMode = (): boolean => {
     try {
@@ -1284,11 +1295,17 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
   const guideHint = document.createElement('p');
   guideHint.className = 'lightink-reader-assistant-guide-hint';
   guideHint.textContent = t('reader.assistant.unconfiguredHint');
+  // R3：主入口直接开向导（缺省面板自开全局模态）；「高级设置」保留为
+  // 管理页 AI 分组的次入口（高级手动配置不变）。
+  const wizardButton = document.createElement('button');
+  wizardButton.type = 'button';
+  wizardButton.className = 'lightink-reader-assistant-setup';
+  wizardButton.textContent = t('reader.assistant.openWizard');
   const settingsButton = document.createElement('button');
   settingsButton.type = 'button';
   settingsButton.className = 'lightink-reader-assistant-settings';
-  settingsButton.textContent = t('reader.assistant.openSettings');
-  guide.append(guideHint, settingsButton);
+  settingsButton.textContent = t('reader.assistant.advancedSettings');
+  guide.append(guideHint, wizardButton, settingsButton);
 
   const main = document.createElement('div');
   main.className = 'lightink-reader-assistant-main';
@@ -3967,6 +3984,11 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     event.preventDefault();
     event.stopPropagation();
     startNewConversation(true);
+  });
+  wizardButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    (deps.openAiWizard ?? defaultOpenAiWizard)();
   });
   settingsButton.addEventListener('click', (event) => {
     event.preventDefault();

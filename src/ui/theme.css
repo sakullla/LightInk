@@ -2508,6 +2508,18 @@ html[data-reading-layout='scroll']:has(
   color: var(--lightink-fg);
 }
 
+/* 右键菜单项右端的状态徽标（R3「需先配置」）：柔和底色胶囊；
+   语义是「可点击去补前置条件」，刻意不用禁用态。 */
+.lightink-context-menu__badge {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .lightink-context-menu__separator {
   margin: 5px 2px;
   border: none;

@@ -7,8 +7,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 import {
+  AI_ENDPOINT_DEFAULT_BASE_URLS,
+  AI_ENDPOINT_KINDS,
+  READER_AI_CONFIGURED_EVENT,
+  aiErrorMessage,
+  aiMissingSummary,
   bytesLabel,
   createLibraryManage,
+  dispatchAiConfigured,
+  fallbackAiConfigStatus,
+  invokeAiGetConfig,
+  invokeAiSaveConfig,
+  invokeAiStoreKey,
+  invokeAiTestConnection,
   type ConcealBossKeysStatus,
   type ConcealManageDeps,
   type ConcealManageLabels,
@@ -2167,5 +2178,28 @@ describe('createLibraryManage 摸鱼段（R2/R5–R10/R13，R12 桌面门控）'
     expect(manage.element.querySelector<HTMLElement>('[data-conceal-custom-effect]')?.textContent).toBe(
       '窗口不透明；正文不透明度为 100；鼠标离开时隐藏底栏；置顶；不是迷你窗口；点击不穿透',
     );
+  });
+});
+
+describe('createLibraryManage consumes ai-config-shared (R3)', () => {
+  it('re-exports the single-authority AI constants and helpers unchanged', async () => {
+    const shared = await import('../ai-config-shared.js');
+    expect(AI_ENDPOINT_DEFAULT_BASE_URLS).toBe(shared.AI_ENDPOINT_DEFAULT_BASE_URLS);
+    expect(AI_ENDPOINT_KINDS).toBe(shared.AI_ENDPOINT_KINDS);
+    expect(READER_AI_CONFIGURED_EVENT).toBe(shared.READER_AI_CONFIGURED_EVENT);
+    expect(invokeAiGetConfig).toBe(shared.invokeAiGetConfig);
+    expect(invokeAiSaveConfig).toBe(shared.invokeAiSaveConfig);
+    expect(invokeAiStoreKey).toBe(shared.invokeAiStoreKey);
+    expect(invokeAiTestConnection).toBe(shared.invokeAiTestConnection);
+    expect(dispatchAiConfigured).toBe(shared.dispatchAiConfigured);
+    expect(fallbackAiConfigStatus()).toEqual(shared.fallbackAiConfigStatus());
+  });
+
+  it('maps AI errors through the shared label table with unchanged output', () => {
+    const zh = LABELS['zh-CN'];
+    expect(aiErrorMessage(zh, { code: 'AI_KEY_INVALID', message: 'x' })).toBe(zh.aiErrorKeyInvalid);
+    expect(aiErrorMessage(zh, { code: 'AI_QUOTA_EXCEEDED', message: 'x' })).toBe(zh.aiErrorQuota);
+    expect(aiErrorMessage(zh, { code: 'AI_NETWORK_ERROR', message: 'x' })).toBe(zh.aiErrorNetwork);
+    expect(aiMissingSummary(zh, ['model'])).toBe(zh.aiModel);
   });
 });

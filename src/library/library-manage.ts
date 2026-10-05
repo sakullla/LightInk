@@ -10,7 +10,6 @@
  * nothing is consumed and the press falls through.
  */
 
-import { invoke } from '@tauri-apps/api/core';
 import { showConfirmDialog } from '../ui/confirm-dialog.js';
 import type { LibraryClient } from './library-client.js';
 import type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
@@ -47,6 +46,23 @@ import {
   type LibraryThemeStorage,
 } from './library-theme.js';
 import {
+  aiErrorMessage,
+  aiMissingSummary,
+  canonicalAiGap,
+  dispatchAiConfigured,
+  fallbackAiConfigStatus,
+  invokeAiForgetKey,
+  invokeAiGetConfig,
+  invokeAiSaveConfig,
+  invokeAiStoreKey,
+  invokeAiTestConnection,
+  isAiEndpointKind,
+  AI_ENDPOINT_KINDS,
+  type AiConfigLabels,
+  type AiConfigStatusView,
+  type AiEndpointKindId,
+} from './ai-config-shared.js';
+import {
   READER_PAGE_TURN_STYLES,
   READER_PREFS_STORAGE_KEY,
   applyReaderPrefs,
@@ -59,6 +75,36 @@ import {
 export { AI_TARGET_LANG_VALUES };
 export type { AiTargetLangValue };
 export type { ConcealBossKeysStatus } from '../conceal/conceal-client.js';
+
+// AI 配置单一权威已抽至 `./ai-config-shared.js`（R3）：此处按原签名再导出，
+// 既有消费方（library-view 等）不感知搬迁；新代码应直接 import shared。
+export {
+  AI_ENDPOINT_DEFAULT_BASE_URLS,
+  AI_ENDPOINT_KINDS,
+  AI_ERROR_LABEL_KEYS,
+  READER_AI_CONFIGURED_EVENT,
+  aiErrorMessage,
+  aiMissingSummary,
+  canonicalAiGap,
+  dispatchAiConfigured,
+  fallbackAiConfigStatus,
+  invokeAiForgetKey,
+  invokeAiGetConfig,
+  invokeAiSaveConfig,
+  invokeAiStoreKey,
+  invokeAiTestConnection,
+  isAiEndpointKind,
+  parseAiConfigStatus,
+} from './ai-config-shared.js';
+export type {
+  AiConfigLabels,
+  AiConfigInputView,
+  AiConfigStatusView,
+  AiConfiguredDetail,
+  AiEndpointDefaultView,
+  AiEndpointKindId,
+  AiTestResultView,
+} from './ai-config-shared.js';
 
 export type ManageSubpage = 'home' | 'cache-limit';
 
@@ -140,7 +186,12 @@ export interface ConcealManageDeps {
   readonly clearSwitchRefusal?: (key: ConcealSwitchRefusalKey) => void;
 }
 
-export interface LibraryManageLabels {
+/**
+ * AI 分组的字段/错误标签现由 `AiConfigLabels`（ai-config-shared）持有：
+ * 配置向导复用同一份 `AI_ERROR_LABEL_KEYS` 映射，两个 surface 的标签形状
+ * 由编译期对齐。此处仅保留管理页专属的分组与操作文案。
+ */
+export interface LibraryManageLabels extends AiConfigLabels {
   readonly appearance: string;
   readonly libraryTheme: string;
   readonly libraryThemeHint: string;
@@ -155,13 +206,9 @@ export interface LibraryManageLabels {
   readonly pageTurnStyleNone: string;
   readonly aiGroup: string;
   readonly aiHint: string;
-  readonly aiEndpointKind: string;
   readonly aiEndpointOpenaiResponses: string;
   readonly aiEndpointOpenaiChat: string;
   readonly aiEndpointClaudeMessages: string;
-  readonly aiBaseUrl: string;
-  readonly aiModel: string;
-  readonly aiKey: string;
   readonly aiKeyClear: string;
   readonly aiKeyShow: string;
   readonly aiKeyHide: string;
@@ -182,23 +229,8 @@ export interface LibraryManageLabels {
   readonly aiTesting: string;
   readonly aiTestOk: string;
   readonly aiConfigured: string;
-  readonly aiUnconfigured: string;
-  readonly aiUnconfiguredGaps: string;
   readonly aiSaved: string;
   readonly aiKeyCleared: string;
-  readonly aiErrorHttpNotAllowed: string;
-  readonly aiErrorUrlInvalid: string;
-  readonly aiErrorConfigInvalid: string;
-  readonly aiErrorStorage: string;
-  readonly aiErrorKeyInvalid: string;
-  readonly aiErrorModelNotFound: string;
-  readonly aiErrorQuota: string;
-  readonly aiErrorUnconfigured: string;
-  readonly aiErrorTimeout: string;
-  readonly aiErrorNetwork: string;
-  readonly aiErrorKeyStore: string;
-  readonly aiErrorTooLarge: string;
-  readonly aiErrorFailed: string;
   readonly storageGroup: string;
   readonly clearCache: string;
   readonly cacheUsage: string;
@@ -386,176 +418,11 @@ function pageTurnStyleLabels(l: LibraryManageLabels): Record<ReaderPageTurnStyle
   };
 }
 
-// ── AI 提供商分组(R2)──命令封装、解析与事件广播 ──────────────────────
+// ── AI 提供商分组(R2)：命令封装、defaults 解析、错误映射与事件常量已抽至
+// ai-config-shared.ts（R3 单一权威），上方按原签名再导出；下方只保留表单 UI。 ──
 
-/** `src-tauri/src/ai.rs` 的端点格式三选一(wire 值 kebab-case,后端测试钉死)。 */
-export type AiEndpointKindId = 'openai-responses' | 'openai-chat' | 'claude-messages';
-
-export const AI_ENDPOINT_KINDS: readonly AiEndpointKindId[] = [
-  'openai-responses',
-  'openai-chat',
-  'claude-messages',
-];
-
-/** 后端不可用(浏览器预览)或未返回 defaults 时的联动预填兜底。 */
-export const AI_ENDPOINT_DEFAULT_BASE_URLS: Readonly<Record<AiEndpointKindId, string>> = {
-  'openai-responses': 'https://api.openai.com/v1',
-  'openai-chat': 'https://api.openai.com/v1',
-  'claude-messages': 'https://api.anthropic.com/v1',
-};
-
-export const READER_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
-
-export interface AiEndpointDefaultView {
-  readonly endpointKind: AiEndpointKindId;
-  readonly baseUrl: string;
-}
-
-/** `ai_get_config` / `ai_save_config` / `ai_store_key` / `ai_forget_key` 的返回形态。 */
-export interface AiConfigStatusView {
-  readonly endpointKind: AiEndpointKindId;
-  readonly baseUrl: string;
-  readonly model: string;
-  readonly allowHttp: boolean;
-  readonly targetLang?: string;
-  readonly hasKey: boolean;
-  readonly configured: boolean;
-  readonly missing: readonly string[];
-  readonly defaults: readonly AiEndpointDefaultView[];
-}
-
-export interface AiConfigInputView {
-  readonly endpointKind: AiEndpointKindId;
-  readonly baseUrl: string;
-  readonly model: string;
-  readonly allowHttp: boolean;
-  readonly targetLang?: string;
-}
-
-/** `lightink:reader-ai-configured` 事件负载(与 `ai_configured` 命令同型)。 */
-export interface AiConfiguredDetail {
-  readonly configured: boolean;
-  readonly missing: readonly string[];
-}
-
-export function isAiEndpointKind(value: unknown): value is AiEndpointKindId {
-  return AI_ENDPOINT_KINDS.includes(value as AiEndpointKindId);
-}
-
-function parseAiDefaults(raw: unknown): AiEndpointDefaultView[] {
-  const parsed: AiEndpointDefaultView[] = [];
-  if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { defaults?: unknown[] }).defaults)) {
-    for (const item of (raw as { defaults: unknown[] }).defaults) {
-      if (item === null || typeof item !== 'object') continue;
-      const entry = item as { endpointKind?: unknown; baseUrl?: unknown };
-      if (isAiEndpointKind(entry.endpointKind) && typeof entry.baseUrl === 'string') {
-        parsed.push({ endpointKind: entry.endpointKind, baseUrl: entry.baseUrl });
-      }
-    }
-  }
-  if (parsed.length === 0) {
-    return AI_ENDPOINT_KINDS.map((kind) => ({
-      endpointKind: kind,
-      baseUrl: AI_ENDPOINT_DEFAULT_BASE_URLS[kind],
-    }));
-  }
-  return parsed;
-}
-
-/** 从未保存过时的默认形态(与后端 status_from(None) 一致,预填 openai-chat)。 */
-export function fallbackAiConfigStatus(): AiConfigStatusView {
-  return {
-    endpointKind: 'openai-chat',
-    baseUrl: AI_ENDPOINT_DEFAULT_BASE_URLS['openai-chat'],
-    model: '',
-    allowHttp: false,
-    hasKey: false,
-    configured: false,
-    missing: ['endpoint_kind', 'base_url', 'model', 'api_key'],
-    defaults: parseAiDefaults(null),
-  };
-}
-
-/** 防御解析 `ai_*` 命令返回;形态不对时退回默认形态(永不抛出)。 */
-export function parseAiConfigStatus(raw: unknown): AiConfigStatusView {
-  const fallback = fallbackAiConfigStatus();
-  if (raw === null || typeof raw !== 'object') {
-    return fallback;
-  }
-  const obj = raw as {
-    endpointKind?: unknown;
-    baseUrl?: unknown;
-    model?: unknown;
-    allowHttp?: unknown;
-    targetLang?: unknown;
-    hasKey?: unknown;
-    configured?: unknown;
-    missing?: unknown;
-  };
-  if (!isAiEndpointKind(obj.endpointKind)) {
-    return fallback;
-  }
-  const missing = Array.isArray(obj.missing)
-    ? obj.missing.filter((gap): gap is string => typeof gap === 'string')
-    : [];
-  const targetLang = typeof obj.targetLang === 'string' && obj.targetLang !== '' ? obj.targetLang : undefined;
-  return {
-    endpointKind: obj.endpointKind,
-    baseUrl: typeof obj.baseUrl === 'string' ? obj.baseUrl : '',
-    model: typeof obj.model === 'string' ? obj.model : '',
-    allowHttp: obj.allowHttp === true,
-    targetLang,
-    hasKey: obj.hasKey === true,
-    configured: obj.configured === true || missing.length === 0,
-    missing,
-    defaults: parseAiDefaults(raw),
-  };
-}
-
-export interface AiTestResultView {
-  readonly latencyMs: number;
-  readonly reply: string;
-}
-
-function parseAiTestResult(raw: unknown): AiTestResultView {
-  if (raw !== null && typeof raw === 'object') {
-    const obj = raw as { latencyMs?: unknown; reply?: unknown };
-    return {
-      latencyMs: typeof obj.latencyMs === 'number' && Number.isFinite(obj.latencyMs) ? obj.latencyMs : 0,
-      reply: typeof obj.reply === 'string' ? obj.reply : '',
-    };
-  }
-  return { latencyMs: 0, reply: '' };
-}
-
-export async function invokeAiGetConfig(): Promise<AiConfigStatusView> {
-  return parseAiConfigStatus(await invoke<unknown>('ai_get_config'));
-}
-
-export async function invokeAiSaveConfig(input: AiConfigInputView): Promise<AiConfigStatusView> {
-  return parseAiConfigStatus(await invoke<unknown>('ai_save_config', { input }));
-}
-
-export async function invokeAiStoreKey(key: string): Promise<AiConfigStatusView> {
-  return parseAiConfigStatus(await invoke<unknown>('ai_store_key', { key }));
-}
-
-export async function invokeAiForgetKey(): Promise<AiConfigStatusView> {
-  return parseAiConfigStatus(await invoke<unknown>('ai_forget_key'));
-}
-
-export async function invokeAiTestConnection(): Promise<AiTestResultView> {
-  return parseAiTestResult(await invoke<unknown>('ai_test_connection'));
-}
-
-export function dispatchAiConfigured(
-  detail: AiConfiguredDetail,
-  target: Document | Window = document,
-): void {
-  target.dispatchEvent(new CustomEvent(READER_AI_CONFIGURED_EVENT, { detail }));
-}
-
-export function aiTargetLangLabel(value: AiTargetLangValue, l: LibraryManageLabels): string {
+/** 目标语言覆盖项的下拉标签（retranslate 与分组摘要共用）。 */
+function aiTargetLangLabel(value: AiTargetLangValue, l: LibraryManageLabels): string {
   switch (value) {
     case 'auto': return l.aiTargetLangAuto;
     case 'zh-CN': return l.aiLangZhCN;
@@ -567,120 +434,6 @@ export function aiTargetLangLabel(value: AiTargetLangValue, l: LibraryManageLabe
     case 'es': return l.aiLangEs;
     case 'ru': return l.aiLangRu;
   }
-}
-
-/**
- * 后端有的用 snake_case（base_url），捕获/旧客户端有的用 camelCase（baseUrl）。
- * 先收成同一种，避免摘要里「Base URL」和「baseUrl」各出现一次。
- */
-export function canonicalAiGap(gap: string): string {
-  switch (gap) {
-    case 'baseUrl':
-    case 'base_url':
-      return 'base_url';
-    case 'apiKey':
-    case 'api_key':
-    case 'key':
-      return 'api_key';
-    case 'endpointKind':
-    case 'endpoint_kind':
-      return 'endpoint_kind';
-    case 'model':
-      return 'model';
-    default:
-      return gap;
-  }
-}
-
-/** 四要素缺口 token → 本地化字段名(后端 config_gaps 的字段名回报)。 */
-export function aiMissingSummary(l: LibraryManageLabels, missing: readonly string[]): string {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (const gap of missing) {
-    const name = canonicalAiGap(gap);
-    if (name === '' || seen.has(name)) continue;
-    seen.add(name);
-    if (name === 'endpoint_kind') names.push(l.aiEndpointKind);
-    else if (name === 'base_url') names.push(l.aiBaseUrl);
-    else if (name === 'model') names.push(l.aiModel);
-    else if (name === 'api_key') names.push(l.aiKey);
-    else names.push(name);
-  }
-  return names.join(', ');
-}
-
-interface AiErrorParts {
-  readonly code: string;
-  readonly message: string;
-  readonly status?: number;
-}
-
-function aiErrorParts(error: unknown): AiErrorParts {
-  let source: unknown = error;
-  if (typeof source === 'string') {
-    const trimmed = source.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      try {
-        source = JSON.parse(trimmed) as unknown;
-      } catch {
-        // 保留原始字符串。
-      }
-    }
-  }
-  if (source === null || typeof source !== 'object') {
-    return { code: '', message: typeof error === 'string' ? error : '' };
-  }
-  const obj = source as { code?: unknown; message?: unknown; error?: unknown; status?: unknown };
-  const code = typeof obj.code === 'string' ? obj.code : '';
-  const messageParts = [obj.error, obj.message]
-    .filter((value): value is string => typeof value === 'string' && value !== '')
-    .join(' ');
-  const status = typeof obj.status === 'number' ? obj.status : undefined;
-  return { code, message: messageParts, status };
-}
-
-const AI_ERROR_LABEL_KEYS: Record<string, keyof LibraryManageLabels> = {
-  AI_HTTP_NOT_ALLOWED: 'aiErrorHttpNotAllowed',
-  AI_URL_INVALID: 'aiErrorUrlInvalid',
-  AI_CONFIG_INVALID: 'aiErrorConfigInvalid',
-  AI_STORAGE_ERROR: 'aiErrorStorage',
-  AI_TARGET_LANG_INVALID: 'aiErrorConfigInvalid',
-  AI_REQUEST_INVALID: 'aiErrorConfigInvalid',
-  AI_MESSAGE_INVALID: 'aiErrorConfigInvalid',
-  AI_KEY_INVALID: 'aiErrorKeyInvalid',
-  AI_MODEL_NOT_FOUND: 'aiErrorModelNotFound',
-  AI_QUOTA_EXCEEDED: 'aiErrorQuota',
-  AI_NOT_CONFIGURED: 'aiErrorUnconfigured',
-  AI_TIMEOUT: 'aiErrorTimeout',
-  AI_NETWORK_ERROR: 'aiErrorNetwork',
-  AI_CLIENT_ERROR: 'aiErrorNetwork',
-  AI_KEY_STORE_FAILED: 'aiErrorKeyStore',
-  AI_RESPONSE_TOO_LARGE: 'aiErrorTooLarge',
-  AI_REQUEST_TOO_LARGE: 'aiErrorTooLarge',
-};
-
-/** 可区分失败:按错误码族取本地化文案,附 HTTP 状态;未知码回退原始消息。 */
-export function aiErrorMessage(
-  l: LibraryManageLabels,
-  error: unknown,
-  missing: readonly string[] = [],
-): string {
-  const parts = aiErrorParts(error);
-  const labelKey = AI_ERROR_LABEL_KEYS[parts.code];
-  let text: string;
-  if (labelKey === undefined) {
-    text = parts.message !== '' ? `${l.aiErrorFailed}: ${parts.message}` : l.aiErrorFailed;
-  } else {
-    text = l[labelKey];
-    if (labelKey === 'aiErrorUnconfigured') {
-      const summary = aiMissingSummary(l, missing);
-      text = summary === '' ? l.aiUnconfigured : text.replace('{missing}', summary);
-    }
-  }
-  if (parts.status !== undefined) {
-    text += ` (HTTP ${parts.status})`;
-  }
-  return text;
 }
 
 function manageLabelsAreEnglish(l: LibraryManageLabels): boolean {

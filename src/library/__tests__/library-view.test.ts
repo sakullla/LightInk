@@ -3,6 +3,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+
+// 书库链路只 import invoke（无 Channel）：按命令名脚本化 ai_get_config，
+// 其余调用维持“无后端即拒绝”的旧行为。
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+const invokeMock = vi.mocked(invoke);
 
 import {
   bindLibraryProgress,
@@ -17,6 +26,7 @@ import {
   jacketHue,
   type LibraryViewDependencies,
 } from '../library-view.js';
+import type { BookTranslationController } from '../book-translation/controller.js';
 import {
   type LibraryGroup,
   type LibraryGroupMembership,
@@ -3784,6 +3794,133 @@ describe('LibraryView reading management (R4)', () => {
     shownButtonWithText(pane!, '标为在读').click();
     await settle();
     expect(loadReadingProgress(storage, 'remote-identity')).not.toHaveProperty('status');
+    view.destroy();
+  });
+});
+
+describe('LibraryView whole-book translation entry (R3)', () => {
+  function translationDeps(
+    overrides: Partial<LibraryViewDependencies> = {},
+  ): {
+    deps: LibraryViewDependencies;
+    controller: BookTranslationController & { launch: ReturnType<typeof vi.fn> };
+  } {
+    const controller = {
+      launch: vi.fn(async (): Promise<'completed'> => 'completed'),
+      cancel: vi.fn(),
+      statusFor: vi.fn((): null => null),
+      subscribe: vi.fn(() => (): void => undefined),
+      destroy: vi.fn(),
+    };
+    const deps = dependencies({ bookTranslation: controller, ...overrides });
+    return {
+      deps,
+      controller: controller as BookTranslationController & { launch: ReturnType<typeof vi.fn> },
+    };
+  }
+
+  const aiStatus = (configured: boolean): Record<string, unknown> => ({
+    endpointKind: 'openai-chat',
+    baseUrl: 'https://api.openai.com/v1',
+    model: configured ? 'gpt-4o-mini' : '',
+    allowHttp: false,
+    hasKey: configured,
+    configured,
+    missing: configured ? [] : ['endpoint_kind', 'base_url', 'model', 'api_key'],
+    defaults: [
+      { endpointKind: 'openai-responses', baseUrl: 'https://api.openai.com/v1' },
+      { endpointKind: 'openai-chat', baseUrl: 'https://api.openai.com/v1' },
+      { endpointKind: 'claude-messages', baseUrl: 'https://api.anthropic.com/v1' },
+    ],
+  });
+
+  afterEach(() => {
+    invokeMock.mockReset();
+    document.querySelector('.lightink-ai-wizard-overlay')?.remove();
+  });
+
+  it('shows the entry with a needs-config badge and opens the wizard when unconfigured', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'ai_get_config') return aiStatus(false);
+      throw new Error('no backend');
+    });
+    const { deps, controller } = translationDeps();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openItemMenu(host, 'local:/books/a.epub');
+    const item = contextMenuItem('整本翻译');
+    expect(item).toBeInstanceOf(HTMLButtonElement);
+    const badge = item.querySelector('.lightink-context-menu__badge');
+    expect(badge?.textContent).toBe('需先配置');
+    expect(controller.launch).not.toHaveBeenCalled();
+
+    item.click();
+    await settle();
+    expect(document.querySelector('.lightink-ai-wizard-overlay')).not.toBeNull();
+    expect(document.querySelector('[data-wizard-pane="preset"]')).not.toBeNull();
+    expect(controller.launch).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('runs the existing translation flow without a badge once configured', async () => {
+    let configured = false;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'ai_get_config') return aiStatus(configured);
+      throw new Error('no backend');
+    });
+    const { deps, controller } = translationDeps();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    // 向导/管理页保存后派发的事件：入口即时转正（不重载）。
+    configured = true;
+    document.dispatchEvent(
+      new CustomEvent('lightink:reader-ai-configured', { detail: { configured: true } }),
+    );
+    await settle();
+
+    await openItemMenu(host, 'local:/books/a.epub');
+    const item = contextMenuItem('整本翻译');
+    expect(item.querySelector('.lightink-context-menu__badge')).toBeNull();
+    item.click();
+    await settle();
+    expect(controller.launch).toHaveBeenCalledWith({
+      path: '/books/a.epub',
+      title: '本地小说',
+      extension: 'epub',
+    });
+    expect(document.querySelector('.lightink-ai-wizard-overlay')).toBeNull();
+    view.destroy();
+  });
+
+  it('keeps unsupported formats without the entry regardless of config state', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'ai_get_config') return aiStatus(true);
+      throw new Error('no backend');
+    });
+    const comic = comicItem();
+    const base = dependencies();
+    const { deps } = translationDeps({
+      library: { ...base.library, listItems: vi.fn(async () => [comic]) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    document.dispatchEvent(
+      new CustomEvent('lightink:reader-ai-configured', { detail: { configured: true } }),
+    );
+    await settle();
+    const menu = await openItemMenu(host, comic.id);
+    expect(
+      Array.from(menu.querySelectorAll('button')).some((b) => b.textContent?.includes('整本翻译')),
+    ).toBe(false);
     view.destroy();
   });
 });

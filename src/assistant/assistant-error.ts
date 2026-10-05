@@ -9,8 +9,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { MessageKey } from '../i18n/messages.js';
 
-/** 与 Manage 页 AI 分组广播的事件同源（`ai-config-ui`）；值保持兼容不改。 */
-export const ASSISTANT_AI_CONFIGURED_EVENT = 'lightink:reader-ai-configured';
+/**
+ * 与 Manage 页 AI 分组广播的事件同源；常量现由 `library/ai-config-shared`
+ * 单点持有（R3），此处按助手侧原名再导出，既有 import 不变。
+ */
+export { READER_AI_CONFIGURED_EVENT as ASSISTANT_AI_CONFIGURED_EVENT } from '../library/ai-config-shared.js';
 
 /** `ai_get_config` 的 surface 侧投影：显隐判定 + 目标语言覆盖项（无密钥材料）。 */
 export interface AiTranslateConfig {
