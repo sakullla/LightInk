@@ -257,6 +257,7 @@ import {
   remoteNeedsRangeWarning,
 } from './library/library-remote.js';
 import { webDavSourceClient } from './library/webdav-source-client.js';
+import { OPEN_ONBOARDING_EVENT } from './library/onboarding-guide.js';
 import {
   bindActiveDownloadCancel,
   bookDownloadClient,
@@ -3987,6 +3988,13 @@ document.addEventListener('lightink:open-manage', () => {
   view.element
     .querySelector<HTMLButtonElement>('.lightink-library-manage-entry')
     ?.click();
+});
+
+// R1：帮助菜单「上手引导」——回书架重开首次运行引导（不检查 done 标记；
+// 事件由 app-shell 的 help-onboarding 菜单项派发）。
+document.addEventListener(OPEN_ONBOARDING_EVENT, () => {
+  workspace.returnToShelf();
+  ensureLibraryView().openOnboarding();
 });
 
 // 外壳/菜单/标题栏按默认 shelf 表面就位；书架本体由 bootstrap 落定启动表面后再建。

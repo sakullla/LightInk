@@ -9,6 +9,7 @@
 
 import type { InsertElementId } from '../editor/insert-commands.js';
 import { ASSISTANT_AI_CONFIGURED_EVENT } from '../assistant/assistant-error.js';
+import { OPEN_ONBOARDING_EVENT } from '../library/onboarding-guide.js';
 import { INSERT_ELEMENTS } from '../editor/insert-commands.js';
 import type { MessageKey } from '../i18n/messages.js';
 import {
@@ -1050,6 +1051,11 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       id: 'help',
       label: () => t('menu.help'),
       items: [
+        // R1：重开首次运行引导（标签走 messages.ts；事件由 main.ts 监听回书架）。
+        menuItem('help-onboarding', () => t('help.onboarding'), () => {
+          if (typeof document === 'undefined') return;
+          document.dispatchEvent(new CustomEvent(OPEN_ONBOARDING_EVENT));
+        }),
         menuItem('help-cheatsheet', () => t('help.cheatsheet'), () => undefined),
         separator('help-lang-sep'),
         menuItem(

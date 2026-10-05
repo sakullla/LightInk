@@ -614,6 +614,7 @@ const en = {
   'mermaid.editTitle': 'Edit flowchart source',
 
   'help.cheatsheet': 'Keyboard Shortcuts',
+  'help.onboarding': 'Getting Started',
   'dialog.close': 'Close',
   'dialog.open': 'Open',
   'dialog.ok': 'OK',
@@ -1471,6 +1472,7 @@ const zhCN = {
   'mermaid.editTitle': '编辑流程图源码',
 
   'help.cheatsheet': '快捷键速查',
+  'help.onboarding': '上手引导',
   'dialog.close': '关闭',
   'dialog.open': '打开',
   'dialog.ok': '确定',

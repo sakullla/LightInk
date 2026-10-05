@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 // 书库链路只 import invoke（无 Channel）：按命令名脚本化 ai_get_config，
@@ -26,6 +26,7 @@ import {
   jacketHue,
   type LibraryViewDependencies,
 } from '../library-view.js';
+import { ONBOARDING_DONE_KEY } from '../onboarding-guide.js';
 import type { BookTranslationController } from '../book-translation/controller.js';
 import {
   type LibraryGroup,
@@ -970,6 +971,12 @@ function itemCard(host: ParentNode, itemId: string): HTMLElement {
   return shell ?? itemRow(host, itemId);
 }
 
+// R1：默认种「已引导」标记稳定既有用例（书架首渲不再弹引导）；
+// 引导专属用例在自身内显式清除。
+beforeEach(() => {
+  window.localStorage.setItem(ONBOARDING_DONE_KEY, '1');
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -981,6 +988,7 @@ afterEach(() => {
   delete document.documentElement.dataset.readerProgressBar;
   window.localStorage.removeItem(CONTINUE_LAST_OPENED_KEY);
   window.localStorage.removeItem(CONTINUE_DISMISS_KEY);
+  window.localStorage.removeItem(ONBOARDING_DONE_KEY);
 });
 
 describe('LibraryView my-books home', () => {
@@ -8867,6 +8875,149 @@ describe('LibraryView home visual system (R2)', () => {
       expect.anything(),
     );
     expect(view.visible).toBe(false);
+    view.destroy();
+  });
+});
+
+describe('LibraryView 首次运行引导（R1）', () => {
+  it('书架首渲且标记缺失时打开引导对话框；跳过后写标记', async () => {
+    window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    const overlay = document.querySelector<HTMLElement>('.lightink-onboarding-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.querySelector('.lightink-onboarding')?.getAttribute('role')).toBe('dialog');
+    expect(overlay?.textContent).toContain('欢迎使用轻墨');
+    // 弹出引导不影响背景书架渲染。
+    expect(isShown(host.querySelector('.lightink-library-cover-wall'))).toBe(true);
+    expect(window.localStorage.getItem(ONBOARDING_DONE_KEY)).toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[data-onboarding-action="skip"]')?.click();
+    expect(window.localStorage.getItem(ONBOARDING_DONE_KEY)).not.toBeNull();
+    expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+    view.destroy();
+  });
+
+  it('标记已存在时书架首渲不再弹出', async () => {
+    // beforeEach 已写入 done 标记。
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+    view.destroy();
+  });
+
+  it('引导期间背景 inert，关闭后恢复且空书架引导卡不受影响', async () => {
+    window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+    const base = dependencies();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, {
+      ...base,
+      library: { ...base.library, listItems: vi.fn(async () => []) },
+    });
+    await view.show();
+    expect(document.querySelector('.lightink-onboarding-overlay')).not.toBeNull();
+    expect(isShown(host.querySelector('.lightink-library-home-empty'))).toBe(true);
+    expect(host.inert).toBe(true);
+
+    document.querySelector<HTMLButtonElement>('[data-onboarding-action="start"]')?.click();
+    expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+    expect(host.inert).toBeFalsy();
+    // 空书架引导卡（含导入磁贴语义）原样保留。
+    const empty = host.querySelector('.lightink-library-home-empty');
+    expect(isShown(empty)).toBe(true);
+    expect(empty?.textContent).toContain('导入本地书籍');
+    view.destroy();
+  });
+
+  it('「导入本地书籍」动作接线 onImportLocal 并写标记', async () => {
+    window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+    const onImportLocal = vi.fn(async () => null);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ onImportLocal }));
+    await view.show();
+    document.querySelector<HTMLButtonElement>('[data-onboarding-action="import"]')?.click();
+    expect(onImportLocal).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(ONBOARDING_DONE_KEY)).not.toBeNull();
+    expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+    view.destroy();
+  });
+
+  it('「添加书源」动作接线既有书源表单并写标记', async () => {
+    window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    await view.show();
+    document.querySelector<HTMLButtonElement>('[data-onboarding-action="add-source"]')?.click();
+    await waitForShown(
+      () => {
+        const sourceModal = document.querySelector<HTMLElement>('.lightink-library-source-modal');
+        return sourceModal !== null && !sourceModal.hidden;
+      },
+      'source form not opened from onboarding',
+    );
+    expect(window.localStorage.getItem(ONBOARDING_DONE_KEY)).not.toBeNull();
+    view.destroy();
+  });
+
+  it('存储写入失败时按未引导处理，但会话内最多自动弹一次', async () => {
+    window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+    const originalSetItem = Storage.prototype.setItem;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(
+      function setItem(this: Storage, key: string, value: string): void {
+        if (key === ONBOARDING_DONE_KEY) throw new Error('quota exceeded');
+        originalSetItem.call(this, key, value);
+      },
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    try {
+      await view.show();
+      expect(document.querySelector('.lightink-onboarding-overlay')).not.toBeNull();
+      document.querySelector<HTMLButtonElement>('[data-onboarding-action="skip"]')?.click();
+      expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+
+      await view.show();
+      // 会话内兜底：标记写不进去也不重复弹出。
+      expect(document.querySelector('.lightink-onboarding-overlay')).toBeNull();
+    } finally {
+      setItemSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
+  it('openOnboarding() 从帮助菜单事件路径重开（标记存在也打开）', () => {
+    // beforeEach 已写入 done 标记。
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies());
+    view.openOnboarding();
+    const overlay = document.querySelector<HTMLElement>('.lightink-onboarding-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.textContent).toContain('欢迎使用轻墨');
+    view.destroy();
+  });
+
+  it('语言切换时打开中的引导按 LABELS 重渲染（retranslate 覆盖）', () => {
+    let locale: 'en' | 'zh-CN' = 'zh-CN';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ getLocale: () => locale }));
+    view.openOnboarding();
+    const overlay = document.querySelector<HTMLElement>('.lightink-onboarding-overlay');
+    expect(overlay?.textContent).toContain('欢迎使用轻墨');
+
+    locale = 'en';
+    view.retranslate();
+    expect(overlay?.textContent).toContain('Welcome to LightInk');
+    expect(overlay?.textContent).not.toContain('欢迎使用轻墨');
     view.destroy();
   });
 });

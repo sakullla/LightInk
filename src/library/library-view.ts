@@ -48,6 +48,12 @@ import {
 } from './library-manage.js';
 import { invokeAiGetConfig, READER_AI_CONFIGURED_EVENT } from './ai-config-shared.js';
 import { aiWizardLabels, openAiConfigWizard } from '../assistant/ai-config-wizard.js';
+import {
+  openOnboardingGuide,
+  readOnboardingDone,
+  type OnboardingGuideHandle,
+  type OnboardingGuideLabels,
+} from './onboarding-guide.js';
 import { translate, type MessageKey } from '../i18n/messages.js';
 import type { BookTranslationController } from './book-translation/controller.js';
 import type { BookTranslationStatus } from './book-translation/types.js';
@@ -297,6 +303,18 @@ interface Labels {
   removeTag: string;
   noTags: string;
   tagsOverflow: string;
+  onboardingTitle: string;
+  onboardingIntro: string;
+  onboardingCapabilitiesTitle: string;
+  onboardingCapabilityImport: string;
+  onboardingCapabilitySources: string;
+  onboardingCapabilityEdit: string;
+  onboardingCapabilityRead: string;
+  onboardingCapabilityExport: string;
+  onboardingCapabilityStealth: string;
+  onboardingAddSource: string;
+  onboardingSkip: string;
+  onboardingStart: string;
 }
 
 const LABELS: Record<Locale, Labels> = {
@@ -494,6 +512,19 @@ const LABELS: Record<Locale, Labels> = {
     removeTag: 'Remove tag',
     noTags: 'No tags yet. Create one below.',
     tagsOverflow: '{count} more tags',
+    onboardingTitle: 'Welcome to LightInk',
+    onboardingIntro:
+      'LightInk pairs a library shelf with a writing desk in one window. The shelf imports, organizes, and opens your books; the editor is where you write and annotate. Start by importing local books or adding a source.',
+    onboardingCapabilitiesTitle: 'What you can do',
+    onboardingCapabilityImport: 'Import local EPUB / CBZ / PDF / TXT books',
+    onboardingCapabilitySources: 'Browse and search OPDS, WebDAV, and custom book sources',
+    onboardingCapabilityEdit: 'Write and annotate in the Markdown editor',
+    onboardingCapabilityRead: 'Immersive reading with progress, themes, and the AI assistant',
+    onboardingCapabilityExport: 'Export books and annotations to HTML or PDF',
+    onboardingCapabilityStealth: 'Stealth mode with boss keys and a disguised shelf',
+    onboardingAddSource: 'Add a book source',
+    onboardingSkip: 'Skip',
+    onboardingStart: 'Get started',
   },
   'zh-CN': {
     library: '书库',
@@ -688,6 +719,19 @@ const LABELS: Record<Locale, Labels> = {
     removeTag: '移除标签',
     noTags: '还没有标签，可在下方新建。',
     tagsOverflow: '另有 {count} 个标签',
+    onboardingTitle: '欢迎使用轻墨',
+    onboardingIntro:
+      '轻墨在同一个窗口里提供书架与编辑器两个表面：书架负责导入、整理和阅读藏书；编辑器用于写作与批注。先导入本地书籍，或添加一个书源，开始搭建你的书架。',
+    onboardingCapabilitiesTitle: '核心能力',
+    onboardingCapabilityImport: '导入本地 EPUB / CBZ / PDF / TXT 书籍',
+    onboardingCapabilitySources: '浏览与搜索 OPDS、WebDAV 及自定义书源',
+    onboardingCapabilityEdit: '在 Markdown 编辑器中写作与批注',
+    onboardingCapabilityRead: '沉浸阅读：翻页进度、主题与 AI 助手',
+    onboardingCapabilityExport: '导出书籍与批注为 HTML 或 PDF',
+    onboardingCapabilityStealth: '摸鱼模式：老板键与伪装书架',
+    onboardingAddSource: '添加书源',
+    onboardingSkip: '跳过',
+    onboardingStart: '开始使用',
   },
 };
 
@@ -825,6 +869,8 @@ export interface LibraryView {
   toggle(): Promise<void>;
   refresh(): Promise<void>;
   retranslate(): void;
+  /** R1：重开首次运行引导（帮助菜单事件路径；不检查 done 标记）。 */
+  openOnboarding(): void;
   destroy(): void;
 }
 
@@ -2145,6 +2191,53 @@ export function createLibraryView(
   if (typeof document !== 'undefined') {
     document.addEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
   }
+
+  // ── R1：首次运行引导（ADR-2；标记设备本地，不进 SyncableStorage）────
+  let onboardingGuide: OnboardingGuideHandle | null = null;
+  // 存储读写异常时按未引导处理，但会话内最多自动弹一次。
+  let onboardingAutoShown = false;
+
+  const onboardingGuideLabels = (): OnboardingGuideLabels => {
+    const l = labels();
+    return {
+      title: l.onboardingTitle,
+      intro: l.onboardingIntro,
+      capabilitiesTitle: l.onboardingCapabilitiesTitle,
+      capabilityImport: l.onboardingCapabilityImport,
+      capabilitySources: l.onboardingCapabilitySources,
+      capabilityEdit: l.onboardingCapabilityEdit,
+      capabilityRead: l.onboardingCapabilityRead,
+      capabilityExport: l.onboardingCapabilityExport,
+      capabilityStealth: l.onboardingCapabilityStealth,
+      importAction: l.importLocal,
+      addSourceAction: l.onboardingAddSource,
+      skip: l.onboardingSkip,
+      start: l.onboardingStart,
+    };
+  };
+
+  function openOnboardingGuideDialog(): void {
+    onboardingGuide?.destroy();
+    onboardingGuide = openOnboardingGuide(doc, {
+      labels: onboardingGuideLabels,
+      themeHost: root,
+      onImport: () => {
+        void importLocalBook();
+      },
+      onAddSource: () => {
+        void showSourcesList().then(() => openSourceForm());
+      },
+    });
+  }
+
+  /** 首次书架渲染且标记缺失时弹引导；存储异常经会话标记兜底不重复弹。 */
+  function maybeAutoOpenOnboardingGuide(): void {
+    if (onboardingAutoShown) return;
+    onboardingAutoShown = true;
+    if (readOnboardingDone(doc.defaultView)) return;
+    openOnboardingGuideDialog();
+  }
+
   const trail: Array<{ title: string; url?: string }> = [];
   let groupListCollapsed = true;
   let smartGroupListCollapsed = true;
@@ -6801,6 +6894,8 @@ export function createLibraryView(
     );
     if (membershipItemId !== null) openMembershipEditor(membershipItemId);
     if (tagDialogMode?.kind === 'assign') openTagDialog(tagDialogMode);
+    // R1：引导对话框打开期间语言切换——按当前 LABELS 重渲染（getter 持有）。
+    onboardingGuide?.retranslate();
   }
 
   function syncSearchClear(): void {
@@ -7350,6 +7445,8 @@ export function createLibraryView(
       if (!isMobileLibraryChrome()) {
         searchInput.focus();
       }
+      // 首次书架渲染（标记缺失）→ 引导对话框；关闭即恢复背景书架交互。
+      maybeAutoOpenOnboardingGuide();
     },
     hide,
     async toggle() {
@@ -7358,6 +7455,7 @@ export function createLibraryView(
     },
     refresh: initialLoad,
     retranslate,
+    openOnboarding: openOnboardingGuideDialog,
     destroy() {
       requestGeneration += 1;
       clearCatalogSearchTimer();
@@ -7372,6 +7470,9 @@ export function createLibraryView(
       if (typeof document !== 'undefined') {
         document.removeEventListener(READER_AI_CONFIGURED_EVENT, onAiConfiguredEvent);
       }
+      // R1：宿主卸载只拆除引导（不写 done 标记）。
+      onboardingGuide?.destroy();
+      onboardingGuide = null;
       doc.defaultView?.removeEventListener('resize', onLibraryViewportResize);
       manage.destroy();
       unbindGroupOverlayReveal();
