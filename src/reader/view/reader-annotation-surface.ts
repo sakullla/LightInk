@@ -56,6 +56,7 @@ import { sessionCapabilitiesForExtension } from '../session/adapters.js';
 import type { SessionAnnotationHost } from '../session/session-annotation.js';
 import type { ReaderTarget } from '../sources/types.js';
 import { mapFrameClientRect, revealPagedElement } from '../flow-renderer.js';
+import { showToast } from '../../ui/toast.js';
 import {
   concealSheet,
   revealSheet,
@@ -68,6 +69,7 @@ import {
 import { cssEscape, readerChromeTouchMode } from './reader-dom.js';
 import { SEARCH_MARK_LINGER_MS } from './reader-search-surface.js';
 import { PAGE_EXTS, type ReaderViewContext } from './reader-context.js';
+import type { MessageKey } from '../../i18n/messages.js';
 
 /** 仅用于稳定标注 id（无加密强度需求）。 */
 function newAnnotationId(): string {
@@ -118,6 +120,11 @@ export interface ReaderAnnotationSurface {
     context: { signal: AbortSignal; isCurrent: () => boolean },
   ): Promise<void>;
   closeOpenNoteDialog(): void;
+  /**
+   * 直接派发标注生命周期 toast（书签开关复用通道；走与高亮/笔记相同的节流与
+   * i18n 翻译，避开 appendAnnotation 跳过 bookmark 分支导致的 toast 漏发）。
+   */
+  notifyAnnotationChanged(kind: 'added' | 'removed', annotation: Annotation): void;
 }
 
 export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnnotationSurface {
@@ -126,16 +133,65 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   /** 点搜索结果关面板：不要立刻 remasure+snap，否则 0 视口会把滚动吸回章首。 */
   let skipVisibleFrameSyncOnce = false;
 
+  // —— 标注生命周期 feedback toast 节流（R17/R22）：500ms 内的多次派发合并
+  // 为最后一次；added/removed 各持一份 timer 与待发标注。书签的成功反馈经
+  // 书签开关处直派（同通道，复用同一节流与 i18n 翻译）。
+  const ANNOTATION_TOAST_THROTTLE_MS = 500;
+  type ToastKind = 'added' | 'removed';
+  const toastTimers: Record<ToastKind, ReturnType<typeof setTimeout> | null> = {
+    added: null,
+    removed: null,
+  };
+  const pendingToast: Record<ToastKind, Annotation | null> = {
+    added: null,
+    removed: null,
+  };
+  const annotationToastKey = (
+    annotation: Annotation,
+    kind: ToastKind,
+  ): MessageKey => {
+    if (annotation.kind === 'highlight') {
+      return kind === 'added'
+        ? 'annotation.toast.highlighted'
+        : 'annotation.toast.unhighlighted';
+    }
+    if (annotation.kind === 'note') {
+      return kind === 'added' ? 'annotation.toast.noteAdded' : 'annotation.toast.noteRemoved';
+    }
+    return kind === 'added' ? 'bookmark.toast.added' : 'bookmark.toast.removed';
+  };
+  const dispatchAnnotationToast = (kind: ToastKind, annotation: Annotation): void => {
+    pendingToast[kind] = annotation;
+    if (toastTimers[kind] !== null) {
+      return; // 窗口内多次派发：保留最后一次，到时一并派发（last-write-wins）
+    }
+    toastTimers[kind] = setTimeout(() => {
+      toastTimers[kind] = null;
+      const target = pendingToast[kind];
+      pendingToast[kind] = null;
+      if (target === null || ctx.destroyed) {
+        return;
+      }
+      showToast(
+        'success',
+        ctx.t(annotationToastKey(target, kind)),
+        undefined,
+        { locale: readerAidLocale(ctx.t) },
+      );
+    }, ANNOTATION_TOAST_THROTTLE_MS);
+  };
+
   // —— 标注宿主会话（session-annotation）：启用判定（标注存储 × adapter
   // 能力声明 × 身份可用）、写队列与侧栏显隐策略唯一实现在核心；本壳只按
   // host 供数（侧栏 DOM/portal/焦点机械）并消费其裁决。 ——
-  const createSessionHost = (): SessionAnnotationHost => ({
+  const host: SessionAnnotationHost = {
     storage: {
       readAnnotations: ctx.deps.readAnnotations,
       writeAnnotations: ctx.deps.writeAnnotations,
       getContentHash: ctx.deps.getContentHash,
     },
     notifySaveFailed: () => ctx.deps.notify?.(ctx.t('annotation.saveFailed')),
+    notifyAnnotationChanged: (kind, annotation) => dispatchAnnotationToast(kind, annotation),
     isDestroyed: () => ctx.destroyed,
     ensureSidebarDom: () => ensureSidebar(),
     syncSidebarDom: () => syncSidebarOverlayDom(),
@@ -183,7 +239,8 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     },
     sidebarSearchQuery: () => ctx.sidebar?.getSearchQuery() ?? '',
     renderSidebarList: () => ctx.sidebar?.render(ctx.annotations),
-  });
+  };
+  const createSessionHost = (): SessionAnnotationHost => host;
 
   /** 写队列策略唯一实现在 session-annotation（按当前身份串行写入，失败提示带会话守卫）。 */
   const saveAnnotations = async (): Promise<void> => {
@@ -191,8 +248,11 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
   };
 
   /** 移除标注（侧栏/划选工具栏共用）：v3 删除产 tombstone（同步合并按记录级
-   * LWW 收敛，防复活），更新集合、经共享引擎清正文 mark、刷新书签表面、保存。 */
+   * LWW 收敛，防复活），更新集合、经共享引擎清正文 mark、刷新书签表面、保存。
+   * 派发 success toast：highlight/note 走通知通道（节流）；bookmark 由
+   * 书签开关 reader-bookmarks 直派，避免重复提示。 */
   const removeAnnotationById = (id: string): void => {
+    const removed = ctx.annotations.find((item) => item.id === id) ?? null;
     ctx.annotations = removeAnnotation(ctx.annotations, id);
     for (const doc of ctx.dom.flowDocuments()) {
       removeAnnotationMarks(doc.body, id);
@@ -205,6 +265,9 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     ctx.bookmarks.syncBookmarkIndicators();
     ctx.bookmarks.syncChromeBookmarkState();
     void saveAnnotations();
+    if (removed !== null && removed.kind !== 'bookmark') {
+      host.notifyAnnotationChanged?.('removed', removed);
+    }
   };
 
   const setSelectionToolbarOpen = (open: boolean): void => {
@@ -639,7 +702,8 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     return { format: 'flow', chapter, ...anchor };
   };
 
-  /** 追加标注并同步正文高亮/侧栏/书签表面/持久化。 */
+  /** 追加标注并同步正文高亮/侧栏/书签表面/持久化；highlight/note 派发
+   * success toast（节流）；bookmark 由 reader-bookmarks 直派避免重复提示。 */
   const appendAnnotation = (
     kind: AnnotationKind,
     locator: Locator,
@@ -647,23 +711,24 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     note: string | undefined,
     color?: AnnotationColor,
   ): void => {
-    ctx.annotations = [
-      ...ctx.annotations,
-      {
-        id: newAnnotationId(),
-        kind,
-        locator,
-        quote,
-        note,
-        createdAt: Date.now(),
-        color,
-      },
-    ];
+    const annotation: Annotation = {
+      id: newAnnotationId(),
+      kind,
+      locator,
+      quote,
+      note,
+      createdAt: Date.now(),
+      color,
+    };
+    ctx.annotations = [...ctx.annotations, annotation];
     renderHighlights();
     renderSidebarAnnotations();
     ctx.bookmarks.syncBookmarkIndicators();
     ctx.bookmarks.syncChromeBookmarkState();
     void saveAnnotations();
+    if (annotation.kind !== 'bookmark') {
+      host.notifyAnnotationChanged?.('added', annotation);
+    }
   };
 
   /** 添加书签或笔记（笔记经多行弹层输入，取消不创建）。 */
@@ -1113,5 +1178,6 @@ export function setupReaderAnnotationSurface(ctx: ReaderViewContext): ReaderAnno
     onFlowSelectionMouseUp,
     loadAnnotationsForSession,
     closeOpenNoteDialog,
+    notifyAnnotationChanged: (kind, annotation) => dispatchAnnotationToast(kind, annotation),
   };
 }

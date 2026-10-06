@@ -73,6 +73,11 @@ export interface SessionAnnotationHost {
   readonly storage: SessionAnnotationStorage;
   /** 标注保存失败提示（仅在视图未销毁且会话身份未变时被调用）。 */
   notifySaveFailed(): void;
+  /**
+   * 标注生命周期反馈（success toast 通道；视图侧节流与 i18n 渲染）。视图层
+   * 在 add/remove 成功路径派发，可选保留以兼容历史装配。
+   */
+  notifyAnnotationChanged?(kind: 'added' | 'removed', annotation: Annotation): void;
   /** 视图已销毁（装载续行与失败提示的守卫）。 */
   isDestroyed(): boolean;
 

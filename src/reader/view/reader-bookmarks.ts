@@ -59,7 +59,10 @@ export function setupReaderBookmarks(ctx: ReaderViewContext): ReaderBookmarksSur
     ctx.chrome.syncChromeProgress();
   };
 
-  /** 书签开关：当前位置已有活书签则 tombstone 移除，否则在当前位置添加。 */
+  /** 书签开关：当前位置已有活书签则 tombstone 移除，否则在当前位置添加。
+   * 书签的 success toast 不走 appendAnnotation/removeAnnotationById 派发
+   * （标注表面已为 highlight/note 走通道并跳过 bookmark 防重复），由本开关
+   * 直派同一通道，复用节流与 i18n。 */
   const toggleBookmarkAtCurrentPosition = (): void => {
     if (!ctx.sessionAnnotation.enabled()) {
       return;
@@ -67,9 +70,19 @@ export function setupReaderBookmarks(ctx: ReaderViewContext): ReaderBookmarksSur
     const existing = bookmarkAtStatePosition(ctx.readerState);
     if (existing !== null) {
       ctx.annotation.removeAnnotationById(existing.id);
+      ctx.annotation.notifyAnnotationChanged('removed', existing);
       return;
     }
-    ctx.annotation.appendAnnotation('bookmark', ctx.annotation.currentPositionLocator(), undefined, undefined);
+    ctx.annotation.appendAnnotation(
+      'bookmark',
+      ctx.annotation.currentPositionLocator(),
+      undefined,
+      undefined,
+    );
+    const added = ctx.annotations[ctx.annotations.length - 1];
+    if (added !== undefined && added.kind === 'bookmark') {
+      ctx.annotation.notifyAnnotationChanged('added', added);
+    }
   };
 
   /** 页内持久书签指示（R1）：有活书签的章/页在页角渲染丝带角标（装饰，不侵交互）。 */
