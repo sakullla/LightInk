@@ -3,6 +3,7 @@
  * Slide (not curl) is the Apple Books / Kindle default for long-form prose.
  */
 
+import type { MessageKey } from '../i18n/messages.js';
 import type { OutlineItem } from '../outline/outline-model.js';
 import type { Annotation } from './annotations.js';
 import { isTouchPrimaryDocument } from './comic-preferences.js';
@@ -117,6 +118,51 @@ export function formatReaderLocation(current: number, total: number): string {
 export function formatReaderPercent(progress: number): string {
   const normalized = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
   return `${Math.round(normalized * 100)}%`;
+}
+
+/**
+ * 底栏"还剩 N 章 / 还剩 N 页"提示（T7 / R24）：EPUB/流式按章节取整，
+ * PDF 按页取整，CBZ 与无效输入返回 null。N 取整到 5 的倍数（向上取整）；
+ * N<=0 / 不可靠输入同样返回 null。suffix 沿用 status.reader.chapter /
+ * status.reader.page 的本地化文案（"章"/"页"/"Chapter"/"Page"），
+ * 模板由 caller 的 t 提供 reader.footer.remaining 键。
+ */
+export interface RemainingText {
+  text: string;
+  suffix: 'chapter' | 'page';
+}
+
+export function remainingText(
+  state: Pick<ReaderState, 'current' | 'locationKind'>,
+  totalChapters: number,
+  totalPages: number,
+  t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string,
+): RemainingText | null {
+  if (state.locationKind === 'chapter') {
+    if (!Number.isFinite(totalChapters) || totalChapters <= 0) return null;
+    if (!Number.isFinite(state.current) || state.current <= 0) return null;
+    const remaining = totalChapters - state.current;
+    if (remaining <= 0) return null;
+    const rounded = Math.max(1, Math.ceil(remaining / 5) * 5);
+    const suffix = t('status.reader.chapter');
+    return {
+      text: t('reader.footer.remaining', { n: String(rounded), suffix }),
+      suffix: 'chapter',
+    };
+  }
+  if (state.locationKind === 'page') {
+    if (!Number.isFinite(totalPages) || totalPages <= 0) return null;
+    if (!Number.isFinite(state.current) || state.current <= 0) return null;
+    const remaining = totalPages - state.current;
+    if (remaining <= 0) return null;
+    const rounded = Math.max(1, Math.ceil(remaining / 5) * 5);
+    const suffix = t('status.reader.page');
+    return {
+      text: t('reader.footer.remaining', { n: String(rounded), suffix }),
+      suffix: 'page',
+    };
+  }
+  return null;
 }
 
 /** Spine index for restore/seek. Never clamp to the mounted iframe window. */

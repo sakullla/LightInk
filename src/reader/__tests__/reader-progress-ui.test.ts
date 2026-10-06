@@ -18,6 +18,7 @@ import {
   playReaderPageTurn,
   readerBookmarkTickFractions,
   readerProgressTickFractions,
+  remainingText,
   resolveReaderChapterTitle,
   stampReadingProgressTitle,
 } from '../reader-progress-ui.js';
@@ -107,6 +108,59 @@ describe('formatReaderLocation', () => {
     expect(formatReaderLocation(3, 12)).toBe('3 / 12');
     expect(formatReaderLocation(0, 12)).toBe('');
     expect(formatReaderLocation(3, 0)).toBe('');
+  });
+});
+
+describe('remainingText', () => {
+  // 复用 messages.ts 的 zh-CN 文案 + 同一替换语义，避免测试脆于 catalog 微调。
+  const t = (key: string, vars?: Readonly<Record<string, string>>): string => {
+    const dict: Record<string, string> = {
+      'reader.footer.remaining': '还剩 {n} {suffix}',
+      'status.reader.chapter': '章',
+      'status.reader.page': '页',
+    };
+    let text = dict[key] ?? key;
+    if (vars !== undefined) {
+      for (const [k, v] of Object.entries(vars)) {
+        text = text.split(`{${k}}`).join(v);
+      }
+    }
+    return text;
+  };
+
+  it('rounds EPUB chapter remainder up to the next multiple of 5', () => {
+    expect(remainingText({ current: 12, locationKind: 'chapter' }, 20, 0, t)).toEqual({
+      text: '还剩 10 章',
+      suffix: 'chapter',
+    });
+    expect(remainingText({ current: 1, locationKind: 'chapter' }, 3, 0, t)).toEqual({
+      text: '还剩 5 章',
+      suffix: 'chapter',
+    });
+  });
+
+  it('returns null when the chapter remainder is zero', () => {
+    expect(remainingText({ current: 8, locationKind: 'chapter' }, 8, 0, t)).toBeNull();
+  });
+
+  it('rounds PDF page remainder up to the next multiple of 5', () => {
+    expect(remainingText({ current: 4, locationKind: 'page' }, 0, 12, t)).toEqual({
+      text: '还剩 10 页',
+      suffix: 'page',
+    });
+  });
+
+  it('returns null for comics (no locationKind)', () => {
+    expect(remainingText({ current: 5, locationKind: null }, 20, 20, t)).toBeNull();
+  });
+
+  it('returns null on invalid or unreliable inputs', () => {
+    expect(remainingText({ current: 0, locationKind: 'chapter' }, 20, 0, t)).toBeNull();
+    expect(remainingText({ current: 5, locationKind: 'chapter' }, 0, 0, t)).toBeNull();
+    expect(remainingText({ current: 5, locationKind: 'chapter' }, NaN, 0, t)).toBeNull();
+    expect(remainingText({ current: 4, locationKind: 'page' }, 0, 0, t)).toBeNull();
+    expect(remainingText({ current: 4, locationKind: 'page' }, 0, NaN, t)).toBeNull();
+    expect(remainingText({ current: NaN, locationKind: 'chapter' }, 20, 0, t)).toBeNull();
   });
 });
 

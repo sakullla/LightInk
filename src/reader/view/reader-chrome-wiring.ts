@@ -37,6 +37,7 @@ import { concealSheet, revealSheet } from '../../ui/touch/sheet-transition.js';
 import {
   formatReaderLocation,
   readerProgressTickFractions,
+  remainingText,
   resolveReaderChapterTitle,
   stampReadingProgressTitle,
 } from '../reader-progress-ui.js';
@@ -279,6 +280,30 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       : ctx.t('reader.chapter', { n: String(n) });
   };
 
+  // T7 / R24：底栏"还剩 N 章 / 还剩 N 页"提示挂载点。chrome 不感知该
+  // span，wiring 端懒创建并附到 footerStats，让其继承 muted 色与 flex gap，
+  // 无样式表新增；null 时设 hidden 让现有 footer 单行不增高度。
+  let footerRemaining: HTMLSpanElement | null = null;
+  const ensureFooterRemaining = (): HTMLSpanElement | null => {
+    if (footerRemaining !== null && footerRemaining.isConnected) {
+      return footerRemaining;
+    }
+    const chrome = ctx.readerChrome;
+    if (chrome === null) {
+      return null;
+    }
+    const span = document.createElement('span');
+    span.className = 'lightink-reader-chrome-remaining';
+    const stats = chrome.footer.querySelector('.lightink-reader-chrome-footer-stats');
+    if (stats !== null) {
+      stats.appendChild(span);
+    } else {
+      chrome.footer.appendChild(span);
+    }
+    footerRemaining = span;
+    return span;
+  };
+
   const syncChromeProgress = (): void => {
     const kind = ctx.readerState.locationKind;
     const current = ctx.readerState.current;
@@ -298,6 +323,25 @@ export function setupReaderChromeWiring(ctx: ReaderViewContext): ReaderChromeWir
       ticks: ticks.chapters,
       bookmarkTicks: ticks.bookmarks,
     });
+    // T7：流式按章节总数 / PDF 按页总数派生"还剩"。漫画与无效输入由
+    // remainingText 返 null。chapter 计数与 PDF 页数都来自当前 state，
+    // 因为 ctx.readerState.total 与 locationKind 一致时即事实源。
+    const remainingSpan = ensureFooterRemaining();
+    if (remainingSpan !== null) {
+      const remaining = remainingText(
+        ctx.readerState,
+        ctx.flowChapterCount > 0 ? ctx.flowChapterCount : total,
+        ctx.pdfHandle !== null ? ctx.pdfHandle.controller.totalPages : total,
+        ctx.t,
+      );
+      if (remaining === null) {
+        remainingSpan.textContent = '';
+        remainingSpan.hidden = true;
+      } else {
+        remainingSpan.textContent = remaining.text;
+        remainingSpan.hidden = false;
+      }
+    }
   };
 
   const goToProgress = (progress: number): void => {
