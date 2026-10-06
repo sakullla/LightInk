@@ -207,6 +207,50 @@ export function selectionClientRect(range: Range): SelectionToolbarRect {
 }
 
 /**
+ * 划选工具栏 8 个动作的内联 SVG（24×24，stroke currentColor；fill 由 CSS 默认 none，
+ * summarize 圆点用 fill="currentColor" 覆盖）。几何只用 rect/line/circle/path/polyline
+ * 等基本 primitive，1em 缩放后暗色与亮色主题下都仍可辨；不引入第三方图标库或字体图标
+ * （ADR-1 备选 B/C 否决）。
+ */
+const SELECTION_ACTION_ICONS: Record<SelectionToolbarAction, string> = {
+  highlight:
+    '<path d="M4 20 V17 L13 8 L16 11 L7 20 Z" stroke-linejoin="round" />' +
+    '<line x1="11" y1="10" x2="14" y2="13" />',
+  note:
+    '<path d="M6 3 H15 L19 7 V21 H6 Z" stroke-linejoin="round" />' +
+    '<path d="M15 3 V7 H19" stroke-linejoin="round" />' +
+    '<line x1="9" y1="12" x2="16" y2="12" stroke-linecap="round" />' +
+    '<line x1="9" y1="15" x2="16" y2="15" stroke-linecap="round" />' +
+    '<line x1="9" y1="18" x2="13" y2="18" stroke-linecap="round" />',
+  copy:
+    '<rect x="8" y="8" width="11" height="11" rx="1.5" stroke-linejoin="round" />' +
+    '<path d="M5 16 V6 a1.5 1.5 0 0 1 1.5 -1.5 H15" stroke-linejoin="round" stroke-linecap="round" />',
+  lookup:
+    '<circle cx="11" cy="11" r="6" />' +
+    '<line x1="15.5" y1="15.5" x2="20" y2="20" stroke-linecap="round" />' +
+    '<path d="M8.5 11 H13.5 M11 8.5 V13.5" stroke-linecap="round" />',
+  aiTranslate:
+    '<path d="M3 17 L6 8 L9 17 M4.5 14 H7.5" stroke-linejoin="round" stroke-linecap="round" />' +
+    '<line x1="10.5" y1="12" x2="14.5" y2="12" stroke-linecap="round" />' +
+    '<polyline points="12.5,9 14.5,12 12.5,15" stroke-linejoin="round" stroke-linecap="round" />' +
+    '<path d="M16 17 V8 H19 a2 2 0 0 1 0 4 H16 a2 2 0 0 1 0 4 H16" stroke-linejoin="round" />',
+  explain:
+    '<path d="M8 17 H16 M9.5 19.5 H14.5" stroke-linecap="round" />' +
+    '<path d="M7 11 a5 5 0 1 1 10 0 c0 2 -1.5 3 -2 4.5 V17 H9 V15.5 c-0.5 -1.5 -2 -2.5 -2 -4.5" stroke-linejoin="round" />',
+  summarize:
+    '<circle cx="4.5" cy="6" r="1.5" fill="currentColor" stroke="none" />' +
+    '<circle cx="4.5" cy="12" r="1.5" fill="currentColor" stroke="none" />' +
+    '<circle cx="4.5" cy="18" r="1.5" fill="currentColor" stroke="none" />' +
+    '<line x1="9" y1="6" x2="20" y2="6" stroke-linecap="round" />' +
+    '<line x1="9" y1="12" x2="20" y2="12" stroke-linecap="round" />' +
+    '<line x1="9" y1="18" x2="20" y2="18" stroke-linecap="round" />',
+  removeHighlight:
+    '<path d="M4 20 V17 L13 8 L16 11 L7 20 Z" stroke-linejoin="round" />' +
+    '<line x1="11" y1="10" x2="14" y2="13" />' +
+    '<line x1="4" y1="4" x2="20" y2="20" stroke-linecap="round" stroke-width="1.75" />',
+};
+
+/**
  * 创建划选工具栏。element 挂到 reader 视图；showAt/hide 控制显隐并派发动作回调。
  */
 export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToolbar {
@@ -224,7 +268,17 @@ export function createSelectionToolbar(deps: SelectionToolbarDeps): SelectionToo
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `lightink-reader-selection-action lightink-reader-selection-action--${action}`;
-    button.textContent = deps.t(labelKey);
+    const label = deps.t(labelKey);
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.setAttribute('focusable', 'false');
+    icon.classList.add('lightink-reader-selection-action-icon');
+    icon.innerHTML = SELECTION_ACTION_ICONS[action];
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'lightink-reader-selection-action-label';
+    labelSpan.textContent = label;
+    button.append(icon, labelSpan);
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();

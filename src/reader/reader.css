@@ -1430,6 +1430,26 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   border: none;
   border-radius: 3px;
   cursor: pointer;
+  /* T2：图标 + 标签横向排列。align-items 让 svg 与 label 文字基线对齐；
+     gap 给出 0.3rem 呼吸距离，避免图标紧贴文字。 */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* T2：动作按钮内 24x24 SVG。1em 缩放后跟随按钮字号，宽窗约 14px、触屏
+   48px 热区下约 52px（与既有 touch hit-area 不冲突）。stroke=currentColor
+   让主题色直接流入；fill=none 由子元素 attribute 覆盖（summarize 圆点
+   仍用 fill="currentColor" 填实）。 */
+.lightink-reader-selection-action-icon {
+  width: 1.1em;
+  height: 1.1em;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .lightink-reader-selection-action:hover:not(:disabled) {
@@ -1439,6 +1459,22 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 .lightink-reader-selection-action:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* T2：桌面窄窗（< 720px）下色板独占一行；动作按钮随后折行到下一行。
+   宽窗（≥ 720px）保持原 colors 与动作按钮同行布局不变（仅靠默认 flex-wrap:
+   wrap 让过宽内容自然折行，不强制换行）。右侧 1px 分隔边线在窄窗下改为下边
+   线，避免 colors 行右侧留出空隙（与动作行视觉分隔）。触屏 hit-area / 折行
+   规则由下方 touch-primary 分支独立接管（max-width: 100vw - 8px + 48px 热区），
+   本断点不重复定义。 */
+@media (max-width: 719px) {
+  .lightink-reader-selection-colors {
+    flex-basis: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--lightink-border);
+    padding-bottom: 0.35rem;
+    margin-bottom: 0.15rem;
+  }
 }
 
 /* 触屏划选工具条按压反馈：action 洗色 + 颜色圆点轻微缩放（几何两态一致）。 */
