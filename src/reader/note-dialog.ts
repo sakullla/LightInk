@@ -138,7 +138,19 @@ export function showNoteDialog(
         revealTimer = window.setTimeout(revealInput, 320);
       }
     });
+    // IME 合成期间 Ctrl/Cmd+Enter 不提交（参考 bindImeSafeQuery 的 compositionstart/end 守卫）。
+    // 部分输入法引擎在 compositionstart 与 isComposing 之间存在一帧时差，
+    // 显式跟踪 composing 以确保合成期间任何来源的 keydown 都不会提前提交。
+    let composing = false;
+    textarea.addEventListener('compositionstart', () => {
+      composing = true;
+    });
+    textarea.addEventListener('compositionend', () => {
+      composing = false;
+    });
     textarea.addEventListener('keydown', (event) => {
+      const ke = event as KeyboardEvent;
+      if (ke.isComposing === true || composing) return;
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         settle(textarea.value);
