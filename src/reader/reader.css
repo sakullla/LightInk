@@ -119,6 +119,7 @@
   flex: 0 0 auto;
   flex-shrink: 0;
   isolation: isolate;
+  position: relative; /* T5 (R20/R22)：锚点用于右上角角标。 */
   min-height: 32px;
   padding: 0.2rem 0.6rem;
   border: 0;
@@ -137,56 +138,43 @@
   -webkit-app-region: no-drag;
 }
 
-.lightink-reader-chrome-action::before {
-  content: '';
-  display: block;
-  flex: 0 0 auto;
-  width: 0.95rem;
-  height: 0.95rem;
-  background-color: currentColor;
-  opacity: 0.78;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  mask-size: contain;
+/* T5 (R20)：顶栏六个按钮内嵌 24×24 SVG 图标。stroke=currentColor 让主题
+   色直接流入，1em 缩放后跟随按钮字号（桌面约 14px，触屏 48px 热区下
+   约 18px；与既有 48×48 thumb hit-area 不冲突）。fill=none 由子元素
+   attribute 覆盖（书签等保持镂空线框）。 */
+.lightink-reader-chrome-action-icon {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.lightink-reader-chrome-action--backToShelf::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M14.7 5.3 8 12l6.7 6.7 1.4-1.4L10.8 12l5.3-5.3z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M14.7 5.3 8 12l6.7 6.7 1.4-1.4L10.8 12l5.3-5.3z'/></svg>");
+/* T5 (R20)：按钮文字标签 span。触屏 / 桌面窄窗下用下方规则 display:none，
+   让 SVG 居中独占 48×48 hit area，aria-label 仍走完整词。 */
+.lightink-reader-chrome-action-label {
+  font: inherit;
+  white-space: inherit;
 }
 
-.lightink-reader-chrome-action--toc::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z'/></svg>");
-}
-
-.lightink-reader-chrome-action--typography::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M5 6h14v2H13v12h-2V8H5z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M5 6h14v2H13v12h-2V8H5z'/></svg>");
-}
-
-.lightink-reader-chrome-action--search::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
-}
-
-.lightink-reader-chrome-action--assistant::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z'/></svg>");
-}
-
-/* Keep localized desktop tools clear of the native window controls. Their
-   accessible names and title tooltips remain available in the compact row. */
+/* T5 (R20)：桌面窄窗（<800px，非触屏）下隐藏 label，SVG 居中保留紧凑宽度。
+   aria-label 仍可被屏幕阅读器宣告「目录 / 排版」等完整词。 */
 @media (max-width: 800px) {
-  html:not([data-android]):not([data-touch-primary]) .lightink-reader-chrome-tools .lightink-reader-chrome-action {
+  html:not([data-android]):not([data-touch-primary])
+    .lightink-reader-chrome-tools
+    .lightink-reader-chrome-action {
     justify-content: center;
     width: 34px;
     padding: 0.2rem;
     gap: 0;
-    font-size: 0;
+  }
+  html:not([data-android]):not([data-touch-primary])
+    .lightink-reader-chrome-tools
+    .lightink-reader-chrome-action-label {
+    display: none;
   }
 }
 
@@ -200,22 +188,59 @@
   background: transparent;
 }
 
-/* 书签开关（R1）：线框图标，已书签态填实并着主题色（与 aria-pressed 同步）。 */
-.lightink-reader-chrome-action--bookmark::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' fill-rule='evenodd' d='M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z'/></svg>");
-}
-
+/* 书签开关（R1 + T5 R22）：线框图标，已书签态 stroke 加粗 + accent 着色
+   （aria-pressed 同步驱动 is-bookmarked 类）。SVG path 走 currentColor，
+   color 与 stroke-width 变化直接生效；fill 由 path attribute 锁住 'none'
+   保持镂空观感。 */
 .lightink-reader-chrome-action--bookmark.is-bookmarked {
   color: var(--lightink-accent);
   font-weight: 600;
 }
 
-.lightink-reader-chrome-action--bookmark.is-bookmarked::before {
+.lightink-reader-chrome-action--bookmark.is-bookmarked .lightink-reader-chrome-action-icon {
+  stroke-width: 1.9;
   opacity: 1;
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M6 3h12v18l-6-4.5L6 21z'/></svg>");
 }
+
+/* T5 (R20 / R22)：chrome action 角标基类。position 由父按钮 relative 锚定
+   右上角；pointer-events:none 让角标不拦截命中（点书按钮仍走原 click）。
+   aria-hidden 让屏幕阅读器只读 aria-label，不重复念数字。 */
+.lightink-reader-chrome-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--lightink-accent);
+  color: var(--lightink-bg);
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 1.5px var(--lightink-bg);
+}
+
+/* 书签开关（R22 圆点）：已书签时按钮右上挂 8px accent 圆点。 */
+.lightink-reader-chrome-badge--dot {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 0;
+  line-height: 0;
+  text-indent: -9999px;
+  overflow: hidden;
+}
+
+/* 标注计数徽标（R20）：99+ 截断由 chrome API 控制；版式与配色复用
+   .lightink-reader-chrome-badge 基类。无额外规则。 */
 
 .lightink-reader-chrome-action.is-open {
   background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
@@ -959,23 +984,20 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   -webkit-app-region: no-drag;
 }
 
+/* T5 (R20)：触屏分支隐藏 label span，SVG 居中独占 48×48 thumb hit
+   area；aria-label 仍被屏幕阅读器宣告完整词。font-size: 0 仅作为
+   嵌套兜底（CSS 在 :is 选择器命中时按声明顺序压过此 display）。 */
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-chrome-action-label {
+  display: none;
+}
+
 /* 触屏 chrome action 按压反馈：洗色 + 轻微缩放（圆形 999px 圆角两态一致）。 */
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-chrome-action:not(:disabled):active {
   background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
   transform: scale(0.97);
   transition: background-color 100ms ease, transform 100ms ease;
-}
-
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-action::before {
-  width: 1.4rem;
-  height: 1.4rem;
-  opacity: 0.92;
-}
-
-:is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-action--search::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-footer {
@@ -1109,15 +1131,17 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
     -webkit-app-region: no-drag;
   }
 
-  .lightink-reader-chrome-action::before {
+  /* T5 (R20)：触屏分支隐藏 label span，SVG 居中独占 48×48 thumb hit
+     area；aria-label 仍被屏幕阅读器宣告完整词。font-size: 0 仅作为
+     嵌套兜底。 */
+  .lightink-reader-chrome-action-label {
+    display: none;
+  }
+
+  .lightink-reader-chrome-action-icon {
     width: 1.4rem;
     height: 1.4rem;
     opacity: 0.92;
-  }
-
-  .lightink-reader-chrome-action--search::before {
-    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
-    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='6'/><path d='M16 16 20.5 20.5'/></svg>");
   }
 
   .lightink-reader-chrome-footer {

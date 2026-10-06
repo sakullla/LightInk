@@ -1148,6 +1148,129 @@ describe('createReaderChrome has no speak control', () => {
   });
 });
 
+describe('createReaderChrome T5 chrome icons + badges', () => {
+  it('embeds a 24×24 SVG inside each top-bar action button with a label span', () => {
+    const { host, chrome } = mount();
+    chrome.reveal();
+    const buttons = labeledButtons(host);
+    const actions = ['backToShelf', 'toc', 'typography', 'bookmark', 'search', 'assistant'] as const;
+    for (const action of actions) {
+      const button = actionButton(host, action);
+      const icon = button.querySelector('svg.lightink-reader-chrome-action-icon');
+      expect(icon, `${action} should ship an inline SVG icon`).not.toBeNull();
+      expect(icon!.getAttribute('viewBox')).toBe('0 0 24 24');
+      expect(icon!.getAttribute('aria-hidden')).toBe('true');
+      expect(icon!.getAttribute('focusable')).toBe('false');
+      // 至少一个 path 或 circle 子节点承载几何图元。
+      expect(icon!.children.length).toBeGreaterThan(0);
+      const labelSpan = button.querySelector<HTMLSpanElement>('.lightink-reader-chrome-action-label');
+      expect(labelSpan, `${action} should expose a label span`).not.toBeNull();
+      expect(labelSpan!.textContent?.trim().length ?? 0).toBeGreaterThan(0);
+      // aria-label 与 label span 文本一致，屏幕阅读器宣读完整词。
+      expect(button.getAttribute('aria-label')?.trim()).toBe(labelSpan!.textContent?.trim());
+    }
+    expect(buttons).toHaveLength(6);
+  });
+
+  it('hides the label span in touch mode so the SVG fills the 48×48 thumb', () => {
+    applyTouchReaderCss();
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+    const button = actionButton(host, 'search');
+    const labelSpan = button.querySelector<HTMLSpanElement>('.lightink-reader-chrome-action-label');
+    expect(labelSpan).not.toBeNull();
+    // 触屏分支 CSS 把 label 设为 display:none。
+    expect(getComputedStyle(labelSpan!).display).toBe('none');
+    // SVG 仍在 DOM 并保留可访问语义。
+    const icon = button.querySelector<SVGElement>('svg.lightink-reader-chrome-action-icon');
+    expect(icon).not.toBeNull();
+    expect(icon!.getAttribute('aria-hidden')).toBe('true');
+    expect(button.getAttribute('aria-label')?.trim()).toBe('搜索');
+  });
+
+  it('toggles a small bookmark badge dot via setBookmarked', () => {
+    const { host, chrome } = mount();
+    chrome.reveal();
+    const bookmark = actionButton(host, 'bookmark');
+    expect(bookmark.querySelector('.lightink-reader-chrome-badge--dot')).toBeNull();
+    chrome.setBookmarked(true);
+    const dot = bookmark.querySelector<HTMLElement>('.lightink-reader-chrome-badge--dot');
+    expect(dot).not.toBeNull();
+    expect(dot!.classList.contains('lightink-reader-chrome-badge')).toBe(true);
+    expect(dot!.getAttribute('aria-hidden')).toBe('true');
+    chrome.setBookmarked(false);
+    expect(bookmark.querySelector('.lightink-reader-chrome-badge--dot')).toBeNull();
+  });
+
+  it('renders 0 → no badge, 12 → "12", 100 → "99+", 150 → "99+" on the search button', () => {
+    const { host, chrome } = mount();
+    chrome.reveal();
+    const search = actionButton(host, 'search');
+    const baseLabel = '搜索';
+
+    chrome.setAnnotationBadge(0);
+    expect(search.querySelector('.lightink-reader-chrome-badge--count')).toBeNull();
+    expect(search.getAttribute('aria-label')).toBe(baseLabel);
+
+    chrome.setAnnotationBadge(12);
+    let badge = search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count');
+    expect(badge).not.toBeNull();
+    expect(badge!.classList.contains('lightink-reader-chrome-badge')).toBe(true);
+    expect(badge!.getAttribute('aria-hidden')).toBe('true');
+    expect(badge!.textContent).toBe('12');
+    expect(search.getAttribute('aria-label')).toBe('搜索 · 12 条标注');
+
+    chrome.setAnnotationBadge(100);
+    expect(search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count')!.textContent).toBe('99+');
+    expect(search.getAttribute('aria-label')).toBe('搜索 · 100 条标注');
+
+    chrome.setAnnotationBadge(150);
+    expect(search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count')!.textContent).toBe('99+');
+    expect(search.getAttribute('aria-label')).toBe('搜索 · 150 条标注');
+
+    chrome.setAnnotationBadge(0);
+    expect(search.querySelector('.lightink-reader-chrome-badge--count')).toBeNull();
+    expect(search.getAttribute('aria-label')).toBe(baseLabel);
+  });
+
+  it('uses the English "Search · N annotations" wording when locale is en', () => {
+    const { host, chrome } = mount({ locale: 'en' });
+    chrome.reveal();
+    const search = actionButton(host, 'search');
+    expect(search.getAttribute('aria-label')).toBe('Search');
+
+    chrome.setAnnotationBadge(7);
+    expect(search.getAttribute('aria-label')).toBe('Search · 7 annotations');
+    expect(search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count')!.textContent).toBe('7');
+  });
+
+  it('never re-creates the badge on repeated updates', () => {
+    const { host, chrome } = mount();
+    chrome.reveal();
+    const search = actionButton(host, 'search');
+    chrome.setAnnotationBadge(5);
+    const badge = search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count');
+    expect(badge).not.toBeNull();
+    chrome.setAnnotationBadge(8);
+    const after = search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count');
+    expect(after).toBe(badge);
+    expect(after!.textContent).toBe('8');
+  });
+
+  it('keeps the annotation badge visible in touch mode while the label stays hidden', () => {
+    const { host, chrome } = mount({ touchMode: true });
+    chrome.reveal();
+    chrome.setAnnotationBadge(4);
+    const search = actionButton(host, 'search');
+    const badge = search.querySelector<HTMLElement>('.lightink-reader-chrome-badge--count');
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe('4');
+    expect(search.querySelector<HTMLSpanElement>('.lightink-reader-chrome-action-label')!.style.display).not.toBe(
+      'inline-flex',
+    );
+  });
+});
+
 describe('createReaderChrome Markdown 编辑/完成', () => {
   function mountMarkdownChrome(overrides: { markdownEditing?: boolean } = {}): ReturnType<
     typeof mount

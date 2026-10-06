@@ -308,6 +308,14 @@ export interface ReaderChrome {
   toggle(): void;
   /** 同步书签按钮两态（aria-pressed + is-bookmarked 视觉态）。 */
   setBookmarked(bookmarked: boolean): void;
+  /**
+   * T5 (R20)：在搜索按钮上挂标注数量徽标。n > 0 渲染计数圆角；n > 99 截断
+   * 为 99+；同步把搜索按钮的 aria-label 改成「搜索 · N 条标注 / Search ·
+   * N annotations」。n = 0 还原基线 aria-label 并移除徽标。宿主在
+   * annotation 列表变化时调用（reader-view / annotation-surface 集成阶段
+   * 接管接线；chrome 自身不感知 ctx.annotations）。
+   */
+  setAnnotationBadge(count: number): void;
   setProgress(snapshot: ReaderChromeProgress): void;
   pinDocks(pane: { getBoundingClientRect(): DOMRect } | null, paginated: boolean): void;
   /** Re-apply stay-revealed (scroll at top) vs idle auto-hide. */
@@ -521,12 +529,76 @@ export function createReaderChrome(
 
   const markdownEditEnabled = typeof deps.onMarkdownEdit === 'function';
 
+  // T5 (R20)：顶栏六个常驻按钮内嵌 24x24 inline SVG；触屏分支 CSS 隐藏
+  // label span，只剩图标居中保留 48×48 thumb hit area。aria-label 仍走
+  // 原 label 文本（屏幕阅读器宣告「目录 / 排版 / 搜索」完整词）。
+  type ActionIconShape =
+    | { readonly kind: 'path'; readonly d: string }
+    | { readonly kind: 'circle'; readonly cx: number; readonly cy: number; readonly r: number };
+
+  const ACTION_ICON_SHAPES: Partial<Record<string, readonly ActionIconShape[]>> = {
+    backToShelf: [
+      { kind: 'path', d: 'M14.7 5.3 8 12l6.7 6.7 1.4-1.4L10.8 12l5.3-5.3z' },
+    ],
+    toc: [
+      { kind: 'path', d: 'M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z' },
+    ],
+    typography: [
+      { kind: 'path', d: 'M5 6h14v2H13v12h-2V8H5z' },
+    ],
+    bookmark: [
+      { kind: 'path', d: 'M6 3h12v18l-6-4.5L6 21V3zm2 2v12.8l4-3 4 3V5H8z' },
+    ],
+    search: [
+      { kind: 'circle', cx: 11, cy: 11, r: 6 },
+      { kind: 'path', d: 'M16 16 20.5 20.5' },
+    ],
+    assistant: [
+      { kind: 'path', d: 'm12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z' },
+    ],
+  };
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  const makeActionIcon = (action: string): SVGElement | null => {
+    const shapes = ACTION_ICON_SHAPES[action];
+    if (shapes === undefined) {
+      return null;
+    }
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    svg.classList.add('lightink-reader-chrome-action-icon');
+    for (const shape of shapes) {
+      if (shape.kind === 'circle') {
+        const circle = document.createElementNS(SVG_NS, 'circle');
+        circle.setAttribute('cx', String(shape.cx));
+        circle.setAttribute('cy', String(shape.cy));
+        circle.setAttribute('r', String(shape.r));
+        svg.appendChild(circle);
+      } else {
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d', shape.d);
+        svg.appendChild(path);
+      }
+    }
+    return svg;
+  };
+
   const makeButton = (action: string, label: string): HTMLButtonElement => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `lightink-reader-chrome-action lightink-reader-chrome-action--${action}`;
     button.dataset.readerChromeAction = action;
-    button.textContent = label;
+    const icon = makeActionIcon(action);
+    if (icon !== null) {
+      button.appendChild(icon);
+    }
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'lightink-reader-chrome-action-label';
+    labelSpan.textContent = label;
+    button.appendChild(labelSpan);
     button.setAttribute('aria-label', label);
     button.title = label;
     if (action === 'toc' || action === 'typography' || action === 'assistant') {
@@ -754,7 +826,16 @@ export function createReaderChrome(
     if (editButton !== null) {
       const editing = deps.markdownEditing?.() === true;
       const label = editing ? labels.done : labels.edit;
-      if (editButton.textContent !== label) {
+      // T5：editButton 经 makeButton 已带 label span（无 SVG），更新时写
+      // span.textContent 而不是 button.textContent——后者会清空 SVG。
+      const editLabelSpan = editButton.querySelector<HTMLSpanElement>(
+        '.lightink-reader-chrome-action-label',
+      );
+      if (editLabelSpan !== null) {
+        if (editLabelSpan.textContent !== label) {
+          editLabelSpan.textContent = label;
+        }
+      } else if (editButton.textContent !== label) {
         editButton.textContent = label;
       }
       writeAttr(editButton, 'aria-label', label);
@@ -812,9 +893,59 @@ export function createReaderChrome(
     }, hideDelayMs);
   };
 
+  // 角标挂在按钮内右上角，aria-hidden 避免和 aria-label 重复宣告。
+  // 复用现有 badge 节点避免连续切换时反复 create/remove。
+  const ensureActionBadge = (
+    button: HTMLButtonElement,
+    variantClass: string,
+  ): { readonly badge: HTMLElement; readonly created: boolean } => {
+    const desired = `lightink-reader-chrome-badge ${variantClass}`;
+    const existing = button.querySelector<HTMLElement>('.lightink-reader-chrome-badge');
+    if (existing !== null) {
+      if (existing.className !== desired) {
+        existing.className = desired;
+      }
+      return { badge: existing, created: false };
+    }
+    const badge = document.createElement('span');
+    badge.className = desired;
+    badge.setAttribute('aria-hidden', 'true');
+    button.appendChild(badge);
+    return { badge, created: true };
+  };
+
+  const removeActionBadge = (button: HTMLButtonElement): void => {
+    button.querySelectorAll('.lightink-reader-chrome-badge').forEach((badge) => badge.remove());
+  };
+
   const setBookmarked = (bookmarked: boolean): void => {
     bookmarkButton.setAttribute('aria-pressed', bookmarked ? 'true' : 'false');
     bookmarkButton.classList.toggle('is-bookmarked', bookmarked);
+    // T5 (R22 角标)：已书签时按钮右上角挂 accent 圆点；取消书签移除圆点。
+    // aria-hidden 让屏幕阅读器只读 aria-label，不重复读数字。
+    if (bookmarked) {
+      ensureActionBadge(bookmarkButton, 'lightink-reader-chrome-badge--dot');
+    } else {
+      removeActionBadge(bookmarkButton);
+    }
+  };
+
+  // T5 (R20 标注徽标)：搜索按钮右上挂计数徽标；n > 99 截断为 99+；
+  // aria-label 追加「搜索 · N 条标注 / Search · N annotations」让屏幕
+  // 阅读器在打开前就知晓标注量。n = 0 时还原基线 aria-label 并清角标。
+  // 调用方（reader-view / annotation-surface）由集成阶段接管。
+  const setAnnotationBadge = (n: number): void => {
+    const locale = deps.locale ?? 'zh-CN';
+    if (n > 0) {
+      const display = n > 99 ? '99+' : String(n);
+      const { badge } = ensureActionBadge(searchButton, 'lightink-reader-chrome-badge--count');
+      badge.textContent = display;
+      const noun = locale === 'zh-CN' ? `${n} 条标注` : `${n} annotations`;
+      searchButton.setAttribute('aria-label', `${labels.search} · ${noun}`);
+    } else {
+      removeActionBadge(searchButton);
+      searchButton.setAttribute('aria-label', labels.search);
+    }
   };
 
   /** 按钮态向宿主事实对齐（揭示/进度刷新时重读，点击后由宿主回写）。 */
@@ -1618,6 +1749,7 @@ export function createReaderChrome(
     isRevealed: () => revealed,
     setProgress,
     setBookmarked,
+    setAnnotationBadge,
     pinDocks,
     reveal,
     syncStayRevealed: () => {
