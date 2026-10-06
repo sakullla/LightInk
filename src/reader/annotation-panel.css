@@ -732,6 +732,27 @@
   text-align: center;
 }
 
+/* 首次启动 / 搜索无命中 时追加的次级 hint 段落：更轻、更短，与上方空态行呼应。 */
+.lightink-reader-sidebar-empty-hint {
+  padding: 0 0.75rem 1rem;
+  color: var(--lightink-muted);
+  font-size: 0.78em;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* 章节分组 sticky 组头：长清单滚动时组头常驻视口顶端，避免群组失联。 */
+.lightink-reader-sidebar-group {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--lightink-bg-elevated);
+  padding: 4px 12px;
+  font-size: 0.78em;
+  color: var(--lightink-muted);
+  border-bottom: 1px solid var(--lightink-border);
+}
+
 /* ===== 搜索区（单输入框：标注分类下筛选标注，正文分类下搜索全书） ===== */
 
 .lightink-reader-sidebar-search-stack {

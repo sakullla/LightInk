@@ -41,6 +41,21 @@ import { bindImeSafeQuery, observeLoadMore } from './search-panel.js';
 type AnnotationFilter = 'all' | AnnotationKind | 'document';
 type ColorFilter = 'all' | AnnotationColor;
 
+/** Fallback group label when annotation has no chapter/page (e.g. text locator). */
+const GROUP_LABEL_FALLBACK = 'Uncategorized';
+
+/** Pending searches that linger beyond this threshold fall back to scanning copy
+ * so the user sees a stable "still searching" message instead of an empty state. */
+const SEARCH_TIMEOUT_MS = 30000;
+
+/** 标注面板里按章节呈现的分组。`groupKey` 的第一个元素是 positionRank 的章节/
+ * 页 索引，第二个元素保留给起点占位（始终为 0；分组按章节，不按位置）。 */
+export interface AnnotationGroup {
+  readonly groupKey: readonly [number, number];
+  readonly groupLabel: string;
+  readonly items: readonly Annotation[];
+}
+
 /** 互斥范围 chips：全部 / 高亮 / 笔记 / 书签；「正文」按需插入全部之后。 */
 const KIND_SCOPES: readonly AnnotationFilter[] = ['all', 'highlight', 'note', 'bookmark'];
 
@@ -98,6 +113,11 @@ export interface AnnotationPanelDeps {
    * 不支持空态；提供时即使 search 缺省也不显示「无结果」。
    */
   isDocumentSearchUnsupported?: () => boolean;
+  /**
+   * 首次打开面板且标注为空时显示引导提示；宿主读到对应偏好键返回布尔。
+   * 默认 undefined 时按「不首次」处理（保持向后兼容）。
+   */
+  isFirstTime?: () => boolean;
 }
 
 export interface AnnotationPanel {
@@ -158,6 +178,50 @@ export function byDocumentPosition(left: Annotation, right: Annotation): number 
     return leftStart - rightStart;
   }
   return left.createdAt - right.createdAt;
+}
+
+/**
+ * 按章节对标注分组；同一章节内的条目按 `byDocumentPosition` 顺序保留。
+ * `groupLabel` 存的是 1-based 的章节号 / 页码（字符串）。面板渲染组头时直接
+ * 喂给 `reader.sidebar.groupHeader` 的 `{chapter}` 占位（模板里已带
+ * 「第 N 章」/「Chapter N」等本地化包装），不要用 `annotationLocationText`
+ * 把同一段文本翻译第二遍。text 格式无章节/页概念，回退到 `GROUP_LABEL_FALLBACK`。
+ * 空数组返回空数组；单一分组不隐藏，由调用方决定是否渲染（面板在
+ * `groups.length >= 2` 时插入组头）。
+ */
+export function groupByDocumentPosition(
+  annotations: readonly Annotation[],
+  t: (key: MessageKey, vars?: Readonly<Record<string, string>>) => string,
+): readonly AnnotationGroup[] {
+  if (annotations.length === 0) return [];
+  const sorted = [...annotations].sort(byDocumentPosition);
+  const groups: Array<{
+    groupKey: readonly [number, number];
+    groupLabel: string;
+    items: Annotation[];
+  }> = [];
+  for (const annotation of sorted) {
+    const [chapter] = positionRank(annotation);
+    const last = groups[groups.length - 1];
+    if (last === undefined || last.groupKey[0] !== chapter) {
+      // text 格式没有章节/页概念；其他格式 positionRank[0] 已经是 0-based，
+      // +1 后正好是显示用的章节号 / 页码。
+      const label =
+        annotation.locator.format === 'text'
+          ? GROUP_LABEL_FALLBACK
+          : String(chapter + 1);
+      // 保留 `t` 在签名上以便后续接入更明确的 locale；当前实现不消费。
+      void t;
+      groups.push({
+        groupKey: [chapter, 0],
+        groupLabel: label,
+        items: [annotation],
+      });
+    } else {
+      last.items.push(annotation);
+    }
+  }
+  return groups;
 }
 
 function styleSwatch(element: HTMLElement, color: string): void {
@@ -403,6 +467,8 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   let annotationQuery = '';
   /** 正文检索命中：null 表示当前没有进行中的正文搜索。 */
   let lastHits: readonly SearchHitView[] | null = null;
+  /** 最近一次发起正文检索的时刻（ms）；用于 30s 超时降级到 scanning 文案。 */
+  let searchStartTime: number | null = null;
 
   scopePanel.append(scopeList, colors);
   const stack = document.createElement('div');
@@ -432,6 +498,13 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       search?.onClear();
     }
     lastHits = null;
+    searchStartTime = null;
+  };
+
+  /** 发起一次新的正文检索：记录起点时间，再转发给宿主。 */
+  const startSearch = (query: string): void => {
+    searchStartTime = Date.now();
+    search?.onQuery(query);
   };
 
   /** 清空查询框并退掉正文搜索会话（Escape/切分类共用；输入框仍有值时通知宿主）。 */
@@ -455,7 +528,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     if (search !== undefined && !unsupported() && noteSearchInput.value.trim() !== '') {
       // 「全部」分类下输入即同时筛选标注与检索正文；「搜索正文」只检索全书。
       if (filter === 'document' || (filter === 'all' && currentColor === 'all')) {
-        search.onQuery(noteSearchInput.value);
+        startSearch(noteSearchInput.value);
         return;
       }
     }
@@ -467,7 +540,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     if (search !== undefined && !unsupported() && currentFilter !== 'document') {
       if (currentColor === 'all' && currentFilter === 'all' && annotationQuery.trim() !== '') {
         renderCombined();
-        search.onQuery(annotationQuery);
+        startSearch(annotationQuery);
         return;
       }
       if (currentColor !== 'all') clearDocumentSearch();
@@ -490,7 +563,7 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
   const unbindQuery = bindImeSafeQuery(noteSearchInput, (query) => {
     annotationQuery = query;
     if (search !== undefined && documentSearchScope() && query.trim() !== '') {
-      search.onQuery(query);
+      startSearch(query);
       return;
     }
     if (documentSearchAvailable() && lastHits !== null) {
@@ -737,6 +810,14 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
     }
   };
 
+  /** 空态下追加一行引导文案（首次启动 / 搜索无结果共用样式）。 */
+  const appendEmptyHint = (text: string): void => {
+    const hint = document.createElement('li');
+    hint.className = 'lightink-reader-sidebar-empty-hint';
+    hint.textContent = text;
+    list.appendChild(hint);
+  };
+
   /**
    * 「搜索正文」分类的命中列表增量渲染。全书扫描每批发布都会重进渲染：
    * 整表 replaceChildren 会在手指按下与抬起之间换掉节点，click 只落到列表
@@ -798,18 +879,29 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       const current = lastHits.findIndex((hit) => hit.current);
       const searching = lastHitsState.searching === true;
       const pending = lastHitsState.pending === true;
-      const quiet = searching || pending;
-      noteStatus.dataset.searchEmpty = lastHits.length === 0 && !quiet ? 'true' : 'false';
-      noteStatus.textContent =
-        lastHits.length === 0 && pending
-          ? ''
-          : lastHits.length === 0 && !searching
-            ? deps.t('reader.search.empty')
-            : searching
-              ? `${lastHits.length}+`
-              : current >= 0
-                ? `${current + 1}/${lastHits.length}`
-                : String(lastHits.length);
+      // 30s 仍未结束的 pending 强制按 searching 处理：状态行固定为 scanning
+      // 字样，避免长时间停留在「空 + 等待」语义。
+      const timedOut =
+        pending &&
+        searchStartTime !== null &&
+        Date.now() - searchStartTime > SEARCH_TIMEOUT_MS;
+      const effectiveSearching = searching || timedOut;
+      const effectivePending = pending && !timedOut;
+      const quiet = effectiveSearching || effectivePending;
+      noteStatus.dataset.searchEmpty =
+        lastHits.length === 0 && !quiet ? 'true' : 'false';
+      if (lastHits.length === 0 && effectivePending) {
+        // pending + 0 命中：scanning 文案占位，不闪空态。
+        noteStatus.textContent = deps.t('reader.search.scanning');
+      } else if (lastHits.length === 0 && !effectiveSearching) {
+        noteStatus.textContent = deps.t('reader.search.empty');
+      } else if (effectiveSearching) {
+        noteStatus.textContent = `${lastHits.length}+ · ${deps.t('reader.search.scanning')}`;
+      } else if (current >= 0) {
+        noteStatus.textContent = `${current + 1}/${lastHits.length}`;
+      } else {
+        noteStatus.textContent = String(lastHits.length);
+      }
     } else {
       noteStatus.textContent = '';
       noteStatus.dataset.searchEmpty = 'false';
@@ -834,6 +926,14 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
         lastHitsState.searching !== true && lastHitsState.pending !== true,
       );
       appendMore();
+      // 正文范围下空命中且扫描已完成：补一行 hint 引导用户换词。
+      if (
+        lastHits.length === 0 &&
+        lastHitsState.searching !== true &&
+        lastHitsState.pending !== true
+      ) {
+        appendEmptyHint(deps.t('reader.search.empty.hint'));
+      }
       return;
     }
     const kindFilter: AnnotationKind | undefined =
@@ -854,8 +954,30 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
       child.remove();
     }
     const firstHit = list.querySelector(':scope > .lightink-reader-sidebar-hit');
-    for (const annotation of visible) {
-      list.insertBefore(renderItem(annotation), firstHit);
+    // 章节分组：分组数 ≥ 2 且范围允许分组（document 已被前面的早返回拦截）时
+    // 在每个分组前插入 sticky 组头；单一分组不显示组头（caller decides）。
+    const grouped =
+      currentFilter === 'all' ||
+      currentFilter === 'highlight' ||
+      currentFilter === 'note';
+    const groups = grouped ? groupByDocumentPosition(visible, deps.t) : null;
+    if (groups !== null && groups.length >= 2) {
+      for (const group of groups) {
+        const header = document.createElement('header');
+        header.className = 'lightink-reader-sidebar-group';
+        header.textContent = deps.t('reader.sidebar.groupHeader', {
+          chapter: group.groupLabel,
+          count: String(group.items.length),
+        });
+        list.insertBefore(header, firstHit);
+        for (const annotation of group.items) {
+          list.insertBefore(renderItem(annotation), firstHit);
+        }
+      }
+    } else {
+      for (const annotation of visible) {
+        list.insertBefore(renderItem(annotation), firstHit);
+      }
     }
     reconcileHitList(lastHits ?? [], false);
     if (lastHits !== null) {
@@ -884,6 +1006,23 @@ export function createAnnotationPanel(deps: AnnotationPanelDeps): AnnotationPane
               ? deps.t('reader.search.empty')
               : deps.t('annotation.filter.empty');
       list.appendChild(empty);
+      // 「全部」分类且没有任何标注：首次启动补一行 hint 引导选词；非首次不显示。
+      if (
+        currentFilter === 'all' &&
+        liveCount === 0 &&
+        lastHits === null &&
+        deps.isFirstTime?.() === true
+      ) {
+        appendEmptyHint(deps.t('annotation.empty.hint'));
+      }
+      // 合并检索完成后 0 命中：补一行 hint 引导换词。
+      if (
+        lastHits !== null &&
+        lastHitsState.searching !== true &&
+        lastHitsState.pending !== true
+      ) {
+        appendEmptyHint(deps.t('reader.search.empty.hint'));
+      }
     }
   };
 

@@ -12,7 +12,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createAnnotationPanel } from '../annotation-panel.js';
+import { createAnnotationPanel, groupByDocumentPosition } from '../annotation-panel.js';
+import { translate } from '../../i18n/messages.js';
 import { createMarkdownAnnotationHost } from '../markdown-annotations.js';
 import { SEARCH_QUERY_DEBOUNCE_MS } from '../search-panel.js';
 import { showNoteDialog } from '../note-dialog.js';
@@ -1393,5 +1394,321 @@ describe('markdown annotation host load', () => {
     expect((payload.annotations[0] as { kind: string }).kind).toBe('bookmark');
 
     view.destroy();
+  });
+});
+
+describe('annotation-panel 章节分组与首次空态（T4）', () => {
+  const flowLocator = (
+    chapter: number,
+    start: number,
+  ): Annotation['locator'] => ({
+    format: 'flow',
+    chapter,
+    start,
+    end: start,
+    quote: '',
+    prefix: '',
+    suffix: '',
+  });
+
+  it('groupByDocumentPosition：跨 ≥2 章节返回 N 组，同章节合并为一组，空数组返回 0', () => {
+    // 跨 3 章节各 1 条 → 3 组
+    const cross = groupByDocumentPosition(
+      [
+        {
+          id: 'f0',
+          kind: 'bookmark',
+          locator: flowLocator(0, 5),
+          createdAt: 1,
+        },
+        {
+          id: 'f1',
+          kind: 'bookmark',
+          locator: flowLocator(1, 5),
+          createdAt: 2,
+        },
+        {
+          id: 'f2',
+          kind: 'bookmark',
+          locator: flowLocator(2, 5),
+          createdAt: 3,
+        },
+      ],
+      t as never,
+    );
+    expect(cross).toHaveLength(3);
+    expect(cross[0]?.groupKey[0]).toBe(0);
+    expect(cross[1]?.groupKey[0]).toBe(1);
+    expect(cross[2]?.groupKey[0]).toBe(2);
+    expect(cross[0]?.items).toHaveLength(1);
+    expect(cross[2]?.items).toHaveLength(1);
+
+    // 同章节多条 → 1 组
+    const sameChapter = groupByDocumentPosition(
+      [
+        {
+          id: 'a',
+          kind: 'highlight',
+          locator: flowLocator(0, 0),
+          createdAt: 1,
+        },
+        {
+          id: 'b',
+          kind: 'highlight',
+          locator: flowLocator(0, 100),
+          createdAt: 2,
+        },
+        {
+          id: 'c',
+          kind: 'highlight',
+          locator: flowLocator(0, 200),
+          createdAt: 3,
+        },
+      ],
+      t as never,
+    );
+    expect(sameChapter).toHaveLength(1);
+    expect(sameChapter[0]?.groupKey[0]).toBe(0);
+    expect(sameChapter[0]?.items.map((a) => a.id)).toEqual(['a', 'b', 'c']);
+
+    // 空数组
+    expect(groupByDocumentPosition([], t as never)).toEqual([]);
+  });
+
+  it('groupByDocumentPosition：同章节多条按 byDocumentPosition 顺序保留', () => {
+    const groups = groupByDocumentPosition(
+      [
+        {
+          id: 'b',
+          kind: 'highlight',
+          locator: flowLocator(1, 200),
+          createdAt: 2,
+        },
+        {
+          id: 'a',
+          kind: 'highlight',
+          locator: flowLocator(1, 50),
+          createdAt: 1,
+        },
+      ],
+      t as never,
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.items.map((annotation) => annotation.id)).toEqual(['a', 'b']);
+  });
+
+  it('filter=highlight + 2 章节标注：渲染出 2 个分组组头（zh-CN 翻译）', () => {
+    const panel = createAnnotationPanel({
+      t: (key, vars) => translate('zh-CN', key, vars),
+      onJump: () => undefined,
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'highlight').click();
+    panel.render([
+      {
+        id: 'h-f0',
+        kind: 'highlight',
+        locator: flowLocator(0, 0),
+        createdAt: 1,
+      },
+      {
+        id: 'h-f1',
+        kind: 'highlight',
+        locator: flowLocator(1, 0),
+        createdAt: 2,
+      },
+    ]);
+    const headers = panel.element.querySelectorAll<HTMLElement>(
+      '.lightink-reader-sidebar-group',
+    );
+    expect(headers).toHaveLength(2);
+    // 用真实 zh-CN 翻译断言组头文案
+    expect(headers[0]?.textContent).toBe('第 1 章 · 1 条');
+    expect(headers[1]?.textContent).toBe('第 2 章 · 1 条');
+    panel.destroy();
+  });
+
+  it('filter=highlight + 1 章节：1 个组时不显示组头（caller decides）', () => {
+    const { panel } = mount();
+    openScope(panel.element);
+    scopeOption(panel.element, 'highlight').click();
+    panel.render([
+      {
+        id: 'h0',
+        kind: 'highlight',
+        locator: flowLocator(0, 0),
+        createdAt: 1,
+      },
+      {
+        id: 'h1',
+        kind: 'highlight',
+        locator: flowLocator(0, 50),
+        createdAt: 2,
+      },
+    ]);
+    expect(
+      panel.element.querySelectorAll('.lightink-reader-sidebar-group'),
+    ).toHaveLength(0);
+    expect(panel.element.querySelectorAll('.lightink-reader-sidebar-item')).toHaveLength(2);
+    panel.destroy();
+  });
+
+  it('filter=all + 0 标注 + isFirstTime=true：追加首次启动 hint', () => {
+    const { panel } = mount({ isFirstTime: () => true });
+    panel.render([]);
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent,
+    ).toBe('annotation.empty');
+    const hints = panel.element.querySelectorAll('.lightink-reader-sidebar-empty-hint');
+    expect(hints).toHaveLength(1);
+    expect(hints[0]?.textContent).toBe('annotation.empty.hint');
+    panel.destroy();
+  });
+
+  it('filter=all + 0 标注 + isFirstTime=false：不显示首次启动 hint', () => {
+    const { panel } = mount({ isFirstTime: () => false });
+    panel.render([]);
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent,
+    ).toBe('annotation.empty');
+    expect(
+      panel.element.querySelectorAll('.lightink-reader-sidebar-empty-hint'),
+    ).toHaveLength(0);
+    panel.destroy();
+  });
+
+  it('filter=all + 0 标注 + isFirstTime 未提供：不显示 hint（保持向后兼容）', () => {
+    const { panel } = mount();
+    panel.render([]);
+    expect(
+      panel.element.querySelectorAll('.lightink-reader-sidebar-empty-hint'),
+    ).toHaveLength(0);
+    panel.destroy();
+  });
+});
+
+describe('annotation-panel 搜索 scan 文案与 30s 超时（T4）', () => {
+  it('正文扫描 pending=true + 0 命中：状态行显示 scanning 文案', () => {
+    vi.useFakeTimers();
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    panel.setSearchQuery('keyword');
+    panel.renderHits([], { pending: true });
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent,
+    ).toBe('reader.search.scanning');
+    panel.destroy();
+    vi.useRealTimers();
+  });
+
+  it('正文扫描 pending=false + 0 命中：状态行 empty + 列表追加空命中 hint', () => {
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    panel.setSearchQuery('keyword');
+    panel.renderHits([]);
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent,
+    ).toBe('reader.search.empty');
+    const hints = panel.element.querySelectorAll('.lightink-reader-sidebar-empty-hint');
+    expect(hints).toHaveLength(1);
+    expect(hints[0]?.textContent).toBe('reader.search.empty.hint');
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-empty')?.textContent,
+    ).toBe('reader.search.empty');
+    panel.destroy();
+  });
+
+  it('正文扫描 searching=true + N 命中：状态行 `${N}+ · scanning`', () => {
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    panel.setSearchQuery('keyword');
+    panel.renderHits(
+      [
+        { key: 'a', snippet: 'one keyword', location: 'page 1', current: true },
+        { key: 'b', snippet: 'two keyword', location: 'page 2', current: false },
+      ],
+      { searching: true, hasMore: true },
+    );
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent,
+    ).toBe('2+ · reader.search.scanning');
+    panel.destroy();
+  });
+
+  it('正文扫描 30s 超时：pending=true 强制按 scanning 显示', () => {
+    vi.useFakeTimers();
+    const baseTime = new Date('2026-01-01T00:00:00Z').getTime();
+    vi.setSystemTime(baseTime);
+    const panel = createAnnotationPanel({
+      t: t as never,
+      onJump: () => undefined,
+      search: {
+        onQuery: () => undefined,
+        onJump: () => undefined,
+        onNext: () => undefined,
+        onPrev: () => undefined,
+        onClear: () => undefined,
+      },
+    });
+    document.body.appendChild(panel.element);
+    panel.render([]);
+    openScope(panel.element);
+    scopeOption(panel.element, 'document').click();
+    panel.setSearchQuery('keyword');
+    // 触发一次真实 search.onQuery，模拟发起新搜索
+    panel.renderHits([], { pending: true });
+    // 在 30s 阈值内：状态行 scanning
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent,
+    ).toBe('reader.search.scanning');
+    // 跨越 30s 后再 renderHits：状态行仍为 scanning（不再显示「无结果」空态）
+    vi.setSystemTime(baseTime + 31_000);
+    panel.renderHits([], { pending: true });
+    expect(
+      panel.element.querySelector('.lightink-reader-sidebar-search-status')?.textContent,
+    ).toBe('reader.search.scanning');
+    panel.destroy();
+    vi.useRealTimers();
   });
 });
