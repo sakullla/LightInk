@@ -115,6 +115,25 @@
   }
 }
 
+/* 出场淡出：与入场对称；animationend 后才移除节点（jsdom/禁动画环境由
+   JS 兜底计时器移除）。退出期间不再拦截指针。 */
+.lightink-toast-out {
+  pointer-events: none;
+  animation: lightink-toast-out var(--lightink-duration-base, 180ms)
+    var(--lightink-easing-standard) forwards;
+}
+
+@keyframes lightink-toast-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
 @media (max-width: 760px) {
   .lightink-toast-region {
     left: max(12px, var(--lightink-safe-left, 0px));

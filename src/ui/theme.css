@@ -3274,7 +3274,13 @@ html[data-reading-layout='scroll']:has(
   cursor: pointer;
 }
 
-.lightink-modal-btn:hover {
+/* 禁用态（如配置向导未通过测试时的「下一步」）：降透明 + 默认光标，hover 不亮起。 */
+.lightink-modal-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lightink-modal-btn:hover:not(:disabled) {
   background: var(--lightink-accent-soft);
   border-color: var(--lightink-accent);
 }
@@ -3291,7 +3297,7 @@ html[data-reading-layout='scroll']:has(
   color: var(--lightink-bg);
 }
 
-.lightink-modal-btn--primary:hover {
+.lightink-modal-btn--primary:hover:not(:disabled) {
   background: var(--lightink-accent);
   border-color: var(--lightink-accent);
   color: var(--lightink-bg);
@@ -3304,7 +3310,7 @@ html[data-reading-layout='scroll']:has(
   border-color: var(--lightink-danger);
 }
 
-.lightink-modal-btn--danger:hover {
+.lightink-modal-btn--danger:hover:not(:disabled) {
   background: var(--lightink-danger);
   border-color: var(--lightink-danger);
   color: var(--lightink-bg);

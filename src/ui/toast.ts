@@ -3,8 +3,10 @@
  *
  * 首次调用懒挂载单例容器：`role=status` + `aria-live=polite`，屏幕角落
  * 堆叠，不 inert、不抢焦点、z-index 低于模态。自动消失（error 8s / 其它
- * 5s）+ 手动关闭；同屏最多 {@link TOAST_MAX_VISIBLE} 条，超出丢弃最旧。
- * 可选 detail 渲染为 `<details>`「技术详情」，原始错误信息永不作主文案。
+ * 5s）+ 手动关闭；悬停或键盘聚焦（读「技术详情」）时暂停计时，离开按剩余
+ * 时长恢复；消失先播出场淡出动画再移除节点。同屏最多 {@link
+ * TOAST_MAX_VISIBLE} 条，超出丢弃最旧。可选 detail 渲染为 `<details>`
+ * 「技术详情」，原始错误信息永不作主文案。
  */
 
 import { adoptDialogSurfaceTheme, inferDialogThemeHost } from './confirm-dialog.js';
@@ -18,6 +20,8 @@ export const TOAST_MAX_VISIBLE = 3;
 export const TOAST_ERROR_DISMISS_MS = 8000;
 /** 其它 kind 自动消失时长。 */
 export const TOAST_DISMISS_MS = 5000;
+/** 出场淡出动画时长（与入场一致；animationend 后才真正移除节点）。 */
+export const TOAST_EXIT_MS = 180;
 
 export interface ToastOptions {
   /** 缺省使用全局 document（应用与 jsdom 测试共用）。 */
@@ -88,19 +92,62 @@ export function showToast(
   toast.append(close);
   container.appendChild(toast);
 
+  // 阅读暂停：悬停（pointerenter/leave）或键盘聚焦（focusin/out，含展开
+  // 「技术详情」）时暂停自动消失，离开后按剩余时长恢复。
+  let remaining = options.durationMs ?? (kind === 'error' ? TOAST_ERROR_DISMISS_MS : TOAST_DISMISS_MS);
+  let startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const dismiss = (): void => {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
+  let exiting = false;
+  let exitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const finishRemoval = (): void => {
+    if (exitTimer !== null) {
+      clearTimeout(exitTimer);
+      exitTimer = null;
+    }
     toast.remove();
     dismissers.delete(toast);
   };
-  timer = setTimeout(
-    dismiss,
-    options.durationMs ?? (kind === 'error' ? TOAST_ERROR_DISMISS_MS : TOAST_DISMISS_MS),
-  );
+
+  const dismiss = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (exiting) {
+      // 二次 dismiss（超量丢弃命中正在淡出的条目）：立即让位，不再等动画。
+      finishRemoval();
+      return;
+    }
+    exiting = true;
+    // 对称出场：先播淡出动画，animationend 后再移除节点。
+    toast.classList.add('lightink-toast-out');
+    toast.addEventListener('animationend', finishRemoval, { once: true });
+    // jsdom / 动画被禁环境不派发 animationend：按动画时长兜底移除
+    // （prefers-reduced-motion 下动画被压到 0.01ms，事件仍会触发）。
+    exitTimer = setTimeout(finishRemoval, TOAST_EXIT_MS);
+  };
+
+  const pause = (): void => {
+    if (timer === null || exiting) return;
+    clearTimeout(timer);
+    timer = null;
+    remaining = Math.max(0, remaining - (Date.now() - startedAt));
+  };
+  const resume = (): void => {
+    if (timer !== null || exiting) return;
+    startedAt = Date.now();
+    timer = setTimeout(dismiss, remaining);
+  };
+
+  startedAt = Date.now();
+  timer = setTimeout(dismiss, remaining);
   dismissers.set(toast, dismiss);
   close.addEventListener('click', dismiss);
+  toast.addEventListener('pointerenter', pause);
+  toast.addEventListener('pointerleave', resume);
+  toast.addEventListener('focusin', pause);
+  toast.addEventListener('focusout', resume);
 
   while (container.childElementCount > TOAST_MAX_VISIBLE) {
     const oldest = container.firstElementChild;

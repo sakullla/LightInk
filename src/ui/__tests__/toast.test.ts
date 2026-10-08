@@ -11,6 +11,7 @@ import {
   showToast,
   TOAST_DISMISS_MS,
   TOAST_ERROR_DISMISS_MS,
+  TOAST_EXIT_MS,
   TOAST_MAX_VISIBLE,
 } from '../toast.js';
 
@@ -73,10 +74,66 @@ describe('toast dismissal', () => {
     showToast('info', 'B');
     expect(toasts().length).toBe(2);
     vi.advanceTimersByTime(TOAST_DISMISS_MS);
-    expect(toasts().map((node) => node.querySelector('.lightink-toast-title')?.textContent)).toEqual([
-      'A',
-    ]);
-    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS - TOAST_DISMISS_MS);
+    // 到期后先进入出场淡出（对称于入场动画），动画结束才算消失。
+    expect(
+      toasts().map((node) => node.querySelector('.lightink-toast-title')?.textContent),
+    ).toEqual(['A', 'B']);
+    vi.advanceTimersByTime(TOAST_EXIT_MS);
+    expect(
+      toasts().map((node) => node.querySelector('.lightink-toast-title')?.textContent),
+    ).toEqual(['A']);
+    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS - TOAST_DISMISS_MS - 1);
+    expect(toasts().length).toBe(1); // 'A' 到期后淡出中
+    vi.advanceTimersByTime(1 + TOAST_EXIT_MS);
+    expect(toasts().length).toBe(0);
+  });
+
+  it('fades out on dismissal and removes the node on animationend', () => {
+    vi.useFakeTimers();
+    showToast('success', 'Done');
+    const toast = toasts()[0]!;
+    vi.advanceTimersByTime(TOAST_DISMISS_MS);
+    expect(toast.classList.contains('lightink-toast-out')).toBe(true);
+    expect(toasts().length).toBe(1); // 淡出中仍在文档内
+    toast.dispatchEvent(new Event('animationend'));
+    expect(toasts().length).toBe(0);
+  });
+
+  it('falls back to a timer when animationend never fires (jsdom / disabled animations)', () => {
+    vi.useFakeTimers();
+    showToast('success', 'Done');
+    vi.advanceTimersByTime(TOAST_DISMISS_MS);
+    expect(toasts().length).toBe(1);
+    vi.advanceTimersByTime(TOAST_EXIT_MS);
+    expect(toasts().length).toBe(0);
+  });
+
+  it('pauses auto-dismiss while hovered and resumes with the remaining time', () => {
+    vi.useFakeTimers();
+    showToast('error', 'A');
+    const toast = toasts()[0]!;
+    vi.advanceTimersByTime(5000);
+    toast.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS); // 悬停期间不消失
+    expect(toasts().length).toBe(1);
+    toast.dispatchEvent(new Event('pointerleave'));
+    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS - 5000 - 1); // 剩余 3000ms 的前 2999ms
+    expect(toasts().length).toBe(1);
+    vi.advanceTimersByTime(1); // 剩余时间耗尽 → 淡出
+    expect(toasts()[0]?.classList.contains('lightink-toast-out')).toBe(true);
+    vi.advanceTimersByTime(TOAST_EXIT_MS);
+    expect(toasts().length).toBe(0);
+  });
+
+  it('pauses auto-dismiss while keyboard focus is inside the toast', () => {
+    vi.useFakeTimers();
+    showToast('info', 'B');
+    const toast = toasts()[0]!;
+    toast.dispatchEvent(new Event('focusin'));
+    vi.advanceTimersByTime(TOAST_DISMISS_MS * 3);
+    expect(toasts().length).toBe(1);
+    toast.dispatchEvent(new Event('focusout'));
+    vi.advanceTimersByTime(TOAST_DISMISS_MS + TOAST_EXIT_MS);
     expect(toasts().length).toBe(0);
   });
 
@@ -87,6 +144,8 @@ describe('toast dismissal', () => {
     const close = toast.querySelector<HTMLButtonElement>('.lightink-toast-close')!;
     expect(close.getAttribute('aria-label')).toBe('关闭通知');
     close.click();
+    expect(toasts().length).toBe(1); // 关闭同样走淡出
+    toast.dispatchEvent(new Event('animationend'));
     expect(toasts().length).toBe(0);
     vi.advanceTimersByTime(TOAST_DISMISS_MS * 2);
     expect(toasts().length).toBe(0);
@@ -113,7 +172,10 @@ describe('toast dismissal', () => {
     // 「Old」被丢弃后，它的到期计时器不得移除后来可见的条目。
     vi.advanceTimersByTime(1500);
     expect(toasts().length).toBe(3);
-    vi.advanceTimersByTime(TOAST_DISMISS_MS);
+    // New 1–3 于 t=9000 同时到期（t=4000 起 5s）：随后 180ms 内为淡出窗口。
+    vi.advanceTimersByTime(3500);
+    expect(toasts().length).toBe(3); // 淡出中
+    vi.advanceTimersByTime(TOAST_EXIT_MS);
     expect(toasts().length).toBe(0);
   });
 });
