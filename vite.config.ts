@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
+import path from "node:path";
 // 不用 "node:fs"：@types/node 的 `declare module "node:fs" { export * from "fs" }`
 // 再导出在 moduleResolution:bundler 下会把 fs.readFileSync 塌缩成单签名
 // (path, encoding: "utf-8")，一参二进制读取报 TS2554；裸 "fs" 拿到完整重载。
@@ -14,6 +15,23 @@ import {
   PDF_WORKER_OFFICIAL_SPECIFIER,
   pdfWorkerBootModule,
 } from "./src/reader/formats/pdf-worker-entry.ts";
+
+// Windows 专用：这台机器上 esbuild 在 %TEMP%（AppData\Local\Temp）删除自己
+// 写入的临时文件会被系统策略拒绝（"remove %TEMP%\esbuild-*: Access is
+// denied"），而任何输入超过 1MB 的 esbuild transform 都会走「写临时文件再
+// 交服务进程删除」路径（node_modules/esbuild/lib/main.js 的 randomFileName /
+// 1MB 阈值），令 `npm run build` 里 vite 的 CSS 压缩（katex.min.css?inline
+// 全字体内联后约 8MB）、JS 转译（mermaid / pdfjs 的超大模块）与大 chunk
+// minify 全部失败。Node 的 os.tmpdir() 每次调用都读取 TEMP/TMP（Windows 上
+// TEMP 优先、不缓存），因此在本进程最早加载的 vite.config.ts 里把临时目录
+// 重定向到项目内可正常写删的目录（npm run build / npm test / tauri:dev 均
+// 以仓库根为 cwd 运行；.tmp 已列入 .gitignore）。
+if (process.platform === "win32") {
+  const esbuildTmpDir = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(esbuildTmpDir, { recursive: true });
+  process.env.TEMP = esbuildTmpDir;
+  process.env.TMP = esbuildTmpDir;
+}
 
 const require = createRequire(import.meta.url);
 const host = process.env.TAURI_DEV_HOST;
