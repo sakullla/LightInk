@@ -208,18 +208,10 @@ export function describePastedImage(
 }
 
 /**
- * Markdown fragment for an image asset. Currently unwired — T4 will route
- * pasted image content through this once paste/asset persistence lands.
- * Re-renders with the canonical URL so the editor's stored source matches
- * the `ImageAsset.url`.
+ * Markdown fragment for an image asset. 实现已拆到 `image-snippet.ts`（纯函数，
+ * 壳层插入图片用），此处重导出以保持既有导入路径与测试不变。
  */
-export function imageMarkdownSnippet(asset: ImageAsset): string {
-  const titlePart =
-    typeof asset.title === 'string' && asset.title.length > 0
-      ? ` "${asset.title.replace(/"/g, '\\"')}"`
-      : '';
-  return `![${asset.alt}](${asset.url}${titlePart})`;
-}
+export { imageMarkdownSnippet } from '../image-snippet.js';
 
 // ---------------------------------------------------------------------------
 // T4：粘贴/拖拽 → 落盘 → 插入 image 节点

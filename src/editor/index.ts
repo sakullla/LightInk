@@ -73,6 +73,8 @@ import {
   headingFoldPlugin,
 } from './plugins/heading-fold.js';
 import { markdownAnnotationPlugin } from './plugins/markdown-annotations.js';
+// side-effect：把主壳暂存的编辑器标签/处理器推送给插件（见 labels.ts / label-bindings.ts）。
+import './label-bindings.js';
 import type { EditorView } from '@milkdown/prose/view';
 import type { Mark } from '@milkdown/prose/model';
 import type {

@@ -738,6 +738,8 @@ const en = {
   'dialog.crash.title': 'Crash Recovery',
   'dialog.crash.message':
     'A recovery snapshot for “{path}” is newer than the file on disk. The snapshot holds unsaved edits not yet written to disk.\nRestore that content?',
+  'dialog.crash.messageUntitled':
+    'An unsaved untitled document has a recovery snapshot holding edits that were never written to disk.\nRestore that content?',
   'dialog.crash.restore': 'Restore',
   'dialog.crash.skip': 'Don’t Restore',
   'dialog.externalReload.title': 'File Changed on Disk',
@@ -1631,6 +1633,8 @@ const zhCN = {
   'dialog.crash.title': '崩溃恢复',
   'dialog.crash.message':
     '检测到「{path}」的崩溃恢复快照比磁盘文件新，快照里有尚未写入磁盘的编辑。\n是否恢复这些内容？',
+  'dialog.crash.messageUntitled':
+    '有一份未命名文档的崩溃恢复快照，快照里有尚未写入磁盘的编辑。\n是否恢复这些内容？',
   'dialog.crash.restore': '恢复',
   'dialog.crash.skip': '不恢复',
   'dialog.externalReload.title': '文件已在磁盘上被修改',

@@ -83,7 +83,10 @@ export function hasFrontMatter(source: string): boolean {
 export const FRONTMATTER_NODE_NAME = 'frontmatter';
 
 /** Root class on the collapsible metadata chrome (`details`). */
-export const FRONTMATTER_CLASS = 'lightink-frontmatter';
+// 纯 DOM 辅助拆到 `front-matter-details.ts`（导出流程用，不拉入编辑器引擎）；
+// 此处重导出/再导入，保持既有导入路径与测试不变。
+export { closeFrontMatterDetails, FRONTMATTER_CLASS } from '../front-matter-details.js';
+import { FRONTMATTER_CLASS } from '../front-matter-details.js';
 
 const FRONTMATTER_VIEW_KEY = new PluginKey('lightink-frontmatter-view');
 
@@ -120,19 +123,6 @@ function frontMatterValueFromDOM(dom: HTMLElement): string {
   }
   const pre = dom.querySelector('pre');
   return pre?.textContent ?? '';
-}
-
-/**
- * Strip `open` from `.lightink-frontmatter` in a cloned export root.
- * Does not touch the ProseMirror document or source Markdown.
- */
-export function closeFrontMatterDetails(root: ParentNode): void {
-  for (const node of root.querySelectorAll(`.${FRONTMATTER_CLASS}`)) {
-    if (node instanceof HTMLDetailsElement) {
-      node.open = false;
-    }
-    node.removeAttribute('open');
-  }
 }
 
 /**

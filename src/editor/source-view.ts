@@ -546,3 +546,11 @@ export class SourceView {
     this.host.classList.remove('is-source-mode');
   }
 }
+
+/**
+ * 工厂：供壳层经按需加载的模块创建源码视图，避免入口包静态引入编辑器引擎
+ * （source-view → code-highlight → highlight.js）。
+ */
+export function createSourceView(host: HTMLElement, roundtrip: SourceRoundtrip): SourceView {
+  return new SourceView(host, roundtrip);
+}

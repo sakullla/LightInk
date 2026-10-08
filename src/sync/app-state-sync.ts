@@ -31,6 +31,12 @@ export interface ApplicationStateSyncOptions {
   /** Return null when no WebDAV target has been configured. */
   readonly getProfile?: () => Promise<unknown | null>;
   readonly debounceMs?: number;
+  /**
+   * Delay before the first scheduled sync after `start()` (default 0). Hosts
+   * pass a small value so the initial network sync does not contend with the
+   * cold-start critical path.
+   */
+  readonly initialDelayMs?: number;
   readonly retryDelaysMs?: readonly number[];
   readonly eventTarget?: SyncEventTarget;
   /** Synchronously re-apply UI preferences while storage notifications are suppressed. */
@@ -112,6 +118,7 @@ function valueOf(record: SyncRecord | null): StoredValue | undefined {
 export class ApplicationStateSync {
   private readonly options: ApplicationStateSyncOptions;
   private readonly debounceMs: number;
+  private readonly initialDelayMs: number;
   private readonly retryDelaysMs: readonly number[];
   private readonly baseline = new Map<string, StoredValue>();
   private readonly dirtyKeys = new Set<string>();
@@ -129,6 +136,7 @@ export class ApplicationStateSync {
   constructor(options: ApplicationStateSyncOptions) {
     this.options = options;
     this.debounceMs = Math.max(0, options.debounceMs ?? 5000);
+    this.initialDelayMs = Math.max(0, options.initialDelayMs ?? 0);
     this.retryDelaysMs = (options.retryDelaysMs ?? [5_000, 15_000, 60_000]).map((delay) =>
       Math.max(0, delay),
     );
@@ -139,7 +147,7 @@ export class ApplicationStateSync {
     this.started = true;
     this.captureBaseline();
     this.options.eventTarget?.addEventListener('online', this.onOnline);
-    this.schedule(0);
+    this.schedule(this.initialDelayMs);
   }
 
   dispose(): void {

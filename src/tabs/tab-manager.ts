@@ -398,10 +398,16 @@ export class TabManager {
    * 且保持脏标记，直到用户保存）。
    */
   async openFile(path?: string): Promise<MarkdownTabState | null> {
-    const opened =
+    const openedPromise =
       path !== undefined
-        ? await openPathFlow(this.deps.roundtrip, path)
-        : await openFileFlow(this.deps.roundtrip);
+        ? openPathFlow(this.deps.roundtrip, path)
+        : openFileFlow(this.deps.roundtrip);
+    // The crash-snapshot probe is independent of the content read: start it in
+    // parallel whenever the path is already known (file association / drop /
+    // recents) so it adds no serial round-trip before the editor mounts.
+    const stalePromise =
+      path !== undefined ? this.deps.readStaleSnapshot(path).catch(() => null) : null;
+    const opened = await openedPromise;
     if (opened === null) {
       return null;
     }
@@ -417,7 +423,7 @@ export class TabManager {
 
     let content = opened.content;
     try {
-      const stale = await this.deps.readStaleSnapshot(opened.path);
+      const stale = stalePromise !== null ? await stalePromise : await this.deps.readStaleSnapshot(opened.path);
       if (stale !== null && stale !== opened.content) {
         const restore = await this.deps.promptRestore(opened.path);
         if (restore) {

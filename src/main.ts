@@ -6,40 +6,26 @@
  * （接线保持 T3 语义不变：宿主元素、崩溃快照、恢复流程）→ 快捷键注册。
  */
 
+// 冷启动预置：在其余模块求值前把持久化主题写到 <html>（避免深色主题闪白）。
+import './preflight.js';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save } from '@tauri-apps/plugin-dialog';
 
-import { mountEditor } from './editor/index.js';
 import { createEditorAssistant, type EditorAssistant } from './editor/assistant-editor.js';
-import { classifyLink } from './editor/link-navigation.js';
-import { imageMarkdownSnippet } from './editor/plugins/image.js';
+import { classifyLink } from './editor/link-classify.js';
+import { imageMarkdownSnippet } from './editor/image-snippet.js';
+import { closeFrontMatterDetails } from './editor/front-matter-details.js';
 import {
+  setEditorLabels,
   setFormatToolbarLinkEditor,
-  setFormatToolbarTitles,
-} from './editor/plugins/format-toolbar.js';
-import { setKeyboardFormatBarTitles } from './editor/plugins/keyboard-format-bar.js';
-import { setCodeChromeLabels } from './editor/plugins/code-highlight.js';
-import { closeFrontMatterDetails } from './editor/plugins/front-matter.js';
-import { setMathEditTitle } from './editor/plugins/math.js';
-import { setMermaidEditTitle } from './editor/plugins/mermaid.js';
-import { setTaskCheckboxLabels } from './editor/plugins/task-checkbox.js';
-import { setSlashImageHandler, setSlashTranslate } from './editor/plugins/slash-menu.js';
+  setSlashImageHandler,
+} from './editor/labels.js';
 import { setAppDisplayName } from './ui/window-title.js';
-import { SourceView } from './editor/source-view.js';
-import {
-  clearFindReplace,
-  collectSourceMatches,
-  createFindReplacePanel,
-  findReplaceViewForHost,
-  nextMatchIndex,
-  readFindReplaceState,
-  replaceAllMatches,
-  replaceCurrentMatch,
-  setFindQuery,
-  stepFindMatch,
-  subscribeFindReplaceStatus,
-  type FindReplaceLabels,
-  type FindReplacePanel,
+import type { SourceView } from './editor/source-view.js';
+// 查找/替换与源码视图属编辑器引擎，主壳按需加载（见下方 lazy loaders）。
+import type {
+  FindReplaceLabels,
+  FindReplacePanel,
 } from './editor/plugins/find-replace.js';
 import {
   buildEditorContextMenuItems,
@@ -89,10 +75,7 @@ import {
   type OutlineView,
 } from './outline/outline-view.js';
 import { outlineLocationFromReader } from './outline/outline-model.js';
-import {
-  createMarkdownAnnotationHost,
-  type MarkdownAnnotationHost,
-} from './reader/markdown-annotations.js';
+import type { MarkdownAnnotationHost } from './reader/markdown-annotations.js';
 import {
   mergeAnnotations,
   parseAnnotations,
@@ -470,47 +453,49 @@ async function persistRecentMutation(
 /** Apply locale-dependent chrome labels (window title, format bar, code blocks). */
 function applyLocaleChrome(): void {
   setAppDisplayName(i18n.t('app.name'));
-  setFormatToolbarTitles({
-    bold: i18n.t('format.bold'),
-    italic: i18n.t('format.italic'),
-    strikethrough: i18n.t('format.strikethrough'),
-    code: i18n.t('format.code'),
-    link: i18n.t('format.link'),
-    highlight: i18n.t('format.highlight'),
-    note: i18n.t('format.note'),
-    copy: i18n.t('format.copy'),
+  setEditorLabels({
+    formatToolbarTitles: {
+      bold: i18n.t('format.bold'),
+      italic: i18n.t('format.italic'),
+      strikethrough: i18n.t('format.strikethrough'),
+      code: i18n.t('format.code'),
+      link: i18n.t('format.link'),
+      highlight: i18n.t('format.highlight'),
+      note: i18n.t('format.note'),
+      copy: i18n.t('format.copy'),
+    },
+    keyboardFormatBarTitles: {
+      bold: i18n.t('format.bold'),
+      italic: i18n.t('format.italic'),
+      strikethrough: i18n.t('format.strikethrough'),
+      code: i18n.t('format.code'),
+      link: i18n.t('format.link'),
+      heading: i18n.t('insert.heading'),
+      list: i18n.t('insert.list'),
+      'task-list': i18n.t('insert.task-list'),
+      blockquote: i18n.t('insert.blockquote'),
+      'code-block': i18n.t('insert.code'),
+      image: i18n.t('insert.image'),
+      undo: i18n.t('edit.undo'),
+      redo: i18n.t('edit.redo'),
+    },
+    codeChromeLabels: {
+      copy: i18n.t('code.copy'),
+      copied: i18n.t('code.copied'),
+      plain: i18n.t('code.plain'),
+      filterPlaceholder: i18n.t('code.filterPlaceholder'),
+      emptyFilter: i18n.t('code.emptyFilter'),
+      mermaid: i18n.t('code.mermaid'),
+      math: i18n.t('code.math'),
+    },
+    mathEditTitle: i18n.t('math.editTitle'),
+    mermaidEditTitle: i18n.t('mermaid.editTitle'),
+    taskCheckboxLabels: {
+      check: i18n.t('task.markComplete'),
+      uncheck: i18n.t('task.markIncomplete'),
+    },
+    slashTranslate: (key) => i18n.t(key),
   });
-  setKeyboardFormatBarTitles({
-    bold: i18n.t('format.bold'),
-    italic: i18n.t('format.italic'),
-    strikethrough: i18n.t('format.strikethrough'),
-    code: i18n.t('format.code'),
-    link: i18n.t('format.link'),
-    heading: i18n.t('insert.heading'),
-    list: i18n.t('insert.list'),
-    'task-list': i18n.t('insert.task-list'),
-    blockquote: i18n.t('insert.blockquote'),
-    'code-block': i18n.t('insert.code'),
-    image: i18n.t('insert.image'),
-    undo: i18n.t('edit.undo'),
-    redo: i18n.t('edit.redo'),
-  });
-  setCodeChromeLabels({
-    copy: i18n.t('code.copy'),
-    copied: i18n.t('code.copied'),
-    plain: i18n.t('code.plain'),
-    filterPlaceholder: i18n.t('code.filterPlaceholder'),
-    emptyFilter: i18n.t('code.emptyFilter'),
-    mermaid: i18n.t('code.mermaid'),
-    math: i18n.t('code.math'),
-  });
-  setMathEditTitle(i18n.t('math.editTitle'));
-  setMermaidEditTitle(i18n.t('mermaid.editTitle'));
-  setTaskCheckboxLabels({
-    check: i18n.t('task.markComplete'),
-    uncheck: i18n.t('task.markIncomplete'),
-  });
-  setSlashTranslate((key) => i18n.t(key));
 }
 applyLocaleChrome();
 
@@ -576,6 +561,89 @@ let statusBar: StatusBar;
 // Per-tab source surfaces must be available to status callbacks during manager startup.
 const sourceViews = new Map<string, SourceView>();
 const markdownAnnotations = new Map<string, MarkdownAnnotationHost>();
+
+// ---------------------------------------------------------------------------
+// 编辑器引擎按需加载（入口包瘦身）：主壳只在真正需要时引入 Milkdown/ProseMirror。
+// 引擎（mountEditor）与查找/替换、源码视图、Markdown 标注宿主同属该引擎；首次
+// 挂载编辑器时一并预热，之后下列模块级访问器即可同步取用（调用点保持原样）。
+// ---------------------------------------------------------------------------
+type FindReplaceModule = typeof import('./editor/plugins/find-replace.js');
+type SourceViewModule = typeof import('./editor/source-view.js');
+type MarkdownAnnotationsModule = typeof import('./reader/markdown-annotations.js');
+
+let findReplaceModule: FindReplaceModule | null = null;
+let sourceViewModule: SourceViewModule | null = null;
+let markdownAnnotationsModule: MarkdownAnnotationsModule | null = null;
+
+function requireFindReplace(): FindReplaceModule {
+  if (findReplaceModule === null) {
+    throw new Error('LightInk: 查找/替换模块尚未加载');
+  }
+  return findReplaceModule;
+}
+
+function requireSourceView(): SourceViewModule {
+  if (sourceViewModule === null) {
+    throw new Error('LightInk: 源码视图模块尚未加载');
+  }
+  return sourceViewModule;
+}
+
+function requireMarkdownAnnotations(): MarkdownAnnotationsModule {
+  if (markdownAnnotationsModule === null) {
+    throw new Error('LightInk: Markdown 标注模块尚未加载');
+  }
+  return markdownAnnotationsModule;
+}
+
+// 同名转发：调用点无需改动，仅在已加载后可见（编辑器挂载前必然已预热）。
+const findReplaceViewForHost: FindReplaceModule['findReplaceViewForHost'] = (host) =>
+  findReplaceModule?.findReplaceViewForHost(host) ?? null;
+const collectSourceMatches: FindReplaceModule['collectSourceMatches'] = (text, query) =>
+  requireFindReplace().collectSourceMatches(text, query);
+const nextMatchIndex: FindReplaceModule['nextMatchIndex'] = (total, active, dir) =>
+  requireFindReplace().nextMatchIndex(total, active, dir);
+const setFindQuery: FindReplaceModule['setFindQuery'] = (view, query) =>
+  requireFindReplace().setFindQuery(view, query);
+const readFindReplaceState: FindReplaceModule['readFindReplaceState'] = (view) =>
+  requireFindReplace().readFindReplaceState(view);
+const stepFindMatch: FindReplaceModule['stepFindMatch'] = (view, dir) =>
+  requireFindReplace().stepFindMatch(view, dir);
+const replaceCurrentMatch: FindReplaceModule['replaceCurrentMatch'] = (view, replacement) =>
+  requireFindReplace().replaceCurrentMatch(view, replacement);
+const replaceAllMatches: FindReplaceModule['replaceAllMatches'] = (view, replacement) =>
+  requireFindReplace().replaceAllMatches(view, replacement);
+const clearFindReplace: FindReplaceModule['clearFindReplace'] = (view) =>
+  requireFindReplace().clearFindReplace(view);
+const subscribeFindReplaceStatus: FindReplaceModule['subscribeFindReplaceStatus'] = (listener) =>
+  requireFindReplace().subscribeFindReplaceStatus(listener);
+const createFindReplacePanel: FindReplaceModule['createFindReplacePanel'] = (
+  doc,
+  labels,
+  handlers,
+) => requireFindReplace().createFindReplacePanel(doc, labels, handlers);
+
+/**
+ * 预热编辑器引擎的伴生模块（首次挂载编辑器时调用）。完成后接线查找状态订阅——
+ * 订阅必须早于用户编辑，晚于面板首次打开（此处满足）。
+ */
+async function warmEditorCompanionModules(): Promise<void> {
+  if (
+    findReplaceModule === null ||
+    sourceViewModule === null ||
+    markdownAnnotationsModule === null
+  ) {
+    const [findReplace, sourceView, markdownAnnotations] = await Promise.all([
+      findReplaceModule ?? import('./editor/plugins/find-replace.js'),
+      sourceViewModule ?? import('./editor/source-view.js'),
+      markdownAnnotationsModule ?? import('./reader/markdown-annotations.js'),
+    ]);
+    findReplaceModule = findReplace;
+    sourceViewModule = sourceView;
+    markdownAnnotationsModule = markdownAnnotations;
+  }
+  wireEditorContentObservers();
+}
 // R14：自动保存控制器在 TabManager 之后创建（见下），菜单回调用 ?. 短路。
 let autosave: AutosaveController;
 // 书架按需创建（见 ensureLibraryView）：关联/CLI 打开 Markdown 的进程可能自始至终
@@ -3154,7 +3222,7 @@ async function applyPortableOpdsSources(
 function annotationHostFor(tab: MarkdownTabState): MarkdownAnnotationHost {
   let host = markdownAnnotations.get(tab.id);
   if (host === undefined) {
-    host = createMarkdownAnnotationHost(tab.hostElement, {
+    host = requireMarkdownAnnotations().createMarkdownAnnotationHost(tab.hostElement, {
       t: (key, vars) => i18n.t(key, vars),
       getContentHash: (path) => invoke<string>('content_hash', { path }),
       readAnnotations: (contentHash) =>
@@ -3242,7 +3310,14 @@ manager = new TabManager({
     }
   },
   listUntitledDrafts: listRecoverableDrafts,
-  mountEditor,
+  // 按需加载编辑器引擎与伴生模块（入口包不静态引入 Milkdown/ProseMirror）。
+  mountEditor: async (host, options) => {
+    const [engine] = await Promise.all([
+      import('./editor/index.js'),
+      warmEditorCompanionModules(),
+    ]);
+    return engine.mountEditor(host, options);
+  },
   mountReader: async (host) => {
     host.classList.add('lightink-tab-host--reader');
     editorScroller.dataset.surface = 'reader';
@@ -3357,7 +3432,10 @@ manager = new TabManager({
   promptRestore: async (path) =>
     (await showConfirmDialog(document, {
       title: i18n.t('dialog.crash.title'),
-      message: i18n.t('dialog.crash.message', { path }),
+      // 未命名草稿的快照键是内部标识（untitled-…），不应展示给用户；改用友好文案。
+      message: isUntitledSnapshotKey(path)
+        ? i18n.t('dialog.crash.messageUntitled')
+        : i18n.t('dialog.crash.message', { path }),
       buttons: [
         { id: 'restore', label: i18n.t('dialog.crash.restore'), kind: 'primary' },
         { id: 'skip', label: i18n.t('dialog.crash.skip'), kind: 'plain' },
@@ -4050,6 +4128,8 @@ applicationStateSync = new ApplicationStateSync({
   storage: syncableStorage,
   records: syncRecordClient,
   getProfile: () => webDavClient.getProfile(),
+  // 首个后台同步延后，避免网络往返与冷启动关键路径争用；本地改动仍即时进入脏集。
+  initialDelayMs: 2000,
   eventTarget: window,
   onStorageApplied: () => {
     applySynchronizedPreferences();
@@ -4273,7 +4353,7 @@ function toggleActiveSourceMode(): void {
   if (tab === null) return;
   let view = sourceViews.get(tab.id);
   if (view === undefined) {
-    view = new SourceView(tab.hostElement, tab.editor);
+    view = requireSourceView().createSourceView(tab.hostElement, tab.editor);
     sourceViews.set(tab.id, view);
   }
   view.toggle();
@@ -4391,9 +4471,9 @@ function wireEditorContentObservers(): void {
   });
 }
 
-// 启动即挂上 WYSIWYG 文档/查找状态订阅（不依赖用户先打开查找面板）。
-// 必须放在 contentObserversWired / findPanel 声明之后，否则会 TDZ 崩掉整页。
-wireEditorContentObservers();
+// WYSIWYG 文档/查找状态订阅在编辑器引擎加载时接线（warmEditorCompanionModules →
+// wireEditorContentObservers）：订阅早于用户编辑、晚于面板首次打开，语义与「启动即挂」
+// 一致，同时避免入口包静态引入查找/替换模块。
 
 function ensureFindPanel(): FindReplacePanel {
   if (findPanel !== null) return findPanel;
@@ -5196,8 +5276,6 @@ void (async () => {
 })();
 
 async function bootstrap(): Promise<void> {
-  // 先恢复崩溃遗留的未命名草稿（其副作用：为每个恢复草稿开标签）。
-  await recoverAvailableDrafts();
   // R1：先注册单实例 open-file 监听，再取首实例 pending——监听就绪前到达的第二实例
   // 文件由随后的初始 take_pending_file 抽干槽兜底，避免启动竞态内事件被孤立。
   // Runtime association/second-instance opens restore the window and notify;
@@ -5205,20 +5283,24 @@ async function bootstrap(): Promise<void> {
   let externalOpenOrigin: ExternalOpenOrigin = 'cold-start';
   try {
     const { listen } = await import('@tauri-apps/api/event');
-    await listen('open-file', () => {
-      void invoke<string | null>('take_pending_file')
-        .then((path) => {
-          if (path !== null) {
-            void openExternalAssociationPath(path, externalOpenOrigin);
-          }
-        })
-        .catch(() => undefined);
-    });
-    // OS 文件拖入窗口：.md 开标签 / 图片插入 / 其他提示（dragDropEnabled 默认开启，
-    // Tauri 把 OS 拖拽拦截为本事件，HTML5 drop 收不到 OS 文件）。
-    await listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
-      void handleOsFileDrop(event.payload.paths);
-    });
+    // Both listeners register in parallel; a file arriving mid-registration is
+    // still recovered by the cold-start take_pending_file drain below.
+    await Promise.all([
+      listen('open-file', () => {
+        void invoke<string | null>('take_pending_file')
+          .then((path) => {
+            if (path !== null) {
+              void openExternalAssociationPath(path, externalOpenOrigin);
+            }
+          })
+          .catch(() => undefined);
+      }),
+      // OS 文件拖入窗口：.md 开标签 / 图片插入 / 其他提示（dragDropEnabled 默认开启，
+      // Tauri 把 OS 拖拽拦截为本事件，HTML5 drop 收不到 OS 文件）。
+      listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+        void handleOsFileDrop(event.payload.paths);
+      }),
+    ]);
   } catch {
     // 非 Tauri 环境（纯前端 dev）：无单实例/拖拽事件，忽略。
   }
@@ -5230,23 +5312,30 @@ async function bootstrap(): Promise<void> {
   });
   // R1：取出启动/关联文件（首实例 argv 经后端 take_pending_file；命令未就绪时静默）。
   const pendingFile = await invoke<string | null>('take_pending_file').catch(() => null);
-  // 启动表面按首个待打开文件落定：无文件/电子书先建书架（现状不变）；桌面 Markdown
-  // 先进编辑器再打开，书架全程不创建（文件缺失也停在编辑器，只弹既有错误框）；
-  // 触控 Markdown 由打开本身落到阅读器表面，仅在打开失败仍停留 shelf 时才建书架。
+  // 启动表面按首个待打开文件落定：桌面 Markdown 先进编辑器再打开，书架全程不创建
+  // （文件缺失也停在编辑器，只弹既有错误框）；触控 Markdown 由打开本身落到阅读器
+  // 表面；无文件 / 电子书由文件打开（或末尾 settleStartupShelf）落到书架。
   const startupPlan = planColdStartSurface(androidViewPending ?? pendingFile, {
     isReaderPath,
     immersive: isImmersiveMarkdownPlatform(),
   });
-  if (startupPlan === 'shelf') {
-    settleStartupShelf();
-  } else if (startupPlan === 'editor') {
+  if (startupPlan === 'editor') {
     workspace.enterEditor();
   }
+  // 打开用户主动请求的文件，早于崩溃草稿恢复：遗留草稿的恢复询问绝不能挡住
+  // 双击关联文件的打开。
   if (androidViewPending !== null) {
     await openExternalAssociationPath(androidViewPending, 'cold-start');
   }
   if (pendingFile !== null) {
     await openExternalAssociationPath(pendingFile, 'cold-start');
+  }
+  const requestedTabId = manager.activeTabId;
+  // 之后再恢复崩溃遗留的未命名草稿（其副作用：为每个恢复草稿开标签）；恢复出的
+  // 标签不得抢走请求文件的焦点。
+  await recoverAvailableDrafts();
+  if (requestedTabId !== null && manager.activeTabId !== requestedTabId) {
+    manager.switchTab(requestedTabId);
   }
   settleStartupShelf();
   externalOpenOrigin = 'runtime';
