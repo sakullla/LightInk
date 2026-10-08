@@ -146,65 +146,67 @@ async function assembleActiveTab(
 }
 
 /**
- * 导出 HTML：装配 → 保存对话框 → 原子写。用户取消或失败返回 false
- * （失败经 reportError 上报）；成功返回 true。
+ * 导出 HTML：装配 → 保存对话框 → 原子写。成功返回写盘的目标路径；用户取消
+ * 或失败返回 null（失败经 reportError 上报）。
  */
-export async function exportActiveTabHtml(deps: ExportServiceDeps): Promise<boolean> {
+export async function exportActiveTabHtml(deps: ExportServiceDeps): Promise<string | null> {
   let assembled: AssembledExport | null;
   try {
     assembled = await assembleActiveTab(deps);
   } catch (error) {
     deps.reportError('导出 HTML 失败', error);
-    return false;
+    return null;
   }
   if (assembled === null) {
     deps.reportError('没有可导出的活动标签', null);
-    return false;
+    return null;
   }
   let html: string;
   try {
     html = buildHtmlDocument(assembled.options);
   } catch (error) {
     reportDocumentBuildError(deps, '导出 HTML 失败', error);
-    return false;
+    return null;
   }
   const target = await deps.showHtmlSaveDialog(defaultExportFileName(assembled.options.title));
   if (target === null) {
-    return false;
+    return null;
   }
   try {
     await deps.writeFile(target, html);
-    return true;
+    return target;
   } catch (error) {
     deps.reportError('导出 HTML 失败', error);
-    return false;
+    return null;
   }
 }
 
 /**
  * 导出 PDF：装配 → 原生矢量 PDF（Windows WebView2 PrintToPdf / macOS WKWebView
  * createPDF），失败时非 macOS 回退 window.print 系统打印对话框。macOS（R1/T6）
- * 以原生为唯一路径：原生失败只 reportError 一次并返回 false，不回退 window.print
- * （WKWebView 打印 bug + 系统打印对话框）。无活动标签返回 false。
+ * 以原生为唯一路径：原生失败只 reportError 一次并返回 null，不回退 window.print
+ * （WKWebView 打印 bug + 系统打印对话框）。无活动标签返回 null。原生路径成功返回
+ * 写盘的 PDF 路径；回退 window.print 分支返回 null——落盘由用户在系统打印对话框
+ * 完成，此处无路径可报。
  */
-export async function exportActiveTabPdf(deps: ExportServiceDeps): Promise<boolean> {
+export async function exportActiveTabPdf(deps: ExportServiceDeps): Promise<string | null> {
   let assembled: AssembledExport | null;
   try {
     assembled = await assembleActiveTab(deps);
   } catch (error) {
     deps.reportError('导出 PDF 失败', error);
-    return false;
+    return null;
   }
   if (assembled === null) {
     deps.reportError('没有可导出的活动标签', null);
-    return false;
+    return null;
   }
   let html: string;
   try {
     html = buildPrintHtml(assembled.options);
   } catch (error) {
     reportDocumentBuildError(deps, '导出 PDF 失败', error);
-    return false;
+    return null;
   }
   const isMac = deps.isMacOS?.() === true;
 
@@ -215,17 +217,17 @@ export async function exportActiveTabPdf(deps: ExportServiceDeps): Promise<boole
       defaultExportFileName(assembled.options.title).replace(/\.html$/i, '.pdf'),
     );
     if (target === null) {
-      return false; // 用户取消
+      return null; // 用户取消
     }
     try {
       await deps.printPdfNative(html, target);
-      return true;
+      return target;
     } catch (error) {
       if (isMac) {
         // R1/T6：macOS 原生 createPDF 是唯一可靠路径（window.print 在 WKWebView
         // 因 Apple 打印 bug 不可靠，且会弹系统打印对话框）。失败只上报一次，不回退。
         deps.reportError('导出 PDF 失败', error);
-        return false;
+        return null;
       }
       // 非 macOS：原生失败（平台不支持 / 运行时缺接口）→ 回退到打印对话框。
       deps.reportError('原生 PDF 导出失败，改用打印对话框', error);
@@ -233,10 +235,10 @@ export async function exportActiveTabPdf(deps: ExportServiceDeps): Promise<boole
   } else if (isMac) {
     // macOS 但原生导出未注入（不应发生，main.ts 总注入）：防御性上报，不回退 window.print。
     deps.reportError('导出 PDF 失败：原生导出未配置', null);
-    return false;
+    return null;
   }
 
   // 回退：window.print() 系统对话框（Linux 主路径；Windows 兜底；macOS 不达此分支）。
   runPrint(html, deps.printHtml);
-  return true;
+  return null;
 }

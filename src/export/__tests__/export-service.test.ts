@@ -67,9 +67,9 @@ describe('defaultExportFileName', () => {
 });
 
 describe('exportActiveTabHtml', () => {
-  it('对话框选定路径 → 写入装配好的独立 HTML（图片已内嵌）', async () => {
+  it('对话框选定路径 → 写入装配好的独立 HTML（图片已内嵌）并返回写盘路径', async () => {
     const deps = makeDeps();
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(true);
+    await expect(exportActiveTabHtml(deps)).resolves.toBe('C:\\out\\笔记.html');
     expect(deps.showHtmlSaveDialog).toHaveBeenCalledWith('笔记.html');
     expect(deps.writeFile).toHaveBeenCalledTimes(1);
     const [path, html] = vi.mocked(deps.writeFile).mock.calls[0];
@@ -95,36 +95,36 @@ describe('exportActiveTabHtml', () => {
     const deps = makeDeps({
       getActiveSnapshot: () => ({ ...SNAPSHOT, filePath: null }),
     });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(true);
+    await expect(exportActiveTabHtml(deps)).resolves.toBe('C:\\out\\笔记.html');
     expect(deps.readImageBase64).toHaveBeenCalledWith(null, 'untitled-ab12', 'assets/a.png');
   });
 
-  it('用户取消对话框 → 不写文件', async () => {
+  it('用户取消对话框 → 返回 null 且不写文件', async () => {
     const deps = makeDeps({ showHtmlSaveDialog: vi.fn(async () => null) });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(false);
+    await expect(exportActiveTabHtml(deps)).resolves.toBeNull();
     expect(deps.writeFile).not.toHaveBeenCalled();
   });
 
-  it('无活动标签 → false 并上报', async () => {
+  it('无活动标签 → null 并上报', async () => {
     const deps = makeDeps({ getActiveSnapshot: () => null });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(false);
+    await expect(exportActiveTabHtml(deps)).resolves.toBeNull();
     expect(deps.reportError).toHaveBeenCalledOnce();
     expect(deps.showHtmlSaveDialog).not.toHaveBeenCalled();
   });
 
-  it('写入失败 → false 并上报', async () => {
+  it('写入失败 → null 并上报', async () => {
     const deps = makeDeps({
       writeFile: vi.fn(async () => {
         throw '磁盘错误';
       }),
     });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(false);
+    await expect(exportActiveTabHtml(deps)).resolves.toBeNull();
     expect(deps.reportError).toHaveBeenCalledOnce();
   });
 
   it('不安全 CSS 在保存对话框前终止并显示错误', async () => {
     const deps = makeDeps({ getCssText: () => '/* </STYLE boundary */' });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(false);
+    await expect(exportActiveTabHtml(deps)).resolves.toBeNull();
     expect(deps.reportError).toHaveBeenCalledWith(
       'Unsafe custom theme CSS',
       expect.any(UnsafeCssBoundaryError),
@@ -139,7 +139,7 @@ describe('exportActiveTabHtml', () => {
         throw new Error('io');
       }),
     });
-    await expect(exportActiveTabHtml(deps)).resolves.toBe(false);
+    await expect(exportActiveTabHtml(deps)).resolves.toBeNull();
     expect(deps.writeFile).not.toHaveBeenCalled();
     expect(deps.reportError).toHaveBeenCalledOnce();
     expect(String(vi.mocked(deps.reportError).mock.calls[0][1])).toMatch(/图片读取失败/);
@@ -147,9 +147,9 @@ describe('exportActiveTabHtml', () => {
 });
 
 describe('exportActiveTabPdf', () => {
-  it('装配打印 HTML（含打印样式与内嵌图片）并触发 print', async () => {
+  it('装配打印 HTML（含打印样式与内嵌图片）并触发 print（返回 null：落盘交给打印对话框）', async () => {
     const deps = makeDeps();
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(true);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(deps.printHtml).toHaveBeenCalledTimes(1);
     const html = vi.mocked(deps.printHtml).mock.calls[0][0];
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
@@ -160,34 +160,34 @@ describe('exportActiveTabPdf', () => {
     expect(deps.writeFile).not.toHaveBeenCalled();
   });
 
-  it('无活动标签 → false 且不触发 print', async () => {
+  it('无活动标签 → null 且不触发 print', async () => {
     const deps = makeDeps({ getActiveSnapshot: () => null });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(false);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(deps.printHtml).not.toHaveBeenCalled();
   });
 
-  it('提供原生 PDF 路径时优先走原生（含可选文字），不触发 printHtml', async () => {
+  it('提供原生 PDF 路径时优先走原生（含可选文字），成功返回写盘路径', async () => {
     const printPdfNative = vi.fn(async () => undefined);
     const showPdfSaveDialog = vi.fn(async () => 'C:\\out\\笔记.pdf');
     const deps = makeDeps({ printPdfNative, showPdfSaveDialog });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(true);
+    await expect(exportActiveTabPdf(deps)).resolves.toBe('C:\\out\\笔记.pdf');
     expect(showPdfSaveDialog).toHaveBeenCalledWith('笔记.pdf');
     expect(printPdfNative).toHaveBeenCalledTimes(1);
     expect(deps.printHtml).not.toHaveBeenCalled();
   });
 
-  it('原生保存对话框取消 → false 且不打印', async () => {
+  it('原生保存对话框取消 → null 且不打印', async () => {
     const printPdfNative = vi.fn(async () => undefined);
     const deps = makeDeps({
       printPdfNative,
       showPdfSaveDialog: vi.fn(async () => null),
     });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(false);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(printPdfNative).not.toHaveBeenCalled();
     expect(deps.printHtml).not.toHaveBeenCalled();
   });
 
-  it('非 macOS 原生失败 → 回退到 printHtml（打印对话框）', async () => {
+  it('非 macOS 原生失败 → 回退到 printHtml（打印对话框），无路径可报', async () => {
     const printPdfNative = vi.fn(async () => {
       throw new Error('unsupported');
     });
@@ -196,13 +196,13 @@ describe('exportActiveTabPdf', () => {
       showPdfSaveDialog: vi.fn(async () => 'C:\\out\\笔记.pdf'),
       isMacOS: () => false,
     });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(true);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(printPdfNative).toHaveBeenCalled();
     expect(deps.printHtml).toHaveBeenCalledTimes(1); // 回退
     expect(deps.reportError).toHaveBeenCalled();
   });
 
-  it('macOS 原生成功 → 一次保存框直接得 PDF，不触发 printHtml（R1/T6）', async () => {
+  it('macOS 原生成功 → 一次保存框直接得 PDF 并返回路径，不触发 printHtml（R1/T6）', async () => {
     const printPdfNative = vi.fn(async (_html: string, _path: string) => undefined);
     const showPdfSaveDialog = vi.fn(async () => '/Users/me/笔记.pdf');
     const deps = makeDeps({
@@ -210,7 +210,7 @@ describe('exportActiveTabPdf', () => {
       showPdfSaveDialog,
       isMacOS: () => true,
     });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(true);
+    await expect(exportActiveTabPdf(deps)).resolves.toBe('/Users/me/笔记.pdf');
     expect(showPdfSaveDialog).toHaveBeenCalledWith('笔记.pdf');
     expect(printPdfNative).toHaveBeenCalledTimes(1);
     const nativeHtml = vi.mocked(printPdfNative).mock.calls[0]?.[0];
@@ -219,7 +219,7 @@ describe('exportActiveTabPdf', () => {
     expect(deps.reportError).not.toHaveBeenCalled(); // 无错误框
   });
 
-  it('macOS 原生失败 → 上报一次并返回 false，不回退 window.print（R1/T6）', async () => {
+  it('macOS 原生失败 → 上报一次并返回 null，不回退 window.print（R1/T6）', async () => {
     const printPdfNative = vi.fn(async () => {
       throw new Error('wkwebview createPDF failed');
     });
@@ -228,15 +228,15 @@ describe('exportActiveTabPdf', () => {
       showPdfSaveDialog: vi.fn(async () => '/Users/me/笔记.pdf'),
       isMacOS: () => true,
     });
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(false);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(printPdfNative).toHaveBeenCalledTimes(1);
     expect(deps.printHtml).not.toHaveBeenCalled(); // 关键：macOS 不回退打印对话框
     expect(deps.reportError).toHaveBeenCalledTimes(1); // 一次明确提示，不连锁弹多框
   });
 
-  it('macOS 未注入原生导出 → 上报并返回 false，不回退 window.print', async () => {
+  it('macOS 未注入原生导出 → 上报并返回 null，不回退 window.print', async () => {
     const deps = makeDeps({ isMacOS: () => true }); // 无 printPdfNative/showPdfSaveDialog
-    await expect(exportActiveTabPdf(deps)).resolves.toBe(false);
+    await expect(exportActiveTabPdf(deps)).resolves.toBeNull();
     expect(deps.printHtml).not.toHaveBeenCalled();
     expect(deps.reportError).toHaveBeenCalledTimes(1);
   });

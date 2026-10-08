@@ -55,6 +55,27 @@ describe('openFileFlow', () => {
     await expect(openPathFlow(deps, 'C:\\bad.md')).resolves.toBeNull();
     expect(deps.reportError).toHaveBeenCalledOnce();
   });
+
+  it('读取失败缺省用中文兜底文案上报', async () => {
+    const deps = makeDeps({
+      readFile: vi.fn(async () => {
+        throw '无法读取文件';
+      }),
+    });
+    await openPathFlow(deps, 'C:\\bad.md');
+    expect(deps.reportError).toHaveBeenCalledWith('打开文件失败: C:\\bad.md', '无法读取文件');
+  });
+
+  it('读取失败用注入的本地化文案上报', async () => {
+    const deps = makeDeps({
+      readFile: vi.fn(async () => {
+        throw new Error('EACCES');
+      }),
+      formatOpenErrorMessage: (path) => `open failed: ${path}`,
+    });
+    await openPathFlow(deps, 'C:\\bad.md');
+    expect(deps.reportError).toHaveBeenCalledWith('open failed: C:\\bad.md', expect.any(Error));
+  });
 });
 
 describe('saveToPathFlow', () => {
@@ -72,6 +93,25 @@ describe('saveToPathFlow', () => {
     });
     await expect(saveToPathFlow(deps, 'C:\\a.md', 'x')).resolves.toBe(false);
     expect(deps.reportError).toHaveBeenCalledOnce();
+  });
+
+  it('写入失败用注入的本地化文案上报（缺省中文兜底）', async () => {
+    const deps = makeDeps({
+      writeFile: vi.fn(async () => {
+        throw '磁盘满';
+      }),
+      formatSaveErrorMessage: (path) => `save failed: ${path}`,
+    });
+    await saveToPathFlow(deps, 'C:\\a.md', 'x');
+    expect(deps.reportError).toHaveBeenCalledWith('save failed: C:\\a.md', '磁盘满');
+
+    const fallback = makeDeps({
+      writeFile: vi.fn(async () => {
+        throw '磁盘满';
+      }),
+    });
+    await saveToPathFlow(fallback, 'C:\\a.md', 'x');
+    expect(fallback.reportError).toHaveBeenCalledWith('保存文件失败: C:\\a.md', '磁盘满');
   });
 });
 
@@ -105,5 +145,26 @@ describe('saveAsFlow', () => {
     });
     await expect(saveAsFlow(deps, 'untitled-1', '内容')).resolves.toBeNull();
     expect(deps.reportError).toHaveBeenCalledOnce();
+  });
+
+  it('另存失败用注入的本地化文案上报（缺省中文兜底）', async () => {
+    const deps = makeDeps({
+      showSaveDialog: vi.fn(async () => 'D:\\x.md'),
+      saveDocumentAs: vi.fn(async () => {
+        throw '只读';
+      }),
+      formatSaveAsErrorMessage: (path) => `save-as failed: ${path}`,
+    });
+    await saveAsFlow(deps, 'untitled-1', '内容');
+    expect(deps.reportError).toHaveBeenCalledWith('save-as failed: D:\\x.md', '只读');
+
+    const fallback = makeDeps({
+      showSaveDialog: vi.fn(async () => 'D:\\x.md'),
+      saveDocumentAs: vi.fn(async () => {
+        throw '只读';
+      }),
+    });
+    await saveAsFlow(fallback, 'untitled-1', '内容');
+    expect(fallback.reportError).toHaveBeenCalledWith('另存文件失败: D:\\x.md', '只读');
   });
 });

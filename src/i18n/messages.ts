@@ -35,6 +35,7 @@ const en = {
   'file.saveAs': 'Save As…',
   'file.exportHtml': 'Export HTML…',
   'file.exportPdf': 'Export PDF…',
+  'file.export.success': 'Exported to {path}.',
 
   'edit.undo': 'Undo',
   'edit.redo': 'Redo',
@@ -132,6 +133,9 @@ const en = {
   'error.imageImportTitle': 'Insert Image',
   'error.openFile': 'Could not open “{path}”: the file may have been moved or deleted.',
   'error.openFileMissing': 'Could not open “{path}”: file not found or unreadable.',
+  'error.fileOpenFailed': 'Could not open “{path}”.',
+  'error.fileSaveFailed': 'Could not save “{path}”.',
+  'error.fileSaveAsFailed': 'Could not save as “{path}”.',
   'error.exportFailed': 'Export failed',
   'error.exportUnsafeCss':
     'Export stopped because the custom theme CSS contains a reserved </style sequence.',
@@ -954,6 +958,7 @@ const zhCN = {
   'file.saveAs': '另存为',
   'file.exportHtml': '导出 HTML…',
   'file.exportPdf': '导出 PDF…',
+  'file.export.success': '已导出到 {path}。',
 
   'edit.undo': '撤销',
   'edit.redo': '重做',
@@ -1051,6 +1056,9 @@ const zhCN = {
   'error.imageImportTitle': '插入图片',
   'error.openFile': '无法打开「{path}」：文件可能已被移动或删除。',
   'error.openFileMissing': '无法打开「{path}」：文件不存在或无法读取。',
+  'error.fileOpenFailed': '无法打开「{path}」。',
+  'error.fileSaveFailed': '无法保存「{path}」。',
+  'error.fileSaveAsFailed': '无法另存「{path}」。',
   'error.exportFailed': '导出失败',
   'error.exportUnsafeCss': '导出已停止：自定义主题 CSS 含有保留的 </style 终止序列。',
   'error.recentRemoved': '已从最近打开中移除。',

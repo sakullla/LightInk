@@ -17,8 +17,14 @@ export interface RoundtripDeps {
   saveDocumentAs: (sessionId: string, path: string, content: string) => Promise<void>;
   showOpenDialog: () => Promise<string | null>;
   showSaveDialog: (defaultPath?: string) => Promise<string | null>;
-  /** 错误上报（T3 用 console/alert 兜底，完整 UI 在 T6/T11）。 */
+  /** 错误上报（缺省 console 兜底；生产由 main.ts 注入非阻断 toast）。 */
   reportError: (message: string, error: unknown) => void;
+  /** 打开失败的主文案（缺省中文兜底；生产注入 i18n 文案，原始错误走 reportError 第二参）。 */
+  formatOpenErrorMessage?: (path: string) => string;
+  /** 保存失败的主文案（同上）。 */
+  formatSaveErrorMessage?: (path: string) => string;
+  /** 另存失败的主文案（同上）。 */
+  formatSaveAsErrorMessage?: (path: string) => string;
 }
 
 export const defaultRoundtripDeps: RoundtripDeps = {
@@ -60,7 +66,7 @@ export async function openPathFlow(
     const content = await deps.readFile(path);
     return { path, content };
   } catch (error) {
-    deps.reportError(`打开文件失败: ${path}`, error);
+    deps.reportError(deps.formatOpenErrorMessage?.(path) ?? `打开文件失败: ${path}`, error);
     return null;
   }
 }
@@ -78,7 +84,7 @@ export async function saveToPathFlow(
   try {
     await deps.writeFile(path, content);
   } catch (error) {
-    deps.reportError(`保存文件失败: ${path}`, error);
+    deps.reportError(deps.formatSaveErrorMessage?.(path) ?? `保存文件失败: ${path}`, error);
     return false;
   }
   return true;
@@ -101,7 +107,7 @@ export async function saveAsFlow(
     await deps.saveDocumentAs(sessionId, path, content);
     return path;
   } catch (error) {
-    deps.reportError(`另存文件失败: ${path}`, error);
+    deps.reportError(deps.formatSaveAsErrorMessage?.(path) ?? `另存文件失败: ${path}`, error);
     return null;
   }
 }

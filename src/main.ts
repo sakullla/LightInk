@@ -44,6 +44,7 @@ import {
 import { fileNameStem, importImageAsset } from './asset/asset-service.js';
 import { isReaderPath, planDroppedFiles } from './file/file-drop.js';
 import { showOpenDialog } from './file/file-dialog.js';
+import { defaultRoundtripDeps } from './file/roundtrip.js';
 import { installExternalOpenBridge } from './file/android-view-open.js';
 import {
   browserFileSize,
@@ -2555,8 +2556,9 @@ function runClipboardCommand(command: 'cut' | 'copy' | 'paste'): void {
 
 interface ExportPipeline {
   readonly buildExportCss: (extraCss?: string) => string;
-  readonly exportHtml: (deps: ExportServiceDeps) => Promise<boolean>;
-  readonly exportPdf: (deps: ExportServiceDeps) => Promise<boolean>;
+  /** 成功返回写盘路径（供成功 toast）；取消/回退打印对话框/失败返回 null。 */
+  readonly exportHtml: (deps: ExportServiceDeps) => Promise<string | null>;
+  readonly exportPdf: (deps: ExportServiceDeps) => Promise<string | null>;
   readonly printHtml: (doc: Document, html: string) => void;
   readonly printPdfNative: (
     doc: Document,
@@ -2727,10 +2729,11 @@ async function runActiveExport(kind: 'html' | 'pdf'): Promise<void> {
     const snapshot = await activeExportSnapshot(kind);
     const pipeline = await loadExportPipeline();
     const deps = createExportDeps(pipeline, snapshot);
-    if (kind === 'html') {
-      await pipeline.exportHtml(deps);
-    } else {
-      await pipeline.exportPdf(deps);
+    const exported =
+      kind === 'html' ? await pipeline.exportHtml(deps) : await pipeline.exportPdf(deps);
+    // null = 用户取消 / 回退系统打印对话框 / 失败（失败已由 reportError 呈现）。
+    if (exported !== null) {
+      appToast('success', i18n.t('file.export.success', { path: exported }));
     }
   } catch (error) {
     reportExportError(i18n.t('error.exportFailed'), error);
@@ -3284,6 +3287,23 @@ manager = new TabManager({
     isTouchPrimary ||
     document.documentElement.hasAttribute('data-android') ||
     document.documentElement.hasAttribute('data-touch-primary'),
+  // R4：打开/保存/另存失败的用户可见反馈。roundtrip 主文案由注入的 i18n 格式器
+  // 生成（含路径），原始错误仅进 toast 的「技术详情」折叠区。TabManager 自身的
+  // reportError（崩溃快照检测等内部噪音）不经此通道，仍走 console，避免刷屏。
+  roundtrip: {
+    ...defaultRoundtripDeps,
+    formatOpenErrorMessage: (path) => i18n.t('error.fileOpenFailed', { path }),
+    formatSaveErrorMessage: (path) => i18n.t('error.fileSaveFailed', { path }),
+    formatSaveAsErrorMessage: (path) => i18n.t('error.fileSaveAsFailed', { path }),
+    reportError: (message, error) => {
+      // 只取 detail：主文案已由上方格式器本地化，title 不使用。
+      const { detail } = friendlyError(error, {
+        fallbackTitle: 'error.exportFailed',
+        t: (key, vars) => i18n.t(key, vars),
+      });
+      appToast('error', message, detail);
+    },
+  },
   writeSnapshot: writeSynchronizedSnapshot,
   clearSnapshot: clearSynchronizedSnapshot,
   // R4 严格退出快照：本地崩溃快照必须确认落盘；untitled 的 documentClient
