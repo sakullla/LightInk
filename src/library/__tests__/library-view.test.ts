@@ -2237,6 +2237,66 @@ describe('LibraryView my-books home', () => {
     expect(overlay?.isConnected).toBe(false);
   });
 
+  it('focuses the first control of the book source panel and hands Escape focus back to the entry', async () => {
+    const bookSources = bookSourceClient();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ bookSources }));
+    await view.show();
+
+    const entry = host.querySelector<HTMLButtonElement>('.lightink-library-book-source-entry')!;
+    entry.focus();
+    entry.click();
+    await settle();
+
+    const overlay = document.querySelector<HTMLElement>('.lightink-library-book-sources')!;
+    expect(overlay.hidden).toBe(false);
+    const firstControl = overlay.querySelector<HTMLButtonElement>(
+      '.lightink-library-book-sources-toolbar button',
+    )!;
+    expect(firstControl.textContent).toBe('新建书源');
+    expect(document.activeElement).toBe(firstControl);
+
+    // 焦点留在面板外（触发按钮）时 Esc 也能关掉面板，并把焦点还给触发按钮。
+    entry.focus();
+    entry.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await settle();
+    expect(overlay.hidden).toBe(true);
+    expect(document.activeElement).toBe(entry);
+
+    view.destroy();
+  });
+
+  it('asks before deleting a book source from the panel rows', async () => {
+    const bookSources = bookSourceClient();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ bookSources }));
+    await view.show();
+
+    host.querySelector<HTMLButtonElement>('.lightink-library-book-source-entry')!.click();
+    await settle();
+    const overlay = document.querySelector<HTMLElement>('.lightink-library-book-sources')!;
+    const row = overlay.querySelector<HTMLElement>('[data-source-id="book-source-1"]')!;
+    shownButtonWithText(row, '删除').click();
+    await settle();
+
+    expect(document.querySelector('.lightink-confirm-dialog')?.textContent).toContain('公版示例');
+    await cancelRemoveDialog();
+    expect(bookSources.removeSource).not.toHaveBeenCalled();
+    expect(overlay.querySelector('[data-source-id="book-source-1"]')).not.toBeNull();
+
+    shownButtonWithText(row, '删除').click();
+    await settle();
+    await confirmRemoveDialog();
+    expect(bookSources.removeSource).toHaveBeenCalledWith('book-source-1');
+    expect(overlay.querySelector('[data-source-id="book-source-1"]')).toBeNull();
+
+    view.destroy();
+  });
+
   it('omits the book source entry when the host does not wire it', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -4732,10 +4792,34 @@ describe('LibraryView sources, manage, and catalog', () => {
     await openSources(host);
     host.querySelector<HTMLButtonElement>('[aria-label="删除源: Nextcloud"]')!.click();
     await settle();
+    expect(document.querySelector('.lightink-confirm-dialog')?.textContent).toContain('Nextcloud');
+    await confirmRemoveDialog();
     expect(removeSource).toHaveBeenCalledWith('webdav-1');
     expect(host.querySelector('[data-source-kind="webdav"]')).toBeNull();
     expect(host.querySelector('[data-source-kind="opds"]')?.textContent).toContain('测试书库');
     expect(onOpenSyncPanel).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('keeps a catalog source after cancelling the delete confirm', async () => {
+    const base = dependencies();
+    const removeSource = vi.fn(async () => undefined);
+    const deps = dependencies({
+      opds: { ...base.opds, removeSource },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await openSources(host);
+    host.querySelector<HTMLButtonElement>('[aria-label="删除源: 测试书库"]')!.click();
+    await settle();
+    expect(document.querySelector('.lightink-confirm-dialog')?.textContent).toContain('测试书库');
+    await cancelRemoveDialog();
+
+    expect(removeSource).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-source-kind="opds"]')).not.toBeNull();
     view.destroy();
   });
 

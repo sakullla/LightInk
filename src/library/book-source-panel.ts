@@ -15,6 +15,7 @@ import {
   type BookDownloadFormat,
   type BookDownloadPanelClient,
 } from './book-download.js';
+import { showConfirmDialog } from '../ui/confirm-dialog.js';
 
 export type BookSourceLocale = 'en' | 'zh-CN';
 
@@ -62,6 +63,8 @@ interface BookSourcePanelLabels {
   enable: string;
   edit: string;
   remove: string;
+  /** Names the source and says imported books stay in the library. */
+  removeConfirm: string;
   check: string;
   search: string;
   searchPlaceholder: string;
@@ -127,6 +130,7 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     enable: 'Enabled',
     edit: 'Edit',
     remove: 'Delete',
+    removeConfirm: 'Delete the book source “{name}”? Books already imported stay in the library.',
     check: 'Check',
     search: 'Search',
     searchPlaceholder: 'Keyword',
@@ -189,6 +193,7 @@ const LABELS: Record<BookSourceLocale, BookSourcePanelLabels> = {
     enable: '启用',
     edit: '编辑',
     remove: '删除',
+    removeConfirm: '删除书源“{name}”？已入库的书籍仍保留在书库。',
     check: '自检',
     search: '搜索',
     searchPlaceholder: '关键词',
@@ -513,6 +518,8 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   let builtins: BookSourceBuiltin[] = [];
   let mode: PanelMode = { kind: 'idle' };
   let editingSourceId: string | undefined;
+  // 对齐 modal-focus 先例：show 前记录焦点，hide 后还给触发入口。
+  let restoreFocus: HTMLElement | null = null;
 
   const downloads = options.downloads ?? bookDownloadClient;
   let downloadPrep:
@@ -753,14 +760,26 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   }
 
   async function removeSource(source: BookSource): Promise<void> {
+    const l = labels();
+    const choice = await showConfirmDialog(doc, {
+      title: l.remove,
+      message: l.removeConfirm.replace('{name}', source.title),
+      buttons: [
+        { id: 'remove', label: l.remove, kind: 'danger' },
+        { id: 'cancel', label: l.cancel, kind: 'plain' },
+      ],
+      cancelId: 'cancel',
+      themeHost: overlay,
+    });
+    if (choice !== 'remove') return;
     try {
       await options.client.removeSource(source.id);
       sources = sources.filter((candidate) => candidate.id !== source.id);
       if (mode.kind === 'search' && mode.sourceId === source.id) mode = { kind: 'idle' };
       if (mode.kind === 'edit' && mode.sourceId === source.id) mode = { kind: 'idle' };
-      setStatus(labels().removed, 'success');
+      setStatus(l.removed, 'success');
     } catch (error) {
-      setStatus(errorText(error, labels().loadFailed), 'error');
+      setStatus(errorText(error, l.loadFailed), 'error');
     }
     renderList();
     renderDetail();
@@ -1151,15 +1170,23 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
   applyLabels();
 
   function show(): Promise<void> {
+    const active = doc.activeElement;
+    restoreFocus = active instanceof HTMLElement && active !== overlay ? active : null;
     overlay.hidden = false;
     mode = { kind: 'idle' };
     setStatus('');
     renderDetail();
+    // 键盘可达性：打开即把焦点移进面板首个控件，Esc/关闭后归还触发入口。
+    addButton.focus();
     return refresh();
   }
 
   function hide(): void {
+    if (overlay.hidden) return;
     overlay.hidden = true;
+    const restore = restoreFocus;
+    restoreFocus = null;
+    if (restore !== null && restore.isConnected) restore.focus();
   }
 
   return {

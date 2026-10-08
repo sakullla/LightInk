@@ -183,6 +183,8 @@ interface Labels {
   save: string;
   cancel: string;
   deleteSource: string;
+  /** Names the source and says imported books stay in the library. */
+  deleteSourceConfirm: string;
   prev: string;
   next: string;
   noAcquisition: string;
@@ -394,6 +396,7 @@ const LABELS: Record<Locale, Labels> = {
     save: 'Save',
     cancel: 'Cancel',
     deleteSource: 'Remove source',
+    deleteSourceConfirm: 'Remove the source “{name}”? Books already imported stay in the library.',
     prev: 'Previous',
     next: 'Next',
     noAcquisition: 'No supported acquisition link',
@@ -602,6 +605,7 @@ const LABELS: Record<Locale, Labels> = {
     save: '保存',
     cancel: '取消',
     deleteSource: '删除源',
+    deleteSourceConfirm: '移除书源“{name}”？已入库的书籍仍保留在书库。',
     prev: '上一页',
     next: '下一页',
     noAcquisition: '没有可用的获取链接',
@@ -6744,6 +6748,19 @@ export function createLibraryView(
   }
 
   async function removeSource(source: CatalogSource): Promise<void> {
+    // 与删除书籍/清缓存同一防误触标准：先过确认弹层，再调客户端删除。
+    const name = source.title === '' ? labels().deleteSource : source.title;
+    const choice = await showConfirmDialog(doc, {
+      title: labels().deleteSource,
+      message: labels().deleteSourceConfirm.replace('{name}', name),
+      buttons: [
+        { id: 'remove', label: labels().deleteSource, kind: 'danger' },
+        { id: 'cancel', label: labels().cancel, kind: 'plain' },
+      ],
+      cancelId: 'cancel',
+      themeHost: root,
+    });
+    if (choice !== 'remove') return;
     try {
       if (source.kind === 'webdav') {
         if (deps.webdavSource === undefined) return;
@@ -7313,6 +7330,13 @@ export function createLibraryView(
     closeTagDialog();
   });
   root.addEventListener('keydown', (event) => {
+    // 书源面板挂在 body 上，焦点留在面板外（如触发按钮）时 Esc 也要能关掉它。
+    if (event.key === 'Escape' && bookSourcePanel !== null && bookSourcePanel.visible) {
+      event.preventDefault();
+      bookSourcePanel.hide();
+      bookSourcesButton?.focus();
+      return;
+    }
     if (event.key === 'Escape' && !filterSheet.hidden) {
       event.preventDefault();
       closeFilterSheet();
