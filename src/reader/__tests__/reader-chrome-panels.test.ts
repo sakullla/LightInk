@@ -404,6 +404,25 @@ describe('reader chrome panels', () => {
     expect(sheet).toMatch(/@media \(pointer: coarse\)\s*\{[\s\S]*?\.lightink-reader-toc-item[^}]*min-height:\s*44px/);
   });
 
+  it('keeps the toc mode toggle hoverable and readable on dark paper', () => {
+    const sheet = panelsCss();
+    // 未选中段悬停：与目录行同款轻染；置于 is-active 之前，活动段悬停不变底。
+    const hoverAt = sheet.search(/\.lightink-reader-toc-mode:hover\s*\{/);
+    const activeAt = sheet.search(/\.lightink-reader-toc-mode\.is-active\s*\{/);
+    expect(hoverAt, '.lightink-reader-toc-mode:hover rule').toBeGreaterThanOrEqual(0);
+    expect(activeAt, 'is-active must win over hover').toBeGreaterThan(hoverAt);
+    expect(sheet).toMatch(
+      /\.lightink-reader-toc-mode:hover\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--lightink-fg\) 7%, transparent\)/,
+    );
+    // 石墨/夜间纸张：选中块不再 #fff 混入（发白亮斑），改用排版分段条同款暗色值。
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\[data-reader-theme='gray'\] \.lightink-reader-toc-mode\.is-active,\s*\.lightink-reader-chrome-panel\[data-reader-theme='night'\] \.lightink-reader-toc-mode\.is-active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--lightink-fg\) 16%, var\(--lightink-bg-elevated\)\)/,
+    );
+    expect(sheet).toMatch(
+      /\.lightink-reader-chrome-panel\[data-reader-theme='night'\] \.lightink-reader-toc-mode\.is-active\s*\{[^}]*box-shadow:\s*0 1px 2px rgba\(0, 0, 0, 0\.35\)/,
+    );
+  });
+
   it('debounces contents search input so steady typing repaints once per pause', () => {
     vi.useFakeTimers();
     try {

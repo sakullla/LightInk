@@ -211,9 +211,22 @@
   cursor: pointer;
 }
 
+/* 未选中段悬停：与目录行同款轻染（置于 is-active 之前，活动段悬停不变底）。 */
+.lightink-reader-toc-mode:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
 .lightink-reader-toc-mode.is-active {
   background: color-mix(in srgb, #fff 58%, var(--lightink-bg-elevated));
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* 石墨/夜间纸张：#fff 混入会形成发白亮斑，浅灰文字几乎读不清——改用与排版面板
+   分段条（.lightink-reader-chrome-typography[data-reader-theme='gray'/'night']）同款暗色值。 */
+.lightink-reader-chrome-panel[data-reader-theme='gray'] .lightink-reader-toc-mode.is-active,
+.lightink-reader-chrome-panel[data-reader-theme='night'] .lightink-reader-toc-mode.is-active {
+  background: color-mix(in srgb, var(--lightink-fg) 16%, var(--lightink-bg-elevated));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .lightink-reader-toc-list.is-thumbs {

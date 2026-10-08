@@ -299,15 +299,18 @@ mark.lightink-reader-highlight[data-annotation-kind='note']::after {
   margin-left: 0.15em;
   opacity: 0.8;
 }
+/* 搜索命中随主题：--lightink-selection/--lightink-accent 由 applyFlowTypography
+   从宿主透传（iframe 是独立文档，变量不会继承），与宿主滚动区/PDF 文本层命中色
+   对齐；未透传时回退 warm-light 硬编码档。 */
 .lightink-reader-search-mark {
-  background: rgba(154, 88, 40, 0.22);
+  background: var(--lightink-selection, rgba(154, 88, 40, 0.22));
   border-radius: 2px;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   overflow-anchor: none;
 }
 .lightink-reader-search-mark--current {
-  background: rgba(154, 88, 40, 0.45);
+  background: color-mix(in srgb, var(--lightink-accent, #9a5828) 45%, transparent);
   box-shadow: inset 0 0 0 1px currentColor;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
@@ -979,7 +982,13 @@ function resolveFlowPageSpread(
   return { compact, pageWidth, innerWidth, widthUsable, pad, layout };
 }
 
-function applyFlowTypography(
+/**
+ * 帧内排版与纸墨色应用（含搜索命中色变量透传）。iframe 是独立文档，宿主的
+ * 自定义属性不会继承：--lightink-selection/--lightink-accent 与纸墨色一样由
+ * 宿主计算值写入帧 documentElement，使 .lightink-reader-search-mark 随主题；
+ * 宿主未定义（空值）时不写入，FLOW_FRAME_CSS 回退 warm-light 档。
+ */
+export function applyFlowTypography(
   root: HTMLElement,
   frameDocument: Document,
   typography = resolveReaderTypography(root),
@@ -987,9 +996,17 @@ function applyFlowTypography(
   const computed = getComputedStyle(root);
   const paper = readerPaperColor(root);
   const ink = computed.color || computed.getPropertyValue('--lightink-fg').trim() || 'inherit';
+  const selection = computed.getPropertyValue('--lightink-selection').trim();
+  const accent = computed.getPropertyValue('--lightink-accent').trim();
   applyReaderTypography(frameDocument.documentElement, typography);
   frameDocument.documentElement.style.setProperty('--lightink-bg', paper);
   frameDocument.documentElement.style.setProperty('--lightink-fg', ink);
+  if (selection !== '') {
+    frameDocument.documentElement.style.setProperty('--lightink-selection', selection);
+  }
+  if (accent !== '') {
+    frameDocument.documentElement.style.setProperty('--lightink-accent', accent);
+  }
   frameDocument.documentElement.style.background = paper;
   frameDocument.documentElement.style.color = ink;
   frameDocument.documentElement.style.colorScheme = computed.colorScheme || '';

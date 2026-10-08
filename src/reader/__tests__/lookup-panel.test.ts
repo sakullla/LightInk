@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -15,6 +17,10 @@ import {
 } from '../lookup-panel.js';
 import { createSelectionToolbar } from '../selection-toolbar.js';
 import { translate, type MessageKey } from '../../i18n/messages.js';
+
+function lookupPanelCss(): string {
+  return readFileSync(resolve(process.cwd(), 'src/reader/lookup-panel.css'), 'utf-8');
+}
 
 const t = (key: MessageKey): string => key;
 const englishT = (key: MessageKey): string => translate('en', key);
@@ -325,6 +331,18 @@ describe('lookup panel translate sections', () => {
     );
     expect(sectionElement(panel.element, 'ai')?.dataset.status).toBe('idle');
     expect(sectionElement(panel.element, 'ai')?.textContent).not.toContain('AI 译文');
+  });
+
+  it('pulses the panel loading message and loading source sections (loading feedback)', () => {
+    const css = lookupPanelCss();
+    // 面板级「正在查词…」与 loading 来源段共用同一脉动动画。
+    expect(css).toContain(
+      ".lightink-reader-lookup-panel[data-lookup-status='loading'] .lightink-reader-lookup-message",
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-lookup-source\[data-status='loading'\]\s*\{[^}]*animation:\s*lightink-lookup-loading-pulse 1\.2s ease-in-out infinite/,
+    );
+    expect(css).toMatch(/@keyframes lightink-lookup-loading-pulse\s*\{[^}]*opacity/);
   });
 });
 

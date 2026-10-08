@@ -148,6 +148,24 @@
   color: var(--lightink-muted);
 }
 
+/* 加载中反馈：面板级「正在查词…」与 loading 来源段做轻量不透明度呼吸，让
+   1-3 秒网络往返可见仍在请求（对齐 reader.css 载入条的 1.2s ease-in-out 先例）。
+   动画由全局 prefers-reduced-motion kill-switch（theme.css）退化为静态，不改文案。 */
+.lightink-reader-lookup-panel[data-lookup-status='loading'] .lightink-reader-lookup-message,
+.lightink-reader-lookup-source[data-status='loading'] {
+  animation: lightink-lookup-loading-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes lightink-lookup-loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .lightink-reader-lookup-source[data-status='error'] .lightink-reader-lookup-message {
   color: var(--lightink-fg);
 }
