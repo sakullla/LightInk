@@ -3336,7 +3336,12 @@ manager = new TabManager({
       import('./editor/index.js'),
       warmEditorCompanionModules(),
     ]);
-    return engine.mountEditor(host, options);
+    // Phone Markdown opens as a reader. Stay non-editable until 编辑, so the
+    // touch format bar does not sit on comic, novel, or Markdown reading.
+    return engine.mountEditor(host, {
+      ...options,
+      editable: isImmersiveMarkdownPlatform() ? false : options.editable,
+    });
   },
   mountReader: async (host) => {
     host.classList.add('lightink-tab-host--reader');

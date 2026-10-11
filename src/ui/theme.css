@@ -2613,6 +2613,7 @@ html[data-reading-layout='scroll']:has(
 }
 
 :is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']
+  #lightink-editor-area[data-surface='markdown']
   .lightink-keyboard-format-bar.is-visible {
   display: flex;
   position: fixed;

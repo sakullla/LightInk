@@ -112,6 +112,33 @@ describe('shouldShowKeyboardFormatBar', () => {
     expect(shouldShowKeyboardFormatBar(viewOf(state, { editable: true }))).toBe(true);
     expect(shouldShowKeyboardFormatBar(viewOf(state, { editable: false }))).toBe(false);
   });
+
+  it('stays hidden on comic or novel surfaces and on a hidden markdown tab', () => {
+    setImmersiveTouch(true);
+    const area = document.createElement('div');
+    area.id = 'lightink-editor-area';
+    area.dataset.surface = 'reader';
+    const host = document.createElement('div');
+    host.className = 'lightink-tab-host';
+    const dom = document.createElement('div');
+    host.appendChild(dom);
+    area.appendChild(host);
+    document.body.appendChild(area);
+    const view = viewOf(state, { editable: true });
+    (view as { dom: HTMLElement }).dom = dom;
+    try {
+      expect(shouldShowKeyboardFormatBar(view)).toBe(false);
+      area.dataset.surface = 'markdown';
+      expect(shouldShowKeyboardFormatBar(view)).toBe(true);
+      host.style.display = 'none';
+      expect(shouldShowKeyboardFormatBar(view)).toBe(false);
+      host.style.display = '';
+      host.hidden = true;
+      expect(shouldShowKeyboardFormatBar(view)).toBe(false);
+    } finally {
+      area.remove();
+    }
+  });
 });
 
 describe('shouldShowFormatToolbar during immersive edit', () => {
@@ -158,7 +185,7 @@ describe('applyKeyboardFormatCommand composing guard', () => {
 describe('keyboard format bar CSS (R2)', () => {
   it('pins the bar above the keyboard with 44px touch targets', () => {
     expect(themeCss).toMatch(
-      /:is\(html\[data-android\], html\[data-touch-primary\]\)\[data-workspace-mode='reader'\]\s*\.lightink-keyboard-format-bar\.is-visible\s*\{[^}]*bottom:\s*var\(--lightink-keyboard-inset,\s*0px\)/,
+      /:is\(html\[data-android\], html\[data-touch-primary\]\)\[data-workspace-mode='reader'\]\s*#lightink-editor-area\[data-surface='markdown'\]\s*\.lightink-keyboard-format-bar\.is-visible\s*\{[^}]*bottom:\s*var\(--lightink-keyboard-inset,\s*0px\)/,
     );
     expect(themeCss).toMatch(
       /\.lightink-keyboard-format-bar__btn\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/,

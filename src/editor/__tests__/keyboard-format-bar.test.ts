@@ -115,6 +115,31 @@ describe('keyboard format bar visibility', () => {
       document.documentElement.removeAttribute('data-workspace-mode');
     }
   });
+
+  it('hides while comic or novel reading is the visible surface', async () => {
+    setImmersiveTouch(true);
+    const area = document.createElement('div');
+    area.id = 'lightink-editor-area';
+    area.dataset.surface = 'reader';
+    const host = document.createElement('div');
+    host.className = 'lightink-tab-host';
+    area.appendChild(host);
+    document.body.appendChild(area);
+    const editor = await mountEditor(host, { initialMarkdown: 'hello\n', editable: true });
+    await editor.ready;
+    try {
+      expect(barOf(host).classList.contains('is-visible')).toBe(false);
+      area.dataset.surface = 'markdown';
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(barOf(host).classList.contains('is-visible')).toBe(true);
+      host.style.display = 'none';
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(barOf(host).classList.contains('is-visible')).toBe(false);
+    } finally {
+      await editor.destroy();
+      area.remove();
+    }
+  });
 });
 
 describe('keyboard format bar commands', () => {

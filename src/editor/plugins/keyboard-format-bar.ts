@@ -1,7 +1,9 @@
 /**
  * Keyboard-adjacent touch format bar (R2 / ADR-5).
  *
- * Shown only while immersive Markdown is editable. Sits at
+ * Shown only while the visible immersive Markdown tab is editable.
+ * Comic, novel, and Markdown reading stay clear: a background editor
+ * must not pin the bar over another surface. Sits at
  * `bottom: var(--lightink-keyboard-inset, 0px)`. Clicks while
  * `view.composing` are ignored so IME composition is not rewritten.
  */
@@ -97,11 +99,41 @@ export function isImmersiveTouchMarkdownSurface(): boolean {
   );
 }
 
+/**
+ * The bar is viewport-fixed, so `view.editable` alone is not enough:
+ * a hidden Markdown tab, or a comic/novel surface sharing the editor
+ * pane, would otherwise keep the reading view's bottom row.
+ */
+export function keyboardFormatBarHostVisible(view: EditorView): boolean {
+  const dom = view.dom;
+  if (dom == null || typeof dom.closest !== 'function') {
+    return true;
+  }
+  const area = dom.closest('#lightink-editor-area');
+  if (area instanceof HTMLElement && area.dataset.surface !== 'markdown') {
+    return false;
+  }
+  let node: HTMLElement | null = dom instanceof HTMLElement ? dom : null;
+  while (node !== null) {
+    if (node.hidden || node.style.display === 'none') {
+      return false;
+    }
+    if (node.classList.contains('lightink-tab-host')) {
+      break;
+    }
+    node = node.parentElement;
+  }
+  return true;
+}
+
 export function shouldShowKeyboardFormatBar(view: EditorView): boolean {
   if (view.editable === false) {
     return false;
   }
-  return isImmersiveTouchMarkdownSurface();
+  if (!isImmersiveTouchMarkdownSurface()) {
+    return false;
+  }
+  return keyboardFormatBarHostVisible(view);
 }
 
 export function nextHeadingCycle(
@@ -323,15 +355,40 @@ function createBarElement(): HTMLElement {
 }
 
 function resolveBarHost(view: EditorView): HTMLElement {
-  const area = view.dom.closest('#lightink-editor-area');
-  if (area instanceof HTMLElement) {
-    return area;
+  // Stay inside the tab host. Inactive tabs use display:none, which also
+  // hides a position:fixed bar. Parking it on #lightink-editor-area let a
+  // background Markdown editor cover comic and novel readers.
+  const tab = view.dom.closest('.lightink-tab-host');
+  if (tab instanceof HTMLElement) {
+    return tab;
   }
   const parent = view.dom.parentElement;
   if (parent instanceof HTMLElement) {
     return parent;
   }
   return document.body;
+}
+
+function watchFormatBarVisibility(view: EditorView, onChange: () => void): () => void {
+  if (typeof MutationObserver !== 'function' || view.dom == null) {
+    return () => undefined;
+  }
+  const observer = new MutationObserver(() => {
+    onChange();
+  });
+  const watch = (node: Node | null, attributeFilter: string[]): void => {
+    if (node instanceof HTMLElement) {
+      observer.observe(node, { attributes: true, attributeFilter });
+    }
+  };
+  watch(document.documentElement, [
+    'data-workspace-mode',
+    'data-android',
+    'data-touch-primary',
+  ]);
+  watch(view.dom.closest('#lightink-editor-area'), ['data-surface']);
+  watch(view.dom.closest('.lightink-tab-host'), ['style', 'hidden']);
+  return () => observer.disconnect();
 }
 
 function syncBar(view: EditorView, bar: HTMLElement): void {
@@ -372,12 +429,16 @@ export const keyboardFormatBarPlugin = $prose((ctx: Ctx) => {
       bar.addEventListener('mousedown', onMouseDown, true);
       bar.addEventListener('click', onClick);
       resolveBarHost(view).appendChild(bar);
+      const stopWatch = watchFormatBarVisibility(view, () => {
+        syncBar(view, bar);
+      });
       syncBar(view, bar);
       return {
         update() {
           syncBar(view, bar);
         },
         destroy() {
+          stopWatch();
           bar.removeEventListener('mousedown', onMouseDown, true);
           bar.removeEventListener('click', onClick);
           bar.remove();
