@@ -257,6 +257,7 @@ import { webDavClient } from './sync/webdav-client.js';
 import { showSyncPanel, SYNC_ERROR_TITLES } from './sync/sync-panel.js';
 import { friendlyError } from './ui/friendly-error.js';
 import { showToast, type ToastKind } from './ui/toast.js';
+import { installTooltips } from './ui/tooltip.js';
 import {
   OPEN_HELP_GUIDE_EVENT,
   buildHelpGuideLabels,
@@ -278,6 +279,7 @@ import './theme/tokens.css';
 import './theme/prose.css';
 import './ui/theme.css';
 import './ui/toast.css';
+import './ui/tooltip.css';
 import './ui/help-guide.css';
 import './ui/window-titlebar.css';
 import './library/library.css';
@@ -5301,6 +5303,9 @@ void (async () => {
 })();
 
 async function bootstrap(): Promise<void> {
+  // Tooltip 层只依赖 document，与应用状态无关：先装好，纯图标控件从第一帧
+  // 就有名字。重复调用返回同一控制器，不会重复挂监听。
+  installTooltips();
   // R1：先注册单实例 open-file 监听，再取首实例 pending——监听就绪前到达的第二实例
   // 文件由随后的初始 take_pending_file 抽干槽兜底，避免启动竞态内事件被孤立。
   // Runtime association/second-instance opens restore the window and notify;

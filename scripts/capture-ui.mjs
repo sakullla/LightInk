@@ -1009,6 +1009,40 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
       await page.evaluate(() => window.__LIGHTINK_CAPTURE_FAIL__.delete('library_update_group'));
     }
   });
+  // 统一 tooltip 层：给纯图标控件补上「看得见」的名字（文案取自 aria-label）。
+  // 侧栏「新建分组」是「+」符号按钮，正是这层要补名字的形状。
+  //
+  // 默认关闭（LIGHTINK_CAPTURE_TOOLTIP=1 打开）：这一步会额外占用每个矩阵单元
+  // 约半秒，而后续分组/管理步骤依赖固定的点击节奏；实测把总时长推高后，应用侧
+  // 未写盘的崩溃恢复快照会被再次弹窗提示，连带后续步骤误报失败。tooltip 本身
+  // 由 src/ui/__tests__/tooltip.test.ts 覆盖，这里只按需出图。
+  if (process.env.LIGHTINK_CAPTURE_TOOLTIP === '1') {
+    await step('shelf:tooltip', async () => {
+      await closeDetail();
+      const addGroup = page.locator('.lightink-library-group-add:visible').first();
+      if ((await addGroup.count()) === 0) {
+        console.log(`SKIP shelf:tooltip ${theme} ${width} — 新建分组按钮不可见`);
+        return;
+      }
+      // 用聚焦而不是悬停：聚焦的气泡没有悬停延迟，这一步几乎不占时间，
+      // 也不会去改写 revealSection 依赖的指针位置。
+      await addGroup.focus();
+      const bubble = page.locator('.lightink-tooltip:visible').first();
+      if (!(await bubble.isVisible({ timeout: 2_000 }).catch(() => false))) {
+        // 这一步本就只服务出图：某个主题下没截到不算失败，记一行日志即可。
+        console.log(`SKIP shelf:tooltip ${theme} ${width} — 气泡未出现`);
+        return;
+      }
+      await shot('shelf-tooltip');
+      // 收尾：让气泡收起，别压住后面的书架管理入口。
+      await page.keyboard.press('Escape');
+      await page
+        .locator('.lightink-tooltip')
+        .first()
+        .waitFor({ state: 'hidden', timeout: 2_000 })
+        .catch(() => undefined);
+    });
+  }
   await step('shelf:manage', async () => {
     await page.locator('.lightink-library-manage-entry').click();
     await page.waitForTimeout(300);

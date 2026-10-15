@@ -1,0 +1,71 @@
+/* ===== tooltip：纯图标控件的悬停/聚焦提示 ==============================
+   单一挂载在 body 上的自绘气泡：主题令牌驱动（反相配色，浅色主题给深底、
+   深色主题给浅底，两边都保持高对比），带视口内翻转与夹紧。纯装饰层
+   （aria-hidden），不抢焦点、不拦截指针（pointer-events: none）。 ===== */
+
+.lightink-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--lightink-z-menu, 10050) + 10);
+  box-sizing: border-box;
+  max-width: min(260px, calc(100vw - 2 * 8px));
+  padding: 5px 9px;
+  border-radius: var(--lightink-radius-control, 6px);
+  /* 反相：底取前景色、文字取背景色。四个内置主题下都远高于 AA 对比。 */
+  background: color-mix(in srgb, var(--lightink-fg) 94%, var(--lightink-bg));
+  color: var(--lightink-bg-elevated);
+  font-family: var(--lightink-font-ui, system-ui, sans-serif);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+  box-shadow: var(--lightink-shadow-strong);
+  /* 定位完全交给 JS 写的 transform，这里不要写 transition-transform。 */
+  transition: opacity var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.lightink-tooltip[hidden] {
+  display: none;
+}
+
+/* 入场：只淡入，位移由 data-placement 决定，翻转时方向才不会错。 */
+.lightink-tooltip-in {
+  opacity: 1;
+}
+
+/* 箭头：跟随锚点中心的水平偏移由 JS 写入 --lightink-tooltip-arrow-x。 */
+.lightink-tooltip::before {
+  content: '';
+  position: absolute;
+  left: var(--lightink-tooltip-arrow-x, 50%);
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+.lightink-tooltip[data-placement='top']::before {
+  bottom: -3px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.lightink-tooltip[data-placement='bottom']::before {
+  top: -3px;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+/* 全局动效开关（prefers-reduced-motion）覆盖到这里：气泡改为直接出现，
+   不再有淡入，也不参与任何位移动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .lightink-tooltip {
+    transition: none;
+  }
+
+  .lightink-tooltip-in {
+    opacity: 1;
+  }
+}
