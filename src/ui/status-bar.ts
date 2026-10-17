@@ -8,7 +8,9 @@ import type { StorageLike } from './chrome-prefs.js';
 
 export const STATUS_BAR_VISIBLE_STORAGE_KEY = 'lightink.statusBar.visible';
 
-const DEFAULT_VISIBLE = false;
+// 纸墨工作室 §3.14：字数/保存状态是写作者的基本反馈，默认开启；
+// 已显式保存过偏好的用户不受影响（loadStatusBarVisible 先读存储）。
+const DEFAULT_VISIBLE = true;
 const DEFAULT_DEBOUNCE_MS = 120;
 
 export function loadStatusBarVisible(storage: StorageLike | null | undefined): boolean {

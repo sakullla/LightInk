@@ -337,6 +337,14 @@ export interface AppShellActions {
   onToggleStatusBar?(): void;
   /** T5/R3：字数状态栏当前是否可见（视图菜单勾选标记）。 */
   isStatusBarVisible?(): boolean;
+  /**
+   * 纸墨工作室 §3.10：编辑版心「纸卡模式」开关（`lightink.editorPaperCard`，
+   * 默认开）。可选——测试 stub 可省略（菜单动作空操作）。实现方负责持久化
+   * 并把已挂载的编辑器宿主即时切换（纯函数在 src/editor/paper-card.ts）。
+   */
+  onTogglePaperCard?(): void;
+  /** 纸卡模式当前是否启用（视图菜单勾选标记）。 */
+  isPaperCardEnabled?(): boolean;
   /** Toggle native window fullscreen (wired in main). */
   onToggleFullscreen(): void;
   /** Whether chrome navigation (menu + tabs) is currently pinned open. */
@@ -632,8 +640,8 @@ export function buildMenus(actions: AppShellActions): Menu[] {
     ),
   );
 
-  /** View → Theme submenu: toggle + presets + custom reload. */
-  const themeSubmenu = (): MenuItem[] => [
+  /** 视图 → 主题：拍平的单项选择组（纸墨工作室 §3.1，原三层子菜单删除）。 */
+  const themeItems = (): MenuItem[] => [
     menuItem(
       'view-theme-toggle',
       () => t('view.toggleTheme'),
@@ -645,7 +653,10 @@ export function buildMenus(actions: AppShellActions): Menu[] {
     ...BUILTIN_THEMES.map((theme) =>
       menuItem(
         `view-theme-${theme.id}`,
-        () => t(`theme.${theme.id}`),
+        () =>
+          actions.getCurrentThemeId() === theme.id
+            ? `✓ ${t(`theme.${theme.id}`)}`
+            : t(`theme.${theme.id}`),
         () => actions.onApplyTheme(theme.id),
         '',
         () => actions.getCurrentThemeId() !== theme.id,
@@ -677,8 +688,6 @@ export function buildMenus(actions: AppShellActions): Menu[] {
   ];
 
   const isReader = actions.activeTabKind?.() === 'reader';
-  // 内联双语（同既有「查找…」「字数统计」先例：i18n 目录不在本改动 scope）。
-  const ll = (en: string, zh: string): string => (actions.getLocale() === 'en' ? en : zh);
 
   /**
    * T1：视图 →「字体布局」子菜单——收纳放大/缩小/重置缩放与滚动/翻页模式
@@ -764,7 +773,7 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       separator('view-reader-type-sep'),
       {
         id: 'view-reader-font',
-        label: () => ll('Reading font', '阅读字体'),
+        label: () => t('view.readerFont'),
         action: () => undefined,
         submenu: () =>
           READER_FONT_PRESETS.map((family) =>
@@ -778,7 +787,7 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       },
       {
         id: 'view-reader-line-height',
-        label: () => ll('Line height', '行高'),
+        label: () => t('view.readerLineHeight'),
         action: () => undefined,
         submenu: () =>
           READER_LINE_HEIGHTS.map((lineHeight) =>
@@ -792,7 +801,7 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       },
       {
         id: 'view-reader-measure',
-        label: () => ll('Measure', '行长'),
+        label: () => t('view.readerMeasure'),
         action: () => undefined,
         submenu: () =>
           READER_MEASURE_REMS.map((measureRem) =>
@@ -811,13 +820,13 @@ export function buildMenus(actions: AppShellActions): Menu[] {
   /** reader 态「标注」菜单：书签开关 / 笔记 / 侧栏开关（侧栏与书签勾选标记当前态）。 */
   const annotationMenu: Menu = {
     id: 'annotation',
-    label: () => ll('Annotate', '标注'),
+    label: () => t('view.annotate'),
     items: [
       menuItem(
         'ann-bookmark',
         () => {
           // 与 chrome 书签按钮同一开关语义：当前位置已书签时勾选。
-          const base = ll('Bookmark This Page', '书签本页');
+          const base = t('view.annotateBookmark');
           return actions.isReaderBookmarked?.() === true ? `✓ ${base}` : base;
         },
         () => actions.onReaderAddBookmark?.(),
@@ -826,7 +835,7 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       ),
       menuItem(
         'ann-note',
-        () => ll('Add Note', '添加笔记'),
+        () => t('view.annotateNote'),
         () => actions.onReaderAddNote?.(),
         '',
         () => actions.isReaderAnnotationEnabled?.() !== false,
@@ -835,7 +844,7 @@ export function buildMenus(actions: AppShellActions): Menu[] {
       menuItem(
         'ann-sidebar',
         () => {
-          const base = ll('Annotation Panel', '标注侧栏');
+          const base = t('view.annotatePanel');
           return actions.isReaderSidebarVisible?.() ? `✓ ${base}` : base;
         },
         () => actions.onReaderToggleSidebar?.(),
@@ -915,8 +924,19 @@ export function buildMenus(actions: AppShellActions): Menu[] {
           '',
           () => actions.hasActiveFile(),
         ),
-        menuItem('file-export-html', () => t('file.exportHtml'), actions.onExportHtml),
-        menuItem('file-export-pdf', () => t('file.exportPdf'), actions.onExportPdf),
+        // 纸墨工作室 §3.18：导出入口带「使用当前主题外观」说明（hint 随语言重建）。
+        {
+          id: 'file-export-html',
+          label: () => t('file.exportHtml'),
+          action: actions.onExportHtml,
+          hint: t('file.exportThemeHint'),
+        },
+        {
+          id: 'file-export-pdf',
+          label: () => t('file.exportPdf'),
+          action: actions.onExportPdf,
+          hint: t('file.exportThemeHint'),
+        },
         // R14 降级退出（desktop）：仅接线时渲染（Android R12 不注入 onQuit）。
         ...(actions.onQuit === undefined
           ? []
@@ -992,13 +1012,9 @@ export function buildMenus(actions: AppShellActions): Menu[] {
           () => actions.getWorkspaceMode?.() !== 'reader',
         ),
         separator('view-workspace-sep'),
-        // Theme controls live under a single submenu (3rd level from the top bar).
-        {
-          id: 'view-theme',
-          label: () => t('view.theme'),
-          action: () => undefined,
-          submenu: themeSubmenu,
-        },
+        // 纸墨工作室 §3.1：主题平铺为单项选择组（toggle + 预设 + 自定义），
+        // 从「顶栏→视图→主题」三层降到一层。
+        ...themeItems(),
         separator('view-theme-sep'),
         menuItem(
           'view-pin-chrome',
@@ -1029,6 +1045,16 @@ export function buildMenus(actions: AppShellActions): Menu[] {
                 actions.onToggleSourceMode,
                 sc(actions, 'Ctrl+/'),
                 () => true,
+              ),
+              // 纸墨工作室 §3.10：纸卡模式开关（勾选标记式，默认开；纯编辑器
+              // 视觉，reader 态随源码模式一起隐藏）。
+              menuItem(
+                'view-paper-card',
+                () => {
+                  const base = t('view.paperCard');
+                  return actions.isPaperCardEnabled?.() !== false ? `✓ ${base}` : base;
+                },
+                () => actions.onTogglePaperCard?.(),
               ),
             ]),
         // T5/R3：字数统计状态栏开关（勾选标记式）。i18n 目录不在本任务 scope，
@@ -1410,6 +1436,7 @@ export function createAppShell(
       overflowLabel: () => actions.t('menu.more'),
     });
     syncTravelLabels();
+    syncAnchorLabels();
     titlebar.retranslate();
   }
   rebuildMenusRef = rebuildMenus;
@@ -1424,10 +1451,96 @@ export function createAppShell(
     getLocale: () => actions.getLocale(),
   });
 
+  // 纸墨工作室 §3.1：标题栏「轻墨 ☰」常驻恢复锚点 + 主题快切按钮。
+  // 独立新元素——不复用/改造 .lightink-menu-trigger（保持 6px 触发条语义与
+  // app-shell.test 的 32px min-height 断言）。左端 0–48px 是品牌文字拖拽区，
+  // ☰ 按钮起点 x≥48：capture 的 (8,8) 坐标点击继续落在拖拽区（§5.6 防劫持）。
+  const anchor = document.createElement('div');
+  anchor.id = 'lightink-titlebar-anchor';
+  anchor.className = 'lightink-titlebar-anchor';
+  const anchorBrand = document.createElement('span');
+  anchorBrand.className = 'lightink-titlebar-brand';
+  anchorBrand.setAttribute('data-tauri-drag-region', '');
+  anchorBrand.setAttribute('aria-hidden', 'true');
+  const anchorMenuBtn = document.createElement('button');
+  anchorMenuBtn.type = 'button';
+  anchorMenuBtn.id = 'lightink-titlebar-anchor-menu';
+  anchorMenuBtn.className = 'lightink-titlebar-anchor-btn';
+  anchorMenuBtn.textContent = '☰';
+  const anchorThemeBtn = document.createElement('button');
+  anchorThemeBtn.type = 'button';
+  anchorThemeBtn.id = 'lightink-titlebar-anchor-theme';
+  anchorThemeBtn.className = 'lightink-titlebar-anchor-btn';
+  anchorThemeBtn.textContent = '◐';
+  anchor.append(anchorBrand, anchorMenuBtn, anchorThemeBtn);
+
+  function syncAnchorLabels(): void {
+    anchorBrand.textContent = actions.t('app.name');
+    anchorMenuBtn.setAttribute('aria-label', actions.t('chrome.appMenu'));
+    anchorMenuBtn.title = actions.t('chrome.appMenu');
+    anchorThemeBtn.setAttribute('aria-label', actions.t('chrome.themeQuickSwitch'));
+    anchorThemeBtn.title = actions.t('chrome.themeQuickSwitch');
+  }
+
+  // 主题快切四主题浮层（右键）：普通按钮列表，不携带 role=menu——
+  // §5.6「同一时刻至多一个 role=menu 可见」，与菜单栏下拉互斥。
+  let themeFlyout: HTMLElement | null = null;
+  function closeThemeFlyout(): void {
+    themeFlyout?.remove();
+    themeFlyout = null;
+    if (typeof document.removeEventListener === 'function') {
+      document.removeEventListener('pointerdown', onThemeFlyoutPointerDown, true);
+      document.removeEventListener('keydown', onThemeFlyoutKeyDown, true);
+    }
+  }
+  function onThemeFlyoutPointerDown(event: Event): void {
+    const target = event.target as HTMLElement | null;
+    if (target !== null && themeFlyout !== null && themeFlyout.contains(target)) {
+      return;
+    }
+    if (target === anchorThemeBtn) {
+      return;
+    }
+    closeThemeFlyout();
+  }
+  function onThemeFlyoutKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') closeThemeFlyout();
+  }
+  function openThemeFlyout(): void {
+    closeThemeFlyout();
+    const flyout = document.createElement('div');
+    flyout.className = 'lightink-titlebar-theme-flyout';
+    flyout.setAttribute('aria-label', actions.t('chrome.themeMenu'));
+    for (const theme of BUILTIN_THEMES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'lightink-titlebar-theme-item';
+      item.dataset.themeId = theme.id;
+      item.textContent = actions.t(`theme.${theme.id}`);
+      if (actions.getCurrentThemeId() === theme.id) {
+        item.classList.add('is-current');
+        item.setAttribute('aria-current', 'true');
+      }
+      item.addEventListener('click', () => {
+        actions.onApplyTheme(theme.id);
+        closeThemeFlyout();
+      });
+      flyout.appendChild(item);
+    }
+    anchor.appendChild(flyout);
+    themeFlyout = flyout;
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('pointerdown', onThemeFlyoutPointerDown, true);
+      document.addEventListener('keydown', onThemeFlyoutKeyDown, true);
+    }
+  }
+  syncAnchorLabels();
+
   chromeHost.replaceChildren(menuTrigger, toolbar);
   tabsHost.replaceChildren(tabsTrigger, tabBar);
   root.replaceChildren(
     titlebar.element,
+    anchor,
     chromeHost,
     tabsHost,
     readerShell,
@@ -1449,12 +1562,15 @@ export function createAppShell(
       editorChrome && lastWorkspaceSurface !== null && lastWorkspaceSurface !== 'editor';
     setChromeSetVisible(chromeHost, editorChrome);
     setChromeSetVisible(tabsHost, editorChrome);
+    // 恢复锚点只在编辑器表面常显（书架/阅读器无菜单 chrome 可恢复）。
+    setChromeSetVisible(anchor, editorChrome);
     setChromeSetVisible(readerShell, shelfChrome);
     setChromeSetVisible(statusBarHost, !shelfChrome);
     // R5：阅读表面走 createReaderChrome backToShelf，不常驻浮层返回。
     setChromeSetVisible(mobileBackToShelf, editorChrome);
     if (!editorChrome) {
       menuBar.closeAll();
+      closeThemeFlyout();
     } else if (enteringEditor) {
       // Manage → 编辑 must land on a usable File/Edit bar, not a 6px strip
       // buried under the caption overlay.
@@ -1613,6 +1729,24 @@ export function createAppShell(
     }
   });
 
+  // 纸墨工作室 §4.1：收起 chrome 后一键找回——☰ 单击恢复钉住态并直达菜单。
+  anchorMenuBtn.addEventListener('click', () => {
+    if (!isChromePinned()) {
+      setChromePinned(true);
+    }
+    chrome.reveal('menu');
+    syncMenuChrome();
+    menuBar.openMenu('file');
+  });
+  // 主题快切：单击浅↔深（同 Ctrl+J）；右键出四主题浮层（§3.1）。
+  anchorThemeBtn.addEventListener('click', () => {
+    actions.onToggleTheme();
+  });
+  anchorThemeBtn.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    openThemeFlyout();
+  });
+
   // Tab context-menu hold is owned by main via setTabsHold + createContextMenu onClose.
 
   syncMenuChrome();
@@ -1706,7 +1840,16 @@ export function createAppShell(
         btn.tabIndex = tab.id === activeId ? 0 : -1;
         const label = document.createElement('span');
         label.className = 'lightink-tab-label';
-        label.textContent = tab.dirty ? `● ${tab.title}` : tab.title;
+        label.textContent = tab.title;
+        // 纸墨工作室 §3.11：脏标双态圆点（未保存=warning 实心点；已存=无点），
+        // 取代旧的「● 」文字前缀，标签文本保持纯净（省略号计算不再被前缀干扰）。
+        if (tab.dirty) {
+          const dirtyDot = document.createElement('span');
+          dirtyDot.className = 'lightink-tab-dirty';
+          dirtyDot.dataset.dirty = 'true';
+          dirtyDot.setAttribute('aria-hidden', 'true');
+          btn.appendChild(dirtyDot);
+        }
         btn.title = tab.title;
         btn.appendChild(label);
         btn.addEventListener('click', () => callbacks.onSwitch(tab.id));
@@ -1787,6 +1930,7 @@ export function createAppShell(
     renderTabBar,
     destroy: () => {
       assistantConfigEpoch += 1;
+      closeThemeFlyout();
       titlebar.dispose();
       if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
         document.removeEventListener('keydown', onReaderLayoutShortcut, true);

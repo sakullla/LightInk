@@ -2862,7 +2862,10 @@ describe('LibraryView my-books home', () => {
     const continueBar = host.querySelector('.lightink-library-continue');
     expect(isShown(continueBar)).toBe(true);
     expect(continueBar?.textContent).toContain('续读小说');
-    expect(host.querySelector('.lightink-library-continue-cue')).toBeNull();
+    // 纸墨改版（§3.2）：hero 带全屏唯一 accent 实底「继续」主按钮。
+    const continueCue = host.querySelector<HTMLButtonElement>('.lightink-library-continue-cue');
+    expect(continueCue).not.toBeNull();
+    expect(continueCue?.textContent).toBe('继续');
     expect(wallHeading(host).hidden).toBe(true);
     expect(
       host.querySelector('[data-library-sort], [data-library-density], [data-library-layout]'),
@@ -3930,6 +3933,10 @@ describe('LibraryView whole-book translation entry (R3)', () => {
     expect(document.querySelector('.lightink-ai-wizard-overlay')).not.toBeNull();
     expect(document.querySelector('[data-wizard-pane="preset"]')).not.toBeNull();
     expect(controller.launch).not.toHaveBeenCalled();
+    // 向导经 mountModalFocus 在 document 上挂了捕获态 Escape 监听；不收掉会
+    // 吞掉后续所有用例的 Escape（浮层逐层退被它截胡）。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
     view.destroy();
   });
 
@@ -5881,6 +5888,37 @@ describe('LibraryView shelf collections', () => {
     await submitGroupForm(host, { name: '稍后读' });
     expect(library.createGroup).toHaveBeenCalledWith('稍后读', undefined);
     expect(library.setGroupMember).toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('closes the membership overlay with Escape while focus is inside the portaled dialog', async () => {
+    const novel = seriesNovel();
+    const { deps } = collectionDependencies({ items: [novel] });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    await startCreateGroup(host);
+    await submitGroupForm(host, { name: '科幻' });
+    await openItemMenu(host, novel.id);
+    contextMenuItem('加入分组').click();
+    await settle();
+    // 前序用例可能遗留未销毁的 membership 浮层：按本用例的分组名锁定自己的浮层。
+    const overlay = Array.from(
+      document.querySelectorAll('.lightink-library-membership-overlay:not([hidden])'),
+    ).find((candidate) => candidate.textContent?.includes('科幻'));
+    if (!(overlay instanceof HTMLElement)) {
+      throw new Error('membership overlay not found');
+    }
+    // mountLibraryOverlay 把浮层挂到 body：root 的键盘链收不到浮层内 keydown，
+    // Esc 必须由浮层自身的监听关闭（capture-ui.mjs:96-113 的兜底源头）。
+    expect(overlay.parentElement).toBe(document.body);
+    const checkbox = overlay.querySelector<HTMLInputElement>('input[name="membership"]');
+    expect(checkbox).not.toBeNull();
+    checkbox!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+    expect(overlay.hidden).toBe(true);
     view.destroy();
   });
 
@@ -8810,11 +8848,16 @@ describe('LibraryView home visual system (R2)', () => {
     const desktopCue =
       ruleBodies(
         css,
-        /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-cue/,
+        /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\) \.lightink-library-continue-cue:hover:not\(:disabled\)/,
       )[0] ?? '';
-    expect(desktopCue).toMatch(/background:\s*var\(--lightink-accent-ink\)/);
-    expect(desktopCue).toMatch(/color:\s*var\(--lightink-bg\)/);
-    expect(desktopCue).not.toMatch(/font-size|padding|font-weight/);
+    // 纸墨改版（§3.2）：「继续」主按钮 accent 实底 + accent-contrast 文字，
+    // 悬停加深仍保持实底（base 规则不再是 accent-ink 反相）。
+    const baseCue = ruleBodies(css, /\.lightink-library-continue-cue(?![\w-])/)[0] ?? '';
+    expect(baseCue).toMatch(/background:\s*var\(--lightink-accent\)/);
+    expect(baseCue).toMatch(/color:\s*var\(--lightink-accent-contrast/);
+    expect(baseCue).toMatch(/min-height:\s*var\(--lightink-control-h/);
+    expect(desktopCue).toMatch(/background:\s*color-mix/);
+    expect(desktopCue).toMatch(/color:\s*var\(--lightink-accent-contrast/);
     const continueCover =
       ruleBodies(css, /\.lightink-library-continue \.lightink-library-cover(?![\w-])/)[0] ?? '';
     expect(continueCover).toMatch(/width:\s*36px/);
@@ -8849,7 +8892,8 @@ describe('LibraryView home visual system (R2)', () => {
       css.match(
         /\.lightink-library-item:hover \.lightink-library-cover,[\s\S]{0,220}?\{([^}]*)\}/,
       )?.[1] ?? '';
-    expect(coverHover).toMatch(/transform:\s*translateY\(-3px\)/);
+    // 纸墨改版（§3.2）：hover 浮起收敛为 translateY(-2px) + shadow-pop。
+    expect(coverHover).toMatch(/transform:\s*translateY\(-2px\)/);
     expect(coverHover).toMatch(/box-shadow:/);
     expect(coverHover).not.toMatch(/(?:^|[;\s])(?:min-)?height\s*:/);
     expect(coverHover).not.toMatch(/(?:^|[;\s])width\s*:/);

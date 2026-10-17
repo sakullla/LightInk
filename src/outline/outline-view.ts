@@ -34,6 +34,7 @@ import {
   type OutlineLocation,
 } from './outline-model.js';
 import type { MessageKey } from '../i18n/messages.js';
+import './outline.css';
 
 /** 渲染侧标题选择器：与 buildOutline 收集的 heading 一一对应（文档顺序）。 */
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6';
@@ -43,10 +44,14 @@ const DEFAULT_DEBOUNCE_MS = 250;
 /** localStorage key for user-resized outline width (px). */
 export const OUTLINE_WIDTH_STORAGE_KEY = 'lightink.outlineWidth';
 
-/** Default / clamp bounds for the drag-resizable outline. */
+/**
+ * Default / clamp bounds for the drag-resizable outline.
+ * 纸墨工作室 §3.12：拖拽调宽手感区间 200–320px（窄于 200 标题换行、宽于
+ * 320 挤压版心），默认 220 在区间内。
+ */
 export const OUTLINE_WIDTH_DEFAULT = 220;
-export const OUTLINE_WIDTH_MIN = 160;
-export const OUTLINE_WIDTH_MAX = 480;
+export const OUTLINE_WIDTH_MIN = 200;
+export const OUTLINE_WIDTH_MAX = 320;
 
 /** expanded: full panel; rail: narrow reopen strip; hidden: no sidebar chrome. */
 export type OutlineVisibility = 'expanded' | 'rail' | 'hidden';
@@ -240,7 +245,8 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
   search.setAttribute('aria-label', t('outline.search'));
   search.setAttribute('placeholder', t('outline.search'));
   search.setAttribute('autocomplete', 'off');
-  search.setAttribute('hidden', '');
+  // 纸墨工作室 §3.12：搜索框常驻顶部（expanded 态不再随空态收起；
+  // rail/hidden 由 applyVisibility 置 [hidden]，theme.css 亦按态隐藏）。
 
   const live = doc.createElement('div');
   live.classList.add('lightink-outline-live');
@@ -324,22 +330,21 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     }
   }
 
+  /** 搜索框常驻（§3.12）：不再按空态收起，仅同步 combobox 的展开语义。 */
   function setSearchChrome(visible: boolean): void {
     search.setAttribute('aria-expanded', visible ? 'true' : 'false');
     if (visible) {
-      search.removeAttribute('hidden');
       if ('value' in search) {
         (search as HTMLInputElement).value = searchQuery;
       }
     } else {
-      search.setAttribute('hidden', '');
       live.textContent = '';
       search.removeAttribute('aria-activedescendant');
     }
   }
 
-  function renderEmpty(text: string, searchVisible = false): void {
-    setSearchChrome(searchVisible);
+  function renderEmpty(text: string): void {
+    setSearchChrome(false);
     const empty = doc.createElement('div');
     empty.classList.add('lightink-outline-empty');
     empty.textContent = text;
@@ -416,7 +421,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     visibleItems = visible;
     if (visible.length === 0) {
       live.textContent = t('outline.emptySearch');
-      renderEmpty(t('outline.emptySearch'), true);
+      renderEmpty(t('outline.emptySearch'));
       return;
     }
     setSearchChrome(true);
@@ -563,6 +568,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
 
     if (next === 'hidden') {
       root.setAttribute('hidden', '');
+      search.setAttribute('hidden', '');
       toggle.setAttribute('aria-expanded', 'false');
       toggle.setAttribute('title', t('outline.show'));
       toggle.setAttribute('aria-label', t('outline.show'));
@@ -570,6 +576,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
       root.style.width = '';
     } else if (next === 'rail') {
       root.removeAttribute('hidden');
+      search.setAttribute('hidden', '');
       toggle.setAttribute('aria-expanded', 'false');
       toggle.setAttribute('title', t('outline.expand'));
       toggle.setAttribute('aria-label', t('outline.expand'));
@@ -577,6 +584,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
       root.style.width = '';
     } else {
       root.removeAttribute('hidden');
+      search.removeAttribute('hidden');
       toggle.setAttribute('aria-expanded', 'true');
       toggle.setAttribute('title', t('outline.collapse'));
       toggle.setAttribute('aria-label', t('outline.collapse'));

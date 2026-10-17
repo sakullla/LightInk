@@ -74,7 +74,7 @@ describe('placeSlashMenu (viewport placement)', () => {
 
   it('caps height to ~5 visible items (scroll for the rest)', () => {
     const five = slashMenuHeightForItems(SLASH_MENU_VISIBLE_ITEMS);
-    expect(five).toBe(184); // 5*32 + 4*2 + 16
+    expect(five).toBe(204); // 5*36 + 4*2 + 16（§3.10 行高 36px）
     const p = placeSlashMenu(
       { left: 40, top: 100, bottom: 120 },
       { width: 220, height: 400 }, // natural height of a long list

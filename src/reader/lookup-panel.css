@@ -16,12 +16,10 @@
   background: var(--lightink-bg-elevated);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
   border-radius: var(--lightink-radius-panel);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
-    0 4px 12px rgba(0, 0, 0, 0.08),
-    0 20px 48px rgba(0, 0, 0, 0.18);
+  /* 纸墨工作室 §3.7：查词面板 elevated 卡 + shadow-pop。 */
+  box-shadow: var(--lightink-shadow-pop, 0 6px 20px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.1));
   font-family: var(--lightink-font-ui);
-  font-size: 0.82rem;
+  font-size: var(--lightink-text-md, 0.82rem);
   line-height: 1.4;
   pointer-events: auto;
 }
@@ -56,7 +54,7 @@
   box-sizing: border-box;
   max-width: 9.75rem;
   min-width: 0;
-  min-height: 1.7rem;
+  min-height: var(--lightink-control-h, 1.7rem);
   padding: 0.12rem 0.35rem;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
   border-radius: var(--lightink-radius-control);
@@ -112,6 +110,9 @@
 
 .lightink-reader-lookup-line {
   margin: 0 0 0.4rem;
+  /* 词条强调（ui-redesign §3.7）：fg-strong + 650 字重，不引入 UI 衬线栈。 */
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-weight: 650;
 }
 
 .lightink-reader-lookup-line:last-child {

@@ -123,9 +123,14 @@ describe('window titlebar', () => {
     expect(css).toMatch(
       /\.lightink-window-titlebar\s*\{[^}]*background:\s*transparent\s*!important/,
     );
+    // 纸墨工作室 §2.2：漫画段硬编码色已令牌化为局部 override（引用 midnight 常量）。
     expect(css).toMatch(
-      /#app\.is-comic-reader \.lightink-window-titlebar\s*\{[^}]*color:\s*#e6e6e6/,
+      /#app\.is-comic-reader\s*\{[^}]*--lightink-titlebar-fg:\s*#d3dae6/,
     );
+    expect(css).toMatch(
+      /#app\.is-comic-reader \.lightink-window-titlebar\s*\{[^}]*color:\s*var\(--lightink-titlebar-fg\)/,
+    );
+    expect(css).not.toMatch(/#e6e6e6|#9a9a9a/);
     expect(css).not.toMatch(/#app:has\(\[data-comic-reader=/);
     expect(css).toMatch(/html\s*\{[^}]*--lightink-titlebar-leading:\s*0px/);
     expect(css).toMatch(
@@ -151,6 +156,29 @@ describe('window titlebar', () => {
     expect(theme).toMatch(/\.lightink-chrome-drag\s*\{[^}]*-webkit-app-region:\s*drag/);
     expect(theme).toMatch(
       /html\[data-platform='mac'\] #app\.is-workspace-editor #lightink-tabbar\s*\{[^}]*padding-left:\s*4px/,
+    );
+  });
+
+  it('pins the ☰ recovery anchor at x≥48 with a 48px brand drag zone (§3.1/§5.6)', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/window-titlebar.css'), 'utf-8');
+    // 品牌拖拽区至少 48px 宽：☰ 按钮起点恒 ≥48px，capture 的 (8,8) 落在拖拽区。
+    expect(css).toMatch(/\.lightink-titlebar-brand\s*\{[^}]*min-width:\s*48px/);
+    expect(css).toMatch(/\.lightink-titlebar-brand\s*\{[^}]*-webkit-app-region:\s*drag/);
+    // 28×28 按钮；品牌在前、按钮 no-drag。
+    expect(css).toMatch(/\.lightink-titlebar-anchor-btn\s*\{[^}]*width:\s*28px/);
+    expect(css).toMatch(/\.lightink-titlebar-anchor-btn\s*\{[^}]*height:\s*28px/);
+    expect(css).toMatch(/\.lightink-titlebar-anchor-btn\s*\{[^}]*-webkit-app-region:\s*no-drag/);
+    // 编辑器表面为锚点预留左端 gutter（菜单/标签不被遮挡）。
+    expect(css).toMatch(
+      /#app\.is-workspace-editor\s*\{[^}]*--lightink-titlebar-leading:\s*1\d+px/,
+    );
+    // 书架/阅读器无菜单 chrome 可恢复：锚点随标题栏隐藏规则同源门控。
+    expect(css).toMatch(
+      /html\[data-android\] \.lightink-titlebar-anchor,\s*html\[data-touch-primary\] \.lightink-titlebar-anchor\s*\{[^}]*display:\s*none/,
+    );
+    // 触屏断点同样隐藏。
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)\s*\{\s*\.lightink-titlebar-anchor\s*\{[^}]*display:\s*none/,
     );
   });
 

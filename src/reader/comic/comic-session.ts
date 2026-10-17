@@ -101,6 +101,8 @@ export interface ComicSession {
   readonly bookmarkButton: HTMLButtonElement;
   /** 顶栏书签列表入口（打开统一标注面板的书签分类）。 */
   readonly bookmarksButton: HTMLButtonElement;
+  /** 标题行阅读方向徽标（ui-redesign §3.9）：RTL 显示方向箭头。 */
+  readonly directionBadge: HTMLElement;
   readonly pagesRoot: HTMLElement;
   readonly scroller: HTMLElement;
   readonly previousButton: HTMLButtonElement;

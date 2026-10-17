@@ -24,12 +24,15 @@
   overflow: hidden;
   overscroll-behavior: contain;
   color: var(--lightink-fg);
-  background: var(--lightink-bg);
-  border-left: 1px solid var(--lightink-border);
+  /* 纸墨工作室 §3.8：标注侧栏统一 elevated 卡面 + radius-panel + shadow-pop；
+     列表内的标注条目退为纸面卡（bg）形成「桌上的纸卡」两层表面。 */
+  background: var(--lightink-bg-elevated);
+  border: 1px solid var(--lightink-border);
+  border-top: 0;
+  border-bottom: 0;
+  border-right: 0;
   border-radius: var(--lightink-radius-panel);
-  box-shadow:
-    -2px 0 6px rgba(0, 0, 0, 0.05),
-    -12px 0 32px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--lightink-shadow-pop, -4px 0 16px rgba(0, 0, 0, 0.12), -1px 0 3px rgba(0, 0, 0, 0.08));
   padding: 0;
   font-size: var(--lightink-font-size-ui, 0.8rem);
   z-index: 14;
@@ -329,7 +332,8 @@
   gap: 0.4rem;
   padding: 0.65rem 0.75rem;
   margin: 0 0.7rem 0.5rem;
-  background: var(--lightink-bg-elevated);
+  /* 侧栏升为 elevated 后，条目退为纸面卡（桌上的纸卡两层表面）。 */
+  background: var(--lightink-bg);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
   border-radius: var(--lightink-radius-panel);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -417,9 +421,12 @@
   text-wrap: pretty;
 }
 
-/* 查询词：荧光笔，字色跟正文，不另起一摊锈色。 */
+/* 查询词：荧光笔，字色跟正文，不另起一摊锈色。
+ * 令牌化（ui-redesign §2.2/§3.8）：底色与三档洗色都从 --lightink-highlight
+ * 派生（纸主题内联分档：浅纸偏亮黄、深纸压暗），保留 55%/42%/14% 洗色
+ * 透明度语义；暗纸文字色走 --lightink-highlight-ink。不再散落五个 hex。 */
 .lightink-reader-sidebar-hit-mark {
-  background: #f6d45e;
+  background: var(--lightink-highlight, #e8d28a);
   color: inherit;
   font: inherit;
   font-weight: inherit;
@@ -431,7 +438,7 @@
 
 /* 面板内：荧光笔只涂字身下半到中部一道，不是整块方框。 */
 .lightink-reader-sidebar .lightink-reader-sidebar-hit-mark {
-  --lightink-hit-wash: color-mix(in srgb, #f3cf4a 55%, transparent);
+  --lightink-hit-wash: color-mix(in srgb, var(--lightink-highlight, #e8d28a) 55%, transparent);
   background: linear-gradient(
     transparent 22%,
     var(--lightink-hit-wash) 22%,
@@ -440,15 +447,16 @@
   );
 }
 
+/* 羊皮纸偏深一档：同一 highlight 令牌、更收敛的洗色浓度。 */
 .lightink-reader-sidebar[data-reader-theme='sepia'] .lightink-reader-sidebar-hit-mark {
-  --lightink-hit-wash: color-mix(in srgb, #e0b63a 42%, transparent);
+  --lightink-hit-wash: color-mix(in srgb, var(--lightink-highlight, #e3c96e) 42%, transparent);
 }
 
-/* 暗色纸：黄底压在黑上是泥色，改成字亮、底极淡。 */
+/* 暗色纸：黄底压在黑上是泥色，改成字亮（highlight-ink）、底极淡。 */
 .lightink-reader-sidebar[data-reader-theme='gray'] .lightink-reader-sidebar-hit-mark,
 .lightink-reader-sidebar[data-reader-theme='night'] .lightink-reader-sidebar-hit-mark {
-  --lightink-hit-wash: color-mix(in srgb, #e8c547 14%, transparent);
-  color: #efd36c;
+  --lightink-hit-wash: color-mix(in srgb, var(--lightink-highlight, #8a7430) 14%, transparent);
+  color: var(--lightink-highlight-ink, #f0e2ac);
 }
 
 .lightink-reader-sidebar-item-meta {
@@ -741,12 +749,13 @@
   text-align: center;
 }
 
-/* 章节分组 sticky 组头：长清单滚动时组头常驻视口顶端，避免群组失联。 */
+/* 章节分组 sticky 组头：长清单滚动时组头常驻视口顶端，避免群组失联。
+   侧栏已是 elevated 卡面，组头改用 sunken 凹面把分组与条目分开。 */
 .lightink-reader-sidebar-group {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-bg-sunken, var(--lightink-bg-elevated));
   padding: 4px 12px;
   font-size: 0.78em;
   color: var(--lightink-muted);

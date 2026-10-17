@@ -118,11 +118,16 @@ function buildFindDecorations(
 ): DecorationSet {
   const decorations = matches.map((match, index) => {
     const current = index === active;
+    // 纸墨工作室：命中高亮消费主题令牌（accent=当前项、highlight=其余项），
+    // 不再硬编码 rgba 橙/黄。inline style 中的 var() 在编辑器 DOM 内正常解析。
     return Decoration.inline(match.from, match.to, {
       class: current ? `${FIND_MATCH_CLASS} ${FIND_MATCH_CURRENT_CLASS}` : FIND_MATCH_CLASS,
       style: current
-        ? 'background-color: rgba(242, 153, 74, 0.75); outline: 1px solid rgba(180, 110, 20, 0.9); border-radius: 2px;'
-        : 'background-color: rgba(242, 201, 76, 0.45); border-radius: 2px;',
+        ? 'background-color: color-mix(in srgb, var(--lightink-accent) 55%, transparent); ' +
+          'outline: 1px solid color-mix(in srgb, var(--lightink-accent) 75%, transparent); ' +
+          'border-radius: 2px;'
+        : 'background-color: color-mix(in srgb, var(--lightink-highlight) 42%, transparent); ' +
+          'border-radius: 2px;',
     });
   });
   return DecorationSet.create(doc, decorations);
@@ -495,6 +500,59 @@ export const findReplacePlugin = $prose(() => createFindReplaceProsePlugin());
 // 壳层面板（DOM 层；纯逻辑在上，面板只发 handlers 回调）
 // ---------------------------------------------------------------------------
 
+/**
+ * 纸墨工作室 §3.10：查找面板钉版心右上。纯几何计算（headless 可测）——
+ * 输入三个矩形（面板定位容器 #lightink-main、滚动容器 #lightink-editor-area、
+ * 活动版心 .lightink-tab-host，均为 viewport 坐标），输出面板在定位容器内的
+ * `top` / `right` 偏移：
+ *   - top = 编辑区顶缘 + 8px（面板不随内容滚动，钉在可视区顶部）；
+ *   - right = 版心右缘向内 12px（与版心右缘对齐，而非整个主区右缘）。
+ * 版心缺失（无活动 markdown 标签）返回 null，调用方保留 theme.css 的右上角
+ * 兜底定位。
+ */
+export interface FindPanelPinRects {
+  /** 面板定位容器（#lightink-main）。 */
+  readonly main: { readonly top: number; readonly right: number };
+  /** 编辑区滚动容器（#lightink-editor-area）。 */
+  readonly area: { readonly top: number };
+  /** 活动版心（.lightink-tab-host）。 */
+  readonly host: { readonly right: number };
+}
+
+export interface FindPanelPin {
+  readonly top: number;
+  readonly right: number;
+}
+
+export function computeFindPanelPin(rects: FindPanelPinRects): FindPanelPin {
+  const top = rects.area.top - rects.main.top + 8;
+  const right = Math.max(rects.main.right - rects.host.right + 12, 12);
+  return { top, right };
+}
+
+/** 面板内边距（top/right），钉位失败时清除 inline 值回落 theme.css 兜底。 */
+function applyFindPanelPin(root: HTMLElement, pin: FindPanelPin | null): void {
+  if (pin === null) {
+    root.style.removeProperty('top');
+    root.style.removeProperty('right');
+    return;
+  }
+  root.style.top = `${pin.top}px`;
+  root.style.right = `${pin.right}px`;
+}
+
+/** 解析当前可视版心（多标签时未激活宿主 display:none → offsetParent 为 null）。 */
+function visibleTabHost(doc: Document): HTMLElement | null {
+  const area = doc.getElementById('lightink-editor-area');
+  if (area === null) return null;
+  for (const host of area.querySelectorAll<HTMLElement>('.lightink-tab-host')) {
+    if (!(host.classList.contains('lightink-tab-host--reader')) && host.offsetParent !== null) {
+      return host;
+    }
+  }
+  return null;
+}
+
 export interface FindReplaceLabels {
   readonly findPlaceholder: string;
   readonly replacePlaceholder: string;
@@ -676,6 +734,85 @@ export function createFindReplacePanel(
   let open = false;
   let replaceOpen = false;
 
+  // —— 钉版心右上（§3.10）——
+  const view = doc.defaultView;
+  let pinCleanup: (() => void) | null = null;
+  // 同值短路：写 inline top/right 本身会触发下方的 MutationObserver，
+  // 位置未变时跳过写入，避免观察器自反馈循环。
+  let lastPinKey = '';
+
+  const pinNow = (): void => {
+    const mainEl = root.parentElement;
+    const areaEl = doc.getElementById('lightink-editor-area');
+    const hostEl = visibleTabHost(doc);
+    if (
+      mainEl === null ||
+      areaEl === null ||
+      hostEl === null ||
+      typeof mainEl.getBoundingClientRect !== 'function' ||
+      typeof areaEl.getBoundingClientRect !== 'function' ||
+      typeof hostEl.getBoundingClientRect !== 'function'
+    ) {
+      if (lastPinKey !== 'fallback') {
+        lastPinKey = 'fallback';
+        applyFindPanelPin(root, null);
+      }
+      return;
+    }
+    const pin = computeFindPanelPin({
+      main: mainEl.getBoundingClientRect(),
+      area: areaEl.getBoundingClientRect(),
+      host: hostEl.getBoundingClientRect(),
+    });
+    const key = `${pin.top}|${pin.right}`;
+    if (key === lastPinKey) return;
+    lastPinKey = key;
+    applyFindPanelPin(root, pin);
+  };
+
+  const stopPinning = (): void => {
+    pinCleanup?.();
+    pinCleanup = null;
+  };
+
+  const startPinning = (): void => {
+    stopPinning();
+    pinNow();
+    const cleanups: Array<() => void> = [];
+    if (view !== null && typeof view.addEventListener === 'function') {
+      const onResize = (): void => {
+        pinNow();
+      };
+      view.addEventListener('resize', onResize);
+      cleanups.push(() => view.removeEventListener('resize', onResize));
+    }
+    // 大纲调宽/三态切换、标签切换都会改动 #lightink-main 子树的 style/class，
+    // 据此重钉；attributes-only 观察开销可忽略（仅面板打开期间存在）。
+    if (typeof MutationObserver === 'function' && root.parentElement !== null) {
+      let raf = 0;
+      const observer = new MutationObserver(() => {
+        if (raf !== 0) return;
+        raf = view?.requestAnimationFrame?.(() => {
+          raf = 0;
+          pinNow();
+        }) ?? 0;
+        if (raf === 0) pinNow();
+      });
+      observer.observe(root.parentElement, {
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden'],
+        subtree: true,
+      });
+      cleanups.push(() => {
+        if (raf !== 0 && view !== null) view.cancelAnimationFrame?.(raf);
+        observer.disconnect();
+      });
+    }
+    pinCleanup = () => {
+      for (const cleanup of cleanups) cleanup();
+    };
+  };
+
   const setReplaceOpen = (next: boolean): void => {
     replaceOpen = next;
     rowReplace.hidden = !next;
@@ -736,12 +873,16 @@ export function createFindReplacePanel(
     open(): void {
       open = true;
       root.classList.add('is-open');
+      startPinning();
       panel.focusFind();
     },
     close(): void {
       if (!open) return;
       open = false;
       root.classList.remove('is-open');
+      stopPinning();
+      lastPinKey = '';
+      applyFindPanelPin(root, null);
       handlers.onClose();
     },
     isOpen(): boolean {

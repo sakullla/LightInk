@@ -32,8 +32,27 @@ export interface LibraryThemeTokens {
   readonly shadow: string;
   readonly danger: string;
   readonly colorScheme: 'light' | 'dark';
+  /**
+   * 纸墨工作室扩展层（docs/design/ui-redesign-2026-10.md §3.21）：书架主题
+   * 与全局主题同源的令牌。预设必须覆盖它们——书架根不带 data-theme，缺省会
+   * 回退到编辑器主题的同名令牌，暗色书架配浅色编辑器时会得到深 fg-strong。
+   */
+  readonly sunken: string;
+  readonly inkStrong: string;
+  readonly accentContrast: string;
+  readonly shadowPop: string;
+  readonly success: string;
+  readonly warning: string;
+  readonly info: string;
 }
 
+/*
+ * 色板与 library.css 的 [data-library-theme] 预设块双写（同提交改），由
+ * tokens.test.ts 的「逐一相等」断言锁定。gallery/paper/ink 的 page、ink 与
+ * gallery 的 elevated 另被 src/reader/__tests__/reader-theme.test.ts 的原生
+ * 标题栏色断言锁定，刷新时保持不变；其余值按「浅纸更深一档、深纸更沉一档」
+ * 对齐 2026-10 改版方向。
+ */
 export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
   {
     id: 'gallery',
@@ -41,74 +60,109 @@ export const LIBRARY_THEMES: readonly LibraryThemeTokens[] = [
     elevated: '#fffcf8',
     ink: '#2a261f',
     accentInk: '#a8431a',
-    muted: '#6b6459',
-    border: '#e5dfd4',
+    muted: '#675f50',
+    border: '#e1d9c9',
     accent: '#c45a28',
-    accentSoft: '#f3e2d4',
+    accentSoft: '#f1ddca',
     overlay: '#2a261f48',
     shadow: '0 12px 32px #2a261f1c',
     danger: '#b42318',
     colorScheme: 'light',
+    sunken: '#e9e1d0',
+    inkStrong: '#211c15',
+    accentContrast: '#fff6ec',
+    shadowPop: '0 6px 20px #2a261f1f, 0 1px 3px #2a261f14',
+    success: '#34693e',
+    warning: '#8f641c',
+    info: '#3e5c8c',
   },
   {
     id: 'paper',
     page: '#f6eadc',
-    elevated: '#fff8ef',
+    elevated: '#fdf3e3',
     ink: '#3a2f24',
     accentInk: '#8a4318',
-    muted: '#756454',
-    border: '#e4d5c2',
+    muted: '#6e5e4d',
+    border: '#dfceb5',
     accent: '#a35a2b',
-    accentSoft: '#f0dfcc',
+    accentSoft: '#eed8bd',
     overlay: '#3a2f2448',
     shadow: '0 12px 32px #3a2f241c',
     danger: '#b42318',
     colorScheme: 'light',
+    sunken: '#ebdcc4',
+    inkStrong: '#2f2518',
+    accentContrast: '#fff6ec',
+    shadowPop: '0 6px 20px #3a2f241f, 0 1px 3px #3a2f2414',
+    success: '#34693e',
+    warning: '#8f641c',
+    info: '#3e5c8c',
   },
   {
     id: 'moss',
-    page: '#eef3ea',
-    elevated: '#f8fbf6',
+    page: '#e8efe1',
+    elevated: '#f5f9f0',
     ink: '#243028',
     accentInk: '#3f6d48',
-    muted: '#59635a',
-    border: '#d4ddd0',
+    muted: '#535e55',
+    border: '#ced9c6',
     accent: '#3f6d48',
-    accentSoft: '#dce8dc',
+    accentSoft: '#d8e5d5',
     overlay: '#24302848',
     shadow: '0 12px 32px #2430281c',
     danger: '#b42318',
     colorScheme: 'light',
+    sunken: '#dee8d3',
+    inkStrong: '#1a2921',
+    accentContrast: '#f4fbf4',
+    shadowPop: '0 6px 20px #2430281f, 0 1px 3px #24302814',
+    success: '#1e6b4f',
+    warning: '#8f641c',
+    info: '#3e5c8c',
   },
   {
     id: 'walnut',
-    page: '#241c17',
-    elevated: '#322820',
+    page: '#201812',
+    elevated: '#2f251b',
     ink: '#eadcc8',
     accentInk: '#d4a06a',
-    muted: '#a8947c',
-    border: '#4a3c32',
+    muted: '#a2917b',
+    border: '#453931',
     accent: '#d4a06a',
-    accentSoft: '#3d2f24',
+    accentSoft: '#392c20',
     overlay: '#100c0a73',
     shadow: '0 12px 32px #100c0a59',
     danger: '#f97066',
     colorScheme: 'dark',
+    sunken: '#181109',
+    inkStrong: '#f7ecd9',
+    accentContrast: '#241a0d',
+    shadowPop: '0 8px 22px #100c0a66, 0 2px 6px #100c0a44',
+    success: '#85b08e',
+    warning: '#cfa75c',
+    info: '#8fa9cc',
   },
   {
     id: 'ink',
     page: '#14161a',
-    elevated: '#1e2228',
+    elevated: '#1d2127',
     ink: '#d5dae2',
     accentInk: '#7ba3c9',
-    muted: '#8b93a0',
-    border: '#2c323c',
+    muted: '#8791a0',
+    border: '#2a313c',
     accent: '#7ba3c9',
-    accentSoft: '#243040',
+    accentSoft: '#223040',
     overlay: '#0a0c0f73',
     shadow: '0 12px 32px #0a0c0f59',
     danger: '#f97066',
     colorScheme: 'dark',
+    sunken: '#0f1216',
+    inkStrong: '#e9eef7',
+    accentContrast: '#0c141f',
+    shadowPop: '0 8px 22px #0a0c0f66, 0 2px 6px #0a0c0f44',
+    success: '#74b39c',
+    warning: '#c2a35c',
+    info: '#7e9cc4',
   },
 ];
 
@@ -211,8 +265,12 @@ function libraryThemeVariable(theme: LibraryThemeId, name: string): string {
       return tokens.page;
     case '--lightink-bg-elevated':
       return tokens.elevated;
+    case '--lightink-bg-sunken':
+      return tokens.sunken;
     case '--lightink-fg':
       return tokens.ink;
+    case '--lightink-fg-strong':
+      return tokens.inkStrong;
     case '--lightink-accent-ink':
       return tokens.accentInk;
     case '--lightink-muted':
@@ -223,12 +281,22 @@ function libraryThemeVariable(theme: LibraryThemeId, name: string): string {
       return tokens.accent;
     case '--lightink-accent-soft':
       return tokens.accentSoft;
+    case '--lightink-accent-contrast':
+      return tokens.accentContrast;
     case '--lightink-overlay':
       return tokens.overlay;
     case '--lightink-shadow':
       return tokens.shadow;
+    case '--lightink-shadow-pop':
+      return tokens.shadowPop;
     case '--lightink-danger':
       return tokens.danger;
+    case '--lightink-success':
+      return tokens.success;
+    case '--lightink-warning':
+      return tokens.warning;
+    case '--lightink-info':
+      return tokens.info;
     default:
       return '';
   }
@@ -237,15 +305,22 @@ function libraryThemeVariable(theme: LibraryThemeId, name: string): string {
 const LIBRARY_OVERLAY_THEME_VARS = [
   '--lightink-bg',
   '--lightink-bg-elevated',
+  '--lightink-bg-sunken',
   '--lightink-fg',
+  '--lightink-fg-strong',
   '--lightink-accent-ink',
   '--lightink-muted',
   '--lightink-border',
   '--lightink-accent',
   '--lightink-accent-soft',
+  '--lightink-accent-contrast',
   '--lightink-overlay',
   '--lightink-shadow',
+  '--lightink-shadow-pop',
   '--lightink-danger',
+  '--lightink-success',
+  '--lightink-warning',
+  '--lightink-info',
 ] as const;
 
 /**

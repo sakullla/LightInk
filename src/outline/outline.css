@@ -1,0 +1,31 @@
+/*
+ * 大纲侧栏样式层（纸墨工作室 §3.12，docs/design/ui-redesign-2026-10.md）。
+ *
+ * 边界：面板 sunken 底色、搜索框骨架与 6px col-resize 拖拽区由地基 F3 在
+ * src/ui/theme.css 交付（禁改）；本文件只补编辑工作台包自有的形态增量——
+ * 当前项/键盘活动项的胶囊高亮（accent-soft 圆角内缩胶囊而非整行刷色）、
+ * 凹面面板上抬起的搜索输入面。覆盖一律用 #lightink-outline-sidebar 前缀
+ * 抬高特异性，不依赖加载顺序。
+ */
+
+/* 当前项（阅读位置）与键盘活动项：accent-soft 胶囊。
+   内缩 6px + 全圆角，条目行仍是全宽命中区（margin 不改变点击目标高度）。 */
+#lightink-outline-sidebar .lightink-outline-item:hover,
+#lightink-outline-sidebar .lightink-outline-item.is-current,
+#lightink-outline-sidebar .lightink-outline-item.is-active {
+  border-radius: 999px;
+  margin-inline: 6px;
+  width: calc(100% - 12px);
+}
+
+/* 当前项文字用强调前景，与胶囊底形成稳定对比（四主题成对调校）。 */
+#lightink-outline-sidebar .lightink-outline-item.is-current {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+/* 常驻搜索框（§3.12）：凹面面板上的抬起输入面，替代默认纸面底。 */
+#lightink-outline-sidebar .lightink-outline-search {
+  background: var(--lightink-bg-elevated);
+}
+
+/* rail 态 theme.css 已整块隐藏搜索框；此处无需再处理。 */

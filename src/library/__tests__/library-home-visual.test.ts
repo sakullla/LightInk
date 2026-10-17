@@ -59,9 +59,13 @@ describe('shelf home cover grid', () => {
     expect(home).not.toMatch(/clamp\(\s*24px,\s*3vw,\s*42px\s*\)/);
     expect(home).not.toMatch(/font-family:\s*var\(--lightink-font-serif/);
     expect(home).not.toMatch(/linear-gradient/);
-    expect(home).not.toMatch(/translateY\(/);
+    // 纸墨改版（§3.2）：封面卡 hover 浮起 translateY(-2px) + shadow-pop，
+    // 选中态加 accent-soft 描边环；hero 行本身不抬升。
     expect(home).toMatch(
-      /\.lightink-library-item:hover \.lightink-library-cover,[\s\S]*?transform:\s*none/,
+      /\.lightink-library-item:hover \.lightink-library-cover,[\s\S]*?transform:\s*translateY\(-2px\)/,
+    );
+    expect(home).toMatch(
+      /\.lightink-library-item\.is-selected \.lightink-library-cover\s*\{[^}]*0 0 0 3px var\(--lightink-accent-soft\)/,
     );
     expect(home).toMatch(/\.lightink-library-continue-open:hover[\s\S]*?transform:\s*none/);
   });
@@ -75,7 +79,10 @@ describe('shelf home cover grid', () => {
     expect(wallCover).toMatch(/width:\s*100%/);
     expect(wallCover).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
     expect(wallCover).toMatch(/border-radius:\s*6px/);
-    expect(wallCover).toMatch(/transition:\s*none/);
+    // hover 浮起走令牌化过渡（reduced-motion 全局压 none）。
+    expect(wallCover).toMatch(
+      /transition:\s*transform var\(--lightink-duration-base, 180ms\)/,
+    );
     const heroCover = ruleBody(
       home,
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-continue \.lightink-library-cover/,

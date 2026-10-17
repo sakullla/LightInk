@@ -2400,9 +2400,9 @@ describe('createAssistantPanel minimal typographic flow (T4)', () => {
       /\.lightink-reader-assistant-waiting-dot\s*\{[^}]*animation:\s*lightink-reader-assistant-dot-pulse/,
     );
     expect(css).toMatch(/@keyframes lightink-reader-assistant-dot-pulse/);
-    // 面板容器仍消费 panel 圆角令牌。
+    // 面板容器是 elevated 卡面 + 16px 圆角（--lightink-radius-dialog，§3.13）。
     expect(ruleBody(/\.lightink-reader-assistant-panel\s*\{([^}]*)\}/)).toMatch(
-      /border-radius:\s*var\(--lightink-radius-panel\)/,
+      /border-radius:\s*var\(--lightink-radius-dialog\)/,
     );
   });
 });
@@ -4271,5 +4271,150 @@ describe('serializeAssistantHistoryStore still round-trips panel writes', () => 
       ],
     });
     expect(parseAssistantHistoryStore(json).activeId).toBe('a');
+  });
+});
+
+describe('createAssistantPanel ink studio reskin (§3.13)', () => {
+  const css = readFileSync('src/assistant/assistant-panel.css', 'utf-8');
+  const ruleBody = (pattern: RegExp): string => pattern.exec(css)?.[1] ?? '';
+
+  it('lifts the panel onto an elevated card with 16px radius and sunken inner surfaces', () => {
+    const panelRule = ruleBody(/\.lightink-reader-assistant-panel\s*\{([^}]*)\}/);
+    expect(panelRule).toMatch(/background:\s*var\(--lightink-bg-elevated\)/);
+    expect(panelRule).toMatch(/border-radius:\s*var\(--lightink-radius-dialog\)/);
+    // 内层表面下沉一层：输入区与动作 chip 都走 bg-sunken。
+    const composerBox = ruleBody(
+      /\.lightink-reader-assistant-composer-box\s*\{([^}]*)\}/,
+    );
+    expect(composerBox).toMatch(/background:\s*var\(--lightink-bg-sunken\)/);
+    const actionRule = ruleBody(/\.lightink-reader-assistant-action\s*\{([^}]*)\}/);
+    expect(actionRule).toMatch(/background:\s*var\(--lightink-bg-sunken\)/);
+  });
+
+  it('renders tool call cards on a sunken base with a leading icon', async () => {
+    const execute = vi.fn(async () => ({ ok: true, updated: ['a'] }));
+    const { panel } = mountPanel({
+      script: async () => ({
+        finish: 'tool_calls',
+        totalChars: 0,
+        toolCalls: [{ id: 'c1', name: 'library_search', arguments: '{"query":"科幻"}' }],
+      }),
+      createToolSession: () =>
+        ({ tools: [], specifiedChapterCount: () => 0, execute }) as unknown as AssistantToolSession,
+    });
+    panel.open();
+    await flush();
+    submitQuestion(panel, '找科幻分组');
+    await flushUntil(() => execute.mock.calls.length > 0);
+    await flush();
+    const chip = panel.element.querySelector<HTMLElement>('[data-tool="library_search"]');
+    expect(chip).not.toBeNull();
+    // 前置图标（aria-hidden 的 svg）在名称之前；四态色由 data-tool-state 驱动。
+    const icon = chip!.querySelector<HTMLElement>('.lightink-reader-assistant-tool-icon');
+    expect(icon?.getAttribute('aria-hidden')).toBe('true');
+    expect(icon?.querySelector('svg')).not.toBeNull();
+    const head = chip!.querySelector('.lightink-reader-assistant-tool-head')!;
+    expect(head.firstElementChild).toBe(icon);
+    const toolRule = ruleBody(/\.lightink-reader-assistant-tool\s*\{([^}]*)\}/);
+    expect(toolRule).toMatch(/background:\s*var\(--lightink-bg-sunken\)/);
+    expect(toolRule).toMatch(/border-radius:\s*var\(--lightink-radius-panel\)/);
+    expect(
+      ruleBody(
+        /\.lightink-reader-assistant-tool\[data-tool-state='done'\]\s+\.lightink-reader-assistant-tool-icon\s*\{([^}]*)\}/,
+      ),
+    ).toMatch(/color:\s*var\(--lightink-success\)/);
+    expect(css).toMatch(/@keyframes lightink-reader-assistant-tool-icon-spin/);
+    panel.destroy();
+  });
+
+  it('blinks a 100ms caret after the streaming text only', () => {
+    const caretRule = ruleBody(
+      /\[data-status='streaming'\][^{]*\.lightink-reader-assistant-message-text::after\s*\{([^}]*)\}/,
+    );
+    expect(caretRule).toMatch(/animation:\s*lightink-reader-assistant-caret-blink/);
+    expect(caretRule).toMatch(/var\(--lightink-duration-fast,\s*100ms\)/);
+    expect(css).toMatch(/@keyframes lightink-reader-assistant-caret-blink/);
+    // 光标只属于 streaming：waiting/stopped/error 不带光标。
+    expect(
+      /\[data-status='waiting'\][^{]*message-text::after/.test(css),
+    ).toBe(false);
+    expect(
+      /\[data-status='stopped'\][^{]*message-text::after/.test(css),
+    ).toBe(false);
+  });
+
+  it('paints the permission mode with info/warning semantics', async () => {
+    const storage = memoryStorage();
+    const { panel } = mountPanel({ showPermissionMode: true, permissionStorage: storage });
+    panel.open();
+    await flush();
+    const trigger = panel.element.querySelector<HTMLButtonElement>(
+      '.lightink-reader-assistant-mode-trigger',
+    )!;
+    const dot = trigger.querySelector<HTMLElement>('.lightink-reader-assistant-mode-dot');
+    expect(dot).not.toBeNull();
+    // 默认审阅：info 色标，触发器不带 YOLO 语气。
+    expect(trigger.classList.contains('is-yolo')).toBe(false);
+    trigger.click();
+    const options = [
+      ...panel.element.querySelectorAll<HTMLButtonElement>('[data-assistant-mode]'),
+    ];
+    options[2]!.click();
+    // YOLO：触发器切 warning 语气；菜单里 yolo 选项也是 warning 语义色。
+    expect(trigger.classList.contains('is-yolo')).toBe(true);
+    expect(
+      ruleBody(
+        /\.lightink-reader-assistant-mode-trigger\.is-yolo\s+\.lightink-reader-assistant-mode-dot\s*\{([^}]*)\}/,
+      ),
+    ).toMatch(/background:\s*var\(--lightink-warning\)/);
+    expect(
+      ruleBody(
+        /\.lightink-reader-assistant-mode-option\[data-assistant-mode='yolo'\]\s*\{([^}]*)\}/,
+      ),
+    ).toMatch(/color:\s*var\(--lightink-warning\)/);
+    expect(ruleBody(/\.lightink-reader-assistant-mode-dot\s*\{([^}]*)\}/)).toMatch(
+      /background:\s*var\(--lightink-info\)/,
+    );
+    panel.destroy();
+  });
+
+  it('tones the pending card warning and the confirm action success', () => {
+    const pendingRule = ruleBody(/\.lightink-reader-assistant-pending\s*\{([^}]*)\}/);
+    expect(pendingRule).toMatch(/border:\s*1px solid/);
+    expect(pendingRule).toMatch(/var\(--lightink-warning\)/);
+    expect(
+      ruleBody(/\.lightink-reader-assistant-pending-title\s*\{([^}]*)\}/),
+    ).toMatch(/color:\s*var\(--lightink-warning\)/);
+    expect(
+      ruleBody(/\.lightink-reader-assistant-pending-confirm\s*\{([^}]*)\}/),
+    ).toMatch(/color:\s*var\(--lightink-success\)/);
+    expect(
+      ruleBody(
+        /\.lightink-reader-assistant-pending-status\[data-assistant-pending-status='confirmed'\]\s*\{([^}]*)\}/,
+      ),
+    ).toMatch(/color:\s*var\(--lightink-success\)/);
+  });
+
+  it('keeps history rows at 40px with an always-visible delete affordance', () => {
+    const openRule = ruleBody(
+      /\.lightink-reader-assistant-history-open\s*\{([^}]*)\}/,
+    );
+    expect(openRule).toMatch(/min-height:\s*40px/);
+    // 单行标题：省略号而不是两行截断。
+    expect(openRule).not.toMatch(/flex-direction:\s*column/);
+    const titleRule = ruleBody(
+      /\.lightink-reader-assistant-history-title\s*\{([^}]*)\}/,
+    );
+    expect(titleRule).toMatch(/text-overflow:\s*ellipsis/);
+    expect(titleRule).not.toMatch(/-webkit-line-clamp/);
+    // 删除按钮常显（不依赖 opacity 显隐）；hover 沿用 ADR-5 锁定的 ink 洗色
+    // （src/ui/__tests__/touch-feedback-css.test.ts:396）。
+    const deleteRule = ruleBody(
+      /\.lightink-reader-assistant-history-delete\s*\{([^}]*)\}/,
+    );
+    expect(deleteRule).not.toMatch(/opacity/);
+    expect(
+      ruleBody(/\.lightink-reader-assistant-history-delete:hover\s*\{([^}]*)\}/),
+    ).toMatch(/color-mix\(in srgb, var\(--lightink-fg\) 8%, transparent\)/);
   });
 });

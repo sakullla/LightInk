@@ -1,0 +1,82 @@
+/*
+ * `sync-panel.css` — WebDAV 同步面板的包内增补层（纸墨工作室 §3.17）。
+ * 基础布局在共享层 theme.css（地基 F3 已换装：control-h、success/danger
+ * 语义色）；本文件只叠放外壳与系统集成包负责的三件事：
+ *   1. 冲突行 40px + 保留/舍弃双栏 mono 对比；
+ *   2. 运行态状态点用 info 语义色（进行中 ≠ 强调色）；
+ *   3. 迁移行同步对齐 40px 触达。
+ * main.ts 中 import 顺序在 theme.css 之后，同特异性下后到者优先。
+ */
+
+/* 运行中的同步是「进行中」不是「强调」：info 语义色（§1.1 四件套）。 */
+.lightink-sync-status.is-running .lightink-sync-status-dot {
+  background: var(--lightink-info, var(--lightink-accent));
+}
+
+/* 冲突行：头部 40px 触达 + 双栏对比。 */
+.lightink-sync-conflict {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.lightink-sync-conflict-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.lightink-sync-conflict-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.lightink-sync-conflict-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.lightink-sync-conflict-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control);
+  background: color-mix(in srgb, var(--lightink-fg) 3%, var(--lightink-bg));
+}
+
+.lightink-sync-conflict-side.is-kept {
+  border-left: 3px solid var(--lightink-success, var(--lightink-accent));
+}
+
+.lightink-sync-conflict-side.is-dropped {
+  border-left: 3px solid var(--lightink-danger);
+}
+
+.lightink-sync-conflict-side-title {
+  color: var(--lightink-muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.lightink-sync-conflict-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--lightink-font-mono, monospace);
+  font-size: 12px;
+  color: var(--lightink-fg);
+}
+
+/* 迁移行与冲突行同一 40px 触达标准。 */
+.lightink-sync-migration-row {
+  min-height: 40px;
+}

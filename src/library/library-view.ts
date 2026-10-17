@@ -208,6 +208,8 @@ interface Labels {
   coverPage: string;
   notStarted: string;
   continueReading: string;
+  /** 「继续」主按钮短文案（§3.2 hero 唯一实底按钮；eyebrow 标签用 continueReading）。 */
+  continueShort: string;
   dismissContinue: string;
   homeEmptyTitle: string;
   homeEmptyHint: string;
@@ -417,6 +419,7 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: 'Cover page',
     notStarted: 'Not started',
     continueReading: 'Continue reading',
+    continueShort: 'Continue',
     dismissContinue: 'Dismiss',
     homeEmptyTitle: 'Your library is empty',
     homeEmptyHint: 'Import local books or add a library source to start building your shelf.',
@@ -626,6 +629,7 @@ const LABELS: Record<Locale, Labels> = {
     coverPage: '封面页',
     notStarted: '未开始',
     continueReading: '继续阅读',
+    continueShort: '继续',
     dismissContinue: '关闭',
     homeEmptyTitle: '书库还是空的',
     homeEmptyHint: '导入本地书籍，或添加书库源，开始建立你的书墙。',
@@ -1554,6 +1558,10 @@ export function createLibraryView(
   manageNavButton.dataset.libraryNavItem = 'manage';
   const headerImport = button(doc, '', 'lightink-library-header-import lightink-library-icon-button');
   headerImport.appendChild(createNavIcon(doc, NAV_ICON_PATHS.plus));
+  // 动作组图标 + 文字（§3.2 头部四区）：桌面显示标签，手机壳仍是方形图标钮。
+  const headerImportLabel = doc.createElement('span');
+  headerImportLabel.className = 'lightink-library-header-action-label';
+  headerImport.appendChild(headerImportLabel);
   // R3：首页 header 助手入口。deps 缺省（测试/降级）不渲染；仅在书架分区显示，
   // 未配置 provider 时仍可打开以显示配置引导。手机复用同一按钮，避免重复入口。
   const headerAssistant = button(
@@ -1569,13 +1577,20 @@ export function createLibraryView(
   headerAssistantMobileLabel.textContent = 'AI';
   headerAssistantMobileLabel.setAttribute('aria-hidden', 'true');
   headerAssistant.appendChild(headerAssistantMobileLabel);
+  const headerAssistantLabel = doc.createElement('span');
+  headerAssistantLabel.className = 'lightink-library-header-action-label';
+  headerAssistant.appendChild(headerAssistantLabel);
   if (deps.onOpenAssistant !== undefined) {
     headerAssistant.addEventListener('click', (event) => {
       event.preventDefault();
       deps.onOpenAssistant?.();
     });
   }
-  headerMain.append(heading, searchForm, headerImport, headerAssistant, toolbar);
+  // 动作组（§3.2 头部四区）：导入/AI/管理 收进同一右缘组，与搜索/品牌分区。
+  const headerActions = doc.createElement('div');
+  headerActions.className = 'lightink-library-header-actions';
+  headerActions.append(headerImport, headerAssistant, toolbar);
+  headerMain.append(heading, searchForm, headerActions);
   header.append(brand, headerMain);
 
   const body = doc.createElement('div');
@@ -5280,6 +5295,14 @@ export function createLibraryView(
     bindLongPress(open, {
       onLongPress: (position) => openItemCollectionMenu(latest, position),
     });
+    // 「继续」主按钮（纸墨改版 §3.2）：书架首屏唯一的 accent 实底按钮。
+    // 独立按钮而非 open 内嵌——button 不能嵌套 button。
+    const continueCue = button(doc, labels().continueShort, 'lightink-library-continue-cue');
+    continueCue.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openSelected(latest);
+    });
     const dismiss = button(doc, '×', 'lightink-library-icon-button lightink-library-continue-dismiss');
     dismiss.setAttribute('aria-label', labels().dismissContinue);
     dismiss.addEventListener('click', (event) => {
@@ -5289,7 +5312,7 @@ export function createLibraryView(
       writeDismissedContinue(fingerprint);
       renderItems();
     });
-    continueHost.append(open, dismiss, createItemMenuButton(latest));
+    continueHost.append(open, continueCue, dismiss, createItemMenuButton(latest));
     continueHost.hidden = false;
   }
 
@@ -6877,8 +6900,10 @@ export function createLibraryView(
     tabbar?.setLabels(tabbarLabels());
     headerImport.title = l.importLocal;
     headerImport.setAttribute('aria-label', l.importLocal);
+    headerImportLabel.textContent = l.importShort;
     headerAssistant.title = l.assistantEntry;
     headerAssistant.setAttribute('aria-label', l.assistantEntry);
+    headerAssistantLabel.textContent = l.assistantEntry;
     searchClear.title = l.clear;
     searchClear.setAttribute('aria-label', l.clear);
     searchButton.textContent = l.search;
@@ -7308,6 +7333,25 @@ export function createLibraryView(
   membershipOverlay.addEventListener('pointerdown', (event) => {
     if (event.target === membershipOverlay) closeMembershipEditor();
   });
+  /*
+   * 浮层收纳（§3.2/§4.8）：挂到 document.body 的浮层不再把 keydown 冒泡给
+   * root，焦点进浮层后 Esc 关不掉——capture 脚本必须逐个点取消钮兜底。
+   * 这里给每个 portaled 浮层挂自身的 Esc：逐层退（只关焦点所在的最上层），
+   * root 键盘链仍覆盖焦点留在书架内的情形。
+   */
+  const bindPortaledOverlayEscape = (overlay: HTMLElement, close: () => void): void => {
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || overlay.hidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    });
+  };
+  bindPortaledOverlayEscape(membershipOverlay, closeMembershipEditor);
+  bindPortaledOverlayEscape(groupOverlay, closeGroupEditor);
+  bindPortaledOverlayEscape(sourceOverlay, closeSourceForm);
+  bindPortaledOverlayEscape(groupsSheet, closeGroupsSheet);
+  bindPortaledOverlayEscape(filterSheet, closeFilterSheet);
   tagEditor.form.addEventListener('submit', (event) => {
     event.preventDefault();
     void submitTagDialog();

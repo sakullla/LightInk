@@ -152,11 +152,11 @@ afterEach(() => {
 });
 
 describe('显隐偏好（localStorage，chrome-prefs 模式）', () => {
-  it('无存储 / 缺键 / 损坏值均回落默认（关闭）', () => {
-    expect(loadStatusBarVisible(null)).toBe(false);
-    expect(loadStatusBarVisible(memoryStorage())).toBe(false);
+  it('无存储 / 缺键 / 损坏值均回落默认（开启，纸墨工作室 §3.14 真实默认缺口）', () => {
+    expect(loadStatusBarVisible(null)).toBe(true);
+    expect(loadStatusBarVisible(memoryStorage())).toBe(true);
     expect(loadStatusBarVisible(memoryStorage({ [STATUS_BAR_VISIBLE_STORAGE_KEY]: 'oops' }))).toBe(
-      false,
+      true,
     );
   });
 
@@ -173,16 +173,23 @@ describe('显隐偏好（localStorage，chrome-prefs 模式）', () => {
     const storage = memoryStorage();
     const host = new FakeEl('div');
     const bar = makeBar(host, { storage });
-    expect(bar.isVisible()).toBe(false);
+    expect(bar.isVisible()).toBe(true);
 
     bar.toggle();
-    expect(storage.store[STATUS_BAR_VISIBLE_STORAGE_KEY]).toBe('true');
+    expect(storage.store[STATUS_BAR_VISIBLE_STORAGE_KEY]).toBe('false');
 
-    // 模拟重启：同一 storage 新建实例恢复开启。
+    // 模拟重启：同一 storage 新建实例恢复关闭。
     const host2 = new FakeEl('div');
     const bar2 = makeBar(host2, { storage });
-    expect(bar2.isVisible()).toBe(true);
-    expect(host2.children).toHaveLength(1);
+    expect(bar2.isVisible()).toBe(false);
+    expect(host2.children).toHaveLength(0);
+  });
+
+  it('默认开启：未显式保存偏好时挂载状态栏（字数/保存状态一等反馈）', () => {
+    const host = new FakeEl('div');
+    const bar = makeBar(host, { storage: null });
+    expect(bar.isVisible()).toBe(true);
+    expect(host.children).toHaveLength(1);
   });
 });
 

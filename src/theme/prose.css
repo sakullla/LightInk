@@ -1,6 +1,8 @@
 /*
  * LightInk Markdown 排版唯一源。选择器一律 .lightink-prose <el>。
  * 标题字号：单一模数 --lightink-heading-ratio 的 calc 乘法链（不用 pow）。
+ * 标题节奏（纸墨工作室 §1.2）：H1/H2 除字号外附加 650 字重与 -0.01em 紧排，
+ * 用字重而不只靠字号分层。
  * 纵向节奏：--lightink-rhythm-unit 为 font-size × font-scale × line-height-body
  * 的 px/数值运算（不用 em、rem 或属性注册）。
  */
@@ -76,6 +78,8 @@
     1em * var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
       var(--lightink-heading-ratio) * var(--lightink-heading-ratio)
   );
+  font-weight: 650;
+  letter-spacing: -0.01em;
   line-height: var(--lightink-heading-line-height-tight);
   margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-major));
   margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));
@@ -87,6 +91,8 @@
       var(--lightink-heading-ratio) * var(--lightink-heading-ratio) *
       var(--lightink-heading-ratio)
   );
+  font-weight: 650;
+  letter-spacing: -0.01em;
   line-height: var(--lightink-heading-line-height-tight);
   margin-top: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-heading-major));
   margin-bottom: calc(var(--lightink-rhythm-unit) * var(--lightink-gap-paragraph));

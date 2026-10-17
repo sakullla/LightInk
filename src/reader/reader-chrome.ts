@@ -9,13 +9,14 @@
  *（列表 + 书内搜索），不再另放「本书标注」。底栏与沉浸条都是单行：章节名 |
  * 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC/书签刻度。
  *
- * 约 2.5s 无操作自动收起；`isOverlayOpen()` 为真时不自动收。Escape 一次只
- * 退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 → 其它浮层 →
- * 控件条。「返回书架」是起始侧唯一合书入口。
+ * 约 3.5s 无操作自动收起（鼠标停留在 chrome 上不计时）；`isOverlayOpen()`
+ * 为真时不自动收。Escape 一次只退一步且永不调用 `returnToShelf`：选区工
+ * 具条 → 标注侧栏 → 其它浮层 → 控件条。「返回书架」是起始侧唯一合书入口。
  *
  * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
- * 唤出；只由中部点按 / Escape / 收浮层收起。翻页模式 idle 仍显示 whisper
- * 进度线；滚动模式不显示（原生滚动条即进度，底栏会挡住末行）。
+ * 唤出；只由中部点按 / Escape / 收浮层收起。idle 时 whisper 压成 2px 进度
+ * 发丝线：翻页模式与滚动模式都保留（滚动模式由 CSS 收敛为纯进度线，不
+ * 再用整行藏起——原生滚动条之外仍有常显进度，唤出底栏才见完整行）。
  * 目录 / 排版 / 书签 / 搜索挪到 `.lightink-reader-chrome-footer` 拇指区
  *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
  * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
@@ -86,8 +87,16 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
   'assistant',
 ];
 
-export const READER_CHROME_HIDE_DELAY_MS = 2500;
-export const READER_CHROME_EDGE_PX = 32;
+/**
+ * Idle auto-hide (ui-redesign-2026-10 §3.6)：3.5s 无操作收起，鼠标停在
+ * chrome 上（bar/footer pointerenter 置 pointerInsideBar）不计时。
+ */
+export const READER_CHROME_HIDE_DELAY_MS = 3500;
+/**
+ * 顶/底悬停唤出带：24px。必须完整覆盖 y≤24（含 22）——capture-ui.mjs 的
+ * revealReaderChrome 舞蹈终点是 y=22，这是 §5.6 验证过的兼容约束。
+ */
+export const READER_CHROME_EDGE_PX = 24;
 /** Touch-primary hit target for backToShelf + footer tools (R5). */
 export const READER_CHROME_TOUCH_HIT_PX = 48;
 /** Minimum gap between adjacent touch-primary chrome actions (R5). */
@@ -803,12 +812,13 @@ export function createReaderChrome(
     footer.hidden = hideFooter;
     writeAttr(footer, 'aria-hidden', hideFooter ? 'true' : 'false');
     // whisper：bottom 被接管隐藏时一并隐藏；'held' 时 footer 已可见，
-    // whisper 按「与 footer 互斥」的原口径保持隐藏；'auto' 时与原规则逐字节一致。
+    // whisper 按「与 footer 互斥」的原口径保持隐藏；'auto' 时与原规则一致。
+    // 滚动模式（ui-redesign §3.6）不再整行藏起——CSS 把它压成底部 2px 进度
+    // 发丝线（章节名/百分比仍隐藏），原生滚动条之外保留常显进度反馈。
     const hideWhisper =
       hideProgress ||
       revealed ||
       footerShown ||
-      attachedHost?.dataset.readingLayout === 'scroll' ||
       concealBottom === 'hidden';
     whisper.hidden = hideWhisper;
     writeAttr(whisper, 'aria-hidden', hideWhisper ? 'true' : 'false');

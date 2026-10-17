@@ -18,47 +18,72 @@ export interface ReaderThemeTokens {
   readonly id: ReaderThemeId;
   readonly page: string;
   readonly elevated: string;
+  /** 凹面/侧栏/轨道（三层表面的最底层；纸墨工作室 §1.1）。 */
+  readonly sunken: string;
   readonly ink: string;
+  /** 标题/强调（比 ink 更进一步；查词词条等浮层强调用）。 */
+  readonly inkStrong: string;
   readonly muted: string;
   readonly border: string;
+  /** 荧光笔底色（纸主题分档：浅纸偏亮黄、深纸压暗）。 */
+  readonly highlight: string;
+  /** 荧光笔洗色上的文字色（暗纸取亮值）。 */
+  readonly highlightInk: string;
   readonly colorScheme: 'light' | 'dark';
 }
 
+/** 纸墨工作室色板（ui-redesign-2026-10 §1.1/§3.21）：浅纸更深一档、深纸更沉一档。 */
 export const READER_THEMES: readonly ReaderThemeTokens[] = [
   {
     id: 'white',
-    page: '#ffffff',
-    elevated: '#f6f6f6',
-    ink: '#1a1a1a',
-    muted: '#6b6b6b',
-    border: 'rgba(26, 26, 26, 0.14)',
+    page: '#fdfcf8',
+    elevated: '#f5f2ea',
+    sunken: '#f0ece1',
+    ink: '#241f18',
+    inkStrong: '#17130c',
+    muted: '#6d6455',
+    border: 'rgba(36, 31, 24, 0.16)',
+    highlight: '#e8d28a',
+    highlightInk: '#5f521c',
     colorScheme: 'light',
   },
   {
     id: 'sepia',
-    page: '#fbf0d9',
-    elevated: '#f4e4c4',
-    ink: '#5c4a32',
-    muted: '#7a6247',
-    border: 'rgba(92, 74, 50, 0.18)',
+    page: '#f5e9d2',
+    elevated: '#eddfc3',
+    sunken: '#ead9b8',
+    ink: '#4e3d28',
+    inkStrong: '#3e2f1c',
+    muted: '#7a6750',
+    border: 'rgba(78, 61, 40, 0.2)',
+    highlight: '#e3c96e',
+    highlightInk: '#574f1f',
     colorScheme: 'light',
   },
   {
     id: 'gray',
-    page: '#2a2a2a',
-    elevated: '#353535',
-    ink: '#d6d6d6',
-    muted: '#a0a0a0',
-    border: 'rgba(255, 255, 255, 0.12)',
+    page: '#262421',
+    elevated: '#312e29',
+    sunken: '#201e1b',
+    ink: '#d9d2c4',
+    inkStrong: '#e6dfd1',
+    muted: '#a49a89',
+    border: 'rgba(217, 210, 196, 0.14)',
+    highlight: '#8a7430',
+    highlightInk: '#f0e2ac',
     colorScheme: 'dark',
   },
   {
     id: 'night',
-    page: '#121212',
-    elevated: '#1c1c1c',
-    ink: '#c8c8c8',
-    muted: '#8e8e8e',
-    border: 'rgba(255, 255, 255, 0.1)',
+    page: '#141822',
+    elevated: '#1c2330',
+    sunken: '#0f131b',
+    ink: '#d3dae6',
+    inkStrong: '#e8edf6',
+    muted: '#8b94a6',
+    border: 'rgba(211, 218, 230, 0.12)',
+    highlight: '#7d7440',
+    highlightInk: '#eadfa9',
     colorScheme: 'dark',
   },
 ];
@@ -154,13 +179,24 @@ export function saveReaderTheme(
   return next;
 }
 
-/** Inline custom properties `applyReaderTheme` writes onto a theme root. */
+/**
+ * Inline custom properties `applyReaderTheme` writes onto a theme root.
+ *
+ * 名单纪律（ui-redesign-2026-10 §2.3 修订版）：只有被纸主题**内联覆盖**的
+ * 主题级令牌才进这份名单——highlight/-ink/sunken/fg-strong 四个本可继承
+ * 应用主题，但纸色分档必须改写它们（暗纸压暗、浅纸偏亮黄），因此随纸
+ * 主题内联提供并在此登记，`resetReaderTheme` 借同一份名单对称清除。
+ */
 export const READER_THEME_INLINE_VARS = [
   '--lightink-bg',
   '--lightink-bg-elevated',
+  '--lightink-bg-sunken',
   '--lightink-fg',
+  '--lightink-fg-strong',
   '--lightink-muted',
   '--lightink-border',
+  '--lightink-highlight',
+  '--lightink-highlight-ink',
 ] as const;
 
 export function applyReaderTheme(root: ReaderThemeRoot, theme: ReaderThemeId): ReaderThemeId {
@@ -172,9 +208,13 @@ export function applyReaderTheme(root: ReaderThemeRoot, theme: ReaderThemeId): R
   }
   root.style.setProperty('--lightink-bg', tokens.page);
   root.style.setProperty('--lightink-bg-elevated', tokens.elevated);
+  root.style.setProperty('--lightink-bg-sunken', tokens.sunken);
   root.style.setProperty('--lightink-fg', tokens.ink);
+  root.style.setProperty('--lightink-fg-strong', tokens.inkStrong);
   root.style.setProperty('--lightink-muted', tokens.muted);
   root.style.setProperty('--lightink-border', tokens.border);
+  root.style.setProperty('--lightink-highlight', tokens.highlight);
+  root.style.setProperty('--lightink-highlight-ink', tokens.highlightInk);
   root.style.colorScheme = tokens.colorScheme;
   root.style.color = tokens.ink;
   root.style.backgroundColor = tokens.page;

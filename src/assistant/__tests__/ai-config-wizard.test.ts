@@ -14,6 +14,7 @@
  */
 
 import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   aiWizardLabels,
@@ -309,6 +310,83 @@ describe('openAiConfigWizard test step', () => {
     expect(commands.calls.saveConfig).toHaveBeenCalledWith(
       expect.objectContaining({ targetLang: 'en' }),
     );
+  });
+});
+
+describe('openAiConfigWizard step indicator (§3.13)', () => {
+  const css = readFileSync('src/assistant/assistant-panel.css', 'utf-8');
+
+  it('renders one dot per step plus a 1/4 counter that advances with Next', async () => {
+    const commands = fakeCommands();
+    openWizard(commands);
+    await flush();
+    const dots = [...document.querySelectorAll<HTMLElement>('[data-wizard-step-dot]')];
+    expect(dots.map((dot) => dot.dataset.wizardStepDot)).toEqual([
+      'preset',
+      'key',
+      'test',
+      'save',
+    ]);
+    const count = document.querySelector<HTMLElement>('[data-wizard-steps-count]');
+    expect(count?.textContent).toBe('1/4');
+    // 当前步：aria-current + is-active；其余步既非 active 也非 done。
+    const activeItem = document.querySelector<HTMLElement>('[data-wizard-step="preset"]');
+    expect(activeItem?.getAttribute('aria-current')).toBe('step');
+    expect(activeItem?.classList.contains('is-active')).toBe(true);
+    expect(activeItem?.classList.contains('is-done')).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-wizard-step="key"]')?.classList.contains('is-done')).toBe(
+      false,
+    );
+
+    await walkToTest('sk-new');
+    expect(count?.textContent).toBe('3/4');
+    expect(document.querySelector<HTMLElement>('[data-wizard-step="preset"]')?.classList.contains('is-done')).toBe(
+      true,
+    );
+    expect(
+      document.querySelector<HTMLElement>('[data-wizard-step="test"]')?.getAttribute('aria-current'),
+    ).toBe('step');
+
+    wizardButton('lightink-ai-wizard-test').click();
+    await flush(10);
+    wizardButton('lightink-ai-wizard-next').click();
+    await flush();
+    expect(count?.textContent).toBe('4/4');
+    expect(document.querySelector<HTMLElement>('[data-wizard-step="save"]')?.classList.contains('is-active')).toBe(
+      true,
+    );
+  });
+
+  it('colors done dots success and the active dot accent with a soft ring', () => {
+    // 圆点：done = success 实心、active = accent 实心 + accent-soft 光环、待办 = 描边。
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-steps li\.is-done \.lightink-ai-wizard-step-dot\s*\{[^}]*background:\s*var\(--lightink-success\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-steps li\.is-active \.lightink-ai-wizard-step-dot\s*\{[^}]*background:\s*var\(--lightink-accent\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-step-dot\s*\{[^}]*border:\s*1px solid var\(--lightink-border\)/,
+    );
+  });
+
+  it('uses semantic colors for the connection test feedback', () => {
+    // success → success、info → info、error 仍 danger（§3.13 连接测试反馈）。
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-status\[data-kind='success'\]\s*\{[^}]*color:\s*var\(--lightink-success\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-status\[data-kind='info'\]\s*\{[^}]*color:\s*var\(--lightink-info\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-ai-wizard-status\[data-kind='error'\]\s*\{[^}]*color:\s*var\(--lightink-danger\)/,
+    );
+    // 表单输入走 sunken 底，与 elevated 模态形成两层表面。
+    const inputRule =
+      /\.lightink-ai-wizard input:not\(\[type='checkbox'\]\),\n\.lightink-ai-wizard select\s*\{([^}]*)\}/.exec(
+        css,
+      )?.[1] ?? '';
+    expect(inputRule).toMatch(/background:\s*var\(--lightink-bg-sunken\)/);
   });
 });
 

@@ -1105,7 +1105,7 @@ export function createBookSourcePanel(options: BookSourcePanelOptions): BookSour
       });
       downloadActions.append(formatLabel, start, close);
     } else if (phase === 'starting' || phase === 'downloading') {
-      const cancel = createButton(doc, l.downloadCancel);
+      const cancel = createButton(doc, l.downloadCancel, 'lightink-library-book-source-download-cancel');
       cancel.addEventListener('click', () => downloadController.cancel());
       downloadActions.append(cancel);
     } else if (phase === 'paused' || phase === 'incomplete' || phase === 'ready' || phase === 'done') {

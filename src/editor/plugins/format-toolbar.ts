@@ -15,6 +15,7 @@
 import { $prose } from '@milkdown/utils';
 import { AllSelection, NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
 import { toggleMark } from '@milkdown/prose/commands';
+import type { EditorState } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
 
 const PLUGIN_KEY = new PluginKey('lightink-format-toolbar');
@@ -37,7 +38,9 @@ export interface FormatTool {
   readonly markName: string;
 }
 
-/** 工具条按钮目录（顺序即渲染顺序）。markName 与 Milkdown schema 一致。 */
+/** 工具条按钮目录（顺序即渲染顺序）。markName 与 Milkdown schema 一致。
+ * label 是目录兜底文案（i18n 缺省语言为中文）；标注三工具在 DOM 里渲染
+ * ANNOTATION_TOOL_ICONS 的线性图标，label 仅作无图标路径/测试的兜底。 */
 /** Default English titles; host may retranslate via setFormatToolbarTitles. */
 export const FORMAT_TOOLS: FormatTool[] = [
   { id: 'bold', label: 'B', title: 'Bold', markName: 'strong' },
@@ -67,6 +70,31 @@ const LINK_ICON_SVG =
   '<path d="M6.6 9.4a2.8 2.8 0 0 0 4 0l1.8-1.8a2.83 2.83 0 0 0-4-4l-1 1"/>' +
   '<path d="M9.4 6.6a2.8 2.8 0 0 0-4 0L3.6 8.4a2.83 2.83 0 0 0 4 4l1-1"/>' +
   '</svg>';
+
+/**
+ * 标注组（高亮/笔记/复制）的内联 SVG 图标——文案本地化经 title/aria-label
+ * 供给，按钮面保持语言中立的线性图标（与链接按钮同一 16px 视窗/描边语言）。
+ */
+const ANNOTATION_TOOL_ICONS: Readonly<Record<'highlight' | 'note' | 'copy', string>> = {
+  highlight:
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M9.5 2.5 13.5 6.5 7.5 12.5H4v-3.5z"/>' +
+    '<path d="M2.5 15h11"/>' +
+    '</svg>',
+  note:
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 2h5l3.5 3.5V14H4z"/>' +
+    '<path d="M9 2v4h3.5"/>' +
+    '</svg>',
+  copy:
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>' +
+    '<path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3.5V9A1.5 1.5 0 0 0 4 10.5h1.5"/>' +
+    '</svg>',
+};
 
 export interface ToolbarPlacement {
   readonly top: number;
@@ -108,15 +136,60 @@ function createToolbarElement(): HTMLElement {
     btn.className = `lightink-format-tool lightink-format-tool--${tool.id}`;
     if (tool.id === 'link') {
       btn.innerHTML = LINK_ICON_SVG;
+    } else if (tool.id === 'highlight' || tool.id === 'note' || tool.id === 'copy') {
+      btn.innerHTML = ANNOTATION_TOOL_ICONS[tool.id];
     } else {
       btn.textContent = tool.label;
     }
     btn.title = tool.title;
     btn.setAttribute('aria-label', tool.title);
     btn.dataset['tool'] = tool.id;
+    // toggle 语义：marks 工具在选区已带该 mark 时呈 pressed 态（syncToolbar 联动）。
+    if (tool.markName !== '') {
+      btn.setAttribute('aria-pressed', 'false');
+    }
     el.appendChild(btn);
   }
   return el;
+}
+
+/**
+ * 纸墨工作室 §3.10 行为联动：判断选区是否整体处于某 mark（ProseMirror
+ * `markActive` 惯例——空选区看 storedMarks/$from，非空选区要求 from..to
+ * 每个位置都带该 mark，部分命中不算 active）。标注组（highlight/note/copy）
+ * 无对应 mark，恒为 false。
+ */
+export function selectionHasMark(state: EditorState, markName: string): boolean {
+  if (markName === '') return false;
+  const markType = state.schema.marks[markName];
+  if (markType === undefined) return false;
+  const { from, to, empty } = state.selection;
+  if (empty) {
+    const stored = state.storedMarks ?? [];
+    if (stored.some((m) => m.type === markType)) return true;
+    return state.doc.resolve(from).marks().some((m) => m.type === markType);
+  }
+  let active = true;
+  state.doc.nodesBetween(from, to, (node, _) => {
+    if (!active) return false;
+    if (node.isText && node.marks.every((m) => m.type !== markType)) {
+      active = false;
+    }
+    return true;
+  });
+  return active;
+}
+
+/** 选区各 marks 工具的 active 状态（syncToolbar 消费；headless 可测）。 */
+export function formatToolActiveStates(
+  state: EditorState,
+  tools: readonly FormatTool[] = FORMAT_TOOLS,
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const tool of tools) {
+    out[tool.id] = selectionHasMark(state, tool.markName);
+  }
+  return out;
 }
 
 /**
@@ -312,9 +385,17 @@ function syncToolbar(view: EditorView, toolbar: HTMLElement): void {
     return;
   }
   const allowDocumentTools = view.editable !== false;
+  const activeStates = formatToolActiveStates(view.state);
+  const toolById = new Map(FORMAT_TOOLS.map((tool) => [tool.id, tool]));
   for (const btn of toolbar.querySelectorAll<HTMLButtonElement>('button[data-tool]')) {
     const id = btn.dataset['tool'] as FormatToolId | undefined;
     btn.hidden = id !== undefined && !isAnnotationFormatTool(id) && !allowDocumentTools;
+    const tool = id !== undefined ? toolById.get(id) : undefined;
+    if (tool !== undefined && tool.markName !== '') {
+      const active = activeStates[tool.id] === true;
+      btn.toggleAttribute('data-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
   }
   // 先显示以测得尺寸（display:none 时 getBoundingClientRect 为 0）。
   toolbar.style.display = '';

@@ -223,6 +223,26 @@ describe('createOutlineView 渲染', () => {
     view.destroy();
   });
 
+  it('纸墨工作室 §3.12：搜索框常驻顶部（空态不隐藏；rail/hidden 隐藏）', () => {
+    const view = createOutlineView({
+      doc: fakeDocument(),
+      getActiveHost: () => null,
+      getActiveMarkdown: () => null,
+    });
+    // 无标签空态也常驻。
+    expect(searchOf(view).getAttribute('hidden')).toBeNull();
+
+    view.setVisibility('rail');
+    expect(searchOf(view).getAttribute('hidden')).toBe('');
+
+    view.setVisibility('hidden');
+    expect(searchOf(view).getAttribute('hidden')).toBe('');
+
+    view.setVisibility('expanded');
+    expect(searchOf(view).getAttribute('hidden')).toBeNull();
+    view.destroy();
+  });
+
   it('按层级渲染标题条目', () => {
     const view = createOutlineView({
       doc: fakeDocument(),
@@ -503,8 +523,9 @@ describe('outline width resize', () => {
     expect(resizeHandleOf(view).classList.contains('lightink-outline-resize')).toBe(true);
 
     view.setWidth(180);
-    expect(view.widthPx).toBe(180);
-    expect(storage.getItem(OUTLINE_WIDTH_STORAGE_KEY)).toBe('180');
+    // 纸墨工作室 §3.12：拖拽调宽区间收窄为 200–320px，越界值按边界钳制。
+    expect(view.widthPx).toBe(OUTLINE_WIDTH_MIN);
+    expect(storage.getItem(OUTLINE_WIDTH_STORAGE_KEY)).toBe(String(OUTLINE_WIDTH_MIN));
     view.destroy();
   });
 

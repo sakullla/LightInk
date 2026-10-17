@@ -9,7 +9,12 @@
  *   - attr ≠ string、attr ≠ punctuation、number ≠ punctuation；
  *   - keyword/comment/string/number/attr/punctuation/code-fg 相对该主题
  *     --lightink-code-bg 的 WCAG 对比度 ≥ 4.5:1；
- *   - :root / warm-light 定义嵌套 chrome 半径令牌，且 control < panel < dialog；
+ *   - :root / warm-light 定义嵌套 chrome 半径令牌，且 control < panel < dialog
+ *     （纸墨工作室 §1.4：8/12/16）；
+ *   - 纸墨工作室加法层（§2.1）：:root 字号阶梯/间距网格/控件高度/动效补充；
+ *     四主题三层表面（bg-sunken 更沉）与 success/warning/info/highlight 等
+ *     新语义令牌；focus-ring 四主题同式；accent-contrast 在 accent 上 ≥4.5:1；
+ *     不新增衬线阅读栈；
  *   - hljs-* 类选择器已映射到主题令牌（T5 高亮输出的类有颜色来源），
  *     含 .hljs-punctuation、.hljs-meta、.hljs-variable、
  *     .hljs-addition → string、.hljs-deletion → danger；
@@ -278,9 +283,10 @@ describe('tokens.css 内置主题', () => {
     const control = tokenValue(block, '--lightink-radius-control');
     const panel = tokenValue(block, '--lightink-radius-panel');
     const dialog = tokenValue(block, '--lightink-radius-dialog');
-    expect(control).toBe('6px');
-    expect(panel).toBe('10px');
-    expect(dialog).toBe('12px');
+    // 纸墨工作室 §1.4：整体上调一档（6/10/12 → 8/12/16）。
+    expect(control).toBe('8px');
+    expect(panel).toBe('12px');
+    expect(dialog).toBe('16px');
     expect(parseFloat(control)).toBeLessThan(parseFloat(panel));
     expect(parseFloat(panel)).toBeLessThan(parseFloat(dialog));
   });
@@ -331,6 +337,122 @@ describe('tokens.css 主题无关共享令牌（T1: motion/z）', () => {
         false,
       );
     }
+  });
+});
+
+describe('tokens.css 纸墨工作室加法层（2026-10 改版 §2.1）', () => {
+  /** 与 T1 describe 同法：提取文件级独立 :root 共享块。 */
+  function sharedRoot(): string {
+    const single = /(^|\n)\s*:root\s*\{([\s\S]*?)\}/.exec(css);
+    if (single === null) {
+      throw new Error('tokens.css 缺少独立 :root 共享块');
+    }
+    return single[2];
+  }
+
+  it('共享 :root 定义字号阶梯（xs 11px … 2xl 28px）', () => {
+    const block = sharedRoot();
+    for (const [name, value] of [
+      ['--lightink-text-xs', '11px'],
+      ['--lightink-text-sm', '12px'],
+      ['--lightink-text-md', '14px'],
+      ['--lightink-text-lg', '18px'],
+      ['--lightink-text-xl', '22px'],
+      ['--lightink-text-2xl', '28px'],
+    ] as const) {
+      expect(tokenValue(block, name)).toBe(value);
+    }
+  });
+
+  it('共享 :root 定义 4px 基网格间距 space-1…7', () => {
+    const block = sharedRoot();
+    for (const [name, value] of [
+      ['--lightink-space-1', '4px'],
+      ['--lightink-space-2', '8px'],
+      ['--lightink-space-3', '12px'],
+      ['--lightink-space-4', '16px'],
+      ['--lightink-space-5', '24px'],
+      ['--lightink-space-6', '32px'],
+      ['--lightink-space-7', '48px'],
+    ] as const) {
+      expect(tokenValue(block, name)).toBe(value);
+    }
+  });
+
+  it('共享 :root 定义控件高度/触达与动效补充令牌', () => {
+    const block = sharedRoot();
+    for (const [name, value] of [
+      ['--lightink-control-h-sm', '28px'],
+      ['--lightink-control-h', '32px'],
+      ['--lightink-control-h-lg', '40px'],
+      ['--lightink-touch-h', '48px'],
+      ['--lightink-density-nav', '26px'],
+      ['--lightink-duration-slow', '280ms'],
+      ['--lightink-easing-leave', 'cubic-bezier(0.4, 0, 1, 1)'],
+    ] as const) {
+      expect(tokenValue(block, name)).toBe(value);
+    }
+  });
+
+  it('不新增衬线阅读栈（§1.2 v3：衬线唯一来源是 READER_FONT_FAMILY_PRESETS.serif）', () => {
+    expect(css).not.toMatch(/--lightink-font-reading/);
+  });
+
+  it.each(BUILTIN_THEMES)('%s 定义三层表面与语义色新令牌', (id) => {
+    const block = themeBlock(id);
+    for (const token of [
+      '--lightink-bg-sunken',
+      '--lightink-fg-strong',
+      '--lightink-accent-contrast',
+      '--lightink-border-strong',
+      '--lightink-success',
+      '--lightink-warning',
+      '--lightink-info',
+      '--lightink-highlight',
+      '--lightink-highlight-ink',
+      '--lightink-focus-ring',
+      '--lightink-shadow-pop',
+    ]) {
+      expect(tokenValue(block, token).length, `${id} 缺少 ${token}`).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(BUILTIN_THEMES)('%s focus-ring 为 accent 60% 洗色（四主题同式）', (id) => {
+    expect(tokenValue(themeBlock(id), '--lightink-focus-ring')).toBe(
+      'color-mix(in srgb, var(--lightink-accent) 60%, transparent)',
+    );
+  });
+
+  it.each(BUILTIN_THEMES)('%s 三层表面：sunken 比 bg 更沉', (id) => {
+    const block = themeBlock(id);
+    const sunken = relativeLuminance(tokenValue(block, '--lightink-bg-sunken'));
+    const bg = relativeLuminance(tokenValue(block, '--lightink-bg'));
+    expect(sunken, `${id} bg-sunken 应比 bg 更暗`).toBeLessThan(bg);
+  });
+
+  it.each(BUILTIN_THEMES)('%s accent-contrast 在 accent 实底上 ≥ 4.5:1', (id) => {
+    const block = themeBlock(id);
+    expect(
+      contrastRatio(
+        tokenValue(block, '--lightink-accent-contrast'),
+        tokenValue(block, '--lightink-accent'),
+      ),
+      `${id} accent-contrast vs accent`,
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(BUILTIN_THEMES)('%s 语义色 success/warning/info 互不相同且异于 danger', (id) => {
+    const block = themeBlock(id);
+    const values = [
+      tokenValue(block, '--lightink-success'),
+      tokenValue(block, '--lightink-warning'),
+      tokenValue(block, '--lightink-info'),
+      tokenValue(block, '--lightink-danger'),
+    ];
+    for (const value of values) {
+      expect(value).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+    expect(new Set(values).size).toBe(values.length);
   });
 });
 
@@ -435,7 +557,7 @@ describe('chrome-shell radius token consumers', () => {
       /\.lightink-library-membership-dialog\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
     );
     expect(assistantCss).toMatch(
-      /\.lightink-reader-assistant-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,
+      /\.lightink-reader-assistant-panel\s*\{[^}]*border-radius:\s*var\(--lightink-radius-dialog\)/,
     );
     expect(annotationCss).toMatch(
       /\.lightink-reader-sidebar\s*\{[^}]*border-radius:\s*var\(--lightink-radius-panel\)/,

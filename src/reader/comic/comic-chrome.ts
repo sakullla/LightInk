@@ -44,10 +44,12 @@ export interface ComicChromeDom {
   readonly chrome: HTMLElement;
   readonly topbar: HTMLElement;
   readonly pageButton: HTMLButtonElement;
-  /** T4（ADR-5）：顶栏书签开关（当前页添加/移除书签，走标注系统）。 */
+  /** T4（ADR-5）：顶栏书签开关（当前页添加/移除，走标注系统）。 */
   readonly bookmarkButton: HTMLButtonElement;
-  /** 顶栏书签列表入口（打开统一标注面板并定位书签分类，B 键同机械）。 */
+  /** 顶栏书签列表入口（打开统一标注面板，B 键同族约定）。 */
   readonly bookmarksButton: HTMLButtonElement;
+  /** 标题行内的阅读方向徽标（ui-redesign §3.9）：RTL 才显示，updateToolbar 同步。 */
+  readonly directionBadge: HTMLElement;
   readonly pagesRoot: HTMLElement;
   readonly previousButton: HTMLButtonElement;
   readonly nextButton: HTMLButtonElement;
@@ -97,7 +99,7 @@ function fitChipFor(labels: ComicToolbarLabels, fit: ComicFit): string {
 export function buildComicChrome(
   container: HTMLElement,
   metadata: ComicMetadata,
-  preferences: { readonly fit: ComicFit },
+  preferences: { readonly fit: ComicFit; readonly direction?: 'ltr' | 'rtl' },
   labels: ComicToolbarLabels,
   options: CbzRenderOptions,
 ): ComicChromeDom {
@@ -106,7 +108,7 @@ export function buildComicChrome(
   container.dataset.comicReader = 'true';
   container.dataset.comicChrome = 'visible';
   container.dataset.comicCanvas = 'near-black';
-  container.style.backgroundColor = 'var(--lightink-comic-canvas, #121212)';
+  container.style.backgroundColor = 'var(--lightink-comic-canvas, #111)';
   const chrome = document.createElement('div');
   chrome.className = 'lightink-reader-comic-chrome lightink-reader-comic-overlay';
   const topbar = document.createElement('div');
@@ -115,6 +117,16 @@ export function buildComicChrome(
   const title = document.createElement('div');
   title.className = 'lightink-reader-comic-title';
   title.textContent = comicTitle(metadata, labels.paged);
+  // 阅读方向徽标（ui-redesign §3.9）：RTL 漫画标题旁常显方向箭头，LTR 默认
+  // 不占位；两态由 updateToolbar 按 preferences.direction 同步。无 aria-label：
+  // 可访问的方向开关仍是底栏「右到左」chip（aria-pressed），徽标只是视觉提示，
+  // 不与 chip 的 aria-label 查询争抢。
+  const directionBadge = document.createElement('span');
+  directionBadge.className = 'lightink-reader-comic-direction';
+  directionBadge.hidden = preferences.direction !== 'rtl';
+  const chineseChrome = labels.paged === '横向翻页';
+  directionBadge.textContent = chineseChrome ? '← 右到左' : '← RTL';
+  title.append(directionBadge);
   const pageButton = document.createElement('button');
   pageButton.type = 'button';
   pageButton.className = 'lightink-reader-comic-page';
@@ -171,7 +183,6 @@ export function buildComicChrome(
   sliderWrap.appendChild(pageSlider);
   const chip = (visible: string, label: string): HTMLButtonElement =>
     toolbarButton(visible, label, 'lightink-reader-comic-chip');
-  const chineseChrome = labels.paged === '横向翻页';
   const stripLabel = labels.strip ?? labels.vertical;
   const verticalButton = chip(chineseChrome ? '连续' : 'Strip', stripLabel);
   const pagedButton = chip(chineseChrome ? '翻页' : 'Pages', labels.paged);
@@ -209,6 +220,7 @@ export function buildComicChrome(
     pageButton,
     bookmarkButton,
     bookmarksButton,
+    directionBadge,
     pagesRoot,
     previousButton,
     nextButton,
@@ -236,6 +248,10 @@ export function updateToolbar(session: ComicSession): void {
   session.pagedButton.setAttribute('aria-pressed', String(preferences.mode === 'paged'));
   session.ltrButton.setAttribute('aria-pressed', String(preferences.direction === 'ltr'));
   session.rtlButton.setAttribute('aria-pressed', String(preferences.direction === 'rtl'));
+  // RTL 方向徽标（ui-redesign §3.9）：只在右到左时占位，LTR 是默认不显示。
+  if (session.directionBadge !== undefined) {
+    session.directionBadge.hidden = preferences.direction !== 'rtl';
+  }
   session.singleButton.setAttribute('aria-pressed', String(preferences.spread === 'single'));
   session.doubleButton.setAttribute('aria-pressed', String(preferences.spread === 'double'));
   session.autoButton.setAttribute('aria-pressed', String(preferences.spread === 'auto'));

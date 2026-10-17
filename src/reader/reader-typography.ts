@@ -33,6 +33,41 @@ export type ReaderFontFamilyPreset = keyof typeof READER_FONT_FAMILY_PRESETS;
 
 export const DEFAULT_READER_FONT_FAMILY = READER_FONT_FAMILY_PRESETS.body;
 
+/**
+ * 排版面板字号快捷档（ui-redesign-2026-10 §3.5）：以 16px 基准的
+ * 15 / 16 / 17px 精确档。共享 FONT_SCALE_STEPS 没有这两个分数档，阅读排版
+ * 的归一化在共享档之外放行它们（仅阅读键；编辑器 fontScale 不受影响）。
+ */
+export const READER_QUICK_SIZE_STEPS = [0.9375, 1, 1.0625] as const;
+
+const READER_EXTRA_SIZE_STEPS = [0.9375, 1.0625] as const;
+
+/** Quick-tier px label at the 16px reader baseline (15 / 16 / 17px). */
+export function readerQuickSizeLabelPx(step: number): string | null {
+  const index = (READER_QUICK_SIZE_STEPS as readonly number[]).indexOf(step);
+  return index >= 0 ? `${Math.round(READER_QUICK_SIZE_STEPS[index]! * 16)}px` : null;
+}
+
+/**
+ * 阅读字号归一化：先吸附共享 FONT_SCALE_STEPS，再与 15/17px 快捷档比距——
+ * 距离更近的快捷档原样保留，其余值仍落共享档（1.1 → 1.125 既有口径不变）。
+ */
+export function snapReaderFontScale(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_FONT_SCALE;
+  }
+  let best: number = snapFontScale(value);
+  let bestDist = Math.abs(best - value);
+  for (const step of READER_EXTRA_SIZE_STEPS) {
+    const dist = Math.abs(step - value);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = step;
+    }
+  }
+  return best;
+}
+
 export const MIN_READER_LINE_HEIGHT = 1.5;
 export const MAX_READER_LINE_HEIGHT = 2.2;
 export const DEFAULT_READER_LINE_HEIGHT = 1.8;
@@ -51,7 +86,11 @@ export const READER_TYPOGRAPHY_VARS = {
 
 export interface ReaderTypography {
   readonly fontFamily: string;
-  readonly fontScaleStep: FontScaleStep;
+  /**
+   * 缩放系数：共享 FONT_SCALE_STEPS 档，或 15/17px 快捷档（0.9375 / 1.0625，
+   * 见 READER_QUICK_SIZE_STEPS）；`snapReaderFontScale` 是唯一归一化入口。
+   */
+  readonly fontScaleStep: number;
   readonly lineHeight: number;
   readonly measureRem: number;
   /** 阅读态下完全隐藏底部状态栏（编辑器状态栏不受影响）。 */
@@ -125,7 +164,7 @@ export function normalizeReaderTypography(
   }
   return {
     fontFamily: normalizeFontFamily(value.fontFamily, fallback.fontFamily),
-    fontScaleStep: snapFontScale(
+    fontScaleStep: snapReaderFontScale(
       typeof value.fontScaleStep === 'number' ? value.fontScaleStep : fallback.fontScaleStep,
     ),
     lineHeight: snapReaderLineHeight(

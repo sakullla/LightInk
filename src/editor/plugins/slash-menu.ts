@@ -98,7 +98,7 @@ export interface SlashMenuPlacement {
 export const SLASH_MENU_VISIBLE_ITEMS = 5;
 
 /** Item row height used for max-height (matches theme.css --lightink-slash-item-h). */
-export const SLASH_MENU_ITEM_HEIGHT = 32;
+export const SLASH_MENU_ITEM_HEIGHT = 36;
 
 const SLASH_MENU_GAP = 2;
 const SLASH_MENU_PAD_Y = 16; // 6 top + 10 bottom

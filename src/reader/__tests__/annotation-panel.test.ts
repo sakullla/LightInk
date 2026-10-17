@@ -1084,9 +1084,21 @@ describe('annotation-panel 触屏 sheet 形态与 Escape 分层', () => {
     );
     const markRule = css.match(/\.lightink-reader-sidebar-hit-mark\s*\{[^}]*\}/)?.[0];
     expect(markRule, 'search hit mark uses a highlighter wash').toBeTruthy();
-    expect(markRule).toMatch(/background:\s*#f6d45e/);
+    // 令牌化（ui-redesign §3.8）：底色走 --lightink-highlight（纸主题内联分档），
+    // 不再散落 hex；三档洗色保留 55%/42%/14% 透明度语义。
+    expect(markRule).toMatch(/background:\s*var\(--lightink-highlight/);
     expect(markRule).toMatch(/color:\s*inherit/);
     expect(markRule).not.toMatch(/font-weight:\s*600/);
+    expect(css).toMatch(
+      /--lightink-hit-wash:\s*color-mix\(in srgb, var\(--lightink-highlight[^)]*\)\s*55%,\s*transparent\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar\[data-reader-theme='sepia'\][^{]*\{[^}]*--lightink-hit-wash:\s*color-mix\(in srgb, var\(--lightink-highlight[^)]*\)\s*42%,\s*transparent\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-sidebar\[data-reader-theme='night'\][^{]*\{[^}]*--lightink-hit-wash:\s*color-mix\(in srgb, var\(--lightink-highlight[^)]*\)\s*14%,\s*transparent\)[^}]*color:\s*var\(--lightink-highlight-ink/,
+    );
+    expect(css).not.toMatch(/#f6d45e|#f3cf4a|#e0b63a|#e8c547|#efd36c/);
   });
 
   it('触屏 sheet CSS：正文命中片段两行截断，一屏可扫多条结果', () => {

@@ -343,13 +343,13 @@
 }
 
 /* ---- 补齐：应用在用、官方子集没有的规则（原 reader.css 镜像已删除，本段为唯一来源）----
- * 选区底色沿用应用标注令牌（保持现有选色观感）；持久高亮 / 搜索命中 mark 由
- * 应用注入 .textLayer（T4 消费方），类名不变。
+ * 选区底色接 selection 令牌（ui-redesign §3.9），随应用/纸主题联动；持久
+ * 高亮 / 搜索命中 mark 由应用注入 .textLayer（T4 消费方），类名不变。
  * 选区 wash 收窄到非护栏状态（文件头偏差 3）：官方 enableSelectionRendering
  * 激活时选区由 DrawLayer `.selection` 覆盖层着色，原生选区必须保持透明，
  * 否则双重着色。 */
 .pdfViewer .textLayer:not(.selectionRendering) ::selection{
-  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  background:var(--lightink-selection, rgba(160, 82, 28, 0.2));
   color:transparent;
 }
 
@@ -366,14 +366,14 @@
 
 /* PDF 持久高亮：半透明叠在 canvas 字形上，不能用不透明 --lightink-annotation。 */
 .pdfViewer .textLayer mark.lightink-reader-highlight{
-  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  background:var(--lightink-annotation-wash, color-mix(in srgb, var(--lightink-accent) 32%, transparent));
   color:transparent;
   padding:0;
   border-radius:0;
 }
 
 .pdfViewer .textLayer mark.lightink-reader-highlight[data-annotation-kind='note']{
-  background:var(--lightink-annotation-wash, rgba(154, 88, 40, 0.32));
+  background:var(--lightink-annotation-wash, color-mix(in srgb, var(--lightink-accent) 32%, transparent));
   box-shadow:inset 0 -0.12em 0 var(--lightink-accent);
   cursor:pointer;
 }

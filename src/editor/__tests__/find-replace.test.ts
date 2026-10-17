@@ -23,6 +23,7 @@ import {
   FIND_REPLACE_PLUGIN_KEY,
   collectMatches,
   collectSourceMatches,
+  computeFindPanelPin,
   createFindReplaceProsePlugin,
   findQueryTr,
   nextMatchIndex,
@@ -300,5 +301,53 @@ describe('transaction builders', () => {
     expect(dispatched).toHaveLength(1);
     state = applyTr(state, dispatched[0]!);
     expect(state.doc.textContent).toBe(original);
+  });
+});
+
+describe('纸墨工作室 §3.10：命中高亮令牌化', () => {
+  it('当前命中用 accent 洗色，其余命中用 highlight 洗色（不再硬编码 rgba）', () => {
+    let state = makeState([{ kind: 'p', text: 'foo foo foo' }]);
+    state = applyTr(state, findQueryTr(state, 'foo'));
+    const decorations = pluginState(state).decorations.find();
+    expect(decorations).toHaveLength(3);
+    const styles = decorations.map((d) =>
+      String((d as unknown as { type: { attrs: Record<string, unknown> } }).type.attrs['style']),
+    );
+    expect(styles[0]).toContain('var(--lightink-accent)');
+    expect(styles[0]).not.toContain('rgba(');
+    expect(styles[1]).toContain('var(--lightink-highlight)');
+    expect(styles[1]).not.toContain('rgba(');
+    expect(styles[2]).toContain('var(--lightink-highlight)');
+  });
+});
+
+describe('纸墨工作室 §3.10：查找面板钉版心（computeFindPanelPin）', () => {
+  it('top 贴编辑区顶缘 +8，right 与版心右缘对齐向内 12px', () => {
+    const pin = computeFindPanelPin({
+      main: { top: 40, right: 1280 },
+      area: { top: 40 },
+      host: { right: 900 },
+    });
+    expect(pin.top).toBe(8);
+    expect(pin.right).toBe(1280 - 900 + 12);
+  });
+
+  it('版心右缘越出主区时 right 不小于 12（面板不出右边界）', () => {
+    const pin = computeFindPanelPin({
+      main: { top: 0, right: 500 },
+      area: { top: 10 },
+      host: { right: 520 },
+    });
+    expect(pin.right).toBe(12);
+    expect(pin.top).toBe(18);
+  });
+
+  it('编辑区在主区内偏移（大纲占位）时 top 随之修正', () => {
+    const pin = computeFindPanelPin({
+      main: { top: 0, right: 1000 },
+      area: { top: 24 },
+      host: { right: 800 },
+    });
+    expect(pin.top).toBe(32);
   });
 });

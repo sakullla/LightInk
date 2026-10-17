@@ -106,16 +106,30 @@ html[data-display='xuhd'] {
 }
 
 /* Comic canvas is near-black. Paper-theme ink would stay dark on dark.
-   `#app.is-comic-reader` is stamped from the active tab only. */
+   `#app.is-comic-reader` is stamped from the active tab only.
+   纸墨工作室 §2.2：硬编码色令牌化——局部 override 引用 midnight 主题
+   令牌常量（tokens.css 的 midnight 块值，CSS 无法跨主题块引用故以命名
+   局部令牌落地，色值唯一来源见 tokens.css [data-theme='midnight']）。 */
+#app.is-comic-reader {
+  --lightink-titlebar-fg: #d3dae6; /* = midnight --lightink-fg */
+  --lightink-titlebar-muted: #8b94a6; /* = midnight --lightink-muted */
+}
+
 #app.is-comic-reader .lightink-window-titlebar {
-  color: #e6e6e6 !important;
-  --lightink-fg: #e6e6e6;
-  --lightink-muted: #9a9a9a;
+  color: var(--lightink-titlebar-fg) !important;
+  --lightink-fg: var(--lightink-titlebar-fg);
+  --lightink-muted: var(--lightink-titlebar-muted);
 }
 
 #app.is-comic-reader .lightink-window-caption:hover,
 #app.is-comic-reader .lightink-window-caption:focus-visible {
-  background: color-mix(in srgb, #ffffff 14%, transparent);
+  background: color-mix(in srgb, var(--lightink-titlebar-fg) 14%, transparent);
+}
+
+#app.is-comic-reader .lightink-titlebar-anchor {
+  --lightink-fg: var(--lightink-titlebar-fg);
+  --lightink-muted: var(--lightink-titlebar-muted);
+  --lightink-border: #333d4e; /* = midnight --lightink-border */
 }
 
 /* Phones have no desktop caption. Keep min/max/close off the status bar. */
@@ -209,4 +223,140 @@ html[data-touch-primary] {
 .lightink-reader-chrome-action,
 .lightink-window-caption {
   -webkit-app-region: no-drag;
+}
+
+/* ===== 纸墨工作室 §3.1：标题栏「轻墨 ☰」常驻恢复锚点 + 主题快切 ============
+ * 独立覆盖条（不在 .lightink-window-titlebar 内——工作区模式下标题栏右贴，
+ * 而锚点必须常驻左端）：品牌文字 0–48px 为拖拽区，☰ 按钮起点 x≥48
+ * （capture 的 (8,8) 坐标点击落在拖拽区，§5.6 防劫持）。只在编辑器表面
+ * 显示（app-shell.applyWorkspace 控制显隐；书架/阅读器无菜单 chrome 可恢复）。
+ * 左端 gutter 由 --lightink-titlebar-leading 预留给 #lightink-toolbar /
+ * #lightink-tabbar 的既有 padding 公式（theme.css），菜单/标签不被遮挡。 ==== */
+
+#app.is-workspace-editor {
+  /* 品牌 48 + ☰ 28 + 主题 28 + 间距 8 + 呼吸 12 = 124px。 */
+  --lightink-titlebar-leading: 124px;
+}
+
+html[data-platform='mac'] #app.is-workspace-editor {
+  /* 叠加 Mac 交通灯 78px 常量（见文件首 html[data-platform='mac']）。 */
+  --lightink-titlebar-leading: 202px;
+}
+
+html[data-platform='mac'] .lightink-titlebar-anchor {
+  /* 避让系统交通灯：锚点从 78px 起步（同 leading 常量）。 */
+  left: 78px;
+}
+
+.lightink-titlebar-anchor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--lightink-titlebar-height);
+  padding: 0 8px;
+  pointer-events: none;
+  font-family: var(--lightink-font-ui);
+}
+
+.lightink-titlebar-anchor[hidden] {
+  display: none !important;
+}
+
+/* 品牌文字：非交互拖拽区，宽度保证 ☰ 起点恒 ≥48px。 */
+.lightink-titlebar-brand {
+  display: inline-block;
+  min-width: 48px;
+  margin: 0;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+.lightink-titlebar-anchor-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: default;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.lightink-titlebar-anchor-btn:hover,
+.lightink-titlebar-anchor-btn:focus-visible {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+  outline: none;
+}
+
+/* 主题快切四主题浮层：普通按钮列表（无 role=menu，§5.6 单菜单规则）。 */
+.lightink-titlebar-theme-flyout {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 48px;
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-pop, var(--lightink-shadow-strong));
+  pointer-events: auto;
+}
+
+.lightink-titlebar-theme-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: default;
+}
+
+.lightink-titlebar-theme-item:hover,
+.lightink-titlebar-theme-item:focus-visible {
+  background: var(--lightink-accent-soft);
+  outline: none;
+}
+
+.lightink-titlebar-theme-item.is-current {
+  color: var(--lightink-accent);
+  font-weight: 650;
+}
+
+/* 触屏/Android 无桌面标题栏，锚点随标题栏一起隐藏。 */
+html[data-android] .lightink-titlebar-anchor,
+html[data-touch-primary] .lightink-titlebar-anchor {
+  display: none !important;
+}
+
+@media (pointer: coarse) {
+  .lightink-titlebar-anchor {
+    display: none !important;
+  }
 }

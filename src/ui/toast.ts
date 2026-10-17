@@ -2,22 +2,23 @@
  * 非阻塞 toast 通知（R4 / ADR-5）。
  *
  * 首次调用懒挂载单例容器：`role=status` + `aria-live=polite`，屏幕角落
- * 堆叠，不 inert、不抢焦点、z-index 低于模态。自动消失（error 8s / 其它
- * 5s）+ 手动关闭；悬停或键盘聚焦（读「技术详情」）时暂停计时，离开按剩余
- * 时长恢复；消失先播出场淡出动画再移除节点。同屏最多 {@link
- * TOAST_MAX_VISIBLE} 条，超出丢弃最旧。可选 detail 渲染为 `<details>`
- * 「技术详情」，原始错误信息永不作主文案。
+ * 堆叠，不 inert、不抢焦点、z-index 低于模态。自动消失（纸墨工作室 §3.20：
+ * error 12s / 其它 5s）+ 手动关闭；悬停或键盘聚焦（读「技术详情」）时暂停
+ * 计时，离开按剩余时长恢复；消失先播出场淡出动画再移除节点。同屏最多
+ * {@link TOAST_MAX_VISIBLE} 条，超出丢弃最旧。可选 detail 渲染为 `<details>`
+ * 「技术详情」+ 一键复制按钮，原始错误信息永不作主文案。
  */
 
 import { adoptDialogSurfaceTheme, inferDialogThemeHost } from './confirm-dialog.js';
+import { writeClipboardText } from './clipboard.js';
 import { translate, type LocaleId } from '../i18n/messages.js';
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 
 /** 同屏最多可见条数；超出时丢弃最旧的一条。 */
 export const TOAST_MAX_VISIBLE = 3;
-/** error 类自动消失时长。 */
-export const TOAST_ERROR_DISMISS_MS = 8000;
+/** error 类自动消失时长（§3.20：8s → 12s，长堆栈读得完）。 */
+export const TOAST_ERROR_DISMISS_MS = 12000;
 /** 其它 kind 自动消失时长。 */
 export const TOAST_DISMISS_MS = 5000;
 /** 出场淡出动画时长（与入场一致；animationend 后才真正移除节点）。 */
@@ -83,6 +84,21 @@ export function showToast(
     body.textContent = detail;
     details.append(summary, body);
     toast.append(details);
+    // §3.20：一键复制技术详情（8s 内读不完长堆栈，拷出来看）。
+    const copy = doc.createElement('button');
+    copy.type = 'button';
+    copy.className = 'lightink-toast-copy';
+    copy.dataset.copyState = 'idle';
+    copy.setAttribute('aria-label', translate(locale, 'toast.copyDetails'));
+    copy.textContent = translate(locale, 'toast.copyDetails');
+    copy.addEventListener('click', () => {
+      void writeClipboardText(detail).then((ok) => {
+        const label = translate(locale, ok ? 'toast.copied' : 'toast.copyFailed');
+        copy.dataset.copyState = ok ? 'done' : 'failed';
+        copy.textContent = label;
+      });
+    });
+    toast.append(copy);
   }
   const close = doc.createElement('button');
   close.type = 'button';

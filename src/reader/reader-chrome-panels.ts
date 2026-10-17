@@ -27,6 +27,8 @@ export {
 } from '../outline/outline-model.js';
 import {
   READER_FONT_FAMILY_PRESETS,
+  READER_QUICK_SIZE_STEPS,
+  readerQuickSizeLabelPx,
   resolveReaderFontFamily,
   type ReaderFontFamilyPreset,
   type ReaderTypography,
@@ -39,6 +41,18 @@ import { observeLoadMore } from './search-panel.js';
 
 export const READER_TYPE_LINE_HEIGHTS = [1.5, 1.65, 1.8, 2] as const;
 export const READER_TYPE_MEASURE_REMS = [16, 18, 22, 26, 32] as const;
+
+/**
+ * 字族分段控件的段序（ui-redesign-2026-10 §3.5 v3）：body / serif / mono 是
+ * 一等三段（衬线走既有 `READER_FONT_FAMILY_PRESETS.serif`，不引入第二套
+ * 衬线栈、默认字族维持 body），sans 保留在末位不断既有用户的选择。
+ */
+export const READER_FONT_SEGMENT_ORDER: readonly ReaderFontFamilyPreset[] = [
+  'body',
+  'serif',
+  'mono',
+  'sans',
+];
 
 /** IME-safe debounce for the contents search box. */
 export const READER_TOC_SEARCH_DEBOUNCE_MS = 200;
@@ -1015,8 +1029,8 @@ export function fillReaderTypographyPanel(
 
 const FONT_SPECIMENS: Readonly<Record<ReaderFontFamilyPreset, string>> = {
   body: '汉',
-  sans: '汉',
-  serif: '汉',
+  sans: '黑',
+  serif: '宋',
   mono: 'Aa',
 };
 
@@ -1095,7 +1109,14 @@ function appendSizeSection(
   bindDiscreteTrackDrag(track, sizeChoices);
   const sizeMark = document.createElement('span');
   sizeMark.className = 'lightink-reader-type-step-mark lightink-reader-type-label--hidden';
-  sizeMark.textContent = formatFontScaleLabel(typography.fontScaleStep);
+  // 共享档维持百分比口径；快捷档（15/17px）直接标 px；16px 既是共享默认档
+  // 又是快捷中档，取百分比避免同一值在滑杆侧标 100%、快捷侧标 16px。
+  sizeMark.textContent = (FONT_SCALE_STEPS as readonly number[]).includes(
+    typography.fontScaleStep,
+  )
+    ? formatFontScaleLabel(typography.fontScaleStep)
+    : readerQuickSizeLabelPx(typography.fontScaleStep) ??
+      formatFontScaleLabel(typography.fontScaleStep);
   const larger = document.createElement('button');
   larger.type = 'button';
   larger.className = 'lightink-reader-type-step lightink-reader-type-step--in';
@@ -1109,7 +1130,32 @@ function appendSizeSection(
     onSize('in');
   });
   sizeRow.append(smaller, track, larger);
-  sizeSection.append(sizeRow, sizeMark);
+  sizeSection.append(sizeRow);
+  // 快捷字号档（ui-redesign §3.5）：16px 基准的 15 / 16 / 17px 三段。标签是
+  // locale 中立的 px 字面量，不新增 i18n 键。
+  const quickRow = document.createElement('div');
+  quickRow.className = 'lightink-reader-type-quick';
+  quickRow.setAttribute('role', 'group');
+  quickRow.setAttribute('aria-label', copy.size);
+  for (const step of READER_QUICK_SIZE_STEPS) {
+    const label = readerQuickSizeLabelPx(step)!;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lightink-reader-type-quick-step';
+    button.dataset.typeQuickSize = label;
+    button.textContent = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', typography.fontScaleStep === step ? 'true' : 'false');
+    button.classList.toggle('is-active', typography.fontScaleStep === step);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onTypography({ fontScaleStep: step });
+    });
+    quickRow.appendChild(button);
+  }
+  sizeSection.append(quickRow);
+  sizeSection.appendChild(sizeMark);
   panel.appendChild(sizeSection);
 }
 
@@ -1124,10 +1170,12 @@ function appendFontSection(
   fonts.className = 'lightink-reader-type-fonts';
   fonts.setAttribute('role', 'group');
   fonts.setAttribute('aria-label', copy.font);
-  for (const family of Object.keys(READER_FONT_FAMILY_PRESETS) as ReaderFontFamilyPreset[]) {
+  for (const family of READER_FONT_SEGMENT_ORDER) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'lightink-reader-type-font';
+    button.dataset.fontPreset = family;
+    // 分段按钮直接以该预设字族渲染（glyph + 名称都是活字样）。
     button.style.fontFamily = READER_FONT_FAMILY_PRESETS[family];
     button.setAttribute('aria-pressed', (
       typography.fontFamily === family ||
@@ -1283,12 +1331,22 @@ function comicChoiceSection(
   return block;
 }
 
+/**
+ * 纸墨令牌拷贝名单（读侧）。bg/fg/muted/border 之外，纸主题现在还内联覆盖
+ * bg-sunken/fg-strong/highlight/highlight-ink（见 reader-theme.ts 的写侧名单
+ * READER_THEME_INLINE_VARS，同包同提交）——portal 到 body 的浮层（查词/笔记/
+ * 目录/排版）吃这些令牌时必须显式拷贝，宿主未定义（空值）不写入。
+ */
 const READER_OVERLAY_THEME_VARS = [
   '--lightink-bg',
   '--lightink-bg-elevated',
+  '--lightink-bg-sunken',
   '--lightink-fg',
+  '--lightink-fg-strong',
   '--lightink-muted',
   '--lightink-border',
+  '--lightink-highlight',
+  '--lightink-highlight-ink',
 ] as const;
 
 /**

@@ -502,7 +502,10 @@ describe('sync panel', () => {
     showSyncPanel({ ...createDeps(), themeHost: host });
     const overlay = document.querySelector<HTMLElement>('.lightink-modal-overlay');
     expect(overlay!.dataset.readerTheme).toBe('white');
-    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#ffffff');
+    // 纸墨工作室 §3.21：白纸主题换新（浅纸更深一档），跟随 reader-theme 现值。
+    expect(overlay!.style.getPropertyValue('--lightink-bg')).toBe('#fdfcf8');
+    // §2.3 名单纪律：阅读纸主题内联覆盖的荧光笔一族随面拷贝。
+    expect(overlay!.style.getPropertyValue('--lightink-highlight')).toBe('#e8d28a');
     host.remove();
   });
 
@@ -654,6 +657,107 @@ describe('sync panel', () => {
     // 冲突/迁移列表行保持整行触控目标。
     expect(css).toMatch(
       /:is\(html\[data-android\], html\[data-touch-primary\]\) \.lightink-sync-checkbox,[\s\S]*?\.lightink-sync-migration-row\s*\{[^}]*min-height:\s*44px/,
+    );
+  });
+
+  it('renders conflicts as 40px dual-column compares and resolves one entry (纸墨工作室 §3.17)', async () => {
+    const panelDeps = createDeps();
+    let conflicts = [
+      {
+        id: 'conflict-1',
+        objectId: 'notes/42',
+        field: 'body',
+        winner: '远端改过的正文',
+        loser: '本机旧正文',
+        winnerDeviceId: 'device-b',
+        loserDeviceId: 'device-a',
+        createdAt: 1,
+      },
+    ];
+    panelDeps.sync.listConflicts = vi.fn(async () => conflicts);
+    const resolveConflict = vi.fn(async () => {
+      conflicts = [];
+    });
+    panelDeps.sync.resolveConflict = resolveConflict;
+    showSyncPanel(panelDeps);
+    await settle();
+
+    const rows = document.querySelectorAll('.lightink-sync-conflict');
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.querySelector('.lightink-sync-conflict-label')?.textContent).toBe(
+      'notes/42 · body',
+    );
+    // 双栏：保留（winner）/ 舍弃（loser），mono 值并排。
+    const sides = row.querySelectorAll('.lightink-sync-conflict-side');
+    expect(sides).toHaveLength(2);
+    expect(sides[0]!.classList.contains('is-kept')).toBe(true);
+    expect(sides[1]!.classList.contains('is-dropped')).toBe(true);
+    expect(sides[0]!.querySelector('.lightink-sync-conflict-side-title')?.textContent).toContain(
+      '保留 · device-b',
+    );
+    expect(sides[0]!.querySelector('.lightink-sync-conflict-value')?.textContent).toBe(
+      '远端改过的正文',
+    );
+    expect(sides[1]!.querySelector('.lightink-sync-conflict-value')?.textContent).toBe(
+      '本机旧正文',
+    );
+    // 标记已处理走 resolveConflict 并重渲染为空态。
+    button(row, '标记已处理').click();
+    await settle();
+    expect(resolveConflict).toHaveBeenCalledWith('conflict-1');
+    expect(document.querySelector('.lightink-sync-conflict')).toBeNull();
+    expect(document.querySelector('.lightink-sync-conflicts')?.textContent).toContain(
+      '没有未处理冲突',
+    );
+  });
+
+  it('serializes non-string conflict values into readable mono columns', async () => {
+    const panelDeps = createDeps();
+    panelDeps.sync.listConflicts = vi.fn(async () => [
+      {
+        id: 'conflict-2',
+        objectId: 'progress/7',
+        field: 'percent',
+        winner: 82,
+        loser: undefined,
+        winnerDeviceId: 'device-b',
+        loserDeviceId: 'device-a',
+        createdAt: 2,
+      },
+    ]);
+    showSyncPanel(panelDeps);
+    await settle();
+    const sides = document.querySelectorAll('.lightink-sync-conflict-side');
+    expect(sides[0]!.querySelector('.lightink-sync-conflict-value')?.textContent).toBe('82');
+    expect(sides[1]!.querySelector('.lightink-sync-conflict-value')?.textContent).toBe('—');
+  });
+});
+
+describe('sync-panel.css 增补层（纸墨工作室 §3.17）', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/sync/sync-panel.css'), 'utf-8');
+
+  it('keeps conflict and migration rows at the 40px touch target', () => {
+    expect(css).toMatch(/\.lightink-sync-conflict-head\s*\{[^}]*min-height:\s*40px/);
+    expect(css).toMatch(/\.lightink-sync-migration-row\s*\{[^}]*min-height:\s*40px/);
+  });
+
+  it('lays conflict compares out as a two-column mono grid with semantic side bars', () => {
+    expect(css).toMatch(
+      /\.lightink-sync-conflict-compare\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-sync-conflict-value\s*\{[^}]*font-family:\s*var\(--lightink-font-mono/,
+    );
+    expect(css).toMatch(
+      /\.lightink-sync-conflict-side\.is-kept\s*\{[^}]*--lightink-success/,
+    );
+    expect(css).toMatch(/\.lightink-sync-conflict-side\.is-dropped\s*\{[^}]*--lightink-danger/);
+  });
+
+  it('uses the info semantic color for the running status dot', () => {
+    expect(css).toMatch(
+      /\.lightink-sync-status\.is-running \.lightink-sync-status-dot\s*\{[^}]*--lightink-info/,
     );
   });
 });

@@ -67,6 +67,8 @@ type Labels = {
   conflicts: string;
   noConflicts: string;
   resolve: string;
+  conflictKept: string;
+  conflictDropped: string;
   migration: string;
   preview: string;
   apply: string;
@@ -114,6 +116,8 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     conflicts: 'Conflicts',
     noConflicts: 'No unresolved conflicts',
     resolve: 'Mark resolved',
+    conflictKept: 'Kept',
+    conflictDropped: 'Dropped',
     migration: 'Manage old books',
     preview: 'Preview migration',
     apply: 'Import selected',
@@ -159,6 +163,8 @@ const LABELS: Record<'en' | 'zh-CN', Labels> = {
     conflicts: '冲突',
     noConflicts: '没有未处理冲突',
     resolve: '标记已处理',
+    conflictKept: '保留',
+    conflictDropped: '舍弃',
     migration: '管理旧书',
     preview: '预览迁移',
     apply: '导入选中',
@@ -319,6 +325,18 @@ function field(
 function migrationLabel(entry: ManagedMigrationEntry): string {
   const suffix = entry.size === undefined ? '' : ` (${Math.round(entry.size / 1024)} KiB)`;
   return `${entry.title}${suffix}`;
+}
+
+/** 冲突值列的 mono 文本：undefined/对象都给可读形态，超长交给 CSS 截断。 */
+function formatConflictValue(value: unknown): string {
+  if (value === undefined || value === null) return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function themeStorageOf(deps: SyncPanelDeps): LibraryThemeStorage | null {
@@ -739,9 +757,14 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       return;
     }
     for (const conflict of values) {
+      // 纸墨工作室 §3.17：冲突行 40px + 双栏对比（保留/舍弃 mono 并排，
+      // 一眼看出两端差异再决定标记已处理）。
       const row = doc.createElement('div');
       row.className = 'lightink-sync-conflict';
+      const head = doc.createElement('div');
+      head.className = 'lightink-sync-conflict-head';
       const label = doc.createElement('span');
+      label.className = 'lightink-sync-conflict-label';
       label.textContent = `${conflict.objectId} · ${conflict.field}`;
       const resolve = button(doc, L.resolve);
       resolve.addEventListener('click', async () => {
@@ -749,7 +772,31 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
         await deps.sync.resolveConflict(conflict.id).catch(() => undefined);
         await renderConflicts();
       });
-      row.append(label, resolve);
+      head.append(label, resolve);
+      const compare = doc.createElement('div');
+      compare.className = 'lightink-sync-conflict-compare';
+      const sides: Array<{
+        kind: 'kept' | 'dropped';
+        title: string;
+        device: string;
+        value: unknown;
+      }> = [
+        { kind: 'kept', title: L.conflictKept, device: conflict.winnerDeviceId, value: conflict.winner },
+        { kind: 'dropped', title: L.conflictDropped, device: conflict.loserDeviceId, value: conflict.loser },
+      ];
+      for (const side of sides) {
+        const cell = doc.createElement('div');
+        cell.className = `lightink-sync-conflict-side is-${side.kind}`;
+        const caption = doc.createElement('span');
+        caption.className = 'lightink-sync-conflict-side-title';
+        caption.textContent = `${side.title} · ${side.device}`;
+        const value = doc.createElement('code');
+        value.className = 'lightink-sync-conflict-value';
+        value.textContent = formatConflictValue(side.value);
+        cell.append(caption, value);
+        compare.appendChild(cell);
+      }
+      row.append(head, compare);
       conflicts.appendChild(row);
     }
   };

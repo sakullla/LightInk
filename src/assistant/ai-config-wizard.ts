@@ -219,18 +219,29 @@ export function openAiConfigWizard(doc: Document, options: AiConfigWizardOptions
   dismiss.textContent = '×';
   head.append(title, dismiss);
 
+  // 步骤指示器（§3.13）：1/4…4/4 计数 + 每步一枚圆点（完成=success、当前=accent）。
+  const stepsRow = doc.createElement('div');
+  stepsRow.className = 'lightink-ai-wizard-steps-row';
   const steps = doc.createElement('ol');
   steps.className = 'lightink-ai-wizard-steps';
+  const stepCount = doc.createElement('span');
+  stepCount.className = 'lightink-ai-wizard-steps-count';
+  stepCount.dataset.wizardStepsCount = 'true';
   const stepItems = new Map<WizardStep, HTMLLIElement>();
   for (const entry of WIZARD_STEPS) {
     const item = doc.createElement('li');
     item.dataset.wizardStep = entry.id;
+    const dot = doc.createElement('span');
+    dot.className = 'lightink-ai-wizard-step-dot';
+    dot.dataset.wizardStepDot = entry.id;
+    dot.setAttribute('aria-hidden', 'true');
     const name = doc.createElement('span');
     name.dataset.wizardStepName = entry.id;
-    item.appendChild(name);
+    item.append(dot, name);
     steps.appendChild(item);
     stepItems.set(entry.id, item);
   }
+  stepsRow.append(steps, stepCount);
 
   const body = doc.createElement('div');
   body.className = 'lightink-ai-wizard-body';
@@ -341,7 +352,7 @@ export function openAiConfigWizard(doc: Document, options: AiConfigWizardOptions
   const saveBtn = button(doc, 'lightink-modal-btn lightink-modal-btn--primary lightink-ai-wizard-save');
   footer.append(cancelBtn, backBtn, testBtn, nextBtn, saveBtn);
 
-  dialog.append(head, steps, body, status, footer);
+  dialog.append(head, stepsRow, body, status, footer);
   body.append(preset, keyPane, testPane, savePane);
   overlay.appendChild(dialog);
   labelModal(dialog, title);
@@ -591,13 +602,15 @@ export function openAiConfigWizard(doc: Document, options: AiConfigWizardOptions
     title.textContent = l.title;
     dismiss.setAttribute('aria-label', l.cancel);
     dismiss.title = l.cancel;
+    const activeIndex = WIZARD_STEPS.findIndex((candidate) => candidate.id === step);
+    stepCount.textContent = `${activeIndex + 1}/${WIZARD_STEPS.length}`;
     for (const entry of WIZARD_STEPS) {
       const item = stepItems.get(entry.id);
       if (item === undefined) continue;
       const index = WIZARD_STEPS.findIndex((candidate) => candidate.id === entry.id);
       const active = entry.id === step;
       item.classList.toggle('is-active', active);
-      item.classList.toggle('is-done', index < WIZARD_STEPS.findIndex((c) => c.id === step));
+      item.classList.toggle('is-done', index < activeIndex);
       if (active) {
         item.setAttribute('aria-current', 'step');
       } else {
@@ -605,7 +618,7 @@ export function openAiConfigWizard(doc: Document, options: AiConfigWizardOptions
       }
       const name = item.querySelector<HTMLElement>(`[data-wizard-step-name="${entry.id}"]`);
       if (name !== null) {
-        name.textContent = `${index + 1}. ${l[entry.name]}`;
+        name.textContent = l[entry.name];
       }
     }
 

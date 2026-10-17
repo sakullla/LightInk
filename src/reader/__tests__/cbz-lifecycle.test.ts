@@ -1187,12 +1187,18 @@ describe('CBZ page materialization', () => {
     expect(container.dataset.comicSpreadPref).toBe('auto');
     expect(container.querySelector('[aria-label="Auto"]')?.getAttribute('aria-pressed')).toBe('true');
     expect(container.querySelector('[aria-label="Right to left"]')).not.toBeNull();
+    // RTL 方向徽标（ui-redesign §3.9）：LTR 默认不占位；切 RTL 后常显方向箭头。
+    const directionBadge = container.querySelector<HTMLElement>('.lightink-reader-comic-direction');
+    expect(directionBadge, 'comic direction badge node').not.toBeNull();
+    expect(directionBadge!.hidden).toBe(true);
     handle.hideChrome();
     expect(container.dataset.comicChrome).toBe('hidden');
     clickCanvas(container, 950);
     expect(handle.currentPage).toBe(2);
     container.querySelector<HTMLButtonElement>('[aria-label="Right to left"]')!.click();
     expect(handle.preferences.direction).toBe('rtl');
+    expect(directionBadge!.hidden).toBe(false);
+    expect(directionBadge!.textContent).toContain('RTL');
     container.querySelector<HTMLButtonElement>('[aria-label="Single page"]')!.click();
     expect(handle.preferences.spread).toBe('single');
     await handle.destroy();

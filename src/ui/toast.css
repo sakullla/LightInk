@@ -21,6 +21,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     'title close'
+    'copy close'
     'detail close';
   align-items: start;
   column-gap: 8px;
@@ -90,18 +91,58 @@
   overflow-y: auto;
 }
 
-.lightink-toast--info,
+/* 纸墨工作室 §3.20：danger/success/info/warning 语义左边条 + 图标色，
+   不再借用 accent 表意。 */
+.lightink-toast--info {
+  border-left-color: var(--lightink-info, var(--lightink-accent));
+}
+
 .lightink-toast--success {
-  border-left-color: var(--lightink-accent);
+  border-left-color: var(--lightink-success, var(--lightink-accent));
 }
 
 .lightink-toast--warning {
-  border-left-color: var(--lightink-accent);
-  background: color-mix(in srgb, var(--lightink-accent-soft) 55%, var(--lightink-bg-elevated));
+  border-left-color: var(--lightink-warning, var(--lightink-accent));
+  background: color-mix(
+    in srgb,
+    var(--lightink-warning, var(--lightink-accent)) 10%,
+    var(--lightink-bg-elevated)
+  );
 }
 
 .lightink-toast--error {
   border-left-color: var(--lightink-danger);
+}
+
+/* §3.20：一键复制技术详情。 */
+.lightink-toast-copy {
+  grid-area: copy;
+  justify-self: start;
+  margin: 4px 0 0;
+  padding: 2px 10px;
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-control, 8px);
+  background: transparent;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.lightink-toast-copy:hover,
+.lightink-toast-copy:focus-visible {
+  color: var(--lightink-fg);
+  background: var(--lightink-selection);
+}
+
+.lightink-toast-copy[data-copy-state='done'] {
+  color: var(--lightink-success, var(--lightink-accent));
+  border-color: color-mix(in srgb, var(--lightink-success, var(--lightink-accent)) 45%, transparent);
+}
+
+.lightink-toast-copy[data-copy-state='failed'] {
+  color: var(--lightink-danger);
 }
 
 @keyframes lightink-toast-in {

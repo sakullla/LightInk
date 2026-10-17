@@ -19,6 +19,13 @@
  *     混合出不同颜色，且被高亮层字形镂空显得块状断裂；实色保证任意底层内容上
  *     选区颜色一致。选中文字由 textarea 的 ::selection 前景色重绘（见 theme.css）。
  *
+ * 纸墨工作室（2026-10 改版，docs/design/ui-redesign-2026-10.md §1/§2）：
+ *   - 三层表面：bg-sunken（凹面/侧栏/轨道）→ bg（纸面）→ bg-elevated（卡片/浮层）；
+ *   - 语义色四件套：danger + success / warning / info（toast、保存状态、同步结果）；
+ *   - 荧光笔：highlight（底色）+ highlight-ink（亮底文字）；
+ *   - focus-ring（focus 洗色）、shadow-pop（菜单/气泡/浮出条）；
+ *   - 字号阶梯 text-xs…2xl、间距网格 space-1…7、控件高度 control-h-*（:root 共享块）。
+ *
  * 自定义主题 = 用户 CSS 文件，由 ThemeService 注入 <style> 覆盖下列令牌
  * （:root 上的 warm-light 令牌作为自定义主题未定义项的回退）。
  * 未写出的 --lightink-syntax-* 同样回退纸墨浅色，而不是午夜/深空。
@@ -39,6 +46,43 @@
   --lightink-z-dialog: 100;
   --lightink-z-menu: 10050;
   --lightink-z-progress: 10100;
+
+  /*
+   * 纸墨工作室（2026-10 改版，docs/design/ui-redesign-2026-10.md §1.2/§1.3）：
+   * 字号阶梯与间距网格（主题无关）。旧 UI 主字号 --lightink-font-size-ui: 13px
+   * 保留向后兼容，仅新代码改用阶梯。
+   */
+  --lightink-text-xs: 11px; /* 状态栏微标 */
+  --lightink-text-sm: 12px;
+  --lightink-text-md: 14px; /* 导航 / 按钮（UI 主字号 13 → 14） */
+  --lightink-text-lg: 18px;
+  --lightink-text-xl: 22px;
+  --lightink-text-2xl: 28px; /* hero */
+
+  /* 4px 基网格的语义间距；存量 CSS 逐包迁移，新规则一律用令牌。 */
+  --lightink-space-1: 4px;
+  --lightink-space-2: 8px;
+  --lightink-space-3: 12px;
+  --lightink-space-4: 16px;
+  --lightink-space-5: 24px;
+  --lightink-space-6: 32px;
+  --lightink-space-7: 48px;
+
+  /* 控件高度与触达：桌面可视 ≥28、命中 ≥32；触屏 ≥48；书库导航密度 26px。 */
+  --lightink-control-h-sm: 28px;
+  --lightink-control-h: 32px;
+  --lightink-control-h-lg: 40px;
+  --lightink-touch-h: 48px;
+  --lightink-density-nav: 26px;
+
+  /*
+   * 动效补充（§1.6）：fast/base/easing-standard 不动；slow 用于 chrome 展开
+   * 类大位移（≥64px），easing-leave 让退场稍快于进场。
+   * 不新增衬线阅读栈：衬线唯一来源是 READER_FONT_FAMILY_PRESETS.serif
+   * （src/reader/reader-typography.ts），见设计 §1.2。
+   */
+  --lightink-duration-slow: 280ms;
+  --lightink-easing-leave: cubic-bezier(0.4, 0, 1, 1);
 }
 
 :root,
@@ -57,23 +101,36 @@
   --lightink-annotation: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg-elevated));
   --lightink-annotation-wash: color-mix(in srgb, var(--lightink-accent) 32%, transparent);
 
-  /* Paper stack: cream page, slightly cooler elevated surfaces for chrome/code. */
-  --lightink-bg: #f4efe6;
-  --lightink-bg-elevated: #fbf7f0;
-  --lightink-fg: #2f2b24; /* ~11:1 on paper — durable long-session contrast */
-  --lightink-muted: #6f6758; /* was too light (#8c8471); now readable UI labels */
-  --lightink-accent: #9a5828;
-  --lightink-accent-soft: #efe2cc;
-  --lightink-border: #d9d0bc;
+  /* Paper stack (纸墨工作室): cream page, slightly cooler elevated surfaces
+     for chrome/code, sunken wells for sidebars / tracks / inset panels. */
+  --lightink-bg: #f6f1e7;
+  --lightink-bg-elevated: #fdfaf4;
+  --lightink-bg-sunken: #ebe4d6;
+  --lightink-fg: #2c2820; /* ~11:1 on paper — durable long-session contrast */
+  --lightink-fg-strong: #201c15; /* headings / emphasis */
+  --lightink-muted: #6d6455; /* was too light (#8c8471); now readable UI labels */
+  --lightink-accent: #a0521c;
+  --lightink-accent-soft: #f0e2c8;
+  --lightink-accent-contrast: #fff8ec; /* text on solid accent fills */
+  --lightink-border: #ddd3bd;
+  --lightink-border-strong: #c9bda2;
   /* Code surface: cooler linen card so blocks read as ink on card, not mud. */
   --lightink-code-bg: #f2eee4;
   --lightink-code-fg: #2a261f;
-  --lightink-selection: rgba(154, 88, 40, 0.2);
+  --lightink-selection: rgba(160, 82, 28, 0.2);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 38%, var(--lightink-bg));
   --lightink-danger: #a83a2e;
+  --lightink-success: #34693e;
+  --lightink-warning: #8f641c;
+  --lightink-info: #3e5c8c;
+  /* 荧光笔一族（§1.1）：highlight 为底色，highlight-ink 为亮底上的文字色。 */
+  --lightink-highlight: #e8d28a;
+  --lightink-highlight-ink: #5f521c;
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
   --lightink-overlay: rgba(47, 43, 36, 0.36);
-  --lightink-shadow: 0 4px 16px rgba(47, 43, 36, 0.1);
+  --lightink-shadow: 0 1px 2px rgba(44, 40, 32, 0.08), 0 4px 16px rgba(44, 40, 32, 0.07);
   --lightink-shadow-strong: 0 12px 32px rgba(47, 43, 36, 0.14), 0 2px 8px rgba(47, 43, 36, 0.06);
+  --lightink-shadow-pop: 0 6px 20px rgba(44, 40, 32, 0.12), 0 1px 3px rgba(44, 40, 32, 0.08);
 
   /* Typography stacks (system-first; no network font fetch). */
   --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
@@ -100,14 +157,14 @@
   /* Middle column cap; scaled per display tier (see theme.css data-display). */
   --lightink-measure: min(56rem, 94%);
   /* Page chrome spacing (scaled per display tier in theme.css). */
-  --lightink-page-pad-x: 28px;
+  --lightink-page-pad-x: 32px;
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
   /* Nested chrome radii: control < panel < dialog. Window frame is native. */
-  --lightink-radius-control: 6px;
-  --lightink-radius-panel: 10px;
-  --lightink-radius-dialog: 12px;
+  --lightink-radius-control: 8px;
+  --lightink-radius-panel: 12px;
+  --lightink-radius-dialog: 16px;
 
   /*
    * Light syntax hue families (cool-light uses the same structure, cooler bias):
@@ -133,21 +190,32 @@
 [data-theme="cool-light"] {
   color-scheme: light;
 
-  --lightink-bg: #f1f3f6;
-  --lightink-bg-elevated: #fafbfc;
-  --lightink-fg: #242a33;
-  --lightink-muted: #5f6874;
-  --lightink-accent: #2a66ad;
-  --lightink-accent-soft: #e4ebf5;
-  --lightink-border: #d0d6de;
+  --lightink-bg: #f2f4f8;
+  --lightink-bg-elevated: #fbfcfe;
+  --lightink-bg-sunken: #e6eaf1;
+  --lightink-fg: #222832;
+  --lightink-fg-strong: #161b23;
+  --lightink-muted: #5b6472;
+  --lightink-accent: #2d6cbb;
+  --lightink-accent-soft: #e5edf8;
+  --lightink-accent-contrast: #ffffff;
+  --lightink-border: #d1d8e2;
+  --lightink-border-strong: #b9c3d2;
   --lightink-code-bg: #e8eef4;
   --lightink-code-fg: #1c222c;
-  --lightink-selection: rgba(42, 102, 173, 0.18);
+  --lightink-selection: rgba(45, 108, 187, 0.2);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg));
   --lightink-danger: #b03a30;
+  --lightink-success: #1e6b4f;
+  --lightink-warning: #8a6414;
+  --lightink-info: #33628f;
+  --lightink-highlight: #e5dfa5;
+  --lightink-highlight-ink: #565421;
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
   --lightink-overlay: rgba(36, 42, 51, 0.36);
-  --lightink-shadow: 0 4px 16px rgba(36, 42, 51, 0.1);
+  --lightink-shadow: 0 1px 2px rgba(34, 40, 50, 0.08), 0 4px 16px rgba(34, 40, 50, 0.07);
   --lightink-shadow-strong: 0 12px 32px rgba(36, 42, 51, 0.14), 0 2px 8px rgba(36, 42, 51, 0.06);
+  --lightink-shadow-pop: 0 6px 20px rgba(34, 40, 50, 0.12), 0 1px 3px rgba(34, 40, 50, 0.08);
 
   --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
     "Microsoft YaHei", system-ui, sans-serif;
@@ -161,7 +229,7 @@
   --lightink-line-height-body: 1.75;
   --lightink-line-height-code: 1.55;
   --lightink-measure: min(56rem, 94%);
-  --lightink-page-pad-x: 28px;
+  --lightink-page-pad-x: 32px;
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
@@ -183,21 +251,32 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --lightink-bg: #1e1c19;
-  --lightink-bg-elevated: #282622;
-  --lightink-fg: #e0d8c8;
-  --lightink-muted: #9a9180;
-  --lightink-accent: #d4a066;
-  --lightink-accent-soft: #3a342a;
-  --lightink-border: #3f3a32;
+  --lightink-bg: #1d1b18;
+  --lightink-bg-elevated: #272522;
+  --lightink-bg-sunken: #171512;
+  --lightink-fg: #e3dccb;
+  --lightink-fg-strong: #f2ede0;
+  --lightink-muted: #9b927f;
+  --lightink-accent: #d8a870;
+  --lightink-accent-soft: #3a3327;
+  --lightink-accent-contrast: #221a0e;
+  --lightink-border: #403a30;
+  --lightink-border-strong: #554d3c;
   --lightink-code-bg: #26231d;
   --lightink-code-fg: #d2c8b2;
-  --lightink-selection: rgba(212, 160, 102, 0.28);
+  --lightink-selection: rgba(216, 168, 112, 0.28);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-bg));
   --lightink-danger: #d4786a;
+  --lightink-success: #85b08e;
+  --lightink-warning: #cfa75c;
+  --lightink-info: #8fa9cc;
+  --lightink-highlight: #8a7430;
+  --lightink-highlight-ink: #f0e2ac;
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
   --lightink-overlay: rgba(0, 0, 0, 0.5);
-  --lightink-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(0, 0, 0, 0.3);
   --lightink-shadow-strong: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --lightink-shadow-pop: 0 8px 22px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
 
   --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
     "Microsoft YaHei", system-ui, sans-serif;
@@ -211,7 +290,7 @@
   --lightink-line-height-body: 1.75;
   --lightink-line-height-code: 1.55;
   --lightink-measure: min(56rem, 94%);
-  --lightink-page-pad-x: 28px;
+  --lightink-page-pad-x: 32px;
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 
@@ -236,21 +315,32 @@
 [data-theme="midnight"] {
   color-scheme: dark;
 
-  --lightink-bg: #151920;
-  --lightink-bg-elevated: #1d232d;
-  --lightink-fg: #d0d7e2;
-  --lightink-muted: #8891a0;
-  --lightink-accent: #7eafdf;
-  --lightink-accent-soft: #273040;
-  --lightink-border: #313947;
+  --lightink-bg: #141822;
+  --lightink-bg-elevated: #1c2330;
+  --lightink-bg-sunken: #0f131b;
+  --lightink-fg: #d3dae6;
+  --lightink-fg-strong: #e8edf6;
+  --lightink-muted: #8b94a6;
+  --lightink-accent: #84b4e4;
+  --lightink-accent-soft: #28334a;
+  --lightink-accent-contrast: #0c141f;
+  --lightink-border: #333d4e;
+  --lightink-border-strong: #4a5568;
   --lightink-code-bg: #1b212b;
   --lightink-code-fg: #bec6d2;
-  --lightink-selection: rgba(126, 175, 223, 0.26);
+  --lightink-selection: rgba(132, 180, 228, 0.26);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 42%, var(--lightink-bg));
   --lightink-danger: #d07878;
+  --lightink-success: #74b39c;
+  --lightink-warning: #c2a35c;
+  --lightink-info: #7e9cc4;
+  --lightink-highlight: #7d7440;
+  --lightink-highlight-ink: #eadfa9;
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
   --lightink-overlay: rgba(0, 0, 0, 0.5);
-  --lightink-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(0, 0, 0, 0.3);
   --lightink-shadow-strong: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --lightink-shadow-pop: 0 8px 22px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
 
   --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
     "Microsoft YaHei", system-ui, sans-serif;
@@ -264,7 +354,7 @@
   --lightink-line-height-body: 1.75;
   --lightink-line-height-code: 1.55;
   --lightink-measure: min(56rem, 94%);
-  --lightink-page-pad-x: 28px;
+  --lightink-page-pad-x: 32px;
   --lightink-page-pad-y: 24px;
   --lightink-outline-width: 220px;
 

@@ -35,6 +35,8 @@ const en = {
   'file.saveAs': 'Save As…',
   'file.exportHtml': 'Export HTML…',
   'file.exportPdf': 'Export PDF…',
+  // 纸墨工作室 §3.18：导出入口标注输出跟随当前主题外观。
+  'file.exportThemeHint': 'Uses current theme look',
   'file.export.success': 'Exported to {path}.',
 
   'edit.undo': 'Undo',
@@ -53,6 +55,7 @@ const en = {
   'view.fullscreen': 'Full Screen',
   'view.outline': 'Outline (Expand / Rail / Hide)',
   'view.sourceMode': 'Source Mode',
+  'view.paperCard': 'Paper Card',
   'view.fontLayout': 'Font & Layout',
   'view.layout.scroll': 'Scroll layout',
   'view.layout.paginated': 'Paginated layout',
@@ -62,6 +65,15 @@ const en = {
   'view.language': 'Language',
   'view.language.en': 'English',
   'view.language.zh': '简体中文',
+  // 纸墨工作室 §3.1/§3.15：主题从三层子菜单拍平为视图菜单单项选择组。
+  // 纸墨工作室 §3.15：标注/阅读排版菜单标签收敛进 messages.ts（原内联 ll() 双语）。
+  'view.annotate': 'Annotate',
+  'view.annotateBookmark': 'Bookmark This Page',
+  'view.annotateNote': 'Add Note',
+  'view.annotatePanel': 'Annotation Panel',
+  'view.readerFont': 'Reading font',
+  'view.readerLineHeight': 'Line height',
+  'view.readerMeasure': 'Measure',
 
   'theme.warm-light': 'Warm Light',
   'theme.cool-light': 'Cool Light',
@@ -72,6 +84,10 @@ const en = {
   'chrome.showMenu': 'Show menu bar',
   'chrome.showTabs': 'Show tab bar',
   'chrome.closeTab': 'Close {title}',
+  // 纸墨工作室 §3.1：标题栏常驻「轻墨 ☰」恢复锚点 + 主题快切按钮。
+  'chrome.appMenu': 'LightInk menu (restore pinned navigation)',
+  'chrome.themeQuickSwitch': 'Switch theme (light/dark); right-click for all themes',
+  'chrome.themeMenu': 'Choose theme',
 
   'outline.title': 'Outline',
   'outline.collapse': 'Collapse outline',
@@ -885,6 +901,10 @@ const en = {
   // R4：非阻塞 toast 与结构化错误友好文案。
   'toast.close': 'Close notification',
   'toast.details': 'Technical details',
+  // 纸墨工作室 §3.20：error toast 一键复制技术详情。
+  'toast.copyDetails': 'Copy details',
+  'toast.copied': 'Copied',
+  'toast.copyFailed': 'Copy failed',
   'sync.backgroundCompleted': 'Sync complete',
   'sync.error.fallback': 'Sync failed',
   'sync.error.profileInvalid': 'The sync target settings are invalid.',
@@ -958,6 +978,8 @@ const zhCN = {
   'file.saveAs': '另存为',
   'file.exportHtml': '导出 HTML…',
   'file.exportPdf': '导出 PDF…',
+  // 纸墨工作室 §3.18：导出入口标注输出跟随当前主题外观。
+  'file.exportThemeHint': '使用当前主题外观',
   'file.export.success': '已导出到 {path}。',
 
   'edit.undo': '撤销',
@@ -976,6 +998,7 @@ const zhCN = {
   'view.fullscreen': '全屏',
   'view.outline': '大纲切换（展开/窄条/隐藏）',
   'view.sourceMode': '源码模式',
+  'view.paperCard': '纸卡模式',
   'view.fontLayout': '字体布局',
   'view.layout.scroll': '滚动模式',
   'view.layout.paginated': '翻页模式',
@@ -985,6 +1008,15 @@ const zhCN = {
   'view.language': '语言',
   'view.language.en': 'English',
   'view.language.zh': '简体中文',
+  // 纸墨工作室 §3.1/§3.15：主题从三层子菜单拍平为视图菜单单项选择组。
+  // 纸墨工作室 §3.15：标注/阅读排版菜单标签收敛进 messages.ts（原内联 ll() 双语）。
+  'view.annotate': '标注',
+  'view.annotateBookmark': '书签本页',
+  'view.annotateNote': '添加笔记',
+  'view.annotatePanel': '标注侧栏',
+  'view.readerFont': '阅读字体',
+  'view.readerLineHeight': '行高',
+  'view.readerMeasure': '行长',
 
   'theme.warm-light': '纸墨浅色',
   'theme.cool-light': '云白浅色',
@@ -995,6 +1027,10 @@ const zhCN = {
   'chrome.showMenu': '显示菜单栏',
   'chrome.showTabs': '显示标签栏',
   'chrome.closeTab': '关闭 {title}',
+  // 纸墨工作室 §3.1：标题栏常驻「轻墨 ☰」恢复锚点 + 主题快切按钮。
+  'chrome.appMenu': '轻墨菜单（恢复钉住导航）',
+  'chrome.themeQuickSwitch': '切换主题（浅/深）；右键查看全部主题',
+  'chrome.themeMenu': '选择主题',
 
   'outline.title': '大纲',
   'outline.collapse': '折叠大纲',
@@ -1780,6 +1816,10 @@ const zhCN = {
   // R4：非阻塞 toast 与结构化错误友好文案。
   'toast.close': '关闭通知',
   'toast.details': '技术详情',
+  // 纸墨工作室 §3.20：error toast 一键复制技术详情。
+  'toast.copyDetails': '复制详情',
+  'toast.copied': '已复制',
+  'toast.copyFailed': '复制失败',
   'sync.backgroundCompleted': '同步完成',
   'sync.error.fallback': '同步失败',
   'sync.error.profileInvalid': '同步目标设置无效。',

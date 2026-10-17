@@ -14,12 +14,12 @@ import { setBlockType, wrapIn } from '@milkdown/prose/commands';
 import { redo, undo } from '@milkdown/prose/history';
 import { wrapInList } from '@milkdown/prose/schema-list';
 import type { Node as PMNode, ResolvedPos } from '@milkdown/prose/model';
-import { Plugin, PluginKey, type Transaction } from '@milkdown/prose/state';
+import { Plugin, PluginKey, type EditorState, type Transaction } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
 import { $prose } from '@milkdown/utils';
 
 import { insertMarkdownAtSelection } from '../insert-markdown.js';
-import { applyFormatTool } from './format-toolbar.js';
+import { applyFormatTool, selectionHasMark } from './format-toolbar.js';
 import { getSlashImageHandler } from './slash-menu.js';
 
 const PLUGIN_KEY = new PluginKey('lightink-keyboard-format-bar');
@@ -391,9 +391,37 @@ function watchFormatBarVisibility(view: EditorView, onChange: () => void): () =>
   return () => observer.disconnect();
 }
 
+/** marks 工具 → schema mark 名（与 FORMAT_TOOLS 同源，便于 active 联动）。 */
+const KEYBOARD_MARK_NAMES: Readonly<Partial<Record<KeyboardFormatToolId, string>>> = {
+  bold: 'strong',
+  italic: 'emphasis',
+  strikethrough: 'strike_through',
+  code: 'inlineCode',
+  link: 'link',
+};
+
+/**
+ * 纸墨工作室 §3.10 行为联动：触屏格式条的 active 态。inline 工具看选区
+ * marks；块工具（列表/任务列表/引用）看光标祖先节点。headless 可测。
+ */
+export function keyboardToolActiveStates(state: EditorState): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const [id, markName] of Object.entries(KEYBOARD_MARK_NAMES)) {
+    out[id] = selectionHasMark(state, markName ?? '');
+  }
+  const $from = state.selection.$from;
+  out['list'] = hasAncestor($from, 'bullet_list') || hasAncestor($from, 'ordered_list');
+  const listDepth = listItemDepth($from);
+  out['task-list'] =
+    listDepth !== null && typeof $from.node(listDepth).attrs['checked'] === 'boolean';
+  out['blockquote'] = hasAncestor($from, 'blockquote');
+  return out;
+}
+
 function syncBar(view: EditorView, bar: HTMLElement): void {
   const show = shouldShowKeyboardFormatBar(view);
   bar.classList.toggle('is-visible', show);
+  const activeStates = keyboardToolActiveStates(view.state);
   for (const tool of KEYBOARD_FORMAT_TOOLS) {
     const btn = bar.querySelector<HTMLButtonElement>(`button[data-tool="${tool.id}"]`);
     if (btn === null) continue;
@@ -401,6 +429,12 @@ function syncBar(view: EditorView, bar: HTMLElement): void {
     btn.setAttribute('aria-label', tool.title);
     if (tool.id === 'heading') {
       btn.textContent = headingButtonLabel(view.state.selection.$from.parent);
+    }
+    // active 联动（§3.10）：当前光标/选区已处于该格式时按钮亮起。
+    if (tool.id in activeStates) {
+      const active = activeStates[tool.id] === true;
+      btn.toggleAttribute('data-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
 }

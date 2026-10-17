@@ -534,6 +534,8 @@ const PAGED_INLINE_BOX_PROPS = [
   'max-height',
   'width',
   'max-width',
+  'margin-left',
+  'margin-right',
   'overflow',
   'overflow-x',
   'overflow-y',
@@ -1861,6 +1863,9 @@ export function createFlowRenderer(
     html.style.setProperty('--lightink-reader-image-max-height', `${height}px`);
     pageBox.style.boxSizing = 'border-box';
     pageBox.style.setProperty('width', spreadWidthCss, 'important');
+    // 版心居中：栏宽受行长约束后 spread 可能窄于纸面，margin-inline auto 让
+    // 双栏（含其中央栏沟）在纸面居中；与纸面同宽时该声明是空操作。
+    pageBox.style.marginInline = 'auto';
     pageBox.style.maxWidth = 'none';
     pageBox.style.setProperty('height', `${height}px`, 'important');
     pageBox.style.setProperty('max-height', `${height}px`, 'important');

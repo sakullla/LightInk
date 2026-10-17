@@ -1,12 +1,17 @@
 /**
- * AI 助手面板样式（assistant-panel，ADR-7 / R1/R2/R4）。
+ * AI 助手面板样式（assistant-panel，ADR-7 / R1/R2/R4；纸墨工作室 §3.13）。
  *
  * 桌面：portal 到 body 后经 pinFixedOverlay 钉阅读区右缘全高（几何由 JS
  * 内联 fixed 提供，此处只给宽度/层级/内部布局）。触屏：is-touch-sheet 底部
  * sheet（键盘弹起时 pinFixedOverlay 双锚定，输入区不被键盘盖住）。
  * 主题令牌由 syncAssistantHostTheme 从当前宿主复制（--lightink-*），
- * 不把强调色改写成正文色。颜色不写死：错误用 --lightink-danger，阴影用
- * --lightink-shadow。
+ * 不把强调色改写成正文色。颜色不写死：错误用 --lightink-danger，成功/警示/
+ * 信息用 --lightink-success/-warning/-info，凹面用 --lightink-bg-sunken，
+ * 阴影用 --lightink-shadow（浮出小件用 --lightink-shadow-pop）。
+ *
+ * 表面语言：面板本体是 elevated 卡面 + 16px 圆角（--lightink-radius-dialog）；
+ * 面板内的输入区/工具调用卡/动作 chip 下沉一层 bg-sunken，形成
+ * sunken → elevated 的两层表面。
  *
  * 面板内节奏统一走根节点上的局部刻度：字级 4 档 --assistant-font-*、间距
  * 4 档 --assistant-space-*；控件圆角统一走 --lightink-radius-control/panel，
@@ -27,9 +32,9 @@
   overflow: hidden;
   overscroll-behavior: contain;
   color: var(--lightink-fg);
-  background: var(--lightink-bg);
+  background: var(--lightink-bg-elevated);
   border: 1px solid var(--lightink-border);
-  border-radius: var(--lightink-radius-panel);
+  border-radius: var(--lightink-radius-dialog);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
     var(--lightink-shadow);
@@ -65,6 +70,7 @@
 .lightink-reader-assistant-title {
   flex: 1 1 auto;
   min-width: 0;
+  color: var(--lightink-fg-strong);
   font-size: var(--assistant-font-lg);
   font-weight: 650;
   letter-spacing: 0.01em;
@@ -171,7 +177,7 @@
   padding: 0 var(--assistant-space-4);
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 20%, transparent);
   border-radius: var(--lightink-radius-control);
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-bg-sunken);
   color: var(--lightink-fg);
   font: inherit;
   font-size: var(--assistant-font-md);
@@ -209,14 +215,16 @@
   gap: var(--assistant-space-1);
 }
 
+/* 会话历史行 40px（§3.13）：单行标题 + 右侧时间；当前会话 accent-soft 胶囊。 */
 .lightink-reader-assistant-history-open {
   display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--assistant-space-1);
+  flex-direction: row;
+  align-items: center;
+  gap: var(--assistant-space-2);
   min-width: 0;
-  padding: 0.55rem var(--assistant-space-3);
+  min-height: 40px;
+  padding: 0.3rem var(--assistant-space-3);
   border: 0;
   border-radius: var(--lightink-radius-control);
   background: transparent;
@@ -227,11 +235,15 @@
 }
 
 .lightink-reader-assistant-history-item.is-active .lightink-reader-assistant-history-open {
-  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  background: var(--lightink-accent-soft);
 }
 
 .lightink-reader-assistant-history-open:hover {
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+.lightink-reader-assistant-history-item.is-active .lightink-reader-assistant-history-open:hover {
+  background: var(--lightink-accent-soft);
 }
 
 .lightink-reader-assistant-history-open:focus-visible {
@@ -240,21 +252,30 @@
 }
 
 .lightink-reader-assistant-history-title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  font-size: var(--assistant-font-lg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--assistant-font-md);
   font-weight: 550;
   line-height: 1.35;
 }
 
+.lightink-reader-assistant-history-item.is-active .lightink-reader-assistant-history-title {
+  color: var(--lightink-fg-strong);
+  font-weight: 600;
+}
+
 .lightink-reader-assistant-history-time {
+  flex: 0 0 auto;
   color: var(--lightink-muted);
   font-size: var(--assistant-font-xs);
   line-height: 1.2;
 }
 
+/* 删除按钮常显（§3.13）：不依赖悬停显隐；hover 沿用 ADR-5 的 ink 洗色
+   （touch-feedback-css.test.ts 锁定）。 */
 .lightink-reader-assistant-history-delete {
   flex: 0 0 auto;
   align-self: center;
@@ -295,13 +316,13 @@
   color: var(--lightink-muted);
 }
 
-/* R3：未配置引导主入口「立即配置 AI」沿用原胶囊按钮语言（打开向导）。 */
+/* R3：未配置引导主入口「立即配置 AI」是本屏唯一软实底主按钮（打开向导）。 */
 .lightink-reader-assistant-setup {
   align-self: flex-start;
   padding: 0.4rem 0.9rem;
-  border: 1px solid color-mix(in srgb, var(--lightink-fg) 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lightink-accent) 40%, var(--lightink-border));
   border-radius: 999px;
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-accent-soft);
   color: var(--lightink-fg);
   font: inherit;
   font-weight: 600;
@@ -309,7 +330,7 @@
 }
 
 .lightink-reader-assistant-setup:hover {
-  background: var(--lightink-accent-soft);
+  background: color-mix(in srgb, var(--lightink-accent) 18%, var(--lightink-accent-soft));
 }
 
 .lightink-reader-assistant-setup:focus-visible {
@@ -332,10 +353,6 @@
 .lightink-reader-assistant-settings:hover {
   color: var(--lightink-fg);
   text-decoration: underline;
-}
-
-.lightink-reader-assistant-settings:hover {
-  background: var(--lightink-accent-soft);
 }
 
 .lightink-reader-assistant-settings:focus-visible {
@@ -487,7 +504,7 @@
 
 .lightink-reader-assistant-welcome h2 {
   margin: 0 0 0.75rem;
-  color: var(--lightink-fg);
+  color: var(--lightink-fg-strong);
   font-size: 1.15rem;
   font-weight: 650;
 }
@@ -519,7 +536,7 @@
   border-radius: 50%;
   background: var(--lightink-bg-elevated);
   color: var(--lightink-muted);
-  box-shadow: var(--lightink-shadow);
+  box-shadow: var(--lightink-shadow-pop);
   cursor: pointer;
 }
 
@@ -706,20 +723,23 @@
   background: color-mix(in srgb, var(--lightink-fg) 14%, transparent);
 }
 
-/* ===== 工具步骤（R4）：人类化名称 + 四态 + 人话摘要；参数/结果默认收起可展开 ===== */
+/* ===== 工具步骤（R4；§3.13）：sunken 卡 + 前置图标 + 人类化名称 + 四态 + 人话摘要 ===== */
 
 .lightink-reader-assistant-tool {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   margin: 0 0 var(--assistant-space-2);
+  padding: 0.12rem 0.35rem 0.12rem 0.15rem;
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-sunken);
   font-size: var(--assistant-font-sm);
   color: var(--lightink-muted);
 }
 
 .lightink-reader-assistant-tool-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--assistant-space-2);
   flex: 1;
   min-width: 0;
@@ -754,6 +774,36 @@
   transform: rotate(90deg);
 }
 
+/* 前置工具图标：静息 muted；完成 success、失败 danger、运行中随 svg 旋转。 */
+.lightink-reader-assistant-tool-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--lightink-muted);
+}
+
+.lightink-reader-assistant-tool[data-tool-state='done'] .lightink-reader-assistant-tool-icon {
+  color: var(--lightink-success);
+}
+
+.lightink-reader-assistant-tool[data-tool-state='failed'] .lightink-reader-assistant-tool-icon {
+  color: var(--lightink-danger);
+}
+
+.lightink-reader-assistant-tool[data-tool-state='running'] .lightink-reader-assistant-tool-icon {
+  color: var(--lightink-fg);
+}
+
+.lightink-reader-assistant-tool[data-tool-state='running'] .lightink-reader-assistant-tool-icon svg {
+  animation: lightink-reader-assistant-tool-icon-spin 1s linear infinite;
+}
+
+@keyframes lightink-reader-assistant-tool-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .lightink-reader-assistant-tool-status {
   flex: none;
   min-width: 0.9em;
@@ -766,7 +816,7 @@
 }
 
 .lightink-reader-assistant-tool-status.is-done {
-  color: var(--lightink-accent);
+  color: var(--lightink-success);
 }
 
 .lightink-reader-assistant-tool-status.is-failed {
@@ -907,6 +957,32 @@
   color: var(--lightink-danger);
 }
 
+/* 流式光标（§3.13）：末尾 2px 强调色竖线，100ms（--lightink-duration-fast）闪烁；
+   reduced-motion 由 theme.css 全局 kill-switch 定格为常亮。 */
+.lightink-reader-assistant-message[data-status='streaming']
+  .lightink-reader-assistant-message-text::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 0.18em;
+  vertical-align: -0.12em;
+  background: var(--lightink-accent);
+  animation: lightink-reader-assistant-caret-blink var(--lightink-duration-fast, 100ms) steps(1)
+    infinite;
+}
+
+@keyframes lightink-reader-assistant-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
 .lightink-reader-assistant-message[data-status='stopped'] .lightink-reader-assistant-stopped {
   margin: 0.4rem 0 0;
   padding-left: var(--assistant-space-3);
@@ -1024,7 +1100,7 @@
   padding: 0.3rem var(--assistant-space-3);
   border: 0;
   border-radius: 999px;
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-bg-sunken);
   color: var(--lightink-muted);
   font: inherit;
   font-size: var(--assistant-font-sm);
@@ -1047,7 +1123,7 @@
   cursor: default;
 }
 
-/* ===== 输入区：一块输入框，栏内引用 + 发送/停止互斥 ===== */
+/* 输入区：elevated 面板上的 sunken 输入面，栏内引用 + 发送/停止互斥 */
 
 .lightink-reader-assistant-composer {
   display: flex;
@@ -1062,7 +1138,7 @@
   flex-direction: column;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
   border-radius: var(--lightink-radius-panel);
-  background: var(--lightink-bg);
+  background: var(--lightink-bg-sunken);
 }
 
 .lightink-reader-assistant-composer-box:focus-within {
@@ -1237,7 +1313,7 @@
   font-size: var(--assistant-font-xs);
 }
 
-/* 权限模式：composer 工具栏左侧紧凑触发器 + 上弹菜单（ADR-5 / R5）。 */
+/* 权限模式：composer 工具栏左侧紧凑触发器 + 上弹菜单（ADR-5 / R5；§3.13 语义色）。 */
 .lightink-reader-assistant-mode-wrap {
   position: relative;
   flex: 0 0 auto;
@@ -1265,6 +1341,30 @@
   color: var(--lightink-fg);
 }
 
+/* 模式色标：审阅/自动 = info；YOLO = warning（触发器整体同步 warning 语气）。 */
+.lightink-reader-assistant-mode-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lightink-info);
+}
+
+.lightink-reader-assistant-mode-trigger.is-yolo {
+  border-color: color-mix(in srgb, var(--lightink-warning) 45%, var(--lightink-border));
+  color: var(--lightink-warning);
+}
+
+.lightink-reader-assistant-mode-trigger.is-yolo:hover,
+.lightink-reader-assistant-mode-trigger.is-yolo[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--lightink-warning) 12%, transparent);
+  color: var(--lightink-warning);
+}
+
+.lightink-reader-assistant-mode-trigger.is-yolo .lightink-reader-assistant-mode-dot {
+  background: var(--lightink-warning);
+}
+
 .lightink-reader-assistant-mode-trigger:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 1px;
@@ -1288,7 +1388,7 @@
   border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
   border-radius: var(--lightink-radius-control);
   background: var(--lightink-bg-elevated);
-  box-shadow: var(--lightink-shadow);
+  box-shadow: var(--lightink-shadow-pop);
 }
 
 .lightink-reader-assistant-mode-menu[hidden] {
@@ -1318,6 +1418,19 @@
 .lightink-reader-assistant-mode-option[aria-checked='true'] {
   background: var(--lightink-accent-soft);
   font-weight: 650;
+}
+
+/* YOLO 选项用 warning 语义色：未确认直接写入的风险一眼可辨（§3.13）。 */
+.lightink-reader-assistant-mode-option[data-assistant-mode='yolo'] {
+  color: var(--lightink-warning);
+}
+
+.lightink-reader-assistant-mode-option[data-assistant-mode='yolo']:hover {
+  background: color-mix(in srgb, var(--lightink-warning) 12%, transparent);
+}
+
+.lightink-reader-assistant-mode-option[data-assistant-mode='yolo'][aria-checked='true'] {
+  background: color-mix(in srgb, var(--lightink-warning) 16%, transparent);
 }
 
 .lightink-reader-assistant-mode-option:focus-visible {
@@ -1374,7 +1487,9 @@
   outline-offset: 1px;
 }
 
-/* ===== 待确认卡片：固定在快捷按钮上方，不跟消息一起滚出屏幕 ===== */
+/* ===== 待确认卡片：固定在快捷按钮上方，不跟消息一起滚出屏幕 =====
+   语义色（§3.13）：卡片整体 warning 语气（等待用户决断），确认按钮 success、
+   已确认状态 success、错误仍 danger。 */
 
 .lightink-reader-assistant-pending {
   display: flex;
@@ -1383,9 +1498,9 @@
   gap: var(--assistant-space-2);
   margin: var(--assistant-space-2) var(--assistant-space-4) 0.15rem;
   padding: var(--assistant-space-3);
-  border: 1px solid color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-border));
+  border: 1px solid color-mix(in srgb, var(--lightink-warning) 50%, var(--lightink-border));
   border-radius: var(--lightink-radius-panel);
-  background: color-mix(in srgb, var(--lightink-accent-soft) 40%, transparent);
+  background: color-mix(in srgb, var(--lightink-warning) 6%, var(--lightink-bg-elevated));
   box-shadow: var(--lightink-shadow);
 }
 
@@ -1395,7 +1510,7 @@
 
 .lightink-reader-assistant-pending-title {
   margin: 0;
-  color: var(--lightink-muted);
+  color: var(--lightink-warning);
   font-size: var(--assistant-font-xs);
   font-weight: 650;
 }
@@ -1462,6 +1577,10 @@
   font-size: var(--assistant-font-xs);
 }
 
+.lightink-reader-assistant-pending-status[data-assistant-pending-status='confirmed'] {
+  color: var(--lightink-success);
+}
+
 .lightink-reader-assistant-pending-confirm,
 .lightink-reader-assistant-pending-reject {
   padding: 0.22rem 0.65rem;
@@ -1476,9 +1595,14 @@
 
 .lightink-reader-assistant-pending-confirm {
   font-weight: 600;
+  border-color: color-mix(in srgb, var(--lightink-success) 45%, var(--lightink-border));
+  color: var(--lightink-success);
 }
 
-.lightink-reader-assistant-pending-confirm:hover,
+.lightink-reader-assistant-pending-confirm:hover {
+  background: color-mix(in srgb, var(--lightink-success) 12%, transparent);
+}
+
 .lightink-reader-assistant-pending-reject:hover {
   background: var(--lightink-accent-soft);
 }
@@ -1627,18 +1751,20 @@
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-history-item.is-active
   .lightink-reader-assistant-history-open:hover:not(:active) {
-  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  background: var(--lightink-accent-soft);
 }
 
-:is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-history-new:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-action:hover:not(:disabled):not(:active),
 :is(html[data-android], html[data-touch-primary])
-  .lightink-reader-assistant-setup:hover:not(:active) {
+  .lightink-reader-assistant-history-new:hover:not(:disabled):not(:active) {
   background: var(--lightink-bg-elevated);
 }
 
+:is(html[data-android], html[data-touch-primary])
+  .lightink-reader-assistant-setup:hover:not(:active) {
+  background: var(--lightink-accent-soft);
+}
 :is(html[data-android], html[data-touch-primary])
   .lightink-reader-assistant-retry:hover:not(:active),
 :is(html[data-android], html[data-touch-primary])
@@ -1684,13 +1810,23 @@
 /* ===== AI 配置向导（R3 / assistant/ai-config-wizard） =====
    body 挂载的全局模态：骨架/按钮复用 theme.css 的 lightink-modal-* 语言，
    主题令牌由 adoptDialogSurfaceTheme 从当前 library/reader 表面复制到
-   overlay 上；此处只补步骤条、表单与状态区的向导专属布局。 */
+   overlay 上；此处只补步骤指示器、表单与状态区的向导专属布局。 */
 
 .lightink-ai-wizard {
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
   width: min(30rem, calc(100vw - 2.5rem));
+}
+
+/* 步骤指示器（§3.13）：1/4…4/4 计数 + 每步一枚圆点（done=success、active=accent）。 */
+.lightink-ai-wizard-steps-row {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 0.9rem;
 }
 
 .lightink-ai-wizard-steps {
@@ -1703,6 +1839,9 @@
 }
 
 .lightink-ai-wizard-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   color: var(--lightink-muted);
   font-size: 12px;
   white-space: nowrap;
@@ -1715,6 +1854,34 @@
 .lightink-ai-wizard-steps li.is-active {
   color: var(--lightink-accent);
   font-weight: 600;
+}
+
+.lightink-ai-wizard-step-dot {
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.lightink-ai-wizard-steps li.is-active .lightink-ai-wizard-step-dot {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent);
+  box-shadow: 0 0 0 3px var(--lightink-accent-soft);
+}
+
+.lightink-ai-wizard-steps li.is-done .lightink-ai-wizard-step-dot {
+  border-color: var(--lightink-success);
+  background: var(--lightink-success);
+}
+
+.lightink-ai-wizard-steps-count {
+  flex: none;
+  color: var(--lightink-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .lightink-ai-wizard-body {
@@ -1749,7 +1916,7 @@
   padding: 7px 10px;
   border: 1px solid var(--lightink-border);
   border-radius: var(--lightink-radius-control);
-  background: var(--lightink-bg);
+  background: var(--lightink-bg-sunken);
   color: var(--lightink-fg);
   font: inherit;
   font-size: 13px;
@@ -1806,6 +1973,7 @@
   word-break: break-all;
 }
 
+/* 连接测试反馈（§3.13）：success/info/warning 语义色，error 仍 danger。 */
 .lightink-ai-wizard-status {
   margin: 0;
   font-size: 12.5px;
@@ -1816,8 +1984,12 @@
   color: var(--lightink-danger);
 }
 
+.lightink-ai-wizard-status[data-kind='info'] {
+  color: var(--lightink-info);
+}
+
 .lightink-ai-wizard-status[data-kind='success'] {
-  color: var(--lightink-fg);
+  color: var(--lightink-success);
 }
 
 .lightink-ai-wizard-actions {

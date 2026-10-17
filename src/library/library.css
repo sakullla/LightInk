@@ -6,84 +6,123 @@
  * must be able to win. Theme swatches do not carry this attribute — their
  * names sit on the shelf page and would otherwise take another preset's muted.
  * The shelf does not follow the editor's data-theme.
+ *
+ * 纸墨工作室（2026-10 改版）：预设补 sunken / fg-strong / accent-contrast /
+ * shadow-pop / success / warning / info 扩展层，与 library-theme.ts 的
+ * LIBRARY_THEMES 同提交双写（tokens.test.ts 逐一相等断言锁定）。
  */
 
 [data-library-theme='gallery'] {
   --lightink-bg: #f2efe8;
   --lightink-bg-elevated: #fffcf8;
+  --lightink-bg-sunken: #e9e1d0;
   --lightink-fg: #2a261f;
+  --lightink-fg-strong: #211c15;
   --lightink-accent-ink: #a8431a;
-  --lightink-muted: #6b6459;
-  --lightink-border: #e5dfd4;
+  --lightink-muted: #675f50;
+  --lightink-border: #e1d9c9;
   --lightink-accent: #c45a28;
-  --lightink-accent-soft: #f3e2d4;
+  --lightink-accent-soft: #f1ddca;
+  --lightink-accent-contrast: #fff6ec;
   --lightink-overlay: #2a261f48;
   --lightink-shadow: 0 12px 32px #2a261f1c;
+  --lightink-shadow-pop: 0 6px 20px #2a261f1f, 0 1px 3px #2a261f14;
   --lightink-danger: #b42318;
+  --lightink-success: #34693e;
+  --lightink-warning: #8f641c;
+  --lightink-info: #3e5c8c;
   color: var(--lightink-fg);
   color-scheme: light;
 }
 
 [data-library-theme='paper'] {
   --lightink-bg: #f6eadc;
-  --lightink-bg-elevated: #fff8ef;
+  --lightink-bg-elevated: #fdf3e3;
+  --lightink-bg-sunken: #ebdcc4;
   --lightink-fg: #3a2f24;
+  --lightink-fg-strong: #2f2518;
   --lightink-accent-ink: #8a4318;
-  --lightink-muted: #756454;
-  --lightink-border: #e4d5c2;
+  --lightink-muted: #6e5e4d;
+  --lightink-border: #dfceb5;
   --lightink-accent: #a35a2b;
-  --lightink-accent-soft: #f0dfcc;
+  --lightink-accent-soft: #eed8bd;
+  --lightink-accent-contrast: #fff6ec;
   --lightink-overlay: #3a2f2448;
   --lightink-shadow: 0 12px 32px #3a2f241c;
+  --lightink-shadow-pop: 0 6px 20px #3a2f241f, 0 1px 3px #3a2f2414;
   --lightink-danger: #b42318;
+  --lightink-success: #34693e;
+  --lightink-warning: #8f641c;
+  --lightink-info: #3e5c8c;
   color: var(--lightink-fg);
   color-scheme: light;
 }
 
 [data-library-theme='moss'] {
-  --lightink-bg: #eef3ea;
-  --lightink-bg-elevated: #f8fbf6;
+  --lightink-bg: #e8efe1;
+  --lightink-bg-elevated: #f5f9f0;
+  --lightink-bg-sunken: #dee8d3;
   --lightink-fg: #243028;
+  --lightink-fg-strong: #1a2921;
   --lightink-accent-ink: #3f6d48;
-  --lightink-muted: #59635a;
-  --lightink-border: #d4ddd0;
+  --lightink-muted: #535e55;
+  --lightink-border: #ced9c6;
   --lightink-accent: #3f6d48;
-  --lightink-accent-soft: #dce8dc;
+  --lightink-accent-soft: #d8e5d5;
+  --lightink-accent-contrast: #f4fbf4;
   --lightink-overlay: #24302848;
   --lightink-shadow: 0 12px 32px #2430281c;
+  --lightink-shadow-pop: 0 6px 20px #2430281f, 0 1px 3px #24302814;
   --lightink-danger: #b42318;
+  --lightink-success: #1e6b4f;
+  --lightink-warning: #8f641c;
+  --lightink-info: #3e5c8c;
   color: var(--lightink-fg);
   color-scheme: light;
 }
 
 [data-library-theme='walnut'] {
-  --lightink-bg: #241c17;
-  --lightink-bg-elevated: #322820;
+  --lightink-bg: #201812;
+  --lightink-bg-elevated: #2f251b;
+  --lightink-bg-sunken: #181109;
   --lightink-fg: #eadcc8;
+  --lightink-fg-strong: #f7ecd9;
   --lightink-accent-ink: #d4a06a;
-  --lightink-muted: #a8947c;
-  --lightink-border: #4a3c32;
+  --lightink-muted: #a2917b;
+  --lightink-border: #453931;
   --lightink-accent: #d4a06a;
-  --lightink-accent-soft: #3d2f24;
+  --lightink-accent-soft: #392c20;
+  --lightink-accent-contrast: #241a0d;
   --lightink-overlay: #100c0a73;
   --lightink-shadow: 0 12px 32px #100c0a59;
+  --lightink-shadow-pop: 0 8px 22px #100c0a66, 0 2px 6px #100c0a44;
   --lightink-danger: #f97066;
+  --lightink-success: #85b08e;
+  --lightink-warning: #cfa75c;
+  --lightink-info: #8fa9cc;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
 
 [data-library-theme='ink'] {
   --lightink-bg: #14161a;
-  --lightink-bg-elevated: #1e2228;
+  --lightink-bg-elevated: #1d2127;
+  --lightink-bg-sunken: #0f1216;
   --lightink-fg: #d5dae2;
+  --lightink-fg-strong: #e9eef7;
   --lightink-accent-ink: #7ba3c9;
-  --lightink-muted: #8b93a0;
-  --lightink-border: #2c323c;
+  --lightink-muted: #8791a0;
+  --lightink-border: #2a313c;
   --lightink-accent: #7ba3c9;
-  --lightink-accent-soft: #243040;
+  --lightink-accent-soft: #223040;
+  --lightink-accent-contrast: #0c141f;
   --lightink-overlay: #0a0c0f73;
   --lightink-shadow: 0 12px 32px #0a0c0f59;
+  --lightink-shadow-pop: 0 8px 22px #0a0c0f66, 0 2px 6px #0a0c0f44;
   --lightink-danger: #f97066;
+  --lightink-success: #74b39c;
+  --lightink-warning: #c2a35c;
+  --lightink-info: #7e9cc4;
   color: var(--lightink-fg);
   color-scheme: dark;
 }
@@ -178,6 +217,11 @@
   opacity: 0.5;
 }
 
+/*
+ * 头部四区（§3.2）：品牌（左）→ 居中弹性搜索 → 动作组（导入/AI/管理）→
+ * 窗口控制（右，由 titlebar-caption*3 预留）。动作组与窗口控制之间强制
+ * space-5 呼吸间距（诊断 #4：搜索框与最小化/关闭按钮挤在一起）。
+ */
 .lightink-library-header {
   display: grid;
   grid-template-columns: minmax(
@@ -190,6 +234,12 @@
   min-height: var(--lightink-titlebar-height, 36px);
   padding: 0 calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px) 0
     calc(var(--lightink-titlebar-leading, 0px) + 8px);
+}
+
+/* 书架头的 R4 预留之上加 space-5：与五栏共享的 caption 公式保持字面不变
+   （app-shell.test.ts 断言），书架头单独把 16px 呼吸位提到 24px。 */
+.lightink-library-header {
+  padding-right: calc(var(--lightink-titlebar-caption, 36px) * 3 + var(--lightink-space-5, 24px));
 }
 
 html[data-platform='mac'] .lightink-library-header {
@@ -246,13 +296,50 @@ html[data-touch-primary] .lightink-library-header {
   flex: 1 1 auto;
 }
 
+/* 动作主区（§3.2 头部四区）：桌面三列网格 1fr|auto|1fr——标题贴左、搜索
+   真居中、动作组贴右（窗口控制右侧另由头部 padding 预留）；搜索隐藏的
+   分区（管理/书源）自动退化为标题左、动作右。 */
 .lightink-library-header-main {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--lightink-space-2, 8px);
   min-width: 0;
   min-height: var(--lightink-titlebar-height, 36px);
   padding: 0 8px 0 16px;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-header-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--lightink-space-3, 12px);
+}
+
+/* 显式列位：搜索隐藏的分区（管理/书源）不塌列，动作组仍在右缘。 */
+html:not([data-android]):not([data-touch-primary]) .lightink-library-header-main > h1 {
+  grid-column: 1;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
+  grid-column: 2;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-header-actions {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.lightink-library-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--lightink-space-2, 8px);
+  min-width: 0;
+}
+
+/* 手机壳网格以 header-main 直接子元素定位：动作组退化为 contents，
+   导入/AI 按钮仍按原 grid-column 落位（54px/44px 方格）。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-library-header-actions {
+  display: contents;
 }
 
 .lightink-library-header h1 {
@@ -363,17 +450,17 @@ html[data-touch-primary] .lightink-library-header {
   line-height: 1;
 }
 
-/* Desktop search is a pill on the elevated surface. Touch rules below keep
-   the 44px field; this selector does not match android or touch-primary. */
+/* Desktop search is a centered pill on the sunken surface, riding the middle
+   grid column of the header（§3.2 头部四区）. Touch rules below keep the
+   44px field; this selector does not match android or touch-primary. */
 html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
-  flex-basis: min(28rem, 42vw);
   width: min(28rem, 42vw);
-  max-width: min(28rem, 42vw);
-  height: 36px;
-  min-height: 36px;
+  height: 32px;
+  min-height: 32px;
+  justify-self: center;
   border: 1px solid var(--lightink-border);
   border-radius: 999px;
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-bg-sunken, var(--lightink-bg-elevated));
   box-shadow: none;
 }
 
@@ -469,7 +556,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   transition: grid-template-columns 200ms ease;
 }
 
-/* Left navigation pane: 书库 / 书源 / 管理 sections. */
+/* Left navigation pane: 书库 / 书源 / 管理 sections.
+ * 纸墨三层表面（§3.2）：左栏落 bg-sunken 凹面，与右侧 bg 纸面形成两层。 */
 .lightink-library-nav {
   position: relative;
   display: flex;
@@ -480,6 +568,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   padding: 6px 8px 12px;
   overflow-x: hidden;
   overflow-y: auto;
+  background: var(--lightink-bg-sunken, var(--lightink-bg));
   border-right: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
 }
 
@@ -624,13 +713,15 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-section-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
   color: var(--lightink-muted);
 }
 
-/* Finder / Linear：标题在左，+ 在行尾。筛选悬停才出现，不占空盒。 */
+/* Finder / Linear：标题在左，+ 在行尾。纸墨改版（§3.2）：分区操作常显
+   （静息 65% 透明度、28px 触达），悬停/聚焦加深；hover 路径保留兼容
+   capture 的「悬停标题再点按钮」。 */
 .lightink-library-pane-actions {
   display: flex;
   align-items: center;
@@ -642,39 +733,45 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-pane-actions .lightink-library-icon-button {
-  width: 24px;
-  min-width: 24px !important;
-  height: 24px;
-  min-height: 24px !important;
-  font-size: 14px !important;
+  width: 28px;
+  min-width: 28px !important;
+  height: 28px;
+  min-height: 28px !important;
+  font-size: 15px !important;
   border-radius: var(--lightink-radius-control) !important;
 }
 
 .lightink-library-pane-action {
-  opacity: 0;
-  width: 0;
-  min-width: 0 !important;
+  opacity: 0.65;
+  width: 28px;
+  min-width: 28px !important;
   overflow: hidden;
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity 150ms ease;
 }
 
 .lightink-library-pane-heading:hover .lightink-library-pane-action,
 .lightink-library-pane-heading:focus-within .lightink-library-pane-action,
+.lightink-library-pane-action:hover,
 .lightink-library-pane-action[aria-expanded='true'] {
   opacity: 1;
-  width: 24px;
-  min-width: 24px !important;
-  pointer-events: auto;
 }
 
 .lightink-library-pane-heading .lightink-library-group-add,
 .lightink-library-pane-heading .lightink-library-tag-add,
 .lightink-library-sources .lightink-library-pane-actions > .lightink-library-pane-action:last-child {
-  opacity: 0.55;
-  width: 24px;
-  min-width: 24px !important;
+  opacity: 0.65;
+  width: 28px;
+  min-width: 28px !important;
   pointer-events: auto;
+}
+
+.lightink-library-pane-heading .lightink-library-group-add:hover,
+.lightink-library-pane-heading .lightink-library-tag-add:hover,
+.lightink-library-sources
+  .lightink-library-pane-actions
+  > .lightink-library-pane-action:last-child:hover {
+  opacity: 1;
 }
 
 .lightink-library-pane-action[aria-expanded='true'] {
@@ -906,10 +1003,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   white-space: nowrap;
 }
 
-/* 行内导航图标：弱化色，hover/选中时跟随文字色。 */
+/* 行内导航图标：弱化色，hover/选中时跟随文字色（§3.2：16px）。 */
 .lightink-library-nav-icon {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
   color: var(--lightink-muted);
 }
@@ -920,9 +1017,11 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   text-overflow: ellipsis;
 }
 
+/* 徽标右对齐 mono（§3.2：密度体验走视觉，不改 26px 行密度）。 */
 .lightink-library-group-count {
   margin-left: auto;
   color: var(--lightink-muted);
+  font-family: var(--lightink-font-mono, ui-monospace, monospace);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -951,11 +1050,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   color: currentColor;
 }
 
+/* 密度优化走 hover/active 视觉（§1.7/§3.2）：hover 是 accent-soft 洗色胶囊，
+   激活是 accent-soft 全胶囊；行高维持被测固化的 26px 密度标准。 */
 .lightink-library-nav-item:hover,
 .lightink-library-source:hover,
 .lightink-library-group:hover,
 .lightink-library-smart-group:hover {
-  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent) !important;
+  background: color-mix(in srgb, var(--lightink-accent-soft) 62%, transparent) !important;
 }
 
 .lightink-library-nav-item.is-active,
@@ -1892,7 +1993,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-pager button {
-  min-height: 30px;
+  min-height: var(--lightink-control-h, 32px);
   padding: 3px 10px;
   border-radius: var(--lightink-radius-control);
   color: var(--lightink-muted);
@@ -2113,21 +2214,25 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-op
   box-shadow: 0 4px 12px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
+/* 「继续」主按钮（§3.2）：书架首屏唯一 accent 实底按钮，文字走
+   accent-contrast。触屏版在下方手机壳规则里改回轻文字样式。 */
 .lightink-library-continue-cue {
   flex: 0 0 auto;
-  margin-left: auto;
-  padding: 5px 12px;
-  border-radius: 999px;
+  align-self: center;
+  margin-left: var(--lightink-space-4, 16px);
+  min-height: var(--lightink-control-h, 32px);
+  padding: 4px 14px;
+  border-radius: var(--lightink-radius-control);
   background: var(--lightink-accent);
-  color: var(--lightink-bg);
-  font-size: 12.5px;
+  color: var(--lightink-accent-contrast, var(--lightink-bg));
+  font-size: var(--lightink-text-md, 13px);
   font-weight: 600;
   white-space: nowrap;
 }
 
-html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cue {
-  background: var(--lightink-accent-ink);
-  color: var(--lightink-bg);
+html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-accent) 88%, var(--lightink-fg));
+  color: var(--lightink-accent-contrast, var(--lightink-bg));
 }
 
 .lightink-library-continue-dismiss {
@@ -2577,13 +2682,20 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 }
 
 .lightink-library-item:hover .lightink-library-cover,
-.lightink-library-item.is-selected .lightink-library-cover,
 .lightink-library-item:focus-visible .lightink-library-cover {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   box-shadow:
     inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
-    0 2px 4px color-mix(in srgb, var(--lightink-fg) 14%, transparent),
-    0 16px 32px color-mix(in srgb, var(--lightink-fg) 20%, transparent);
+    var(--lightink-shadow-pop);
+}
+
+/* 选中态：accent-soft 描边环（§3.2），叠在书脊高光与浮起阴影之上。 */
+.lightink-library-item.is-selected .lightink-library-cover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 3px var(--lightink-accent-soft),
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    var(--lightink-shadow-pop);
 }
 
 .lightink-library-cover img {
@@ -2831,24 +2943,73 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   letter-spacing: 0;
 }
 
-/* Detail aside. */
+/*
+ * 书籍详情双形态（§3.2）：≥900px 侧推并排（workArea 双列，封面墙让位）；
+ * <900px 覆盖式面板（钉在 workArea 右缘全高、elevated 卡面 + 背板），
+ * Esc / 点背板 / × 都能收起。[hidden] 与 .lightink-library-detail-close 钩子保留。
+ * 触屏手机壳（≤760 + touch）仍走底部 sheet（下方规则覆盖本块）。
+ */
+.lightink-library-workarea {
+  position: relative;
+}
+
 .lightink-library-detail {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
   min-width: 0;
   overflow-y: auto;
   padding: 20px var(--lightink-library-pad-x) 28px 16px;
-  background: transparent;
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-pop);
+  border-left: 1px solid var(--lightink-border);
 }
 
 .lightink-library-detail[hidden] {
   display: none;
 }
 
+/* 覆盖态背板：<900px 时与详情同显，点外即收（§4.8）；≥900px 推挤态无背板。 */
 .lightink-library-detail-backdrop {
   display: none;
 }
 
 .lightink-library-detail-backdrop[hidden] {
   display: none;
+}
+
+@media (max-width: 899.98px) {
+  .lightink-library-detail-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    background: var(--lightink-overlay);
+  }
+}
+
+/* ≥900px：详情回到文档流，workArea 推挤出双列（封面墙让位并排）。 */
+@media (min-width: 900px) {
+  .lightink-library-detail {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    background: transparent;
+    box-shadow: none;
+    border-left: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-workarea:has(
+      .lightink-library-detail:not([hidden])
+    ) {
+    grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
+  }
+
+  .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(
+      .lightink-library-detail:not([hidden])
+    ) {
+    grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
+  }
 }
 
 .lightink-library-detail h3 {
@@ -3146,8 +3307,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   color: var(--lightink-danger);
 }
 
+/* 语义色四件套（§1.1）：保存/连接成功走 success，不再借 accent 表意。 */
 .lightink-library-ai-feedback[data-kind='success'] {
-  color: var(--lightink-accent);
+  color: var(--lightink-success, var(--lightink-accent));
+}
+
+.lightink-library-ai-feedback[data-kind='info'] {
+  color: var(--lightink-info, var(--lightink-muted));
 }
 
 .lightink-library-ai-status[data-ai-configured='true'] {
@@ -3297,7 +3463,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: block;
 }
 
-/* 展开时内容做一次轻量淡入（reduced-motion 由全局媒体查询压到 0.01ms）。 */
+/* 展开动效 280ms（§3.3 设置卡片：chrome 展开类大位移走 duration-slow；
+   reduced-motion 由全局媒体查询压到 0.01ms）。 */
 @keyframes lightink-manage-group-reveal {
   from {
     opacity: 0;
@@ -3306,21 +3473,61 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 }
 
 .lightink-library-manage-group:not([data-collapsed='true']) > :not(h2) {
-  animation: lightink-manage-group-reveal var(--lightink-duration-base, 180ms)
+  animation: lightink-manage-group-reveal var(--lightink-duration-slow, 280ms)
     var(--lightink-easing-standard, ease) both;
 }
 
 .lightink-library-manage-group-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 36px;
+  gap: var(--lightink-space-2, 8px);
+  min-height: var(--lightink-control-h-lg, 40px);
   box-sizing: border-box;
   padding: 6px 0;
   margin: -4px 0;
   border-radius: var(--lightink-radius-control);
   cursor: pointer;
   user-select: none;
+}
+
+/* 设置卡图标（§3.3：图标 + 标题 + 摘要）：mask 取 currentColor，双主题
+   同对比；按 data-manage-group 分发。 */
+.lightink-library-manage-group > h2::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--lightink-manage-group-icon) center / contain no-repeat;
+  mask: var(--lightink-manage-group-icon) center / contain no-repeat;
+}
+
+.lightink-library-manage-group[data-manage-group='appearance'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.7 17.7 8.4a8 8 0 1 1-11.4 0z'/></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='reading'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5h-2v6.4l5.2 3.1 1-1.7-4.2-2.5z'/></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='ai'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.5l2 5.4 5.5 2.1-5.5 2.1-2 5.4-2-5.4L4.5 10l5.5-2.1z'/><path fill='black' d='M18.5 14.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z'/></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='storage'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2c4.4 0 8 1 8 2.2S16.4 6.4 12 6.4 4 5.4 4 4.2 7.6 2 12 2zm8 4.6v3.2c0 1.2-3.6 2.2-8 2.2s-8-1-8-2.2V6.6C5.3 7.6 8.4 8.2 12 8.2s6.7-.6 8-1.6zm0 5v3.2c0 1.2-3.6 2.2-8 2.2s-8-1-8-2.2v-3.2c1.3 1 4.4 1.6 8 1.6s6.7-.6 8-1.6zm0 5V20c0 1.2-3.6 2.2-8 2.2S4 21.2 4 20v-3.2c1.3 1 4.4 1.6 8 1.6s6.7-.6 8-1.6z'/></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='sync'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M23 4v6h-6'/><path d='M1 20v-6h6'/><path d='M3.5 9a9 9 0 0 1 14.9-3.4L23 10'/><path d='M20.5 15a9 9 0 0 1-14.9 3.4L1 14'/></g></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='other'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3'/><path d='M1 14h6M9 8h6M17 16h6'/></g></svg>");
+}
+
+.lightink-library-manage-group[data-manage-group='conceal'] {
+  --lightink-manage-group-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/><path d='M1 1l22 22'/></g></svg>");
 }
 
 .lightink-library-manage-group-toggle:hover {
@@ -3709,6 +3916,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   }
 }
 
+/* 缓存用量摘要（§3.3）：数字走 text-lg + mono，读作仪表读数。 */
 .lightink-library-cache-summary {
   display: flex;
   align-items: center;
@@ -3719,10 +3927,17 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   min-height: 44px;
   padding: 10px 14px;
   border-radius: var(--lightink-radius-panel);
-  background: var(--lightink-bg-elevated);
+  background: var(--lightink-bg-sunken, var(--lightink-bg-elevated));
   box-shadow: inset 0 0 0 1px var(--lightink-border);
   color: var(--lightink-muted);
   font-size: 12px;
+}
+
+.lightink-library-cache-summary > span {
+  color: var(--lightink-fg);
+  font-family: var(--lightink-font-mono, ui-monospace, monospace);
+  font-size: var(--lightink-text-lg, 18px);
+  font-variant-numeric: tabular-nums;
 }
 
 .lightink-library-cache-limit-form {
@@ -3942,21 +4157,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   gap: 2px;
 }
 
-/* 桌面书架也经 workArea 渲染书墙：右键「作品详情」后详情侧栏占右列，
-   未选中时隐藏，布局与旧的直挂 itemList 一致。 */
-.lightink-library[data-library-nav='shelf'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
-  grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
-}
-
+/* 桌面书架也经 workArea 渲染书墙：详情侧栏占右列的双列推挤规则已上移至
+   「≥900px」媒体块（<900px 详情为覆盖式，不再占网格轨道）。 */
 .lightink-library[data-library-nav='catalog'] .lightink-library-workarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
-}
-
-.lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
-  grid-template-columns: minmax(0, 1fr) minmax(var(--lightink-library-detail-min), 32%);
 }
 
 .lightink-library[data-library-nav='catalog'] .lightink-library-empty {
@@ -4176,8 +4383,15 @@ html[data-display='xuhd'] .lightink-library {
     display: none;
   }
 
+  /* 窄窗口（非触屏）退回 flex 折行：三列网格在 <760 放不下动作组。 */
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-header-main {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
   .lightink-library-search {
     flex: 1 1 240px;
+    width: auto;
     min-width: 0;
   }
 
@@ -4201,24 +4415,8 @@ html[data-display='xuhd'] .lightink-library {
     padding: 12px;
   }
 
-  .lightink-library-detail {
-    position: absolute;
-    inset: 42px 0 0 var(--lightink-library-nav-width);
-    z-index: 2;
-    background: var(--lightink-bg);
-  }
-
-  /* The detail panel is taken out of flow above. Keeping a second grid
-     track still reserves ~200px and crushes the cover wall and the
-     continue-reading title down to a single glyph. */
-  .lightink-library[data-library-nav='shelf'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])),
-  .lightink-library[data-library-nav='catalog'] .lightink-library-workarea:has(.lightink-library-detail:not([hidden])) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .lightink-library[data-library-nav-collapsed='true'] .lightink-library-detail {
-    inset: 42px 0 0 var(--lightink-library-nav-collapsed);
-  }
+  /* 详情在 <900px 已统一为覆盖式（见上方双形态块）；本断点只剩触屏
+     底部 sheet 的覆盖（文件后段触屏规则）。 */
 }
 
 html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
@@ -4376,6 +4574,42 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
  */
 .lightink-library-tabbar {
   display: none;
+}
+
+/*
+ * 动作组（§3.2）：桌面把导入/AI 显示为图标 + 文字的 ghost 按钮（28px 高、
+ * text-md），与「管理」文字钮同组；手机壳维持方形图标钮（下方触屏规则）。
+ * 标签只在指针桌面渲染。
+ */
+.lightink-library-header-action-label {
+  display: none;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  :is(.lightink-library-header-import, .lightink-library-header-assistant) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lightink-space-2, 8px);
+  width: auto;
+  min-width: 0;
+  min-height: var(--lightink-control-h-sm, 28px);
+  padding: 0 var(--lightink-space-3, 12px) !important;
+  font-size: var(--lightink-text-md, 13px);
+  font-weight: 600;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  :is(.lightink-library-header-import, .lightink-library-header-assistant)
+  .lightink-library-header-action-label {
+  display: inline;
+  white-space: nowrap;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  :is(.lightink-library-header-import, .lightink-library-header-assistant)
+  .lightink-library-nav-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .lightink-library-header-import {
@@ -5431,7 +5665,9 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   }
 
   :is(html[data-android], html[data-touch-primary]) .lightink-library-continue-cue {
-    padding: 0;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 8px;
     background: transparent;
     color: var(--lightink-accent);
     font-size: var(--lightink-type-ui);
@@ -5463,6 +5699,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
     max-height: min(72vh, calc(100vh - var(--lightink-safe-top, 0px) - 48px));
     overflow-y: auto;
     padding: 8px var(--lightink-library-pad-x) calc(16px + var(--lightink-safe-bottom, 0px));
+    border-left: none;
     border-radius: 16px 16px 0 0;
     background: var(--lightink-bg-elevated);
     box-shadow: 0 -12px 40px color-mix(in srgb, var(--lightink-fg) 16%, transparent);
@@ -6345,8 +6582,9 @@ html:not([data-android]):not([data-touch-primary])
   height: auto;
   aspect-ratio: 2 / 3;
   border-radius: 6px;
-  transition: none;
-  transform: none;
+  transition:
+    transform var(--lightink-duration-base, 180ms) var(--lightink-easing-standard, ease),
+    box-shadow var(--lightink-duration-base, 180ms) var(--lightink-easing-standard, ease);
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
@@ -6365,15 +6603,35 @@ html:not([data-android]):not([data-touch-primary])
   box-shadow: none;
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:hover .lightink-library-cover--import,
-.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:focus-visible .lightink-library-cover--import {
+/* 导入占位卡不参与浮起（虚线卡语义），提高特异性压过通用 hover 抬升。 */
+.lightink-library[data-library-nav='shelf']
+  .lightink-library-item.lightink-library-item--import:hover
+  .lightink-library-cover--import,
+.lightink-library[data-library-nav='shelf']
+  .lightink-library-item.lightink-library-item--import:focus-visible
+  .lightink-library-cover--import {
   box-shadow: none;
   transform: none;
 }
 
+/* 书架封面卡 hover 浮起（§3.2）：translateY(-2px) + shadow-pop；选中加
+   accent-soft 描边环。hero 封面不抬升（整行已是可点区，浮起会显得错位）。 */
 .lightink-library[data-library-nav='shelf'] .lightink-library-item:hover .lightink-library-cover,
-.lightink-library[data-library-nav='shelf'] .lightink-library-item.is-selected .lightink-library-cover,
-.lightink-library[data-library-nav='shelf'] .lightink-library-item:focus-visible .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:focus-visible .lightink-library-cover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    var(--lightink-shadow-pop);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item.is-selected .lightink-library-cover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 3px var(--lightink-accent-soft),
+    inset 1px 0 0 color-mix(in srgb, #fff 22%, transparent),
+    var(--lightink-shadow-pop);
+}
+
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue-open:hover .lightink-library-cover {
   transform: none;
   box-shadow:
@@ -6425,9 +6683,11 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text strong {
   -webkit-line-clamp: 2;
-  font-size: 15px;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: var(--lightink-text-xl, 22px);
   font-weight: 650;
-  line-height: 1.3;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
 }
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-item-progress {
@@ -6729,7 +6989,7 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 
 .lightink-library-book-sources-status[data-status='success'],
 .lightink-library-book-source-editor-status[data-status='success'] {
-  color: var(--lightink-accent);
+  color: var(--lightink-success, var(--lightink-accent));
 }
 
 /* R4：下载失败的「技术详情」折叠区——原始错误只在这里展开显示。 */
@@ -6766,6 +7026,8 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   overflow: hidden;
 }
 
+/* 设置卡片化（§3.4）：左列源清单沉入 sunken 凹面，右侧编辑/结果区为
+   elevated 卡面，形成与书库左栏一致的两层表面。 */
 .lightink-library-book-sources-list,
 .lightink-library-book-sources-detail {
   display: flex;
@@ -6773,6 +7035,21 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
+}
+
+.lightink-library-book-sources-list {
+  align-self: stretch;
+  padding: var(--lightink-space-2, 8px);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-sunken, transparent);
+}
+
+.lightink-library-book-sources-detail {
+  align-self: stretch;
+  padding: var(--lightink-space-3, 12px);
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-bg-elevated);
 }
 
 .lightink-library-book-source-row,
@@ -6960,15 +7237,30 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 .lightink-library-book-source-download-info {
   margin: 0;
   color: var(--lightink-fg);
-  font-size: 13px;
+  font-family: var(--lightink-font-mono, ui-monospace, monospace);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
+/* 下载进度：accent 细轨（§3.4），取消按钮 danger ghost（见 TS class）。 */
 .lightink-library-book-source-download-progress {
-  height: 6px;
+  height: 4px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+.lightink-library-book-sources
+  button.lightink-library-book-source-download-cancel {
+  border-color: transparent;
+  background: transparent;
+  color: var(--lightink-danger);
+}
+
+.lightink-library-book-sources
+  button.lightink-library-book-source-download-cancel:hover:not(:active):not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-danger) 12%, transparent);
+  color: var(--lightink-danger);
 }
 
 .lightink-library-book-source-download-progress-bar {

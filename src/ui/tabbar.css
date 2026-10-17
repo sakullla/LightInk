@@ -1,0 +1,31 @@
+/*
+ * `tabbar.css` — 标签栏视觉换装增补层（纸墨工作室 §3.11，外壳与系统集成包）。
+ * 基础标签样式（圆角芯片、active 底边 accent 指示条、关闭钮 24px 热区）在
+ * 共享层 theme.css；本文件只补三件事：
+ *   1. 标签控件对齐 ≥32px 密度（§1.7 与菜单行/命令按钮同一标准）；
+ *   2. 脏标双态圆点（未保存=warning 实心点，替代旧「● 」文字前缀）；
+ *   3. active 标签字重节奏（层次不只靠颜色）。
+ * main.ts 中 import 顺序在 theme.css 之后。
+ */
+
+.lightink-tab-button {
+  min-height: 32px;
+}
+
+.lightink-tab.active .lightink-tab-label {
+  font-weight: 650;
+}
+
+/* 脏标双态：未保存实心 warning 点；已存不渲染（app-shell.renderTabBar）。 */
+.lightink-tab-dirty {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--lightink-warning, var(--lightink-accent));
+}
+
+.lightink-tab.active .lightink-tab-dirty {
+  background: var(--lightink-warning, var(--lightink-accent));
+}

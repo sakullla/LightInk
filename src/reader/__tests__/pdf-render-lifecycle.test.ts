@@ -1011,9 +1011,10 @@ describe('PDF page host CSS contract', () => {
 
     // 补齐 wash 收窄到非护栏状态 + 两条补偿护栏（pdf-viewer.css 文件头偏差 3）：
     // enableSelectionRendering 激活时原生选区必须透明，不得与 DrawLayer
-    // `.selection` 覆盖层双重着色；br 选区始终透明。
+    // `.selection` 覆盖层双重着色；br 选区始终透明。选区底色接 selection
+    // 令牌（ui-redesign §3.9），不再走 annotation 洗色的旧 warm 回退。
     expect(css).toMatch(
-      /\.pdfViewer \.textLayer:not\(\.selectionRendering\) ::selection\s*\{[^}]*background:\s*var\(--lightink-annotation-wash, rgba\(154, 88, 40, 0\.32\)\)/,
+      /\.pdfViewer \.textLayer:not\(\.selectionRendering\) ::selection\s*\{[^}]*background:\s*var\(--lightink-selection, rgba\(160, 82, 28, 0\.2\)\)/,
     );
     expect(css).toMatch(
       /\.pdfViewer \.textLayer\.selectionRendering ::selection\s*\{[^}]*background:\s*transparent/,

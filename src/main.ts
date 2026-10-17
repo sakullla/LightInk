@@ -20,6 +20,12 @@ import {
   setFormatToolbarLinkEditor,
   setSlashImageHandler,
 } from './editor/labels.js';
+// 纸墨工作室 §3.10：纸卡模式偏好是纯函数（无编辑器引擎依赖，可静态引入）。
+import {
+  applyPaperCardClass,
+  resolvePaperCardEnabled,
+  savePaperCardEnabled,
+} from './editor/paper-card.js';
 import { setAppDisplayName } from './ui/window-title.js';
 import type { SourceView } from './editor/source-view.js';
 // 查找/替换与源码视图属编辑器引擎，主壳按需加载（见下方 lazy loaders）。
@@ -282,8 +288,10 @@ import './ui/toast.css';
 import './ui/tooltip.css';
 import './ui/help-guide.css';
 import './ui/window-titlebar.css';
+import './ui/tabbar.css';
 import './library/library.css';
 import './conceal/conceal.css';
+import './sync/sync-panel.css';
 import { createConcealClient } from './conceal/conceal-client.js';
 import {
   createConcealController,
@@ -2915,6 +2923,20 @@ shell = createAppShell(
     isStatusBarVisible: () => statusBar?.isVisible() === true,
     onToggleStatusBar: () => {
       statusBar?.toggle();
+    },
+    // 纸墨工作室 §3.10：纸卡模式开关（视图菜单勾选项；默认开）。切换即改写
+    // 全部已挂载的 Markdown 版心宿主（reader 版心带 --reader 修饰，排除）；
+    // 此后新挂载的编辑器由 mountEditor 的 applyPaperCardPreference 读同一偏好。
+    isPaperCardEnabled: () => resolvePaperCardEnabled(window.localStorage),
+    onTogglePaperCard: () => {
+      const next = !resolvePaperCardEnabled(window.localStorage);
+      savePaperCardEnabled(window.localStorage, next);
+      const hosts = document.querySelectorAll<HTMLElement>(
+        '.lightink-tab-host:not(.lightink-tab-host--reader)',
+      );
+      for (const host of Array.from(hosts)) {
+        applyPaperCardClass(host, next);
+      }
     },
     onToggleFullscreen: () => {
       void enterOrExitFullscreen();

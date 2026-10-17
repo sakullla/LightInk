@@ -16,13 +16,16 @@ import { readerFlowColumnLayout } from '../reader-layout.js';
 import {
   DEFAULT_READER_TYPOGRAPHY,
   READER_FONT_FAMILY_PRESETS,
+  READER_QUICK_SIZE_STEPS,
   READER_TYPOGRAPHY_STORAGE_KEY,
   applyReaderTypography,
   loadReaderTypography,
   nextReaderFontScaleStep,
   parseReaderTypography,
+  readerQuickSizeLabelPx,
   resolveReaderFontFamily,
   saveReaderTypography,
+  snapReaderFontScale,
   stepReaderFontScale,
 } from '../reader-typography.js';
 
@@ -160,6 +163,28 @@ describe('stepReaderFontScale', () => {
     );
     expect(store[FONT_SCALE_STORAGE_KEY]).toBeUndefined();
     expect(storage.getItem(FONT_SCALE_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe('quick size tiers (ui-redesign §3.5)', () => {
+  it('keeps the exact 15/17px fractions and labels them at the 16px baseline', () => {
+    expect([...READER_QUICK_SIZE_STEPS]).toEqual([0.9375, 1, 1.0625]);
+    expect(readerQuickSizeLabelPx(0.9375)).toBe('15px');
+    expect(readerQuickSizeLabelPx(1)).toBe('16px');
+    expect(readerQuickSizeLabelPx(1.0625)).toBe('17px');
+    expect(readerQuickSizeLabelPx(1.125)).toBeNull();
+  });
+
+  it('normalization preserves quick tiers and still snaps everything else to shared steps', () => {
+    expect(snapReaderFontScale(0.9375)).toBe(0.9375);
+    expect(snapReaderFontScale(1.0625)).toBe(1.0625);
+    expect(snapReaderFontScale(1.1)).toBe(1.125);
+    expect(snapReaderFontScale(0.95)).toBe(0.9375);
+    expect(snapReaderFontScale(Number.NaN)).toBe(DEFAULT_FONT_SCALE);
+    const { storage } = memoryStorage();
+    const next = saveReaderTypography(storage, { fontScaleStep: 1.0625 });
+    expect(next.fontScaleStep).toBe(1.0625);
+    expect(loadReaderTypography(storage).fontScaleStep).toBe(1.0625);
   });
 });
 

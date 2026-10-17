@@ -20,7 +20,8 @@
   line-height: 1.45;
   text-align: left;
   overflow-wrap: anywhere;
-  box-shadow: var(--lightink-shadow-strong);
+  /* 纸墨工作室 §3.20：气泡用 shadow-pop（浮出条层级，轻于模态 shadow-strong）。 */
+  box-shadow: var(--lightink-shadow-pop, var(--lightink-shadow-strong));
   /* 定位完全交给 JS 写的 transform，这里不要写 transition-transform。 */
   transition: opacity var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
   pointer-events: none;

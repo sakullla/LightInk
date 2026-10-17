@@ -8,7 +8,7 @@ import { SHEET_DRAG_THRESHOLD_PX } from '../../ui/touch/sheet-drag.js';
 import { createAnnotationPanel } from '../annotation-panel.js';
 import { defaultComicPreferences } from '../comic-preferences.js';
 import { createReaderChrome } from '../reader-chrome.js';
-import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
+import { DEFAULT_READER_TYPOGRAPHY, READER_FONT_FAMILY_PRESETS } from '../reader-typography.js';
 import { PDF_THUMB_MAX_EDGE } from '../formats/pdf.js';
 import {
   adoptReaderOverlayTheme,
@@ -1080,6 +1080,26 @@ describe('reader chrome panels', () => {
     expect(panel.querySelectorAll('.lightink-reader-type-font')).toHaveLength(4);
     expect(panel.querySelectorAll('.lightink-reader-type-font-glyph')).toHaveLength(4);
     expect(panel.querySelector('.lightink-reader-type-font-glyph')?.textContent).toBe('汉');
+    // 字族分段控件段序（ui-redesign §3.5 v3）：body / serif / mono 一等三段，
+    // sans 殿后；衬线按钮直接以 READER_FONT_FAMILY_PRESETS.serif 渲染预览。
+    expect(
+      [...panel.querySelectorAll<HTMLButtonElement>('.lightink-reader-type-font')].map(
+        (button) => button.dataset.fontPreset,
+      ),
+    ).toEqual(['body', 'serif', 'mono', 'sans']);
+    const serifButton = panel.querySelector<HTMLButtonElement>(
+      '[data-font-preset="serif"]',
+    )!;
+    expect(serifButton.style.fontFamily).toBe(READER_FONT_FAMILY_PRESETS.serif);
+    // 快捷字号档：15 / 16 / 17px，默认 16px 段激活。
+    expect(
+      [...panel.querySelectorAll('.lightink-reader-type-quick-step')].map(
+        (button) => button.textContent,
+      ),
+    ).toEqual(['15px', '16px', '17px']);
+    expect(
+      panel.querySelector('.lightink-reader-type-quick-step.is-active')?.textContent,
+    ).toBe('16px');
     expect(panel.querySelectorAll('.lightink-reader-type-mode')).toHaveLength(2);
     expect(panel.querySelectorAll('.lightink-reader-type-slider')).toHaveLength(2);
     expect(
@@ -1241,8 +1261,12 @@ describe('reader chrome panels', () => {
     expect(panelsCss()).toMatch(
       /\.lightink-reader-type-fonts,\s*\.lightink-reader-type-modes\s*\{[^}]*background:\s*var\(--lightink-reader-seg-track\)/,
     );
-    expect(panelsCss()).toMatch(
+    // 字族分段控件带活字样预览（ui-redesign §3.5 v3）：glyph 不再隐藏。
+    expect(panelsCss()).not.toMatch(
       /\.lightink-reader-type-font-glyph\s*\{[^}]*display:\s*none/,
+    );
+    expect(panelsCss()).toMatch(
+      /\.lightink-reader-chrome-panel\s*\{[^}]*box-shadow:\s*var\(--lightink-shadow-pop/,
     );
   });
 
@@ -1264,11 +1288,15 @@ describe('reader chrome panels', () => {
     expect(css).toMatch(
       /\.is-touch-sheet\s+\.lightink-reader-theme-swatch-name\s*\{[^}]*display:\s*none/,
     );
-    expect(css).toMatch(
+    // 触屏 sheet 同样保留字族活字样预览（不再隐藏 glyph）。
+    expect(css).not.toMatch(
       /\.is-touch-sheet\s+\.lightink-reader-type-font-glyph\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /\.is-touch-sheet\s+\.lightink-reader-type-step\s*\{[^}]*min-height:\s*44px/,
+    );
+    expect(css).toMatch(
+      /\.is-touch-sheet\s+\.lightink-reader-type-quick-step\s*\{[^}]*min-height:\s*44px/,
     );
   });
 

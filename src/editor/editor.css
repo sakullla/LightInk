@@ -1,0 +1,141 @@
+/*
+ * 编辑工作台样式层（纸墨工作室 §3.10/§3.12，docs/design/ui-redesign-2026-10.md）。
+ *
+ * 边界：src/ui/theme.css 是共享层（地基 F3，禁改），本文件只做编辑器包自有的
+ * 视觉增量——纸卡版心、代码/Mermaid/front-matter 凹面容器、查找面板钉版心、
+ * 格式条 active 态。覆盖 theme.css 的规则一律用更高特异性（#lightink-* id 或
+ * [role] 属性），不依赖加载顺序。
+ *
+ * 颜色/圆角/阴影全部消费主题令牌；动效遵守 §1.6（进场 180ms 内、reduced-motion
+ * 降级豁免在文件尾）。
+ */
+
+/* ---------------------------------------------------------------------------
+ * 1. 编辑版心纸卡模式（§3.10）：版心 = bg-elevated 卡面 + 1px border + 静置阴影。
+ * 页面底仍是 bg 纸面；上下留白让纸卡「浮」在纸面上。默认开（paper-card.ts）。
+ * ------------------------------------------------------------------------- */
+.lightink-tab-host.is-paper-card {
+  background: var(--lightink-bg-elevated);
+  border: 1px solid var(--lightink-border);
+  border-radius: var(--lightink-radius-panel, 12px);
+  box-shadow: var(--lightink-shadow);
+  margin-block: var(--lightink-space-5, 24px) var(--lightink-space-6, 32px);
+}
+
+/*
+ * 沉浸/全屏融为纯纸面（§3.10）：两者都会取消 chrome 钉住
+ * （main.ts enterOrExitFullscreen / toggleChromePinnedWithOutline），
+ * `is-chrome-pinned` 的生命周期已被 theme.css 触发条显隐依赖，此处复用同一钩子。
+ * 只复位本文件纸卡规则设置的属性，theme.css 的版心排版不动。
+ */
+#lightink-chrome-host:not(.is-chrome-pinned) ~ #lightink-main .lightink-tab-host.is-paper-card {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  margin-block: 0;
+}
+
+/* 打印：纸卡边框/阴影不进导出与打印（版面由 prose/print 规则接管）。 */
+@media print {
+  .lightink-tab-host.is-paper-card {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    margin-block: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. 代码块 / Mermaid / front-matter 容器：12px 圆角 + bg-sunken 凹面（§3.10）。
+ * 版心是 elevated 纸卡后，代码族容器下沉一档形成「嵌入纸面」的层次
+ * （§1.1 三层表面）。语法前景/语法 12 角色不动——四主题语法色在 bg-sunken 上
+ * 实测最差 4.67:1，仍满足 ≥4.5:1 约定。
+ * ------------------------------------------------------------------------- */
+
+/*
+ * 代码块卡片：容器统一 12px 圆角 + sunken 底（覆盖 theme.css 的 10px/code-bg）。
+ * 已渲染的 Mermaid/Math 代码块源码隐藏、由兄弟预览件呈现，theme.css 将其置为
+ * 透明占位——此处必须排除，否则同特异性下晚加载会给隐形占位画出空白凹面。
+ */
+.lightink-tab-host
+  .lightink-code-block:not([data-mermaid='rendered']):not([data-math-fence='rendered']):not(
+    .lightink-mermaid-source
+  ):not(.lightink-math-source) {
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: var(--lightink-bg-sunken);
+}
+
+/* 代码块 chrome（语言 + 复制）：sunken 之上的浅一档横带，替代旧的 elevated 混色。 */
+.lightink-tab-host .lightink-code-header {
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 38%, var(--lightink-bg-sunken));
+}
+
+/* Mermaid 渲染容器：同一凹面语言（theme.css 为 10px/elevated）。 */
+.lightink-tab-host .lightink-mermaid {
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: var(--lightink-bg-sunken);
+}
+
+/* YAML front-matter 折叠条：凹面 + 12px（theme.css 为 6px/elevated 混色）。 */
+.lightink-tab-host[role='tabpanel'] .lightink-frontmatter {
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: var(--lightink-bg-sunken);
+}
+
+/* front-matter 展开后的 YAML 原文：凹面内再下沉的轨底。 */
+.lightink-tab-host[role='tabpanel'] .lightink-frontmatter > pre {
+  background: color-mix(in srgb, var(--lightink-code-bg) 42%, var(--lightink-bg-sunken));
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. 查找面板钉版心右上、不压正文首行（§3.10）。
+ * 面板挂在 #lightink-main（非滚动），左右位置由 find-replace.ts 按活动版心
+ * 实测钉到版心右上（inline right/top）；这里的 :has() 在面板打开时给版心
+ * 让出头部空间，首行永不被浮层盖住（VS Code 式「占一行」语义）。
+ * ------------------------------------------------------------------------- */
+#lightink-main:has(.lightink-find-panel.is-open)
+  #lightink-editor-area
+  .lightink-tab-host:not(.lightink-tab-host--reader) {
+  /* 版心原 page-pad-y 顶部留白 + 面板占位（单行面板 ~44px + 呼吸）。 */
+  padding-top: calc(var(--lightink-page-pad-y, 24px) + 58px);
+  transition: padding-top var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+/* 面板自身：贴纸卡语言（find-replace.ts 钉位后仍是 elevated 浮层，仅补令牌细节）。 */
+#lightink-main .lightink-find-panel {
+  border-radius: var(--lightink-radius-panel, 12px);
+}
+
+/* ---------------------------------------------------------------------------
+ * 4. 划选格式条（§3.10 行为联动）：active 态 accent-soft 底（data-active 由
+ * format-toolbar.ts 按选区 marks 联动），标注组与 marks 组之间的发丝分组线。
+ * 容器样式（elevated + shadow-pop + radius-panel）由地基 F3 在 theme.css 交付。
+ * ------------------------------------------------------------------------- */
+body .lightink-format-toolbar .lightink-format-tool[data-active] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+/* 分组分隔线：highlight 起的标注组（高亮/笔记/复制）与 marks 组之间。 */
+body .lightink-format-toolbar .lightink-format-tool--highlight {
+  margin-left: var(--lightink-space-1, 4px);
+  border-left: 1px solid var(--lightink-border);
+  border-radius: 0 var(--lightink-radius-control, 8px) var(--lightink-radius-control, 8px) 0;
+}
+
+/* 触屏格式条同语言的 active 态（keyboard-format-bar.ts 的 data-active）。 */
+body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-active] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+/* ---------------------------------------------------------------------------
+ * 动效豁免（§1.6）：本文件新增的过渡全部在 prefers-reduced-motion 下降级。
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  #lightink-main:has(.lightink-find-panel.is-open)
+    #lightink-editor-area
+    .lightink-tab-host:not(.lightink-tab-host--reader) {
+    transition: none;
+  }
+}

@@ -386,7 +386,10 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-whisper,[\s\S]*?\.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
-      /\.lightink-reader\[data-reading-layout='scroll'\] > \.lightink-reader-chrome-whisper\s*\{[^}]*display:\s*none/,
+      /\.lightink-reader\[data-reading-layout='scroll'\] > \.lightink-reader-chrome-whisper\s*\{[^}]*height:\s*2px[^}]*pointer-events:\s*none/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-reading-layout='scroll'\] > \.lightink-reader-chrome-whisper[\s\S]*?\.lightink-reader-chrome-whisper-chapter,[\s\S]*?\.lightink-reader-chrome-whisper-progress\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
       /\.lightink-reader\[data-comic-reader='true'\] > \.lightink-reader-chrome-footer,[\s\S]*?\.lightink-reader-chrome-footer\s*\{[^}]*display:\s*none/,
@@ -1038,12 +1041,29 @@ describe('readerFlowSpreadFromTypography', () => {
     expect(page.gap).toBe(0);
   });
 
-  it('splits a wide page into two filling columns without leftover sliver width', () => {
+  it('bounds both facing columns by the stored measure so the spread can center', () => {
     const page = readerPageSpread(1000, 16, 22);
     expect(page.columns).toBe(2);
-    expect(page.width).toBe(1000);
+    // 版心居中：栏宽对齐 22rem 行长，双栏均衡 + 中央栏沟；spread 窄于纸面，
+    // 由 flow-renderer 的 margin-inline auto 居中（1280 宽不再画 ~39rem 通栏长行）。
+    expect(page.columnWidth).toBe(22 * 16);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+    expect(page.width).toBeLessThan(1000);
     expect(page.step).toBe(page.width + page.gap);
+  });
+
+  it('never narrows a facing column below the readable minimum for a short measure', () => {
+    const page = readerPageSpread(1000, 16, 16);
+    expect(page.columns).toBe(2);
+    expect(page.columnWidth).toBe(22 * 16);
+    expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+  });
+
+  it('lets a wide measure widen the facing columns up to the filling split', () => {
+    const page = readerPageSpread(1000, 16, 32);
+    expect(page.columns).toBe(2);
+    expect(page.columnWidth).toBe(Math.floor((1000 - 40) / 2));
+    expect(page.columnWidth * 2 + page.gap).toBe(page.width);
   });
 });
 
@@ -1109,15 +1129,26 @@ describe('readerPageSpread compact / narrow (R5)', () => {
     expectSingleFullWidthColumn(readerPageSpread(640, 16, 22), 640);
   });
 
-  it('keeps two filling columns on a desktop-wide pane without compact flags', () => {
+  it('keeps two measure-bounded columns on a desktop-wide pane without compact flags', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
     expect(readerSurfaceIsCompact()).toBe(false);
     const page = readerPageSpread(1000, 16, 22);
     expect(page.columns).toBe(2);
-    expect(page.width).toBe(1000);
+    expect(page.columnWidth).toBe(22 * 16);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+    expect(page.width).toBeLessThan(1000);
     expect(page.step).toBe(page.width + page.gap);
     expect(readerFlowSpreadFromTypography(1000, 16, { ...DEFAULT_READER_TYPOGRAPHY, measureRem: 32 }).columns).toBe(2);
+  });
+
+  it('centers the paginated spread on the paper and caps scroll chapters to the measure', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
+    expect(flow).toMatch(/pageBox\.style\.marginInline = 'auto'/);
+    expect(flow).toMatch(/'margin-left',\s*\n\s*'margin-right',/);
+    const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
+    expect(css).toMatch(
+      /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-chapter\s*\{[^}]*max-width:\s*var\(--lightink-reader-measure,\s*none\)[^}]*margin-inline:\s*auto/,
+    );
   });
 
   it('keeps the flow CSS column-width fallback at 100% for a single column', () => {

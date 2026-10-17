@@ -147,6 +147,13 @@ describe('prose.css 标题比例与节奏', () => {
     }
   });
 
+  it('标题字重节奏（纸墨工作室 §1.2）：h1/h2 附加 650 字重与 -0.01em 紧排', () => {
+    for (const level of [1, 2]) {
+      expect(headingRule(level)).toMatch(/font-weight:\s*650/);
+      expect(headingRule(level)).toMatch(/letter-spacing:\s*-0\.01em/);
+    }
+  });
+
   it('标题 margin-top 引用 major/minor，margin-bottom 引用 paragraph', () => {
     expect(headingRule(1)).toContain('var(--lightink-gap-heading-major)');
     expect(headingRule(2)).toContain('var(--lightink-gap-heading-major)');
@@ -323,6 +330,14 @@ describe('theme.css 不再持有第二份排版声明', () => {
     }
   });
 
+  it('标题组不再以更高特异性覆写 letter-spacing（§1.2 节奏由 prose.css 持有）', () => {
+    const headingSel =
+      '.lightink-tab-host .ProseMirror h1, .lightink-tab-host .ProseMirror h2, .lightink-tab-host .ProseMirror h3, .lightink-tab-host .ProseMirror h4, .lightink-tab-host .ProseMirror h5, .lightink-tab-host .ProseMirror h6';
+    const group = declarationBlocks(themeCss).find((rule) => rule.selector === headingSel);
+    expect(group).toBeDefined();
+    expect(group!.body).not.toMatch(/letter-spacing\s*:/);
+  });
+
   it('源码模式两层复位块含 CJK 复位', () => {
     const source = declarationBlocks(themeCss).find(
       (rule) => rule.selector === '.lightink-source-editor',
@@ -475,7 +490,7 @@ describe('theme.css Markdown 栏宽分档', () => {
     const shell = declarationBlocks(themeCss).find((rule) => rule.selector === READER_SHELL_HOST);
     expect(shell).toBeDefined();
     expect(shell!.body).toMatch(
-      /padding:\s*calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-x,\s*28px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*2\.2\s*\*\s*1\.5\)/,
+      /padding:\s*calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-x,\s*32px\)\s*\*\s*1\.5\)\s+calc\(\s*var\(--lightink-page-pad-y,\s*24px\)\s*\*\s*2\.2\s*\*\s*1\.5\)/,
     );
     expect(shell!.body).toMatch(
       /font-size:\s*calc\(\s*var\(--lightink-font-size,\s*16px\)\s*\*\s*1\.125\s*\*\s*var\(--lightink-font-scale,\s*1\)\s*\)/,

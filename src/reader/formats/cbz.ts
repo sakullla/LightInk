@@ -508,6 +508,7 @@ export async function renderCbzInto(
       pageButton: dom.pageButton,
       bookmarkButton: dom.bookmarkButton,
       bookmarksButton: dom.bookmarksButton,
+      directionBadge: dom.directionBadge,
       pagesRoot: dom.pagesRoot,
       scroller: dom.pagesRoot,
       previousButton: dom.previousButton,

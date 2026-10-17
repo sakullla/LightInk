@@ -100,7 +100,9 @@ export interface AssistantToolTurn {
 const ASSISTANT_THEME_VARS = [
   '--lightink-bg',
   '--lightink-bg-elevated',
+  '--lightink-bg-sunken',
   '--lightink-fg',
+  '--lightink-fg-strong',
   '--lightink-accent-ink',
   '--lightink-muted',
   '--lightink-border',
@@ -109,6 +111,9 @@ const ASSISTANT_THEME_VARS = [
   '--lightink-overlay',
   '--lightink-shadow',
   '--lightink-danger',
+  '--lightink-success',
+  '--lightink-warning',
+  '--lightink-info',
 ] as const;
 
 /**
@@ -166,6 +171,10 @@ const ASSISTANT_JUMP_BOTTOM_ICON =
 /** 新建会话图标（加号）：面板头部一级入口（ADR-10 / R2）。 */
 const ASSISTANT_NEW_CONVERSATION_ICON =
   '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3.5v9"/><path d="M3.5 8h9"/></svg>';
+
+/** 工具调用卡图标（扳手）：sunken 卡片头部的前置图标，颜色随四态变化（§3.13）。 */
+const ASSISTANT_TOOL_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
 
 export type { AssistantHistoryMessage };
 
@@ -1494,13 +1503,17 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     modeTrigger.setAttribute('aria-haspopup', 'true');
     modeTrigger.setAttribute('aria-expanded', 'false');
     modeTrigger.setAttribute('title', t('reader.assistant.permissionMode'));
+    // 模式色标（§3.13）：审阅/自动 = info 蓝点，YOLO = warning 琥珀点，随 paintMode 切换。
+    const modeDot = document.createElement('span');
+    modeDot.className = 'lightink-reader-assistant-mode-dot';
+    modeDot.setAttribute('aria-hidden', 'true');
     const modeTriggerLabel = document.createElement('span');
     modeTriggerLabel.className = 'lightink-reader-assistant-mode-trigger-label';
     const modeChevron = document.createElement('span');
     modeChevron.className = 'lightink-reader-assistant-mode-chevron';
     modeChevron.setAttribute('aria-hidden', 'true');
     modeChevron.textContent = '▾';
-    modeTrigger.append(modeTriggerLabel, modeChevron);
+    modeTrigger.append(modeDot, modeTriggerLabel, modeChevron);
     const modeMenu = document.createElement('div');
     modeMenu.className = 'lightink-reader-assistant-mode-menu';
     modeMenu.setAttribute('role', 'radiogroup');
@@ -1525,6 +1538,8 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
         button.tabIndex = selected ? 0 : -1;
       }
       modeTriggerLabel.textContent = t(permissionModeLabel(permissionMode));
+      // YOLO 会未经确认直接写入：触发器整体切 warning 语气，与色标同步。
+      modeTrigger.classList.toggle('is-yolo', permissionMode === 'yolo');
     };
     const selectMode = (mode: AssistantPermissionMode, focus = false): void => {
       if (permissionMode !== mode) {
@@ -1831,6 +1846,12 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
     arrow.setAttribute('aria-hidden', 'true');
     arrow.textContent = '▸';
 
+    // 工具调用卡前置图标（§3.13）：sunken 卡 + 图标；着色随 data-tool-state 走语义色。
+    const icon = document.createElement('span');
+    icon.className = 'lightink-reader-assistant-tool-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = ASSISTANT_TOOL_ICON;
+
     const status = document.createElement('span');
     status.className = `lightink-reader-assistant-tool-status is-${state}`;
     status.setAttribute('role', 'img');
@@ -1878,7 +1899,7 @@ export function createAssistantPanel(deps: AssistantPanelDeps): AssistantPanel {
       el.classList.toggle('is-open', open);
     });
 
-    head.append(arrow, status, name, summary);
+    head.append(icon, name, summary, status, arrow);
     el.append(head);
     if (state === 'running' && downloadCancels.has(block.id)) {
       const stop = document.createElement('button');

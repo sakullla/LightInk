@@ -64,11 +64,44 @@ describe('toast surface', () => {
     showToast('success', '已同步');
     const toast = toasts()[0]!;
     expect(toast.querySelector('details')).toBeNull();
+    // §3.20：复制详情按钮只随 detail 出现。
+    expect(toast.querySelector('.lightink-toast-copy')).toBeNull();
+  });
+
+  it('offers one-click copy for the technical detail and reports the outcome (§3.20)', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    try {
+      showToast('error', '导出失败', 'boom at module x');
+      const toast = toasts()[0]!;
+      const copy = toast.querySelector<HTMLButtonElement>('.lightink-toast-copy')!;
+      expect(copy).not.toBeNull();
+      expect(copy.getAttribute('aria-label')).toBe('复制详情');
+      expect(copy.textContent).toBe('复制详情');
+      copy.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith('boom at module x');
+      expect(copy.dataset.copyState).toBe('done');
+      expect(copy.textContent).toBe('已复制');
+
+      writeText.mockRejectedValue(new Error('denied'));
+      showToast('error', '再次失败', 'boom at module y');
+      const copy2 = toasts()[1]!.querySelector<HTMLButtonElement>('.lightink-toast-copy')!;
+      copy2.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(copy2.dataset.copyState).toBe('failed');
+      expect(copy2.textContent).toBe('复制失败');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
 describe('toast dismissal', () => {
-  it('auto-dismisses errors after 8s and other kinds after 5s', () => {
+  it('auto-dismisses errors after 12s and other kinds after 5s (§3.20: 8s→12s)', () => {
     vi.useFakeTimers();
     showToast('error', 'A');
     showToast('info', 'B');
@@ -117,7 +150,7 @@ describe('toast dismissal', () => {
     vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS); // 悬停期间不消失
     expect(toasts().length).toBe(1);
     toast.dispatchEvent(new Event('pointerleave'));
-    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS - 5000 - 1); // 剩余 3000ms 的前 2999ms
+    vi.advanceTimersByTime(TOAST_ERROR_DISMISS_MS - 5000 - 1); // 剩余 7000ms 的前 6999ms
     expect(toasts().length).toBe(1);
     vi.advanceTimersByTime(1); // 剩余时间耗尽 → 淡出
     expect(toasts()[0]?.classList.contains('lightink-toast-out')).toBe(true);

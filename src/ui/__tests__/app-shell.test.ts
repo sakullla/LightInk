@@ -155,6 +155,15 @@ class FakeEl {
     }
   }
 
+  /** jsdom/Element.remove 对齐（外壳测试用：主题浮层关闭等路径）。 */
+  remove(): void {
+    const parent = this.parent;
+    if (parent === null) return;
+    const index = parent.children.indexOf(this);
+    if (index >= 0) parent.children.splice(index, 1);
+    this.parent = null;
+  }
+
   contains(node: unknown): boolean {
     if (node === this) return true;
     return this.children.some((child) => child.contains(node));
@@ -375,6 +384,102 @@ describe('createAppShell immersive chrome', () => {
     shell.toggleMenuChrome();
     expect(shell.chrome.isRevealed('menu')).toBe(false);
     expect(chromeHost?.classList.contains('is-menu-revealed')).toBe(false);
+  });
+
+  it('☰ 恢复锚点：常驻、无 menu role，单击恢复钉住并直达文件菜单（§3.1/§4.1）', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(root, stubActions(), {
+      shortcutBindings: () => [],
+      storage: null,
+      initialPinPrefs: { menu: false, tabs: false },
+    });
+    const fakeRoot = root as unknown as FakeEl;
+    const anchor = fakeRoot.querySelector('#lightink-titlebar-anchor');
+    expect(anchor).not.toBeNull();
+    // 常显容器禁用 menu role（§5.6 role 劫持规则）。
+    expect(anchor?.getAttribute('role')).toBeNull();
+    // 品牌拖拽区在前，☰ 按钮在其后（起点 x≥48 由 window-titlebar.css 锁定）。
+    expect(anchor?.children[0]?.className).toContain('lightink-titlebar-brand');
+    expect(anchor?.children[0]?.getAttribute('aria-hidden')).toBe('true');
+    const menuBtn = fakeRoot.querySelector('#lightink-titlebar-anchor-menu');
+    expect(menuBtn?.getAttribute('aria-label')).toBe('chrome.appMenu');
+
+    expect(shell.isChromePinned()).toBe(false);
+    menuBtn?.click();
+    expect(shell.isChromePinned()).toBe(true);
+    expect(shell.chrome.isRevealed('menu')).toBe(true);
+    // 直达菜单：File 下拉面板处于打开态（hidden=false）。
+    const filePanel = fakeRoot
+      .querySelectorAll('.lightink-menu-panel')
+      .find((panel) => panel.dataset.menuId === 'file');
+    expect(filePanel?.hidden).toBe(false);
+  });
+
+  it('主题快切：单击切换浅深；右键弹四主题浮层并应用（无 role=menu）', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const onToggleTheme = vi.fn();
+    const onApplyTheme = vi.fn();
+    createAppShell(
+      root,
+      { ...stubActions(), onToggleTheme, onApplyTheme },
+      { shortcutBindings: () => [], storage: null },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const themeBtn = fakeRoot.querySelector('#lightink-titlebar-anchor-theme');
+    expect(themeBtn?.getAttribute('aria-label')).toBe('chrome.themeQuickSwitch');
+    themeBtn?.click();
+    expect(onToggleTheme).toHaveBeenCalledOnce();
+
+    themeBtn?.fire('contextmenu');
+    const flyout = fakeRoot.querySelector('.lightink-titlebar-theme-flyout');
+    expect(flyout).not.toBeNull();
+    // §5.6：新组件不引入第二个 role=menu。
+    expect(flyout?.getAttribute('role')).toBeNull();
+    const items = flyout?.children ?? [];
+    expect(items).toHaveLength(4);
+    items[3]!.click();
+    expect(onApplyTheme).toHaveBeenCalledWith('midnight');
+    expect(fakeRoot.querySelector('.lightink-titlebar-theme-flyout')).toBeNull();
+  });
+
+  it('脏标双态：未保存标签渲染圆点元素，已存标签无点、文字无 ● 前缀（§3.11）', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(root, stubActions(), {
+      shortcutBindings: () => [],
+      storage: null,
+      initialPinPrefs: { menu: true, tabs: true },
+    });
+    shell.renderTabBar(
+      [
+        { id: 'tab-1', title: 'a.md', dirty: true },
+        { id: 'tab-2', title: 'b.md', dirty: false },
+      ],
+      'tab-1',
+      { onSwitch: () => undefined, onClose: () => undefined },
+    );
+    const tabBar = (root as unknown as FakeEl).querySelector('#lightink-tabbar');
+    const first = tabBar?.children.find((child) => child.dataset.tabId === 'tab-1');
+    const second = tabBar?.children.find((child) => child.dataset.tabId === 'tab-2');
+    const firstButton = first?.children.find((child) =>
+      child.classList.contains('lightink-tab-button'),
+    );
+    const secondButton = second?.children.find((child) =>
+      child.classList.contains('lightink-tab-button'),
+    );
+    const dirtyDot = firstButton?.children.find((child) =>
+      child.classList.contains('lightink-tab-dirty'),
+    );
+    expect(dirtyDot?.dataset.dirty).toBe('true');
+    const firstLabel = firstButton?.children.find((child) =>
+      child.classList.contains('lightink-tab-label'),
+    );
+    expect(firstLabel?.textContent).toBe('a.md');
+    expect(
+      secondButton?.children.some((child) => child.classList.contains('lightink-tab-dirty')),
+    ).toBe(false);
   });
 
   it('setChromePinned pins menu and tabs and marks hosts', () => {
@@ -806,32 +911,49 @@ describe('buildMenus 生产结构', () => {
     }
   });
 
-  it('视图菜单把主题收纳为子菜单，预设主题当前项禁用（R15）', () => {
+  it('视图菜单把主题平铺为单项选择组，预设当前项禁用（纸墨工作室 §3.1 拍平）', () => {
     const viewMenus = buildMenus(stubActions('midnight'));
     const view = viewMenus.find((m) => m.id === 'view');
-    const themeEntry = view?.items.find((i) => i.id === 'view-theme');
-    expect(themeEntry?.submenu).toBeTypeOf('function');
-    // Top-level View no longer lists each theme inline.
-    expect(view?.items.some((i) => i.id === 'view-theme-midnight')).toBe(false);
+    // 拍平：不再有 view-theme 子菜单容器。
+    expect(view?.items.some((i) => i.id === 'view-theme')).toBe(false);
+    expect(view?.items.find((i) => i.id === 'view-theme')?.submenu).toBeUndefined();
 
-    const themeItems = themeEntry!.submenu!();
-    // submenu may be sync or Promise — production uses sync factory.
-    expect(Array.isArray(themeItems)).toBe(true);
-    const items = themeItems as import('../menus.js').MenuItem[];
+    // 快捷切换与预设直接平铺在 View 顶层。
     const presetIds = ['warm-light', 'cool-light', 'dark', 'midnight'].map(
       (id) => `view-theme-${id}`,
     );
-    const presetItems = items.filter(
-      (i) => i.separator !== true && i.id !== 'view-theme-toggle' && presetIds.includes(i.id),
+    const presetItems = view!.items.filter(
+      (i) => i.separator !== true && presetIds.includes(i.id),
     );
     expect(presetItems.map((i) => i.id)).toEqual(presetIds);
-    // 当前主题 midnight 禁用、其余启用。
-    expect(presetItems.find((i) => i.id === 'view-theme-midnight')?.enabled?.()).toBe(false);
+    // 当前主题 midnight 禁用（带 ✓ 前缀）、其余启用。
+    const current = presetItems.find((i) => i.id === 'view-theme-midnight');
+    expect(current?.enabled?.()).toBe(false);
+    const currentLabel = typeof current!.label === 'function' ? current!.label() : current!.label;
+    expect(currentLabel).toMatch(/^✓/);
     expect(presetItems.find((i) => i.id === 'view-theme-warm-light')?.enabled?.()).toBe(true);
-    // 热重载自定义主题入口存在。
-    expect(items.some((i) => i.id === 'view-reload-custom-theme')).toBe(true);
-    // Toggle still present inside the submenu.
-    expect(items.some((i) => i.id === 'view-theme-toggle')).toBe(true);
+    // Toggle 仍在顶层（快捷键保留）。
+    const toggle = view?.items.find((i) => i.id === 'view-theme-toggle');
+    expect(toggle?.submenu).toBeUndefined();
+    expect(toggle?.shortcut).toBe('Ctrl+J');
+    // 热重载自定义主题入口存在（同样平铺）。
+    expect(view?.items.some((i) => i.id === 'view-reload-custom-theme')).toBe(true);
+    expect(view?.items.some((i) => i.id === 'view-select-custom-theme')).toBe(true);
+    expect(view?.items.some((i) => i.id === 'view-reset-custom-theme')).toBe(true);
+  });
+
+  it('平铺主题项点击应用预设；当前项经 enabled 门控不可再点', () => {
+    const applied: string[] = [];
+    const view = buildMenus({
+      ...stubActions('midnight'),
+      onApplyTheme: (id) => {
+        applied.push(id);
+      },
+    }).find((m) => m.id === 'view');
+    view?.items.find((i) => i.id === 'view-theme-warm-light')!.action();
+    expect(applied).toEqual(['warm-light']);
+    // 当前主题项 enabled=false（菜单渲染为禁用，防重复应用）。
+    expect(view?.items.find((i) => i.id === 'view-theme-midnight')?.enabled?.()).toBe(false);
   });
 
   it('reader 标签下视图菜单隐藏「源码模式」，切回 Markdown 恢复（T1）', () => {
@@ -841,6 +963,41 @@ describe('buildMenus 生产结构', () => {
       (m) => m.id === 'view',
     );
     expect(readerView?.items.some((i) => i.id === 'view-source-mode')).toBe(false);
+  });
+
+  it('纸卡模式开关：Markdown 视图菜单勾选两态，reader 态隐藏（§3.10）', () => {
+    const paperCardLabel = (enabled: boolean): string => {
+      const view = buildMenus({
+        ...stubActions(),
+        isPaperCardEnabled: () => enabled,
+      }).find((m) => m.id === 'view');
+      const item = view?.items.find((i) => i.id === 'view-paper-card');
+      return typeof item?.label === 'function' ? item.label() : String(item?.label);
+    };
+    // 默认开（isPaperCardEnabled 缺省时 !== false 也勾选）。
+    expect(paperCardLabel(true)).toMatch(/^✓ /);
+    expect(paperCardLabel(false)).not.toMatch(/^✓ /);
+    const defaultStub = menus.find((m) => m.id === 'view');
+    const defaultItem = defaultStub?.items.find((i) => i.id === 'view-paper-card');
+    const defaultLabel =
+      typeof defaultItem?.label === 'function' ? defaultItem.label() : String(defaultItem?.label);
+    expect(defaultLabel).toMatch(/^✓ /);
+    // 开关动作走注入回调（main.ts 负责持久化与宿主类切换）。
+    const toggled: boolean[] = [];
+    const withToggle = buildMenus({
+      ...stubActions(),
+      isPaperCardEnabled: () => false,
+      onTogglePaperCard: () => {
+        toggled.push(true);
+      },
+    }).find((m) => m.id === 'view');
+    withToggle?.items.find((i) => i.id === 'view-paper-card')!.action();
+    expect(toggled).toEqual([true]);
+    // 纸卡是编辑器视觉：reader 态随「源码模式」一起隐藏。
+    const readerView = buildMenus({ ...stubActions(), activeTabKind: () => 'reader' }).find(
+      (m) => m.id === 'view',
+    );
+    expect(readerView?.items.some((i) => i.id === 'view-paper-card')).toBe(false);
   });
 
   it('标注菜单书签项两态：isReaderBookmarked 真/假决定 ✓ 前缀（T4 回归）', () => {

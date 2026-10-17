@@ -50,11 +50,24 @@ describe('reader paper themes', () => {
     const root = document.createElement('div');
     applyReaderTheme(root, 'night');
     expect(root.dataset.readerTheme).toBe('night');
-    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#121212');
-    expect(root.style.getPropertyValue('--lightink-fg')).toBe('#c8c8c8');
+    expect(root.style.getPropertyValue('--lightink-bg')).toBe('#141822');
+    expect(root.style.getPropertyValue('--lightink-fg')).toBe('#d3dae6');
     expect(root.style.colorScheme).toBe('dark');
-    expect(root.style.color).toMatch(/#c8c8c8|rgb\(200,\s*200,\s*200\)/);
-    expect(root.style.backgroundColor).toMatch(/#121212|rgb\(18,\s*18,\s*18\)/);
+    expect(root.style.color).toMatch(/#d3dae6|rgb\(211,\s*218,\s*230\)/);
+    expect(root.style.backgroundColor).toMatch(/#141822|rgb\(20,\s*24,\s*34\)/);
+  });
+
+  it('inlines the paper-tier highlight family onto the reading host', () => {
+    const root = document.createElement('div');
+    applyReaderTheme(root, 'sepia');
+    expect(root.style.getPropertyValue('--lightink-bg-sunken')).toBe('#ead9b8');
+    expect(root.style.getPropertyValue('--lightink-fg-strong')).toBe('#3e2f1c');
+    expect(root.style.getPropertyValue('--lightink-highlight')).toBe('#e3c96e');
+    expect(root.style.getPropertyValue('--lightink-highlight-ink')).toBe('#574f1f');
+    const dark = document.createElement('div');
+    applyReaderTheme(dark, 'gray');
+    expect(dark.style.getPropertyValue('--lightink-highlight')).toBe('#8a7430');
+    expect(dark.style.getPropertyValue('--lightink-highlight-ink')).toBe('#f0e2ac');
   });
 
   it('resets a shared pane so reader paper does not outrank editor themes', () => {
@@ -64,9 +77,13 @@ describe('reader paper themes', () => {
     expect(pane.dataset.readerTheme).toBeUndefined();
     expect(pane.style.getPropertyValue('--lightink-bg')).toBe('');
     expect(pane.style.getPropertyValue('--lightink-bg-elevated')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-bg-sunken')).toBe('');
     expect(pane.style.getPropertyValue('--lightink-fg')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-fg-strong')).toBe('');
     expect(pane.style.getPropertyValue('--lightink-muted')).toBe('');
     expect(pane.style.getPropertyValue('--lightink-border')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-highlight')).toBe('');
+    expect(pane.style.getPropertyValue('--lightink-highlight-ink')).toBe('');
     expect(pane.style.colorScheme).toBe('');
     expect(pane.style.color).toBe('');
     expect(pane.style.backgroundColor).toBe('');
@@ -75,13 +92,13 @@ describe('reader paper themes', () => {
   it('maps paper themes onto native caption colors', () => {
     expect(readerNativeWindowChrome('sepia')).toEqual({
       dark: false,
-      caption: '#fbf0d9',
-      text: '#5c4a32',
+      caption: '#f5e9d2',
+      text: '#4e3d28',
     });
     expect(readerNativeWindowChrome('night')).toEqual({
       dark: true,
-      caption: '#121212',
-      text: '#c8c8c8',
+      caption: '#141822',
+      text: '#d3dae6',
     });
     expect(COMIC_NATIVE_WINDOW_CHROME).toEqual({
       dark: true,

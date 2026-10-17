@@ -27,12 +27,10 @@
   background: var(--lightink-bg-elevated);
   border: 1px solid color-mix(in srgb, var(--lightink-border) 70%, transparent);
   border-radius: var(--lightink-radius-panel);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
-    0 4px 12px rgba(0, 0, 0, 0.08),
-    0 20px 48px rgba(0, 0, 0, 0.18);
+  /* 纸墨工作室 §3.6：chrome 浮层统一 elevated + radius-panel + shadow-pop。 */
+  box-shadow: var(--lightink-shadow-pop, 0 6px 20px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.1));
   font-family: var(--lightink-font-ui);
-  font-size: 0.78rem;
+  font-size: var(--lightink-text-md, 0.78rem);
   line-height: 1.35;
   --lightink-reader-font-scale: 1;
   --lightink-reader-line-height: 1.35;
@@ -430,6 +428,41 @@
   color: var(--lightink-muted);
 }
 
+/* 快捷字号档（ui-redesign §3.5）：16px 基准的 15/16/17px，与字族/版式共用
+   分段语言；mono 表格数字让三段等宽对齐。 */
+.lightink-reader-type-quick {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0;
+  margin-top: 0.15rem;
+  padding: 3px;
+  border-radius: var(--lightink-radius-panel);
+  background: var(--lightink-reader-seg-track);
+}
+
+.lightink-reader-type-quick-step {
+  min-height: 1.9rem;
+  padding: 0.2rem 0.25rem;
+  border: 0;
+  border-radius: var(--lightink-radius-control);
+  background: transparent;
+  color: color-mix(in srgb, var(--lightink-fg) 72%, transparent);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lightink-reader-type-quick-step.is-active {
+  background: var(--lightink-reader-seg-active);
+  box-shadow: var(--lightink-reader-seg-shadow);
+  color: var(--lightink-fg);
+  font-weight: 600;
+}
+
 /* 纸张：小色片 + 名称，不再画迷你书页。 */
 .lightink-reader-theme-swatches {
   display: grid;
@@ -520,8 +553,15 @@
   cursor: pointer;
 }
 
+/* 字族预览字样（ui-redesign §3.5 v3）：每段以自己的字族渲染「汉/宋/Aa/黑」
+   活字样，衬线（唯一来源 READER_FONT_FAMILY_PRESETS.serif）一等可见。 */
 .lightink-reader-type-font-glyph {
-  display: none;
+  flex: 0 0 auto;
+  min-width: 1.1em;
+  font-size: 0.95em;
+  line-height: 1;
+  text-align: center;
+  font-weight: 500;
 }
 
 .lightink-reader-type-font-name {
@@ -824,6 +864,7 @@
   .lightink-reader-toc-item,
   .lightink-reader-type-choice,
   .lightink-reader-type-font,
+  .lightink-reader-type-quick-step,
   .lightink-reader-type-step,
   .lightink-reader-theme-swatch {
     min-height: 44px;
@@ -1075,8 +1116,18 @@
   font-weight: 600;
 }
 
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-quick {
+  margin-top: 0.3rem;
+}
+
+.lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-quick-step {
+  min-height: 44px;
+  font-size: 0.9rem;
+}
+
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font-glyph {
-  display: none;
+  min-width: 1.15em;
+  font-size: 1em;
 }
 
 .lightink-reader-chrome-panel.is-touch-sheet .lightink-reader-type-font-name {

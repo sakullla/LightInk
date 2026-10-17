@@ -556,11 +556,12 @@
   transform: translate(-50%, -50%);
 }
 
-/* 书签刻度（R3）：主题色、比章节刻度粗，可点击跳对应书签（容器 pointer-events:none，按钮自行恢复）。 */
+/* 书签刻度（R3）：主题色、比章节刻度粗，可点击跳对应书签（容器 pointer-events:none，按钮自行恢复）。
+   触达 16px 高（ui-redesign §3.6：进度轨刻度加大）。 */
 .lightink-reader-chrome-tick--bookmark {
   z-index: 2;
-  width: 10px;
-  height: 12px;
+  width: 12px;
+  height: 16px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -572,7 +573,7 @@
   content: '';
   display: block;
   width: 3px;
-  height: 10px;
+  height: 14px;
   margin: 0 auto;
   border-radius: 1px;
   background: var(--lightink-accent);
@@ -694,11 +695,34 @@
   display: none;
 }
 
-/* Scroll: the pane scrollbar is the progress cue. An idle whisper overlay
-   covers the last line (the usual continuous-scroll complaint). Tap still
-   reveals the full footer for chapter seek. */
+/* Scroll: the pane scrollbar stays the seek affordance, but the idle whisper
+   survives as a 2px progress hairline (ui-redesign §3.6) — the full row
+   (chapter + percent) would cover the last line; the hairline does not. Tap
+   still reveals the full footer for chapter seek (the row is pointer-events:
+   none so text selection near the bottom edge is untouched). */
 .lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper {
+  height: 2px;
+  padding: 0;
+  gap: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper
+  .lightink-reader-chrome-whisper-chapter,
+.lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper
+  .lightink-reader-chrome-whisper-progress {
   display: none;
+}
+
+.lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper
+  .lightink-reader-chrome-scrubber--whisper {
+  height: 2px;
+}
+
+.lightink-reader[data-reading-layout='scroll'] > .lightink-reader-chrome-whisper
+  .lightink-reader-chrome-track--whisper {
+  height: 2px;
 }
 
 /* PDF is always continuous scroll: the page scroller is the progress cue.
@@ -1250,6 +1274,14 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-height: 0;
 }
 
+/* 版心居中（滚动模式）：行长对齐阅读偏好 --lightink-reader-measure，章块以
+   行长为上限、margin-inline auto 居中，宽窗两侧纸面留白对称，不再整幅通栏
+   （ui-redesign-2026-10 §3.5「只把默认行长对齐 measure 令牌」）。 */
+.lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
+  max-width: var(--lightink-reader-measure, none);
+  margin-inline: auto;
+}
+
 .lightink-reader-chapter-spacer {
   display: block;
   width: 100%;
@@ -1405,15 +1437,34 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
+  /* 纸墨工作室 §3.7：按钮间距 space-2（8px），出现 180ms 上浮 4px。 */
+  gap: var(--lightink-space-2, 0.25rem);
   padding: 0.3rem 0.35rem;
   max-width: calc(100vw - 8px);
   color: var(--lightink-fg);
   background: var(--lightink-bg-elevated);
   border: 1px solid var(--lightink-border);
   border-radius: var(--lightink-radius-panel);
-  box-shadow: var(--lightink-shadow);
+  box-shadow: var(--lightink-shadow-pop, var(--lightink-shadow));
   pointer-events: auto;
+  animation: lightink-reader-selection-rise 180ms var(--lightink-easing-standard, ease-out);
+}
+
+@keyframes lightink-reader-selection-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-reader-selection-toolbar {
+    animation: none;
+  }
 }
 
 .lightink-reader-selection-colors {
@@ -1446,13 +1497,16 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 .lightink-reader-selection-action {
+  /* 触达 32×32（ui-redesign §3.7）；触屏在下方 touch 段进一步放大热区。 */
+  min-width: 32px;
+  min-height: 32px;
   padding: 0.2rem 0.55rem;
   font: inherit;
   font-size: var(--lightink-font-size-ui, 0.8rem);
   color: var(--lightink-fg);
   background: transparent;
   border: none;
-  border-radius: 3px;
+  border-radius: var(--lightink-radius-control, 3px);
   cursor: pointer;
   /* T2：图标 + 标签横向排列。align-items 让 svg 与 label 文字基线对齐；
      gap 给出 0.3rem 呼吸距离，避免图标紧贴文字。 */
@@ -1967,12 +2021,32 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   white-space: nowrap;
 }
 
+/* 阅读方向徽标（ui-redesign §3.9）：RTL 漫画标题旁的常显方向箭头，
+   纸墨令牌化——底/字都从漫画 fg 洗色，不写死 hex。 */
+.lightink-reader-comic-direction {
+  display: inline-block;
+  flex: 0 0 auto;
+  margin-left: 0.5rem;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 26%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 10%, transparent);
+  color: var(--lightink-comic-fg, #e6e6e6);
+  font: 600 11px/1.2 var(--lightink-font-ui);
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}
+
+.lightink-reader-comic-direction[hidden] {
+  display: none;
+}
+
 .lightink-reader-comic-page {
   flex: none;
   padding: 4px 10px;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, #ffffff 10%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 10%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 13px/1.2 var(--lightink-font-ui);
   letter-spacing: 0;
@@ -2044,7 +2118,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   gap: 10px;
   width: min(320px, 100%);
   padding: 16px;
-  border: 1px solid color-mix(in srgb, #ffffff 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 12%, transparent);
   border-radius: var(--lightink-radius-panel);
   background: var(--lightink-comic-canvas, #111);
   color: var(--lightink-comic-fg, #e6e6e6);
@@ -2064,9 +2138,9 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   flex: 1 1 auto;
   min-width: 0;
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, #ffffff 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 18%, transparent);
   border-radius: var(--lightink-radius-control);
-  background: color-mix(in srgb, #ffffff 8%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 8%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 14px/1.2 var(--lightink-font-ui);
 }
@@ -2085,7 +2159,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   padding: 8px 14px;
   border: 0;
   border-radius: var(--lightink-radius-control);
-  background: color-mix(in srgb, #ffffff 14%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 14%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 13px/1 var(--lightink-font-ui);
   cursor: pointer;
@@ -2103,7 +2177,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   gap: 2px;
   padding: 2px;
   border-radius: var(--lightink-radius-panel);
-  background: color-mix(in srgb, #ffffff 7%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 7%, transparent);
 }
 
 .lightink-reader-comic-tool {
@@ -2190,14 +2264,14 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
 .lightink-reader-comic-tool:focus-visible,
 .lightink-reader-comic-tool[aria-pressed='true'] {
   position: relative;
-  background: color-mix(in srgb, #ffffff 14%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 14%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .lightink-reader-comic-tool:hover:not(:disabled) {
     position: relative;
-    background: color-mix(in srgb, #ffffff 14%, transparent);
+    background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 14%, transparent);
     color: var(--lightink-comic-fg, #e6e6e6);
   }
 }
@@ -2673,9 +2747,9 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
 .lightink-reader-comic-error button {
   min-height: 30px;
   padding: 4px 10px;
-  border: 1px solid color-mix(in srgb, #ffffff 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 16%, transparent);
   border-radius: 4px;
-  background: color-mix(in srgb, #ffffff 8%, transparent);
+  background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 8%, transparent);
   color: var(--lightink-comic-fg, var(--lightink-fg));
   font: inherit;
   letter-spacing: 0;
@@ -2944,11 +3018,12 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
   padding: 0.55rem 0.7rem;
   font: inherit;
   font-size: 0.95em;
-  line-height: 1.55;
+  /* ui-redesign §3.8：笔记 textarea 行高 1.7、圆角 12。 */
+  line-height: 1.7;
   color: var(--lightink-fg);
   background: var(--lightink-bg);
   border: 1px solid var(--lightink-border);
-  border-radius: 6px;
+  border-radius: var(--lightink-radius-panel, 12px);
   outline: none;
 }
 
@@ -3036,40 +3111,59 @@ html[data-keyboard] .lightink-note-textarea {
   min-height: 6.5rem;
 }
 
+/* 纸墨工作室纸主题预设块（ui-redesign-2026-10 §3.21）：与 reader-theme.ts
+   的 READER_THEMES 双写，改值必须两处同提交。运行时 applyReaderTheme 的
+   内联值覆盖此处，这里承载无 JS 首帧与测试fixture 的缺省。 */
 .lightink-reader[data-reader-theme='white'] {
   color-scheme: light;
-  --lightink-bg: #ffffff;
-  --lightink-bg-elevated: #f6f6f6;
-  --lightink-fg: #1a1a1a;
-  --lightink-muted: #6b6b6b;
-  --lightink-border: rgba(26, 26, 26, 0.14);
+  --lightink-bg: #fdfcf8;
+  --lightink-bg-elevated: #f5f2ea;
+  --lightink-bg-sunken: #f0ece1;
+  --lightink-fg: #241f18;
+  --lightink-fg-strong: #17130c;
+  --lightink-muted: #6d6455;
+  --lightink-border: rgba(36, 31, 24, 0.16);
+  --lightink-highlight: #e8d28a;
+  --lightink-highlight-ink: #5f521c;
 }
 
 .lightink-reader[data-reader-theme='sepia'] {
   color-scheme: light;
-  --lightink-bg: #fbf0d9;
-  --lightink-bg-elevated: #f4e4c4;
-  --lightink-fg: #5c4a32;
-  --lightink-muted: #7a6247;
-  --lightink-border: rgba(92, 74, 50, 0.18);
+  --lightink-bg: #f5e9d2;
+  --lightink-bg-elevated: #eddfc3;
+  --lightink-bg-sunken: #ead9b8;
+  --lightink-fg: #4e3d28;
+  --lightink-fg-strong: #3e2f1c;
+  --lightink-muted: #7a6750;
+  --lightink-border: rgba(78, 61, 40, 0.2);
+  --lightink-highlight: #e3c96e;
+  --lightink-highlight-ink: #574f1f;
 }
 
 .lightink-reader[data-reader-theme='gray'] {
   color-scheme: dark;
-  --lightink-bg: #2a2a2a;
-  --lightink-bg-elevated: #353535;
-  --lightink-fg: #d6d6d6;
-  --lightink-muted: #a0a0a0;
-  --lightink-border: rgba(255, 255, 255, 0.12);
+  --lightink-bg: #262421;
+  --lightink-bg-elevated: #312e29;
+  --lightink-bg-sunken: #201e1b;
+  --lightink-fg: #d9d2c4;
+  --lightink-fg-strong: #e6dfd1;
+  --lightink-muted: #a49a89;
+  --lightink-border: rgba(217, 210, 196, 0.14);
+  --lightink-highlight: #8a7430;
+  --lightink-highlight-ink: #f0e2ac;
 }
 
 .lightink-reader[data-reader-theme='night'] {
   color-scheme: dark;
-  --lightink-bg: #121212;
-  --lightink-bg-elevated: #1c1c1c;
-  --lightink-fg: #c8c8c8;
-  --lightink-muted: #8e8e8e;
-  --lightink-border: rgba(255, 255, 255, 0.1);
+  --lightink-bg: #141822;
+  --lightink-bg-elevated: #1c2330;
+  --lightink-bg-sunken: #0f131b;
+  --lightink-fg: #d3dae6;
+  --lightink-fg-strong: #e8edf6;
+  --lightink-muted: #8b94a6;
+  --lightink-border: rgba(211, 218, 230, 0.12);
+  --lightink-highlight: #7d7440;
+  --lightink-highlight-ink: #eadfa9;
 }
 
 @media (forced-colors: active) {

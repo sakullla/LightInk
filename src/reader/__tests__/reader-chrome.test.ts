@@ -19,7 +19,8 @@
  *
  * The bar is out of document flow (`position: absolute|fixed|sticky`) so
  * reveal/dismiss does not change the reading area's top or height.
- * Idle auto-hide is 2500ms unless `isOverlayOpen()` is true.
+ * Idle auto-hide is 3500ms unless `isOverlayOpen()` is true; a pointer
+ * resting on the bar/footer pauses the timer entirely.
  *
  * `handleEscape()` closes one layer and never calls `returnToShelf`
  * (window-level leftover Escape owns 合书). Order:
@@ -60,7 +61,7 @@ import {
 const LABELS = ['返回书架', '目录', '排版', '书签', '搜索', '助手'] as const;
 const THUMB_ACTIONS = ['toc', 'typography', 'bookmark', 'search', 'assistant'] as const;
 const PRIMARY_TOUCH_ACTIONS = ['backToShelf', ...THUMB_ACTIONS] as const;
-const AUTO_HIDE_MS = 2500;
+const AUTO_HIDE_MS = 3500;
 const MIN_HIT_PX = READER_CHROME_TOUCH_HIT_PX;
 const MIN_GAP_PX = READER_CHROME_TOUCH_GAP_PX;
 
@@ -322,16 +323,18 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.whisper.hidden).toBe(false);
   });
 
-  it('hides the idle whisper in scroll mode so it does not cover the last line', () => {
+  it('keeps the idle whisper hairline in scroll mode; the full row stays CSS-collapsed', () => {
     const { host, chrome } = mount();
     host.dataset.readingLayout = 'scroll';
     chrome.dismiss();
-    expect(chrome.whisper.hidden).toBe(true);
+    // ui-redesign §3.6：滚动模式不再整行藏起 whisper——CSS 把 idle 行压成
+    // 底部 2px 进度发丝线（DOM 可见性仍由 syncDom 单点管理）。
+    expect(chrome.whisper.hidden).toBe(false);
     chrome.reveal();
     expect(chrome.footer.hidden).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
     chrome.dismiss();
-    expect(chrome.whisper.hidden).toBe(true);
+    expect(chrome.whisper.hidden).toBe(false);
   });
 
   it('keeps the touch footer tools when comic progress docks are suppressed', () => {
@@ -384,6 +387,29 @@ describe('createReaderChrome reveal', () => {
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 394 }),
     );
     expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('covers the full 24px hover band including the capture dance end at y=22', () => {
+    // ui-redesign §5.6：24px 顶部悬停带必须完整覆盖 y≤24（含 22）——
+    // capture-ui.mjs revealReaderChrome 的舞蹈终点是 y=22，这是兼容约束。
+    const { host, chrome } = mount();
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 22 }),
+    );
+    expect(chrome.isRevealed()).toBe(true);
+
+    chrome.dismiss();
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 24 }),
+    );
+    expect(chrome.isRevealed()).toBe(true);
+
+    // 25 起在带外：中部坐标不再触发悬停唤出（单击切换不受影响）。
+    chrome.dismiss();
+    host.dispatchEvent(
+      new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 25 }),
+    );
+    expect(chrome.isRevealed()).toBe(false);
   });
 
   it('reveals at the visible window top after the host has scrolled away', () => {
@@ -698,7 +724,7 @@ describe('createReaderChrome escape is one step', () => {
 });
 
 describe('createReaderChrome auto-hide', () => {
-  it('dismisses after 2.5s idle and stays up while an overlay is open', () => {
+  it('dismisses after 3.5s idle and stays up while an overlay is open', () => {
     vi.useFakeTimers();
     const overlay = { open: false };
     const { chrome } = mount({
@@ -715,6 +741,24 @@ describe('createReaderChrome auto-hide', () => {
     chrome.reveal();
     vi.advanceTimersByTime(AUTO_HIDE_MS * 2);
     expect(chrome.isRevealed()).toBe(true);
+  });
+
+  it('pauses the idle timer while the pointer rests on the bar or footer', () => {
+    vi.useFakeTimers();
+    const { chrome } = mount();
+
+    chrome.reveal();
+    chrome.bar.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 3);
+    expect(chrome.isRevealed()).toBe(true);
+
+    chrome.footer.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
+    vi.advanceTimersByTime(AUTO_HIDE_MS * 3);
+    expect(chrome.isRevealed()).toBe(true);
+
+    chrome.footer.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    vi.advanceTimersByTime(AUTO_HIDE_MS);
+    expect(chrome.isRevealed()).toBe(false);
   });
 
   it('stays revealed while the window titlebar is hovered', () => {

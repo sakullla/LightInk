@@ -66,7 +66,8 @@ html[data-conceal-surface='reader'] .lightink-reader-status {
 /* ── R7 三区隐藏（visibility 保几何；阅读器 bar/footer/whisper 由
  *    reader-chrome.setConcealZones 单写者接管，不经这里） ── */
 #app[data-conceal-top='hidden'] #lightink-window-titlebar,
-#app[data-conceal-top='hidden'] .lightink-library-header {
+#app[data-conceal-top='hidden'] .lightink-library-header,
+#app[data-conceal-top='hidden'] .lightink-titlebar-anchor {
   visibility: hidden;
 }
 

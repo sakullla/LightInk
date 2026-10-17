@@ -558,10 +558,10 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     applyReaderTheme(root, 'sepia');
     renderer.syncTheme();
     expect(doc.documentElement.style.getPropertyValue('--lightink-bg')).toMatch(
-      /#fbf0d9|rgb\(251,\s*240,\s*217\)/,
+      /#f5e9d2|rgb\(245,\s*233,\s*210\)/,
     );
     expect(`${doc.documentElement.style.background} ${doc.body.style.background} ${iframe.style.background}`).toMatch(
-      /#fbf0d9|rgb\(251,\s*240,\s*217\)/,
+      /#f5e9d2|rgb\(245,\s*233,\s*210\)/,
     );
     iframe.remove();
     root.remove();
@@ -643,7 +643,11 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(page.columns).toBe(2);
     expect(pageBox.style.columnCount).toBe('2');
     expect(pageBox.style.columnWidth).toBe(`${page.columnWidth}px`);
-    expect(pageBox.style.width).toBe('1020px');
+    // 版心居中：双栏受 22rem 行长约束（2×352+40=744），spread 窄于纸面，
+    // margin-inline auto 居中；纸面（html）仍是整幅 1100px。
+    expect(page.columnWidth).toBe(352);
+    expect(pageBox.style.width).toBe('744px');
+    expect(pageBox.style.marginInline).toBe('auto');
     expect(iframe.style.width).toBe('100%');
     expect(html.style.width).toBe('1100px');
     expect(pageBox.style.getPropertyValue('--lightink-reader-page-step')).toBe(`${page.step}px`);

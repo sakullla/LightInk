@@ -28,6 +28,11 @@ const SURFACE_THEME_VARS = [
   '--lightink-overlay',
   '--lightink-shadow',
   '--lightink-danger',
+  // 纸墨工作室 §2.3 名单纪律：阅读纸主题将内联覆盖荧光笔一族
+  // （READER_THEME_INLINE_VARS，阅读体验包），借面浮层按「谁覆盖谁进名单」
+  // 同步拷贝，保证 toast/确认层在纸面上高亮色不漂回默认主题。
+  '--lightink-highlight',
+  '--lightink-highlight-ink',
 ] as const;
 
 export function inferDialogThemeHost(doc: Document): HTMLElement | null {

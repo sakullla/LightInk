@@ -179,11 +179,13 @@ export interface ReaderPageSpread {
 
 /**
  * Readium/Thorium page metrics.
- * The paper and the text columns fill the window. A second column opens
- * once each side can hold a readable line (~22rem). A shorter minimum
- * paints two skinny columns and, on a short chapter, a blank facing page.
- * Two columns split the page evenly so `column-count: 2` cannot leak a
- * leftover sliver.
+ * The paper fills the window; the text columns follow the stored measure so
+ * line length stays on the user's 行长 preference instead of inflating with
+ * the window (1280-wide pages painted ~39rem lines). A second column opens
+ * once each side can hold a readable line (~22rem). The resulting spread can
+ * be narrower than the page — the caller centers it (`margin-inline: auto`),
+ * which is the 版心居中 fix for the left-heavy single-text-column screenshot:
+ * two equal measure columns + a central gutter instead of one fat left column.
  *
  * Compact / touch never uses that desktop pair threshold: an inflated
  * iframe width would paint two overlapping columns and skip a page.
@@ -207,7 +209,12 @@ export function readerPageSpread(
   const forceSingle =
     compact === true || (compact !== false && readerSurfaceIsCompact());
   if (!forceSingle && pageWidth >= 2 * minColumnPx + pairGap) {
-    const columnWidth = Math.max(1, Math.floor((pageWidth - pairGap) / 2));
+    // 双栏均衡：两栏等宽（步进公式依赖该不变量），栏宽受行长上限约束，
+    // 下限不小于可读最小栏（更窄的行长偏好不产生两根细栏）。
+    const columnWidth = Math.max(
+      minColumnPx,
+      Math.min(Math.floor((pageWidth - pairGap) / 2), measurePx),
+    );
     const width = columnWidth * 2 + pairGap;
     return {
       width,

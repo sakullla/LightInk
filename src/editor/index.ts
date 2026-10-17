@@ -41,6 +41,8 @@ import { isInTable } from '@milkdown/prose/tables';
 
 import { attachCursorListeners, type CursorEventBinding } from './dom-events.js';
 import { insertMarkdownAtSelection } from './insert-markdown.js';
+import { applyPaperCardPreference } from './paper-card.js';
+import './editor.css';
 import { codeHighlightPlugin } from './plugins/code-highlight.js';
 import { clipboardMdPlugin } from './plugins/clipboard-md.js';
 import { contentChangePlugin } from './plugins/content-change.js';
@@ -257,6 +259,8 @@ export async function mountEditor(
     mounted: false,
     cachedMarkdown: options.initialMarkdown ?? '',
   };
+  // 纸墨工作室 §3.10：版心纸卡模式（默认开；editor.css 消费该类）。
+  applyPaperCardPreference(container);
   let editable = options.editable !== false;
   let unbindBlankFocus: (() => void) | null = null;
 
