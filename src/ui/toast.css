@@ -192,3 +192,57 @@
     min-width: 44px;
   }
 }
+
+/* Paperlight v4：角落纸条——更柔的纸边、更清楚的标题与小号操作。 */
+.lightink-toast {
+  min-width: min(300px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-color: color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-left-width: 3px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lightink-bg-elevated) 100%, transparent), var(--lightink-bg-elevated));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 6%, transparent),
+    0 20px 44px -20px color-mix(in srgb, var(--lightink-fg) 52%, transparent);
+}
+
+.lightink-toast-title {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.lightink-toast-close {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 7px;
+  font-size: 15px;
+}
+
+.lightink-toast-copy {
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--lightink-border) 84%, transparent);
+  font-size: 11.5px;
+}
+
+.lightink-toast-detail summary {
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+  font-size: 12px;
+}
+
+.lightink-toast--error {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lightink-danger) 4%, var(--lightink-bg-elevated)), var(--lightink-bg-elevated));
+}
+
+.lightink-toast-region {
+  right: max(20px, var(--lightink-safe-right, 0px));
+  bottom: max(20px, calc(var(--lightink-safe-bottom, 0px) + 12px));
+}
+

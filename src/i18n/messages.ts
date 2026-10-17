@@ -144,6 +144,7 @@ const en = {
   'app.untitled': 'Untitled-{n}',
   'app.untitledRestored': 'Untitled-{n} (restored)',
   'app.name': 'LightInk',
+  'app.nameShort': 'LightInk',
 
   'error.imageImport': 'Image import failed; reference was not inserted.\n{detail}',
   'error.imageImportTitle': 'Insert Image',
@@ -1087,6 +1088,7 @@ const zhCN = {
   'app.untitled': '未命名-{n}',
   'app.untitledRestored': '未命名-{n}（已恢复）',
   'app.name': '轻墨 LightInk',
+  'app.nameShort': '轻墨',
 
   'error.imageImport': '图片导入失败，未插入引用。\n{detail}',
   'error.imageImportTitle': '插入图片',

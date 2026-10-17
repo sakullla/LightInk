@@ -1475,7 +1475,7 @@ export function createAppShell(
   anchor.append(anchorBrand, anchorMenuBtn, anchorThemeBtn);
 
   function syncAnchorLabels(): void {
-    anchorBrand.textContent = actions.t('app.name');
+    anchorBrand.textContent = actions.t('app.nameShort');
     anchorMenuBtn.setAttribute('aria-label', actions.t('chrome.appMenu'));
     anchorMenuBtn.title = actions.t('chrome.appMenu');
     anchorThemeBtn.setAttribute('aria-label', actions.t('chrome.themeQuickSwitch'));

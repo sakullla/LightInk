@@ -58,6 +58,20 @@
   --lightink-text-lg: 18px;
   --lightink-text-xl: 22px;
   --lightink-text-2xl: 28px; /* hero */
+  --lightink-text-3xl: 34px; /* 书架问候 / 空态大标题 */
+
+  /* 圆角补充：胶囊控件与书封；嵌套半径仍为 8/12/16。 */
+  --lightink-radius-pill: 999px;
+
+  /*
+   * 纸光（Paperlight，2026-10 v4）：
+   *   - 封面排版用的展示衬线栈（仅书封/品牌印记，不参与正文阅读）；
+   *   - 纸张颗粒与更柔的强调缓动。颗粒只画在页面底，不覆盖内容。
+   */
+  --lightink-font-cover: Georgia, "Times New Roman", "Songti SC", "STSong", "Noto Serif SC",
+    "Source Han Serif SC", serif;
+  --lightink-easing-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --lightink-duration-emphasized: 320ms;
 
   /* 4px 基网格的语义间距；存量 CSS 逐包迁移，新规则一律用令牌。 */
   --lightink-space-1: 4px;
@@ -101,42 +115,41 @@
   --lightink-annotation: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg-elevated));
   --lightink-annotation-wash: color-mix(in srgb, var(--lightink-accent) 32%, transparent);
 
-  /* Paper stack (纸墨工作室): cream page, slightly cooler elevated surfaces
-     for chrome/code, sunken wells for sidebars / tracks / inset panels. */
-  --lightink-bg: #f6f1e7;
-  --lightink-bg-elevated: #fdfaf4;
-  --lightink-bg-sunken: #ebe4d6;
-  --lightink-fg: #2c2820; /* ~11:1 on paper — durable long-session contrast */
-  --lightink-fg-strong: #201c15; /* headings / emphasis */
-  --lightink-muted: #6d6455; /* was too light (#8c8471); now readable UI labels */
-  --lightink-accent: #a0521c;
-  --lightink-accent-soft: #f0e2c8;
-  --lightink-accent-contrast: #fff8ec; /* text on solid accent fills */
-  --lightink-border: #ddd3bd;
-  --lightink-border-strong: #c9bda2;
-  /* Code surface: cooler linen card so blocks read as ink on card, not mud. */
-  --lightink-code-bg: #f2eee4;
-  --lightink-code-fg: #2a261f;
-  --lightink-selection: rgba(160, 82, 28, 0.2);
+  /* Paper stack (纸光 v4): warm ivory desk, chalk-white sheet, linen well. */
+  --lightink-bg: #f7f3ec;
+  --lightink-bg-elevated: #fffdf9;
+  --lightink-bg-sunken: #ece5d9;
+  --lightink-fg: #26231d; /* ~13:1 on paper */
+  --lightink-fg-strong: #171410;
+  --lightink-muted: #6b6457;
+  --lightink-accent: #b6462a; /* 朱砂封泥 */
+  --lightink-accent-soft: #f4e2da;
+  --lightink-accent-contrast: #fff9f4;
+  --lightink-border: #e4dccd;
+  --lightink-border-strong: #cec3ae;
+  /* Code surface: a cooler linen card so blocks read as ink, not mud. */
+  --lightink-code-bg: #f3efe6;
+  --lightink-code-fg: #282319;
+  --lightink-selection: rgba(182, 70, 42, 0.18);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 38%, var(--lightink-bg));
-  --lightink-danger: #a83a2e;
-  --lightink-success: #34693e;
-  --lightink-warning: #8f641c;
-  --lightink-info: #3e5c8c;
+  --lightink-danger: #a93b2f;
+  --lightink-success: #3d6b45;
+  --lightink-warning: #8a611d;
+  --lightink-info: #3c5f8a;
   /* 荧光笔一族（§1.1）：highlight 为底色，highlight-ink 为亮底上的文字色。 */
-  --lightink-highlight: #e8d28a;
-  --lightink-highlight-ink: #5f521c;
+  --lightink-highlight: #ead284;
+  --lightink-highlight-ink: #5b4c18;
   --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
-  --lightink-overlay: rgba(47, 43, 36, 0.36);
-  --lightink-shadow: 0 1px 2px rgba(44, 40, 32, 0.08), 0 4px 16px rgba(44, 40, 32, 0.07);
-  --lightink-shadow-strong: 0 12px 32px rgba(47, 43, 36, 0.14), 0 2px 8px rgba(47, 43, 36, 0.06);
-  --lightink-shadow-pop: 0 6px 20px rgba(44, 40, 32, 0.12), 0 1px 3px rgba(44, 40, 32, 0.08);
+  --lightink-overlay: rgba(32, 27, 20, 0.38);
+  --lightink-shadow: 0 1px 2px rgba(42, 36, 26, 0.05), 0 8px 24px rgba(42, 36, 26, 0.07);
+  --lightink-shadow-strong: 0 28px 70px rgba(32, 27, 20, 0.18), 0 6px 18px rgba(32, 27, 20, 0.08);
+  --lightink-shadow-pop: 0 12px 34px rgba(42, 36, 26, 0.14), 0 2px 6px rgba(42, 36, 26, 0.07);
 
   /* Typography stacks (system-first; no network font fetch). */
-  --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
-    "Microsoft YaHei", system-ui, sans-serif;
-  --lightink-font-body: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-ui: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
   --lightink-font-mono: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei Mono",
     ui-monospace, Consolas, "Courier New", monospace;
   --lightink-font-size: 16px;
@@ -190,20 +203,20 @@
 [data-theme="cool-light"] {
   color-scheme: light;
 
-  --lightink-bg: #f2f4f8;
-  --lightink-bg-elevated: #fbfcfe;
-  --lightink-bg-sunken: #e6eaf1;
-  --lightink-fg: #222832;
-  --lightink-fg-strong: #161b23;
+  --lightink-bg: #f3f5f8;
+  --lightink-bg-elevated: #fcfdff;
+  --lightink-bg-sunken: #e8ebf0;
+  --lightink-fg: #20262f;
+  --lightink-fg-strong: #12171f;
   --lightink-muted: #5b6472;
-  --lightink-accent: #2d6cbb;
-  --lightink-accent-soft: #e5edf8;
+  --lightink-accent: #35619c;
+  --lightink-accent-soft: #e4ebf7;
   --lightink-accent-contrast: #ffffff;
-  --lightink-border: #d1d8e2;
-  --lightink-border-strong: #b9c3d2;
-  --lightink-code-bg: #e8eef4;
-  --lightink-code-fg: #1c222c;
-  --lightink-selection: rgba(45, 108, 187, 0.2);
+  --lightink-border: #d7dde6;
+  --lightink-border-strong: #bcc5d2;
+  --lightink-code-bg: #edf1f6;
+  --lightink-code-fg: #1c222b;
+  --lightink-selection: rgba(53, 97, 156, 0.18);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg));
   --lightink-danger: #b03a30;
   --lightink-success: #1e6b4f;
@@ -212,15 +225,15 @@
   --lightink-highlight: #e5dfa5;
   --lightink-highlight-ink: #565421;
   --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
-  --lightink-overlay: rgba(36, 42, 51, 0.36);
-  --lightink-shadow: 0 1px 2px rgba(34, 40, 50, 0.08), 0 4px 16px rgba(34, 40, 50, 0.07);
-  --lightink-shadow-strong: 0 12px 32px rgba(36, 42, 51, 0.14), 0 2px 8px rgba(36, 42, 51, 0.06);
-  --lightink-shadow-pop: 0 6px 20px rgba(34, 40, 50, 0.12), 0 1px 3px rgba(34, 40, 50, 0.08);
+  --lightink-overlay: rgba(30, 37, 47, 0.38);
+  --lightink-shadow: 0 1px 2px rgba(31, 38, 48, 0.05), 0 8px 24px rgba(31, 38, 48, 0.07);
+  --lightink-shadow-strong: 0 28px 70px rgba(25, 32, 42, 0.18), 0 6px 18px rgba(25, 32, 42, 0.08);
+  --lightink-shadow-pop: 0 12px 34px rgba(31, 38, 48, 0.14), 0 2px 6px rgba(31, 38, 48, 0.07);
 
-  --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
-    "Microsoft YaHei", system-ui, sans-serif;
-  --lightink-font-body: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-ui: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
   --lightink-font-mono: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei Mono",
     ui-monospace, Consolas, "Courier New", monospace;
   --lightink-font-size: 16px;
@@ -251,37 +264,37 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --lightink-bg: #1d1b18;
-  --lightink-bg-elevated: #272522;
-  --lightink-bg-sunken: #171512;
-  --lightink-fg: #e3dccb;
-  --lightink-fg-strong: #f2ede0;
-  --lightink-muted: #9b927f;
-  --lightink-accent: #d8a870;
-  --lightink-accent-soft: #3a3327;
-  --lightink-accent-contrast: #221a0e;
-  --lightink-border: #403a30;
-  --lightink-border-strong: #554d3c;
-  --lightink-code-bg: #26231d;
-  --lightink-code-fg: #d2c8b2;
-  --lightink-selection: rgba(216, 168, 112, 0.28);
+  --lightink-bg: #171513;
+  --lightink-bg-elevated: #211f1c;
+  --lightink-bg-sunken: #100f0d;
+  --lightink-fg: #e6dfd2;
+  --lightink-fg-strong: #f5efe4;
+  --lightink-muted: #a29886;
+  --lightink-accent: #e08a6a;
+  --lightink-accent-soft: #3a2a23;
+  --lightink-accent-contrast: #1c0f0a;
+  --lightink-border: #37322a;
+  --lightink-border-strong: #4b4438;
+  --lightink-code-bg: #201d19;
+  --lightink-code-fg: #d6cdbb;
+  --lightink-selection: rgba(224, 138, 106, 0.26);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 45%, var(--lightink-bg));
-  --lightink-danger: #d4786a;
-  --lightink-success: #85b08e;
-  --lightink-warning: #cfa75c;
-  --lightink-info: #8fa9cc;
+  --lightink-danger: #dd7c6d;
+  --lightink-success: #86b18f;
+  --lightink-warning: #d0a85f;
+  --lightink-info: #90abcc;
   --lightink-highlight: #8a7430;
   --lightink-highlight-ink: #f0e2ac;
   --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
-  --lightink-overlay: rgba(0, 0, 0, 0.5);
-  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(0, 0, 0, 0.3);
-  --lightink-shadow-strong: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
-  --lightink-shadow-pop: 0 8px 22px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --lightink-overlay: rgba(0, 0, 0, 0.55);
+  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 22px rgba(0, 0, 0, 0.32);
+  --lightink-shadow-strong: 0 28px 70px rgba(0, 0, 0, 0.55), 0 6px 18px rgba(0, 0, 0, 0.3);
+  --lightink-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 6px rgba(0, 0, 0, 0.32);
 
-  --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
-    "Microsoft YaHei", system-ui, sans-serif;
-  --lightink-font-body: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-ui: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
   --lightink-font-mono: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei Mono",
     ui-monospace, Consolas, "Courier New", monospace;
   --lightink-font-size: 16px;
@@ -315,20 +328,20 @@
 [data-theme="midnight"] {
   color-scheme: dark;
 
-  --lightink-bg: #141822;
-  --lightink-bg-elevated: #1c2330;
-  --lightink-bg-sunken: #0f131b;
-  --lightink-fg: #d3dae6;
-  --lightink-fg-strong: #e8edf6;
-  --lightink-muted: #8b94a6;
-  --lightink-accent: #84b4e4;
-  --lightink-accent-soft: #28334a;
-  --lightink-accent-contrast: #0c141f;
-  --lightink-border: #333d4e;
-  --lightink-border-strong: #4a5568;
-  --lightink-code-bg: #1b212b;
-  --lightink-code-fg: #bec6d2;
-  --lightink-selection: rgba(132, 180, 228, 0.26);
+  --lightink-bg: #11141a;
+  --lightink-bg-elevated: #191e27;
+  --lightink-bg-sunken: #0a0c11;
+  --lightink-fg: #d6dce7;
+  --lightink-fg-strong: #eaf0fa;
+  --lightink-muted: #8c95a6;
+  --lightink-accent: #8fb4e2;
+  --lightink-accent-soft: #253145;
+  --lightink-accent-contrast: #0b1220;
+  --lightink-border: #323b4a;
+  --lightink-border-strong: #485365;
+  --lightink-code-bg: #181c24;
+  --lightink-code-fg: #c1c9d5;
+  --lightink-selection: rgba(143, 180, 226, 0.26);
   --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 42%, var(--lightink-bg));
   --lightink-danger: #d07878;
   --lightink-success: #74b39c;
@@ -337,15 +350,15 @@
   --lightink-highlight: #7d7440;
   --lightink-highlight-ink: #eadfa9;
   --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
-  --lightink-overlay: rgba(0, 0, 0, 0.5);
-  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(0, 0, 0, 0.3);
-  --lightink-shadow-strong: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
-  --lightink-shadow-pop: 0 8px 22px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --lightink-overlay: rgba(0, 0, 0, 0.55);
+  --lightink-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 22px rgba(0, 0, 0, 0.32);
+  --lightink-shadow-strong: 0 28px 70px rgba(0, 0, 0, 0.55), 0 6px 18px rgba(0, 0, 0, 0.3);
+  --lightink-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 6px rgba(0, 0, 0, 0.32);
 
-  --lightink-font-ui: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
-    "Microsoft YaHei", system-ui, sans-serif;
-  --lightink-font-body: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-ui: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --lightink-font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
   --lightink-font-mono: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei Mono",
     ui-monospace, Consolas, "Courier New", monospace;
   --lightink-font-size: 16px;

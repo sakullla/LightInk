@@ -3184,3 +3184,328 @@ html[data-keyboard] .lightink-note-textarea {
     opacity: 0.45;
   }
 }
+
+/* =====================================================================
+ * Paperlight v4 — 阅读器（2026-10 UI/UX 重做）
+ * 纸页浮在更深的桌面上，顶/底 chrome 变成两片轻玻璃；
+ * 版心与分栏逻辑不动，只改视觉与呼吸。
+ * ===================================================================== */
+
+/* ---- 1. 阅读桌面与纸页 ---- */
+.lightink-reader {
+  /* 纸主题会内联 backgroundColor（页面色），桌面色需 !important 覆盖；
+     纸页本身由章节/iframe 继续使用 --lightink-bg。 */
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 78%, var(--lightink-bg)) !important;
+}
+
+.lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
+  padding: 18px 22px calc(18px + 2.2rem);
+}
+
+.lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
+  box-sizing: border-box;
+  padding: 30px 36px 38px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+  border-radius: 16px;
+  background: var(--lightink-bg);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 6%, transparent),
+    0 26px 64px -34px color-mix(in srgb, var(--lightink-fg) 55%, transparent);
+}
+
+.lightink-reader-chapter-title {
+  margin-bottom: 1.4rem;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
+  padding: 10px 18px 16px;
+}
+
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+  border-radius: 14px;
+  background: var(--lightink-bg);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 6%, transparent),
+    0 24px 60px -34px color-mix(in srgb, var(--lightink-fg) 52%, transparent);
+}
+
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter-frame {
+  border-radius: 0;
+  background: var(--lightink-bg);
+}
+
+/* 加载/错误/空态卡片：与纸页语言一致。 */
+.lightink-reader-status {
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+  border-radius: 14px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: 0 16px 40px -28px color-mix(in srgb, var(--lightink-fg) 50%, transparent);
+}
+
+/* ---- 2. 顶部 chrome：悬浮玻璃条 ---- */
+.lightink-reader-chrome-bar {
+  min-height: 44px;
+  margin: 8px 10px 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 84%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
+    0 12px 34px -22px color-mix(in srgb, var(--lightink-fg) 55%, transparent);
+  backdrop-filter: blur(24px) saturate(1.18);
+  font-size: 12.5px;
+}
+
+.lightink-reader-chrome-title {
+  color: var(--lightink-fg);
+  padding: 0 0.7rem;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.lightink-reader-chrome-action {
+  gap: 0.4rem;
+  min-height: 32px;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--lightink-fg) 84%, var(--lightink-muted));
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+.lightink-reader-chrome-action:hover,
+.lightink-reader-chrome-action.is-open {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+.lightink-reader-chrome-action-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---- 3. 底部 chrome：悬浮进度卡 ---- */
+.lightink-reader-chrome-footer {
+  right: 12px;
+  bottom: 10px;
+  left: 12px;
+  padding: 7px 15px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 84%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
+    0 12px 34px -22px color-mix(in srgb, var(--lightink-fg) 55%, transparent);
+  backdrop-filter: blur(24px) saturate(1.18);
+  font-size: 12px;
+}
+
+.lightink-reader-chrome-chapter {
+  color: var(--lightink-fg);
+  font-weight: 600;
+  max-width: 30%;
+}
+
+.lightink-reader-chrome-footer-stats {
+  gap: 0.8rem;
+  color: color-mix(in srgb, var(--lightink-muted) 92%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-reader-chrome-percent {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-weight: 700;
+}
+
+.lightink-reader-chrome-track {
+  height: 4px;
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+}
+
+.lightink-reader-chrome-fill {
+  background: linear-gradient(90deg, var(--lightink-accent), color-mix(in srgb, var(--lightink-accent) 68%, var(--lightink-fg)));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--lightink-accent) 55%, transparent);
+}
+
+.lightink-reader-chrome-tick {
+  height: 9px;
+  background: color-mix(in srgb, var(--lightink-fg) 26%, transparent);
+}
+
+.lightink-reader-chrome-progress::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--lightink-bg-elevated);
+  background: var(--lightink-accent);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--lightink-fg) 35%, transparent);
+}
+
+/* ---- 4. 目录 / 排版浮层 ---- */
+.lightink-reader-chrome-panel {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 72%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 95%, transparent);
+  box-shadow: var(--lightink-shadow-pop);
+  backdrop-filter: blur(24px) saturate(1.1);
+}
+
+.lightink-reader-chrome-panel-title {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lightink-reader-toc-count {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-reader-toc-search {
+  height: 32px;
+  border-color: color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 34%, transparent);
+}
+
+.lightink-reader-toc-search:focus {
+  outline: none;
+  border-color: var(--lightink-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 13%, transparent);
+}
+
+.lightink-reader-toc-item {
+  min-height: 36px;
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--lightink-fg) 86%, var(--lightink-muted));
+}
+
+.lightink-reader-toc-item:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+}
+
+.lightink-reader-toc-item.is-current,
+.lightink-reader-toc-item.is-active {
+  background: var(--lightink-accent-soft);
+  box-shadow: inset 2px 0 0 var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-weight: 600;
+}
+
+.lightink-reader-type-label {
+  color: var(--lightink-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.lightink-reader-type-step {
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 60%, transparent);
+}
+
+.lightink-reader-type-step:hover:not(:disabled) {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-reader-theme-swatch {
+  border-radius: 10px;
+}
+
+.lightink-reader-theme-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--lightink-accent);
+}
+
+/* ---- 5. 划选工具条与查词卡 ---- */
+.lightink-reader-selection-toolbar {
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 76%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 95%, transparent);
+  box-shadow: var(--lightink-shadow-pop);
+  backdrop-filter: blur(22px) saturate(1.12);
+}
+
+.lightink-reader-selection-action {
+  border-radius: 9px;
+  color: var(--lightink-fg);
+  font-size: 12px;
+}
+
+.lightink-reader-selection-action:hover:not(:disabled) {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-reader-selection-color {
+  border-radius: 999px;
+}
+
+/* 阅读器内的滚动条与纸面协调。 */
+.lightink-reader-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.lightink-reader-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-muted) 46%, transparent);
+  background-clip: content-box;
+}
+
+/* 触屏：纸页贴近屏幕边缘，减少无意义边距。 */
+:is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
+  padding: 8px 10px calc(8px + 2.2rem);
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
+  padding: 22px 20px 32px;
+  border-radius: 14px;
+}
+
+/* 翻页模式下纸页不描边，避免把满版绘本切成卡片。 */
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-pages[data-comic-reader='true'] ~ * {
+  border: none;
+}
+
+@media (max-width: 800px) {
+  .lightink-reader-chrome-bar {
+    margin: 6px 6px 0;
+  }
+
+  .lightink-reader-chrome-footer {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    padding-inline: 12px;
+  }
+
+  .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
+    padding-inline: 10px;
+  }
+
+  .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
+    padding: 24px 20px 32px;
+    border-radius: 14px;
+  }
+}
+

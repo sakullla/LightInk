@@ -1906,6 +1906,14 @@ export function createLibraryView(
   const booksHeading = doc.createElement('h2');
   booksHeading.className = 'lightink-library-home-heading lightink-library-wall-heading';
   booksHeading.hidden = true;
+  // 纸光（v4）：书墙自己的小节标题，给书架一个清晰的信息层级。
+  const shelfHead = doc.createElement('div');
+  shelfHead.className = 'lightink-library-shelf-head';
+  const shelfHeadTitle = doc.createElement('h2');
+  shelfHeadTitle.className = 'lightink-library-shelf-head-title';
+  const shelfHeadCount = doc.createElement('span');
+  shelfHeadCount.className = 'lightink-library-shelf-head-count';
+  shelfHead.append(shelfHeadTitle, shelfHeadCount);
   const shelfToolbar = doc.createElement('div');
   shelfToolbar.className = 'lightink-library-shelf-toolbar';
   shelfToolbar.hidden = true;
@@ -2035,7 +2043,7 @@ export function createLibraryView(
   const detailBackdrop = doc.createElement('div');
   detailBackdrop.className = 'lightink-library-detail-backdrop';
   detailBackdrop.hidden = true;
-  booksHost.append(booksHeading, itemList);
+  booksHost.append(booksHeading, shelfHead, itemList);
   home.append(continueHost, booksHost);
   workArea.append(home, detail);
   body.append(navPane, content);
@@ -3403,7 +3411,7 @@ export function createLibraryView(
     catalogPane.hidden = !inCatalog;
     navPane.hidden = isMobileLibraryChrome() && inCatalog;
     if (activeSection === 'shelf') {
-      booksHost.append(booksHeading, itemList);
+      booksHost.append(booksHeading, shelfHead, itemList);
       heading.textContent = isMobileLibraryChrome() ? labels().tabShelf : labels().library;
       // 宽屏触控仍显示标题；≤760 手机壳由 CSS 隐藏，勿对全部 chrome 强制 hidden。
       heading.hidden = !isMobileLibraryChrome();
@@ -4774,6 +4782,26 @@ export function createLibraryView(
     } else {
       appendJacket(cover, display.item, plainJacket);
     }
+    appendCoverFinish(cover, display.item);
+  }
+
+  /**
+   * 纸光（v4）：书封收尾层——纸面高光/内框、格式徽标。
+   * 纯装饰（aria-hidden），不参与封面内容布局；图片封面同样获得实体纸感。
+   */
+  function appendCoverFinish(cover: HTMLElement, item: LibraryItem): void {
+    const glaze = doc.createElement('span');
+    glaze.className = 'lightink-library-cover-glaze';
+    glaze.setAttribute('aria-hidden', 'true');
+    cover.appendChild(glaze);
+    const extension = item.extension?.trim();
+    if (extension !== undefined && extension !== '') {
+      const kind = doc.createElement('span');
+      kind.className = 'lightink-library-cover-kind';
+      kind.setAttribute('aria-hidden', 'true');
+      kind.textContent = extension.toUpperCase();
+      cover.appendChild(kind);
+    }
   }
 
   /**
@@ -4786,8 +4814,19 @@ export function createLibraryView(
     const initial = title.slice(0, 1);
     cover.classList.add('lightink-library-cover--jacket');
     cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
+    cover.dataset.coverInitial = initial === '' ? '?' : initial.toUpperCase();
     // Shelf home keeps the title under the cover only.
     if (plain) return;
+    // 纸光（v4）：抽象几何纹样 + 出版印记，让无封面书也像一本真正的书。
+    const motif = doc.createElement('span');
+    motif.className = 'lightink-library-cover-motif';
+    motif.setAttribute('aria-hidden', 'true');
+    cover.appendChild(motif);
+    const imprint = doc.createElement('span');
+    imprint.className = 'lightink-library-cover-imprint';
+    imprint.setAttribute('aria-hidden', 'true');
+    imprint.textContent = 'LIGHTINK';
+    cover.appendChild(imprint);
     // Decorative like an <img alt="">: the row text already names the book.
     const jacketTitle = doc.createElement('span');
     jacketTitle.className = 'lightink-library-cover-jacket-title';
@@ -5386,6 +5425,16 @@ export function createLibraryView(
       if (items.length > 0) emptyFailure = '';
       renderContinueBar();
       syncWallHeading();
+      const unfilteredShelf =
+        searchInput.value.trim() === '' &&
+        selectedGroup === 'all' &&
+        selectedCustomGroupId === null &&
+        selectedSmartGroupId === null &&
+        selectedTagId === null &&
+        !catalogActive();
+      shelfHeadTitle.textContent = labels().myBooks;
+      shelfHeadCount.textContent = String(items.length);
+      shelfHead.hidden = !unfilteredShelf || status.hidden === false || items.length === 0;
     }
     const shown = visibleItems();
     itemList.replaceChildren();

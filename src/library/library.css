@@ -7493,3 +7493,1336 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
     flex: 1 1 100%;
   }
 }
+
+/* =====================================================================
+ * Paperlight v4 — 书架（2026-10 UI/UX 重做）
+ * 目标：像一张整洁的编辑桌面——纸页、书脊、印记与留白；
+ * 只覆盖视觉属性，保留全部 .lightink-library-* 钩子与 26px 导航密度。
+ * ===================================================================== */
+
+/* ---- 1. 顶部：印记 + 呼吸感搜索 + 动作胶囊 ---- */
+.lightink-library-header {
+  min-height: 52px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lightink-bg-elevated) 74%, transparent), transparent),
+    color-mix(in srgb, var(--lightink-bg) 82%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 46%, transparent);
+}
+
+.lightink-library-brand {
+  gap: 10px;
+  padding: 0 8px 0 16px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.lightink-library-brand::before {
+  content: '墨';
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--lightink-accent);
+  color: var(--lightink-accent-contrast);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--lightink-accent) 30%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent);
+  font-family: var(--lightink-font-cover);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand {
+  padding: 0;
+}
+
+.lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand::before {
+  width: 28px;
+  height: 28px;
+}
+
+.lightink-library-header-main {
+  min-height: 52px;
+  padding: 0 10px 0 14px;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
+  height: 36px;
+  min-height: 36px;
+  width: min(30rem, 40vw);
+  padding: 0 32px 0 34px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 38%, var(--lightink-bg-elevated));
+  box-shadow: inset 0 1px 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent);
+  transition: border-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    box-shadow var(--lightink-duration-fast) var(--lightink-easing-standard),
+    background-color var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search::before {
+  left: 13px;
+  width: 15px;
+  height: 15px;
+  opacity: 0.7;
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focus-within {
+  border-color: color-mix(in srgb, var(--lightink-accent) 62%, transparent);
+  background: var(--lightink-bg-elevated);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 13%, transparent),
+    var(--lightink-shadow);
+}
+
+.lightink-library-search input {
+  font-size: 13px;
+}
+
+.lightink-library-search input::placeholder {
+  color: color-mix(in srgb, var(--lightink-muted) 82%, transparent);
+}
+
+.lightink-library-header-import,
+.lightink-library-header-assistant {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 7px;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 32px;
+  min-height: 32px !important;
+  padding: 0 13px !important;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  color: var(--lightink-fg) !important;
+  font-size: 12.5px !important;
+  font-weight: 550 !important;
+  white-space: nowrap;
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+.lightink-library-header-import {
+  border-color: color-mix(in srgb, var(--lightink-border) 82%, transparent) !important;
+  background: var(--lightink-bg-elevated) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+.lightink-library-header-import:hover,
+.lightink-library-header-import:focus-visible {
+  border-color: var(--lightink-accent) !important;
+  background: var(--lightink-accent-soft) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent)) !important;
+}
+
+.lightink-library-header-assistant:hover,
+.lightink-library-header-assistant:focus-visible {
+  background: color-mix(in srgb, var(--lightink-accent) 10%, transparent) !important;
+  color: var(--lightink-accent-ink, var(--lightink-accent)) !important;
+}
+
+.lightink-library-header-import svg,
+.lightink-library-header-assistant svg {
+  width: 15px;
+  height: 15px;
+  opacity: 0.78;
+}
+
+.lightink-library-header-action-label {
+  margin: 0 !important;
+  font: inherit !important;
+}
+
+/* ---- 2. 左栏：安静的索引，管理常驻底部 ---- */
+.lightink-library-nav {
+  padding: 12px 10px 12px;
+  gap: 2px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lightink-bg-sunken) 82%, var(--lightink-bg)), var(--lightink-bg-sunken));
+  border-right: 1px solid color-mix(in srgb, var(--lightink-border) 48%, transparent);
+}
+
+.lightink-library-nav-heading {
+  padding: 4px 8px 8px;
+  color: color-mix(in srgb, var(--lightink-muted) 82%, transparent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lightink-library-pane-heading {
+  padding: 0 4px;
+  margin-top: 10px;
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+}
+
+.lightink-library-pane-heading h2,
+.lightink-library-pane-heading h3 {
+  color: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lightink-library-section-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.lightink-library-nav-item,
+.lightink-library-source,
+.lightink-library-group,
+.lightink-library-smart-group {
+  padding: 0 8px;
+  border-radius: 7px;
+  color: color-mix(in srgb, var(--lightink-fg) 80%, var(--lightink-muted));
+  font-size: 13px;
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+.lightink-library-nav-item:hover,
+.lightink-library-source:hover,
+.lightink-library-group:hover,
+.lightink-library-smart-group:hover {
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 62%, transparent) !important;
+  color: var(--lightink-fg) !important;
+}
+
+.lightink-library-nav-item.is-active,
+.lightink-library-group.is-active,
+.lightink-library-smart-group.is-active,
+.lightink-library-source.is-active {
+  border-radius: 7px;
+  background: var(--lightink-accent-soft) !important;
+  box-shadow: inset 2px 0 0 var(--lightink-accent);
+  color: var(--lightink-accent-ink, var(--lightink-accent)) !important;
+  font-weight: 600;
+}
+
+.lightink-library-nav-item.is-active .lightink-library-nav-icon,
+.lightink-library-group.is-active .lightink-library-nav-icon,
+.lightink-library-smart-group.is-active .lightink-library-nav-icon {
+  opacity: 1;
+}
+
+.lightink-library-nav-icon {
+  width: 15px;
+  height: 15px;
+  opacity: 0.72;
+}
+
+.lightink-library-group-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: color-mix(in srgb, var(--lightink-muted) 94%, transparent);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+}
+
+.lightink-library-nav-item.is-active .lightink-library-group-count,
+.lightink-library-group.is-active .lightink-library-group-count {
+  background: color-mix(in srgb, var(--lightink-accent) 16%, transparent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library-pane-action {
+  opacity: 0.62;
+  transition: opacity var(--lightink-duration-fast), background-color var(--lightink-duration-fast);
+}
+
+.lightink-library-pane-heading:hover .lightink-library-pane-action,
+.lightink-library-pane-heading:focus-within .lightink-library-pane-action {
+  opacity: 1;
+}
+
+.lightink-library-manage {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 44%, transparent);
+}
+
+.lightink-library-manage-nav {
+  padding: 0;
+}
+
+.lightink-library-nav-collapse {
+  width: 26px !important;
+  min-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  color: color-mix(in srgb, var(--lightink-muted) 88%, transparent);
+}
+
+/* 左栏滚动条收细，避免纸面被切出硬槽。 */
+.lightink-library-nav::-webkit-scrollbar {
+  width: 8px;
+}
+
+/* ---- 3. 继续阅读：一张真正的「正在读」卡片 ---- */
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue {
+  width: 100%;
+  max-width: none;
+  margin: 0 0 4px;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 72%, transparent);
+  border-radius: 18px;
+  background:
+    radial-gradient(520px 180px at 8% 0%, color-mix(in srgb, var(--lightink-accent) 12%, transparent), transparent 62%),
+    linear-gradient(112deg, color-mix(in srgb, var(--lightink-accent-soft) 46%, var(--lightink-bg-elevated)), var(--lightink-bg-elevated));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
+    0 16px 38px -22px color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+  gap: 16px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-open {
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 20px;
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-cover {
+  width: 84px;
+  border-radius: 4px 9px 9px 4px;
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 24%, transparent),
+    0 2px 4px color-mix(in srgb, var(--lightink-fg) 22%, transparent),
+    0 14px 26px -10px color-mix(in srgb, var(--lightink-fg) 45%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text {
+  gap: 5px;
+  max-width: none;
+}
+
+.lightink-library-resume-label {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-text strong {
+  -webkit-line-clamp: 1;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: clamp(20px, 1.9vw, 26px);
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.18;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue .lightink-library-item-progress {
+  color: color-mix(in srgb, var(--lightink-fg) 62%, var(--lightink-muted));
+  font-size: 12.5px;
+}
+
+.lightink-library-continue-meter {
+  width: min(240px, 100%);
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+}
+
+.lightink-library-continue-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
+  margin-left: auto;
+  min-height: 38px;
+  padding: 6px 22px;
+  border-radius: 999px;
+  background: var(--lightink-accent);
+  color: var(--lightink-accent-contrast);
+  font-size: 13px;
+  font-weight: 650;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-accent) 34%, transparent),
+    0 10px 22px -10px color-mix(in srgb, var(--lightink-accent) 70%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue:hover {
+  background: color-mix(in srgb, var(--lightink-accent) 86%, var(--lightink-fg));
+  color: var(--lightink-accent-contrast);
+  transform: translateY(-1px);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-continue-dismiss {
+  top: 10px;
+  left: auto;
+  right: 10px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-border) 60%, transparent);
+}
+
+.lightink-library-continue > .lightink-library-item-menu {
+  border-radius: 999px;
+}
+
+
+/* ---- 4. 书架：工作面与书墙 ---- */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home {
+  gap: 26px;
+  padding: 26px var(--lightink-library-pad-x) 72px;
+  background: transparent;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books {
+  gap: 26px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-cover-wall,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home-books .lightink-library-items {
+  column-gap: var(--lightink-library-cover-gap-x);
+  row-gap: var(--lightink-library-cover-gap-y);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-cover {
+  border-radius: 5px 10px 10px 5px;
+  transition:
+    transform var(--lightink-duration-base, 180ms) var(--lightink-easing-emphasized, ease),
+    box-shadow var(--lightink-duration-base, 180ms) var(--lightink-easing-standard, ease);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item-shell,
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item--import {
+  max-width: 190px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item {
+  gap: 11px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item-text strong {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.32;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:hover .lightink-library-item-text strong {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item-progress {
+  color: color-mix(in srgb, var(--lightink-muted) 92%, transparent);
+  font-size: 11.5px;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item[data-progress-status='finished'] .lightink-library-item-progress {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  letter-spacing: 0.02em;
+}
+
+/* 悬浮预览：书封微微抬起并带一点倾斜，像从架上抽出。 */
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:hover .lightink-library-cover,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item:focus-visible .lightink-library-cover {
+  transform: translateY(-7px) rotate(-0.4deg);
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 26%, transparent),
+    0 3px 6px color-mix(in srgb, var(--lightink-fg) 18%, transparent),
+    0 26px 42px -16px color-mix(in srgb, var(--lightink-fg) 46%, transparent);
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item.is-selected .lightink-library-cover {
+  transform: translateY(-7px);
+  box-shadow:
+    0 0 0 3px var(--lightink-accent-soft),
+    inset 1px 0 0 color-mix(in srgb, #fff 26%, transparent),
+    0 24px 40px -16px color-mix(in srgb, var(--lightink-fg) 42%, transparent);
+}
+
+/* ---- 5. 书封：书脊、纸光、格式徽标与排版封面 ---- */
+.lightink-library-cover {
+  isolation: isolate;
+  border-radius: 4px 10px 10px 4px;
+  background-color: color-mix(in srgb, var(--lightink-fg) 10%, var(--lightink-bg));
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 24%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #000 8%, transparent),
+    0 2px 3px color-mix(in srgb, var(--lightink-fg) 16%, transparent),
+    0 16px 26px -14px color-mix(in srgb, var(--lightink-fg) 52%, transparent);
+}
+
+.lightink-library-cover-glaze {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.26) 0, rgba(255, 255, 255, 0.16) 2.6%, rgba(255, 255, 255, 0) 8%),
+    linear-gradient(118deg, rgba(255, 255, 255, 0.16) 0, rgba(255, 255, 255, 0) 34%),
+    linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0, rgba(0, 0, 0, 0) 22%);
+  outline: 1px solid rgba(255, 255, 255, 0.13);
+  outline-offset: -11px;
+}
+
+.lightink-library-cover-kind {
+  position: absolute;
+  top: 11px;
+  left: 12px;
+  z-index: 4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(18, 14, 10, 0.42);
+  color: rgba(255, 252, 244, 0.88);
+  font-family: var(--lightink-font-ui);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.5;
+  backdrop-filter: blur(6px);
+}
+
+.lightink-library-continue .lightink-library-cover-kind,
+.lightink-library-item--row .lightink-library-cover-kind {
+  display: none;
+}
+
+/* 进度条压在纸光层之上，始终贴底。 */
+.lightink-library-item[data-progress-fill] .lightink-library-cover::before,
+.lightink-library-item[data-progress-fill] .lightink-library-cover::after {
+  z-index: 3;
+  height: 3px;
+}
+
+.lightink-library-item[data-progress-fill] .lightink-library-cover::before {
+  background: rgba(0, 0, 0, 0.36);
+}
+
+.lightink-library-item[data-progress-fill] .lightink-library-cover::after {
+  background: hsl(var(--lightink-library-jacket-hue, 28) 82% 62%);
+  box-shadow: 0 0 8px hsl(var(--lightink-library-jacket-hue, 28) 82% 62% / 0.55);
+}
+
+/* 排版封面：深色书脊 + 抽象环纹 + 衬线书名。 */
+.lightink-library-cover--jacket {
+  --lightink-library-jacket-h: var(--lightink-library-jacket-hue, 24);
+  grid-template-rows: 1fr auto;
+  align-items: start;
+  justify-items: stretch;
+  padding: 15% 14% 13%;
+  background:
+    radial-gradient(130% 86% at 82% 6%, hsl(var(--lightink-library-jacket-h) 46% 54% / 0.5), transparent 58%),
+    radial-gradient(100% 70% at 8% 100%, hsl(var(--lightink-library-jacket-h) 48% 12% / 0.72), transparent 62%),
+    linear-gradient(155deg, hsl(var(--lightink-library-jacket-h) 30% 33%), hsl(var(--lightink-library-jacket-h) 36% 17%));
+  color: hsl(var(--lightink-library-jacket-h) 34% 95%);
+  text-align: center;
+}
+
+.lightink-library-cover-motif {
+  position: absolute;
+  top: 11%;
+  right: -14%;
+  width: 76%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    repeating-radial-gradient(circle at 50% 50%,
+      transparent 0 12.4%,
+      color-mix(in srgb, #fff 13%, transparent) 12.6% 13.2%,
+      transparent 13.4% 25%);
+  opacity: 0.9;
+  z-index: 0;
+}
+
+.lightink-library-cover-motif::after {
+  content: '';
+  position: absolute;
+  inset: 17%;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, #fff 20%, transparent);
+}
+
+.lightink-library-cover-imprint {
+  position: absolute;
+  top: 8%;
+  left: 14%;
+  z-index: 1;
+  color: color-mix(in srgb, #fff 52%, transparent);
+  font-family: var(--lightink-font-ui);
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: 0.3em;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.lightink-library-cover-jacket-title {
+  position: relative;
+  z-index: 1;
+  margin-top: 30%;
+  color: hsl(var(--lightink-library-jacket-h) 30% 97%);
+  font-family: var(--lightink-font-cover, Georgia, serif);
+  font-size: clamp(15px, 1.35vw, 19px);
+  font-weight: 600;
+  line-height: 1.34;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 2px hsl(var(--lightink-library-jacket-h) 40% 10% / 0.5);
+}
+
+.lightink-library-cover-jacket-author {
+  position: absolute;
+  right: 14%;
+  bottom: 11%;
+  left: 14%;
+  z-index: 1;
+  color: hsl(var(--lightink-library-jacket-h) 24% 90% / 0.78);
+  font-family: var(--lightink-font-ui);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+}
+
+/* 小封面（继续阅读 / 目录行）保持字母徽记，去掉环纹与印记。 */
+.lightink-library-continue .lightink-library-cover-motif,
+.lightink-library-item--row .lightink-library-cover-motif,
+.lightink-library-continue .lightink-library-cover-imprint,
+.lightink-library-item--row .lightink-library-cover-imprint {
+  display: none;
+}
+
+.lightink-library-continue .lightink-library-cover-glaze,
+.lightink-library-item--row .lightink-library-cover-glaze {
+  outline-offset: -4px;
+}
+
+.lightink-library-cover-jacket-title::before {
+  inset: 6.5% 7.5%;
+  border-color: color-mix(in srgb, #fff 18%, transparent);
+}
+
+/* 导入卡：虚线纸卡 + 圆形加号。 */
+.lightink-library[data-library-nav='shelf'] .lightink-library-cover--import {
+  border: 1.5px dashed color-mix(in srgb, var(--lightink-fg) 26%, transparent);
+  border-radius: 10px;
+  background:
+    radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--lightink-accent) 7%, transparent), transparent 62%),
+    color-mix(in srgb, var(--lightink-bg-elevated) 62%, transparent);
+  box-shadow: none;
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:hover .lightink-library-cover--import,
+.lightink-library[data-library-nav='shelf'] .lightink-library-item--import:focus-visible .lightink-library-cover--import {
+  border-color: var(--lightink-accent);
+  background:
+    radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--lightink-accent) 15%, transparent), transparent 62%),
+    var(--lightink-bg-elevated);
+}
+
+.lightink-library-import-plus {
+  box-sizing: content-box;
+  width: 20px;
+  height: 20px;
+  padding: 10px;
+  border-radius: 50%;
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library[data-library-nav='shelf'] .lightink-library-item--import .lightink-library-item-text strong {
+  color: var(--lightink-muted);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.lightink-library-item-shell > .lightink-library-item-menu {
+  top: 10px;
+  right: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
+  backdrop-filter: blur(10px);
+  transition: opacity var(--lightink-duration-fast) var(--lightink-easing-standard),
+    transform var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:hover .lightink-library-item-menu {
+  transform: translateY(-1px);
+}
+
+
+/* ---- 6. 作品详情：右侧纸卡 ---- */
+@media (min-width: 900px) {
+  .lightink-library-detail {
+    position: static;
+    padding: 22px 24px 36px;
+    border-left: 1px solid color-mix(in srgb, var(--lightink-border) 45%, transparent);
+    background: color-mix(in srgb, var(--lightink-bg-elevated) 46%, var(--lightink-bg-sunken));
+  }
+
+  .lightink-library-detail::before {
+    content: '';
+    position: sticky;
+    top: 0;
+    display: block;
+    height: 0;
+    box-shadow: 0 0 24px 12px color-mix(in srgb, var(--lightink-bg) 60%, transparent);
+    pointer-events: none;
+  }
+}
+
+@media (max-width: 899.98px) {
+  .lightink-library-detail {
+    padding: 20px 20px calc(28px + var(--lightink-safe-bottom, 0px));
+    border-left: none;
+    border-radius: 18px 0 0 18px;
+    background: var(--lightink-bg-elevated);
+    box-shadow: var(--lightink-shadow-strong);
+  }
+
+  .lightink-library-detail-backdrop:not([hidden]) {
+    backdrop-filter: blur(3px);
+  }
+}
+
+.lightink-library-detail-header h2 {
+  margin: 0;
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lightink-library-detail-close {
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 55%, transparent) !important;
+}
+
+.lightink-library-detail-hero {
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.lightink-library-detail-hero .lightink-library-cover {
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
+  border-radius: 4px 9px 9px 4px;
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, #fff 24%, transparent),
+    0 3px 6px color-mix(in srgb, var(--lightink-fg) 20%, transparent),
+    0 18px 30px -14px color-mix(in srgb, var(--lightink-fg) 52%, transparent);
+}
+
+.lightink-library-detail-identity {
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.lightink-library-detail h3 {
+  margin: 0;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 21px;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+  line-height: 1.24;
+}
+
+.lightink-library-detail-authors {
+  color: color-mix(in srgb, var(--lightink-fg) 62%, var(--lightink-muted));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.lightink-library-detail-format {
+  margin-top: 2px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-accent) 11%, transparent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.lightink-library-comic-metadata {
+  gap: 6px 14px;
+  margin: 18px 0;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+  font-size: 12px;
+}
+
+.lightink-library-comic-metadata dt {
+  color: color-mix(in srgb, var(--lightink-muted) 84%, transparent);
+}
+
+.lightink-library-comic-metadata dd {
+  color: var(--lightink-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-library-detail-meter {
+  width: 100%;
+  height: 5px;
+  margin-top: 10px;
+  background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+}
+
+.lightink-library-detail-actions {
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.lightink-library-detail-actions > .lightink-library-primary {
+  flex: 1 0 100%;
+  min-height: 40px;
+  border: none !important;
+  border-radius: 999px !important;
+  background: var(--lightink-accent) !important;
+  color: var(--lightink-accent-contrast) !important;
+  font-size: 13.5px;
+  font-weight: 650;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-accent) 30%, transparent),
+    0 10px 22px -10px color-mix(in srgb, var(--lightink-accent) 64%, transparent);
+}
+
+.lightink-library-detail-actions > .lightink-library-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-accent) 86%, var(--lightink-fg)) !important;
+  transform: translateY(-1px);
+}
+
+.lightink-library-detail-actions > button:not(.lightink-library-primary):not(.lightink-library-danger):not(.lightink-library-icon-button) {
+  min-height: 34px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 74%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-border) 86%, transparent);
+  color: var(--lightink-fg);
+  font-size: 12.5px;
+}
+
+.lightink-library-detail-actions > button:not(.lightink-library-primary):not(.lightink-library-danger):not(.lightink-library-icon-button):hover {
+  background: var(--lightink-bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--lightink-border-strong);
+}
+
+.lightink-library-detail-actions > .lightink-library-danger {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-radius: 0 !important;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lightink-border) 60%, transparent);
+  font-size: 12.5px;
+}
+
+.lightink-library-summary {
+  margin-top: 16px;
+  padding: 14px 15px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 38%, transparent);
+  color: color-mix(in srgb, var(--lightink-fg) 82%, var(--lightink-muted));
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* ---- 7. 管理页：居中设置卡 ---- */
+.lightink-library-manage-panel {
+  padding: 30px var(--lightink-library-pad-x) 72px;
+}
+
+.lightink-library-manage-home {
+  gap: 16px;
+  width: 100%;
+  max-width: 64rem;
+  margin-inline: auto;
+}
+
+.lightink-library-manage-group {
+  max-width: none;
+  padding: 16px 20px;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  transition: border-color var(--lightink-duration-base) var(--lightink-easing-standard),
+    box-shadow var(--lightink-duration-base) var(--lightink-easing-standard);
+}
+
+.lightink-library-manage-group:hover {
+  border-color: color-mix(in srgb, var(--lightink-border-strong) 82%, transparent);
+  box-shadow: 0 10px 28px -20px color-mix(in srgb, var(--lightink-fg) 38%, transparent);
+}
+
+.lightink-library-manage-group-title,
+.lightink-library-manage-group > h2 {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 15.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.lightink-library-manage-group > h2::before {
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 7px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--lightink-accent) 12%, transparent);
+  background-image: none;
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  -webkit-mask: none;
+  mask: none;
+}
+
+.lightink-library-manage-group[data-manage-group='appearance'] > h2::before,
+.lightink-library-manage-group[data-manage-group='reading'] > h2::before,
+.lightink-library-manage-group[data-manage-group='ai'] > h2::before,
+.lightink-library-manage-group[data-manage-group='storage'] > h2::before,
+.lightink-library-manage-group[data-manage-group='sync'] > h2::before,
+.lightink-library-manage-group[data-manage-group='other'] > h2::before,
+.lightink-library-manage-group[data-manage-group='conceal'] > h2::before {
+  -webkit-mask: var(--lightink-manage-group-icon) center / 16px 16px no-repeat;
+  mask: var(--lightink-manage-group-icon) center / 16px 16px no-repeat;
+  background-color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-library-manage-group-summary {
+  color: color-mix(in srgb, var(--lightink-muted) 92%, transparent);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.lightink-library-manage-group-toggle:hover {
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+.lightink-library-manage-group-toggle::after {
+  border-color: color-mix(in srgb, var(--lightink-muted) 55%, transparent);
+}
+
+/* 宽窗两列设置卡；窄窗自然回落单列。 */
+@media (min-width: 1080px) {
+  .lightink-library-manage-home {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .lightink-library-manage-group[data-manage-group='appearance'],
+  .lightink-library-manage-group[data-manage-group='reading'] {
+    grid-column: 1 / -1;
+  }
+}
+
+
+/* ---- 8. 首次引导：欢迎页也像一张纸页 ---- */
+.lightink-onboarding {
+  width: min(32rem, calc(100vw - 2.5rem));
+  gap: 1rem;
+}
+
+.lightink-modal-dialog:has(.lightink-onboarding) {
+  padding: 26px 28px;
+}
+
+.lightink-onboarding-intro {
+  color: color-mix(in srgb, var(--lightink-fg) 88%, var(--lightink-muted));
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+
+.lightink-onboarding-section-title {
+  margin-top: 0.5rem;
+  color: var(--lightink-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lightink-onboarding-capabilities {
+  gap: 0.5rem;
+}
+
+.lightink-onboarding-capabilities li {
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 34%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.lightink-onboarding-capabilities li::before {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.lightink-onboarding-actions .lightink-onboarding-import {
+  min-height: 38px;
+  border-radius: 999px;
+}
+
+.lightink-onboarding-footer {
+  padding-top: 0.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 55%, transparent);
+}
+
+/* ---- 9. 窄窗与手机：保留留白但收紧网格 ---- */
+@media (max-width: 900px) {
+  .lightink-library-header {
+    min-height: 48px;
+  }
+
+  .lightink-library-header-main {
+    min-height: 48px;
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-home {
+    padding-top: 16px;
+    gap: 18px;
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue {
+    padding: 14px 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue {
+    width: 100%;
+  }
+
+  .lightink-library[data-library-nav='shelf'] .lightink-library-continue-cue {
+    display: none;
+  }
+
+  .lightink-library-brand::before {
+    width: 24px;
+    height: 24px;
+    font-size: 13px;
+  }
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-library-header {
+  background: var(--lightink-bg);
+}
+
+
+/* 继续阅读缩略封面：保留一个衬线字徽记，像书脊上的压印。 */
+.lightink-library-continue .lightink-library-cover--jacket::after {
+  content: attr(data-cover-initial);
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  color: hsl(var(--lightink-library-jacket-h) 30% 96% / 0.92);
+  font-family: var(--lightink-font-cover, Georgia, serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  text-shadow: 0 1px 3px hsl(var(--lightink-library-jacket-h) 40% 8% / 0.55);
+  pointer-events: none;
+}
+
+
+/* ---- 10. 修订：书架头部 / 继续阅读 / 封面色质 ---- */
+
+/* 搜索框的 max-width 未被覆盖导致仍收成 200px。 */
+html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
+  max-width: min(30rem, 40vw);
+}
+
+/* 「继续阅读」外层的高特异性复位规则压过了纸卡：同特异性、后到覆盖。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: none;
+  margin: 0 0 4px;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 72%, transparent);
+  border-radius: 18px;
+  background:
+    radial-gradient(520px 180px at 8% 0%, color-mix(in srgb, var(--lightink-accent) 12%, transparent), transparent 62%),
+    linear-gradient(112deg, color-mix(in srgb, var(--lightink-accent-soft) 46%, var(--lightink-bg-elevated)), var(--lightink-bg-elevated));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
+    0 16px 38px -22px color-mix(in srgb, var(--lightink-fg) 36%, transparent);
+  gap: 16px;
+}
+
+/* 关闭按钮回到卡片右上，避开 84px 封面。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-dismiss {
+  top: 10px;
+  left: auto;
+  right: 10px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-border) 60%, transparent);
+}
+
+/* 出版印记移到作者上方，避免与格式徽标相撞。 */
+.lightink-library-cover-imprint {
+  top: auto;
+  right: 14%;
+  bottom: 21%;
+  left: 14%;
+  text-align: center;
+  font-size: 6.5px;
+  letter-spacing: 0.28em;
+  opacity: 0.72;
+}
+
+/* 封面色温更克制：降低高光饱和度，压深底色，接近编辑设计而非霓虹。 */
+.lightink-library-cover--jacket {
+  background:
+    radial-gradient(130% 86% at 82% 6%, hsl(var(--lightink-library-jacket-h) 34% 44% / 0.42), transparent 58%),
+    radial-gradient(100% 70% at 8% 100%, hsl(var(--lightink-library-jacket-h) 40% 10% / 0.7), transparent 62%),
+    linear-gradient(155deg, hsl(var(--lightink-library-jacket-h) 26% 29%), hsl(var(--lightink-library-jacket-h) 30% 15%));
+}
+
+.lightink-library-cover-jacket-title {
+  color: hsl(var(--lightink-library-jacket-h) 28% 95%);
+}
+
+.lightink-library-cover-jacket-author {
+  color: hsl(var(--lightink-library-jacket-h) 20% 88% / 0.72);
+}
+
+/* 进度条统一暖金，不再随书封色相变成荧光绿。 */
+.lightink-library-item[data-progress-fill] .lightink-library-cover::after {
+  background: color-mix(in srgb, var(--lightink-highlight) 66%, #f7e8c2);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--lightink-highlight) 60%, transparent);
+}
+
+
+/* ---- 11. 修订二：封框、设置双列、浮层不透明 ---- */
+
+/* 封框交给纸光层（outline 内缩），书名不再被框住。 */
+.lightink-library-cover-jacket-title::before {
+  display: none;
+}
+
+/* 窄窗/宽窗都让设置卡按内容排布；容器查询里的「全部跨列」在宽窗让位。 */
+@media (min-width: 1080px) {
+  .lightink-library-manage-home > .lightink-library-manage-group {
+    grid-column: auto;
+  }
+
+  .lightink-library-manage-home
+    > .lightink-library-manage-group[data-manage-group='appearance'],
+  .lightink-library-manage-home
+    > .lightink-library-manage-group[data-manage-group='reading'] {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 设置卡在双列里保持内边距但不强行 40rem 上限。 */
+@media (min-width: 1080px) {
+  .lightink-library-manage-home > .lightink-library-manage-group {
+    max-width: none;
+    padding: 16px 20px;
+  }
+}
+
+
+/* 关闭按钮让开右上角的「更多」按钮。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-dismiss {
+  right: 46px;
+}
+
+
+/* 书库主按钮统一为朱砂实底（详情/分组/来源/标签弹层共用）。 */
+.lightink-library-primary {
+  border-radius: var(--lightink-radius-control) !important;
+  background: var(--lightink-accent) !important;
+  color: var(--lightink-accent-contrast) !important;
+  font-weight: 600;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-accent) 30%, transparent);
+}
+
+.lightink-library-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lightink-accent) 86%, var(--lightink-fg)) !important;
+  color: var(--lightink-accent-contrast) !important;
+}
+
+
+/* ---- 12. 书墙小节标题 ---- */
+.lightink-library-shelf-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px;
+  min-height: 24px;
+}
+
+.lightink-library-shelf-head[hidden] {
+  display: none !important;
+}
+
+.lightink-library-shelf-head-title {
+  margin: 0;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.lightink-library-shelf-head-count {
+  min-width: 22px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: color-mix(in srgb, var(--lightink-muted) 92%, transparent);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* 选中分组/搜索时，分组自己的 wall-heading 优先，避免两个标题叠在一起。 */
+.lightink-library-home-books:has(> .lightink-library-wall-heading:not([hidden]))
+  > .lightink-library-shelf-head {
+  display: none;
+}
+
+
+/* 出版印记放在右上，与左上格式徽标成对，避开作者。 */
+.lightink-library-cover-imprint {
+  top: 9%;
+  right: 12%;
+  bottom: auto;
+  left: auto;
+  text-align: right;
+  font-size: 6.5px;
+  letter-spacing: 0.24em;
+  opacity: 0.7;
+}
+
+
+/* ---- 13. 窄桌面（≤760、细指针）：头部回到一行，动作收成图标 ---- */
+@media (max-width: 760px) {
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-header-main {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  html:not([data-android]):not([data-touch-primary])
+    .lightink-library-header-action-label {
+    display: none;
+  }
+
+  html:not([data-android]):not([data-touch-primary])
+    :is(.lightink-library-header-import, .lightink-library-header-assistant) {
+    justify-content: center;
+    width: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-header-actions {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
+    flex: 1 1 160px;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-toolbar:empty {
+    display: none;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-library-header {
+    padding-right: calc(var(--lightink-titlebar-caption, 36px) * 3 + 10px);
+  }
+}
+
+
+/* 窄屏引导：主行动（导入）排在次行动（添加书源）之前。 */
+@media (max-width: 760px) {
+  .lightink-onboarding-actions .lightink-onboarding-import {
+    order: -1;
+  }
+}
+
+
+/* 窄桌面的动作标签必须压过桌面规则的 :is(...) 前缀。 */
+@media (max-width: 760px) {
+  html:not([data-android]):not([data-touch-primary])
+    :is(.lightink-library-header-import, .lightink-library-header-assistant)
+    .lightink-library-header-action-label {
+    display: none !important;
+  }
+
+  html:not([data-android]):not([data-touch-primary])
+    :is(.lightink-library-header-import, .lightink-library-header-assistant)
+    .lightink-library-header-assistant-mobile-label {
+    display: none !important;
+  }
+
+  html:not([data-android]):not([data-touch-primary])
+    :is(.lightink-library-header-import, .lightink-library-header-assistant) {
+    overflow: hidden;
+    gap: 0;
+  }
+}
+
+
+/* 书名/作者压在纸光层之上，避免高光把字洗淡。 */
+.lightink-library-cover-jacket-title,
+.lightink-library-cover-jacket-author,
+.lightink-library-cover-imprint {
+  z-index: 3;
+}
+

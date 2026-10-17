@@ -1999,3 +1999,228 @@
 .lightink-ai-wizard-cancel {
   margin-right: auto;
 }
+
+/* =====================================================================
+ * Paperlight v4 — AI 助手面板与配置向导
+ * 面板仍是右侧纸卡，但头部、未配置引导与步骤指示器更像成品。
+ * ===================================================================== */
+
+.lightink-reader-assistant-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lightink-bg-elevated) 100%, transparent), var(--lightink-bg-elevated));
+  border-color: color-mix(in srgb, var(--lightink-border) 78%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent),
+    0 30px 80px -40px color-mix(in srgb, var(--lightink-fg) 48%, transparent);
+}
+
+.lightink-reader-assistant-head {
+  min-height: 46px;
+  padding: 0 var(--assistant-space-3) 0 var(--assistant-space-4);
+  border-bottom-color: color-mix(in srgb, var(--lightink-border) 55%, transparent);
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 22%, transparent);
+}
+
+.lightink-reader-assistant-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--assistant-font-md);
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.lightink-reader-assistant-title::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background: var(--lightink-accent);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.5l2 5.4 5.5 2.1-5.5 2.1-2 5.4-2-5.4L4.5 10l5.5-2.1z'/><path fill='black' d='M18.5 14.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.5l2 5.4 5.5 2.1-5.5 2.1-2 5.4-2-5.4L4.5 10l5.5-2.1z'/><path fill='black' d='M18.5 14.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-reader-assistant-close {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+/* 未配置引导：一枚纸面图标 + 说明 + 实底主按钮。 */
+.lightink-reader-assistant-guide {
+  position: relative;
+  gap: 0.9rem;
+  padding: 1.4rem 1.1rem 1.6rem;
+}
+
+.lightink-reader-assistant-guide::before {
+  content: '';
+  position: absolute;
+  top: 1.35rem;
+  left: 1.1rem;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--lightink-accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-accent) 26%, transparent);
+}
+
+.lightink-reader-assistant-guide::after {
+  content: '';
+  position: absolute;
+  top: calc(1.35rem + 9px);
+  left: calc(1.1rem + 9px);
+  width: 20px;
+  height: 20px;
+  background: var(--lightink-accent-ink, var(--lightink-accent));
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.5l2 5.4 5.5 2.1-5.5 2.1-2 5.4-2-5.4L4.5 10l5.5-2.1z'/><path fill='black' d='M18.5 14.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M12 2.5l2 5.4 5.5 2.1-5.5 2.1-2 5.4-2-5.4L4.5 10l5.5-2.1z'/><path fill='black' d='M18.5 14.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z'/></svg>") center / contain no-repeat;
+}
+
+.lightink-reader-assistant-guide-hint {
+  margin-top: 48px;
+  color: color-mix(in srgb, var(--lightink-fg) 76%, var(--lightink-muted));
+  font-size: var(--assistant-font-sm);
+  line-height: 1.75;
+}
+
+.lightink-reader-assistant-setup {
+  align-self: flex-start;
+  min-height: 34px;
+  padding: 0.4rem 1.05rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--lightink-accent);
+  color: var(--lightink-accent-contrast);
+  font-size: var(--assistant-font-sm);
+  font-weight: 650;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-accent) 35%, transparent),
+    0 8px 18px -10px color-mix(in srgb, var(--lightink-accent) 70%, transparent);
+}
+
+.lightink-reader-assistant-setup:hover {
+  background: color-mix(in srgb, var(--lightink-accent) 86%, var(--lightink-fg));
+}
+
+.lightink-reader-assistant-settings {
+  color: color-mix(in srgb, var(--lightink-muted) 88%, transparent);
+  font-size: var(--assistant-font-xs);
+}
+
+/* 用户消息：暖色小气泡；助手保持直排。 */
+.lightink-reader-assistant-message.is-user {
+  background: color-mix(in srgb, var(--lightink-accent-soft) 72%, transparent);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  border-radius: 14px 14px 4px 14px;
+}
+
+/* 输入区：更大的纸面与聚焦环。 */
+.lightink-reader-assistant-composer-box {
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 52%, var(--lightink-bg-elevated));
+}
+
+.lightink-reader-assistant-composer-box:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 12%, transparent);
+}
+
+/* 配置向导：编号步骤 + 更宽表单。 */
+.lightink-ai-wizard {
+  width: min(34rem, calc(100vw - 2.5rem));
+  gap: 1rem;
+}
+
+.lightink-ai-wizard-steps {
+  counter-reset: wizard-step;
+  gap: 0.3rem 0.75rem;
+}
+
+.lightink-ai-wizard-steps li {
+  counter-increment: wizard-step;
+  gap: 0.4rem;
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+  font-size: 11.5px;
+}
+
+.lightink-ai-wizard-step-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.lightink-ai-wizard-step-dot::before {
+  content: counter(wizard-step);
+}
+
+.lightink-ai-wizard-steps li.is-active .lightink-ai-wizard-step-dot {
+  border-color: var(--lightink-accent);
+  background: var(--lightink-accent);
+  color: var(--lightink-accent-contrast);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 14%, transparent);
+}
+
+.lightink-ai-wizard-steps li.is-done .lightink-ai-wizard-step-dot {
+  border-color: var(--lightink-success);
+  background: var(--lightink-success);
+  color: var(--lightink-bg-elevated);
+}
+
+.lightink-ai-wizard-steps-count {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+  font-size: 10.5px;
+}
+
+.lightink-ai-wizard-steps-row {
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 45%, transparent);
+}
+
+.lightink-ai-wizard input:not([type='checkbox']),
+.lightink-ai-wizard select {
+  min-height: 36px;
+  padding: 7px 11px;
+  border-color: color-mix(in srgb, var(--lightink-border) 84%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 36%, var(--lightink-bg-elevated));
+}
+
+.lightink-ai-wizard input:focus,
+.lightink-ai-wizard select:focus {
+  outline: none;
+  border-color: var(--lightink-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 13%, transparent);
+  background: var(--lightink-bg-elevated);
+}
+
+.lightink-ai-wizard-hint {
+  color: color-mix(in srgb, var(--lightink-muted) 90%, transparent);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.lightink-ai-wizard-status {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 38%, transparent);
+}
+
+.lightink-ai-wizard-status[data-kind='error'] {
+  background: color-mix(in srgb, var(--lightink-danger) 9%, transparent);
+}
+
+.lightink-ai-wizard-status[data-kind='success'] {
+  background: color-mix(in srgb, var(--lightink-success) 9%, transparent);
+}
+

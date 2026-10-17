@@ -29,3 +29,30 @@
 }
 
 /* rail 态 theme.css 已整块隐藏搜索框；此处无需再处理。 */
+
+/* ---- Paperlight v4：窄桌面把大纲收成更窄的索引栏，正文优先 ---- */
+@media (max-width: 760px) {
+  html:not([data-android]):not([data-touch-primary]) #lightink-outline-sidebar {
+    --lightink-outline-width: 148px;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-outline-title {
+    letter-spacing: 0.08em;
+  }
+
+  html:not([data-android]):not([data-touch-primary]) .lightink-outline-search {
+    margin-inline: 6px;
+    width: calc(100% - 12px);
+  }
+}
+
+
+/* 窄桌面：大纲按视口比例收窄，正文仍可读；拖拽调宽在宽窗恢复。 */
+@media (max-width: 760px) {
+  html:not([data-android]):not([data-touch-primary])
+    #lightink-outline-sidebar
+    .lightink-outline:not(.is-hidden):not(.is-rail):not(.collapsed) {
+    width: clamp(132px, 26vw, 220px) !important;
+  }
+}
+

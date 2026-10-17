@@ -3,7 +3,7 @@
  */
 
 html {
-  --lightink-titlebar-height: 36px;
+  --lightink-titlebar-height: 40px;
   --lightink-titlebar-caption: 36px;
   --lightink-titlebar-icon: 16px;
   --lightink-titlebar-leading: 0px;
@@ -15,8 +15,8 @@ html[data-platform='mac'] {
 }
 
 html[data-display='compact'] {
-  --lightink-titlebar-height: 32px;
-  --lightink-titlebar-caption: 32px;
+  --lightink-titlebar-height: 40px;
+  --lightink-titlebar-caption: 34px;
   --lightink-titlebar-icon: 15px;
 }
 
@@ -234,13 +234,13 @@ html[data-touch-primary] {
  * #lightink-tabbar 的既有 padding 公式（theme.css），菜单/标签不被遮挡。 ==== */
 
 #app.is-workspace-editor {
-  /* 品牌 48 + ☰ 28 + 主题 28 + 间距 8 + 呼吸 12 = 124px。 */
-  --lightink-titlebar-leading: 124px;
+  /* 品牌 48 + ☰ 28 + 主题 28 + 间距 8 + 呼吸 24 = 136px。 */
+  --lightink-titlebar-leading: 136px;
 }
 
 html[data-platform='mac'] #app.is-workspace-editor {
   /* 叠加 Mac 交通灯 78px 常量（见文件首 html[data-platform='mac']）。 */
-  --lightink-titlebar-leading: 202px;
+  --lightink-titlebar-leading: 214px;
 }
 
 html[data-platform='mac'] .lightink-titlebar-anchor {
@@ -360,3 +360,12 @@ html[data-touch-primary] .lightink-titlebar-anchor {
     display: none !important;
   }
 }
+
+#app.is-workspace-shelf .lightink-window-titlebar {
+  top: 6px;
+}
+
+#app.is-workspace-reader.is-reader-chrome-revealed .lightink-window-titlebar {
+  top: 8px;
+}
+
