@@ -179,19 +179,23 @@ export interface ReaderPageSpread {
 
 /**
  * Readium/Thorium page metrics.
- * The paper fills the window; the text columns follow the stored measure so
- * line length stays on the user's 行长 preference instead of inflating with
- * the window (1280-wide pages painted ~39rem lines). A second column opens
- * once each side can hold a readable line (~22rem). The resulting spread can
- * be narrower than the page — the caller centers it (`margin-inline: auto`),
- * which is the 版心居中 fix for the left-heavy single-text-column screenshot:
- * two equal measure columns + a central gutter instead of one fat left column.
- *
+ * A second column opens once each side can hold a readable line (~22rem).
+ * On a wide window the stored 行长 is a floor, not a cap: leaving the rest of
+ * the page as empty margin (a 22rem pair centered in 1280px) is the gutter
+ * the reader sees as “边距太大”. Columns grow until the unused side slack is
+ * modest, and stop at {@link READER_SPREAD_MAX_COLUMN_REM} so a line does not
+ * run past the comfort ceiling (~42 CJK characters, ~80 Latin).
  * Compact / touch never uses that desktop pair threshold: an inflated
  * iframe width would paint two overlapping columns and skip a page.
  * Force one full-width column (`column-width: 100%`) and step by that width.
  */
 export const READER_SPREAD_MIN_COLUMN_REM = 22;
+/** Comfort ceiling for one facing column before leftover space may return as margin. */
+export const READER_SPREAD_MAX_COLUMN_REM = 42;
+
+function readerFacingGapPx(fontPx: number): number {
+  return Math.max(32, Math.round(fontPx * 2));
+}
 
 export function readerPageSpread(
   containerWidth: number,
@@ -202,26 +206,28 @@ export function readerPageSpread(
   const size = Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 16;
   const measurePx = Math.max(1, Math.round(measureRem * size));
   const minColumnPx = Math.round(READER_SPREAD_MIN_COLUMN_REM * size);
-  const minPad = Math.max(40, Math.round(size * 2.5));
-  const pairGap = Math.max(40, Math.round(size * 2.5));
+  const maxColumnPx = Math.round(READER_SPREAD_MAX_COLUMN_REM * size);
+  const pairGap = readerFacingGapPx(size);
   const pageWidth =
     Number.isFinite(containerWidth) && containerWidth > 0 ? Math.max(1, Math.round(containerWidth)) : 1;
   const forceSingle =
     compact === true || (compact !== false && readerSurfaceIsCompact());
+  const pad = readerPageInnerPadPx(size, forceSingle);
   if (!forceSingle && pageWidth >= 2 * minColumnPx + pairGap) {
-    // 双栏均衡：两栏等宽（步进公式依赖该不变量），栏宽受行长上限约束，
-    // 下限不小于可读最小栏（更窄的行长偏好不产生两根细栏）。
-    const columnWidth = Math.max(
-      minColumnPx,
-      Math.min(Math.floor((pageWidth - pairGap) / 2), measurePx),
-    );
+    // 双栏等宽（步进公式依赖该不变量）。行长是下限；页宽有余时栏随之变宽，
+    // 直到舒适上限，避免短行长把半个窗口留成空白。
+    const fillColumn = Math.max(1, Math.floor((pageWidth - pairGap) / 2));
+    const preferred = Math.min(fillColumn, Math.max(minColumnPx, measurePx));
+    const slack = Math.floor((pageWidth - (preferred * 2 + pairGap)) / 2);
+    const slackLimit = Math.round(Math.min(72, Math.max(36, pageWidth * 0.05)));
+    const columnWidth = slack > slackLimit ? Math.min(maxColumnPx, fillColumn) : preferred;
     const width = columnWidth * 2 + pairGap;
     return {
       width,
       columnWidth,
       columns: 2,
       gap: pairGap,
-      pad: minPad,
+      pad,
       measurePx,
       // Skip the gap after the right-hand column; stepping by `width` alone
       // leaves a sliver of that column on the next page (a fake third column).
@@ -233,7 +239,7 @@ export function readerPageSpread(
     columnWidth: pageWidth,
     columns: 1,
     gap: 0,
-    pad: minPad,
+    pad,
     measurePx,
     step: pagedColumnStep(pageWidth, 0),
   };
@@ -248,13 +254,18 @@ export function readerFlowSpreadFromTypography(
   return readerPageSpread(containerWidth, fontSizePx, typography.measureRem, compact);
 }
 
-/** Phone/tablet reading: Kindle Narrow is ~16pt, not the desktop 40px gutter. */
+/**
+ * Outer page inset. Compact stays near one em (Kindle Narrow).
+ * Desktop is about 2em with a 36–64px band: enough to keep the text off the
+ * window edge, not the old 2.5em/40px floor that stacked on top of a centered
+ * short measure.
+ */
 export function readerPageInnerPadPx(fontPx: number, compact = false): number {
   const size = Number.isFinite(fontPx) && fontPx > 0 ? fontPx : 16;
   if (compact) {
     return Math.max(14, Math.round(size * 1.05));
   }
-  return Math.max(40, Math.round(size * 2.5));
+  return Math.min(64, Math.max(36, Math.round(size * 2.25)));
 }
 
 export function readerSurfaceIsCompact(root?: ParentNode | null): boolean {

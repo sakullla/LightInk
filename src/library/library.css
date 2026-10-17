@@ -458,9 +458,9 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
   height: 32px;
   min-height: 32px;
   justify-self: center;
-  border: 1px solid var(--lightink-border);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--lightink-bg-sunken, var(--lightink-bg-elevated));
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
   box-shadow: none;
 }
 
@@ -3775,27 +3775,34 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: block;
 }
 
-/* Settings rows: large touch targets (import / clear cache / sync / editor). */
+/* Settings rows sit inside the group card. A second filled slab on every
+   action made storage look like three stacked buttons. */
 .lightink-library-manage-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  min-height: 44px;
-  padding: 10px 14px;
-  border-radius: var(--lightink-radius-panel);
-  background: var(--lightink-bg-elevated);
-  box-shadow: inset 0 0 0 1px var(--lightink-border);
+  min-height: 40px;
+  padding: 8px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
   color: var(--lightink-fg);
   font-size: 13px;
   text-align: left;
 }
 
-.lightink-library-manage-row:hover:not(:disabled),
-.lightink-library-manage-row:focus-visible {
-  background: var(--lightink-accent-soft);
-  color: var(--lightink-accent);
+.lightink-library button.lightink-library-manage-row:hover:not(:disabled),
+.lightink-library button.lightink-library-manage-row:focus-visible {
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-library-manage-group > .lightink-library-manage-row {
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 85%, transparent);
+  border-radius: 0;
 }
 
 .lightink-library-manage-row-label {
@@ -3805,9 +3812,16 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   white-space: nowrap;
 }
 
-/* 动作行（清理缓存）：红色文字常驻提示破坏性；hover 仍走 accent-soft 底色。 */
-.lightink-library-manage-row.is-danger {
+/* 动作行（清理缓存）：红色文字常驻提示破坏性，不铺一整条警告底。 */
+.lightink-library-manage-row.is-danger,
+.lightink-library button.lightink-library-manage-row.is-danger:hover:not(:disabled),
+.lightink-library button.lightink-library-manage-row.is-danger:focus-visible {
   color: var(--lightink-danger);
+}
+
+.lightink-library button.lightink-library-manage-row.is-danger:hover:not(:disabled),
+.lightink-library button.lightink-library-manage-row.is-danger:focus-visible {
+  background: color-mix(in srgb, var(--lightink-danger) 8%, transparent);
 }
 
 .lightink-library-manage-row-chevron {
@@ -3916,21 +3930,38 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   }
 }
 
-/* 缓存用量摘要（§3.3）：数字走 text-lg + mono，读作仪表读数。 */
+/* 缓存用量：一行读数 + 细轨，不再是一枚假按钮。比例由 --lightink-cache-ratio 写入。 */
 .lightink-library-cache-summary {
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 8px;
   width: 100%;
   max-width: var(--lightink-library-manage-max);
-  min-height: 44px;
-  padding: 10px 14px;
-  border-radius: var(--lightink-radius-panel);
-  background: var(--lightink-bg-sunken, var(--lightink-bg-elevated));
-  box-shadow: inset 0 0 0 1px var(--lightink-border);
+  min-height: 0;
+  padding: 4px 4px 10px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: var(--lightink-muted);
   font-size: 12px;
+}
+
+.lightink-library-cache-track {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--lightink-bg-sunken, var(--lightink-border));
+}
+
+.lightink-library-cache-track > b {
+  display: block;
+  width: calc(var(--lightink-cache-ratio, 0) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lightink-accent);
 }
 
 .lightink-library-cache-summary > span {
@@ -4610,6 +4641,47 @@ html:not([data-android]):not([data-touch-primary])
   .lightink-library-nav-icon {
   width: 16px;
   height: 16px;
+}
+
+/* 导入 / AI 收成一枚分段胶囊，不再是贴在窗口按钮旁的两块独立色条。
+   导入是胶囊里唯一的实底，AI 保持文字态。离开书架后两个按钮都隐藏，
+   胶囊底一起收掉，避免管理页顶栏留一枚空槽。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-header-actions:has(
+    :is(.lightink-library-header-import, .lightink-library-header-assistant):not([hidden])
+  ) {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library
+  button.lightink-library-header-assistant {
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lightink-muted);
+  box-shadow: none;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library
+  button.lightink-library-header-import {
+  border-radius: 999px;
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library
+  button.lightink-library-header-import:hover:not(:disabled),
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library
+  button.lightink-library-header-assistant:hover:not(:disabled) {
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
 }
 
 .lightink-library-header-import {

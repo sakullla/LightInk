@@ -1749,7 +1749,11 @@ export function createLibraryManage(
   cacheSummary.className = 'lightink-library-cache-summary';
   cacheSummary.hidden = true;
   const cacheUsage = doc.createElement('span');
-  cacheSummary.append(cacheUsage);
+  const cacheTrack = doc.createElement('i');
+  cacheTrack.className = 'lightink-library-cache-track';
+  cacheTrack.setAttribute('aria-hidden', 'true');
+  cacheTrack.append(doc.createElement('b'));
+  cacheSummary.append(cacheUsage, cacheTrack);
   // 清理缓存是动作（弹确认后直接执行）：红色文字、无 ›；
   // 调整缓存上限打开弹层：给 › 指示去向。
   const clearCacheRow = manageRow(doc, 'is-danger', false);
@@ -2118,12 +2122,18 @@ export function createLibraryManage(
         cacheUsage.textContent = labels()
           .cacheUsage.replace('{used}', bytesLabel(cache.bytesCached))
           .replace('{limit}', bytesLabel(cache.limitBytes));
+        const ratio =
+          cache.limitBytes > 0
+            ? Math.min(1, Math.max(0, cache.bytesCached / cache.limitBytes))
+            : 0;
+        cacheSummary.style.setProperty('--lightink-cache-ratio', ratio.toFixed(4));
         if (doc.activeElement !== cacheLimitInput) {
           cacheLimitInput.value = String(cache.limitBytes / 1024 ** 3);
         }
       } catch {
         // 浏览器预览无 cacheStats：隐藏空用量盒，避免盖住「存储与缓存」。
         cacheUsage.textContent = '';
+        cacheSummary.style.removeProperty('--lightink-cache-ratio');
       }
       cacheSummary.hidden = cacheUsage.textContent.trim() === '';
       // 折叠态标题下的同一行摘要（为空时保持 hidden）。

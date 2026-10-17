@@ -21,7 +21,7 @@
   --lightink-reader-body-size: var(--lightink-font-size);
   font-size: var(--lightink-reader-body-size);
   line-height: var(--lightink-reader-line-height, 1.8);
-  --lightink-reader-pad-x: 2.25rem;
+  --lightink-reader-pad-x: 1.5rem;
   --lightink-reader-pad-y: 2rem;
   --lightink-reader-paged-pad-x: 0.75rem;
   overflow: visible;
@@ -1258,7 +1258,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   overflow: visible;
   max-width: none;
   margin: 0;
-  padding: var(--lightink-reader-pad-y, 2rem) var(--lightink-reader-pad-x, 2.25rem)
+  padding: var(--lightink-reader-pad-y, 2rem) var(--lightink-reader-pad-x, 1.5rem)
     calc(var(--lightink-reader-pad-y, 2rem) * 2.2);
 }
 
@@ -1274,11 +1274,10 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-height: 0;
 }
 
-/* 版心居中（滚动模式）：行长对齐阅读偏好 --lightink-reader-measure，章块以
-   行长为上限、margin-inline auto 居中，宽窗两侧纸面留白对称，不再整幅通栏
-   （ui-redesign-2026-10 §3.5「只把默认行长对齐 measure 令牌」）。 */
+/* 滚动版心：行长是下限。窄偏好不再把宽窗收成一条细栏；上限 42rem，
+   约 42 个汉字 / 80 个拉丁字母，超过之后才把多余宽度留成边距。 */
 .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
-  max-width: var(--lightink-reader-measure, none);
+  max-width: max(var(--lightink-reader-measure, 22rem), min(42rem, 100%));
   margin-inline: auto;
 }
 
@@ -1352,7 +1351,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   align-items: center;
   width: 100%;
   margin: 0 auto;
-  padding: var(--lightink-reader-pad-y, 2rem) var(--lightink-reader-pad-x, 2.25rem)
+  padding: var(--lightink-reader-pad-y, 2rem) var(--lightink-reader-pad-x, 1.5rem)
     calc(var(--lightink-reader-pad-y, 2rem) * 2.2);
 }
 

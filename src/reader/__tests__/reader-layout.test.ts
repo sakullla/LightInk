@@ -436,8 +436,8 @@ describe('READER_FLOW_PAGED_PADDING_X_REM', () => {
   });
 
 describe('readerPageInnerPadPx', () => {
-  it('uses a Kindle-narrow gutter on compact surfaces and the desktop pad otherwise', () => {
-    expect(readerPageInnerPadPx(16, false)).toBe(40);
+  it('uses a Kindle-narrow gutter on compact surfaces and a modest desktop pad', () => {
+    expect(readerPageInnerPadPx(16, false)).toBe(36);
     expect(readerPageInnerPadPx(16, true)).toBe(17);
     document.documentElement.setAttribute('data-android', '');
     expect(readerSurfaceIsCompact()).toBe(true);
@@ -1041,29 +1041,38 @@ describe('readerFlowSpreadFromTypography', () => {
     expect(page.gap).toBe(0);
   });
 
-  it('bounds both facing columns by the stored measure so the spread can center', () => {
+  it('fills a desktop page instead of parking a short measure in a wide gutter', () => {
     const page = readerPageSpread(1000, 16, 22);
     expect(page.columns).toBe(2);
-    // 版心居中：栏宽对齐 22rem 行长，双栏均衡 + 中央栏沟；spread 窄于纸面，
-    // 由 flow-renderer 的 margin-inline auto 居中（1280 宽不再画 ~39rem 通栏长行）。
-    expect(page.columnWidth).toBe(22 * 16);
+    // 行长 22rem 只是下限。1000px 页宽时两栏吃满纸面，不再居中留出大边。
+    expect(page.width).toBe(1000);
+    expect(page.columnWidth).toBeGreaterThan(22 * 16);
+    expect(page.columnWidth).toBeLessThanOrEqual(42 * 16);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
-    expect(page.width).toBeLessThan(1000);
     expect(page.step).toBe(page.width + page.gap);
   });
 
   it('never narrows a facing column below the readable minimum for a short measure', () => {
     const page = readerPageSpread(1000, 16, 16);
     expect(page.columns).toBe(2);
-    expect(page.columnWidth).toBe(22 * 16);
+    expect(page.columnWidth).toBeGreaterThanOrEqual(22 * 16);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+    expect(page.width).toBe(1000);
   });
 
   it('lets a wide measure widen the facing columns up to the filling split', () => {
     const page = readerPageSpread(1000, 16, 32);
     expect(page.columns).toBe(2);
-    expect(page.columnWidth).toBe(Math.floor((1000 - 40) / 2));
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
+    expect(page.width).toBe(1000);
+    expect(page.columnWidth).toBeGreaterThanOrEqual(Math.min(32 * 16, Math.floor((1000 - page.gap) / 2)));
+  });
+
+  it('stops growing columns at the comfort ceiling on an ultrawide page', () => {
+    const page = readerPageSpread(2200, 16, 22);
+    expect(page.columns).toBe(2);
+    expect(page.columnWidth).toBe(42 * 16);
+    expect(page.width).toBeLessThan(2200);
   });
 });
 
@@ -1134,9 +1143,9 @@ describe('readerPageSpread compact / narrow (R5)', () => {
     expect(readerSurfaceIsCompact()).toBe(false);
     const page = readerPageSpread(1000, 16, 22);
     expect(page.columns).toBe(2);
-    expect(page.columnWidth).toBe(22 * 16);
+    expect(page.width).toBe(1000);
+    expect(page.columnWidth).toBeGreaterThan(22 * 16);
     expect(page.columnWidth * 2 + page.gap).toBe(page.width);
-    expect(page.width).toBeLessThan(1000);
     expect(page.step).toBe(page.width + page.gap);
     expect(readerFlowSpreadFromTypography(1000, 16, { ...DEFAULT_READER_TYPOGRAPHY, measureRem: 32 }).columns).toBe(2);
   });
@@ -1147,7 +1156,7 @@ describe('readerPageSpread compact / narrow (R5)', () => {
     expect(flow).toMatch(/'margin-left',\s*\n\s*'margin-right',/);
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(
-      /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-chapter\s*\{[^}]*max-width:\s*var\(--lightink-reader-measure,\s*none\)[^}]*margin-inline:\s*auto/,
+      /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-chapter\s*\{[^}]*max-width:\s*max\(var\(--lightink-reader-measure,\s*22rem\),\s*min\(42rem,\s*100%\)\)[^}]*margin-inline:\s*auto/,
     );
   });
 

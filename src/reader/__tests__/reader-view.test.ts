@@ -25,7 +25,7 @@ import {
   clearPagedSpreadVars,
   pagedSpreadMetrics,
 } from '../../ui/reading-layout.js';
-import { readerFlowSpreadFromTypography } from '../reader-layout.js';
+import { readerFlowSpreadFromTypography, readerPageInnerPadPx } from '../reader-layout.js';
 import { applyReaderTheme } from '../reader-theme.js';
 import { CONCEAL_PAGE_BACKGROUND_EVENT } from '../../conceal/conceal-controller.js';
 import { DEFAULT_READER_TYPOGRAPHY } from '../reader-typography.js';
@@ -494,7 +494,7 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
 
     const html = doc.documentElement;
     const metrics = readerFlowSpreadFromTypography(
-      1020,
+      1100 - readerPageInnerPadPx(16, false) * 2,
       16,
       DEFAULT_READER_TYPOGRAPHY,
     );
@@ -508,7 +508,9 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(pageBox.style.overflowY).toBe('hidden');
     expect(pageBox.style.touchAction).toBe('pan-y');
     expect(pageBox.style.overscrollBehaviorX).toBe('none');
-    expect(metrics.columnWidth * metrics.columns + metrics.gap).toBeLessThanOrEqual(1020);
+    expect(metrics.columnWidth * metrics.columns + metrics.gap).toBeLessThanOrEqual(
+      1100 - readerPageInnerPadPx(16, false) * 2,
+    );
     expect(html.style.getPropertyValue('--lightink-reader-column-width')).toBe(
       `${metrics.columnWidth}px`,
     );
@@ -602,7 +604,7 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(iframe.style.width).toBe('100%');
     expect(html.style.width).toBe(`${page.width}px`);
     expect(pageBox.style.columnCount).toBe('1');
-    expect(pageBox.style.columnWidth).toBe('440px');
+    expect(pageBox.style.columnWidth).toBe(`${520 - readerPageInnerPadPx(16, false) * 2}px`);
     expect(html.style.paddingLeft).toMatch(/^0(px)?$/);
     expect(html.style.paddingRight).toMatch(/^0(px)?$/);
     expect(doc.body.style.maxWidth).toBe('none');
@@ -638,15 +640,16 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     doc.body.innerHTML = '<p>chapter</p>';
     renderer.applyPaginatedDocument(iframe, doc);
     const html = doc.documentElement;
-    const page = readerFlowSpreadFromTypography(1020, 16, DEFAULT_READER_TYPOGRAPHY);
+    const inner = 1100 - readerPageInnerPadPx(16, false) * 2;
+    const page = readerFlowSpreadFromTypography(inner, 16, DEFAULT_READER_TYPOGRAPHY);
     const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
     expect(page.columns).toBe(2);
     expect(pageBox.style.columnCount).toBe('2');
     expect(pageBox.style.columnWidth).toBe(`${page.columnWidth}px`);
-    // 版心居中：双栏受 22rem 行长约束（2×352+40=744），spread 窄于纸面，
-    // margin-inline auto 居中；纸面（html）仍是整幅 1100px。
-    expect(page.columnWidth).toBe(352);
-    expect(pageBox.style.width).toBe('744px');
+    // 双栏吃满扣掉页边后的纸面，不再把 22rem 行长居中留出大边。
+    expect(page.width).toBe(inner);
+    expect(page.columnWidth).toBeGreaterThan(22 * 16);
+    expect(pageBox.style.width).toBe(`${inner}px`);
     expect(pageBox.style.marginInline).toBe('auto');
     expect(iframe.style.width).toBe('100%');
     expect(html.style.width).toBe('1100px');
