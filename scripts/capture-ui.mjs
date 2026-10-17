@@ -26,13 +26,14 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.LIGHTINK_CAPTURE_OUT ?? `${root}/docs/verification/ui`;
 // Vite 默认只绑定 localhost（Windows 上解析到 ::1），因此探测与访问统一用 localhost。
-const baseUrl = process.env.LIGHTINK_PREVIEW_URL ?? 'http://localhost:1420';
+// let：ensureDevServer 在 1420 被其他应用占用时会把实际可用的备选端口写回这里。
+let baseUrl = process.env.LIGHTINK_PREVIEW_URL ?? 'http://localhost:1420';
 const locale = process.env.LIGHTINK_CAPTURE_LOCALE ?? 'zh-CN';
 const widths = (process.env.LIGHTINK_CAPTURE_WIDTHS ?? '1280,900,640').split(',').map(Number);
 const themes = (process.env.LIGHTINK_CAPTURE_THEMES ?? 'warm-light,dark').split(',');
@@ -625,45 +626,93 @@ export function installFixtures({
  * `lightink` = 本仓库 dev server；`foreign` = 端口被其他应用占用（此时绝不能截图）；
  * `down` = 没有服务在监听。
  */
-async function probeDevServer() {
+async function probeUrl(url) {
   try {
-    const response = await fetch(baseUrl, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(1500) });
     if (!(response.ok || response.status < 500)) return 'foreign';
     const html = await response.text();
-    return html.includes('src="/src/main.ts"') ? 'lightink' : 'foreign';
+    // 判据用 index.html 的 <title>（仓库源字面，vite 原样保留）。不能用
+    // 入口 script 的 /src/main.ts：vite 会给入口加 ?t= 时间戳导致失配，且
+    // 其他 vite 项目入口同名（实测 1420 上的 RillSQL 亦为 /src/main.ts?t=…）。
+    return html.includes('<title>轻墨 LightInk</title>') ? 'lightink' : 'foreign';
   } catch {
     return 'down';
   }
 }
 
-export async function ensureDevServer() {
-  if (process.env.LIGHTINK_PREVIEW_URL !== undefined) return null;
-  const probe = await probeDevServer();
-  if (probe === 'lightink') return null;
-  if (probe === 'foreign') {
-    throw new Error(
-      `${baseUrl} 被其他进程占用（返回的 HTML 不是 LightInk）。请先释放 1420 端口，` +
-        '或用 LIGHTINK_PREVIEW_URL 指向 LightInk dev server，避免截到其他应用。',
-    );
-  }
-  console.log('dev server 未运行，正在启动 vite ...');
+async function probeDevServer() {
+  return probeUrl(baseUrl);
+}
+
+/** 1420 被其他应用占用时依次尝试的备选端口（自起本仓库 vite，绝不连接外部应用）。 */
+const FALLBACK_PORTS = [1427, 1428, 1429];
+
+function spawnViteDevServer(port) {
   const child = spawn(
     process.execPath,
-    ['node_modules/vite/bin/vite.js', '--port', '1420', '--strictPort'],
+    ['node_modules/vite/bin/vite.js', '--port', String(port), '--strictPort'],
     { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   child.stdout.on('data', (chunk) => process.stdout.write(`[dev] ${chunk}`));
   child.stderr.on('data', (chunk) => process.stderr.write(`[dev] ${chunk}`));
-  // 冷启动（依赖预构建）可能持续数分钟。
-  const deadline = Date.now() + 300_000;
+  return child;
+}
+
+/**
+ * 等待自起的 vite 就绪（冷启动/依赖预构建可能持续数分钟）。
+ * 返回 false 表示进程提前退出（如端口实际被占 EADDRINUSE）或超时；调用方换下一个端口。
+ */
+async function waitForLightinkDevServer(child, url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (child.exitCode !== null) return false;
     if (Date.now() > deadline) {
       child.kill();
-      throw new Error('dev server 启动超时');
+      return false;
     }
-    if ((await probeDevServer()) === 'lightink') return child;
+    if ((await probeUrl(url)) === 'lightink') return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+}
+
+export async function ensureDevServer() {
+  if (process.env.LIGHTINK_PREVIEW_URL !== undefined) {
+    // 用户显式指定的 URL 也必须验明是 LightInk：否则错误会以难懂的形式
+    // 深埋进首个截图步骤（甚至把别的应用截进来）。
+    const previewProbe = await probeDevServer();
+    if (previewProbe !== 'lightink') {
+      throw new Error(
+        `LIGHTINK_PREVIEW_URL=${baseUrl} 探测结果为 ${previewProbe}（非 LightInk dev server）。` +
+          '请确认该 URL 指向本仓库 vite dev server，或清空该变量改由脚本自管端口。',
+      );
+    }
+    return null;
+  }
+  const probe = await probeDevServer();
+  if (probe === 'lightink') return null;
+  if (probe === 'foreign') {
+    console.log(
+      `${baseUrl} 被其他应用占用（返回的 HTML 不是 LightInk），将在备选端口自起本仓库 dev server …`,
+    );
+  } else {
+    console.log('dev server 未运行，正在启动 vite ...');
+  }
+  // 1420 down 时维持原行为（首选 1420）；1420 被占时跳过它，从备选端口自起。
+  const candidates = probe === 'foreign' ? FALLBACK_PORTS : [1420, ...FALLBACK_PORTS];
+  for (const port of candidates) {
+    const url = `http://localhost:${port}`;
+    if ((await probeUrl(url)) !== 'down') continue;
+    const child = spawnViteDevServer(port);
+    if (await waitForLightinkDevServer(child, url, 300_000)) {
+      baseUrl = url;
+      console.log(`dev server 已就绪：${url}`);
+      return child;
+    }
+  }
+  throw new Error(
+    '无法提供 LightInk dev server：1420 被其他应用占用且备选端口 ' +
+      `${FALLBACK_PORTS.join('/')} 均不可用。请释放端口，或用 LIGHTINK_PREVIEW_URL 指向本仓库 dev server。`,
+  );
 }
 
 async function shoot(page, width, theme, name) {
@@ -1524,7 +1573,15 @@ export function buildFixtureArgs(targetLocale = locale) {
 
 async function main() {
   const server = await ensureDevServer();
-  const browser = await chromium.launch({ headless });
+  let browser;
+  try {
+    browser = await chromium.launch({ headless });
+  } catch (error) {
+    console.error('Chromium 启动失败（Playwright 浏览器缺失时先执行 npx playwright install chromium）：');
+    console.error(error);
+    process.exitCode = 1;
+    return;
+  }
   const fixtureArgs = buildFixtureArgs();
   try {
     await warmUp(browser, fixtureArgs);
@@ -1545,11 +1602,28 @@ async function main() {
     }
   }
 
+  // 零截图防护：任何原因导致的「一张都没截到」都不得以成功（exit 0）收场。
+  if (captures.length === 0) {
+    record({ label: 'capture:no-output', error: `未产出任何截图（captures=0），输出目录 ${out}` });
+  }
   console.log(JSON.stringify({ failures }, null, 2));
   fs.writeFileSync(`${out}/report.json`, JSON.stringify({ locale, aiConfigured, widths, themes, captures, failures }, null, 2));
   if (failures.length) process.exitCode = 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// 入口判定比较真实路径而非 URL 字面：Windows 的 8.3 短路径（PROJEC~1）与
+// 盘符/目录大小写变体会让 pathToFileURL 产生不等价的 href，从而静默跳过
+// main()（退出码 0 且零产出）——这是已被实测触发的坑。
+function invokedAsScript() {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsScript()) {
   await main();
 }
