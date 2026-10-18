@@ -123,6 +123,11 @@
   --lightink-fg-strong: #171410;
   --lightink-muted: #6b6457;
   --lightink-accent: #b6462a; /* 朱砂封泥 */
+  /* accent-ink：accent 当「字」用而非当「底」用时的取色（比 accent 更沉）。
+     阅读器/编辑器/助手面板过去引用它，但它只在 library.css 里定义，
+     宿主表面一律回退到 accent（一个当填充用的朱砂），于是阅读进度「0%」
+     被画成告警红。 */
+  --lightink-accent-ink: #96391f;
   --lightink-accent-soft: #f4e2da;
   --lightink-accent-contrast: #fff9f4;
   --lightink-border: #e4dccd;
@@ -210,6 +215,7 @@
   --lightink-fg-strong: #12171f;
   --lightink-muted: #5b6472;
   --lightink-accent: #35619c;
+  --lightink-accent-ink: #2a4d7d;
   --lightink-accent-soft: #e4ebf7;
   --lightink-accent-contrast: #ffffff;
   --lightink-border: #d7dde6;
@@ -271,6 +277,7 @@
   --lightink-fg-strong: #f5efe4;
   --lightink-muted: #a29886;
   --lightink-accent: #e08a6a;
+  --lightink-accent-ink: #f0a184;
   --lightink-accent-soft: #3a2a23;
   --lightink-accent-contrast: #1c0f0a;
   --lightink-border: #37322a;
@@ -335,6 +342,7 @@
   --lightink-fg-strong: #eaf0fa;
   --lightink-muted: #8c95a6;
   --lightink-accent: #8fb4e2;
+  --lightink-accent-ink: #a2c2ec;
   --lightink-accent-soft: #253145;
   --lightink-accent-contrast: #0b1220;
   --lightink-border: #323b4a;

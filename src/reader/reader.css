@@ -3509,3 +3509,77 @@ html[data-keyboard] .lightink-note-textarea {
   }
 }
 
+/* =====================================================================
+ * 阅读器可用性修正（2026-10 UX 重做）
+ *
+ * 1. 顶栏遮挡正文：.lightink-reader-chrome 是 height:0 的 sticky 浮层
+ *    （reader.css:50-61），bar 以 margin 8px + min-height 44px 溢出到纸页之上。
+ *    翻页壳只留了 10px 上边距（:3226），于是首行被压在玻璃条下。这里给
+ *    纸页留出与浮栏等高的呼吸带，滚动壳同步让位。
+ * 2. 章节刻度戳出轨道：8px 的刻度在 4px 轨道上下各露出一截，密集时读起来
+ *    像毛刺。降到 6px 并压低对比，保留「章节边界」的信息而去掉毛刺感。
+ * 3. 进度百分比读成告警：:3327 引用 --lightink-accent-ink，而该令牌只在
+ *    library.css 定义，阅读器表面回退到 accent（一个当填充用的朱砂），
+ *    于是「0%」被画成告警红。改为中性前景色，accent 交给进度条本身表达。
+ * ===================================================================== */
+
+/* 1. 顶栏让位：浮栏是 44px + 8px 上边距，纸页从这条带子之下开始。
+ *    这条留白是「常量」而不是跟着浮栏显隐：翻页高度一变，每栏行数就会重排，
+ *    浮栏自动隐藏的瞬间正文会跟着跳页。宁可常驻一条页边距，也不要读着读着重排。 */
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
+  padding-top: 52px;
+}
+
+.lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
+  padding-top: 60px;
+}
+
+/* 2. 章节刻度收敛为「克制的分隔线」。
+ * 原状 tick 8px 高、32% 不透明，而轨道只有 4px，于是刻度上下各戳出 2px，
+ * 密集时读起来像毛刺而不是分隔。降到 6px 并压低对比：仍能看出章节边界，
+ * 又不再与轨道抢视线。书签是用户自己放的锚点，继续保留醒目的一抹朱色。 */
+.lightink-reader-chrome-tick {
+  height: 6px;
+  opacity: 0.24;
+}
+
+/* 3. 百分比是数据，不是告警：中性前景 + 等宽数字。 */
+.lightink-reader-chrome-percent {
+  color: var(--lightink-fg);
+  font-weight: 650;
+}
+
+/* 翻页纸页居中成一张真正的「页」：限宽 + 居中 + 环境影，
+   避免整幅纸面铺满窗宽、短章节时视觉重心偏左。 */
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active {
+  position: relative;
+  max-width: min(76rem, 100%);
+  margin-inline: auto;
+}
+
+/*
+ * 书沟：翻页是等宽两栏对开（readerPageSpread），spread 居中且两栏等宽，
+ * 于是栏缝恰好落在纸页正中。短章节只填满左栏时，右半页原本是一片读不出来的
+ * 空白；补一道极轻的对称渐变后，它读作「对开本的另一半」，而不是排版事故。
+ * pointer-events:none 保证不拦截划选与翻页热区。
+ */
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 76px;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--lightink-fg) 5%, transparent) 46%,
+    color-mix(in srgb, var(--lightink-fg) 8%, transparent) 50%,
+    color-mix(in srgb, var(--lightink-fg) 5%, transparent) 54%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+

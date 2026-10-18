@@ -7748,6 +7748,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   opacity: 1;
 }
 
+/* 「管理」靠 margin-top:auto 贴底；重做后的取值见文件末尾的「书架层」。 */
 .lightink-library-manage {
   margin-top: auto;
   padding-top: 10px;
@@ -7771,7 +7772,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   width: 8px;
 }
 
-/* ---- 3. 继续阅读：一张真正的「正在读」卡片 ---- */
+/* ---- 3. 继续阅读：一张真正的「正在读」卡片 ----
+ * 重做后的取值（限宽、进度条撑满）集中在文件末尾的「书架层」，原因见那里。 */
 .lightink-library[data-library-nav='shelf'] .lightink-library-continue {
   width: 100%;
   max-width: none;
@@ -8422,17 +8424,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:
   border-color: color-mix(in srgb, var(--lightink-muted) 55%, transparent);
 }
 
-/* 宽窗两列设置卡；窄窗自然回落单列。 */
+/* 宽窗两列设置卡；窄窗自然回落单列。
+   折叠态等宽、展开态跨满两列的重做规则见文件末尾的「书架层」。 */
 @media (min-width: 1080px) {
   .lightink-library-manage-home {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
-  }
-
-  .lightink-library-manage-group[data-manage-group='appearance'],
-  .lightink-library-manage-group[data-manage-group='reading'] {
-    grid-column: 1 / -1;
   }
 }
 
@@ -8824,5 +8822,79 @@ html:not([data-android]):not([data-touch-primary])
 .lightink-library-cover-jacket-author,
 .lightink-library-cover-imprint {
   z-index: 3;
+}
+
+/* =====================================================================
+ * 2026-10 UI/UX 重做：书架层（Bookshelf layer）
+ *
+ * 为什么单独开一块、并且必须带上 html:not([data-android]):not([data-touch-primary]) 前缀：
+ * library.css 是四层叠加的历史产物。桌面端另有一批
+ *   html:not([data-android]):not([data-touch-primary])
+ *     .lightink-library[data-library-nav='shelf'] .lightink-library-continue
+ * 形状的规则（6334 / 6601 / 8588 等），它的特异度是 (0,5,1)，比裸写的
+ * (0,3,0) 高——只靠「写在文件末尾」是压不住的。
+ * 已用 CSSOM 实测确认：max-width 的最终胜出者是那批 (0,5,1) 的 max-width:none，
+ * 而 max-width:760px 排在其后却因特异度不足而失效（矩仍为满宽 1032px）。
+ * 这里沿用同一个前缀拿到同级特异度，再靠源顺序最后取胜，不需要 !important。
+ * ===================================================================== */
+
+/* ---- A. 继续阅读：收掉横幅中间约 600px 的死区 ----
+ * 原状：width:100%（约 1030px）× 155px，封面/标题贴左、「继续」被甩到最右端，
+ * 中间整片空白，视觉重心塌在左上角。
+ * 关键是别把那块空白「挤掉」，而是让它有内容：进度条改为撑满文字列，
+ * 于是版面变成 封面 | 标题/章节/进度条 | 继续 —— 没有空洞，也不需要搬动文案。
+ * 卡片本身给一个可读的上限并与下方书墙左对齐。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue {
+  max-width: 640px;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue-open {
+  flex: 1 1 auto;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 16px;
+}
+
+/* 进度条撑满文字列——这一条就是消掉中间死区的地方。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue
+  .lightink-library-meter {
+  width: 100%;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-continue
+  .lightink-library-cover {
+  width: 76px;
+}
+
+/* ---- B. 左栏：给「书源 → 管理」之间的空档一个收口 ----
+ * 「管理」靠 margin-top:auto 贴底是对的，但上面的空档没有边界，
+ * 看起来像一条没画完的槽。留白保持，只把分界线的层次压低一点。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-manage {
+  padding-top: 12px;
+}
+
+/* ---- C. 设置卡：折叠态等宽两列，展开态跨满两列 ----
+ * 8667 那层用 .lightink-library-manage-home > .group[data-manage-group=…]
+ * 把 appearance / reading 无条件钉成整行；重做规则必须排在它之后才能改回
+ * 「折叠时两列、展开时整行」。 */
+@media (min-width: 1080px) {
+  .lightink-library-manage-home
+    > .lightink-library-manage-group:has(> .lightink-library-manage-group-toggle[aria-expanded='true']) {
+    grid-column: 1 / -1;
+  }
+
+  .lightink-library-manage-home
+    > .lightink-library-manage-group:not(:has(> .lightink-library-manage-group-toggle[aria-expanded='true'])) {
+    grid-column: auto;
+  }
 }
 
