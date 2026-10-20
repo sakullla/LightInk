@@ -114,8 +114,12 @@
 }
 
 .lightink-reader-toc-search:focus {
-  outline: 2px solid var(--lightink-accent);
-  outline-offset: 1px;
+  border-color: var(--lightink-accent);
+}
+
+.lightink-reader-toc-search:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lightink-focus-ring);
 }
 
 .lightink-reader-chrome-panel-empty {
@@ -152,6 +156,7 @@
   text-align: left;
   line-height: 1.4;
   cursor: pointer;
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard);
 }
 
 .lightink-reader-toc-item:hover {
@@ -215,7 +220,7 @@
 }
 
 .lightink-reader-toc-mode.is-active {
-  background: color-mix(in srgb, #fff 58%, var(--lightink-bg-elevated));
+  background: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg-elevated));
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
@@ -300,7 +305,7 @@
 
 .lightink-reader-chrome-typography {
   --lightink-reader-seg-track: color-mix(in srgb, var(--lightink-fg) 6.5%, transparent);
-  --lightink-reader-seg-active: color-mix(in srgb, #fff 58%, var(--lightink-bg-elevated));
+  --lightink-reader-seg-active: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg-elevated));
   --lightink-reader-seg-shadow:
     0 1px 2px rgba(0, 0, 0, 0.08),
     0 0 0 0.5px color-mix(in srgb, var(--lightink-fg) 10%, transparent);
@@ -394,12 +399,13 @@
   height: 2.6rem;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent;
   box-shadow: none;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard);
 }
 
 .lightink-reader-type-step--out {
@@ -414,6 +420,30 @@
 
 .lightink-reader-type-step:hover {
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+}
+
+/* 排版面板控件：键盘焦点统一柔焦环（覆盖全局硬描边兜底），hover 加过渡。 */
+.lightink-reader-type-step:focus-visible,
+.lightink-reader-type-quick-step:focus-visible,
+.lightink-reader-type-font:focus-visible,
+.lightink-reader-type-mode:focus-visible,
+.lightink-reader-theme-swatch:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--lightink-focus-ring);
+}
+
+.lightink-reader-type-quick-step,
+.lightink-reader-type-font,
+.lightink-reader-type-mode {
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast) var(--lightink-easing-standard);
+}
+
+.lightink-reader-type-quick-step:hover:not(.is-active),
+.lightink-reader-type-font:hover:not(.is-active),
+.lightink-reader-type-mode:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg);
 }
 
 .lightink-reader-type-step:disabled {
@@ -904,7 +934,7 @@
  */
 .lightink-reader-chrome-panel.is-touch-sheet.lightink-reader-chrome-typography {
   --lightink-reader-seg-track: color-mix(in srgb, var(--lightink-fg) 6.5%, transparent);
-  --lightink-reader-seg-active: color-mix(in srgb, #fff 58%, var(--lightink-bg));
+  --lightink-reader-seg-active: color-mix(in srgb, var(--lightink-fg) 8%, var(--lightink-bg));
   --lightink-reader-seg-shadow:
     0 1px 2px rgba(0, 0, 0, 0.1),
     0 0 0 0.5px color-mix(in srgb, var(--lightink-fg) 10%, transparent);

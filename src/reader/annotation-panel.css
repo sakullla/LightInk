@@ -92,7 +92,7 @@
   height: 1.9rem;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   color: var(--lightink-muted);
   background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
   font-size: 1.15rem;
@@ -226,12 +226,12 @@
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1.75rem;
+  height: 1.75rem;
   margin-right: 0.3rem;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-muted) 38%, transparent);
   color: var(--lightink-bg);
   font-size: 0.78rem;
@@ -469,7 +469,7 @@
 /* kind 徽章：小胶囊样式。 */
 .lightink-reader-sidebar-kind {
   padding: 0.08rem 0.45rem;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   font-size: 0.68em;
   font-weight: 600;
@@ -564,7 +564,7 @@
   min-height: 1.75rem;
   padding: 0 0.65rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent;
   color: var(--lightink-muted);
   font: inherit;
@@ -645,6 +645,7 @@
    「全部」色点（data-color='all'）是文字按钮，不适用圆点几何。 */
 .lightink-reader-sidebar-color,
 .lightink-reader-sidebar-color-filter:not([data-color='all']) {
+  position: relative;
   width: 1rem;
   height: 1rem;
   padding: 0;
@@ -655,11 +656,18 @@
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
+/* 视觉 16px，命中区撑到 ~28px（仅色点筛选按钮是可点的，列表行内色片是展示）。 */
+.lightink-reader-sidebar-color-filter:not([data-color='all'])::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
 .lightink-reader-sidebar-search-scope-color[data-color='all'] {
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   padding: 0.15rem 0.45rem;
   font: inherit;
   font-size: 0.78em;
@@ -699,7 +707,7 @@
   cursor: pointer;
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   padding: 0.18rem 0.55rem;
   font-size: 0.78em;
   font-weight: 500;

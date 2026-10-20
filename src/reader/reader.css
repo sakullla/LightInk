@@ -215,7 +215,7 @@
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-accent);
   color: var(--lightink-bg);
   font-size: 10px;
@@ -514,7 +514,7 @@
   flex: 1 1 auto;
   align-items: center;
   min-width: 4.5rem;
-  height: 18px;
+  height: 28px;
 }
 
 .lightink-reader-chrome-scrubber--whisper {
@@ -528,7 +528,7 @@
   top: 50%;
   height: 3px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
   pointer-events: none;
   transform: translateY(-50%);
@@ -583,7 +583,7 @@
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 18px;
+  height: 28px;
   margin: 0;
   background: transparent;
   cursor: pointer;
@@ -598,7 +598,7 @@
 .lightink-reader-chrome-progress:focus-visible {
   outline: 2px solid var(--lightink-accent);
   outline-offset: 3px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
 }
 
 .lightink-reader-chrome-progress::-webkit-slider-runnable-track {
@@ -1002,7 +1002,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   min-height: 48px;
   padding: 0;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   font-size: 0;
   line-height: 0;
   -webkit-app-region: no-drag;
@@ -1149,7 +1149,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
     min-height: 48px;
     padding: 0;
     justify-content: center;
-    border-radius: 999px;
+    border-radius: var(--lightink-radius-pill);
     font-size: 0;
     line-height: 0;
     -webkit-app-region: no-drag;
@@ -1480,7 +1480,7 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   height: 1.15rem;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--lightink-fg) 22%, transparent);
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   cursor: pointer;
 }
 
@@ -2028,7 +2028,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   margin-left: 0.5rem;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 26%, transparent);
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 10%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 600 11px/1.2 var(--lightink-font-ui);
@@ -2044,7 +2044,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   flex: none;
   padding: 4px 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-comic-fg, #e6e6e6) 10%, transparent);
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 13px/1.2 var(--lightink-font-ui);
@@ -2086,7 +2086,7 @@ html[data-platform='mac'] .lightink-reader-comic-topbar {
   position: absolute;
   bottom: calc(100% + 10px);
   padding: 5px 12px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-comic-overlay, color-mix(in srgb, #111 82%, transparent));
   color: var(--lightink-comic-fg, #e6e6e6);
   font: 650 14px/1.2 var(--lightink-font-ui);
@@ -2789,7 +2789,7 @@ html[data-comic-turn='prev']::view-transition-old(lightink-comic-pages) {
 .lightink-reader-load-track {
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
@@ -3229,7 +3229,7 @@ html[data-keyboard] .lightink-note-textarea {
 .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg);
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--lightink-fg) 6%, transparent),
@@ -3244,7 +3244,7 @@ html[data-keyboard] .lightink-note-textarea {
 /* 加载/错误/空态卡片：与纸页语言一致。 */
 .lightink-reader-status {
   border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: var(--lightink-bg-elevated);
   box-shadow: 0 16px 40px -28px color-mix(in srgb, var(--lightink-fg) 50%, transparent);
 }
@@ -3256,7 +3256,7 @@ html[data-keyboard] .lightink-note-textarea {
   padding-top: 0;
   padding-bottom: 0;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 84%, transparent);
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
@@ -3268,7 +3268,7 @@ html[data-keyboard] .lightink-note-textarea {
 .lightink-reader-chrome-title {
   color: var(--lightink-fg);
   padding: 0 0.7rem;
-  font-size: 13px;
+  font-size: var(--lightink-text-md);
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -3277,9 +3277,9 @@ html[data-keyboard] .lightink-note-textarea {
   gap: 0.4rem;
   min-height: 32px;
   padding: 0.2rem 0.7rem;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   color: color-mix(in srgb, var(--lightink-fg) 84%, var(--lightink-muted));
-  font-size: 12px;
+  font-size: var(--lightink-text-sm);
   font-weight: 500;
   transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard),
     color var(--lightink-duration-fast) var(--lightink-easing-standard);
@@ -3289,6 +3289,11 @@ html[data-keyboard] .lightink-note-textarea {
 .lightink-reader-chrome-action.is-open {
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+.lightink-reader-chrome-action:focus-visible {
+  outline: 2px solid var(--lightink-focus-ring);
+  outline-offset: -2px;
 }
 
 .lightink-reader-chrome-action-icon {
@@ -3303,7 +3308,7 @@ html[data-keyboard] .lightink-note-textarea {
   left: 12px;
   padding: 7px 15px;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 84%, transparent);
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--lightink-fg) 5%, transparent),
@@ -3370,7 +3375,7 @@ html[data-keyboard] .lightink-note-textarea {
 
 .lightink-reader-toc-count {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: var(--lightink-muted);
   font-size: 10.5px;
@@ -3385,19 +3390,30 @@ html[data-keyboard] .lightink-note-textarea {
 }
 
 .lightink-reader-toc-search:focus {
+  border-color: var(--lightink-accent);
+}
+
+.lightink-reader-toc-search:focus-visible {
   outline: none;
   border-color: var(--lightink-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lightink-accent) 13%, transparent);
+  box-shadow: 0 0 0 3px var(--lightink-focus-ring);
 }
 
 .lightink-reader-toc-item {
   min-height: 36px;
-  border-radius: 8px;
+  border-radius: var(--lightink-radius-control);
   color: color-mix(in srgb, var(--lightink-fg) 86%, var(--lightink-muted));
+  transition: background-color var(--lightink-duration-fast) var(--lightink-easing-standard);
 }
 
 .lightink-reader-toc-item:hover {
   background: color-mix(in srgb, var(--lightink-fg) 6%, transparent);
+}
+
+/* outline 而非 box-shadow：不与 is-current 的内嵌进度条阴影打架。 */
+.lightink-reader-toc-item:focus-visible {
+  outline: 2px solid var(--lightink-focus-ring);
+  outline-offset: -2px;
 }
 
 .lightink-reader-toc-item.is-current,
@@ -3439,7 +3455,7 @@ html[data-keyboard] .lightink-note-textarea {
 .lightink-reader-selection-toolbar {
   padding: 5px;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 76%, transparent);
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 95%, transparent);
   box-shadow: var(--lightink-shadow-pop);
   backdrop-filter: blur(22px) saturate(1.12);
@@ -3457,7 +3473,7 @@ html[data-keyboard] .lightink-note-textarea {
 }
 
 .lightink-reader-selection-color {
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
 }
 
 /* 阅读器内的滚动条与纸面协调。 */
@@ -3467,7 +3483,7 @@ html[data-keyboard] .lightink-note-textarea {
 
 .lightink-reader-scroll::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-muted) 46%, transparent);
   background-clip: content-box;
 }
@@ -3479,7 +3495,7 @@ html[data-keyboard] .lightink-note-textarea {
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
   padding: 22px 20px 32px;
-  border-radius: 14px;
+  border-radius: var(--lightink-radius-panel);
 }
 
 /* 翻页模式下纸页不描边，避免把满版绘本切成卡片。 */
@@ -3505,7 +3521,7 @@ html[data-keyboard] .lightink-note-textarea {
 
   .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
     padding: 24px 20px 32px;
-    border-radius: 14px;
+    border-radius: var(--lightink-radius-panel);
   }
 }
 

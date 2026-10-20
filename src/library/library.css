@@ -459,7 +459,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
   min-height: 32px;
   justify-self: center;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
   box-shadow: none;
 }
@@ -779,8 +779,10 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   color: var(--lightink-accent);
 }
 
-/* 折叠 chevron：小三角，对齐 11px 分区标签，避免看起来像导航项前缀。 */
+/* 折叠 chevron：小三角，对齐 11px 分区标签，避免看起来像导航项前缀。
+   视觉 16px，命中区用 ::after 撑到 28px（桌面最小触达）。 */
 .lightink-library-collapse-toggle {
+  position: relative;
   display: inline-grid;
   place-items: center;
   width: 16px;
@@ -789,6 +791,12 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-height: 16px;
   padding: 0;
   color: var(--lightink-muted);
+}
+
+.lightink-library-collapse-toggle::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 .lightink-library-collapse-chevron {
@@ -856,12 +864,20 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 }
 
 .lightink-library-section-filter-clear {
+  position: relative;
   width: 24px;
   min-width: 24px !important;
   height: 24px;
   min-height: 24px !important;
   color: var(--lightink-muted);
   font-size: 16px !important;
+}
+
+/* 视觉 24px（导航密度），命中区撑到 28px。 */
+.lightink-library-section-filter-clear::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
 }
 
 /* 分区空态：只在筛选无匹配时出现；无自定义分组不占一段说明文字。 */
@@ -1555,7 +1571,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   padding: 4px 12px;
   overflow: hidden;
   border: 1px solid var(--lightink-border) !important;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-bg-elevated) !important;
   color: var(--lightink-fg);
   font-size: 13px;
@@ -1597,7 +1613,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-height: 32px;
   padding: 4px 12px;
   border: 1px dashed var(--lightink-border) !important;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent !important;
   color: var(--lightink-muted);
   font-size: 13px;
@@ -1627,7 +1643,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-height: 28px;
   padding: 2px 10px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent-ink, var(--lightink-accent));
   font-size: 12px;
@@ -1885,7 +1901,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-height: 36px;
   padding: 6px 14px;
   border: 1px solid var(--lightink-border);
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-bg);
   color: var(--lightink-fg);
   font-size: 14px;
@@ -2284,7 +2300,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 .lightink-library-continue .lightink-library-cover-jacket-title::after,
 .lightink-library-item--row .lightink-library-cover-jacket-title::after {
   content: attr(data-cover-initial);
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-family: var(--lightink-font-cover);
   font-size: 14px;
   font-weight: 700;
 }
@@ -2464,7 +2480,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   align-items: center;
   min-height: 32px;
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-accent);
   color: var(--lightink-bg-elevated);
   font-size: 13px;
@@ -2475,7 +2491,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   min-height: 32px;
   padding: 4px 12px;
   border: 1px solid var(--lightink-border) !important;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent !important;
   color: var(--lightink-muted);
   font-size: 13px;
@@ -2527,7 +2543,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   min-height: 32px;
   padding: 4px 12px;
   border: 1px solid var(--lightink-border) !important;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent !important;
   color: var(--lightink-muted);
   font-size: 13px;
@@ -2616,8 +2632,8 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 .lightink-library-home-empty h2 {
   margin: 0;
   color: var(--lightink-fg);
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
-  font-size: 21px;
+  font-family: var(--lightink-font-cover);
+  font-size: var(--lightink-text-xl);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -2747,7 +2763,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   -webkit-line-clamp: 4;
   overflow: hidden;
   margin-top: 18%;
-  font-family: var(--lightink-font-serif, Georgia, 'Songti SC', 'Noto Serif CJK SC', serif);
+  font-family: var(--lightink-font-cover);
   font-size: clamp(12px, 1rem, 16px);
   font-weight: 700;
   line-height: 1.35;
@@ -3093,7 +3109,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
 .lightink-library-detail-format {
   margin: 2px 0 0;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-accent-soft);
   color: var(--lightink-accent-ink, var(--lightink-accent));
   font-size: 11px;
@@ -3106,7 +3122,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   height: 4px;
   margin-top: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
@@ -3952,7 +3968,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue-cu
   display: block;
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-bg-sunken, var(--lightink-border));
 }
 
@@ -4652,14 +4668,14 @@ html:not([data-android]):not([data-touch-primary])
   ) {
   gap: 2px;
   padding: 3px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 5%, transparent);
 }
 
 html:not([data-android]):not([data-touch-primary])
   .lightink-library
   button.lightink-library-header-assistant {
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: transparent;
   color: var(--lightink-muted);
   box-shadow: none;
@@ -4668,7 +4684,7 @@ html:not([data-android]):not([data-touch-primary])
 html:not([data-android]):not([data-touch-primary])
   .lightink-library
   button.lightink-library-header-import {
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-bg-elevated);
   color: var(--lightink-fg-strong, var(--lightink-fg));
   box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 12%, transparent);
@@ -5325,7 +5341,7 @@ html:not([data-android]):not([data-touch-primary])
     left: 50%;
     width: 36px;
     height: 4px;
-    border-radius: 999px;
+    border-radius: var(--lightink-radius-pill);
     background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
     transform: translate(-50%, -50%);
     pointer-events: none;
@@ -5786,7 +5802,7 @@ html:not([data-android]):not([data-touch-primary])
     margin: 4px auto 10px;
     padding: 0;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--lightink-radius-pill);
     background: color-mix(in srgb, var(--lightink-fg) 22%, transparent);
   }
 
@@ -6555,7 +6571,7 @@ html:not([data-android]):not([data-touch-primary])
 
 .lightink-library[data-library-nav='shelf'] .lightink-library-home::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-border);
   background-clip: content-box;
 }
@@ -6803,7 +6819,7 @@ html:not([data-android]):not([data-touch-primary])
   z-index: 2;
   min-width: 28px;
   min-height: 28px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-bg) 88%, transparent);
   color: var(--lightink-fg);
 }
@@ -6893,7 +6909,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-continue:fo
   height: 3px;
   margin-top: 5px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
@@ -7318,7 +7334,7 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 .lightink-library-book-source-download-progress {
   height: 4px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 12%, transparent);
 }
 
@@ -7556,7 +7572,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search {
   width: min(30rem, 40vw);
   padding: 0 32px 0 34px;
   border: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-bg-sunken) 38%, var(--lightink-bg-elevated));
   box-shadow: inset 0 1px 1px color-mix(in srgb, var(--lightink-fg) 4%, transparent);
   transition: border-color var(--lightink-duration-fast) var(--lightink-easing-standard),
@@ -7597,7 +7613,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-height: 32px !important;
   padding: 0 13px !important;
   border: 1px solid transparent !important;
-  border-radius: 999px !important;
+  border-radius: var(--lightink-radius-pill) !important;
   color: var(--lightink-fg) !important;
   font-size: 12.5px !important;
   font-weight: 550 !important;
@@ -7723,7 +7739,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-group-count {
   min-width: 20px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: color-mix(in srgb, var(--lightink-muted) 94%, transparent);
   font-size: 10.5px;
@@ -7837,7 +7853,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   width: min(240px, 100%);
   height: 4px;
   margin-top: 6px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 10%, transparent);
 }
 
@@ -7852,7 +7868,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   margin-left: auto;
   min-height: 38px;
   padding: 6px 22px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: var(--lightink-accent);
   color: var(--lightink-accent-contrast);
   font-size: 13px;
@@ -7875,13 +7891,13 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   min-width: 26px;
   height: 26px;
   min-height: 26px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-border) 60%, transparent);
 }
 
 .lightink-library-continue > .lightink-library-item-menu {
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
 }
 
 
@@ -8157,7 +8173,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
 .lightink-library-item-shell > .lightink-library-item-menu {
   top: 10px;
   right: 10px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 88%, transparent);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--lightink-fg) 18%, transparent);
   backdrop-filter: blur(10px);
@@ -8217,7 +8233,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:
   width: 30px !important;
   min-width: 30px !important;
   height: 30px !important;
-  border-radius: 999px !important;
+  border-radius: var(--lightink-radius-pill) !important;
   background: color-mix(in srgb, var(--lightink-bg-sunken) 55%, transparent) !important;
 }
 
@@ -8261,7 +8277,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:
 .lightink-library-detail-format {
   margin-top: 2px;
   padding: 2px 9px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-accent) 11%, transparent);
   color: var(--lightink-accent-ink, var(--lightink-accent));
   font-size: 10px;
@@ -8302,7 +8318,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:
   flex: 1 0 100%;
   min-height: 40px;
   border: none !important;
-  border-radius: 999px !important;
+  border-radius: var(--lightink-radius-pill) !important;
   background: var(--lightink-accent) !important;
   color: var(--lightink-accent-contrast) !important;
   font-size: 13.5px;
@@ -8489,7 +8505,7 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-item-shell:
 
 .lightink-onboarding-actions .lightink-onboarding-import {
   min-height: 38px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
 }
 
 .lightink-onboarding-footer {
@@ -8597,7 +8613,7 @@ html:not([data-android]):not([data-touch-primary])
   min-width: 26px;
   height: 26px;
   min-height: 26px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-bg-elevated) 82%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-border) 60%, transparent);
 }
@@ -8715,7 +8731,7 @@ html:not([data-android]):not([data-touch-primary])
 .lightink-library-shelf-head-count {
   min-width: 22px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--lightink-radius-pill);
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: color-mix(in srgb, var(--lightink-muted) 92%, transparent);
   font-size: 10.5px;

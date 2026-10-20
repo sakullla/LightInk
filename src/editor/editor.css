@@ -228,7 +228,7 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
   .lightink-tab-host.is-paper-card {
     margin-block: 12px 20px;
     padding: 30px 24px 48px;
-    border-radius: 14px;
+    border-radius: var(--lightink-radius-panel);
   }
 
   .lightink-tab-host.is-paper-card::before {
