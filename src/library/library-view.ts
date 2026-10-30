@@ -1188,7 +1188,7 @@ function jacketHash(title: string): number {
   return hash;
 }
 
-/** Stable 0–359 hue from the title so a book keeps its jacket colour across reloads. */
+/** Stable 0–359 hue from the title. A row may shift this so neighbours differ. */
 export function jacketHue(title: string): number {
   // Spread neighbouring titles apart instead of clustering near one hue.
   return Math.abs(jacketHash(title) * 137) % 360;
@@ -1199,10 +1199,50 @@ export const JACKET_MOTIFS = ['rings', 'bands', 'diamond'] as const;
 
 export type JacketMotif = (typeof JACKET_MOTIFS)[number];
 
+/** Step used when the title hue matches the previous jacket in the same row. */
+const JACKET_HUE_GAP = 48;
+
+export interface PlacedJacket {
+  readonly hue: number;
+  readonly motif: JacketMotif;
+}
+
 /** Stable motif from the title. Not a recolour of the same ring pattern. */
 export function jacketMotif(title: string): JacketMotif {
   const index = Math.abs(jacketHash(title)) % JACKET_MOTIFS.length;
   return JACKET_MOTIFS[index] ?? 'rings';
+}
+
+/**
+ * Place coverless jackets in display order.
+ * The title hash is the start. If that hue matches the previous jacket, add
+ * {@link JACKET_HUE_GAP}. Any four in a row use at least two motifs.
+ * The result depends only on the title sequence, so a reload of the same order matches.
+ */
+export function placeJacketFaces(titles: readonly string[]): PlacedJacket[] {
+  const placed: PlacedJacket[] = [];
+  for (const title of titles) {
+    let hue = jacketHue(title);
+    let motif = jacketMotif(title);
+    const previous = placed[placed.length - 1];
+    if (previous !== undefined && hue === previous.hue) {
+      hue = (hue + JACKET_HUE_GAP) % 360;
+    }
+    if (placed.length >= 3) {
+      const motifs = new Set<JacketMotif>([
+        placed[placed.length - 3]!.motif,
+        placed[placed.length - 2]!.motif,
+        placed[placed.length - 1]!.motif,
+        motif,
+      ]);
+      if (motifs.size < 2) {
+        const next = (JACKET_MOTIFS.indexOf(motif) + 1) % JACKET_MOTIFS.length;
+        motif = JACKET_MOTIFS[next] ?? 'bands';
+      }
+    }
+    placed.push({ hue, motif });
+  }
+  return placed;
 }
 
 /** 进度阶段文案键（模板串键无法通过 MessageKey 类型，显式映射）。 */
@@ -4780,6 +4820,48 @@ export function createLibraryView(
     navigation.hidden = breadcrumbs.hidden && pager.hidden;
   }
 
+  interface WallJacketSlot {
+    id: string;
+    title: string;
+    coverless: boolean;
+  }
+
+  let wallJacketSlots: WallJacketSlot[] = [];
+  let wallJacketFaces = new Map<string, PlacedJacket>();
+
+  function syncWallJacketFaces(shown: readonly DisplayItem[], heroId: string | null): void {
+    wallJacketSlots = [];
+    for (const display of shown) {
+      if (heroId !== null && display.item.id === heroId) continue;
+      wallJacketSlots.push({
+        id: display.item.id,
+        title: displayBookTitle(display.item),
+        coverless: safeCoverUrl(display.item, sources) === undefined,
+      });
+    }
+    const coverless = wallJacketSlots.filter((slot) => slot.coverless);
+    const faces = placeJacketFaces(coverless.map((slot) => slot.title));
+    wallJacketFaces = new Map();
+    coverless.forEach((slot, index) => {
+      const face = faces[index];
+      if (face !== undefined) wallJacketFaces.set(slot.id, face);
+    });
+  }
+
+  /** A failed image joins the coverless row at its current index. Earlier faces stay put. */
+  function faceAfterCoverError(item: LibraryItem): PlacedJacket | undefined {
+    const slot = wallJacketSlots.find((entry) => entry.id === item.id);
+    if (slot === undefined) return undefined;
+    slot.coverless = true;
+    const titles: string[] = [];
+    for (const entry of wallJacketSlots) {
+      if (!entry.coverless) continue;
+      titles.push(entry.title);
+      if (entry.id === item.id) break;
+    }
+    return placeJacketFaces(titles).at(-1);
+  }
+
   function appendCover(cover: HTMLElement, display: DisplayItem, plainJacket = false): void {
     const coverUrl = safeCoverUrl(display.item, sources);
     if (coverUrl !== undefined) {
@@ -4792,6 +4874,8 @@ export function createLibraryView(
       image.addEventListener('load', () => image.classList.add('is-loaded'));
       image.addEventListener('error', () => {
         image.remove();
+        const face = faceAfterCoverError(display.item);
+        if (face !== undefined) wallJacketFaces.set(display.item.id, face);
         appendJacket(cover, display.item, plainJacket);
       });
       cover.appendChild(image);
@@ -4827,10 +4911,13 @@ export function createLibraryView(
    */
   function appendJacket(cover: HTMLElement, item: LibraryItem, plain = false): void {
     const title = displayBookTitle(item);
+    const base = { hue: jacketHue(title), motif: jacketMotif(title) };
+    // Continue strip is one thumb, not a neighbour in the cover row.
+    const placed = plain ? base : (wallJacketFaces.get(item.id) ?? base);
     const initial = title.slice(0, 1);
     cover.classList.add('lightink-library-cover--jacket');
-    cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
-    cover.dataset.jacketMotif = jacketMotif(title);
+    cover.style.setProperty('--lightink-library-jacket-hue', String(placed.hue));
+    cover.dataset.jacketMotif = placed.motif;
     cover.dataset.coverInitial = initial === '' ? '?' : initial.toUpperCase();
     // Shelf home keeps the title under the cover only.
     if (plain) return;
@@ -5530,6 +5617,7 @@ export function createLibraryView(
       activeSection === 'shelf' && !catalogActive() && !continueHost.hidden
         ? (latestInProgress()?.item.id ?? null)
         : null;
+    syncWallJacketFaces(shown, heroId);
     let renderedCatalogGroup: string | undefined;
     for (const display of shown) {
       if (heroId !== null && display.item.id === heroId) continue;

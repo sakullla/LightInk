@@ -25,6 +25,7 @@ import {
   createLibraryView,
   jacketHue,
   jacketMotif,
+  placeJacketFaces,
   type LibraryViewDependencies,
 } from '../library-view.js';
 import { ONBOARDING_DONE_KEY } from '../onboarding-guide.js';
@@ -2106,13 +2107,24 @@ describe('LibraryView my-books home', () => {
   });
 
   it('splits adjacent coverless jackets by hue and uses at least two motifs', async () => {
-    const titles = ['围城', '活着', '三体', '边城'] as const;
+    // 这四本按书名哈希会全部落到 rings，且后两本色相都是 345。
+    const titles = ['活着', '三体', '百年孤独', '挪威的森林'] as const;
+    expect(titles.map((title) => jacketMotif(title))).toEqual(['rings', 'rings', 'rings', 'rings']);
+    expect(jacketHue('百年孤独')).toBe(jacketHue('挪威的森林'));
+    const placed = placeJacketFaces(titles);
+    expect(placeJacketFaces(titles)).toEqual(placed);
+    for (let index = 1; index < placed.length; index += 1) {
+      expect(placed[index]!.hue).not.toBe(placed[index - 1]!.hue);
+    }
+    expect(new Set(placed.map((face) => face.motif)).size).toBeGreaterThanOrEqual(2);
+
     const books = titles.map((title, index) =>
       localItem({
         id: `local:/books/jacket-${index}.epub`,
         title,
         authors: ['作者'],
         localPath: `/books/jacket-${index}.epub`,
+        updatedAt: 1_000 - index,
       }),
     );
     const base = dependencies();
@@ -2124,19 +2136,36 @@ describe('LibraryView my-books home', () => {
     const view = createLibraryView(host, deps);
     await view.show();
 
-    const covers = titles.map((title, index) => {
-      const cover = itemRow(host, books[index]!.id).querySelector<HTMLElement>('.lightink-library-cover')!;
-      expect(cover.querySelector('img')).toBeNull();
-      expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(title);
-      expect(cover.dataset.jacketMotif).toBe(jacketMotif(title));
-      return cover;
+    const readCovers = () =>
+      titles.map((title, index) => {
+        const cover = itemRow(host, books[index]!.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+        expect(cover.querySelector('img')).toBeNull();
+        expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(title);
+        return cover;
+      });
+    const covers = readCovers();
+    const wallOrder = [
+      ...host.querySelectorAll('.lightink-library-cover-wall .lightink-library-item--cover'),
+    ].map((row) => row.getAttribute('data-item-id'));
+    expect(wallOrder).toEqual(books.map((book) => book.id));
+    covers.forEach((cover, index) => {
+      expect(Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(placed[index]!.hue);
+      expect(cover.dataset.jacketMotif).toBe(placed[index]!.motif);
     });
     const hues = covers.map((cover) => Number(cover.style.getPropertyValue('--lightink-library-jacket-hue')));
     for (let index = 1; index < hues.length; index += 1) {
       expect(hues[index]).not.toBe(hues[index - 1]);
     }
     expect(new Set(covers.map((cover) => cover.dataset.jacketMotif)).size).toBeGreaterThanOrEqual(2);
+
     view.destroy();
+    const again = createLibraryView(host, deps);
+    await again.show();
+    readCovers().forEach((cover, index) => {
+      expect(Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(placed[index]!.hue);
+      expect(cover.dataset.jacketMotif).toBe(placed[index]!.motif);
+    });
+    again.destroy();
   });
 
   it('keeps the workspace travel control hidden on the shelf', async () => {
