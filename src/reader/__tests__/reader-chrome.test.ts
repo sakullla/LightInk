@@ -1047,6 +1047,9 @@ describe('createReaderChrome desktop keeps five actions on the top bar', () => {
       /\.lightink-reader-chrome-action-label\s*\{[^}]*white-space:\s*nowrap/,
     );
     expect(css).toMatch(
+      /\.lightink-reader-chrome-title\s*\{[^}]*flex:\s*100 1 0%[^}]*max-width:\s*max-content[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+    );
+    expect(css).toMatch(
       /\.lightink-reader-chrome-action\s*\{[^}]*flex-shrink:\s*0[^}]*isolation:\s*isolate/,
     );
   });

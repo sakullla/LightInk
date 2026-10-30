@@ -98,11 +98,14 @@
   max-width: 100%;
 }
 
-/* Book title between back and tools: muted, single-line, clipped. The left
-   drag region still fills remaining space so the bar stays draggable. */
+/* Book title between back and tools. A nowrap title's max-content flex base
+   wraps the bar onto a second row and covers the first text line. Basis 0
+   keeps it on the first row; a large grow factor then yields to max-content,
+   so a wide window still shows the full title and a narrow one ellipsizes. */
 .lightink-reader-chrome-title {
-  flex: 0 1 auto;
+  flex: 100 1 0%;
   min-width: 0;
+  max-width: max-content;
   padding: 0 0.5rem;
   overflow: hidden;
   color: var(--lightink-muted);

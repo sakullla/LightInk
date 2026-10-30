@@ -1170,7 +1170,7 @@ export function totalColumnCount(
 
 /**
  * 宽窗可以开对开，但正文只够一栏时改成单栏铺满，不再补空白右页。
- * measuredColumns ≤ 0 表示宿主还没排出 CSS columns（jsdom 的 scrollWidth），
+ * measuredColumns ≤ 0 表示还没有可测的列框（jsdom 不排 CSS columns），
  * 保留按宽度算出的栏数。
  */
 export function flowSpreadColumnsForContent(
@@ -1187,6 +1187,82 @@ export function flowSpreadColumnsForContent(
     return 1;
   }
   return layoutColumns;
+}
+
+/** 相对分栏容器内容盒左缘的文本片段。 */
+export interface SpreadFragmentBox {
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * 两栏定宽后，内容没溢出客户区时 scrollWidth === clientWidth，空的右栏和
+ * 写满的两栏无法区分。片段中心落在第几栏才算占用：只在左栏则为 1。
+ * 宽于一栏的盒子（容器自身）忽略。没有任何可测片段时返回 0。
+ */
+export function spreadColumnsFromFragments(
+  fragments: readonly SpreadFragmentBox[],
+  columnWidth: number,
+  gap: number,
+): number {
+  if (!Number.isFinite(columnWidth) || columnWidth <= 0) {
+    return 0;
+  }
+  const stride = columnWidth + Math.max(0, gap);
+  const maxFragmentWidth = columnWidth + Math.max(0, gap) * 0.5;
+  let occupied = 0;
+  for (const box of fragments) {
+    if (!(box.width > 0) || !(box.height > 0) || box.width > maxFragmentWidth) {
+      continue;
+    }
+    const center = box.left + box.width / 2;
+    if (!Number.isFinite(center) || center < 0) {
+      continue;
+    }
+    const columns = Math.floor(center / stride) + 1;
+    if (columns > occupied) {
+      occupied = columns;
+    }
+  }
+  return occupied;
+}
+
+/**
+ * 读 spread 里文本片段的列框。clientWidth 为 0（jsdom）时返回 0，
+ * 不把「没排出来」误判成只占一栏。
+ */
+function measuredSpreadColumns(pageBox: HTMLElement, columnWidth: number, gap: number): number {
+  if (pageBox.clientWidth <= 0) {
+    return 0;
+  }
+  const doc = pageBox.ownerDocument;
+  if (doc.defaultView === null || typeof doc.createRange !== 'function') {
+    return 0;
+  }
+  let rects: DOMRectList;
+  try {
+    const range = doc.createRange();
+    range.selectNodeContents(pageBox);
+    rects = range.getClientRects();
+  } catch {
+    return 0;
+  }
+  const origin = pageBox.getBoundingClientRect();
+  const scrollLeft = pageBox.scrollLeft || 0;
+  const fragments: SpreadFragmentBox[] = [];
+  for (let i = 0; i < rects.length; i += 1) {
+    const rect = rects.item(i);
+    if (rect === null) {
+      continue;
+    }
+    fragments.push({
+      left: rect.left - origin.left + scrollLeft,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+  return spreadColumnsFromFragments(fragments, columnWidth, gap);
 }
 
 /** 编排壳注入的回调：状态机/进度/标注/搜索与工具栏均留在 reader-view。 */
@@ -1977,7 +2053,8 @@ export function createFlowRenderer(
     frame.style.background = readerPaperColor(root);
     if (widthUsable && columns > 1) {
       void pageBox.offsetWidth;
-      const measured = totalColumnCount(pageBox.scrollWidth, columnWidth, gap);
+      // scrollWidth 在右栏还空着时也等于客户区，不能用来判断只占一栏。
+      const measured = measuredSpreadColumns(pageBox, columnWidth, gap);
       if (flowSpreadColumnsForContent(columns, measured) <= 1) {
         columns = 1;
         gap = 0;

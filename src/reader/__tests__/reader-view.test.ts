@@ -13,6 +13,7 @@ import {
   createFlowRenderer,
   FLOW_CHAPTER_EVICT_IDLE_MS,
   flowSpreadColumnsForContent,
+  spreadColumnsFromFragments,
   mapFrameClientRect,
   resolveFlowFrameClick,
   shouldDeferFlowPointerTap,
@@ -394,6 +395,76 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     document.body.replaceChildren();
   });
 
+  const withSpreadColumnFragments = (
+    doc: Document,
+    metrics: {
+      clientWidth: number;
+      scrollWidth: number;
+      fragments: readonly { left: number; width: number; height: number }[];
+    },
+    run: () => void,
+  ): void => {
+    const owner = doc.defaultView ?? window;
+    const proto = owner.HTMLElement.prototype;
+    const originalClient = Object.getOwnPropertyDescriptor(proto, 'clientWidth');
+    const originalScroll = Object.getOwnPropertyDescriptor(proto, 'scrollWidth');
+    const rangeProto = owner.Range.prototype;
+    const originalRects = rangeProto.getClientRects;
+    const isSpread = (el: HTMLElement): boolean => el.classList.contains('lightink-reader-spread');
+    Object.defineProperty(proto, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (isSpread(this)) {
+          return metrics.clientWidth;
+        }
+        const inherited = originalClient?.get;
+        return typeof inherited === 'function' ? (inherited.call(this) as number) : 0;
+      },
+    });
+    Object.defineProperty(proto, 'scrollWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (isSpread(this)) {
+          return metrics.scrollWidth;
+        }
+        const inherited = originalScroll?.get;
+        return typeof inherited === 'function' ? (inherited.call(this) as number) : 0;
+      },
+    });
+    rangeProto.getClientRects = () =>
+      ({
+        length: metrics.fragments.length,
+        item: (index: number) => {
+          const box = metrics.fragments[index];
+          if (box === undefined) {
+            return null;
+          }
+          return {
+            left: box.left,
+            top: 0,
+            width: box.width,
+            height: box.height,
+            right: box.left + box.width,
+            bottom: box.height,
+            x: box.left,
+            y: 0,
+            toJSON: () => ({}),
+          } as DOMRect;
+        },
+      }) as DOMRectList;
+    try {
+      run();
+    } finally {
+      if (originalClient) {
+        Object.defineProperty(proto, 'clientWidth', originalClient);
+      }
+      if (originalScroll) {
+        Object.defineProperty(proto, 'scrollWidth', originalScroll);
+      }
+      rangeProto.getClientRects = originalRects;
+    }
+  };
+
   const withSpreadScrollWidth = (doc: Document, scrollWidth: number, run: () => void): void => {
     const owner = doc.defaultView?.HTMLElement ?? HTMLElement;
     const proto = owner.prototype;
@@ -724,9 +795,42 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(page.columns).toBe(2);
     expect(flowSpreadColumnsForContent(2, 1)).toBe(1);
     expect(flowSpreadColumnsForContent(2, 0)).toBe(2);
-    withSpreadScrollWidth(doc, page.columnWidth, () => {
-      renderer.applyPaginatedDocument(iframe, doc);
-    });
+    expect(
+      spreadColumnsFromFragments(
+        [
+          { left: 0, width: page.columnWidth, height: 28 },
+          { left: 0, width: 40, height: 20 },
+        ],
+        page.columnWidth,
+        page.gap,
+      ),
+    ).toBe(1);
+    expect(
+      spreadColumnsFromFragments(
+        [
+          { left: 0, width: page.columnWidth, height: 28 },
+          { left: page.columnWidth + page.gap, width: 80, height: 20 },
+        ],
+        page.columnWidth,
+        page.gap,
+      ),
+    ).toBe(2);
+    // Chromium：只填满左栏时 scrollWidth 仍等于两栏客户区，不能再把 scrollWidth 桩成单栏宽。
+    const spreadWidth = page.columnWidth * 2 + page.gap;
+    withSpreadColumnFragments(
+      doc,
+      {
+        clientWidth: spreadWidth,
+        scrollWidth: spreadWidth,
+        fragments: [
+          { left: 0, width: page.columnWidth, height: 28.8 },
+          { left: 0, width: 160, height: 21 },
+        ],
+      },
+      () => {
+        renderer.applyPaginatedDocument(iframe, doc);
+      },
+    );
     const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
     expect(pageBox.style.columnCount).toBe('1');
     expect(pageBox.style.columnWidth).toBe(`${inner}px`);
@@ -735,6 +839,65 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(doc.querySelector('.lightink-reader-column-pad')).toBeNull();
     expect(iframe.dataset.readerColumns).toBe('1');
     expect(chapter.dataset.readerColumns).toBe('1');
+    iframe.remove();
+    chapter.remove();
+  });
+
+  it('keeps facing pages when column fragments reach the right page even if scrollWidth equals the spread', () => {
+    const hooks: FlowRendererHooks = {
+      t: (key) => key,
+      remoteImagePolicy: sessionRemoteImagePolicy,
+      syncState: () => undefined,
+      applyPendingRestore: () => undefined,
+      renderHighlights: () => undefined,
+      handleNoteMarkClick: () => false,
+      onSelectionMouseUp: () => undefined,
+      openSearch: () => undefined,
+      advanceReading: () => false,
+      advancePagedWheel: () => false,
+      dismissSelectionToolbar: () => false,
+      isLayoutSwitching: () => false,
+      scrollContainer: () => document.body,
+    };
+    const root = document.createElement('div');
+    const chapter = document.createElement('article');
+    chapter.className = 'lightink-reader-chapter is-active';
+    const scrollHost = document.createElement('div');
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(scrollHost, 'clientHeight', { configurable: true, value: 800 });
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, hooks);
+    const iframe = document.createElement('iframe');
+    chapter.appendChild(iframe);
+    document.body.appendChild(chapter);
+    const doc = iframe.contentDocument!;
+    doc.body.innerHTML = '<p>写满左右两栏</p>';
+    const inner = 1100 - readerPageInnerPadPx(16, false) * 2;
+    const page = readerFlowSpreadFromTypography(inner, 16, DEFAULT_READER_TYPOGRAPHY);
+    const spreadWidth = page.columnWidth * 2 + page.gap;
+    expect(page.columns).toBe(2);
+    withSpreadColumnFragments(
+      doc,
+      {
+        clientWidth: spreadWidth,
+        scrollWidth: spreadWidth,
+        fragments: [
+          { left: 0, width: page.columnWidth, height: 700 },
+          { left: page.columnWidth + page.gap, width: page.columnWidth, height: 320 },
+        ],
+      },
+      () => {
+        renderer.applyPaginatedDocument(iframe, doc);
+      },
+    );
+    const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
+    expect(pageBox.style.columnCount).toBe('2');
+    expect(pageBox.style.columnWidth).toBe(`${page.columnWidth}px`);
+    expect(pageBox.style.width).toBe(`${spreadWidth}px`);
+    expect(doc.querySelector('.lightink-reader-column-pad')).toBeNull();
+    expect(iframe.dataset.readerColumns).toBe('2');
+    expect(chapter.dataset.readerColumns).toBe('2');
     iframe.remove();
     chapter.remove();
   });
