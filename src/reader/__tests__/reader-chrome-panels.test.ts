@@ -1710,7 +1710,7 @@ describe('reader chrome panels', () => {
     host.remove();
   });
 
-  it('reveals footer four tools and top-bar 回书架 by tap, then docks the sheet above the footer', () => {
+  it('opens top-bar tools already expanded, then docks the sheet above the footer', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     host.className = 'lightink-reader';
@@ -1730,7 +1730,7 @@ describe('reader chrome panels', () => {
     };
     const chrome = createReaderChrome(host, { touchMode: true, ...deps });
 
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     expect(host.querySelector('#lightink-toolbar')).toBeNull();
     expect(host.querySelector('#lightink-tabbar')).toBeNull();
     expect(host.querySelector('#lightink-chrome-host')).toBeNull();
@@ -1743,8 +1743,8 @@ describe('reader chrome panels', () => {
     expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
     expect(chrome.footer.contains(actionButton(host, 'backToShelf'))).toBe(false);
     for (const action of THUMB_ACTIONS) {
-      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(true);
-      expect(chrome.bar.contains(actionButton(host, action)), action).toBe(false);
+      expect(chrome.bar.contains(actionButton(host, action)), action).toBe(true);
+      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(false);
     }
     const shown = page.getBoundingClientRect();
     expect(shown.top).toBe(before.top);
@@ -1769,7 +1769,7 @@ describe('reader chrome panels', () => {
     page.dispatchEvent(
       new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 180, clientY: 280 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     const hidden = page.getBoundingClientRect();
     expect(hidden.top).toBe(before.top);
     expect(hidden.height).toBe(before.height);
@@ -1811,7 +1811,7 @@ describe('reader chrome panels', () => {
     }
   });
 
-  it('keeps comic progress-dock suppression from hiding the shared footer tools', () => {
+  it('keeps comic progress-dock suppression from hiding the top-bar tools', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     document.body.append(host);
@@ -1826,9 +1826,11 @@ describe('reader chrome panels', () => {
       toggleSidebar: vi.fn(),
     });
     chrome.reveal();
-    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.footer.hidden).toBe(true);
+    expect(chrome.bar.hidden).toBe(false);
     for (const action of THUMB_ACTIONS) {
-      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action)), action).toBe(true);
+      expect(actionButton(host, action).hidden, action).toBe(false);
     }
     chrome.footer.getBoundingClientRect = () =>
       ({
@@ -1842,7 +1844,7 @@ describe('reader chrome panels', () => {
     const panel = document.createElement('div');
     positionReaderChromePanel(panel, host, actionButton(host, 'typography'));
     expect(panel.classList.contains('is-touch-sheet')).toBe(true);
-    expect(panel.style.bottom).toBe('calc(64px + var(--lightink-keyboard-inset, 0px))');
+    expect(panel.style.bottom).toBe('calc(0px + var(--lightink-keyboard-inset, 0px))');
     chrome.destroy();
   });
 
