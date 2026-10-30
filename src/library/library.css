@@ -4488,6 +4488,7 @@ html[data-display] .lightink-library[data-library-nav-collapsed='true'] {
   .lightink-library-status-shimmer {
     animation: none !important;
     transition: none !important;
+    transform: none !important;
     scroll-behavior: auto !important;
   }
 
@@ -7925,7 +7926,12 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
     box-shadow var(--lightink-duration-base, 180ms) var(--lightink-easing-standard, ease);
 }
 
-.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item-shell,
+/* 书壳随 minmax(152px, 1fr) 的列宽变大，不再钉在约 190px。导入卡不在这条里。 */
+.lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item-shell {
+  width: 100%;
+  max-width: none;
+}
+
 .lightink-library[data-library-nav='shelf'] .lightink-library-home .lightink-library-item--import {
   max-width: 190px;
 }
@@ -8912,5 +8918,76 @@ html:not([data-android]):not([data-touch-primary])
     > .lightink-library-manage-group:not(:has(> .lightink-library-manage-group-toggle[aria-expanded='true'])) {
     grid-column: auto;
   }
+}
+
+/* ---- D. 封面壳取消约 190px 上限，随列宽变大；导入卡宽度锁不动 ----
+ * 前面同特异度的 180px / 190px 会把书壳钉死，少书时下半屏是空的。
+ * 用与继续阅读相同的桌面前缀压过那些规则。导入卡仍走既有 max-width。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library[data-library-nav='shelf']
+  .lightink-library-home
+  .lightink-library-item-shell {
+  width: 100%;
+  max-width: none;
+}
+
+/* 无封面书：书名哈希选出的图形，不是同一套同心圆换色。
+   rings 沿用 .lightink-library-cover-motif 的环纹。 */
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='bands']
+  .lightink-library-cover-motif,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='bands']
+  .lightink-library-cover-motif {
+  top: 0;
+  right: 0;
+  left: 0;
+  width: 100%;
+  height: 38%;
+  aspect-ratio: auto;
+  border-radius: 0;
+  opacity: 0.85;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0 9px,
+    color-mix(in srgb, #fff 22%, transparent) 9px 10px
+  );
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='bands']
+  .lightink-library-cover-motif::after,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='bands']
+  .lightink-library-cover-motif::after {
+  display: none;
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='diamond']
+  .lightink-library-cover-motif,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='diamond']
+  .lightink-library-cover-motif {
+  top: 14%;
+  right: 18%;
+  left: auto;
+  width: 42%;
+  border-radius: 0;
+  opacity: 0.9;
+  transform: rotate(45deg);
+  background:
+    linear-gradient(135deg, transparent 42%, color-mix(in srgb, #fff 28%, transparent) 42% 50%, transparent 50%),
+    linear-gradient(45deg, transparent 42%, color-mix(in srgb, #fff 16%, transparent) 42% 50%, transparent 50%);
+}
+
+html:not([data-android]):not([data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='diamond']
+  .lightink-library-cover-motif::after,
+:is(html[data-android], html[data-touch-primary])
+  .lightink-library-cover--jacket[data-jacket-motif='diamond']
+  .lightink-library-cover-motif::after {
+  border-radius: 0;
+  inset: 22%;
 }
 

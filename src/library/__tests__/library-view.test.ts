@@ -24,6 +24,7 @@ import {
   CONTINUE_LAST_OPENED_KEY,
   createLibraryView,
   jacketHue,
+  jacketMotif,
   type LibraryViewDependencies,
 } from '../library-view.js';
 import { ONBOARDING_DONE_KEY } from '../onboarding-guide.js';
@@ -1055,6 +1056,7 @@ describe('LibraryView my-books home', () => {
     expect(hue).toBe(jacketHue('围城'));
     expect(hue).toBeGreaterThanOrEqual(0);
     expect(hue).toBeLessThan(360);
+    expect(cover.dataset.jacketMotif).toBe(jacketMotif('围城'));
     expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('围城');
     expect(cover.querySelector('.lightink-library-cover-jacket-author')?.textContent).toBe('钱钟书');
     expect(itemRow(host, bare.id).textContent).toContain('围城');
@@ -1076,6 +1078,9 @@ describe('LibraryView my-books home', () => {
     expect(css).toMatch(
       /\.lightink-library-cover--jacket\s*\{[^}]*hsl\(var\(--lightink-library-jacket-h\)/,
     );
+    expect(css).toMatch(/data-jacket-motif='bands'[\s\S]*?repeating-linear-gradient/);
+    expect(css).toMatch(/data-jacket-motif='diamond'/);
+    expect(css).toMatch(/\.lightink-library-cover-motif[\s\S]*?repeating-radial-gradient/);
     expect(css).toMatch(
       /\.lightink-library-continue \.lightink-library-cover-jacket-title::after[^{]*\{[^}]*content:\s*attr\(data-cover-initial\)/,
     );
@@ -2090,6 +2095,47 @@ describe('LibraryView my-books home', () => {
     expect(image.classList.contains('lightink-library-cover-img')).toBe(true);
     image.dispatchEvent(new Event('load'));
     expect(image.classList.contains('is-loaded')).toBe(true);
+    expect(image.closest('.lightink-library-cover')?.querySelector('.lightink-library-cover-motif')).toBeNull();
+    image.dispatchEvent(new Event('error'));
+    const failed = itemRow(host, cover.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    expect(failed.querySelector('img')).toBeNull();
+    expect(failed.classList.contains('lightink-library-cover--jacket')).toBe(true);
+    expect(failed.dataset.jacketMotif).toBe(jacketMotif('河山记'));
+    expect(failed.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe('河山记');
+    view.destroy();
+  });
+
+  it('splits adjacent coverless jackets by hue and uses at least two motifs', async () => {
+    const titles = ['围城', '活着', '三体', '边城'] as const;
+    const books = titles.map((title, index) =>
+      localItem({
+        id: `local:/books/jacket-${index}.epub`,
+        title,
+        authors: ['作者'],
+        localPath: `/books/jacket-${index}.epub`,
+      }),
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => books) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const covers = titles.map((title, index) => {
+      const cover = itemRow(host, books[index]!.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+      expect(cover.querySelector('img')).toBeNull();
+      expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(title);
+      expect(cover.dataset.jacketMotif).toBe(jacketMotif(title));
+      return cover;
+    });
+    const hues = covers.map((cover) => Number(cover.style.getPropertyValue('--lightink-library-jacket-hue')));
+    for (let index = 1; index < hues.length; index += 1) {
+      expect(hues[index]).not.toBe(hues[index - 1]);
+    }
+    expect(new Set(covers.map((cover) => cover.dataset.jacketMotif)).size).toBeGreaterThanOrEqual(2);
     view.destroy();
   });
 
@@ -8911,6 +8957,9 @@ describe('LibraryView home visual system (R2)', () => {
     );
     expect(reduce).toMatch(
       /\.lightink-library-cover-wall \.lightink-library-cover[\s\S]*?transition:\s*none\s*!important/,
+    );
+    expect(reduce).toMatch(
+      /\.lightink-library-cover-wall \.lightink-library-cover[\s\S]*?transform:\s*none\s*!important/,
     );
     expect(reduce).toMatch(/scroll-behavior:\s*auto\s*!important/);
   });

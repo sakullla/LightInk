@@ -1179,14 +1179,30 @@ function matchesShelfQuery(item: LibraryItem, query: string): boolean {
   return `${itemTitle(item)}\n${itemAuthors(item).join('\n')}`.toLocaleLowerCase().includes(lowered);
 }
 
-/** Stable 0–359 hue from the title so a book keeps its jacket colour across reloads. */
-export function jacketHue(title: string): number {
+/** Stable signed hash so a title keeps its jacket colour and motif across reloads. */
+function jacketHash(title: string): number {
   let hash = 5381;
   for (let index = 0; index < title.length; index += 1) {
     hash = ((hash << 5) + hash + title.charCodeAt(index)) | 0;
   }
+  return hash;
+}
+
+/** Stable 0–359 hue from the title so a book keeps its jacket colour across reloads. */
+export function jacketHue(title: string): number {
   // Spread neighbouring titles apart instead of clustering near one hue.
-  return Math.abs(hash * 137) % 360;
+  return Math.abs(jacketHash(title) * 137) % 360;
+}
+
+/** Graphic structures for coverless jackets. Hue and motif both come from the title hash. */
+export const JACKET_MOTIFS = ['rings', 'bands', 'diamond'] as const;
+
+export type JacketMotif = (typeof JACKET_MOTIFS)[number];
+
+/** Stable motif from the title. Not a recolour of the same ring pattern. */
+export function jacketMotif(title: string): JacketMotif {
+  const index = Math.abs(jacketHash(title)) % JACKET_MOTIFS.length;
+  return JACKET_MOTIFS[index] ?? 'rings';
 }
 
 /** 进度阶段文案键（模板串键无法通过 MessageKey 类型，显式映射）。 */
@@ -4814,6 +4830,7 @@ export function createLibraryView(
     const initial = title.slice(0, 1);
     cover.classList.add('lightink-library-cover--jacket');
     cover.style.setProperty('--lightink-library-jacket-hue', String(jacketHue(title)));
+    cover.dataset.jacketMotif = jacketMotif(title);
     cover.dataset.coverInitial = initial === '' ? '?' : initial.toUpperCase();
     // Shelf home keeps the title under the cover only.
     if (plain) return;

@@ -92,6 +92,9 @@ describe('shelf home cover grid', () => {
     expect(css).toMatch(
       /\.lightink-library\[data-library-nav='shelf'\] \.lightink-library-cover-wall > \.lightink-library-item--import\s*\{[^}]*max-width:\s*180px/,
     );
+    expect(css).toMatch(
+      /html:not\(\[data-android\]\):not\(\[data-touch-primary\]\)\s+\.lightink-library\[data-library-nav='shelf'\]\s+\.lightink-library-home\s+\.lightink-library-item-shell\s*\{[^}]*max-width:\s*none/,
+    );
     expect(home).toMatch(/max-width:\s*148px/);
 
     const homeGrid = ruleBody(
