@@ -1153,10 +1153,23 @@ describe('readerPageSpread compact / narrow (R5)', () => {
   it('centers the paginated spread on the paper and caps scroll chapters to the measure', () => {
     const flow = readFileSync(resolve(process.cwd(), 'src/reader/flow-renderer.ts'), 'utf-8');
     expect(flow).toMatch(/pageBox\.style\.marginInline = 'auto'/);
+    expect(flow).toMatch(/flowSpreadColumnsForContent\(columns, measured\)/);
     expect(flow).toMatch(/'margin-left',\s*\n\s*'margin-right',/);
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).toMatch(
       /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-chapter\s*\{[^}]*max-width:\s*max\(var\(--lightink-reader-measure,\s*22rem\),\s*min\(42rem,\s*100%\)\)[^}]*margin-inline:\s*auto/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader:not\(\[data-reading-layout='scroll'\]\) \.lightink-reader-scroll\s*\{[^}]*padding-top:\s*calc\(52px \+ var\(--lightink-reader-line-height, 1\.8\) \* 1em\)[^}]*padding-bottom:\s*calc\(4\.75rem \+ 0\.85rem\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader\[data-reading-layout='scroll'\] \.lightink-reader-scroll\s*\{[^}]*padding-top:\s*calc\(60px \+ var\(--lightink-reader-line-height, 1\.8\) \* 1em\)[^}]*padding-bottom:\s*calc\(18px \+ 2\.2rem \+ 1\.6rem\)/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chapter\.is-active\[data-reader-columns='2'\]::after/,
+    );
+    expect(css).not.toMatch(
+      /\.lightink-reader-chapter\.is-active::after\s*\{[^}]*content:\s*''/,
     );
   });
 

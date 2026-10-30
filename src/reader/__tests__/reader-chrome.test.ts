@@ -1,43 +1,33 @@
 // @vitest-environment jsdom
 
 /**
- * Contract for `src/reader/reader-chrome.ts` (T3 / R4 / R5 + 搜索一等入口):
+ * Contract for `src/reader/reader-chrome.ts` (R1 / R4 / R5 + 搜索一等入口):
  *
  * `createReaderChrome(host, deps)` mounts an overlay on the reading host.
- * First paint is hidden except a 1px progress hairline. A page click
- * or a pointer near the top/bottom edge reveals six text-labeled actions
- * together with a progress footer:
+ * Text and PDF novels open with the top bar and progress footer already
+ * expanded. Idle (~3500ms), a page click, and Escape do not collapse them.
+ * The top bar carries:
  *   返回书架 · 目录 · 排版 · 书签 · 搜索 · 助手
- * 「返回书架」 is the first control (start of the top bar). It is the only
- * path that calls injected `returnToShelf`. 目录 / 排版 / 搜索 / 助手
- * call `openOutline` / `openTypography` / `openSearch` / `openAssistant`.
- * 书签 calls `toggleBookmark` and reflects `isBookmarked` as a two-state
- * toggle. 搜索 lives in the tools cluster and opens the annotation sidebar
- * (notes + in-book search); chrome does not add a second 本书标注 control.
- * 助手 (R5) opens the reader AI assistant panel and carries
- * aria-haspopup/aria-expanded like the other dialog actions.
+ * 「返回书架」 is the first control and the only path that calls
+ * `returnToShelf`. 目录 / 排版 / 搜索 / 助手 call `openOutline` /
+ * `openTypography` / `openSearch` / `openAssistant`. 书签 calls
+ * `toggleBookmark` and reflects `isBookmarked`. 搜索 lives in the tools
+ * cluster. 助手 carries aria-haspopup/aria-expanded like the other dialogs.
  *
  * The bar is out of document flow (`position: absolute|fixed|sticky`) so
- * reveal/dismiss does not change the reading area's top or height.
- * Idle auto-hide is 3500ms unless `isOverlayOpen()` is true; a pointer
- * resting on the bar/footer pauses the timer entirely.
+ * it does not change the reading area's top or height. The 24px edge band
+ * still calls reveal, but seeing the bar does not depend on it.
  *
  * `handleEscape()` closes one layer and never calls `returnToShelf`
  * (window-level leftover Escape owns 合书). Order:
- *   selection toolbar → annotation sidebar → dismissOverlay() → chrome bar.
- * Return true when a layer closed; false when nothing is open.
+ *   selection toolbar → annotation sidebar → dismissOverlay().
+ * Return true when a layer closed; false when nothing else is open.
+ * Escape does not hide the bars.
  *
- * Deps: `returnToShelf`, `openOutline`, `openSearch`, `openTypography`,
- * `toggleSidebar`, optional `isOverlayOpen`, `dismissOverlay`,
- * `isSidebarVisible`, `isSelectionToolbarVisible`, `hideSelectionToolbar`.
- *
- * Touch mode (`touchMode: true`): no idle auto-hide and no edge-hover
- * reveal — the chrome only leaves via center tap, Escape, or closing an
- * overlay. Desktop behavior above is unchanged when the flag is absent.
- * toc / typography / bookmark / search live in the footer thumb zone
- * (hit target ≥48×48, adjacent gap ≥8px) so they stay reachable after the
- * top bar is dismissed. backToShelf stays on the top bar with the same
- * 48×48 hit. Text books and comics share this reveal/dismiss chrome.
+ * Touch mode keeps the same actions on the top bar. They may wrap. Hit
+ * height stays 48px and the gap stays at least 8px. The footer is only
+ * chapter + progress. Comics keep comic chrome; novel progress docks stay
+ * suppressed.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -47,8 +37,10 @@ import { applyConcealScene, defaultConcealPrefs, type ConcealPrefs } from '../..
 import { translate } from '../../i18n/messages.js';
 import {
   createReaderChrome,
+  isReaderChromeEdge,
   parseReaderConcealOpacity,
   READER_CHROME_ACTIONS,
+  READER_CHROME_EDGE_PX,
   READER_CHROME_TOUCH_GAP_PX,
   READER_CHROME_TOUCH_HIT_PX,
   READER_CONCEAL_REFUSAL_KEYS,
@@ -145,14 +137,6 @@ function actionButton(root: ParentNode, action: string): HTMLButtonElement {
   return match!;
 }
 
-function footerThumbZone(footer: HTMLElement): HTMLElement {
-  return (
-    footer.querySelector<HTMLElement>('.lightink-reader-chrome-thumb') ??
-    footer.querySelector<HTMLElement>('.lightink-reader-chrome-tools') ??
-    footer
-  );
-}
-
 function declaredHitPx(el: HTMLElement): number {
   const computed = getComputedStyle(el);
   for (const raw of [el.style.minHeight, el.style.height, computed.minHeight, computed.height]) {
@@ -222,25 +206,27 @@ afterEach(() => {
 });
 
 describe('createReaderChrome first paint', () => {
-  it('starts hidden with no editor menus or markdown tab bar', () => {
+  it('opens expanded with no editor menus or markdown tab bar', () => {
     const { host, chrome } = mount();
 
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.bar.hidden).toBe(false);
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
     expect(host.querySelector('#lightink-toolbar')).toBeNull();
     expect(host.querySelector('#lightink-tabbar')).toBeNull();
     expect(host.querySelector('#lightink-chrome-host')).toBeNull();
     expect(host.textContent).not.toContain('文件');
     expect(host.textContent).not.toContain('插入');
-    expect(labeledButtons(host).some((button) => !button.hidden && button.offsetParent !== null)).toBe(
-      false,
-    );
+    expect(labeledButtons(host).every((button) => button.hidden === false)).toBe(true);
   });
 });
 
 describe('createReaderChrome reveal', () => {
-  it('reveals six text-labeled controls with 返回书架 first after a page click', () => {
+  it('opens six text-labeled controls with 返回书架 first and a page click leaves them up', () => {
     const { host, page, chrome } = mount();
 
+    expect(chrome.isRevealed()).toBe(true);
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
 
@@ -260,10 +246,11 @@ describe('createReaderChrome reveal', () => {
       expect(button.hasAttribute('data-tauri-drag-region')).toBe(false);
     }
     chrome.dismiss();
-    expect(bar?.hasAttribute('data-tauri-drag-region')).toBe(false);
-    expect(
-      host.querySelector('.lightink-reader-chrome-drag')?.hasAttribute('data-tauri-drag-region'),
-    ).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(bar?.getAttribute('data-tauri-drag-region')).toBe('');
+    expect(host.querySelector('.lightink-reader-chrome-drag')?.getAttribute('data-tauri-drag-region')).toBe(
+      '',
+    );
     chrome.reveal();
     for (const button of buttons) {
       expect(button.getAttribute('aria-label')?.trim()).toBe(button.textContent?.trim());
@@ -277,19 +264,15 @@ describe('createReaderChrome reveal', () => {
   it('notifies onRevealChange only on effective visibility transitions', () => {
     const onRevealChange = vi.fn();
     const { page, chrome } = mount({ onRevealChange });
-    // 挂载时 revealed=false 已是隐藏态，首次 syncDom 触发一次 false。
-    expect(onRevealChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealChange).toHaveBeenLastCalledWith(true);
     const mountCalls = onRevealChange.mock.calls.length;
 
     clickPage(page, 120);
     expect(chrome.isRevealed()).toBe(true);
-    expect(onRevealChange).toHaveBeenLastCalledWith(true);
     chrome.reveal();
-    expect(onRevealChange.mock.calls.length).toBe(mountCalls + 1);
-
     chrome.dismiss();
-    expect(onRevealChange).toHaveBeenLastCalledWith(false);
-    expect(onRevealChange.mock.calls.length).toBe(mountCalls + 2);
+    expect(onRevealChange).toHaveBeenLastCalledWith(true);
+    expect(onRevealChange.mock.calls.length).toBe(mountCalls);
   });
 
   it('uses English chrome labels when locale is en', () => {
@@ -314,43 +297,40 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.whisper.hidden).toBe(true);
   });
 
-  it('shows the idle whisper only when progress docks are not suppressed', () => {
+  it('keeps the chapter footer once progress docks are allowed again', () => {
     let covering = true;
     const { chrome } = mount({ suppressProgressDock: () => covering });
+    expect(chrome.footer.hidden).toBe(true);
     expect(chrome.whisper.hidden).toBe(true);
     covering = false;
-    chrome.dismiss();
-    expect(chrome.whisper.hidden).toBe(false);
-  });
-
-  it('keeps the idle whisper hairline in scroll mode; the full row stays CSS-collapsed', () => {
-    const { host, chrome } = mount();
-    host.dataset.readingLayout = 'scroll';
-    chrome.dismiss();
-    // ui-redesign §3.6：滚动模式不再整行藏起 whisper——CSS 把 idle 行压成
-    // 底部 2px 进度发丝线（DOM 可见性仍由 syncDom 单点管理）。
-    expect(chrome.whisper.hidden).toBe(false);
     chrome.reveal();
     expect(chrome.footer.hidden).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
-    chrome.dismiss();
-    expect(chrome.whisper.hidden).toBe(false);
   });
 
-  it('keeps the touch footer tools when comic progress docks are suppressed', () => {
+  it('keeps the chapter footer in scroll mode instead of dropping to the whisper', () => {
+    const { host, chrome } = mount();
+    host.dataset.readingLayout = 'scroll';
+    chrome.dismiss();
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-chapter')).not.toBeNull();
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-progress')).not.toBeNull();
+  });
+
+  it('keeps touch actions on the top bar when comic progress docks are suppressed', () => {
     const { host, chrome } = mount({
       touchMode: true,
       suppressProgressDock: () => true,
     });
-    expect(chrome.isRevealed()).toBe(false);
-    expect(chrome.whisper.hidden).toBe(true);
-    chrome.reveal();
-    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.footer.hidden).toBe(true);
     expect(chrome.whisper.hidden).toBe(true);
     expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
     expect(actionButton(host, 'backToShelf').hidden).toBe(false);
     for (const action of THUMB_ACTIONS) {
-      expect(chrome.footer.contains(actionButton(host, action))).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
+      expect(chrome.footer.contains(actionButton(host, action))).toBe(false);
       expect(actionButton(host, action).hidden).toBe(false);
     }
   });
@@ -364,15 +344,15 @@ describe('createReaderChrome reveal', () => {
     stubRect(page, { width: 720, height: 400 });
 
     clickPage(page, 120);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
 
     page.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('reveals when the pointer rests near the top or bottom edge', () => {
+  it('keeps the bars up when the pointer rests near the top or bottom edge', () => {
     const { host, chrome } = mount();
 
     host.dispatchEvent(
@@ -381,8 +361,6 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.isRevealed()).toBe(true);
 
     chrome.dismiss();
-    expect(chrome.isRevealed()).toBe(false);
-
     host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 394 }),
     );
@@ -390,9 +368,13 @@ describe('createReaderChrome reveal', () => {
   });
 
   it('covers the full 24px hover band including the capture dance end at y=22', () => {
-    // ui-redesign §5.6：24px 顶部悬停带必须完整覆盖 y≤24（含 22）——
-    // capture-ui.mjs revealReaderChrome 的舞蹈终点是 y=22，这是兼容约束。
+    // 24px 顶部悬停带必须完整覆盖 y≤24（含 22）。看见顶栏不再依赖这次唤出。
     const { host, chrome } = mount();
+    expect(READER_CHROME_EDGE_PX).toBe(24);
+    const bounds = { top: 0, height: 400 };
+    expect(isReaderChromeEdge(22, bounds)).toBe(true);
+    expect(isReaderChromeEdge(24, bounds)).toBe(true);
+    expect(isReaderChromeEdge(25, bounds)).toBe(false);
     host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 22 }),
     );
@@ -400,16 +382,9 @@ describe('createReaderChrome reveal', () => {
 
     chrome.dismiss();
     host.dispatchEvent(
-      new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 24 }),
-    );
-    expect(chrome.isRevealed()).toBe(true);
-
-    // 25 起在带外：中部坐标不再触发悬停唤出（单击切换不受影响）。
-    chrome.dismiss();
-    host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 640, clientY: 25 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
   it('reveals at the visible window top after the host has scrolled away', () => {
@@ -540,12 +515,12 @@ describe('createReaderChrome assistant entry (R5)', () => {
     expect(deps.returnToShelf).not.toHaveBeenCalled();
   });
 
-  it('keeps 助手 in the touch footer thumb zone', () => {
+  it('keeps 助手 on the touch top bar', () => {
     const { host, chrome } = mount({ touchMode: true });
     chrome.reveal();
     const assistant = actionButton(host, 'assistant');
-    expect(chrome.footer.contains(assistant)).toBe(true);
-    expect(chrome.bar.contains(assistant)).toBe(false);
+    expect(chrome.bar.contains(assistant)).toBe(true);
+    expect(chrome.footer.contains(assistant)).toBe(false);
     expect(assistant.hidden).toBe(false);
   });
 
@@ -606,13 +581,12 @@ describe('createReaderChrome bookmark toggle (R1)', () => {
     expect(button.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('keeps the bookmark toggle in the touch footer thumb zone with a 48px hit', () => {
+  it('keeps the bookmark toggle on the touch top bar with a 48px hit', () => {
     const { host, chrome, deps } = mount({ touchMode: true });
     chrome.reveal();
     const button = actionButton(host, 'bookmark');
-    const zone = footerThumbZone(chrome.footer);
-    expect(zone.contains(button)).toBe(true);
-    expect(chrome.bar.contains(button)).toBe(false);
+    expect(chrome.bar.contains(button)).toBe(true);
+    expect(chrome.footer.contains(button)).toBe(false);
     expect(Number(button.dataset.readerChromeHit ?? 0)).toBeGreaterThanOrEqual(MIN_HIT_PX);
     button.click();
     expect(deps.toggleBookmark).toHaveBeenCalledTimes(1);
@@ -710,21 +684,18 @@ describe('createReaderChrome escape is one step', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('hides the chrome bar on the next Escape and still does not return to the shelf', () => {
+  it('leaves the chrome bar up on Escape and still does not return to the shelf', () => {
     const { chrome, deps } = mount();
     chrome.reveal();
 
-    expect(chrome.handleEscape()).toBe(true);
-    expect(chrome.isRevealed()).toBe(false);
-    expect(deps.returnToShelf).not.toHaveBeenCalled();
-
     expect(chrome.handleEscape()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
   });
 });
 
-describe('createReaderChrome auto-hide', () => {
-  it('dismisses after 3.5s idle and stays up while an overlay is open', () => {
+describe('createReaderChrome stays expanded', () => {
+  it('stays up after 3.5s idle, including while an overlay is open', () => {
     vi.useFakeTimers();
     const overlay = { open: false };
     const { chrome } = mount({
@@ -735,7 +706,7 @@ describe('createReaderChrome auto-hide', () => {
     vi.advanceTimersByTime(AUTO_HIDE_MS - 1);
     expect(chrome.isRevealed()).toBe(true);
     vi.advanceTimersByTime(1);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
 
     overlay.open = true;
     chrome.reveal();
@@ -743,7 +714,7 @@ describe('createReaderChrome auto-hide', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('pauses the idle timer while the pointer rests on the bar or footer', () => {
+  it('stays up while the pointer rests on the bar or footer and after it leaves', () => {
     vi.useFakeTimers();
     const { chrome } = mount();
 
@@ -758,7 +729,7 @@ describe('createReaderChrome auto-hide', () => {
 
     chrome.footer.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
     vi.advanceTimersByTime(AUTO_HIDE_MS);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
   it('stays revealed while the window titlebar is hovered', () => {
@@ -775,7 +746,7 @@ describe('createReaderChrome auto-hide', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('stays revealed while stayRevealed is true', () => {
+  it('stays revealed after stayRevealed turns false', () => {
     vi.useFakeTimers();
     let atTop = true;
     const { chrome } = mount({
@@ -787,37 +758,38 @@ describe('createReaderChrome auto-hide', () => {
     atTop = false;
     chrome.syncStayRevealed();
     vi.advanceTimersByTime(AUTO_HIDE_MS);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('reveals when syncStayRevealed runs at the top of scroll mode', () => {
+  it('is already revealed when syncStayRevealed runs at the top of scroll mode', () => {
     const { chrome } = mount({
       stayRevealed: () => true,
     });
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     chrome.syncStayRevealed();
     expect(chrome.isRevealed()).toBe(true);
   });
 });
 
 describe('createReaderChrome touch mode', () => {
-  it('starts immersive: chrome hidden, no desktop menus, and no hover-only path', () => {
+  it('opens with the touch top bar expanded and does not depend on edge hover', () => {
     const { host, chrome } = mount({ touchMode: true });
 
-    expect(chrome.isRevealed()).toBe(false);
-    expect(chrome.bar.hidden).toBe(true);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.bar.hidden).toBe(false);
     expect(host.querySelector('#lightink-toolbar')).toBeNull();
     expect(host.querySelector('#lightink-tabbar')).toBeNull();
     expect(host.querySelector('#lightink-chrome-host')).toBeNull();
     expect(host.textContent).not.toContain('文件');
     expect(host.textContent).not.toContain('插入');
     for (const action of PRIMARY_TOUCH_ACTIONS) {
-      expect(actionButton(host, action).hidden).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
+      expect(actionButton(host, action).hidden).toBe(false);
     }
     host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
   it('never auto-hides after idle or pointer leave when touchMode is true', () => {
@@ -834,25 +806,25 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('does not reveal from edge hover: pointermove is a no-op', () => {
+  it('does not use edge hover to show or hide the touch bar', () => {
     const { host, chrome } = mount({ touchMode: true });
 
     host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 6 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
 
     host.dispatchEvent(
       new PointerEvent('pointermove', { bubbles: true, clientX: 80, clientY: 394 }),
     );
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
 
     chrome.handlePointerMove({ clientY: 4 });
     chrome.handlePointerMove({ clientY: 396 });
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('toggles with center taps and stays up between them', () => {
+  it('keeps touch actions on the top bar across center taps', () => {
     vi.useFakeTimers();
     const { host, page, chrome } = mount({ touchMode: true });
     const before = page.getBoundingClientRect();
@@ -862,7 +834,8 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
     expect(actionButton(host, 'backToShelf').hidden).toBe(false);
     for (const action of THUMB_ACTIONS) {
-      expect(chrome.footer.contains(actionButton(host, action))).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
+      expect(chrome.footer.contains(actionButton(host, action))).toBe(false);
       expect(actionButton(host, action).hidden).toBe(false);
     }
     const shown = page.getBoundingClientRect();
@@ -872,23 +845,25 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.isRevealed()).toBe(true);
 
     clickPage(page, 200);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     for (const action of PRIMARY_TOUCH_ACTIONS) {
-      expect(actionButton(host, action).hidden).toBe(true);
+      expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
+      expect(actionButton(host, action).hidden).toBe(false);
     }
     const hidden = page.getBoundingClientRect();
     expect(hidden.top).toBe(before.top);
     expect(hidden.height).toBe(before.height);
   });
 
-  it('hides via Escape and brings the whisper progress line back', () => {
+  it('leaves the touch bars up on Escape and does not return to the shelf', () => {
     const { chrome, deps } = mount({ touchMode: true });
     chrome.reveal();
+    expect(chrome.footer.hidden).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
 
-    expect(chrome.handleEscape()).toBe(true);
-    expect(chrome.isRevealed()).toBe(false);
-    expect(chrome.whisper.hidden).toBe(false);
+    expect(chrome.handleEscape()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.whisper.hidden).toBe(true);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
   });
 
@@ -904,15 +879,15 @@ describe('createReaderChrome touch mode', () => {
     expect(chrome.isRevealed()).toBe(true);
   });
 
-  it('closes an open sheet on tap even when the footer is already hidden', () => {
+  it('closes an open sheet on tap and keeps the bars expanded', () => {
     const { page, chrome, deps } = mount({
       touchMode: true,
       isOverlayOpen: vi.fn(() => true),
     });
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     clickPage(page, 200);
     expect(deps.dismissOverlay).toHaveBeenCalledTimes(1);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     expect(deps.returnToShelf).not.toHaveBeenCalled();
   });
 
@@ -932,37 +907,36 @@ describe('createReaderChrome touch mode', () => {
     setAttribute.mockRestore();
   });
 
-  it('keeps the whisper visible while the chrome is hidden', () => {
+  it('keeps chapter progress on the footer while the bars stay up', () => {
     const { chrome } = mount({ touchMode: true });
-    expect(chrome.whisper.hidden).toBe(false);
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
     chrome.setProgress({ chapterTitle: '第一章', location: '2 / 10', progress: 0.25 });
-    expect(chrome.whisper.querySelector('.lightink-reader-chrome-whisper-progress')?.textContent).toBe(
-      '25%',
-    );
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-chapter')?.textContent).toBe('第一章');
+    expect(chrome.footer.querySelector('.lightink-reader-chrome-percent')?.textContent).toBe('25%');
   });
 
-  it('places toc / typography / bookmark / search in the footer thumb zone', () => {
+  it('places toc / typography / bookmark / search on the touch top bar', () => {
     const { host, chrome } = mount({ touchMode: true });
     chrome.reveal();
 
-    const zone = footerThumbZone(chrome.footer);
-    expect(chrome.footer.contains(zone)).toBe(true);
+    const zone = chrome.bar.querySelector<HTMLElement>('.lightink-reader-chrome-tools');
+    expect(zone).not.toBeNull();
+    expect(chrome.bar.contains(zone!)).toBe(true);
     for (const action of THUMB_ACTIONS) {
       const button = actionButton(host, action);
-      expect(zone.contains(button), `${action} should live in the footer thumb zone`).toBe(true);
-      expect(chrome.bar.contains(button), `${action} should leave the top bar in touchMode`).toBe(
-        false,
-      );
+      expect(zone!.contains(button), `${action} should live on the top bar`).toBe(true);
+      expect(chrome.footer.contains(button)).toBe(false);
       expect(button.hidden).toBe(false);
+      expect(Number(button.dataset.readerChromeHit ?? 0)).toBeGreaterThanOrEqual(MIN_HIT_PX);
     }
+    expect(chrome.bar.style.flexWrap).toBe('wrap');
+    expect(chrome.bar.style.overflowX).toBe('clip');
   });
 
-  it('keeps the four thumb actions reachable after the top bar is dismissed', () => {
+  it('keeps the touch actions on the top bar and clickable', () => {
     const { chrome, deps } = mount({ touchMode: true });
     chrome.reveal();
-
-    chrome.bar.hidden = true;
-    chrome.bar.style.display = 'none';
 
     const clicks: Array<[string, () => void]> = [
       ['toc', () => expect(deps.openOutline).toHaveBeenCalledTimes(1)],
@@ -971,10 +945,10 @@ describe('createReaderChrome touch mode', () => {
       ['search', () => expect(deps.openSearch).toHaveBeenCalledTimes(1)],
     ];
     for (const [action, assertCall] of clicks) {
-      const button = actionButton(chrome.footer, action);
-      expect(chrome.footer.contains(button)).toBe(true);
+      const button = actionButton(chrome.bar, action);
+      expect(chrome.bar.contains(button)).toBe(true);
+      expect(chrome.footer.contains(button)).toBe(false);
       expect(button.hidden).toBe(false);
-      expect(button.offsetParent !== null || chrome.footer.hidden === false).toBe(true);
       button.click();
       assertCall();
     }
@@ -991,13 +965,8 @@ describe('createReaderChrome touch mode', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     for (const action of PRIMARY_TOUCH_ACTIONS) {
       const button = actionButton(host, action);
-      if (action === 'backToShelf') {
-        expect(chrome.bar.contains(button), 'backToShelf stays on the top bar').toBe(true);
-      } else {
-        expect(chrome.footer.contains(button), `${action} must be in the footer to measure`).toBe(
-          true,
-        );
-      }
+      expect(chrome.bar.contains(button), `${action} stays on the top bar`).toBe(true);
+      expect(chrome.footer.contains(button)).toBe(false);
       const size = declaredHitPx(button);
       if (size > 0) {
         expect(size, `${action} hit target`).toBeGreaterThanOrEqual(MIN_HIT_PX);
@@ -1005,7 +974,7 @@ describe('createReaderChrome touch mode', () => {
       expect(Number(button.dataset.readerChromeHit ?? size)).toBeGreaterThanOrEqual(MIN_HIT_PX);
     }
 
-    const zone = footerThumbZone(chrome.footer);
+    const zone = chrome.bar.querySelector<HTMLElement>('.lightink-reader-chrome-tools')!;
     const zoneGap = declaredGapPx(zone);
     if (zoneGap > 0) {
       expect(zoneGap, 'footer thumb gap').toBeGreaterThanOrEqual(MIN_GAP_PX);
@@ -1069,7 +1038,13 @@ describe('createReaderChrome desktop keeps five actions on the top bar', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/reader/reader.css'), 'utf-8');
     expect(css).not.toMatch(/chrome-action--annotations/);
     expect(css).toMatch(
-      /\.lightink-reader-chrome-tools\s*\{[^}]*flex-wrap:\s*nowrap[^}]*gap:\s*0\.4rem/,
+      /\.lightink-reader-chrome-tools\s*\{[^}]*flex-wrap:\s*wrap[^}]*max-width:\s*100%/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-bar\s*\{[^}]*flex-wrap:\s*wrap[^}]*overflow-x:\s*clip/,
+    );
+    expect(css).toMatch(
+      /\.lightink-reader-chrome-action-label\s*\{[^}]*white-space:\s*nowrap/,
     );
     expect(css).toMatch(
       /\.lightink-reader-chrome-action\s*\{[^}]*flex-shrink:\s*0[^}]*isolation:\s*isolate/,
@@ -1093,18 +1068,19 @@ describe('createReaderChrome destroy', () => {
 });
 
 describe('createReaderChrome footer and whisper', () => {
-  it('shows the whisper while chrome is hidden and the footer when revealed', () => {
+  it('shows the chapter footer while the bars stay expanded', () => {
     const { chrome } = mount();
-    expect(chrome.footer.hidden).toBe(true);
-    expect(chrome.whisper.hidden).toBe(false);
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
 
     chrome.reveal();
     expect(chrome.footer.hidden).toBe(false);
     expect(chrome.whisper.hidden).toBe(true);
 
     chrome.dismiss();
-    expect(chrome.footer.hidden).toBe(true);
-    expect(chrome.whisper.hidden).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.footer.hidden).toBe(false);
+    expect(chrome.whisper.hidden).toBe(true);
   });
 
   it('writes chapter and location into both docks and seeks from the scrubber', () => {
@@ -1188,7 +1164,8 @@ describe('createReaderChrome has no speak control', () => {
     const touch = mount({ touchMode: true, suppressProgressDock: () => true });
     touch.chrome.reveal();
     expect(touch.host.querySelector('[data-reader-tts-speak]')).toBeNull();
-    expect(footerThumbZone(touch.chrome.footer).querySelector('[data-reader-tts-speak]')).toBeNull();
+    expect(touch.chrome.bar.querySelector('[data-reader-tts-speak]')).toBeNull();
+    expect(touch.chrome.footer.querySelector('[data-reader-tts-speak]')).toBeNull();
   });
 });
 
@@ -1379,18 +1356,16 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
     expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
   });
 
-  it('handleEscape dismisses chrome in edit mode and never finishes or 合书', () => {
+  it('handleEscape leaves the bars up in edit mode and never finishes or 合书', () => {
     const { chrome, deps } = mountMarkdownChrome({ markdownEditing: true });
     chrome.reveal();
-    expect(chrome.handleEscape()).toBe(true);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.handleEscape()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
     expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
     expect(deps.returnToShelf).not.toHaveBeenCalled();
-    expect(chrome.handleEscape()).toBe(false);
-    expect(deps.onMarkdownFinish).not.toHaveBeenCalled();
   });
 
-  it('toggles chrome on contenteditable=false body click, not on contenteditable=true', () => {
+  it('does not hide the bars on a contenteditable body click', () => {
     const { host, chrome } = mount({ touchMode: true });
     const readable = document.createElement('div');
     readable.className = 'ProseMirror lightink-prose';
@@ -1403,7 +1378,7 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
     host.append(readable, writable);
 
     clickPage(writable, 120);
-    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.isRevealed()).toBe(true);
 
     clickPage(readable, 120);
     expect(chrome.isRevealed()).toBe(true);
@@ -1412,15 +1387,16 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
 
 
 describe('createReaderChrome setConcealZones (R7 摸鱼接管)', () => {
-  it("'auto' keeps the original reveal/idle mechanism in full charge", () => {
+  it("'auto' keeps the bars expanded through the old idle window", () => {
     vi.useFakeTimers();
     try {
       const { chrome } = mount();
-      expect(chrome.bar.hidden).toBe(true);
+      expect(chrome.bar.hidden).toBe(false);
       chrome.reveal();
       expect(chrome.bar.hidden).toBe(false);
       vi.advanceTimersByTime(AUTO_HIDE_MS);
-      expect(chrome.bar.hidden).toBe(true);
+      expect(chrome.bar.hidden).toBe(false);
+      expect(chrome.footer.hidden).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -1454,12 +1430,11 @@ describe('createReaderChrome setConcealZones (R7 摸鱼接管)', () => {
     }
   });
 
-  it("'held' bottom keeps the footer visible without the bar", () => {
+  it("'held' bottom keeps the footer visible when the top zone is hidden", () => {
     const { chrome } = mount();
-    chrome.setConcealZones('auto', 'held');
+    chrome.setConcealZones('hidden', 'held');
     expect(chrome.bar.hidden).toBe(true);
     expect(chrome.footer.hidden).toBe(false);
-    // footer 可见时 whisper 按互斥口径隐藏。
     expect(chrome.whisper.hidden).toBe(true);
   });
 
@@ -1476,17 +1451,17 @@ describe('createReaderChrome setConcealZones (R7 摸鱼接管)', () => {
     expect(chrome.footer.getAttribute('aria-hidden')).toBe('false');
   });
 
-  it("returning to 'auto' restores idle auto-hide", () => {
+  it("returning to 'auto' keeps the bars expanded", () => {
     vi.useFakeTimers();
     try {
       const { chrome } = mount();
       chrome.setConcealZones('held', 'held');
       expect(chrome.bar.hidden).toBe(false);
       chrome.setConcealZones('auto', 'auto');
-      // 原机制续接：已显示 → idle 计时重启 → 自动隐藏。
       expect(chrome.bar.hidden).toBe(false);
       vi.advanceTimersByTime(AUTO_HIDE_MS);
-      expect(chrome.bar.hidden).toBe(true);
+      expect(chrome.bar.hidden).toBe(false);
+      expect(chrome.footer.hidden).toBe(false);
     } finally {
       vi.useRealTimers();
     }

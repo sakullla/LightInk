@@ -1168,6 +1168,27 @@ export function totalColumnCount(
   return Math.round((scrollWidth + gap) / denom);
 }
 
+/**
+ * 宽窗可以开对开，但正文只够一栏时改成单栏铺满，不再补空白右页。
+ * measuredColumns ≤ 0 表示宿主还没排出 CSS columns（jsdom 的 scrollWidth），
+ * 保留按宽度算出的栏数。
+ */
+export function flowSpreadColumnsForContent(
+  layoutColumns: number,
+  measuredColumns: number,
+): number {
+  if (layoutColumns <= 1) {
+    return 1;
+  }
+  if (!Number.isFinite(measuredColumns) || measuredColumns <= 0) {
+    return layoutColumns;
+  }
+  if (measuredColumns <= 1) {
+    return 1;
+  }
+  return layoutColumns;
+}
+
 /** 编排壳注入的回调：状态机/进度/标注/搜索与工具栏均留在 reader-view。 */
 export interface FlowRendererHooks {
   /** 翻译 i18n key（章节标题/远程图占位文案）。 */
@@ -1822,7 +1843,7 @@ export function createFlowRenderer(
           step: pagedColumnStep(widthUsable ? innerWidth : Math.max(1, layout.width), 0),
         }
       : layout;
-    const { columnWidth, columns, gap, step } = spread;
+    let { columnWidth, columns, gap, step } = spread;
     const height = viewport.height;
     const pageWidthCss = widthUsable ? `${pageWidth}px` : '100%';
     const spreadWidthCss = widthUsable ? `${spread.width}px` : '100%';
@@ -1954,7 +1975,46 @@ export function createFlowRenderer(
     frame.style.border = '0';
     frame.style.outline = 'none';
     frame.style.background = readerPaperColor(root);
-    padFinalSpread(pageBox, frameDocument, columnWidth, columns, gap);
+    if (widthUsable && columns > 1) {
+      void pageBox.offsetWidth;
+      const measured = totalColumnCount(pageBox.scrollWidth, columnWidth, gap);
+      if (flowSpreadColumnsForContent(columns, measured) <= 1) {
+        columns = 1;
+        gap = 0;
+        columnWidth = innerWidth;
+        step = pagedColumnStep(innerWidth, 0);
+        const singleWidthCss = `${columnWidth}px`;
+        applyPagedSpreadVars(html, { columnWidth, columns, gap });
+        applyPagedPageStep(html, step);
+        applyPagedSpreadVars(pageBox, { columnWidth, columns, gap });
+        applyPagedPageStep(pageBox, step);
+        pageBox.style.setProperty('width', singleWidthCss, 'important');
+        pageBox.style.setProperty('column-width', singleWidthCss, 'important');
+        pageBox.style.setProperty('column-count', '1', 'important');
+        pageBox.style.setProperty('column-gap', '0px', 'important');
+        if (!cover && !plates) {
+          for (const media of mediaList) {
+            media.style.maxWidth = singleWidthCss;
+          }
+          for (const figure of frameDocument.querySelectorAll<HTMLElement>('figure')) {
+            figure.style.maxWidth = singleWidthCss;
+          }
+        }
+      }
+    }
+    const columnMark = String(Math.max(1, columns));
+    frame.dataset.readerColumns = columnMark;
+    const chapterHost = frame.closest('.lightink-reader-chapter');
+    if (chapterHost instanceof HTMLElement) {
+      chapterHost.dataset.readerColumns = columnMark;
+    }
+    if (columns <= 1) {
+      for (const existing of frameDocument.querySelectorAll('.lightink-reader-column-pad')) {
+        existing.remove();
+      }
+    } else {
+      padFinalSpread(pageBox, frameDocument, columnWidth, columns, gap);
+    }
     // 搜索跳转：iframe load 的 rAF 重测 / 邻章 pagedRestore=start 会把
     // scrollLeft 吸回章首。hold 期间只重分栏，不恢复、不 snap。
     const searchHold = frame.dataset.pagedSearchHold === 'true';

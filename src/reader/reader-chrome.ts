@@ -1,26 +1,18 @@
 /**
- * `reader-chrome` — 读书页沉浸控件（R4 / R5）。
+ * `reader-chrome` — 读书页常驻控件（R1 / R4 / R5）。
  *
- * Kindle / Apple Books / Readest：阅读时 chrome 消失；单击中部或靠近顶/底
- * 边缘时顶栏与底栏同时出现。桌面顶栏是五项常驻入口（返回书架 · 目录 ·
- * 排版 · 书签 · 搜索），助手仅在 AI 已配置时出现。书签是一等开关：对当前位置添加/取消书签，按钮按
- * 当前位置是否已书签呈现两态（aria-pressed + is-bookmarked 视觉态）；进度
- * 轨在 TOC 刻度之外再画书签刻度（可点击跳转）。搜索打开同一套标注侧栏
- *（列表 + 书内搜索），不再另放「本书标注」。底栏与沉浸条都是单行：章节名 |
- * 进度轨道 | 位置/百分比。轨道用主题色填充，唤出后标 TOC/书签刻度。
+ * 文字书与 PDF 打开时顶栏、底栏已经展开。空闲、页内单击和 Escape 都不再
+ * 把它们收起。顶栏是返回书架 · 目录 · 排版 · 书签 · 搜索，助手仅在 AI
+ * 已配置时出现。触屏同样把这些动作留在顶栏，允许换行，命中高度 48px。
+ * 书签是一等开关：对当前位置添加/取消书签，按钮按当前位置是否已书签呈现
+ * 两态（aria-pressed + is-bookmarked）；进度轨在 TOC 刻度之外再画书签刻度
+ *（可点击跳转）。搜索打开同一套标注侧栏（列表 + 书内搜索），不再另放
+ *「本书标注」。底栏是单行：章节名 | 进度轨道 | 位置/百分比。
  *
- * 约 3.5s 无操作自动收起（鼠标停留在 chrome 上不计时）；`isOverlayOpen()`
- * 为真时不自动收。Escape 一次只退一步且永不调用 `returnToShelf`：选区工
- * 具条 → 标注侧栏 → 其它浮层 → 控件条。「返回书架」是起始侧唯一合书入口。
- *
- * `touchMode` 为真（触屏优先平台）时不做空闲自动收起，也不做边缘悬停
- * 唤出；只由中部点按 / Escape / 收浮层收起。idle 时 whisper 压成 2px 进度
- * 发丝线：翻页模式与滚动模式都保留（滚动模式由 CSS 收敛为纯进度线，不
- * 再用整行藏起——原生滚动条之外仍有常显进度，唤出底栏才见完整行）。
- * 目录 / 排版 / 书签 / 搜索挪到 `.lightink-reader-chrome-footer` 拇指区
- *（进度行之前的同一 tools 簇）；返回书架留在顶栏边缘。主控件可点区域
- * 至少 48×48，相邻间距至少 8px。显隐仍走既有 reveal / dismiss，不另造
- * 一套 chrome 状态机。文字书与漫画共用这套点按显隐。
+ * Escape 一次只退一步且永不调用 `returnToShelf`：选区工具条 → 标注侧栏 →
+ * 其它浮层。没有这些层时返回 false，留给窗口级 leftover（合书 / 结束编辑）。
+ * 24px 边缘带仍可调用 reveal，但看见顶栏不再依赖它。漫画继续用漫画条，
+ * 小说 chrome 由宿主 CSS 藏起。
  */
 
 import {
@@ -88,8 +80,8 @@ export const READER_CHROME_ACTIONS: readonly ReaderChromeAction[] = [
 ];
 
 /**
- * Idle auto-hide (ui-redesign-2026-10 §3.6)：3.5s 无操作收起，鼠标停在
- * chrome 上（bar/footer pointerenter 置 pointerInsideBar）不计时。
+ * 历史空闲收起窗口（3.5s）。顶栏与底栏改为常驻后不再用它隐藏控件；
+ * 常量保留，便于测试锁定「经过这段时间仍然展开」。
  */
 export const READER_CHROME_HIDE_DELAY_MS = 3500;
 /**
@@ -97,7 +89,7 @@ export const READER_CHROME_HIDE_DELAY_MS = 3500;
  * revealReaderChrome 舞蹈终点是 y=22，这是 §5.6 验证过的兼容约束。
  */
 export const READER_CHROME_EDGE_PX = 24;
-/** Touch-primary hit target for backToShelf + footer tools (R5). */
+/** Touch-primary hit target for top-bar actions (R5 / R1). */
 export const READER_CHROME_TOUCH_HIT_PX = 48;
 /** Minimum gap between adjacent touch-primary chrome actions (R5). */
 export const READER_CHROME_TOUCH_GAP_PX = 8;
@@ -404,32 +396,9 @@ function isElementHost(value: HTMLElement | ReaderChromeDeps): value is HTMLElem
   return typeof (value as HTMLElement).appendChild === 'function';
 }
 
-function defaultSchedule(fn: () => void, ms: number): number {
-  if (typeof setTimeout === 'undefined') {
-    fn();
-    return 0;
-  }
-  return setTimeout(fn, ms) as unknown as number;
-}
-
 function defaultCancel(id: number): void {
   if (typeof clearTimeout !== 'undefined') {
     clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
-  }
-}
-
-function isWindowTitlebarHot(): boolean {
-  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
-    return false;
-  }
-  const bar = document.getElementById('lightink-window-titlebar');
-  if (bar === null || typeof bar.matches !== 'function') {
-    return false;
-  }
-  try {
-    return bar.matches(':hover, :focus-within');
-  } catch {
-    return false;
   }
 }
 
@@ -521,7 +490,6 @@ export function createReaderChrome(
   const hideDelayMs = deps.hideDelayMs ?? READER_CHROME_HIDE_DELAY_MS;
   const edgePx = deps.edgePx ?? READER_CHROME_EDGE_PX;
   const touchMode = deps.touchMode === true;
-  const schedule = deps.schedule ?? defaultSchedule;
   const cancel = deps.cancel ?? defaultCancel;
 
   const element = document.createElement('div');
@@ -647,15 +615,19 @@ export function createReaderChrome(
     element.dataset.touchMode = 'true';
     bar.dataset.touchMode = 'true';
     bar.style.minHeight = hit;
+    bar.style.flexWrap = 'wrap';
+    bar.style.maxWidth = '100%';
+    bar.style.overflowX = 'clip';
     tools.classList.add('lightink-reader-chrome-thumb');
+    tools.style.flexWrap = 'wrap';
+    tools.style.maxWidth = '100%';
+    tools.style.justifyContent = 'flex-start';
     tools.style.gap = gap;
     tools.style.minHeight = hit;
     element.style.setProperty('--lightink-reader-chrome-hit', hit);
     element.style.setProperty('--lightink-reader-chrome-gap', gap);
-    bar.append(backButton, drag);
-  } else {
-    bar.append(backButton, barTitle, tools, drag);
   }
+  bar.append(backButton, barTitle, tools, drag);
   if (editButton !== null) {
     backButton.after(editButton);
   }
@@ -697,10 +669,8 @@ export function createReaderChrome(
     footer.dataset.touchMode = 'true';
     footer.style.setProperty('--lightink-reader-chrome-hit', `${READER_CHROME_TOUCH_HIT_PX}px`);
     footer.style.setProperty('--lightink-reader-chrome-gap', `${READER_CHROME_TOUCH_GAP_PX}px`);
-    footer.append(tools, footerChapter, scrubber, footerStats);
-  } else {
-    footer.append(footerChapter, scrubber, footerStats);
   }
+  footer.append(footerChapter, scrubber, footerStats);
 
   const whisper = document.createElement('div');
   whisper.className = 'lightink-reader-chrome-whisper';
@@ -722,7 +692,7 @@ export function createReaderChrome(
   whisperProgress.className = 'lightink-reader-chrome-whisper-progress';
   whisper.append(whisperChapter, whisperScrubber, whisperProgress);
 
-  let revealed = false;
+  let revealed = true;
   let pointerInsideBar = false;
   let hideTimer: number | null = null;
   let attachedHost: HTMLElement | null = null;
@@ -807,7 +777,7 @@ export function createReaderChrome(
     const hideProgress = suppressProgressDock();
     const footerShown =
       concealBottom === 'held' ||
-      (revealed && !(hideProgress && !touchMode) && concealBottom !== 'hidden');
+      (revealed && !hideProgress && concealBottom !== 'hidden');
     const hideFooter = !footerShown;
     footer.hidden = hideFooter;
     writeAttr(footer, 'aria-hidden', hideFooter ? 'true' : 'false');
@@ -873,34 +843,9 @@ export function createReaderChrome(
   };
 
   const scheduleHide = (): void => {
-    if (
-      touchMode ||
-      destroyed ||
-      overlayOpen() ||
-      pointerInsideBar ||
-      !revealed ||
-      stayRevealed() ||
-      isWindowTitlebarHot() ||
-      // R7：顶带被 'held' 接管时抑制 idle 自动隐藏（强制显示语义）。
-      concealTop === 'held'
-    ) {
-      return;
-    }
+    // 顶栏与底栏常驻。hideDelayMs 仍留给既有 deps，不再据此收起。
+    void hideDelayMs;
     clearHideTimer();
-    hideTimer = schedule(() => {
-      hideTimer = null;
-      if (
-        destroyed ||
-        overlayOpen() ||
-        pointerInsideBar ||
-        stayRevealed() ||
-        isWindowTitlebarHot()
-      ) {
-        return;
-      }
-      revealed = false;
-      syncDom();
-    }, hideDelayMs);
   };
 
   // 角标挂在按钮内右上角，aria-hidden 避免和 aria-label 重复宣告。
@@ -981,12 +926,14 @@ export function createReaderChrome(
   };
 
   const dismiss = (): void => {
-    if (overlayOpen()) {
+    if (destroyed) {
       return;
     }
     clearHideTimer();
-    revealed = false;
-    syncDom();
+    if (!revealed) {
+      revealed = true;
+      syncDom();
+    }
   };
 
   const handleEscape = (): boolean => {
@@ -1003,12 +950,6 @@ export function createReaderChrome(
     }
     if (overlayOpen()) {
       deps.dismissOverlay?.();
-      return true;
-    }
-    if (revealed) {
-      clearHideTimer();
-      revealed = false;
-      syncDom();
       return true;
     }
     return false;
@@ -1042,11 +983,9 @@ export function createReaderChrome(
       deps.dismissOverlay?.();
       return;
     }
-    if (revealed) {
-      dismiss();
-      return;
+    if (!revealed) {
+      reveal();
     }
-    reveal();
   };
 
   const handlePointerMove = (event: { clientY: number }, bounds?: ReaderChromeBounds): void => {
@@ -1741,7 +1680,7 @@ export function createReaderChrome(
     concealBottom = 'auto';
     requestedConcealTop = 'auto';
     delete bar.dataset.concealReaderBarHost;
-    bar.style.flexWrap = '';
+    bar.style.flexWrap = touchMode ? 'wrap' : '';
     syncDom();
   };
 
@@ -1784,11 +1723,9 @@ export function createReaderChrome(
     },
     dismiss,
     toggle() {
-      if (revealed) {
-        dismiss();
-        return;
+      if (!revealed) {
+        reveal();
       }
-      reveal();
     },
     handleEscape,
     handleSurfaceClick,

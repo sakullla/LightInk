@@ -63,9 +63,12 @@
 /* Toolbar + popover share one desktop language (Apple Books / Foliate). */
 .lightink-reader-chrome-bar {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.2rem;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-x: clip;
   min-height: var(--lightink-titlebar-height, 2.25rem);
   padding: 0.3rem calc(var(--lightink-titlebar-caption, 36px) * 3 + 16px) 0.3rem
     calc(var(--lightink-titlebar-leading, 0px) + 8px);
@@ -87,11 +90,12 @@
 
 .lightink-reader-chrome-tools {
   display: flex;
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
+  max-width: 100%;
 }
 
 /* Book title between back and tools: muted, single-line, clipped. The left
@@ -157,7 +161,7 @@
    让 SVG 居中独占 48×48 hit area，aria-label 仍走完整词。 */
 .lightink-reader-chrome-action-label {
   font: inherit;
-  white-space: inherit;
+  white-space: nowrap;
 }
 
 /* T5 (R20)：桌面窄窗（<800px，非触屏）下隐藏 label，SVG 居中保留紧凑宽度。
@@ -957,30 +961,35 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-  padding: calc(var(--lightink-safe-top, 0px) + 0.2rem)
+  box-sizing: border-box;
+  padding: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em)
     max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-right, 0px))
-    var(--lightink-reader-whisper-reserve)
+    calc(var(--lightink-reader-whisper-reserve) + 1.75rem)
     max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-left, 0px));
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-  padding: calc(var(--lightink-safe-top, 0px) + 0.85rem)
+  box-sizing: border-box;
+  padding: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em)
     max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px))
-    calc(var(--lightink-reader-whisper-reserve) + 0.35rem)
+    calc(var(--lightink-reader-whisper-reserve) + 0.35rem + 1.75rem)
     max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-pages[data-reader-active='true']:not([data-comic-reader='true']) {
-  padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
+  padding-top: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em);
   padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
   padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
-  padding-bottom: var(--lightink-reader-whisper-reserve);
+  padding-bottom: calc(var(--lightink-reader-whisper-reserve) + 1.75rem);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-bar {
   min-height: 48px;
   padding: var(--lightink-safe-top, 0px) 0.3rem 0.1rem;
   gap: 8px;
+  flex-wrap: wrap;
+  max-width: 100%;
+  overflow-x: clip;
   border-bottom: 0;
   background: color-mix(in srgb, var(--lightink-bg) 94%, transparent);
   -webkit-app-region: no-drag;
@@ -991,7 +1000,10 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader-chrome-tools {
-  margin-left: auto;
+  margin-left: 0;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  max-width: 100%;
   gap: 8px;
 }
 
@@ -1105,24 +1117,26 @@ html[data-reader-progress-bar='off'] .lightink-reader-chrome-whisper-chapter,
   }
 
   .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-    padding: calc(var(--lightink-safe-top, 0px) + 0.2rem)
+    box-sizing: border-box;
+    padding: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em)
       max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-right, 0px))
-      var(--lightink-reader-whisper-reserve)
+      calc(var(--lightink-reader-whisper-reserve) + 1.75rem)
       max(var(--lightink-reader-paged-pad-x, 0.2rem), var(--lightink-safe-left, 0px));
   }
 
   .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-    padding: calc(var(--lightink-safe-top, 0px) + 0.85rem)
+    box-sizing: border-box;
+    padding: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em)
       max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px))
-      calc(var(--lightink-reader-whisper-reserve) + 0.35rem)
+      calc(var(--lightink-reader-whisper-reserve) + 0.35rem + 1.75rem)
       max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
   }
 
   .lightink-reader-pages[data-reader-active='true']:not([data-comic-reader='true']) {
-    padding-top: calc(var(--lightink-safe-top, 0px) + var(--lightink-reader-pad-y, 0.85rem));
+    padding-top: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em);
     padding-left: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-left, 0px));
     padding-right: max(var(--lightink-reader-pad-x, 0.9rem), var(--lightink-safe-right, 0px));
-    padding-bottom: var(--lightink-reader-whisper-reserve);
+    padding-bottom: calc(var(--lightink-reader-whisper-reserve) + 1.75rem);
   }
 
   .lightink-reader-chrome-bar {
@@ -3488,9 +3502,12 @@ html[data-keyboard] .lightink-note-textarea {
   background-clip: content-box;
 }
 
-/* 触屏：纸页贴近屏幕边缘，减少无意义边距。 */
+/* 触屏滚动：保留状态栏让位，并在顶栏下多留一行、窗口底边留出页边。 */
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-  padding: 8px 10px calc(8px + 2.2rem);
+  box-sizing: border-box;
+  padding: calc(var(--lightink-safe-top, 0px) + 56px + var(--lightink-reader-line-height, 1.8) * 1em)
+    10px
+    calc(8px + 2.2rem + 1.75rem);
 }
 
 :is(html[data-android], html[data-touch-primary]) .lightink-reader[data-reading-layout='scroll'] .lightink-reader-chapter {
@@ -3543,11 +3560,15 @@ html[data-keyboard] .lightink-note-textarea {
  *    这条留白是「常量」而不是跟着浮栏显隐：翻页高度一变，每栏行数就会重排，
  *    浮栏自动隐藏的瞬间正文会跟着跳页。宁可常驻一条页边距，也不要读着读着重排。 */
 .lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-scroll {
-  padding-top: 52px;
+  box-sizing: border-box;
+  padding-top: calc(52px + var(--lightink-reader-line-height, 1.8) * 1em);
+  padding-bottom: calc(4.75rem + 0.85rem);
 }
 
 .lightink-reader[data-reading-layout='scroll'] .lightink-reader-scroll {
-  padding-top: 60px;
+  box-sizing: border-box;
+  padding-top: calc(60px + var(--lightink-reader-line-height, 1.8) * 1em);
+  padding-bottom: calc(18px + 2.2rem + 1.6rem);
 }
 
 /* 2. 章节刻度收敛为「克制的分隔线」。
@@ -3574,12 +3595,11 @@ html[data-keyboard] .lightink-note-textarea {
 }
 
 /*
- * 书沟：翻页是等宽两栏对开（readerPageSpread），spread 居中且两栏等宽，
- * 于是栏缝恰好落在纸页正中。短章节只填满左栏时，右半页原本是一片读不出来的
- * 空白；补一道极轻的对称渐变后，它读作「对开本的另一半」，而不是排版事故。
+ * 书沟只画在真正的对开（data-reader-columns=2）上。只够一栏的章节改成单栏
+ * 铺满纸面，不再用中央渐变把空白右页伪装成对开。
  * pointer-events:none 保证不拦截划选与翻页热区。
  */
-.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active::after {
+.lightink-reader:not([data-reading-layout='scroll']) .lightink-reader-chapter.is-active[data-reader-columns='2']::after {
   content: '';
   position: absolute;
   top: 0;

@@ -12,6 +12,7 @@ import {
   applyFrameWheelToScroller,
   createFlowRenderer,
   FLOW_CHAPTER_EVICT_IDLE_MS,
+  flowSpreadColumnsForContent,
   mapFrameClientRect,
   resolveFlowFrameClick,
   shouldDeferFlowPointerTap,
@@ -393,6 +394,29 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     document.body.replaceChildren();
   });
 
+  const withSpreadScrollWidth = (doc: Document, scrollWidth: number, run: () => void): void => {
+    const owner = doc.defaultView?.HTMLElement ?? HTMLElement;
+    const proto = owner.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, 'scrollWidth');
+    Object.defineProperty(proto, 'scrollWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList.contains('lightink-reader-spread')) {
+          return scrollWidth;
+        }
+        const inherited = original?.get;
+        return typeof inherited === 'function' ? (inherited.call(this) as number) : 0;
+      },
+    });
+    try {
+      run();
+    } finally {
+      if (original) {
+        Object.defineProperty(proto, 'scrollWidth', original);
+      }
+    }
+  };
+
   it('applyPagedSpreadVars 写入 pagedSpreadMetrics 派生的共享列变量', () => {
     const el = document.createElement('div');
     const metrics = pagedSpreadMetrics(1000, 16);
@@ -490,14 +514,16 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     document.body.appendChild(iframe);
     const doc = iframe.contentDocument!;
     doc.body.innerHTML = '<p>chapter</p>';
-    renderer.applyPaginatedDocument(iframe, doc);
-
-    const html = doc.documentElement;
     const metrics = readerFlowSpreadFromTypography(
       1100 - readerPageInnerPadPx(16, false) * 2,
       16,
       DEFAULT_READER_TYPOGRAPHY,
     );
+    withSpreadScrollWidth(doc, metrics.columnWidth * 4 + metrics.gap * 3, () => {
+      renderer.applyPaginatedDocument(iframe, doc);
+    });
+
+    const html = doc.documentElement;
     const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
     expect(html.style.getPropertyValue('--lightink-reader-column-count')).toBe(
       String(metrics.columns),
@@ -520,7 +546,9 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     const figure = doc.createElement('figure');
     figure.appendChild(image);
     doc.body.appendChild(figure);
-    renderer.applyPaginatedDocument(iframe, doc);
+    withSpreadScrollWidth(doc, metrics.columnWidth * 4 + metrics.gap * 3, () => {
+      renderer.applyPaginatedDocument(iframe, doc);
+    });
     expect(image.style.maxWidth).toBe(`${metrics.columnWidth}px`);
     expect(image.style.maxHeight).toBe(html.style.height);
     expect(image.style.columnSpan).toBe('none');
@@ -638,12 +666,15 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     document.body.appendChild(iframe);
     const doc = iframe.contentDocument!;
     doc.body.innerHTML = '<p>chapter</p>';
-    renderer.applyPaginatedDocument(iframe, doc);
-    const html = doc.documentElement;
     const inner = 1100 - readerPageInnerPadPx(16, false) * 2;
     const page = readerFlowSpreadFromTypography(inner, 16, DEFAULT_READER_TYPOGRAPHY);
+    withSpreadScrollWidth(doc, page.columnWidth * 3 + page.gap * 2, () => {
+      renderer.applyPaginatedDocument(iframe, doc);
+    });
+    const html = doc.documentElement;
     const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
     expect(page.columns).toBe(2);
+    expect(flowSpreadColumnsForContent(page.columns, 3)).toBe(2);
     expect(pageBox.style.columnCount).toBe('2');
     expect(pageBox.style.columnWidth).toBe(`${page.columnWidth}px`);
     // 双栏吃满扣掉页边后的纸面，不再把 22rem 行长居中留出大边。
@@ -654,7 +685,58 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     expect(iframe.style.width).toBe('100%');
     expect(html.style.width).toBe('1100px');
     expect(pageBox.style.getPropertyValue('--lightink-reader-page-step')).toBe(`${page.step}px`);
+    expect(doc.querySelector('.lightink-reader-column-pad')).not.toBeNull();
     iframe.remove();
+  });
+
+  it('lays a one-column chapter out as one full-width column without a blank facing page', () => {
+    const hooks: FlowRendererHooks = {
+      t: (key) => key,
+      remoteImagePolicy: sessionRemoteImagePolicy,
+      syncState: () => undefined,
+      applyPendingRestore: () => undefined,
+      renderHighlights: () => undefined,
+      handleNoteMarkClick: () => false,
+      onSelectionMouseUp: () => undefined,
+      openSearch: () => undefined,
+      advanceReading: () => false,
+      advancePagedWheel: () => false,
+      dismissSelectionToolbar: () => false,
+      isLayoutSwitching: () => false,
+      scrollContainer: () => document.body,
+    };
+    const root = document.createElement('div');
+    const chapter = document.createElement('article');
+    chapter.className = 'lightink-reader-chapter is-active';
+    const scrollHost = document.createElement('div');
+    Object.defineProperty(scrollHost, 'clientWidth', { configurable: true, value: 1100 });
+    Object.defineProperty(scrollHost, 'clientHeight', { configurable: true, value: 800 });
+    root.appendChild(scrollHost);
+    document.body.appendChild(root);
+    const renderer = createFlowRenderer(scrollHost, root, hooks);
+    const iframe = document.createElement('iframe');
+    chapter.appendChild(iframe);
+    document.body.appendChild(chapter);
+    const doc = iframe.contentDocument!;
+    doc.body.innerHTML = '<p>短章节</p>';
+    const inner = 1100 - readerPageInnerPadPx(16, false) * 2;
+    const page = readerFlowSpreadFromTypography(inner, 16, DEFAULT_READER_TYPOGRAPHY);
+    expect(page.columns).toBe(2);
+    expect(flowSpreadColumnsForContent(2, 1)).toBe(1);
+    expect(flowSpreadColumnsForContent(2, 0)).toBe(2);
+    withSpreadScrollWidth(doc, page.columnWidth, () => {
+      renderer.applyPaginatedDocument(iframe, doc);
+    });
+    const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
+    expect(pageBox.style.columnCount).toBe('1');
+    expect(pageBox.style.columnWidth).toBe(`${inner}px`);
+    expect(pageBox.style.width).toBe(`${inner}px`);
+    expect(pageBox.style.columnGap).toBe('0px');
+    expect(doc.querySelector('.lightink-reader-column-pad')).toBeNull();
+    expect(iframe.dataset.readerColumns).toBe('1');
+    expect(chapter.dataset.readerColumns).toBe('1');
+    iframe.remove();
+    chapter.remove();
   });
 
   it('lays out a cover-only chapter as one full page, not a left-column image', () => {
@@ -744,7 +826,11 @@ describe('共享翻页布局应用器（T5：markdown 与流式同源）', () =>
     document.body.appendChild(iframe);
     const doc = iframe.contentDocument!;
     doc.body.innerHTML = '<p>一段足够长的正文，用来确认翻页高度被窗口卡住。</p>'.repeat(40);
-    renderer.applyPaginatedDocument(iframe, doc);
+    const grownInner = 1100 - readerPageInnerPadPx(16, false) * 2;
+    const grown = readerFlowSpreadFromTypography(grownInner, 16, DEFAULT_READER_TYPOGRAPHY);
+    withSpreadScrollWidth(doc, grown.columnWidth * 4 + grown.gap * 3, () => {
+      renderer.applyPaginatedDocument(iframe, doc);
+    });
     const pageBox = doc.querySelector<HTMLElement>('.lightink-reader-spread')!;
     expect(pageBox.style.height).toBe('720px');
     expect(pageBox.style.columnCount).toBe('2');
@@ -3468,7 +3554,7 @@ describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称
     expect(tocPanel!.style.position).toBe('');
     expect(tocPanel!.style.bottom).toBe('');
     const footer = document.querySelector<HTMLElement>('.lightink-reader-chrome-footer');
-    expect(footer?.hidden).toBe(true);
+    expect(footer?.hidden).toBe(false);
 
     // 最后一个 pin 已释放 → 键盘 MutationObserver disconnect，不再触碰已关闭面板。
     await flushKeyboardMutation();
@@ -3479,7 +3565,7 @@ describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称
     await view.destroy();
   });
 
-  it('closes typography and search overlays and hides the touch footer', async () => {
+  it('closes typography and search overlays and keeps the touch footer', async () => {
     vi.useFakeTimers();
     document.documentElement.setAttribute('data-touch-primary', '');
     const { view } = await loadTouchBook();
@@ -3494,14 +3580,14 @@ describe('触屏 chrome 面板 pin 释放（touchSheetPins/键盘观察者对称
     expect(document.querySelector<HTMLElement>('.lightink-reader-chrome-typography')?.hidden).toBe(
       true,
     );
-    expect(footer()?.hidden).toBe(true);
+    expect(footer()?.hidden).toBe(false);
 
     chromeAction('search').click();
     const sidebar = document.querySelector<HTMLElement>('.lightink-reader-annotation-panel');
     expect(sidebar?.hidden).toBe(false);
     sidebar?.querySelector<HTMLButtonElement>('.lightink-reader-sidebar-close')?.click();
     expect(sidebar?.hidden).toBe(true);
-    expect(footer()?.hidden).toBe(true);
+    expect(footer()?.hidden).toBe(false);
 
     await view.destroy();
   });
