@@ -2449,7 +2449,7 @@ describe('Reader load lifecycle', () => {
 });
 
 describe('Reader immersive chrome lifecycle', () => {
-  it('opens a book without editor menus or tabs, then reveals four labeled overlay controls on a page click', async () => {
+  it('opens a book without editor menus or tabs and already shows the reader chrome controls', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     const view = createReaderView(host, readerViewDeps());
@@ -2463,7 +2463,7 @@ describe('Reader immersive chrome lifecycle', () => {
 
     const chrome = readerChrome(host);
     expect(chrome).not.toBeNull();
-    expect(isReaderChromeRevealed(host)).toBe(false);
+    expect(isReaderChromeRevealed(host)).toBe(true);
 
     revealReaderChrome(host);
     expect(isReaderChromeRevealed(host)).toBe(true);
@@ -2542,11 +2542,10 @@ describe('Reader immersive chrome lifecycle', () => {
     expect(view.state.phase).toBe('ready');
     expect(host.querySelector('.lightink-reader')).not.toBeNull();
 
-    if (isReaderChromeRevealed(host)) {
-      root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      expect(isReaderChromeRevealed(host)).toBe(false);
-      expect(onReturnToShelf).not.toHaveBeenCalled();
-    }
+    expect(isReaderChromeRevealed(host)).toBe(true);
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(isReaderChromeRevealed(host)).toBe(true);
+    expect(onReturnToShelf).not.toHaveBeenCalled();
 
     // 无浮层 Esc 不合书：阅读器只退一步；窗口级 leftover Esc 才 returnToShelf。
     const leftover = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -2560,7 +2559,7 @@ describe('Reader immersive chrome lifecycle', () => {
     await view.destroy();
   });
 
-  it('reveals chrome from a single PDF page click instead of reveal-then-dismiss', async () => {
+  it('opens a PDF with chrome already revealed and a page click leaves it up', async () => {
     pdfMock.renderPdfInto.mockImplementation(async (_source, stagedHost: HTMLElement) => {
       const slot = document.createElement('div');
       slot.className = 'lightink-reader-page-slot';
@@ -2576,7 +2575,7 @@ describe('Reader immersive chrome lifecycle', () => {
     });
     await view.load('book.pdf');
 
-    expect(isReaderChromeRevealed(host)).toBe(false);
+    expect(isReaderChromeRevealed(host)).toBe(true);
     const page = host.querySelector<HTMLElement>('.lightink-reader-page-slot')!;
     page.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(isReaderChromeRevealed(host)).toBe(true);

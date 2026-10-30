@@ -1811,7 +1811,7 @@ describe('reader chrome panels', () => {
     }
   });
 
-  it('keeps comic progress-dock suppression from hiding the top-bar tools', () => {
+  it('hides the novel top bar during comic progress-dock suppression and docks the sheet at the window', () => {
     document.documentElement.setAttribute('data-touch-primary', '');
     const host = document.createElement('div');
     document.body.append(host);
@@ -1826,11 +1826,14 @@ describe('reader chrome panels', () => {
       toggleSidebar: vi.fn(),
     });
     chrome.reveal();
+    expect(chrome.isRevealed()).toBe(false);
     expect(chrome.footer.hidden).toBe(true);
-    expect(chrome.bar.hidden).toBe(false);
+    expect(chrome.bar.hidden).toBe(true);
+    expect(chrome.element.hidden).toBe(true);
     for (const action of THUMB_ACTIONS) {
       expect(chrome.bar.contains(actionButton(host, action)), action).toBe(true);
-      expect(actionButton(host, action).hidden, action).toBe(false);
+      expect(chrome.footer.contains(actionButton(host, action)), action).toBe(false);
+      expect(actionButton(host, action).hidden, action).toBe(true);
     }
     chrome.footer.getBoundingClientRect = () =>
       ({

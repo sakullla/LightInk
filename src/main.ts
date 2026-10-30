@@ -1615,7 +1615,6 @@ function syncMarkdownReaderChrome(): void {
           },
         });
       },
-      suppressProgressDock: () => true,
       toggleSidebar: () => {
         annotationHostFor(tab).toggleSidebar();
       },
@@ -1639,6 +1638,9 @@ function syncMarkdownReaderChrome(): void {
         syncSystemBarsVisible(shown);
       },
     });
+    // Markdown 没有章节进度条。suppressProgressDock 现在表示漫画会话并会藏起顶栏，
+    // 这里只收起底栏，顶栏的返回/编辑保持常显。
+    markdownReaderChrome.setConcealZones('auto', 'hidden');
     markdownReaderChromeHost = host;
     applyMarkdownEditable(false);
   } catch {
