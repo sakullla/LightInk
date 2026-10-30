@@ -2168,6 +2168,130 @@ describe('LibraryView my-books home', () => {
     again.destroy();
   });
 
+  it('reflows later jackets when an earlier cover image fails', async () => {
+    const brokenCover = 'data:image/png;base64,iVBORw0KGgo=';
+    const titles = ['活着', '三体', '百年孤独', '挪威的森林'] as const;
+    const before = placeJacketFaces(titles.slice(1));
+    const after = placeJacketFaces(titles);
+    expect(before.every((face) => face.motif === 'rings')).toBe(true);
+    expect(new Set(after.map((face) => face.motif)).size).toBeGreaterThanOrEqual(2);
+    expect(after[3]!.motif).not.toBe('rings');
+    const books = titles.map((title, index) =>
+      localItem({
+        id: `local:/books/fail-row-${index}.epub`,
+        title,
+        authors: ['作者'],
+        localPath: `/books/fail-row-${index}.epub`,
+        updatedAt: 1_000 - index,
+        ...(index === 0 ? { coverUrl: brokenCover } : {}),
+      }),
+    );
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => books) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const coverFor = (index: number) =>
+      itemRow(host, books[index]!.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    const picture = coverFor(0);
+    expect(picture.querySelector('img')).not.toBeNull();
+    expect(picture.querySelector('.lightink-library-cover-motif')).toBeNull();
+    expect(picture.classList.contains('lightink-library-cover--jacket')).toBe(false);
+    for (let index = 1; index < titles.length; index += 1) {
+      const cover = coverFor(index);
+      expect(cover.querySelector('img')).toBeNull();
+      expect(cover.dataset.jacketMotif).toBe(before[index - 1]!.motif);
+      expect(Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(
+        before[index - 1]!.hue,
+      );
+    }
+
+    picture.querySelector('img')!.dispatchEvent(new Event('error'));
+    const wallOrder = [
+      ...host.querySelectorAll('.lightink-library-cover-wall .lightink-library-item--cover'),
+    ].map((row) => row.getAttribute('data-item-id'));
+    expect(wallOrder).toEqual(books.map((book) => book.id));
+    titles.forEach((title, index) => {
+      const cover = coverFor(index);
+      expect(cover.querySelector('img')).toBeNull();
+      expect(cover.classList.contains('lightink-library-cover--jacket')).toBe(true);
+      expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(title);
+      expect(cover.dataset.jacketMotif).toBe(after[index]!.motif);
+      expect(Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(after[index]!.hue);
+    });
+    const hues = titles.map((_, index) =>
+      Number(coverFor(index).style.getPropertyValue('--lightink-library-jacket-hue')),
+    );
+    for (let index = 1; index < hues.length; index += 1) {
+      expect(hues[index]).not.toBe(hues[index - 1]);
+    }
+    view.destroy();
+  });
+
+  it('reflows the following jacket when a middle cover image fails onto the same hue', async () => {
+    const brokenCover = 'data:image/png;base64,iVBORw0KGgo=';
+    const titles = ['百年孤独', '挪威的森林', '挪威的森林'] as const;
+    const before = placeJacketFaces([titles[0]!, titles[2]!]);
+    const after = placeJacketFaces(titles);
+    expect(before[0]!.hue).toBe(jacketHue('百年孤独'));
+    expect(before[1]!.hue).toBe((jacketHue('挪威的森林') + 48) % 360);
+    expect(after[1]!.hue).toBe(before[1]!.hue);
+    expect(after[2]!.hue).not.toBe(after[1]!.hue);
+    const books = [
+      localItem({
+        id: 'local:/books/lonely.epub',
+        title: titles[0],
+        localPath: '/books/lonely.epub',
+        updatedAt: 300,
+      }),
+      localItem({
+        id: 'local:/books/forest-picture.epub',
+        title: titles[1],
+        localPath: '/books/forest-picture.epub',
+        updatedAt: 200,
+        coverUrl: brokenCover,
+      }),
+      localItem({
+        id: 'local:/books/forest-plain.epub',
+        title: titles[2],
+        localPath: '/books/forest-plain.epub',
+        updatedAt: 100,
+      }),
+    ];
+    const base = dependencies();
+    const deps = dependencies({
+      library: { ...base.library, listItems: vi.fn(async () => books) },
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, deps);
+    await view.show();
+
+    const coverFor = (index: number) =>
+      itemRow(host, books[index]!.id).querySelector<HTMLElement>('.lightink-library-cover')!;
+    expect(coverFor(1).querySelector('img')).not.toBeNull();
+    expect(coverFor(1).querySelector('.lightink-library-cover-motif')).toBeNull();
+    expect(Number(coverFor(0).style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(before[0]!.hue);
+    expect(Number(coverFor(2).style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(before[1]!.hue);
+
+    coverFor(1).querySelector('img')!.dispatchEvent(new Event('error'));
+    books.forEach((book, index) => {
+      const cover = coverFor(index);
+      expect(cover.querySelector('img')).toBeNull();
+      expect(cover.querySelector('.lightink-library-cover-jacket-title')?.textContent).toBe(book.title);
+      expect(Number(cover.style.getPropertyValue('--lightink-library-jacket-hue'))).toBe(after[index]!.hue);
+      expect(cover.dataset.jacketMotif).toBe(after[index]!.motif);
+    });
+    expect(Number(coverFor(1).style.getPropertyValue('--lightink-library-jacket-hue'))).not.toBe(
+      Number(coverFor(2).style.getPropertyValue('--lightink-library-jacket-hue')),
+    );
+    view.destroy();
+  });
+
   it('keeps the workspace travel control hidden on the shelf', async () => {
     const travel = document.createElement('button');
     travel.type = 'button';

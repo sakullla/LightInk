@@ -4829,6 +4829,16 @@ export function createLibraryView(
   let wallJacketSlots: WallJacketSlot[] = [];
   let wallJacketFaces = new Map<string, PlacedJacket>();
 
+  function assignCoverlessFaces(): void {
+    const coverless = wallJacketSlots.filter((slot) => slot.coverless);
+    const faces = placeJacketFaces(coverless.map((slot) => slot.title));
+    wallJacketFaces = new Map();
+    coverless.forEach((slot, index) => {
+      const face = faces[index];
+      if (face !== undefined) wallJacketFaces.set(slot.id, face);
+    });
+  }
+
   function syncWallJacketFaces(shown: readonly DisplayItem[], heroId: string | null): void {
     wallJacketSlots = [];
     for (const display of shown) {
@@ -4839,27 +4849,38 @@ export function createLibraryView(
         coverless: safeCoverUrl(display.item, sources) === undefined,
       });
     }
-    const coverless = wallJacketSlots.filter((slot) => slot.coverless);
-    const faces = placeJacketFaces(coverless.map((slot) => slot.title));
-    wallJacketFaces = new Map();
-    coverless.forEach((slot, index) => {
-      const face = faces[index];
-      if (face !== undefined) wallJacketFaces.set(slot.id, face);
-    });
+    assignCoverlessFaces();
   }
 
-  /** A failed image joins the coverless row at its current index. Earlier faces stay put. */
-  function faceAfterCoverError(item: LibraryItem): PlacedJacket | undefined {
-    const slot = wallJacketSlots.find((entry) => entry.id === item.id);
-    if (slot === undefined) return undefined;
-    slot.coverless = true;
-    const titles: string[] = [];
-    for (const entry of wallJacketSlots) {
-      if (!entry.coverless) continue;
-      titles.push(entry.title);
-      if (entry.id === item.id) break;
+  function wallJacketCover(itemId: string): HTMLElement | null {
+    for (const row of itemList.querySelectorAll<HTMLElement>('.lightink-library-item--cover')) {
+      if (row.dataset.itemId !== itemId) continue;
+      return row.querySelector<HTMLElement>('.lightink-library-cover--jacket');
     }
-    return placeJacketFaces(titles).at(-1);
+    return null;
+  }
+
+  function paintPlacedJacket(itemId: string, face: PlacedJacket): void {
+    const cover = wallJacketCover(itemId);
+    if (cover === null) return;
+    cover.style.setProperty('--lightink-library-jacket-hue', String(face.hue));
+    cover.dataset.jacketMotif = face.motif;
+  }
+
+  /**
+   * A failed image joins the coverless row. Repaint every jacket already on
+   * the wall, including books after the failure: their faces were placed
+   * while this slot still counted as a picture.
+   */
+  function adoptFailedCover(item: LibraryItem): void {
+    const slot = wallJacketSlots.find((entry) => entry.id === item.id);
+    if (slot === undefined) return;
+    slot.coverless = true;
+    assignCoverlessFaces();
+    for (const [id, face] of wallJacketFaces) {
+      if (id === item.id) continue;
+      paintPlacedJacket(id, face);
+    }
   }
 
   function appendCover(cover: HTMLElement, display: DisplayItem, plainJacket = false): void {
@@ -4874,8 +4895,7 @@ export function createLibraryView(
       image.addEventListener('load', () => image.classList.add('is-loaded'));
       image.addEventListener('error', () => {
         image.remove();
-        const face = faceAfterCoverError(display.item);
-        if (face !== undefined) wallJacketFaces.set(display.item.id, face);
+        adoptFailedCover(display.item);
         appendJacket(cover, display.item, plainJacket);
       });
       cover.appendChild(image);
