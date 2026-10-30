@@ -3435,14 +3435,23 @@ export function createLibraryView(
     setStatus(labels().loading);
   }
 
-  function parkWorkspaceTravel(): void {
+  /**
+   * 桌面书架把现有「编辑」放进顶栏动作组（导入 / AI 一侧），不贴窗口右缘。
+   * Android 不挂上这个按钮。离开书架时藏起，避免管理页顶栏多一枚写作入口。
+   */
+  function parkWorkspaceTravel(onShelf: boolean): void {
     const travel = deps.workspaceTravel;
     if (travel === undefined) return;
     travel.classList.add('lightink-library-edit');
-    travel.hidden = true;
-    if (travel.parentElement !== root) {
-      root.appendChild(travel);
+    if (doc.documentElement.hasAttribute('data-android')) {
+      travel.hidden = true;
+      if (travel.parentElement === headerActions) travel.remove();
+      return;
     }
+    if (travel.parentElement !== headerActions) {
+      headerActions.insertBefore(travel, toolbar);
+    }
+    travel.hidden = !onShelf;
   }
 
   function syncPageChrome(): void {
@@ -3460,7 +3469,7 @@ export function createLibraryView(
     headerImport.hidden = currentTab !== 'shelf';
     // R3/R12：同一个助手入口覆盖桌面与手机书架；无回调或离开书架时不渲染死控件。
     headerAssistant.hidden = deps.onOpenAssistant === undefined || currentTab !== 'shelf';
-    parkWorkspaceTravel();
+    parkWorkspaceTravel(currentTab === 'shelf');
     manageNavButton.classList.toggle('is-active', activeSection === 'manage');
     groupPane.hidden = inCatalog;
     sourcePane.hidden = inCatalog;

@@ -740,7 +740,11 @@ describe('createAppShell immersive chrome', () => {
     expect(fakeRoot.querySelector('#lightink-tabs-host')?.hidden).toBe(false);
     expect(fakeRoot.querySelector('#lightink-reader-shell')?.hidden).toBe(true);
     expect(readBtn?.textContent).toBe('阅读/书架');
-    expect(readBtn?.hidden).toBe(true);
+    expect(readBtn?.hidden).toBe(false);
+    const toolbarKids = fakeRoot.querySelector('#lightink-toolbar')?.children ?? [];
+    const readIndex = toolbarKids.indexOf(readBtn as FakeEl);
+    const dragIndex = toolbarKids.findIndex((child) => child.className.includes('lightink-chrome-drag'));
+    expect(readIndex).toBeGreaterThan(dragIndex);
     // R5：往返走「阅读/书架」，不再点常驻「返回书架」浮层。
     readBtn?.click();
     expect(calls).toEqual(['editor', 'shelf']);
@@ -758,6 +762,36 @@ describe('createAppShell immersive chrome', () => {
     expect(fakeRoot.querySelector('#lightink-enter-editor')).not.toBeNull();
     readBtn?.click();
     expect(calls).toEqual(['editor', 'shelf', 'shelf']);
+    shell.applyWorkspace({ mode: 'reader', surface: 'shelf' });
+    expect(readBtn?.hidden).toBe(true);
+  });
+
+  it('labels the editor menu-bar return in English as Reading / Shelf', () => {
+    installFakeDocument();
+    let locale: 'en' | 'zh-CN' = 'en';
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const shell = createAppShell(
+      root,
+      {
+        ...stubActions(),
+        getLocale: () => locale,
+        getWorkspaceSnapshot: () => ({ mode: 'editor', surface: 'editor' }),
+        getWorkspaceMode: () => 'editor',
+      },
+      { shortcutBindings: () => [], storage: null },
+    );
+    const fakeRoot = root as unknown as FakeEl;
+    const readBtn = fakeRoot.querySelector('#lightink-enter-reader-home');
+    const editBtn = fakeRoot.querySelector('#lightink-enter-editor');
+    expect(readBtn?.hidden).toBe(false);
+    expect(readBtn?.textContent).toBe('Reading / Shelf');
+    expect(editBtn?.textContent).toBe('Edit');
+    expect(editBtn?.hidden).toBe(true);
+    locale = 'zh-CN';
+    shell.rebuildMenus();
+    expect(readBtn?.textContent).toBe('阅读/书架');
+    expect(editBtn?.textContent).toBe('编辑');
+    expect(fakeRoot.querySelector('#lightink-toolbar')?.contains(readBtn)).toBe(true);
   });
 
   it('R6：Android 阅读侧裁剪——「编辑」travel 按钮不挂载，阅读侧 chrome 正常', () => {

@@ -476,18 +476,29 @@ html:not([data-android]):not([data-touch-primary]) .lightink-library-search:focu
   gap: 4px;
 }
 
+/* 与导入 / AI 同组排布。不要 absolute 到窗口右缘，否则盖住最小化、最大化、关闭。 */
 .lightink-library-edit.lightink-workspace-travel {
-  position: absolute;
-  top: 14px;
-  right: var(--lightink-library-pad-x);
-  z-index: 30;
+  position: static;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 0;
+  min-width: 0;
   min-height: 32px;
+  max-width: 100%;
   padding: 4px 12px;
   border-radius: var(--lightink-radius-control);
   background: var(--lightink-bg-elevated);
   box-shadow: inset 0 0 0 1px var(--lightink-border), var(--lightink-shadow);
   color: var(--lightink-fg);
   font-size: 13px;
+  white-space: nowrap;
+}
+
+html[data-android] .lightink-library-edit.lightink-workspace-travel {
+  display: none !important;
 }
 
 .lightink-library-primary {

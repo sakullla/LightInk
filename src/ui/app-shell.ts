@@ -1294,6 +1294,8 @@ export function createAppShell(
   enterReaderHomeBtn.type = 'button';
   enterReaderHomeBtn.id = 'lightink-enter-reader-home';
   enterReaderHomeBtn.className = 'lightink-workspace-travel';
+  // 编辑器菜单栏可见；书架/阅读由 applyWorkspace 藏起。不绝对贴窗口右缘
+  //（工具栏右侧 caption 留白已经让开最小化、最大化、关闭）。
   enterReaderHomeBtn.hidden = true;
   enterReaderHomeBtn.addEventListener('click', () => enterReaderHomeWorkspace(actions));
 
@@ -1562,6 +1564,7 @@ export function createAppShell(
       editorChrome && lastWorkspaceSurface !== null && lastWorkspaceSurface !== 'editor';
     setChromeSetVisible(chromeHost, editorChrome);
     setChromeSetVisible(tabsHost, editorChrome);
+    enterReaderHomeBtn.hidden = !editorChrome;
     // 恢复锚点只在编辑器表面常显（书架/阅读器无菜单 chrome 可恢复）。
     setChromeSetVisible(anchor, editorChrome);
     setChromeSetVisible(readerShell, shelfChrome);

@@ -2292,22 +2292,42 @@ describe('LibraryView my-books home', () => {
     view.destroy();
   });
 
-  it('keeps the workspace travel control hidden on the shelf', async () => {
+  it('shows the shelf edit control beside import and AI', async () => {
     const travel = document.createElement('button');
     travel.type = 'button';
     travel.id = 'lightink-enter-editor';
     travel.className = 'lightink-workspace-travel';
     travel.textContent = '编辑';
+    const entered = vi.fn();
+    travel.addEventListener('click', entered);
     const deps = dependencies({ workspaceTravel: travel });
     const host = document.createElement('div');
     document.body.appendChild(host);
     const view = createLibraryView(host, deps);
     await view.show();
 
-    const toolbar = host.querySelector('.lightink-library-toolbar');
-    expect(toolbar?.contains(travel)).toBe(false);
+    const actions = host.querySelector('.lightink-library-header-actions');
+    const importButton = actions?.querySelector('.lightink-library-header-import');
+    const assistant = actions?.querySelector('.lightink-library-header-assistant');
+    expect(actions?.contains(travel)).toBe(true);
+    expect(host.querySelector('.lightink-library-toolbar')?.contains(travel)).toBe(false);
     expect(travel.classList.contains('lightink-library-edit')).toBe(true);
-    expect(isShown(travel)).toBe(false);
+    expect(isShown(travel)).toBe(true);
+    expect(travel.textContent).toBe('编辑');
+    const order = Array.from(actions?.children ?? []);
+    expect(order.indexOf(importButton as Element)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(travel)).toBeGreaterThan(order.indexOf(importButton as Element));
+    expect(order.indexOf(travel)).toBeGreaterThan(order.indexOf(assistant as Element));
+    travel.click();
+    expect(entered).toHaveBeenCalledTimes(1);
+
+    const css = readFileSync(resolve(process.cwd(), 'src/library/library.css'), 'utf-8');
+    const travelRule = css.match(/\.lightink-library-edit\.lightink-workspace-travel\s*\{([^}]*)\}/);
+    expect(travelRule).not.toBeNull();
+    expect(travelRule![1]).not.toMatch(/position:\s*absolute/);
+    expect(travelRule![1]).not.toMatch(/right:\s*var\(--lightink-library-pad-x\)/);
+    expect(css).toMatch(/html\[data-android\] \.lightink-library-edit\.lightink-workspace-travel\s*\{[^}]*display:\s*none/);
+
     const manageEntry =
       host.querySelector('.lightink-library-manage-entry') ??
       host.querySelector('.lightink-library-cache-entry') ??
@@ -2315,17 +2335,45 @@ describe('LibraryView my-books home', () => {
     expect(manageEntry instanceof HTMLElement && isShown(manageEntry)).toBe(true);
 
     await openManage(host);
-    // 管理区内容随导航一次点击呈现
     shownButtonWithText(host, '导入本地书籍');
     expect(isShown(travel)).toBe(false);
-    expect(
-      Array.from(host.querySelectorAll('.lightink-library-toolbar button')).some(
-        (button) => button.textContent === '编辑' && isShown(button),
-      ),
-    ).toBe(false);
     expect(isShown(host.querySelector('.lightink-library-editor-entry'))).toBe(false);
     view.destroy();
     expect(travel.isConnected).toBe(false);
+  });
+
+  it('keeps an English Edit label and does not render it on Android', async () => {
+    const travel = document.createElement('button');
+    travel.type = 'button';
+    travel.id = 'lightink-enter-editor';
+    travel.className = 'lightink-workspace-travel';
+    travel.textContent = 'Edit';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = createLibraryView(host, dependencies({ workspaceTravel: travel }));
+    await view.show();
+    expect(isShown(travel)).toBe(true);
+    expect(travel.textContent).toBe('Edit');
+    view.destroy();
+
+    document.documentElement.setAttribute('data-android', '');
+    const androidTravel = document.createElement('button');
+    androidTravel.type = 'button';
+    androidTravel.id = 'lightink-enter-editor';
+    androidTravel.className = 'lightink-workspace-travel';
+    androidTravel.textContent = '编辑';
+    const androidHost = document.createElement('div');
+    document.body.appendChild(androidHost);
+    const androidView = createLibraryView(
+      androidHost,
+      dependencies({ workspaceTravel: androidTravel }),
+    );
+    await androidView.show();
+    expect(isShown(androidTravel)).toBe(false);
+    expect(androidHost.querySelector('.lightink-library-header-actions')?.contains(androidTravel)).toBe(
+      false,
+    );
+    androidView.destroy();
   });
 
   it('shows the home assistant entry on the shelf when wired and hides it elsewhere', async () => {
