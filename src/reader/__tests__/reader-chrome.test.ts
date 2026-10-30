@@ -318,19 +318,31 @@ describe('createReaderChrome reveal', () => {
     expect(chrome.footer.querySelector('.lightink-reader-chrome-progress')).not.toBeNull();
   });
 
-  it('keeps touch actions on the top bar when comic progress docks are suppressed', () => {
+  it('hides the novel top bar during a comic session and keeps its actions out of the footer', () => {
+    let comic = true;
     const { host, chrome } = mount({
       touchMode: true,
-      suppressProgressDock: () => true,
+      suppressProgressDock: () => comic,
     });
-    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.isRevealed()).toBe(false);
+    expect(chrome.element.hidden).toBe(true);
+    expect(chrome.bar.hidden).toBe(true);
     expect(chrome.footer.hidden).toBe(true);
     expect(chrome.whisper.hidden).toBe(true);
     expect(chrome.bar.contains(actionButton(host, 'backToShelf'))).toBe(true);
-    expect(actionButton(host, 'backToShelf').hidden).toBe(false);
+    expect(actionButton(host, 'backToShelf').hidden).toBe(true);
     for (const action of THUMB_ACTIONS) {
       expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
       expect(chrome.footer.contains(actionButton(host, action))).toBe(false);
+      expect(actionButton(host, action).hidden).toBe(true);
+    }
+    comic = false;
+    chrome.reveal();
+    expect(chrome.isRevealed()).toBe(true);
+    expect(chrome.bar.hidden).toBe(false);
+    expect(actionButton(host, 'backToShelf').hidden).toBe(false);
+    for (const action of THUMB_ACTIONS) {
+      expect(chrome.bar.contains(actionButton(host, action))).toBe(true);
       expect(actionButton(host, action).hidden).toBe(false);
     }
   });
@@ -1313,7 +1325,6 @@ describe('createReaderChrome Markdown 编辑/完成', () => {
     });
     const mounted = mount({
       touchMode: true,
-      suppressProgressDock: () => true,
       markdownEditing: () => editing,
       onMarkdownEdit,
       onMarkdownFinish,

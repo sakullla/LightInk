@@ -170,9 +170,9 @@ export interface ReaderChromeDeps {
   /** When true, an already-revealed bar does not auto-hide (e.g. scroll at top). */
   stayRevealed?: () => boolean;
   /**
-   * Hide the flow footer/whisper for comics. Page/slider live on the
-   * comic overlay; a persistent "第 N 页 · ── · N%" dock is too sparse
-   * for a bitmap canvas and duplicates the overlay chrome.
+   * Comic session: hide the novel bar as well as the flow footer/whisper.
+   * Page/slider live on the comic overlay. isRevealed() is false for the
+   * whole session so the titlebar follows comic chrome only.
    */
   suppressProgressDock?: () => boolean;
   /**
@@ -749,9 +749,12 @@ export function createReaderChrome(
 
   const syncDom = (): void => {
     // R7 接管态与原机制合成（单写者仍在本函数）：
-    //   barShown  = held 强制显示 ‖ (revealed 且未被 hidden 强制隐藏)
+    //   漫画会话整段藏起小说栏，标题栏只跟漫画栏。
+    //   barShown  = 非漫画 && (held 强制显示 ‖ (revealed 且未被 hidden 强制隐藏))
     //   footerShown/whisperShown 同理按 bottom 合成。
-    const barShown = concealTop === 'held' || (revealed && concealTop !== 'hidden');
+    const comicSession = suppressProgressDock();
+    const barShown =
+      !comicSession && (concealTop === 'held' || (revealed && concealTop !== 'hidden'));
     if (barShown !== lastChromeShown) {
       lastChromeShown = barShown;
       deps.onRevealChange?.(barShown);
@@ -774,7 +777,7 @@ export function createReaderChrome(
       drag.removeAttribute('data-tauri-drag-region');
       bar.style.setProperty('-webkit-app-region', 'no-drag');
     }
-    const hideProgress = suppressProgressDock();
+    const hideProgress = comicSession;
     const footerShown =
       concealBottom === 'held' ||
       (revealed && !hideProgress && concealBottom !== 'hidden');
@@ -930,6 +933,12 @@ export function createReaderChrome(
       return;
     }
     clearHideTimer();
+    // 小说/PDF/重排常显，不把 revealed 打回 false。漫画会话立刻按
+    // suppressProgressDock 把小说栏写隐藏，内部 revealed 仍留给回到小说后恢复。
+    if (suppressProgressDock()) {
+      syncDom();
+      return;
+    }
     if (!revealed) {
       revealed = true;
       syncDom();
@@ -1695,7 +1704,7 @@ export function createReaderChrome(
     bar,
     footer,
     whisper,
-    isRevealed: () => revealed,
+    isRevealed: () => revealed && !suppressProgressDock(),
     setProgress,
     setBookmarked,
     setAnnotationBadge,
