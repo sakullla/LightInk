@@ -75,7 +75,7 @@ const en = {
   'view.readerLineHeight': 'Line height',
   'view.readerMeasure': 'Measure',
 
-  'theme.warm-light': 'Warm Light',
+  'theme.warm-light': 'Light',
   'theme.cool-light': 'Cool Light',
   'theme.dark': 'Ink Dark',
   'theme.midnight': 'Midnight',
@@ -1019,7 +1019,7 @@ const zhCN = {
   'view.readerLineHeight': '行高',
   'view.readerMeasure': '行长',
 
-  'theme.warm-light': '纸墨浅色',
+  'theme.warm-light': '浅白',
   'theme.cool-light': '云白浅色',
   'theme.dark': '墨夜深色',
   'theme.midnight': '深空深色',

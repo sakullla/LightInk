@@ -243,6 +243,8 @@
 }
 
 html[data-platform='mac'] .lightink-library-header {
+  /* 交通灯让位放进品牌列，整条网格仍与侧栏左缘对齐。 */
+  padding-left: 0;
   padding-right: 8px;
 }
 
@@ -7547,30 +7549,67 @@ html[data-keyboard]:is([data-android], [data-touch-primary])
 
 .lightink-library-brand::before {
   content: '墨';
-  display: inline-grid;
+  display: grid;
   place-items: center;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   background: var(--lightink-accent);
   color: var(--lightink-accent-contrast);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--lightink-accent) 30%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent);
-  font-family: var(--lightink-font-cover);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
+  font-family: var(--lightink-font-ui);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 28px;
+  text-align: center;
   pointer-events: none;
 }
 
+/* 收起后 56px 轨放不下印记 + 按钮，只留一枚看得清的侧栏开关。 */
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand {
+  justify-content: center;
   padding: 0;
+  overflow: visible;
 }
 
 .lightink-library[data-library-nav-collapsed='true'] .lightink-library-brand::before {
-  width: 28px;
-  height: 28px;
+  display: none;
+}
+
+.lightink-library-nav-collapse {
+  color: var(--lightink-fg);
+}
+
+.lightink-library-nav-collapse .lightink-library-nav-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 1;
+  color: var(--lightink-fg);
+}
+
+.lightink-library-nav-collapse:hover,
+.lightink-library-nav-collapse:focus-visible {
+  background: color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+  color: var(--lightink-fg);
+}
+
+/* macOS 交通灯盖住顶栏左端。展开时印记从灯后起笔；收起时开关挪到灯的右侧，避免裁成空方块。 */
+html[data-platform='mac'] .lightink-library:not([data-library-nav-collapsed='true']) .lightink-library-brand {
+  padding-left: calc(var(--lightink-titlebar-leading, 78px) + 6px);
+}
+
+html[data-platform='mac'] .lightink-library[data-library-nav-collapsed='true'] .lightink-library-header {
+  position: relative;
+}
+
+html[data-platform='mac'] .lightink-library[data-library-nav-collapsed='true'] .lightink-library-nav-collapse {
+  position: absolute;
+  left: calc(var(--lightink-titlebar-leading, 78px) + 8px);
+  top: 50%;
+  z-index: 3;
+  margin: 0;
+  transform: translateY(-50%);
 }
 
 .lightink-library-header-main {

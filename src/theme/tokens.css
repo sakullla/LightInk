@@ -2,7 +2,7 @@
  * LightInk 主题令牌（T6, R15）。唯一 owner：前端主题服务（src/theme/theme-service.ts）。
  *
  * 内置主题（4 套，浅/深各二）：
- *   - warm-light 纸墨浅色：默认长读浅色，暖纸底 + 赭石强调（避纯白眩光）；
+ *   - warm-light 浅白：Markdown 默认浅色，白纸版心 + 冷灰桌面 + 墨蓝强调；
  *   - cool-light 云白浅色：冷调浅色，雾白底 + 青蓝强调；
  *   - dark      墨夜深色：暖炭深色，墨色底 + 蜜蜡强调；
  *   - midnight  深空深色：冷调深色，夜空蓝底 + 星蓝强调。
@@ -28,7 +28,7 @@
  *
  * 自定义主题 = 用户 CSS 文件，由 ThemeService 注入 <style> 覆盖下列令牌
  * （:root 上的 warm-light 令牌作为自定义主题未定义项的回退）。
- * 未写出的 --lightink-syntax-* 同样回退纸墨浅色，而不是午夜/深空。
+ * 未写出的 --lightink-syntax-* 同样回退浅白，而不是午夜/深空。
  */
 
 /*
@@ -115,28 +115,27 @@
   --lightink-annotation: color-mix(in srgb, var(--lightink-accent) 35%, var(--lightink-bg-elevated));
   --lightink-annotation-wash: color-mix(in srgb, var(--lightink-accent) 32%, transparent);
 
-  /* Paper stack (纸光 v4): warm ivory desk, chalk-white sheet, linen well. */
-  --lightink-bg: #f7f3ec;
-  --lightink-bg-elevated: #fffdf9;
-  --lightink-bg-sunken: #ece5d9;
-  --lightink-fg: #26231d; /* ~13:1 on paper */
-  --lightink-fg-strong: #171410;
-  --lightink-muted: #6b6457;
-  --lightink-accent: #b6462a; /* 朱砂封泥 */
+  /* Markdown default: cool gray desk, pure white sheet, neutral ink. */
+  --lightink-bg: #f5f6f8;
+  --lightink-bg-elevated: #ffffff;
+  --lightink-bg-sunken: #eef0f3;
+  --lightink-fg: #1c1f24; /* ~14:1 on white */
+  --lightink-fg-strong: #101216;
+  --lightink-muted: #5c6570;
+  --lightink-accent: #1d4e89;
   /* accent-ink：accent 当「字」用而非当「底」用时的取色（比 accent 更沉）。
      阅读器/编辑器/助手面板过去引用它，但它只在 library.css 里定义，
-     宿主表面一律回退到 accent（一个当填充用的朱砂），于是阅读进度「0%」
-     被画成告警红。 */
-  --lightink-accent-ink: #96391f;
-  --lightink-accent-soft: #f4e2da;
-  --lightink-accent-contrast: #fff9f4;
-  --lightink-border: #e4dccd;
-  --lightink-border-strong: #cec3ae;
-  /* Code surface: a cooler linen card so blocks read as ink, not mud. */
-  --lightink-code-bg: #f3efe6;
-  --lightink-code-fg: #282319;
-  --lightink-selection: rgba(182, 70, 42, 0.18);
-  --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 38%, var(--lightink-bg));
+     宿主表面一律回退到 accent，进度数字会被画成强调色块。 */
+  --lightink-accent-ink: #163e6c;
+  --lightink-accent-soft: #e7eef6;
+  --lightink-accent-contrast: #ffffff;
+  --lightink-border: #e3e6eb;
+  --lightink-border-strong: #c5cbd3;
+  /* Code surface sits one step off the white sheet so fences stay visible. */
+  --lightink-code-bg: #f3f4f6;
+  --lightink-code-fg: #1c2128;
+  --lightink-selection: rgba(29, 78, 137, 0.16);
+  --lightink-selection-strong: color-mix(in srgb, var(--lightink-accent) 32%, var(--lightink-bg));
   --lightink-danger: #a93b2f;
   --lightink-success: #3d6b45;
   --lightink-warning: #8a611d;
@@ -145,10 +144,10 @@
   --lightink-highlight: #ead284;
   --lightink-highlight-ink: #5b4c18;
   --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 60%, transparent);
-  --lightink-overlay: rgba(32, 27, 20, 0.38);
-  --lightink-shadow: 0 1px 2px rgba(42, 36, 26, 0.05), 0 8px 24px rgba(42, 36, 26, 0.07);
-  --lightink-shadow-strong: 0 28px 70px rgba(32, 27, 20, 0.18), 0 6px 18px rgba(32, 27, 20, 0.08);
-  --lightink-shadow-pop: 0 12px 34px rgba(42, 36, 26, 0.14), 0 2px 6px rgba(42, 36, 26, 0.07);
+  --lightink-overlay: rgba(22, 26, 32, 0.36);
+  --lightink-shadow: 0 1px 2px rgba(24, 28, 34, 0.05), 0 8px 24px rgba(24, 28, 34, 0.06);
+  --lightink-shadow-strong: 0 28px 70px rgba(22, 26, 32, 0.16), 0 6px 18px rgba(22, 26, 32, 0.07);
+  --lightink-shadow-pop: 0 12px 34px rgba(24, 28, 34, 0.12), 0 2px 6px rgba(24, 28, 34, 0.06);
 
   /* Typography stacks (system-first; no network font fetch). */
   --lightink-font-ui: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",

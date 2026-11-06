@@ -4772,6 +4772,12 @@ body {
   background-image: none;
 }
 
+/* Markdown 版心是浅白纸，不铺桌面颗粒，也不跟书架的暖色。 */
+#lightink-editor-area[data-surface='markdown'] {
+  background-color: var(--lightink-bg);
+  background-image: none;
+}
+
 /* ---- 10. 触屏/窄窗的全局微调 ---- */
 @media (max-width: 760px) {
   .lightink-modal-dialog {

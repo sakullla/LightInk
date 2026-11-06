@@ -1,7 +1,7 @@
 /**
  * tokens.css 结构性测试（node 环境，经 fs 读取文件文本断言）：
  *   - warm-light / dark 两个内置主题块均存在；
- *   - warm-light 背景为暖色护眼、非纯白；
+ *   - warm-light（Markdown 默认）桌面为浅白、版心为纯白，不是暖纸；
  *   - 四个主题都定义了主要语法令牌（keyword/comment/string/number/
  *     function/title/variable/attr/builtin/literal/punctuation）；
  *   - function 与 title、number 与 literal 在每套主题里必须是不同 hex；
@@ -107,18 +107,22 @@ describe('tokens.css 内置主题', () => {
     expect(css).toContain('[data-theme="dark"]');
   });
 
-  it('warm-light 背景为暖色护眼、非纯白', () => {
-    const bg = tokenValue(themeBlock('warm-light'), '--lightink-bg').toLowerCase();
-    expect(bg).not.toBe('#fff');
+  it('warm-light 是浅白：桌面近白，Markdown 版心纯白', () => {
+    const block = themeBlock('warm-light');
+    const bg = tokenValue(block, '--lightink-bg').toLowerCase();
+    const sheet = tokenValue(block, '--lightink-bg-elevated').toLowerCase();
+    expect(sheet).toBe('#ffffff');
     expect(bg).not.toBe('#ffffff');
+    expect(bg).not.toBe('#fff');
     expect(bg).not.toBe('white');
-    // 暖纸色：R ≥ G ≥ B 且整体明亮（护眼浅色的结构特征）。
     const hex = /^#([0-9a-f]{6})$/.exec(bg);
     expect(hex, `warm-light 背景应为 #rrggbb，实际 ${bg}`).not.toBeNull();
     const [r, g, b] = [1, 3, 5].map((i) => parseInt((hex as RegExpExecArray)[1].slice(i - 1, i + 1), 16));
-    expect(r).toBeGreaterThanOrEqual(g);
-    expect(g).toBeGreaterThanOrEqual(b);
-    expect(r).toBeGreaterThan(0xd0); // 明亮浅色
+    expect(r).toBeGreaterThan(0xe8);
+    expect(g).toBeGreaterThan(0xe8);
+    expect(b).toBeGreaterThan(0xe8);
+    // 中性浅白，不带暖纸的红偏。
+    expect(Math.abs(r - b)).toBeLessThan(12);
   });
 
   it('dark 背景为深色', () => {
