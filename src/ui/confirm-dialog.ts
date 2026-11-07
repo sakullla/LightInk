@@ -36,10 +36,16 @@ const SURFACE_THEME_VARS = [
 ] as const;
 
 export function inferDialogThemeHost(doc: Document): HTMLElement | null {
-  return (
+  const activeSurface =
     doc.querySelector<HTMLElement>('.lightink-library:not([hidden])') ??
-    doc.querySelector<HTMLElement>('.lightink-reader:not([hidden])') ??
-    doc.querySelector<HTMLElement>('[data-library-theme], [data-reader-theme]')
+    doc.querySelector<HTMLElement>('.lightink-reader:not([hidden])');
+  if (activeSurface !== null) return activeSurface;
+  const app = doc.getElementById('app');
+  if (app !== null && app.classList.contains('is-workspace-editor')) {
+    return null;
+  }
+  return doc.querySelector<HTMLElement>(
+    '[data-library-theme]:not([hidden]):not(.lightink-toast-region):not(.lightink-modal-overlay), [data-reader-theme]:not([hidden]):not(.lightink-toast-region):not(.lightink-modal-overlay)',
   );
 }
 

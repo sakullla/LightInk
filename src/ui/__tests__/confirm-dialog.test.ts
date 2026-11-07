@@ -91,13 +91,24 @@ describe('dialog surface theme', () => {
   it('prefers a visible library host over a hidden one', () => {
     const hidden = document.createElement('section');
     hidden.className = 'lightink-library';
+    hidden.dataset.libraryTheme = 'gallery';
     hidden.hidden = true;
+    expect(inferDialogThemeHost(document)).toBeNull();
     const visible = document.createElement('section');
     visible.className = 'lightink-library';
     document.body.append(hidden, visible);
     expect(inferDialogThemeHost(document)).toBe(visible);
     hidden.remove();
     visible.remove();
+  });
+
+  it('ignores leftover toast regions and editor workspace when inferring dialog theme host', () => {
+    const toastRegion = document.createElement('div');
+    toastRegion.className = 'lightink-toast-region';
+    toastRegion.dataset.libraryTheme = 'gallery';
+    document.body.appendChild(toastRegion);
+    expect(inferDialogThemeHost(document)).toBeNull();
+    toastRegion.remove();
   });
 
   it('copies shelf tokens onto the alert overlay instead of editor paper', async () => {

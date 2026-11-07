@@ -3139,6 +3139,10 @@ html[data-keyboard] .lightink-note-textarea {
   --lightink-fg-strong: #17130c;
   --lightink-muted: #6d6455;
   --lightink-border: rgba(36, 31, 24, 0.16);
+  --lightink-accent: #8f4e2c;
+  --lightink-accent-ink: #723b1e;
+  --lightink-accent-soft: rgba(143, 78, 44, 0.11);
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
   --lightink-highlight: #e8d28a;
   --lightink-highlight-ink: #5f521c;
 }
@@ -3152,6 +3156,10 @@ html[data-keyboard] .lightink-note-textarea {
   --lightink-fg-strong: #3e2f1c;
   --lightink-muted: #7a6750;
   --lightink-border: rgba(78, 61, 40, 0.2);
+  --lightink-accent: #8c4a27;
+  --lightink-accent-ink: #6e381b;
+  --lightink-accent-soft: rgba(140, 74, 39, 0.13);
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
   --lightink-highlight: #e3c96e;
   --lightink-highlight-ink: #574f1f;
 }
@@ -3165,6 +3173,10 @@ html[data-keyboard] .lightink-note-textarea {
   --lightink-fg-strong: #e6dfd1;
   --lightink-muted: #a49a89;
   --lightink-border: rgba(217, 210, 196, 0.14);
+  --lightink-accent: #d4956a;
+  --lightink-accent-ink: #e2ab84;
+  --lightink-accent-soft: rgba(212, 149, 106, 0.16);
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
   --lightink-highlight: #8a7430;
   --lightink-highlight-ink: #f0e2ac;
 }
@@ -3178,6 +3190,10 @@ html[data-keyboard] .lightink-note-textarea {
   --lightink-fg-strong: #e8edf6;
   --lightink-muted: #8b94a6;
   --lightink-border: rgba(211, 218, 230, 0.12);
+  --lightink-accent: #7aa2d4;
+  --lightink-accent-ink: #96b8e3;
+  --lightink-accent-soft: rgba(122, 162, 212, 0.16);
+  --lightink-focus-ring: color-mix(in srgb, var(--lightink-accent) 55%, transparent);
   --lightink-highlight: #7d7440;
   --lightink-highlight-ink: #eadfa9;
 }
@@ -3302,10 +3318,17 @@ html[data-keyboard] .lightink-note-textarea {
     color var(--lightink-duration-fast) var(--lightink-easing-standard);
 }
 
-.lightink-reader-chrome-action:hover,
-.lightink-reader-chrome-action.is-open {
+.lightink-reader-chrome-action:hover {
   background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
   color: var(--lightink-fg-strong, var(--lightink-fg));
+}
+
+.lightink-reader-chrome-action.is-open,
+.lightink-reader-chrome-action[aria-expanded='true'] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-fg-strong, var(--lightink-fg)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-accent) 26%, transparent);
+  font-weight: 600;
 }
 
 .lightink-reader-chrome-action:focus-visible {
@@ -3491,6 +3514,31 @@ html[data-keyboard] .lightink-note-textarea {
 
 .lightink-reader-selection-color {
   border-radius: var(--lightink-radius-pill);
+}
+
+/* 划选工具条内部分组分隔：色点组 | 标注与基础工具 | AI 工具 | 取消高亮。 */
+.lightink-reader-selection-colors {
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid color-mix(in srgb, var(--lightink-border) 75%, transparent);
+}
+
+.lightink-reader-selection-action--aiTranslate:not([hidden]),
+.lightink-reader-selection-action--removeHighlight:not([hidden]) {
+  position: relative;
+  margin-left: 4px;
+}
+
+.lightink-reader-selection-action--aiTranslate:not([hidden])::before,
+.lightink-reader-selection-action--removeHighlight:not([hidden])::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: color-mix(in srgb, var(--lightink-border) 75%, transparent);
+  pointer-events: none;
 }
 
 /* 阅读器内的滚动条与纸面协调。 */

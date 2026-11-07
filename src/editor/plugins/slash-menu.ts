@@ -295,6 +295,7 @@ function buildMenuElement(
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'lightink-slash-menu__item';
+    item.dataset.slashId = element.id;
     if (index === state.selectedIndex) {
       item.className += ' lightink-slash-menu__item--active';
       item.setAttribute('aria-selected', 'true');
@@ -308,6 +309,7 @@ function buildMenuElement(
     hint.className = 'lightink-slash-menu__hint';
     hint.textContent = element.id;
     item.append(label, hint);
+    item.addEventListener('mouseenter', () => applySelectedIndex(el, index));
     item.addEventListener('mousedown', (event) => event.preventDefault());
     item.addEventListener('click', () => insertElement(view, ctx, element.id));
     el.appendChild(item);

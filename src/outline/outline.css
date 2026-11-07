@@ -8,6 +8,13 @@
  * 抬高特异性，不依赖加载顺序。
  */
 
+/* 常驻胶囊尺寸：默认即内缩 6px + 全圆角，消除悬停/激活时的 6px 横向跳动。 */
+#lightink-outline-sidebar .lightink-outline-item {
+  border-radius: 999px;
+  margin-inline: 6px;
+  width: calc(100% - 12px);
+}
+
 /* 当前项（阅读位置）与键盘活动项：accent-soft 胶囊。
    内缩 6px + 全圆角，条目行仍是全宽命中区（margin 不改变点击目标高度）。 */
 #lightink-outline-sidebar .lightink-outline-item:hover,
@@ -18,9 +25,16 @@
   width: calc(100% - 12px);
 }
 
-/* 当前项文字用强调前景，与胶囊底形成稳定对比（四主题成对调校）。 */
+/* 当前项文字用强调前景，与胶囊底形成稳定对比（四主题成对调校）；
+   去掉 theme.css 在 999px 胶囊左端被裁成月牙的 2px 竖条，改用柔和内描边。 */
 #lightink-outline-sidebar .lightink-outline-item.is-current {
   color: var(--lightink-fg-strong, var(--lightink-fg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lightink-accent) 22%, transparent);
+}
+
+/* 一级标题微提字重，拉开章节树层级节奏。 */
+#lightink-outline-sidebar .lightink-outline-item.level-1 {
+  font-weight: 560;
 }
 
 /* 常驻搜索框（§3.12）：凹面面板上的抬起输入面，替代默认纸面底。 */

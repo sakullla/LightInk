@@ -532,6 +532,8 @@ export function installFixtures({
           return null;
         case 'sync_get_profile':
           return null;
+        case 'sync_status':
+          return { state: 'idle', uploaded: 0, downloaded: 0, conflicts: 0 };
         case 'sync_device_id':
           return 'capture-device';
         case 'managed_document_save_draft':

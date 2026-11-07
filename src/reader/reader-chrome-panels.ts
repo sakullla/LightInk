@@ -1376,7 +1376,10 @@ export function adoptReaderOverlayTheme(overlay: HTMLElement, host: HTMLElement)
   const elevated =
     overlay.style.getPropertyValue('--lightink-bg-elevated').trim() ||
     style.getPropertyValue('--lightink-bg-elevated').trim();
-  if (ink !== '') overlay.style.setProperty('--lightink-accent', ink);
+  if (ink !== '') {
+    overlay.style.setProperty('--lightink-accent', ink);
+    overlay.style.setProperty('--lightink-accent-ink', ink);
+  }
   if (elevated !== '') overlay.style.setProperty('--lightink-accent-soft', elevated);
 }
 

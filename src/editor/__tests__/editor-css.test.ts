@@ -165,4 +165,12 @@ describe('outline.css 胶囊高亮（§3.12）', () => {
     expect(search).not.toBeNull();
     expect(search![0]).toContain('background: var(--lightink-bg-elevated)');
   });
+
+  it('默认态即内缩胶囊，悬停/激活不触发横向跳动', () => {
+    const rest =
+      /#lightink-outline-sidebar \.lightink-outline-item\s*\{[^}]*\}/.exec(outlineCss);
+    expect(rest).not.toBeNull();
+    expect(rest![0]).toContain('margin-inline: 6px');
+    expect(rest![0]).toContain('width: calc(100% - 12px)');
+  });
 });

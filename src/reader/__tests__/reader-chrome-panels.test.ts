@@ -1678,6 +1678,7 @@ describe('reader chrome panels', () => {
     mountReaderOverlay(overlay, host);
     expect(overlay.style.getPropertyValue('--lightink-bg-elevated')).toBe('rgb(246, 246, 246)');
     expect(overlay.style.getPropertyValue('--lightink-accent')).toBe('rgb(26, 26, 26)');
+    expect(overlay.style.getPropertyValue('--lightink-accent-ink')).toBe('rgb(26, 26, 26)');
     expect(overlay.style.getPropertyValue('--lightink-comic-canvas')).toBe('');
     expect(overlay.dataset.readerTheme).toBe('white');
     expect(overlay.dataset.comicReader).toBeUndefined();

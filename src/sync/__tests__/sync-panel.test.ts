@@ -760,6 +760,26 @@ describe('sync-panel.css 增补层（纸墨工作室 §3.17）', () => {
       /\.lightink-sync-status\.is-running \.lightink-sync-status-dot\s*\{[^}]*--lightink-info/,
     );
   });
+
+  it('treats a nullish status response as idle Ready and clears aria-invalid on input', async () => {
+    const panelDeps = createDeps();
+    panelDeps.sync.status = vi.fn(async () => null as unknown as SyncStatus);
+    showSyncPanel(panelDeps);
+    await settle();
+    const dialog = document.querySelector<HTMLElement>('.lightink-sync-dialog')!;
+    const status = dialog.querySelector<HTMLElement>('.lightink-sync-status')!;
+    expect(status.classList.contains('is-error')).toBe(false);
+    expect(status.textContent).toContain('就绪');
+
+    button(dialog, '保存配置').click();
+    await settle();
+    const nameInput = dialog.querySelector<HTMLInputElement>('.lightink-sync-field input')!;
+    expect(nameInput.getAttribute('aria-invalid')).toBe('true');
+    nameInput.value = 'Home';
+    nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(nameInput.getAttribute('aria-invalid')).toBeNull();
+    button(dialog, '关闭').click();
+  });
 });
 
 function button(root: ParentNode, label: string): HTMLButtonElement {

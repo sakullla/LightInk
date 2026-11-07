@@ -616,6 +616,13 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
     }
     return names;
   };
+  for (const input of [name, url, username, password, token]) {
+    input.addEventListener('input', () => {
+      if (input.getAttribute('aria-invalid') === 'true' && input.value.trim() !== '') {
+        input.removeAttribute('aria-invalid');
+      }
+    });
+  }
   const markMissingFields = (names: readonly string[]): void => {
     for (const input of [name, url, username, password, token]) {
       const caption = input.parentElement?.querySelector('span')?.textContent ?? '';
@@ -678,7 +685,13 @@ export function showSyncPanel(deps: SyncPanelDeps): void {
       void refreshStatus();
     }, running ? 250 : 1000);
   };
-  const renderStatus = (value: SyncStatus): void => {
+  const renderStatus = (rawValue: SyncStatus | null | undefined): void => {
+    const value: SyncStatus = rawValue ?? {
+      state: 'idle',
+      uploaded: 0,
+      downloaded: 0,
+      conflicts: 0,
+    };
     const running = value.state === 'running';
     status.classList.toggle('is-running', running);
     status.classList.toggle('is-error', value.state === 'error');

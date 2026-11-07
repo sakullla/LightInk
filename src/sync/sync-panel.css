@@ -80,3 +80,21 @@
 .lightink-sync-migration-row {
   min-height: 40px;
 }
+
+/* 危险操作区：水平紧凑卡片，标题在左、动作按钮在右，避免拉长弹窗。 */
+.lightink-sync-section--danger {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--lightink-danger) 28%, var(--lightink-border));
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: color-mix(in srgb, var(--lightink-danger) 4%, transparent);
+}
+
+.lightink-sync-section--danger .lightink-sync-section-title {
+  margin: 0;
+  color: var(--lightink-danger);
+}

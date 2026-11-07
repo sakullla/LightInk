@@ -187,6 +187,12 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
   backdrop-filter: blur(20px) saturate(1.1);
 }
 
+/* 纸卡模式下，查找面板随纸卡上边距（28px）自然下移落入纸面右上角，避免跨压纸卡顶边。 */
+#lightink-main:has(#lightink-editor-area .lightink-tab-host.is-paper-card:not(.lightink-tab-host--reader))
+  .lightink-find-panel {
+  margin-top: 24px;
+}
+
 #lightink-main .lightink-find-input {
   border-radius: 7px;
   background: color-mix(in srgb, var(--lightink-bg-sunken) 40%, transparent);
@@ -194,6 +200,7 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
 
 /* 斜杠菜单与格式条同纸片语言。 */
 .lightink-slash-menu {
+  min-width: 224px;
   border-radius: 13px;
   background: color-mix(in srgb, var(--lightink-bg-elevated) 96%, transparent);
   box-shadow: var(--lightink-shadow-pop);
@@ -203,6 +210,40 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
 .lightink-slash-menu__item {
   border-radius: 8px;
 }
+
+/* 斜杠菜单项左侧语义徽标：纯 CSS 伪元素，不改变 textContent 或行高契约。 */
+.lightink-slash-menu__item[data-slash-id]::before {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 75%, var(--lightink-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 72%, transparent);
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.lightink-slash-menu__item--active[data-slash-id]::before,
+.lightink-slash-menu__item[data-slash-id]:hover::before {
+  background: color-mix(in srgb, var(--lightink-accent) 14%, var(--lightink-bg-elevated));
+  border-color: color-mix(in srgb, var(--lightink-accent) 32%, transparent);
+  color: var(--lightink-accent);
+}
+
+.lightink-slash-menu__item[data-slash-id='heading']::before { content: 'H'; }
+.lightink-slash-menu__item[data-slash-id='list']::before { content: '•'; font-size: 13px; }
+.lightink-slash-menu__item[data-slash-id='task-list']::before { content: '✓'; }
+.lightink-slash-menu__item[data-slash-id='table']::before { content: '⊞'; font-size: 12px; }
+.lightink-slash-menu__item[data-slash-id='code']::before { content: '<>'; font-size: 9.5px; letter-spacing: -0.04em; }
+.lightink-slash-menu__item[data-slash-id='formula']::before { content: '∑'; }
+.lightink-slash-menu__item[data-slash-id='flowchart']::before { content: '◇'; }
+.lightink-slash-menu__item[data-slash-id='image']::before { content: '▣'; }
+.lightink-slash-menu__item[data-slash-id='link']::before { content: '↗'; }
 
 @media (max-width: 760px) {
   .lightink-tab-host.is-paper-card {

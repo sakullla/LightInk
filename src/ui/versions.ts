@@ -262,7 +262,9 @@ export function showVersionsModal(
       return;
     }
     const now = Date.now();
-    for (const meta of newestFirst(metas)) {
+    const sorted = newestFirst(metas);
+    const rows: Array<{ meta: VersionMeta; row: HTMLButtonElement }> = [];
+    for (const meta of sorted) {
       const row = doc.createElement('button');
       row.type = 'button';
       row.className = 'lightink-versions-item';
@@ -285,8 +287,29 @@ export function showVersionsModal(
       }
       row.addEventListener('click', () => selectRow(meta.id, row));
       listEl.appendChild(row);
+      rows.push({ meta, row });
+    }
+    // 自动选中最新快照（或保留已选中项），打开即预览，无需额外点击。
+    const target = rows.find((entry) => entry.meta.id === selectedId) ?? rows[0];
+    if (target !== undefined) {
+      selectRow(target.meta.id, target.row);
     }
   }
+
+  listEl.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const items = Array.from(listEl.querySelectorAll<HTMLButtonElement>('.lightink-versions-item'));
+    if (items.length === 0) return;
+    event.preventDefault();
+    const currentIdx = items.findIndex((el) => el.classList.contains('selected'));
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    const nextIdx = currentIdx < 0 ? 0 : (currentIdx + delta + items.length) % items.length;
+    const nextEl = items[nextIdx];
+    if (nextEl !== undefined) {
+      nextEl.focus();
+      nextEl.click();
+    }
+  });
 
   function refresh(): void {
     void actions
