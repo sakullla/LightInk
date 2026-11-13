@@ -55,8 +55,14 @@
  *     shows as `lightink-mermaid-pending` source.
  */
 import { $prose } from '@milkdown/utils';
-import { appendPreviewEditButton } from './preview-edit-button.js';
 import { Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
+import './mermaid-viewer.css';
+import {
+  createMermaidViewer,
+  DEFAULT_MERMAID_VIEWER_LABELS,
+  showMermaidLightbox,
+  type MermaidViewerLabels,
+} from './mermaid-viewer.js';
 import type { Node as PMNode } from '@milkdown/prose/model';
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/prose/view';
 
@@ -175,12 +181,22 @@ export const mermaidPluginKey = new PluginKey<MermaidPluginState>('lightink-merm
 
 /** Tooltip on mermaid preview widget (host may retranslate). */
 let MERMAID_EDIT_TITLE = '双击编辑流程图源码';
+let MERMAID_VIEWER_LABELS: MermaidViewerLabels = {
+  ...DEFAULT_MERMAID_VIEWER_LABELS,
+  edit: MERMAID_EDIT_TITLE,
+};
 
 /** Update mermaid preview tooltip after language switch. */
 export function setMermaidEditTitle(title: string): void {
   if (title.trim() !== '') {
     MERMAID_EDIT_TITLE = title.trim();
+    MERMAID_VIEWER_LABELS = { ...MERMAID_VIEWER_LABELS, edit: MERMAID_EDIT_TITLE };
   }
+}
+
+export function setMermaidViewerLabels(labels: MermaidViewerLabels): void {
+  MERMAID_VIEWER_LABELS = labels;
+  MERMAID_EDIT_TITLE = labels.edit;
 }
 
 /** PM 事务元数据：模块加载完成或单块渲染完成后由 view 回灌触发重装饰。 */
@@ -302,15 +318,18 @@ export function buildMermaidDecorations(
           const el = document.createElement('div');
           el.className = 'lightink-mermaid';
           el.setAttribute('title', MERMAID_EDIT_TITLE);
-          el.setAttribute('data-mermaid-preview', '');
           // mermaid 在 securityLevel:'strict' 下已对 SVG 消毒。
           el.innerHTML = svg;
-          appendPreviewEditButton(el, MERMAID_EDIT_TITLE, () => onEditRequest?.(blockPos));
-          el.addEventListener('dblclick', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onEditRequest?.(blockPos);
-          });
+          const renderedSvg = el.querySelector('svg');
+          if (renderedSvg !== null) {
+            createMermaidViewer(el, renderedSvg, {
+              labels: MERMAID_VIEWER_LABELS,
+              onEdit: () => onEditRequest?.(blockPos),
+              onExpand: () => {
+                showMermaidLightbox(el.ownerDocument, renderedSvg, MERMAID_VIEWER_LABELS);
+              },
+            });
+          }
           return el;
         },
         { side: 1, key: `lightink-mermaid-${definitionHash(def)}` },

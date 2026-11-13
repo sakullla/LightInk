@@ -501,6 +501,17 @@ function applyLocaleChrome(): void {
     },
     mathEditTitle: i18n.t('math.editTitle'),
     mermaidEditTitle: i18n.t('mermaid.editTitle'),
+    mermaidViewerLabels: {
+      diagram: i18n.t('mermaid.diagram'),
+      zoomIn: i18n.t('mermaid.zoomIn'),
+      zoomOut: i18n.t('mermaid.zoomOut'),
+      fit: i18n.t('mermaid.fit'),
+      expand: i18n.t('mermaid.expand'),
+      close: i18n.t('mermaid.close'),
+      edit: i18n.t('mermaid.editTitle'),
+      hint: i18n.t('mermaid.hint'),
+      modalHint: i18n.t('mermaid.modalHint'),
+    },
     taskCheckboxLabels: {
       check: i18n.t('task.markComplete'),
       uncheck: i18n.t('task.markIncomplete'),

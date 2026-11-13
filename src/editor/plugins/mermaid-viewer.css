@@ -1,0 +1,325 @@
+.lightink-tab-host .lightink-mermaid.lightink-mermaid--interactive,
+.lightink-mermaid-lightbox-viewer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 82%, transparent);
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: var(--lightink-bg-sunken);
+  color: var(--lightink-fg);
+  text-align: left;
+  cursor: default;
+}
+
+.lightink-tab-host .lightink-mermaid.lightink-mermaid--interactive:hover {
+  border-color: color-mix(in srgb, var(--lightink-accent) 32%, var(--lightink-border));
+  box-shadow: 0 4px 18px -14px color-mix(in srgb, var(--lightink-fg) 35%, transparent);
+}
+
+.lightink-mermaid-header {
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 5px 7px 5px 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 68%, transparent);
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 68%, var(--lightink-bg-sunken));
+  font-family: var(--lightink-font-ui);
+}
+
+.lightink-mermaid-title {
+  flex: 0 0 auto;
+  color: var(--lightink-fg);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+}
+
+.lightink-mermaid-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-mermaid-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.lightink-mermaid-control {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--lightink-radius-control, 7px);
+  background: transparent;
+  color: var(--lightink-muted);
+  font: 500 18px/1 var(--lightink-font-ui);
+  cursor: pointer;
+  transition:
+    color var(--lightink-duration-fast, 100ms) ease,
+    background-color var(--lightink-duration-fast, 100ms) ease,
+    border-color var(--lightink-duration-fast, 100ms) ease;
+}
+
+.lightink-mermaid-control svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lightink-mermaid-control:hover {
+  border-color: color-mix(in srgb, var(--lightink-border) 75%, transparent);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+}
+
+.lightink-mermaid-control:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+.lightink-mermaid-control:active {
+  background: color-mix(in srgb, var(--lightink-accent) 18%, transparent);
+}
+
+.lightink-mermaid-percent {
+  min-width: 48px;
+  color: var(--lightink-muted);
+  font: 500 11px/1 var(--lightink-font-ui);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  user-select: none;
+}
+
+.lightink-mermaid-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 240px;
+  height: clamp(260px, 48vh, 540px);
+  overflow: hidden;
+  outline: none;
+  background:
+    linear-gradient(color-mix(in srgb, var(--lightink-border) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--lightink-border) 18%, transparent) 1px, transparent 1px),
+    var(--lightink-bg-elevated);
+  background-size: 24px 24px;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lightink-mermaid-viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--lightink-accent);
+}
+
+.lightink-mermaid-viewport[data-zoomed='true'] {
+  cursor: grab;
+}
+
+.lightink-mermaid-viewport[data-panning='true'] {
+  cursor: grabbing;
+}
+
+.lightink-mermaid-canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.lightink-tab-host .lightink-mermaid .lightink-mermaid-svg,
+.lightink-mermaid-lightbox .lightink-mermaid-svg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: auto;
+  max-width: none !important;
+  height: auto;
+  max-height: none !important;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  zoom: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 3px color-mix(in srgb, var(--lightink-fg) 6%, transparent));
+}
+
+.lightink-mermaid-svg .cluster > rect {
+  fill: color-mix(in srgb, var(--lightink-accent-soft) 52%, var(--lightink-bg-elevated)) !important;
+  stroke: color-mix(in srgb, var(--lightink-border) 88%, transparent) !important;
+}
+
+.lightink-mermaid-svg .node :is(rect, polygon, circle, ellipse),
+.lightink-mermaid-svg .actor,
+.lightink-mermaid-svg .note {
+  fill: var(--lightink-bg-elevated) !important;
+  stroke: color-mix(in srgb, var(--lightink-accent) 56%, var(--lightink-border)) !important;
+}
+
+.lightink-mermaid-svg .note {
+  fill: var(--lightink-accent-soft) !important;
+}
+
+.lightink-mermaid-svg :is(.edgePath path, .flowchart-link, .actor-line, .messageLine0, .messageLine1, .loopLine) {
+  stroke: var(--lightink-muted) !important;
+}
+
+.lightink-mermaid-svg :is(marker path, marker circle) {
+  fill: var(--lightink-muted) !important;
+  stroke: var(--lightink-muted) !important;
+}
+
+.lightink-mermaid-svg .edgeLabel rect {
+  fill: var(--lightink-bg-elevated) !important;
+}
+
+.lightink-mermaid-svg .edgeLabel .label,
+.lightink-mermaid-svg .edgeLabel .labelBkg {
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 94%, transparent) !important;
+  color: var(--lightink-fg) !important;
+}
+
+.lightink-mermaid-svg :is(text, .label, .nodeLabel, .cluster-label, .edgeLabel, .messageText, .loopText, .labelText) {
+  fill: var(--lightink-fg) !important;
+  color: var(--lightink-fg) !important;
+}
+
+.lightink-mermaid-lightbox {
+  padding: 16px;
+}
+
+.lightink-mermaid-lightbox-dialog {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 88%, transparent);
+  border-radius: 16px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow-strong, var(--lightink-shadow-pop));
+}
+
+.lightink-mermaid-lightbox-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.lightink-mermaid-lightbox-viewer .lightink-mermaid-header {
+  min-height: 50px;
+  padding-inline: 16px 9px;
+}
+
+.lightink-mermaid-lightbox-viewer .lightink-mermaid-viewport {
+  height: auto;
+  min-height: 0;
+}
+
+.lightink-mermaid-lightbox-viewer .lightink-mermaid-control {
+  width: 36px;
+  height: 36px;
+}
+
+.lightink-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .lightink-mermaid-hint {
+    display: none;
+  }
+
+  .lightink-mermaid-header {
+    gap: 6px;
+    padding-left: 10px;
+  }
+
+  .lightink-mermaid-viewport {
+    min-height: 220px;
+    height: 42vh;
+  }
+
+  .lightink-mermaid-lightbox {
+    padding: 0;
+  }
+
+  .lightink-mermaid-lightbox-dialog {
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-mermaid-control,
+:is(html[data-android], html[data-touch-primary]) .lightink-mermaid-lightbox-viewer .lightink-mermaid-control {
+  width: 42px;
+  height: 42px;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-mermaid-controls {
+  gap: 0;
+}
+
+:is(html[data-android], html[data-touch-primary]) .lightink-mermaid-percent {
+  min-width: 42px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-mermaid-control {
+    transition: none;
+  }
+
+  .lightink-mermaid-canvas {
+    will-change: auto;
+  }
+}
+
+@media print {
+  .lightink-mermaid-header {
+    display: none;
+  }
+
+  .lightink-mermaid-viewport {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    background: transparent;
+  }
+
+  .lightink-mermaid-canvas {
+    position: static;
+    transform: none !important;
+  }
+
+  .lightink-tab-host .lightink-mermaid .lightink-mermaid-svg {
+    position: static;
+    max-width: 100% !important;
+    transform: none;
+  }
+}

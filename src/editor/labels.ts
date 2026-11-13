@@ -14,6 +14,7 @@ import type { CodeChromeLabels } from './plugins/code-highlight.js';
 import type { FormatToolId, LinkEditorFn } from './plugins/format-toolbar.js';
 import type { KeyboardFormatToolId } from './plugins/keyboard-format-bar.js';
 import type { SlashInteractiveHandler } from './plugins/slash-menu.js';
+import type { MermaidViewerLabels } from './plugins/mermaid-viewer.js';
 
 export interface EditorLabelPayloads {
   formatToolbarTitles?: Partial<Record<FormatToolId, string>>;
@@ -21,6 +22,7 @@ export interface EditorLabelPayloads {
   codeChromeLabels?: CodeChromeLabels;
   mathEditTitle?: string;
   mermaidEditTitle?: string;
+  mermaidViewerLabels?: MermaidViewerLabels;
   taskCheckboxLabels?: { check: string; uncheck: string };
   slashTranslate?: ((key: MessageKey) => string) | null;
 }

@@ -530,6 +530,7 @@ describe('language picker helpers', () => {
     );
     const dispatched: unknown[] = [];
     const view = {
+      editable: true,
       state: {
         doc,
         get tr() {
@@ -548,6 +549,8 @@ describe('language picker helpers', () => {
     expect(setCodeBlockLanguage(view as never, 0, 'python')).toBe(true);
     expect(dispatched).toHaveLength(1);
     expect(setCodeBlockLanguage(view as never, 0, 'js')).toBe(false);
+    expect(setCodeBlockLanguage({ ...view, editable: false } as never, 0, 'rust')).toBe(false);
+    expect(dispatched).toHaveLength(1);
   });
 });
 

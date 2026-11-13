@@ -195,6 +195,10 @@ function applyEditableProps(view: EditorView, next: boolean): void {
   if (typeof dom.contentEditable === 'string') {
     dom.contentEditable = next ? 'true' : 'false';
   }
+  dom.querySelectorAll<HTMLButtonElement>('.lightink-code-lang-trigger, .lightink-task-checkbox')
+    .forEach((button) => {
+      button.disabled = !next;
+    });
   if (!next && typeof dom.blur === 'function') {
     dom.blur();
   }

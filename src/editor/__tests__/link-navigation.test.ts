@@ -111,12 +111,13 @@ describe('resolveLocalPath', () => {
   });
 });
 
-function mockLinkView(href: string): EditorView {
+function mockLinkView(href: string, editable = true): EditorView {
   const mark = {
     type: { name: 'link' },
     attrs: { href },
   } as unknown as Mark;
   return {
+    editable,
     state: {
       doc: {
         resolve: () => ({
@@ -156,6 +157,22 @@ describe('linkNavigationPlugin click contract (R5)', () => {
     expect(result).toBe(false);
     expect(opened).toEqual([]);
     expect(isModifiedClick(clickEvent({}))).toBe(false);
+  });
+
+  it('plain click opens in the read-only Markdown surface', () => {
+    const opened: string[] = [];
+    const plugin = createLinkNavigationProsePlugin({
+      onLinkNavigate: (href) => {
+        opened.push(href);
+      },
+    });
+    const result = plugin.props.handleClick!.bind(plugin)(
+      mockLinkView('https://example.com/docs', false),
+      1,
+      clickEvent({}),
+    );
+    expect(result).toBe(true);
+    expect(opened).toEqual(['https://example.com/docs']);
   });
 
   it('Ctrl/Cmd click opens after confirmOpen', async () => {

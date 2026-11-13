@@ -2,8 +2,8 @@
  * `link-navigation` — document link open (R14) + exclusive link ends.
  *
  * Pure [`classifyLink`] splits targets into external / localMd / localFile /
- * invalid. [`linkNavigationPlugin`] opens only on **Ctrl/Cmd + click** after the
- * host confirms; plain click places the caret so links stay editable.
+ * invalid. Editing opens links on **Ctrl/Cmd + click** so a plain click can place
+ * the caret; the read-only Markdown surface opens them with a plain click.
  *
  * [`linkExclusiveEndsPlugin`] clears the link mark from storedMarks when the
  * caret sits at the end of a link, so typing after a hyperlink does not keep
@@ -27,8 +27,8 @@ export type { ClassifiedLink, LinkKind } from './link-classify.js';
 
 export interface LinkNavigationOptions {
   /**
-   * Called only for Ctrl/Cmd+click on a link mark after the host may confirm.
-   * Synchronous or fire-and-forget is fine; return value is ignored.
+   * Called for an accepted link click after the host may confirm. Editing accepts
+   * Ctrl/Cmd+click; read-only mode also accepts plain click. Return value is ignored.
    */
   onLinkNavigate: (href: string) => void;
   /**
@@ -147,14 +147,14 @@ function findMarkRangeFromMark(
 }
 
 /**
- * Native ProseMirror plugin: Ctrl/Cmd+click on a link mark → confirm → navigate.
- * Plain click returns false so the caret can move into the link for editing.
+ * Native ProseMirror plugin: Click on a link mark → confirm → navigate.
+ * Editing requires Ctrl/Cmd; read-only mode also accepts a plain click.
  */
 export function createLinkNavigationProsePlugin(opts: LinkNavigationOptions): Plugin {
   return new Plugin({
     props: {
       handleClick(view, pos, event) {
-        if (!isModifiedClick(event)) {
+        if (view.editable && !isModifiedClick(event)) {
           // Plain click: let ProseMirror place the caret (editable links).
           return false;
         }
@@ -181,8 +181,8 @@ export function createLinkNavigationProsePlugin(opts: LinkNavigationOptions): Pl
 }
 
 /**
- * ProseMirror plugin: Ctrl/Cmd+click on a link mark → confirm → navigate.
- * Plain click returns false so the caret can move into the link for editing.
+ * ProseMirror plugin: Click on a link mark → confirm → navigate.
+ * Editing requires Ctrl/Cmd; read-only mode also accepts a plain click.
  */
 export function linkNavigationPlugin(opts: LinkNavigationOptions) {
   return $prose(() => createLinkNavigationProsePlugin(opts));

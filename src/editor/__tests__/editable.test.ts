@@ -73,4 +73,25 @@ describe('EditorInstance.setEditable', () => {
       host.remove();
     }
   });
+
+  it('disables document-mutating chrome in read-only mode and restores it for editing', async () => {
+    const { host, editor } = await mount('```ts\nconst x = 1;\n```\n\n- [ ] task\n');
+    try {
+      const language = host.querySelector<HTMLButtonElement>('.lightink-code-lang-trigger')!;
+      const task = host.querySelector<HTMLButtonElement>('.lightink-task-checkbox')!;
+      expect(language.disabled).toBe(false);
+      expect(task.disabled).toBe(false);
+
+      editor.setEditable(false);
+      expect(language.disabled).toBe(true);
+      expect(task.disabled).toBe(true);
+
+      editor.setEditable(true);
+      expect(language.disabled).toBe(false);
+      expect(task.disabled).toBe(false);
+    } finally {
+      await editor.destroy();
+      host.remove();
+    }
+  });
 });

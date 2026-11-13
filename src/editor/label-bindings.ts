@@ -18,7 +18,7 @@ import {
 import { setKeyboardFormatBarTitles } from './plugins/keyboard-format-bar.js';
 import { setCodeChromeLabels } from './plugins/code-highlight.js';
 import { setMathEditTitle } from './plugins/math.js';
-import { setMermaidEditTitle } from './plugins/mermaid.js';
+import { setMermaidEditTitle, setMermaidViewerLabels } from './plugins/mermaid.js';
 import { setTaskCheckboxLabels } from './plugins/task-checkbox.js';
 import {
   setSlashImageHandler as applySlashImageHandler,
@@ -34,6 +34,7 @@ function applyAll(): void {
   if (l.codeChromeLabels !== undefined) setCodeChromeLabels(l.codeChromeLabels);
   if (l.mathEditTitle !== undefined) setMathEditTitle(l.mathEditTitle);
   if (l.mermaidEditTitle !== undefined) setMermaidEditTitle(l.mermaidEditTitle);
+  if (l.mermaidViewerLabels !== undefined) setMermaidViewerLabels(l.mermaidViewerLabels);
   if (l.taskCheckboxLabels !== undefined) setTaskCheckboxLabels(l.taskCheckboxLabels);
   if (l.slashTranslate !== undefined) setSlashTranslate(l.slashTranslate);
   applyFormatToolbarLinkEditor(getFormatToolbarLinkEditor());

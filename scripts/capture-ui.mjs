@@ -181,6 +181,28 @@ const doc = await open('notes.md');
 console.log(doc.title, doc.words);
 \`\`\`
 
+## 发布流程
+
+\`\`\`mermaid
+flowchart LR
+  subgraph 编辑[内容与结构]
+    A[撰写 Markdown] --> B[检查目录]
+    B --> C[校对格式]
+  end
+  subgraph 校验[自动校验]
+    D[解析文档] --> E[链接检查]
+    E --> F[流程图渲染]
+    F --> G[导出预检]
+  end
+  subgraph 发布[交付]
+    H[生成 HTML] --> I[生成 PDF]
+    I --> J[归档版本]
+  end
+  C --> D
+  G --> H
+  F -. 失败时保留源码 .-> C
+\`\`\`
+
 更多内容见 [LightInk 仓库](https://example.com/lightink)。
 
 ## 交互备忘
@@ -1155,6 +1177,20 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     );
     await page.waitForTimeout(500);
     await shot('editor-file-tab');
+  });
+  await step('editor:mermaid', async () => {
+    const host = await activeHost();
+    const diagram = page.locator(`${host} .lightink-mermaid--interactive`);
+    await diagram.waitFor({ state: 'visible', timeout: 20_000 });
+    await diagram.scrollIntoViewIfNeeded();
+    await shot('editor-mermaid');
+    await diagram.locator('[data-mermaid-action="zoom-in"]').click();
+    await shot('editor-mermaid-zoom');
+    await diagram.locator('[data-mermaid-action="expand"]').click();
+    await page.locator('.lightink-mermaid-lightbox').waitFor({ state: 'visible' });
+    await shot('editor-mermaid-fullscreen');
+    await page.keyboard.press('Escape');
+    await page.locator('.lightink-mermaid-lightbox').waitFor({ state: 'hidden' });
   });
   await step('editor:find', async () => {
     await page.keyboard.press('Control+f');

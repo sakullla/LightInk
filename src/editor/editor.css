@@ -244,11 +244,87 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
 .lightink-slash-menu__item[data-slash-id='flowchart']::before { content: '◇'; }
 .lightink-slash-menu__item[data-slash-id='image']::before { content: '▣'; }
 .lightink-slash-menu__item[data-slash-id='link']::before { content: '↗'; }
+.lightink-tab-host .ProseMirror :is(h1, h2, h3, h4) {
+  scroll-margin-top: 72px;
+  text-wrap: balance;
+}
+
+.lightink-tab-host .ProseMirror p,
+.lightink-tab-host .ProseMirror li {
+  text-wrap: pretty;
+}
+
+.lightink-tab-host .ProseMirror h1 {
+  padding-bottom: 0.32em;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] {
+  cursor: default;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] a {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--lightink-accent) 45%, transparent);
+  text-underline-offset: 0.18em;
+  overflow-wrap: anywhere;
+  transition: color var(--lightink-duration-fast, 100ms) ease,
+    text-decoration-color var(--lightink-duration-fast, 100ms) ease;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] a:hover {
+  color: color-mix(in srgb, var(--lightink-accent) 82%, var(--lightink-fg));
+  text-decoration-color: currentColor;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] img {
+  cursor: zoom-in;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] .lightink-code-lang-trigger {
+  cursor: default;
+  pointer-events: none;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] .lightink-code-lang-trigger::after {
+  display: none;
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='false'] .lightink-task-checkbox {
+  cursor: default;
+}
+
+.lightink-tab-host .tableWrapper {
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lightink-border) transparent;
+}
+
+.lightink-tab-host .ProseMirror :not(pre) > code {
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 48%, transparent);
+}
 
 @media (max-width: 760px) {
   .lightink-tab-host.is-paper-card {
     margin-block: 12px 20px;
-    padding: 30px 24px 48px;
+    padding: 26px 20px 42px;
     border-radius: var(--lightink-radius-panel);
+  }
+
+  .lightink-tab-host .ProseMirror h1 {
+    padding-bottom: 0.24em;
+  }
+}
+
+:is(html[data-android], html[data-touch-primary])[data-workspace-mode='reader']
+  #lightink-editor-area[data-surface='markdown']
+  .lightink-tab-host {
+  padding-inline: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-tab-host .ProseMirror[contenteditable='false'] a {
+    transition: none;
   }
 }

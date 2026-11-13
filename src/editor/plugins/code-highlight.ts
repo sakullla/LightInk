@@ -691,6 +691,7 @@ export function setCodeBlockLanguage(
   pos: number,
   language: string,
 ): boolean {
+  if (!view.editable) return false;
   const node = view.state.doc.nodeAt(pos);
   if (node === null || node.type.name !== 'code_block') {
     return false;
