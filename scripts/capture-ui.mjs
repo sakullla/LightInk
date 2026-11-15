@@ -1198,7 +1198,19 @@ async function captureMatrix(browser, width, theme, fixtureArgs) {
     await page.locator('.lightink-find-input').fill('排版');
     await page.waitForTimeout(200);
     await shot('editor-find');
+    await page.keyboard.press('Control+h');
+    await page.locator('.lightink-find-panel.is-replace-open').waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(150);
+    await shot('editor-replace');
     await page.keyboard.press('Escape');
+  });
+  await step('editor:table-toolbar', async () => {
+    const host = await activeHost();
+    const cell = page.locator(`${host} .ProseMirror td`).first();
+    await cell.scrollIntoViewIfNeeded();
+    await cell.click();
+    await page.locator('.lightink-table-toolbar:visible').first().waitFor({ timeout: 5_000 });
+    await shot('editor-table-toolbar');
   });
   if (aiConfigured) await step('ai:editor', async () => {
     try {

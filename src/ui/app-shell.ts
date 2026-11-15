@@ -284,6 +284,10 @@ export interface AppShellActions {
    * 无活动标签时实现方自行空操作。
    */
   onFind?(): void;
+  /** 打开查找替换面板并展开替换行（Ctrl+H / 编辑 → 替换…）。 */
+  onReplace?(): void;
+  /** 当前活动 Markdown 标签是否处于源码模式（视图菜单勾选标记）。 */
+  isSourceModeActive?(): boolean;
   // 插入（元素 id）
   onInsertElement(id: InsertElementId): void;
   // ---- 只读阅读标签（reader）专用：阅读态菜单据此装配「标注」菜单 ----
@@ -982,6 +986,17 @@ export function buildMenus(actions: AppShellActions): Menu[] {
           () => actions.onFind?.(),
           sc(actions, 'Ctrl+F'),
         ),
+        ...(isReader
+          ? []
+          : [
+              menuItem(
+                'edit-replace',
+                () => (actions.getLocale() === 'en' ? 'Replace…' : '替换…'),
+                () => (actions.onReplace ?? actions.onFind)?.(),
+                sc(actions, 'Ctrl+H'),
+                () => actions.hasActiveDocument?.() !== false,
+              ),
+            ]),
       ],
     },
     // reader 标签：以「标注」菜单取代「插入」（只读，无插入元素）。
@@ -1041,7 +1056,10 @@ export function buildMenus(actions: AppShellActions): Menu[] {
           : [
               menuItem(
                 'view-source-mode',
-                () => t('view.sourceMode'),
+                () => {
+                  const base = t('view.sourceMode');
+                  return actions.isSourceModeActive?.() === true ? `✓ ${base}` : base;
+                },
                 actions.onToggleSourceMode,
                 sc(actions, 'Ctrl+/'),
                 () => true,
@@ -1289,6 +1307,23 @@ export function createAppShell(
     },
     { passive: false },
   );
+  // 双击标签栏空白处快速新建文档（不干扰拖拽区单击拖动）。
+  tabBar.addEventListener('dblclick', (event) => {
+    const target = event.target as HTMLElement | null;
+    if (
+      target === tabBar ||
+      target?.classList?.contains('lightink-chrome-drag--tabs') === true
+    ) {
+      actions.onNew();
+    }
+  });
+
+  const newTabBtn = document.createElement('button');
+  newTabBtn.type = 'button';
+  newTabBtn.id = 'lightink-tab-new';
+  newTabBtn.className = 'lightink-tab-new';
+  newTabBtn.textContent = '+';
+  newTabBtn.addEventListener('click', () => actions.onNew());
 
   const enterReaderHomeBtn = document.createElement('button');
   enterReaderHomeBtn.type = 'button';
@@ -1369,6 +1404,13 @@ export function createAppShell(
     mobileBackToShelf.textContent = backToShelfLabel;
     mobileBackToShelf.title = backToShelfLabel;
     mobileBackToShelf.setAttribute('aria-label', backToShelfLabel);
+    const newTabRaw = actions.t('chrome.newTab', { shortcut: sc(actions, 'Ctrl+N') });
+    const newTabLabel =
+      newTabRaw === 'chrome.newTab'
+        ? `${locale === 'en' ? 'New document' : '新建文档'} (${sc(actions, 'Ctrl+N')})`
+        : newTabRaw;
+    newTabBtn.title = newTabLabel;
+    newTabBtn.setAttribute('aria-label', newTabLabel);
     if (editorAssistantEnabled) {
       const assistantLabel = locale === 'en' ? 'Assistant' : '助手';
       editorAssistantBtn.textContent = assistantLabel;
@@ -1896,6 +1938,7 @@ export function createAppShell(
         item.append(btn, close);
         return item;
       }),
+      newTabBtn,
       tabsDrag,
     );
     // 激活标签可能因横向溢出在视野外（切换/新建时滚到它，inline:'nearest'

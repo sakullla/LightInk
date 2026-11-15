@@ -139,6 +139,8 @@ export interface OutlineView {
   scheduleRefresh(): void;
   /** 立即重算并渲染（绕过防抖）。 */
   refreshNow(): void;
+  /** 轻量同步当前章节高亮与滚入视口（滚动/光标移动时调用，不重解析 MDAST）。 */
+  syncLocation(): void;
   /** Re-apply localized chrome strings after language switch. */
   retranslate(): void;
   /** 清理待执行的防抖计时器 / 拖动监听。 */
@@ -391,6 +393,40 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
     const active = buttons[activeIndex] ?? buttons.find((button) => button.classList.contains('is-current'));
     if (active !== undefined) {
       scrollChildIntoScroller(body, active);
+    }
+  }
+
+  function syncLocation(): void {
+    const buttons = outlineButtons();
+    if (buttons.length === 0 || visibleItems.length !== buttons.length) {
+      return;
+    }
+    const current = deps.getActiveLocation?.() ?? {};
+    let nextCurrentIndex = -1;
+    let changed = false;
+    buttons.forEach((button, index) => {
+      const item = visibleItems[index];
+      const isCurrent = item !== undefined && outlineItemIsCurrent(item, current);
+      const wasCurrent = button.classList.contains('is-current');
+      if (isCurrent !== wasCurrent) {
+        changed = true;
+      }
+      button.classList.toggle('is-current', isCurrent);
+      if (isCurrent) {
+        button.setAttribute('aria-current', 'location');
+        nextCurrentIndex = index;
+      } else {
+        button.removeAttribute('aria-current');
+      }
+    });
+    if (!changed) {
+      return;
+    }
+    if (searchQuery.trim() === '') {
+      setActive(nextCurrentIndex >= 0 ? nextCurrentIndex : 0, false);
+      if (visibility === 'expanded' && nextCurrentIndex >= 0) {
+        scrollCurrentOutlineItem();
+      }
     }
   }
 
@@ -720,6 +756,7 @@ export function createOutlineView(deps: OutlineViewDeps): OutlineView {
       cancelTimer();
       render();
     },
+    syncLocation,
     retranslate(): void {
       title.textContent = t('outline.title');
       search.setAttribute('aria-label', t('outline.search'));

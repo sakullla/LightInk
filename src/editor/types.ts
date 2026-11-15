@@ -143,6 +143,8 @@ export interface EditorInstance {
    * 供 R3 上下文菜单启用/禁用与动作使用。
    */
   getSelection(): SelectionSummary | null;
+  /** Plain text inside the current selection (empty string when collapsed/unready). */
+  getSelectedText?(): string;
   /** One-based cursor line/column in the rendered document text flow. */
   getCursorPosition(): CursorPosition | null;
   /**
@@ -193,7 +195,10 @@ export interface EditorInstance {
       | 'delete-column'
       | 'delete-table'
       | 'select-row'
-      | 'select-column',
+      | 'select-column'
+      | 'align-col-left'
+      | 'align-col-center'
+      | 'align-col-right',
   ): boolean;
   /**
    * Focus the ProseMirror surface so typing can start without hunting the caret

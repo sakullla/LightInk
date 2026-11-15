@@ -24,6 +24,9 @@ import {
   setSlashImageHandler as applySlashImageHandler,
   setSlashTranslate,
 } from './plugins/slash-menu.js';
+import { setEditorPlaceholder } from './plugins/placeholder.js';
+import { setTocLabels } from './plugins/toc.js';
+import { setTableToolbarLabels } from './plugins/table-toolbar.js';
 
 function applyAll(): void {
   const l = getEditorLabels();
@@ -37,6 +40,9 @@ function applyAll(): void {
   if (l.mermaidViewerLabels !== undefined) setMermaidViewerLabels(l.mermaidViewerLabels);
   if (l.taskCheckboxLabels !== undefined) setTaskCheckboxLabels(l.taskCheckboxLabels);
   if (l.slashTranslate !== undefined) setSlashTranslate(l.slashTranslate);
+  if (l.editorPlaceholder !== undefined) setEditorPlaceholder(l.editorPlaceholder);
+  if (l.tocLabels !== undefined) setTocLabels(l.tocLabels);
+  if (l.tableToolbarLabels !== undefined) setTableToolbarLabels(l.tableToolbarLabels);
   applyFormatToolbarLinkEditor(getFormatToolbarLinkEditor());
   applySlashImageHandler(getSlashImageHandler());
 }

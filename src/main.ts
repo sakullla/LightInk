@@ -81,7 +81,15 @@ import {
   readStoredOutlineWidth,
   type OutlineView,
 } from './outline/outline-view.js';
-import { outlineLocationFromReader } from './outline/outline-model.js';
+import {
+  outlineLocationFromReader,
+  resolveActiveHeadingAnchorByLine,
+  resolveActiveHeadingAnchorByTops,
+} from './outline/outline-model.js';
+import {
+  createEditorEmptyState,
+  type EditorEmptyStateHandle,
+} from './ui/editor-empty-state.js';
 import type { MarkdownAnnotationHost } from './reader/markdown-annotations.js';
 import {
   mergeAnnotations,
@@ -517,6 +525,26 @@ function applyLocaleChrome(): void {
       uncheck: i18n.t('task.markIncomplete'),
     },
     slashTranslate: (key) => i18n.t(key),
+    editorPlaceholder: i18n.t('editor.placeholder'),
+    tocLabels: {
+      title: i18n.t('toc.title'),
+      empty: i18n.t('toc.empty'),
+    },
+    tableToolbarLabels: {
+      toolbarLabel: i18n.t('table.toolbar.label'),
+      titles: {
+        'insert-row-above': `${i18n.t('ctx.table.insertRowAbove')} (${formatShortcutLabel('Ctrl+Shift+Enter', isMac)})`,
+        'insert-row-below': `${i18n.t('ctx.table.insertRowBelow')} (${formatShortcutLabel('Ctrl+Enter', isMac)})`,
+        'insert-col-left': `${i18n.t('ctx.table.insertColLeft')} (${formatShortcutLabel('Ctrl+Alt+←', isMac)})`,
+        'insert-col-right': `${i18n.t('ctx.table.insertColRight')} (${formatShortcutLabel('Ctrl+Alt+→', isMac)})`,
+        'align-col-left': i18n.t('ctx.table.alignLeft'),
+        'align-col-center': i18n.t('ctx.table.alignCenter'),
+        'align-col-right': i18n.t('ctx.table.alignRight'),
+        'delete-row': `${i18n.t('ctx.table.deleteRow')} (${formatShortcutLabel('Ctrl+Shift+Backspace', isMac)})`,
+        'delete-column': `${i18n.t('ctx.table.deleteColumn')} (${formatShortcutLabel('Ctrl+Shift+Delete', isMac)})`,
+        'delete-table': i18n.t('ctx.table.delete'),
+      },
+    },
   });
 }
 applyLocaleChrome();
@@ -526,6 +554,8 @@ function refreshLocalizedSurfaces(revealMenu = false): void {
   shell?.rebuildMenus();
   if (revealMenu) shell?.revealMenu();
   outline?.retranslate();
+  findPanel?.retranslate(findPanelLabels());
+  editorEmptyState?.retranslate();
   libraryView?.retranslate();
   // R2：帮助菜单打开中的指南/关于对话框随语言切换重渲染（已关闭则空操作）。
   helpGuideDialog?.retranslate();
@@ -580,6 +610,7 @@ let shell: ReturnType<typeof createAppShell>;
 let outline: OutlineView;
 // T5/R3：字数状态栏在 TabManager 之后创建（见下），菜单回调用 ?. 短路。
 let statusBar: StatusBar;
+let editorEmptyState: EditorEmptyStateHandle | null = null;
 // Per-tab source surfaces must be available to status callbacks during manager startup.
 const sourceViews = new Map<string, SourceView>();
 const markdownAnnotations = new Map<string, MarkdownAnnotationHost>();
@@ -621,12 +652,15 @@ function requireMarkdownAnnotations(): MarkdownAnnotationsModule {
 // 同名转发：调用点无需改动，仅在已加载后可见（编辑器挂载前必然已预热）。
 const findReplaceViewForHost: FindReplaceModule['findReplaceViewForHost'] = (host) =>
   findReplaceModule?.findReplaceViewForHost(host) ?? null;
-const collectSourceMatches: FindReplaceModule['collectSourceMatches'] = (text, query) =>
-  requireFindReplace().collectSourceMatches(text, query);
+const collectSourceMatches: FindReplaceModule['collectSourceMatches'] = (
+  text,
+  query,
+  matchCase,
+) => requireFindReplace().collectSourceMatches(text, query, matchCase);
 const nextMatchIndex: FindReplaceModule['nextMatchIndex'] = (total, active, dir) =>
   requireFindReplace().nextMatchIndex(total, active, dir);
-const setFindQuery: FindReplaceModule['setFindQuery'] = (view, query) =>
-  requireFindReplace().setFindQuery(view, query);
+const setFindQuery: FindReplaceModule['setFindQuery'] = (view, query, options) =>
+  requireFindReplace().setFindQuery(view, query, options);
 const readFindReplaceState: FindReplaceModule['readFindReplaceState'] = (view) =>
   requireFindReplace().readFindReplaceState(view);
 const stepFindMatch: FindReplaceModule['stepFindMatch'] = (view, dir) =>
@@ -2907,6 +2941,13 @@ shell = createAppShell(
       }
       openFindPanel();
     },
+    onReplace: () => {
+      openReplacePanel();
+    },
+    isSourceModeActive: () => {
+      const tab = activeMarkdownTab();
+      return tab !== null && sourceViews.get(tab.id)?.isSourceMode === true;
+    },
     // T6/R10：全选（双模式）；含未保存新标签在内的任意活动文档均可用。
     onSelectAll: () => selectAllActive(),
     hasActiveDocument: () => activeMarkdownTab() != null,
@@ -3138,6 +3179,7 @@ function renderTabBar(): void {
       });
     },
   });
+  editorEmptyState?.sync(manager.tabList.length > 0);
   syncDocumentTitle();
   // markdown ↔ reader 切换时重建菜单（隐藏/显示「插入」与「标注」）。
   const kind = manager.activeTab?.kind ?? null;
@@ -3552,6 +3594,8 @@ manager = new TabManager({
       }
     }
     if (tab === null) {
+      statusBar?.refresh(getActiveStatusSnapshot);
+      outline?.refreshNow();
       syncNativeWindowChrome();
       return;
     }
@@ -3572,6 +3616,8 @@ manager = new TabManager({
       applyMarkdownDocumentLayout(document.documentElement, readingLayout);
       syncReadingColumns();
       editorScroller.scrollTop = manager.getScrollPosition(tab.id);
+      findPanel?.setEditable(tab.editor.isEditable());
+      scheduleOutlineLocationSync();
     }
     syncMarkdownReaderChrome();
     syncNativeWindowChrome();
@@ -3635,6 +3681,15 @@ manager = new TabManager({
     }),
 });
 
+let outlineScrollSyncRaf = 0;
+function scheduleOutlineLocationSync(): void {
+  if (outline === undefined || outlineScrollSyncRaf !== 0) return;
+  outlineScrollSyncRaf = window.requestAnimationFrame(() => {
+    outlineScrollSyncRaf = 0;
+    outline?.syncLocation();
+  });
+}
+
 // T3/R3：实时记录活动标签的滚动位置到其 TabState.scrollTop。共享容器只有一个，
 // 故 markdown 标签的滚动需逐事件回写当前活动标签；切换时由 onTabSwitched 恢复
 // 目标标签的存储值（reader 不滚动此容器，活动 reader 时此处 scrollTop 恒 0）。
@@ -3649,6 +3704,7 @@ editorScroller.addEventListener(
     if (id !== null) {
       m.recordScrollPosition(id, editorScroller.scrollTop);
     }
+    scheduleOutlineLocationSync();
   },
   { passive: true },
 );
@@ -3699,8 +3755,38 @@ outline = createOutlineView({
     activeReaderTab()?.reader.jumpToOutlineItem(item);
   },
   getActiveLocation: () => {
-    const tab = activeReaderTab();
-    return tab === null ? {} : outlineLocationFromReader(tab.reader.state);
+    const readerTab = activeReaderTab();
+    if (readerTab !== null) {
+      return outlineLocationFromReader(readerTab.reader.state);
+    }
+    const mdTab = activeMarkdownTab();
+    if (mdTab === null) {
+      return {};
+    }
+    const source = sourceViews.get(mdTab.id);
+    if (source?.isSourceMode === true) {
+      const ta = mdTab.hostElement.querySelector<HTMLTextAreaElement>(
+        'textarea.lightink-source-editor',
+      );
+      if (ta !== null) {
+        const cursor = cursorPositionFromOffset(ta.value, ta.selectionEnd);
+        const anchor = resolveActiveHeadingAnchorByLine(ta.value, cursor.line);
+        return anchor === undefined ? {} : { anchor };
+      }
+    }
+    const headings = Array.from(
+      mdTab.hostElement.querySelectorAll<HTMLElement>('.ProseMirror :is(h1,h2,h3,h4,h5,h6)'),
+    );
+    if (headings.length === 0) {
+      return {};
+    }
+    const scrollerRect = editorScroller.getBoundingClientRect();
+    const threshold = scrollerRect.top + Math.min(104, Math.max(64, scrollerRect.height * 0.18));
+    const tops = headings.map((el) =>
+      el.offsetParent === null ? null : el.getBoundingClientRect().top,
+    );
+    const anchor = resolveActiveHeadingAnchorByTops(tops, threshold);
+    return anchor === undefined ? {} : { anchor };
   },
   // T4/R2：大纲↔编辑器折叠双向联动（序号口径与 buildOutline anchor 一致）。
   getFoldedOrdinals: () => activeMarkdownTab()?.editor.getFoldedOrdinals() ?? [],
@@ -3712,14 +3798,60 @@ outline = createOutlineView({
 });
 shell.outlineSidebar.appendChild(outline.root);
 
+editorEmptyState = createEditorEmptyState(shell.editorArea, {
+  labels: () => ({
+    title: i18n.t('editor.empty.title'),
+    hint: i18n.t('editor.empty.hint'),
+    newDoc: i18n.t('file.new'),
+    newShortcut: formatShortcutLabel('Ctrl+N', isMac),
+    openDoc: i18n.t('file.open'),
+    openShortcut: formatShortcutLabel('Ctrl+O', isMac),
+    recentHeading: i18n.t('editor.empty.recent'),
+  }),
+  onNew: () => void manager.newTab(),
+  onOpen: () => void openViaDialog(),
+  listRecents: () =>
+    isTauriRuntime() ? invoke<string[]>('list_recents').catch(() => []) : Promise.resolve([]),
+  onOpenRecent: (path) => {
+    void openPathByKind(path).then(async (tab) => {
+      if (tab === null) {
+        const removed = await persistRecentMutation('remove_recent', { path });
+        void showAppAlert(
+          `${i18n.t('error.openFile', { path })}${
+            removed ? ` ${i18n.t('error.recentRemoved')}` : ''
+          }`,
+        );
+        editorEmptyState?.sync(manager.tabList.length > 0);
+      }
+    });
+  },
+});
+
 // Document status bar: hidden by default. Content and cursor updates are
 // debounced; save/conflict transitions refresh immediately.
 // 标签闭包现读 locale，语言切换后下次刷新即用新文案。
 statusBar = createStatusBar(document, shell.statusBarHost, {
   storage: syncableStorage,
+  onToggleMode: () => toggleActiveSourceMode(),
+  onSaveClick: () => {
+    commitActiveSourceMode();
+    void manager.saveActiveTab();
+  },
   labels: () => ({
     words: i18n.t('status.words'),
     characters: i18n.t('status.characters'),
+    selected: i18n.t('status.selected'),
+    readingTime: (min) => i18n.t('status.readingTime', { min: String(min) }),
+    mode: {
+      wysiwyg: i18n.t('status.mode.wysiwyg'),
+      source: i18n.t('status.mode.source'),
+      toggleTitle: i18n.t('status.mode.toggleTitle', {
+        shortcut: formatShortcutLabel('Ctrl+/', isMac),
+      }),
+    },
+    saveClickHint: i18n.t('status.save.clickHint', {
+      shortcut: formatShortcutLabel('Ctrl+S', isMac),
+    }),
     line: i18n.t('status.line'),
     column: i18n.t('status.column'),
     encoding: i18n.t('status.encoding'),
@@ -4263,11 +4395,19 @@ function getActiveStatusSnapshot(): StatusBarSnapshot {
       textarea === null
         ? (tab.editor.getCursorPosition() ?? { line: 1, column: 1 })
         : cursorPositionFromOffset(textarea.value, textarea.selectionEnd);
+    const selectionMarkdown =
+      textarea === null
+        ? (tab.editor.getSelectedText?.() ?? '')
+        : textarea.selectionEnd > textarea.selectionStart
+          ? textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)
+          : '';
     return {
       kind: 'markdown',
       markdown,
       saveStatus: manager.getSaveStatus(tab.id) ?? (tab.dirty ? 'dirty' : 'saved'),
       cursor,
+      selectionMarkdown,
+      editorMode: textarea === null ? 'wysiwyg' : 'source',
     };
   } catch {
     return null;
@@ -4310,6 +4450,9 @@ window.addEventListener('resize', scheduleReadingColumnSync);
 document.addEventListener('lightink:font-scale', syncReadingColumns);
 document.addEventListener('selectionchange', () => {
   statusBar.scheduleUpdate(getActiveStatusSnapshot);
+  if (activeSourceTextarea() !== null) {
+    scheduleOutlineLocationSync();
+  }
 });
 
 // R14：可选自动保存（默认关；偏好 localStorage 跨会话保持）。tick 前先提交
@@ -4366,6 +4509,14 @@ function showVersionsForActive(): void {
       saveNew: i18n.t('dialog.versions.saveNew'),
       close: i18n.t('dialog.close'),
       loadFailed: i18n.t('dialog.versions.loadFailed'),
+      viewFull: i18n.t('dialog.versions.viewFull'),
+      viewDiff: i18n.t('dialog.versions.viewDiff'),
+      identical: i18n.t('dialog.versions.identical'),
+      diffSummary: (added, removed) =>
+        i18n.t('dialog.versions.diffSummary', {
+          added: String(added),
+          removed: String(removed),
+        }),
       justNow: i18n.t('dialog.justNow'),
       minutesAgo: (n) => i18n.t('dialog.minutesAgo', { n: String(n) }),
       hoursAgo: (n) => i18n.t('dialog.hoursAgo', { n: String(n) }),
@@ -4420,6 +4571,7 @@ function toggleActiveSourceMode(): void {
   }
   view.toggle();
   statusBar.refresh(getActiveStatusSnapshot);
+  scheduleOutlineLocationSync();
 }
 /** 源码态下把活动标签的 textarea 源码同步回编辑器（供保存/大纲读取一致）。 */
 function commitActiveSourceMode(): void {
@@ -4480,6 +4632,7 @@ function findPanelLabels(): FindReplaceLabels {
     replace: zh ? '替换' : 'Replace',
     replaceAll: zh ? '全部替换' : 'Replace All',
     close: zh ? '关闭' : 'Close',
+    matchCase: i18n.t('find.matchCase'),
     empty: zh ? '无匹配' : 'No matches',
     count: (active, total) => `${String(active + 1)}/${String(total)}`,
   };
@@ -4540,12 +4693,15 @@ function wireEditorContentObservers(): void {
 function ensureFindPanel(): FindReplacePanel {
   if (findPanel !== null) return findPanel;
   findPanel = createFindReplacePanel(document, findPanelLabels(), {
-    onQueryChange: (query) => runFindQuery(query),
+    onQueryChange: (query, matchCase) => runFindQuery(query, matchCase),
     onNext: () => stepFind(1),
     onPrev: () => stepFind(-1),
     onReplace: (replacement) => runReplaceCurrent(replacement),
     onReplaceAll: (replacement) => runReplaceAll(replacement),
-    onClose: () => clearFindHighlights(),
+    onClose: () => {
+      clearFindHighlights();
+      focusActiveEditor();
+    },
   });
   // 挂到 #lightink-main（非滚动容器）而非 editor-area：上一处/下一处滚动
   // 命中时面板保持在视口右上，不会被卷出屏幕。
@@ -4646,10 +4802,14 @@ function findNearestScrollContainer(fromEl: HTMLElement): HTMLElement | null {
   return null;
 }
 
-function runFindQuery(query: string): void {
+function currentFindMatchCase(): boolean {
+  return findPanel?.isMatchCase() ?? false;
+}
+
+function runFindQuery(query: string, matchCase = currentFindMatchCase()): void {
   const ta = activeSourceTextarea();
   if (ta !== null) {
-    const matches = collectSourceMatches(ta.value, query);
+    const matches = collectSourceMatches(ta.value, query, matchCase);
     sourceFindActive = matches.length > 0 ? 0 : -1;
     const first = matches[0];
     if (first !== undefined) selectSourceMatch(ta, first);
@@ -4661,7 +4821,7 @@ function runFindQuery(query: string): void {
     syncFindPanelStatus(0, -1);
     return;
   }
-  setFindQuery(view, query);
+  setFindQuery(view, query, { matchCase });
   const state = readFindReplaceState(view);
   syncFindPanelStatus(state?.total ?? 0, state?.active ?? -1);
 }
@@ -4677,9 +4837,10 @@ function refreshFindOnContentChange(): void {
     syncFindPanelStatus(0, -1);
     return;
   }
+  const matchCase = currentFindMatchCase();
   const ta = activeSourceTextarea();
   if (ta !== null) {
-    const matches = collectSourceMatches(ta.value, query);
+    const matches = collectSourceMatches(ta.value, query, matchCase);
     if (matches.length === 0) {
       sourceFindActive = -1;
       syncFindPanelStatus(0, -1);
@@ -4707,9 +4868,10 @@ function refreshFindOnContentChange(): void {
 
 function stepFind(dir: 1 | -1): void {
   const query = findPanel?.getQuery() ?? '';
+  const matchCase = currentFindMatchCase();
   const ta = activeSourceTextarea();
   if (ta !== null) {
-    const matches = collectSourceMatches(ta.value, query);
+    const matches = collectSourceMatches(ta.value, query, matchCase);
     if (matches.length === 0) {
       sourceFindActive = -1;
       syncFindPanelStatus(0, -1);
@@ -4751,9 +4913,10 @@ function replaceSourceRange(
 
 function runReplaceCurrent(replacement: string): void {
   const query = findPanel?.getQuery() ?? '';
+  const matchCase = currentFindMatchCase();
   const ta = activeSourceTextarea();
   if (ta !== null) {
-    const matches = collectSourceMatches(ta.value, query);
+    const matches = collectSourceMatches(ta.value, query, matchCase);
     const match = matches[Math.min(Math.max(sourceFindActive, 0), matches.length - 1)];
     if (match === undefined) {
       syncFindPanelStatus(0, -1);
@@ -4761,7 +4924,7 @@ function runReplaceCurrent(replacement: string): void {
     }
     replaceSourceRange(ta, match.start, match.end, replacement);
     // 替换后命中重收：原下标处即下一未替换命中（收敛到范围内）。
-    const next = collectSourceMatches(ta.value, query);
+    const next = collectSourceMatches(ta.value, query, matchCase);
     sourceFindActive =
       next.length === 0
         ? -1
@@ -4780,16 +4943,17 @@ function runReplaceCurrent(replacement: string): void {
 
 function runReplaceAll(replacement: string): void {
   const query = findPanel?.getQuery() ?? '';
+  const matchCase = currentFindMatchCase();
   const ta = activeSourceTextarea();
   if (ta !== null) {
-    const matches = collectSourceMatches(ta.value, query);
+    const matches = collectSourceMatches(ta.value, query, matchCase);
     // 自后向前替换，位置不被前序替换带偏；每次 insertText 均为原生可撤销步。
     for (let i = matches.length - 1; i >= 0; i -= 1) {
       const match = matches[i];
       if (match !== undefined) replaceSourceRange(ta, match.start, match.end, replacement);
     }
     sourceFindActive = -1;
-    syncFindPanelStatus(collectSourceMatches(ta.value, query).length, -1);
+    syncFindPanelStatus(collectSourceMatches(ta.value, query, matchCase).length, -1);
     return;
   }
   const view = activeFindView();
@@ -4840,29 +5004,36 @@ function sanitizeFindSeed(raw: string): string {
 }
 
 /** 编辑菜单「查找…」/ Ctrl+F：打开面板；有选区则预填，再应用到活动标签。 */
-function openFindPanel(): void {
-  const tab = manager?.activeTab ?? null;
+function openFindPanel(withReplace = false): void {
+  const tab = activeMarkdownTab();
   if (tab === null) return;
   const panel = ensureFindPanel();
+  panel.setEditable(tab.editor.isEditable());
   const seed = selectionForFindSeed();
   if (seed !== '') {
     panel.setQuery(seed);
   }
-  panel.open();
-  runFindQuery(panel.getQuery());
+  if (withReplace) {
+    panel.openReplace();
+  } else {
+    panel.open();
+  }
+  runFindQuery(panel.getQuery(), panel.isMatchCase());
 }
 
-// Ctrl+F/Cmd+F 打开查找面板：捕获阶段接线，优先于 WebView/编辑器默认行为
-//（shortcuts.ts 注册表属后续任务 scope，此处在 main.ts 独立监听）。
+/** 编辑菜单「替换…」/ Ctrl+H：展开替换行打开面板。 */
+function openReplacePanel(): void {
+  openFindPanel(true);
+}
+
+// Ctrl+F/Cmd+F 查找，Ctrl+H / Cmd+Alt+F 替换：捕获阶段接线，优先于 WebView 默认行为。
 document.addEventListener(
   'keydown',
   (event) => {
-    if (
-      (event.ctrlKey || event.metaKey) &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 'f'
-    ) {
+    const mod = event.ctrlKey || event.metaKey;
+    if (!mod || event.shiftKey) return;
+    const key = event.key.toLowerCase();
+    if (!event.altKey && key === 'f') {
       event.preventDefault();
       // reader 标签活动时打开阅读器搜索面板，编辑标签走原查找面板。
       const readerTab = activeReaderTab();
@@ -4870,7 +5041,14 @@ document.addEventListener(
         readerTab.reader.openSearch?.(window.getSelection()?.toString());
         return;
       }
-      openFindPanel();
+      openFindPanel(false);
+      return;
+    }
+    const isReplaceChord =
+      (!event.altKey && key === 'h') || (isMac && event.altKey && key === 'f');
+    if (isReplaceChord && activeMarkdownTab() !== null) {
+      event.preventDefault();
+      openReplacePanel();
     }
   },
   true,
@@ -5168,6 +5346,15 @@ function showEditorContextMenu(x: number, y: number): void {
       },
       selectColumn: () => {
         tab.editor.runTableOp('select-column');
+      },
+      alignColLeft: () => {
+        tab.editor.runTableOp('align-col-left');
+      },
+      alignColCenter: () => {
+        tab.editor.runTableOp('align-col-center');
+      },
+      alignColRight: () => {
+        tab.editor.runTableOp('align-col-right');
       },
       deleteTable: () => {
         tab.editor.runTableOp('delete-table');

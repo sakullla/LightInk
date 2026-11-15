@@ -45,16 +45,17 @@ export interface FindMatch {
   readonly to: number;
 }
 
-/** 插件状态：当前查询串、命中列表、当前命中下标（-1 = 无）、decoration 集。 */
+/** 插件状态：当前查询串、大小写开关、命中列表、当前命中下标（-1 = 无）、decoration 集。 */
 export interface FindReplaceState {
   readonly query: string;
+  readonly matchCase: boolean;
   readonly matches: readonly FindMatch[];
   readonly active: number;
   readonly decorations: DecorationSet;
 }
 
 type FindReplaceMeta =
-  | { readonly type: 'query'; readonly query: string }
+  | { readonly type: 'query'; readonly query: string; readonly matchCase?: boolean }
   | { readonly type: 'active'; readonly index: number };
 
 /** 全部命中的 decoration class；当前命中额外叠加 current class。 */
@@ -66,16 +67,21 @@ export const FIND_MATCH_CURRENT_CLASS = 'lightink-find-match-current';
 // ---------------------------------------------------------------------------
 
 /**
- * 在 PM 文档内收集查询串的全部命中（逐 text 节点、大小写不敏感、不重叠、
+ * 在 PM 文档内收集查询串的全部命中（逐 text 节点、可选区分大小写、不重叠、
  * 不跨节点边界）。空查询返回空数组。
  */
-export function collectMatches(doc: PMNode, query: string): FindMatch[] {
-  const needle = query.toLowerCase();
+export function collectMatches(
+  doc: PMNode,
+  query: string,
+  matchCase = false,
+): FindMatch[] {
+  const needle = matchCase ? query : query.toLowerCase();
   if (needle === '') return [];
   const out: FindMatch[] = [];
   doc.descendants((node, pos) => {
     if (!node.isText) return;
-    const haystack = (node.text ?? '').toLowerCase();
+    const raw = node.text ?? '';
+    const haystack = matchCase ? raw : raw.toLowerCase();
     let idx = haystack.indexOf(needle);
     while (idx !== -1) {
       out.push({ from: pos + idx, to: pos + idx + needle.length });
@@ -91,11 +97,15 @@ export interface SourceTextMatch {
   readonly end: number;
 }
 
-export function collectSourceMatches(text: string, query: string): SourceTextMatch[] {
-  const needle = query.toLowerCase();
+export function collectSourceMatches(
+  text: string,
+  query: string,
+  matchCase = false,
+): SourceTextMatch[] {
+  const needle = matchCase ? query : query.toLowerCase();
   if (needle === '') return [];
   const out: SourceTextMatch[] = [];
-  const haystack = text.toLowerCase();
+  const haystack = matchCase ? text : text.toLowerCase();
   let idx = haystack.indexOf(needle);
   while (idx !== -1) {
     out.push({ start: idx, end: idx + needle.length });
@@ -135,6 +145,7 @@ function buildFindDecorations(
 
 const EMPTY_STATE: FindReplaceState = {
   query: '',
+  matchCase: false,
   matches: [],
   active: -1,
   decorations: DecorationSet.empty,
@@ -153,14 +164,20 @@ export function createFindReplaceProsePlugin(): Plugin {
       apply: (tr, old, _oldState, newState): FindReplaceState => {
         const meta = tr.getMeta(FIND_REPLACE_PLUGIN_KEY) as FindReplaceMeta | undefined;
         let query = old.query;
+        let matchCase = old.matchCase;
         let matches = old.matches;
         let active = old.active;
         let decorations = old.decorations;
         let rebuilt = false;
 
-        const recompute = (nextQuery: string, preferredActive: number): void => {
+        const recompute = (
+          nextQuery: string,
+          nextMatchCase: boolean,
+          preferredActive: number,
+        ): void => {
           query = nextQuery;
-          matches = collectMatches(newState.doc, query);
+          matchCase = nextMatchCase;
+          matches = collectMatches(newState.doc, query, matchCase);
           if (matches.length === 0) {
             active = -1;
           } else if (preferredActive < 0) {
@@ -174,10 +191,10 @@ export function createFindReplaceProsePlugin(): Plugin {
 
         if (meta?.type === 'query') {
           // 显式设置查询：跳到首命中（-1 语义 → 0）。
-          recompute(meta.query, -1);
+          recompute(meta.query, meta.matchCase ?? matchCase, -1);
         } else if (tr.docChanged && query !== '') {
           // 编辑/替换后按当前查询重收，保持当前下标（收敛到范围内）。
-          recompute(query, active);
+          recompute(query, matchCase, active);
         }
 
         if (meta?.type === 'active') {
@@ -190,7 +207,7 @@ export function createFindReplaceProsePlugin(): Plugin {
           // 防御：理论上 docChanged 且 query 非空必然 recompute；兜底映射。
           decorations = decorations.map(tr.mapping, tr.doc);
         }
-        return { query, matches, active, decorations };
+        return { query, matchCase, matches, active, decorations };
       },
     },
     props: {
@@ -212,7 +229,7 @@ export function createFindReplaceProsePlugin(): Plugin {
           const fr = pluginStateOf(view.state);
           if (fr === null) return;
           // 任意文档变更/查询变更后，命中列表或当前项可能变；通知壳层面板。
-          const key = `${fr.query}|${fr.active}|${fr.matches.length}|${view.state.doc.content.size}`;
+          const key = `${fr.query}|${String(fr.matchCase)}|${fr.active}|${fr.matches.length}|${view.state.doc.content.size}`;
           if (key === lastKey) return;
           lastKey = key;
           emitFindReplaceStatus(view);
@@ -237,12 +254,19 @@ function pluginStateOf(state: EditorState): FindReplaceState | null {
  * 设置查询串的事务：meta 驱动命中重收；有命中时把选区移到首命中并滚动可见
  * （选区事务不产生 history 撤销步）。查询为空即清除全部高亮。
  */
-export function findQueryTr(state: EditorState, query: string): Transaction {
+export function findQueryTr(
+  state: EditorState,
+  query: string,
+  options?: { readonly matchCase?: boolean },
+): Transaction {
+  const prevMatchCase = pluginStateOf(state)?.matchCase ?? false;
+  const matchCase = options?.matchCase ?? prevMatchCase;
   const tr = state.tr.setMeta(FIND_REPLACE_PLUGIN_KEY, {
     type: 'query',
     query,
+    matchCase,
   } satisfies FindReplaceMeta);
-  const matches = collectMatches(state.doc, query);
+  const matches = collectMatches(state.doc, query, matchCase);
   const first = matches[0];
   if (first !== undefined) {
     tr.setSelection(TextSelection.create(state.doc, first.from, first.to)).scrollIntoView();
@@ -377,14 +401,23 @@ export function findReplaceViewForHost(host: HTMLElement): EditorView | null {
 /** 读取当前查询状态（壳层面板计数用）。 */
 export function readFindReplaceState(
   view: EditorView,
-): { query: string; active: number; total: number } | null {
+): { query: string; active: number; total: number; matchCase: boolean } | null {
   const fr = pluginStateOf(view.state);
   if (fr === null) return null;
-  return { query: fr.query, active: fr.active, total: fr.matches.length };
+  return {
+    query: fr.query,
+    active: fr.active,
+    total: fr.matches.length,
+    matchCase: fr.matchCase,
+  };
 }
 
-export function setFindQuery(view: EditorView, query: string): void {
-  view.dispatch(findQueryTr(view.state, query));
+export function setFindQuery(
+  view: EditorView,
+  query: string,
+  options?: { readonly matchCase?: boolean },
+): void {
+  view.dispatch(findQueryTr(view.state, query, options));
   scrollActiveMatchIntoView(view);
 }
 
@@ -561,6 +594,8 @@ export interface FindReplaceLabels {
   readonly replace: string;
   readonly replaceAll: string;
   readonly close: string;
+  /** 区分大小写按钮文案（可选，默认 Match case）。 */
+  readonly matchCase?: string;
   /** 无匹配空态文案。 */
   readonly empty: string;
   /** 命中计数文案（active 为 0 基下标）。 */
@@ -568,7 +603,7 @@ export interface FindReplaceLabels {
 }
 
 export interface FindReplacePanelHandlers {
-  onQueryChange(query: string): void;
+  onQueryChange(query: string, matchCase: boolean): void;
   onNext(): void;
   onPrev(): void;
   onReplace(replacement: string): void;
@@ -578,11 +613,18 @@ export interface FindReplacePanelHandlers {
 
 export interface FindReplacePanel {
   readonly element: HTMLElement;
-  open(): void;
+  open(options?: { readonly replace?: boolean }): void;
+  /** 以展开替换行的形态打开（Ctrl+H / 编辑 → 替换…）。 */
+  openReplace(): void;
   close(): void;
   isOpen(): boolean;
+  isMatchCase(): boolean;
   /** 刷新计数/空态/替换按钮可用性（total=0 且无命中时禁用替换）。 */
   setStatus(total: number, active: number): void;
+  /** 只读标签下隐藏替换行与展开钮。 */
+  setEditable(editable: boolean): void;
+  /** 语言切换后刷新面板文案。 */
+  retranslate(nextLabels: FindReplaceLabels): void;
   getQuery(): string;
   /** 预填查找框（Ctrl+F 带上当前选区时用）；不自动触发 onQueryChange。 */
   setQuery(query: string): void;
@@ -649,9 +691,10 @@ function fieldIcon(doc: Document, svg: string, className: string): HTMLSpanEleme
  */
 export function createFindReplacePanel(
   doc: Document,
-  labels: FindReplaceLabels,
+  initialLabels: FindReplaceLabels,
   handlers: FindReplacePanelHandlers,
 ): FindReplacePanel {
+  let labels = initialLabels;
   const root = doc.createElement('div');
   root.className = 'lightink-find-panel';
   root.setAttribute('role', 'search');
@@ -675,6 +718,14 @@ export function createFindReplacePanel(
   findInput.autocomplete = 'off';
   findInput.spellcheck = false;
 
+  const caseBtn = doc.createElement('button');
+  caseBtn.type = 'button';
+  caseBtn.className = 'lightink-find-case-btn';
+  caseBtn.textContent = 'Aa';
+  caseBtn.title = labels.matchCase ?? 'Match case';
+  caseBtn.setAttribute('aria-label', labels.matchCase ?? 'Match case');
+  caseBtn.setAttribute('aria-pressed', 'false');
+
   const status = doc.createElement('span');
   status.className = 'lightink-find-status';
   status.setAttribute('aria-live', 'polite');
@@ -684,6 +735,7 @@ export function createFindReplacePanel(
   findField.append(
     fieldIcon(doc, FIND_ICON_SEARCH, 'lightink-find-panel__glyph--search'),
     findInput,
+    caseBtn,
     status,
   );
 
@@ -733,6 +785,10 @@ export function createFindReplacePanel(
 
   let open = false;
   let replaceOpen = false;
+  let matchCase = false;
+  let editable = true;
+  let lastTotal = 0;
+  let lastActive = -1;
 
   // —— 钉版心右上（§3.10）——
   const view = doc.defaultView;
@@ -814,17 +870,39 @@ export function createFindReplacePanel(
   };
 
   const setReplaceOpen = (next: boolean): void => {
-    replaceOpen = next;
-    rowReplace.hidden = !next;
-    root.classList.toggle('is-replace-open', next);
-    expandBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
-    expandBtn.classList.toggle('is-expanded', next);
+    const effective = editable && next;
+    replaceOpen = effective;
+    rowReplace.hidden = !effective;
+    root.classList.toggle('is-replace-open', effective);
+    expandBtn.setAttribute('aria-expanded', effective ? 'true' : 'false');
+    expandBtn.classList.toggle('is-expanded', effective);
   };
 
+  const toggleMatchCase = (): void => {
+    matchCase = !matchCase;
+    caseBtn.classList.toggle('is-active', matchCase);
+    caseBtn.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
+    handlers.onQueryChange(findInput.value, matchCase);
+  };
+
+  caseBtn.addEventListener('mousedown', (event) => {
+    // Keep typing caret inside findInput when toggling Aa.
+    event.preventDefault();
+  });
+  caseBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    toggleMatchCase();
+  });
+
   findInput.addEventListener('input', () => {
-    handlers.onQueryChange(findInput.value);
+    handlers.onQueryChange(findInput.value, matchCase);
   });
   findInput.addEventListener('keydown', (event) => {
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      toggleMatchCase();
+      return;
+    }
     if (event.key === 'Enter') {
       event.preventDefault();
       if (event.shiftKey) {
@@ -838,6 +916,11 @@ export function createFindReplacePanel(
     }
   });
   replaceInput.addEventListener('keydown', (event) => {
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      toggleMatchCase();
+      return;
+    }
     if (event.key === 'Enter') {
       event.preventDefault();
       if (event.ctrlKey || event.metaKey) {
@@ -870,11 +953,22 @@ export function createFindReplacePanel(
 
   const panel: FindReplacePanel = {
     element: root,
-    open(): void {
+    open(options?: { readonly replace?: boolean }): void {
       open = true;
       root.classList.add('is-open');
+      if (options?.replace === true) {
+        setReplaceOpen(true);
+      }
       startPinning();
-      panel.focusFind();
+      if (options?.replace === true && findInput.value !== '' && replaceOpen) {
+        replaceInput.focus();
+        replaceInput.select();
+      } else {
+        panel.focusFind();
+      }
+    },
+    openReplace(): void {
+      panel.open({ replace: true });
     },
     close(): void {
       if (!open) return;
@@ -888,7 +982,12 @@ export function createFindReplacePanel(
     isOpen(): boolean {
       return open;
     },
+    isMatchCase(): boolean {
+      return matchCase;
+    },
     setStatus(total: number, active: number): void {
+      lastTotal = total;
+      lastActive = active;
       const hasQuery = findInput.value !== '';
       const empty = hasQuery && total === 0;
       root.dataset['findTotal'] = String(total);
@@ -900,10 +999,42 @@ export function createFindReplacePanel(
           ? labels.count(active, total)
           : '';
       const noHits = total === 0;
-      replaceBtn.disabled = noHits;
-      replaceAllBtn.disabled = noHits;
+      replaceBtn.disabled = noHits || !editable;
+      replaceAllBtn.disabled = noHits || !editable;
       prevBtn.disabled = noHits;
       nextBtn.disabled = noHits;
+    },
+    setEditable(nextEditable: boolean): void {
+      editable = nextEditable;
+      expandBtn.hidden = !editable;
+      if (!editable && replaceOpen) {
+        setReplaceOpen(false);
+      }
+      panel.setStatus(lastTotal, lastActive);
+    },
+    retranslate(nextLabels: FindReplaceLabels): void {
+      labels = nextLabels;
+      root.setAttribute('aria-label', labels.findPlaceholder);
+      expandBtn.title = labels.replacePlaceholder;
+      expandBtn.setAttribute('aria-label', labels.replacePlaceholder);
+      findInput.placeholder = labels.findPlaceholder;
+      findInput.setAttribute('aria-label', labels.findPlaceholder);
+      const mc = labels.matchCase ?? 'Match case';
+      caseBtn.title = mc;
+      caseBtn.setAttribute('aria-label', mc);
+      prevBtn.title = labels.prev;
+      prevBtn.setAttribute('aria-label', labels.prev);
+      nextBtn.title = labels.next;
+      nextBtn.setAttribute('aria-label', labels.next);
+      closeBtn.title = labels.close;
+      closeBtn.setAttribute('aria-label', labels.close);
+      replaceInput.placeholder = labels.replacePlaceholder;
+      replaceInput.setAttribute('aria-label', labels.replacePlaceholder);
+      replaceBtn.textContent = labels.replace;
+      replaceBtn.title = labels.replace;
+      replaceAllBtn.textContent = labels.replaceAll;
+      replaceAllBtn.title = labels.replaceAll;
+      panel.setStatus(lastTotal, lastActive);
     },
     getQuery(): string {
       return findInput.value;

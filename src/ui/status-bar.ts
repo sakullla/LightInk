@@ -39,6 +39,14 @@ export function saveStatusBarVisible(
 export interface StatusBarLabels {
   words: string;
   characters: string;
+  selected?: string;
+  readingTime?: (minutes: number) => string;
+  mode?: {
+    readonly wysiwyg: string;
+    readonly source: string;
+    readonly toggleTitle: string;
+  };
+  saveClickHint?: string;
   line: string;
   column: string;
   encoding: string;
@@ -57,6 +65,10 @@ export interface MarkdownStatusSnapshot {
   readonly markdown: string;
   readonly saveStatus: DocumentSaveStatus;
   readonly cursor: CursorPosition;
+  /** Optional non-empty selected text so writers see selection counts vs total. */
+  readonly selectionMarkdown?: string;
+  /** Optional active editing mode (`wysiwyg` | `source`) for mode indicator/toggle. */
+  readonly editorMode?: 'wysiwyg' | 'source';
 }
 
 export interface ReaderStatusSnapshot {
@@ -70,6 +82,21 @@ export type StatusBarSnapshot = MarkdownStatusSnapshot | ReaderStatusSnapshot | 
 
 export function formatWordStats(stats: WordStats, labels: StatusBarLabels): string {
   return `${labels.words} ${formatCount(stats.words)} · ${labels.characters} ${formatCount(stats.characters)}`;
+}
+
+/** Estimate reading duration in minutes (~300 CJK chars / Latin words per minute). */
+export function estimateReadingMinutes(stats: WordStats): number {
+  if (stats.words <= 0) return 0;
+  return Math.max(1, Math.ceil(stats.words / 300));
+}
+
+export function formatSelectionWordStats(
+  selection: WordStats,
+  total: WordStats,
+  labels: StatusBarLabels,
+): string {
+  const prefix = labels.selected ?? labels.words;
+  return `${prefix} ${formatCount(selection.words)} / ${formatCount(total.words)} · ${labels.characters} ${formatCount(selection.characters)} / ${formatCount(total.characters)}`;
 }
 
 function formatCount(n: number): string {
@@ -101,6 +128,8 @@ export interface StatusBarOptions {
   labels: () => StatusBarLabels;
   debounceMs?: number;
   initiallyVisible?: boolean;
+  onToggleMode?: () => void;
+  onSaveClick?: () => void;
 }
 
 export interface StatusBar {
@@ -143,15 +172,40 @@ export function createStatusBar(
   persistence.setAttribute('role', 'status');
   persistence.setAttribute('aria-live', 'polite');
   persistence.setAttribute('aria-atomic', 'true');
+  if (options.onSaveClick !== undefined && typeof persistence.addEventListener === 'function') {
+    persistence.addEventListener('click', () => {
+      if (element.dataset.saveStatus === 'dirty') {
+        options.onSaveClick?.();
+      }
+    });
+    persistence.addEventListener('keydown', (event) => {
+      if (
+        element.dataset.saveStatus === 'dirty' &&
+        (event.key === 'Enter' || event.key === ' ')
+      ) {
+        event.preventDefault();
+        options.onSaveClick?.();
+      }
+    });
+  }
   const details = doc.createElement('span') as HTMLSpanElement;
   details.className = 'lightink-status-details';
+  const modeChip = doc.createElement('button') as HTMLButtonElement;
+  modeChip.type = 'button';
+  modeChip.className = 'lightink-status-mode';
+  modeChip.hidden = true;
+  if (options.onToggleMode !== undefined && typeof modeChip.addEventListener === 'function') {
+    modeChip.addEventListener('click', () => {
+      options.onToggleMode?.();
+    });
+  }
   const position = doc.createElement('span') as HTMLSpanElement;
   position.className = 'lightink-status-position';
   const encoding = doc.createElement('span') as HTMLSpanElement;
   encoding.className = 'lightink-status-encoding';
   const counts = doc.createElement('span') as HTMLSpanElement;
   counts.className = 'lightink-status-counts';
-  details.append(position, encoding, counts);
+  details.append(modeChip, position, encoding, counts);
   element.append(persistence, details);
 
   function applyVisibility(): void {
@@ -174,6 +228,8 @@ export function createStatusBar(
     if (snapshot === null) {
       element.hidden = true;
       persistence.hidden = false;
+      modeChip.hidden = true;
+      modeChip.textContent = '';
       delete element.dataset.saveStatus;
       delete element.dataset.readerPhase;
       delete element.dataset.statusKind;
@@ -188,15 +244,68 @@ export function createStatusBar(
       element.dataset.saveStatus = snapshot.saveStatus;
       persistence.hidden = false;
       persistence.textContent = labels.save[snapshot.saveStatus];
+      const canClickSave =
+        snapshot.saveStatus === 'dirty' && options.onSaveClick !== undefined;
+      if (canClickSave) {
+        persistence.dataset.clickable = 'true';
+        persistence.tabIndex = 0;
+        if (labels.saveClickHint !== undefined) {
+          persistence.title = labels.saveClickHint;
+        }
+      } else {
+        delete persistence.dataset.clickable;
+        persistence.tabIndex = -1;
+        persistence.title = '';
+      }
+
+      if (snapshot.editorMode !== undefined && labels.mode !== undefined) {
+        modeChip.hidden = false;
+        modeChip.dataset.editorMode = snapshot.editorMode;
+        modeChip.textContent =
+          snapshot.editorMode === 'source' ? labels.mode.source : labels.mode.wysiwyg;
+        modeChip.title = labels.mode.toggleTitle;
+        modeChip.setAttribute('aria-label', labels.mode.toggleTitle);
+        modeChip.setAttribute(
+          'aria-pressed',
+          snapshot.editorMode === 'source' ? 'true' : 'false',
+        );
+      } else {
+        modeChip.hidden = true;
+        modeChip.textContent = '';
+      }
+
       position.hidden = false;
       position.textContent = `${labels.line} ${snapshot.cursor.line}, ${labels.column} ${snapshot.cursor.column}`;
       encoding.hidden = false;
       encoding.textContent = labels.encoding;
       counts.hidden = false;
-      counts.textContent = formatWordStats(computeWordStats(snapshot.markdown), labels);
+      const totalStats = computeWordStats(snapshot.markdown);
+      const rawSel = snapshot.selectionMarkdown?.trim() ?? '';
+      if (rawSel !== '') {
+        counts.dataset.hasSelection = 'true';
+        counts.textContent = formatSelectionWordStats(
+          computeWordStats(snapshot.selectionMarkdown!),
+          totalStats,
+          labels,
+        );
+      } else {
+        delete counts.dataset.hasSelection;
+        const baseStats = formatWordStats(totalStats, labels);
+        const mins =
+          labels.readingTime !== undefined ? estimateReadingMinutes(totalStats) : 0;
+        counts.textContent =
+          mins > 0 && labels.readingTime !== undefined
+            ? `${baseStats} · ${labels.readingTime(mins)}`
+            : baseStats;
+      }
       return;
     }
 
+    modeChip.hidden = true;
+    modeChip.textContent = '';
+    delete persistence.dataset.clickable;
+    persistence.tabIndex = -1;
+    persistence.title = '';
     delete element.dataset.saveStatus;
     element.dataset.readerPhase = snapshot.state.phase;
     const ready = snapshot.state.phase === 'ready';

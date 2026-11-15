@@ -101,6 +101,13 @@
   transition: padding-top var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
 }
 
+#lightink-main:has(.lightink-find-panel.is-open.is-replace-open)
+  #lightink-editor-area
+  .lightink-tab-host:not(.lightink-tab-host--reader) {
+  /* 展开替换行时再让出一行高度，避免双行面板遮挡正文首行。 */
+  padding-top: calc(var(--lightink-page-pad-y, 24px) + 92px);
+}
+
 /* 面板自身：贴纸卡语言（find-replace.ts 钉位后仍是 elevated 浮层，仅补令牌细节）。 */
 #lightink-main .lightink-find-panel {
   border-radius: var(--lightink-radius-panel, 12px);
@@ -305,6 +312,587 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
   border: 1px solid color-mix(in srgb, var(--lightink-border) 48%, transparent);
 }
 
+/* ---------------------------------------------------------------------------
+ * 5. Markdown 编辑细节打磨：空文档占位、折叠胶囊、[TOC] 卡片、上下文表格条、
+ *    查找区分大小写、状态栏模式胶囊、零标签空态与版本对比视图。
+ * ------------------------------------------------------------------------- */
+
+/* 空文档首段占位提示（纯 decoration + ::before，不入文档模型与导出）。 */
+.lightink-tab-host .ProseMirror p.lightink-empty-paragraph[data-placeholder]::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  user-select: none;
+  color: color-mix(in srgb, var(--lightink-muted) 68%, transparent);
+  font-style: normal;
+}
+
+/* 折叠标题尾随胶囊指示：明确提示下方存在已收起章节，点击折叠三角即可展开。 */
+.lightink-tab-host .ProseMirror .lightink-heading-folded::after {
+  content: '⋯';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.48em;
+  padding: 0 0.46em;
+  height: 1.3em;
+  border-radius: var(--lightink-radius-pill, 999px);
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 86%, transparent);
+  background: var(--lightink-bg-sunken);
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 0.62em;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+}
+
+/* [TOC] 内嵌目录卡片：统一凹面容器语言，移除浏览器默认 button 外框。 */
+.lightink-tab-host .lightink-toc {
+  margin-block: calc(var(--lightink-rhythm-unit, 28px) * var(--lightink-gap-block, 0.75));
+  padding: 14px 18px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 78%, transparent);
+  border-radius: var(--lightink-radius-panel, 12px);
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 68%, var(--lightink-bg-elevated));
+  user-select: none;
+}
+
+.lightink-tab-host .lightink-toc-header {
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 58%, transparent);
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.lightink-tab-host .lightink-toc-empty {
+  padding: 4px 2px;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 12.5px;
+}
+
+.lightink-tab-host .lightink-toc-item {
+  margin: 1px 0;
+}
+
+.lightink-tab-host .lightink-toc-link {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--lightink-fg) 90%, var(--lightink-muted));
+  font-family: var(--lightink-font-body);
+  font-size: 0.92em;
+  line-height: 1.45;
+  text-align: left;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-tab-host .lightink-toc-item[data-level='1'] .lightink-toc-link {
+  font-weight: 600;
+  color: var(--lightink-fg);
+}
+
+.lightink-tab-host .lightink-toc-link:hover {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+}
+
+.lightink-tab-host .lightink-toc-link:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+/* 正文容器视觉一致性：表格、公式、引用、front-matter 与链接下划线。 */
+.lightink-tab-host[role='tabpanel'] .tableWrapper {
+  border-radius: var(--lightink-radius-panel, 12px);
+  border-color: color-mix(in srgb, var(--lightink-border) 82%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 4%, transparent);
+}
+
+.lightink-tab-host[role='tabpanel'] :is(th, td) {
+  padding: 8px 14px;
+}
+
+.lightink-tab-host[role='tabpanel'] .lightink-math-preview {
+  border-radius: var(--lightink-radius-panel, 12px);
+  border-color: color-mix(in srgb, var(--lightink-border) 72%, transparent);
+  background: color-mix(in srgb, var(--lightink-bg-sunken) 52%, var(--lightink-bg-elevated));
+}
+
+.lightink-tab-host[role='tabpanel'] .lightink-math-preview .lightink-preview-edit {
+  border-radius: 6px;
+  opacity: 0;
+  transition:
+    opacity var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-tab-host[role='tabpanel'] .lightink-math-preview:is(:hover, :focus-within) .lightink-preview-edit {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .lightink-tab-host[role='tabpanel'] .lightink-math-preview .lightink-preview-edit {
+    opacity: 0.85;
+  }
+}
+
+.lightink-tab-host[role='tabpanel'] blockquote {
+  padding: 0.5em 1.1em;
+  border-left: 3px solid color-mix(in srgb, var(--lightink-accent) 62%, var(--lightink-border));
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, var(--lightink-accent-soft) 36%, var(--lightink-bg-sunken));
+}
+
+.lightink-tab-host[role='tabpanel'] .lightink-frontmatter > summary {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+
+.lightink-tab-host[role='tabpanel'] .lightink-frontmatter[open] > summary {
+  border-bottom: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+}
+
+.lightink-tab-host .ProseMirror[contenteditable='true'] a {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--lightink-accent) 34%, transparent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+.lightink-tab-host .ProseMirror kbd {
+  display: inline-block;
+  padding: 0.08em 0.42em;
+  border: 1px solid color-mix(in srgb, var(--lightink-border-strong, var(--lightink-border)) 85%, transparent);
+  border-radius: 5px;
+  background: var(--lightink-bg-sunken);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--lightink-fg) 10%, transparent);
+  color: var(--lightink-fg);
+  font-family: var(--lightink-font-mono);
+  font-size: 0.82em;
+  line-height: 1.35;
+}
+
+/* 上下文浮动表格操作条：与格式工具条同一玻璃纸片浮层语言。 */
+body .lightink-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 96%, transparent);
+  box-shadow: var(--lightink-shadow-pop);
+  backdrop-filter: blur(18px);
+}
+
+body .lightink-table-toolbar__sep {
+  width: 1px;
+  height: 16px;
+  margin-inline: 2px;
+  background: color-mix(in srgb, var(--lightink-border) 82%, transparent);
+}
+
+body .lightink-table-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--lightink-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+body .lightink-table-tool:hover {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-fg);
+}
+
+body .lightink-table-tool[data-active] {
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent);
+}
+
+body .lightink-table-tool--danger:hover {
+  background: color-mix(in srgb, var(--lightink-danger) 14%, transparent);
+  color: var(--lightink-danger);
+}
+
+/* 查找面板内嵌「Aa」区分大小写开关。 */
+#lightink-main .lightink-find-case-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 24px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+#lightink-main .lightink-find-case-btn:hover {
+  background: color-mix(in srgb, var(--lightink-fg) 7%, transparent);
+  color: var(--lightink-fg);
+}
+
+#lightink-main .lightink-find-case-btn.is-active {
+  background: var(--lightink-accent-soft);
+  border-color: color-mix(in srgb, var(--lightink-accent) 36%, transparent);
+  color: var(--lightink-accent);
+}
+
+/* 状态栏交互：脏态单击保存 + 所见/源码模式一键切换胶囊。 */
+.lightink-status-save[data-clickable='true'] {
+  padding: 1px 7px;
+  margin-left: -7px;
+  border-radius: var(--lightink-radius-pill, 999px);
+  cursor: pointer;
+  transition: background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-status-save[data-clickable='true']:hover {
+  background: color-mix(in srgb, var(--lightink-warning) 14%, transparent);
+}
+
+.lightink-status-details > .lightink-status-mode[hidden] {
+  display: none !important;
+}
+
+.lightink-status-details > .lightink-status-mode[hidden] + span::before {
+  content: none;
+  margin-right: 0;
+}
+
+.lightink-status-mode {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 78%, transparent);
+  border-radius: var(--lightink-radius-pill, 999px);
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 65%, transparent);
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-status-mode:hover {
+  border-color: var(--lightink-border-strong, var(--lightink-border));
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg);
+}
+
+.lightink-status-mode[data-editor-mode='source'] {
+  border-color: color-mix(in srgb, var(--lightink-accent) 38%, transparent);
+  background: var(--lightink-accent-soft);
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-weight: 650;
+}
+
+.lightink-status-counts[data-has-selection='true'] {
+  color: var(--lightink-accent-ink, var(--lightink-accent));
+  font-weight: 550;
+}
+
+/* 零标签编辑器空态引导卡。 */
+.lightink-editor-empty {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 32px 20px;
+}
+
+.lightink-editor-empty[hidden] {
+  display: none !important;
+}
+
+.lightink-editor-empty__card {
+  width: min(420px, 100%);
+  padding: 28px 30px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 82%, transparent);
+  border-radius: 16px;
+  background: var(--lightink-bg-elevated);
+  box-shadow: var(--lightink-shadow);
+  text-align: left;
+}
+
+.lightink-editor-empty__title {
+  margin: 0 0 6px;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.lightink-editor-empty__hint {
+  margin: 0 0 18px;
+  color: var(--lightink-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.lightink-editor-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lightink-editor-empty__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 14px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 92%, transparent);
+  border-radius: 9px;
+  background: var(--lightink-bg);
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-editor-empty__btn:hover {
+  border-color: var(--lightink-border-strong, var(--lightink-border));
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-editor-empty__btn--primary {
+  border-color: transparent;
+  background: var(--lightink-accent);
+  color: var(--lightink-accent-contrast);
+}
+
+.lightink-editor-empty__btn--primary:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--lightink-accent) 88%, var(--lightink-fg));
+  color: var(--lightink-accent-contrast);
+}
+
+.lightink-editor-empty__kbd {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font-family: var(--lightink-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.88;
+}
+
+.lightink-editor-empty__recents {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--lightink-border) 62%, transparent);
+}
+
+.lightink-editor-empty__recents[hidden] {
+  display: none !important;
+}
+
+.lightink-editor-empty__recents-title {
+  margin-bottom: 6px;
+  color: var(--lightink-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lightink-editor-empty__recents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lightink-editor-empty__recent-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lightink-editor-empty__recent-item:hover {
+  background: var(--lightink-accent-soft);
+}
+
+.lightink-editor-empty__recent-name {
+  min-width: 0;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightink-editor-empty__recent-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--lightink-muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 版本历史右侧预览栏：差异统计 + 完整/对比切换 + 行级红绿着色。 */
+.lightink-versions-preview-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lightink-versions-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.lightink-versions-toolbar[hidden] {
+  display: none !important;
+}
+
+.lightink-versions-diff-meta {
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightink-versions-diff-meta[data-identical='true'] {
+  font-family: var(--lightink-font-ui);
+}
+
+.lightink-versions-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--lightink-border) 80%, transparent);
+  border-radius: 8px;
+  background: var(--lightink-bg-sunken);
+}
+
+.lightink-versions-mode-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.lightink-versions-mode-btn:hover {
+  color: var(--lightink-fg);
+}
+
+.lightink-versions-mode-btn.is-active {
+  background: var(--lightink-bg-elevated);
+  color: var(--lightink-fg-strong, var(--lightink-fg));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--lightink-fg) 8%, transparent);
+}
+
+.lightink-versions-preview.is-diff {
+  padding: 8px 0;
+}
+
+.lightink-diff-line {
+  padding: 1px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lightink-diff-line--add {
+  background: color-mix(in srgb, var(--lightink-success) 15%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-diff-line--del {
+  background: color-mix(in srgb, var(--lightink-danger) 14%, transparent);
+  color: color-mix(in srgb, var(--lightink-fg) 82%, var(--lightink-danger));
+}
+
+.lightink-versions-diff-identical {
+  padding: 18px 14px;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+@media print {
+  .lightink-table-toolbar,
+  .lightink-tab-host .ProseMirror .lightink-heading-folded::after,
+  .lightink-tab-host .ProseMirror p.lightink-empty-paragraph[data-placeholder]::before {
+    display: none !important;
+  }
+}
+
 @media (max-width: 760px) {
   .lightink-tab-host.is-paper-card {
     margin-block: 12px 20px;
@@ -324,7 +912,14 @@ body .lightink-keyboard-format-bar .lightink-keyboard-format-bar__btn[data-activ
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lightink-tab-host .ProseMirror[contenteditable='false'] a {
+  .lightink-tab-host .ProseMirror[contenteditable='false'] a,
+  .lightink-tab-host .lightink-toc-link,
+  .lightink-tab-host[role='tabpanel'] .lightink-math-preview .lightink-preview-edit,
+  body .lightink-table-tool,
+  #lightink-main .lightink-find-case-btn,
+  .lightink-status-save[data-clickable='true'],
+  .lightink-status-mode,
+  .lightink-editor-empty__btn {
     transition: none;
   }
 }

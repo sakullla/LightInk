@@ -351,3 +351,31 @@ describe('纸墨工作室 §3.10：查找面板钉版心（computeFindPanelPin�
     expect(pin.top).toBe(32);
   });
 });
+
+describe('matchCase (Aa) case-sensitive find & replace', () => {
+  it('filters matches by exact case when matchCase=true in both PM and source text', () => {
+    const state = makeState([
+      { kind: 'p', text: 'LightInk and lightink and LIGHTINK' },
+    ]);
+    expect(collectMatches(state.doc, 'LightInk', false)).toHaveLength(3);
+    expect(collectMatches(state.doc, 'LightInk', true)).toHaveLength(1);
+    expect(collectSourceMatches('Foo foo FOO', 'Foo', false)).toHaveLength(3);
+    expect(collectSourceMatches('Foo foo FOO', 'Foo', true)).toHaveLength(1);
+  });
+
+  it('persists matchCase in plugin state across document edits', () => {
+    let state = makeState([{ kind: 'p', text: 'Note and note' }]);
+    state = applyTr(state, findQueryTr(state, 'Note', { matchCase: true }));
+    expect(pluginState(state).matchCase).toBe(true);
+    expect(pluginState(state).matches).toHaveLength(1);
+
+    // Editing doc keeps matchCase=true without resetting to case-insensitive
+    const end = state.doc.content.size;
+    state = applyTr(
+      state,
+      state.tr.insert(end, schema.nodes.paragraph!.create(null, schema.text('note Note'))),
+    );
+    expect(pluginState(state).matchCase).toBe(true);
+    expect(pluginState(state).matches).toHaveLength(2);
+  });
+});

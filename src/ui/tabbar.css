@@ -10,6 +10,7 @@
 
 .lightink-tab-button {
   min-height: 32px;
+  gap: 6px;
 }
 
 .lightink-tab.active .lightink-tab-label {
@@ -21,11 +22,53 @@
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
-  margin-left: 2px;
+  margin-left: 0;
   border-radius: 50%;
   background: var(--lightink-warning, var(--lightink-accent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lightink-warning, var(--lightink-accent)) 18%, transparent);
 }
 
 .lightink-tab.active .lightink-tab-dirty {
   background: var(--lightink-warning, var(--lightink-accent));
+}
+
+/* 标签栏末端「+」快速新建按钮。 */
+.lightink-tab-new {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--lightink-radius-control, 8px);
+  background: transparent;
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 16px;
+  font-weight: 450;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    background-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    border-color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard),
+    color var(--lightink-duration-fast, 100ms) var(--lightink-easing-standard);
+}
+
+.lightink-tab-new:hover {
+  background: color-mix(in srgb, var(--lightink-bg-elevated) 72%, var(--lightink-accent-soft));
+  border-color: color-mix(in srgb, var(--lightink-border) 70%, transparent);
+  color: var(--lightink-fg);
+}
+
+.lightink-tab-new:focus-visible {
+  outline: 2px solid var(--lightink-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightink-tab-new {
+    transition: none;
+  }
 }

@@ -39,6 +39,8 @@ import {
 
 const PLUGIN_KEY = new PluginKey('lightink-table-ops');
 
+export type TableColumnAlign = 'left' | 'center' | 'right';
+
 export type TableOpId =
   | 'insert-col-left'
   | 'insert-col-right'
@@ -48,7 +50,10 @@ export type TableOpId =
   | 'delete-column'
   | 'delete-table'
   | 'select-row'
-  | 'select-column';
+  | 'select-column'
+  | 'align-col-left'
+  | 'align-col-center'
+  | 'align-col-right';
 
 /** True when the caret/selection is inside a GFM table. */
 export function editorIsInTable(state: EditorState): boolean {
@@ -108,6 +113,72 @@ export function selectCurrentColumn(view: EditorView): boolean {
   return true;
 }
 
+/** Read the GFM alignment of the active column (defaults to `'left'`). */
+export function getActiveColumnAlignment(state: EditorState): TableColumnAlign | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    if (rect.map.width <= 0 || rect.map.height <= 0) return null;
+    const col = Math.min(Math.max(0, rect.left), rect.map.width - 1);
+    const offset = rect.map.positionAt(0, col, rect.table);
+    const cell = rect.table.nodeAt(offset);
+    const raw = cell?.attrs?.['alignment'];
+    if (raw === 'center' || raw === 'right' || raw === 'left') {
+      return raw;
+    }
+    return 'left';
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Set GFM column alignment (`left` | `center` | `right`) on every row of the
+ * selected column(s) in a single undoable transaction. Milkdown GFM serializes
+ * column alignment from the header row's `alignment` cell attribute and paints
+ * `text-align` on each cell in DOM.
+ */
+export function setColumnAlignment(
+  view: EditorView,
+  alignment: TableColumnAlign,
+): boolean {
+  if (!isInTable(view.state)) return false;
+  let rect;
+  try {
+    rect = selectedRect(view.state);
+  } catch {
+    return false;
+  }
+  const { table, tableStart, map } = rect;
+  if (map.width <= 0 || map.height <= 0) return false;
+  const startCol = Math.max(0, rect.left);
+  const endCol = Math.min(map.width, Math.max(startCol + 1, rect.right));
+  const visitedOffsets = new Set<number>();
+  let tr = view.state.tr;
+  let changed = false;
+
+  for (let row = 0; row < map.height; row += 1) {
+    for (let col = startCol; col < endCol; col += 1) {
+      const offset = map.positionAt(row, col, table);
+      if (visitedOffsets.has(offset)) continue;
+      visitedOffsets.add(offset);
+      const cell = table.nodeAt(offset);
+      if (cell === null) continue;
+      if (cell.attrs['alignment'] === alignment) continue;
+      tr = tr.setNodeMarkup(tableStart + offset, undefined, {
+        ...cell.attrs,
+        alignment,
+      });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    view.dispatch(tr);
+  }
+  return true;
+}
+
 export function runTableOp(view: EditorView, op: TableOpId): boolean {
   switch (op) {
     case 'insert-col-left':
@@ -128,6 +199,12 @@ export function runTableOp(view: EditorView, op: TableOpId): boolean {
       return selectCurrentRow(view);
     case 'select-column':
       return selectCurrentColumn(view);
+    case 'align-col-left':
+      return setColumnAlignment(view, 'left');
+    case 'align-col-center':
+      return setColumnAlignment(view, 'center');
+    case 'align-col-right':
+      return setColumnAlignment(view, 'right');
     default:
       return false;
   }
@@ -974,6 +1051,9 @@ export const TABLE_OP_LABELS: Readonly<Record<TableOpId, string>> = {
   'delete-table': '删除表格',
   'select-row': '选中当前行',
   'select-column': '选中当前列',
+  'align-col-left': '列左对齐',
+  'align-col-center': '列居中对齐',
+  'align-col-right': '列右对齐',
 };
 
 export const TABLE_OP_SHORTCUTS: Readonly<Partial<Record<TableOpId, string>>> = {

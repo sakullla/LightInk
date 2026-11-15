@@ -155,6 +155,39 @@ td { overflow-wrap: break-word; }
 .lightink-export-toc-item.level-6 { padding-left: 5rem; }
 .lightink-export-toc a { color: inherit; text-decoration: none; }
 .lightink-export-toc a:hover { color: var(--lightink-accent); }
+/* [TOC] 内嵌目录（编辑器克隆导出）：去除原生 button 外壳，保持与正文卡片一致。 */
+.lightink-toc {
+  margin: calc(var(--lightink-rhythm-unit, 24px) * 0.75) 0;
+  padding: 12px 16px;
+  border: 1px solid var(--lightink-border);
+  border-radius: 10px;
+  background: var(--lightink-bg-elevated);
+}
+.lightink-toc-header {
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--lightink-border);
+  color: var(--lightink-muted);
+  font-family: var(--lightink-font-ui);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.lightink-toc-list { margin: 0; padding: 0; list-style: none; }
+.lightink-toc-item { margin: 2px 0; }
+.lightink-toc-link {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  color: var(--lightink-fg);
+  font: inherit;
+  font-size: 0.94em;
+  text-align: left;
+  cursor: pointer;
+}
+.lightink-toc-empty { color: var(--lightink-muted); font-size: 0.9em; }
 .lightink-math-error, .lightink-mermaid-error { color: var(--lightink-accent); }
 ::selection { background: var(--lightink-selection); }
 `;

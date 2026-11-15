@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  computeLineDiff,
   createBoundVersionActions,
   newestFirst,
   formatRelativeTime,
@@ -130,5 +131,28 @@ describe('createBoundVersionActions', () => {
 
     expect(harness.setContent).not.toHaveBeenCalled();
     expect(first.content).toBe('current a');
+  });
+});
+
+describe('computeLineDiff (Version History Changes view)', () => {
+  it('marks identical documents with zero added/removed lines', () => {
+    const diff = computeLineDiff('# Title\r\n\r\nBody', '# Title\n\nBody');
+    expect(diff.identical).toBe(true);
+    expect(diff.added).toBe(0);
+    expect(diff.removed).toBe(0);
+  });
+
+  it('computes minimal line additions and deletions with preserved context', () => {
+    const current = ['# Notes', '', '- old item', '- shared'].join('\n');
+    const snapshot = ['# Notes', '', '- restored item', '- extra', '- shared'].join('\n');
+    const diff = computeLineDiff(current, snapshot);
+    expect(diff.identical).toBe(false);
+    expect(diff.removed).toBe(1);
+    expect(diff.added).toBe(2);
+    expect(diff.lines.filter((l) => l.kind === 'del').map((l) => l.text)).toEqual(['- old item']);
+    expect(diff.lines.filter((l) => l.kind === 'add').map((l) => l.text)).toEqual([
+      '- restored item',
+      '- extra',
+    ]);
   });
 });

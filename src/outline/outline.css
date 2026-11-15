@@ -34,7 +34,27 @@
 
 /* 一级标题微提字重，拉开章节树层级节奏。 */
 #lightink-outline-sidebar .lightink-outline-item.level-1 {
-  font-weight: 560;
+  font-weight: 600;
+  color: var(--lightink-fg);
+}
+
+#lightink-outline-sidebar .lightink-outline-item:is(.level-4, .level-5, .level-6) {
+  color: color-mix(in srgb, var(--lightink-fg) 72%, var(--lightink-muted));
+  font-size: 12px;
+}
+
+#lightink-outline-sidebar .lightink-outline-body {
+  padding-inline: 2px;
+}
+
+#lightink-outline-sidebar .lightink-outline-fold.is-folded {
+  color: var(--lightink-accent);
+  opacity: 0.95;
+}
+
+#lightink-outline-sidebar .lightink-outline-fold:hover {
+  opacity: 1;
+  color: var(--lightink-fg-strong, var(--lightink-fg));
 }
 
 /* 常驻搜索框（§3.12）：凹面面板上的抬起输入面，替代默认纸面底。 */

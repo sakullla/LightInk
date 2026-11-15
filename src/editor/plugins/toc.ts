@@ -47,6 +47,35 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/prose/view
 /** 触发目录渲染的字面标记（段落 trim 后须完全等于它）。 */
 export const TOC_MARK = '[TOC]';
 
+export interface TocLabels {
+  readonly title?: string;
+  readonly empty?: string;
+}
+
+let tocTitleLabel = '目录';
+let tocEmptyLabel = '添加标题后将在此自动生成目录';
+const tocViews = new Set<EditorView>();
+
+export function setTocLabels(labels: TocLabels): void {
+  let changed = false;
+  if (typeof labels.title === 'string' && labels.title !== '' && labels.title !== tocTitleLabel) {
+    tocTitleLabel = labels.title;
+    changed = true;
+  }
+  if (typeof labels.empty === 'string' && labels.empty !== '' && labels.empty !== tocEmptyLabel) {
+    tocEmptyLabel = labels.empty;
+    changed = true;
+  }
+  if (!changed) return;
+  for (const view of tocViews) {
+    try {
+      view.dispatch(view.state.tr.setMeta(TOC_PLUGIN_KEY, TOC_REFRESH_META));
+    } catch {
+      /* ignore stale view */
+    }
+  }
+}
+
 /** 目录重建防抖窗口（毫秒）：文档变更后在此窗口内合并重建一次。 */
 export const TOC_REBUILD_DEBOUNCE_MS = 150;
 
@@ -187,7 +216,15 @@ export function jumpToHeading(view: EditorView, pos: number): boolean {
   view.dispatch(tr.scrollIntoView());
   const dom = view.nodeDOM(pos);
   if (dom instanceof HTMLElement) {
-    dom.scrollIntoView({ block: 'start' });
+    let behavior: ScrollBehavior = 'smooth';
+    try {
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        behavior = 'auto';
+      }
+    } catch {
+      behavior = 'auto';
+    }
+    dom.scrollIntoView({ block: 'start', behavior });
   }
   return true;
 }
@@ -204,16 +241,22 @@ function createTocWidget(
   container.className = 'lightink-toc';
   container.contentEditable = 'false';
   container.setAttribute('role', 'navigation');
-  container.setAttribute('aria-label', '目录');
+  container.setAttribute('aria-label', tocTitleLabel);
+
+  const header = document.createElement('div');
+  header.className = 'lightink-toc-header';
+  header.textContent = tocTitleLabel;
+  container.appendChild(header);
 
   if (headings.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'lightink-toc-empty';
-    empty.textContent = '目录为空：文档还没有标题';
+    empty.textContent = tocEmptyLabel;
     container.appendChild(empty);
     return container;
   }
 
+  const minLevel = headings.reduce((min, h) => Math.min(min, h.level), 6);
   const list = document.createElement('ul');
   list.className = 'lightink-toc-list';
   list.style.listStyle = 'none';
@@ -228,14 +271,14 @@ function createTocWidget(
     const item = document.createElement('li');
     item.className = 'lightink-toc-item';
     item.dataset['level'] = String(heading.level);
-    item.style.paddingLeft = `${(heading.level - 1) * 1.25}em`;
+    const depth = Math.max(0, heading.level - minLevel);
+    item.style.paddingLeft = `${depth * 1.15}em`;
 
     const link = document.createElement('button');
     link.type = 'button';
     link.className = 'lightink-toc-link';
     link.textContent = heading.text === '' ? '(无标题)' : heading.text;
     link.style.cursor = 'pointer';
-    link.tabIndex = -1;
     // 阻止 PM 抢占焦点/放置光标。
     link.addEventListener('mousedown', (event) => {
       event.preventDefault();
@@ -317,6 +360,7 @@ export function createTocProsePlugin(): Plugin {
     },
     view(editorView) {
       viewRef = editorView;
+      tocViews.add(editorView);
       const schedule = debounce(() => {
         const view = viewRef;
         if (view === null) return;
@@ -331,6 +375,7 @@ export function createTocProsePlugin(): Plugin {
         },
         destroy() {
           schedule.cancel();
+          tocViews.delete(editorView);
           viewRef = null;
         },
       };

@@ -174,6 +174,9 @@ export interface EditorMenuActions {
   insertColRight?(): void;
   insertRowAbove?(): void;
   insertRowBelow?(): void;
+  alignColLeft?(): void;
+  alignColCenter?(): void;
+  alignColRight?(): void;
   deleteRow?(): void;
   deleteColumn?(): void;
   selectRow?(): void;
@@ -275,6 +278,21 @@ export function buildEditorContextMenuItems(
         id: 'table-select-column',
         label: t('ctx.table.selectColumn'),
         action: () => actions.selectColumn?.(),
+      },
+      {
+        id: 'table-align-left',
+        label: t('ctx.table.alignLeft'),
+        action: () => actions.alignColLeft?.(),
+      },
+      {
+        id: 'table-align-center',
+        label: t('ctx.table.alignCenter'),
+        action: () => actions.alignColCenter?.(),
+      },
+      {
+        id: 'table-align-right',
+        label: t('ctx.table.alignRight'),
+        action: () => actions.alignColRight?.(),
       },
       {
         id: 'table-delete-row',

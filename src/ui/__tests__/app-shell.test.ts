@@ -1801,3 +1801,61 @@ describe('File→退出（R14 无退出死角降级出口）', () => {
     expect(file?.items.some((i) => i.id === 'file-sep-exit')).toBe(false);
   });
 });
+
+describe('Markdown editor quick affordances (+ new tab, Ctrl+H replace, source checkmark)', () => {
+  afterEach(() => {
+    restoreDocument();
+  });
+
+  it('renders a + new-tab button in #lightink-tabbar that triggers onNew', () => {
+    installFakeDocument();
+    const root = document.createElement('div') as unknown as HTMLElement;
+    const onNew = vi.fn();
+    const shell = createAppShell(
+      root,
+      { ...stubActions(), onNew },
+      { shortcutBindings: () => [], storage: null, initialPinPrefs: { menu: true, tabs: true } },
+    );
+    shell.renderTabBar([{ id: 'tab-1', title: 'notes.md', dirty: false }], 'tab-1', {
+      onSwitch: () => undefined,
+      onClose: () => undefined,
+    });
+    const newBtn = (root as unknown as FakeEl).querySelector('#lightink-tab-new');
+    expect(newBtn).not.toBeNull();
+    newBtn?.click();
+    expect(onNew).toHaveBeenCalledOnce();
+  });
+
+  it('exposes Edit → Replace… (Ctrl+H) on Markdown tabs and omits it on read-only Reader tabs', () => {
+    const onReplace = vi.fn();
+    const mdMenus = buildMenus({
+      ...stubActions(),
+      activeTabKind: () => 'markdown',
+      onReplace,
+    });
+    const editItem = mdMenus.find((m) => m.id === 'edit')?.items.find((i) => i.id === 'edit-replace');
+    expect(editItem).toBeDefined();
+    expect(editItem?.shortcut).toBe('Ctrl+H');
+    editItem?.action();
+    expect(onReplace).toHaveBeenCalledOnce();
+
+    const readerMenus = buildMenus({
+      ...stubActions(),
+      activeTabKind: () => 'reader',
+      onReplace,
+    });
+    expect(readerMenus.find((m) => m.id === 'edit')?.items.some((i) => i.id === 'edit-replace')).toBe(
+      false,
+    );
+  });
+
+  it('marks View → Source Mode with ✓ when isSourceModeActive returns true', () => {
+    const menus = buildMenus({
+      ...stubActions(),
+      isSourceModeActive: () => true,
+    });
+    const item = menus.find((m) => m.id === 'view')?.items.find((i) => i.id === 'view-source-mode');
+    const label = typeof item?.label === 'function' ? item.label() : item?.label;
+    expect(label).toBe('✓ view.sourceMode');
+  });
+});

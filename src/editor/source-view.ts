@@ -135,6 +135,167 @@ function renderHighlightedSource(source: string): string {
   return `${highlightCode('markdown', source)}\n`;
 }
 
+export interface SourceRangePatch {
+  readonly replaceFrom: number;
+  readonly replaceTo: number;
+  readonly replacement: string;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+}
+
+const SOURCE_INDENT = '  ';
+
+/**
+ * Pure helper: compute a 2-space indent or outdent patch for a source textarea.
+ * - Single-caret `Tab` (no selection, not outdent) inserts two spaces at the caret.
+ * - Multi-line selection or `Shift+Tab` indents/outdents every touched line while
+ *   keeping the selection anchored to the same logical characters.
+ */
+export function indentSourceSelection(
+  text: string,
+  selectionStart: number,
+  selectionEnd: number,
+  outdent = false,
+): SourceRangePatch | null {
+  const start = Math.max(0, Math.min(selectionStart, text.length));
+  const end = Math.max(start, Math.min(selectionEnd, text.length));
+
+  if (!outdent && start === end) {
+    return {
+      replaceFrom: start,
+      replaceTo: end,
+      replacement: SOURCE_INDENT,
+      selectionStart: start + SOURCE_INDENT.length,
+      selectionEnd: start + SOURCE_INDENT.length,
+    };
+  }
+
+  const lineStart = text.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  // When selection ends at column 0 of a trailing line (`start < end` and preceding char is `\n`),
+  // exclude that untouched trailing line (VS Code / standard editor convention).
+  const effectiveEnd =
+    end > start && text[end - 1] === '\n' ? end - 1 : end;
+  const nextNewline = text.indexOf('\n', effectiveEnd);
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+
+  const block = text.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+
+  if (!outdent) {
+    const replacement = lines.map((line) => `${SOURCE_INDENT}${line}`).join('\n');
+    const nextStart =
+      start === lineStart && end > start ? start : start + SOURCE_INDENT.length;
+    const nextEnd = end + lines.length * SOURCE_INDENT.length;
+    return {
+      replaceFrom: lineStart,
+      replaceTo: lineEnd,
+      replacement,
+      selectionStart: nextStart,
+      selectionEnd: nextEnd,
+    };
+  }
+
+  let removedFirst = 0;
+  let totalRemoved = 0;
+  const outdented = lines.map((line, index) => {
+    let remove = 0;
+    if (line.startsWith(SOURCE_INDENT)) {
+      remove = SOURCE_INDENT.length;
+    } else if (line.startsWith('\t') || line.startsWith(' ')) {
+      remove = 1;
+    }
+    if (index === 0) {
+      removedFirst = remove;
+    }
+    totalRemoved += remove;
+    return remove > 0 ? line.slice(remove) : line;
+  });
+
+  if (totalRemoved === 0) {
+    return null;
+  }
+
+  const replacement = outdented.join('\n');
+  const nextStart = Math.max(lineStart, start - removedFirst);
+  const nextEnd = Math.max(nextStart, end - totalRemoved);
+  return {
+    replaceFrom: lineStart,
+    replaceTo: lineEnd,
+    replacement,
+    selectionStart: nextStart,
+    selectionEnd: nextEnd,
+  };
+}
+
+/**
+ * Pure helper: wrap or unwrap `[selectionStart, selectionEnd]` with a symmetric
+ * Markdown inline marker (`**`, `*`, `` ` ``, `~~`).
+ */
+export function toggleSourceWrap(
+  text: string,
+  selectionStart: number,
+  selectionEnd: number,
+  marker: string,
+): SourceRangePatch {
+  const start = Math.max(0, Math.min(selectionStart, text.length));
+  const end = Math.max(start, Math.min(selectionEnd, text.length));
+  const mLen = marker.length;
+
+  // Case 1: markers immediately surround the selection (`**[sel]**`) -> unwrap.
+  if (
+    start >= mLen &&
+    end + mLen <= text.length &&
+    text.slice(start - mLen, start) === marker &&
+    text.slice(end, end + mLen) === marker
+  ) {
+    // Avoid mistaking `**bold**` outer `*` when toggling single `*` italic:
+    const isSingleStarInsideDouble =
+      marker === '*' &&
+      start >= 2 &&
+      end + 2 <= text.length &&
+      text.slice(start - 2, start) === '**' &&
+      text.slice(end, end + 2) === '**' &&
+      !(start >= 3 && text.slice(start - 3, start) === '***');
+    if (!isSingleStarInsideDouble) {
+      const inner = text.slice(start, end);
+      return {
+        replaceFrom: start - mLen,
+        replaceTo: end + mLen,
+        replacement: inner,
+        selectionStart: start - mLen,
+        selectionEnd: end - mLen,
+      };
+    }
+  }
+
+  // Case 2: selection itself starts and ends with the marker (`[**sel**]`) -> unwrap.
+  const selected = text.slice(start, end);
+  if (
+    selected.length >= mLen * 2 &&
+    selected.startsWith(marker) &&
+    selected.endsWith(marker) &&
+    !(marker === '*' && selected.startsWith('**') && !selected.startsWith('***'))
+  ) {
+    const inner = selected.slice(mLen, selected.length - mLen);
+    return {
+      replaceFrom: start,
+      replaceTo: end,
+      replacement: inner,
+      selectionStart: start,
+      selectionEnd: start + inner.length,
+    };
+  }
+
+  // Case 3: wrap selection (or insert empty pair with caret inside).
+  return {
+    replaceFrom: start,
+    replaceTo: end,
+    replacement: `${marker}${selected}${marker}`,
+    selectionStart: start + mLen,
+    selectionEnd: end + mLen,
+  };
+}
+
 /**
  * DOM 层：在宿主上挂「透明 textarea + 背后高亮 pre/code」叠加层实现可编辑的带高亮
  * 源码视图。表面按内容撑高宿主，滚动交给 #lightink-editor-area（与 WYSIWYG 同一条
@@ -335,6 +496,57 @@ export class SourceView {
     textarea.addEventListener('keyup', onCaretMove);
     textarea.addEventListener('click', onCaretMove);
     textarea.addEventListener('wheel', onWheel, { passive: false });
+    const applyTextareaPatch = (patch: SourceRangePatch): void => {
+      const ta2 = this.textarea;
+      if (ta2 === null) return;
+      ta2.focus();
+      ta2.setSelectionRange(patch.replaceFrom, patch.replaceTo);
+      let inserted = false;
+      try {
+        inserted = doc.execCommand('insertText', false, patch.replacement);
+      } catch {
+        inserted = false;
+      }
+      if (!inserted) {
+        ta2.setRangeText(patch.replacement, patch.replaceFrom, patch.replaceTo, 'end');
+      }
+      ta2.setSelectionRange(patch.selectionStart, patch.selectionEnd);
+      this.refreshFromTextarea();
+      this.ensureCaretVisible();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.isComposing) return;
+      if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        const patch = indentSourceSelection(
+          textarea.value,
+          textarea.selectionStart,
+          textarea.selectionEnd,
+          event.shiftKey,
+        );
+        if (patch !== null) {
+          applyTextareaPatch(patch);
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+        const key = event.key.toLowerCase();
+        const marker =
+          key === 'b' ? '**' : key === 'i' ? '*' : key === '`' ? '`' : null;
+        if (marker !== null) {
+          event.preventDefault();
+          applyTextareaPatch(
+            toggleSourceWrap(
+              textarea.value,
+              textarea.selectionStart,
+              textarea.selectionEnd,
+              marker,
+            ),
+          );
+        }
+      }
+    };
+    textarea.addEventListener('keydown', onKeyDown);
     // 源码模式粘贴：本应用复制优先插入 Markdown 源；外部 text/html 转 Markdown，
     // 不插入原始 HTML 标签；无可用载荷或转换失败则回落原生纯文本粘贴。
     const onPaste = (event: ClipboardEvent): void => {

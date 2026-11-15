@@ -207,6 +207,67 @@ export function lastCurrentOutlineIndex(
   return found;
 }
 
+/**
+ * Pure scroll-spy resolver for rendered WYSIWYG headings:
+ * Given each heading's viewport `top` (or `null` when hidden inside a folded
+ * section) in document order and `thresholdPx` (`scrollerTop + offset`),
+ * returns the anchor ordinal of the active section.
+ */
+export function resolveActiveHeadingAnchorByTops(
+  headingTops: ReadonlyArray<number | null>,
+  thresholdPx: number,
+): number | undefined {
+  let firstVisible: number | undefined;
+  let candidate: number | undefined;
+  for (let i = 0; i < headingTops.length; i += 1) {
+    const top = headingTops[i];
+    if (top === null || !Number.isFinite(top)) {
+      continue;
+    }
+    if (firstVisible === undefined) {
+      firstVisible = i;
+    }
+    if (top <= thresholdPx) {
+      candidate = i;
+    } else {
+      break;
+    }
+  }
+  return candidate ?? firstVisible;
+}
+
+/**
+ * Pure cursor-line resolver for Source Mode:
+ * Maps a 1-based cursor line to the anchor ordinal of the owning Markdown
+ * heading (same MDAST traversal order as `buildOutline`, so code fences are
+ * ignored cleanly).
+ */
+export function resolveActiveHeadingAnchorByLine(
+  markdown: string,
+  cursorLine: number,
+): number | undefined {
+  if (typeof markdown !== 'string' || markdown.trim() === '') {
+    return undefined;
+  }
+  const root: Root = parseMarkdownToMdast(markdown);
+  const headings: Heading[] = [];
+  collectHeadings(root.children, headings);
+  if (headings.length === 0) {
+    return undefined;
+  }
+  const line = Math.max(1, Math.floor(cursorLine));
+  let candidate = 0;
+  for (let i = 0; i < headings.length; i += 1) {
+    const startLine = headings[i]?.position?.start?.line ?? 1;
+    if (startLine <= line) {
+      candidate = i;
+    } else {
+      break;
+    }
+  }
+  return candidate;
+}
+
 export type OutlineSearchKeyAction =
   | { readonly kind: 'clear' }
   | { readonly kind: 'dismiss' }

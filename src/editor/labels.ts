@@ -15,6 +15,8 @@ import type { FormatToolId, LinkEditorFn } from './plugins/format-toolbar.js';
 import type { KeyboardFormatToolId } from './plugins/keyboard-format-bar.js';
 import type { SlashInteractiveHandler } from './plugins/slash-menu.js';
 import type { MermaidViewerLabels } from './plugins/mermaid-viewer.js';
+import type { TableToolbarLabels } from './plugins/table-toolbar.js';
+import type { TocLabels } from './plugins/toc.js';
 
 export interface EditorLabelPayloads {
   formatToolbarTitles?: Partial<Record<FormatToolId, string>>;
@@ -25,6 +27,9 @@ export interface EditorLabelPayloads {
   mermaidViewerLabels?: MermaidViewerLabels;
   taskCheckboxLabels?: { check: string; uncheck: string };
   slashTranslate?: ((key: MessageKey) => string) | null;
+  editorPlaceholder?: string;
+  tocLabels?: TocLabels;
+  tableToolbarLabels?: TableToolbarLabels;
 }
 
 const labels: EditorLabelPayloads = {};

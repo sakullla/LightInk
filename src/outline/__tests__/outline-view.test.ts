@@ -23,6 +23,10 @@ import {
   writeStoredOutlineWidth,
   type OutlineView,
 } from '../outline-view.js';
+import {
+  resolveActiveHeadingAnchorByLine,
+  resolveActiveHeadingAnchorByTops,
+} from '../outline-model.js';
 
 /** 最小 fake DOM 元素：只实现视图用到的子集。 */
 class FakeElement {
@@ -742,5 +746,55 @@ describe('createOutlineView + TabManager', () => {
     expect(itemTexts(view)).toEqual(['A']);
     view.destroy();
     vi.useRealTimers();
+  });
+});
+
+describe('Markdown live scroll-spy & syncLocation', () => {
+  it('resolveActiveHeadingAnchorByTops picks the last visible heading above threshold', () => {
+    expect(resolveActiveHeadingAnchorByTops([180, 420, 760], 120)).toBe(0);
+    expect(resolveActiveHeadingAnchorByTops([40, 110, 380], 120)).toBe(1);
+    expect(resolveActiveHeadingAnchorByTops([-200, null, -10, 260], 120)).toBe(2);
+    expect(resolveActiveHeadingAnchorByTops([], 120)).toBeUndefined();
+  });
+
+  it('resolveActiveHeadingAnchorByLine tracks cursor section and ignores fenced code # lines', () => {
+    const md = [
+      '# Intro',
+      '',
+      '```sh',
+      '# comment in code',
+      '```',
+      '',
+      '## Design',
+      'Line under design',
+      '### Details',
+    ].join('\n');
+    expect(resolveActiveHeadingAnchorByLine(md, 1)).toBe(0);
+    expect(resolveActiveHeadingAnchorByLine(md, 4)).toBe(0);
+    expect(resolveActiveHeadingAnchorByLine(md, 8)).toBe(1);
+    expect(resolveActiveHeadingAnchorByLine(md, 9)).toBe(2);
+  });
+
+  it('syncLocation updates is-current and aria-current in place without replacing buttons', () => {
+    let activeAnchor = 0;
+    const view = createOutlineView({
+      doc: fakeDocument(),
+      getActiveHost: () => null,
+      getActiveMarkdown: () => '# One\n\n## Two\n\n## Three\n',
+      getActiveLocation: () => ({ anchor: activeAnchor }),
+    });
+    const initialButtons = [...bodyOf(view).children];
+    expect(initialButtons).toHaveLength(3);
+    expect(initialButtons[0]?.classList.contains('is-current')).toBe(true);
+    expect(initialButtons[2]?.classList.contains('is-current')).toBe(false);
+
+    activeAnchor = 2;
+    view.syncLocation();
+    expect(bodyOf(view).children[0]).toBe(initialButtons[0]);
+    expect(initialButtons[0]?.classList.contains('is-current')).toBe(false);
+    expect(initialButtons[0]?.getAttribute('aria-current')).toBeNull();
+    expect(initialButtons[2]?.classList.contains('is-current')).toBe(true);
+    expect(initialButtons[2]?.getAttribute('aria-current')).toBe('location');
+    view.destroy();
   });
 });

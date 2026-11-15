@@ -67,7 +67,9 @@ import { slashMenuPlugin } from './plugins/slash-menu.js';
 import { taskCheckboxPlugin } from './plugins/task-checkbox.js';
 import { runTableOp, type TableOpId } from './plugins/table-ops.js';
 import { tableOpsPlugin } from './plugins/table-ops.js';
+import { tableToolbarPlugin } from './plugins/table-toolbar.js';
 import { tableViewPlugin } from './plugins/table-view.js';
+import { placeholderPlugin } from './plugins/placeholder.js';
 import { tocPlugin } from './plugins/toc.js';
 import {
   collectHeadings,
@@ -349,8 +351,11 @@ export async function mountEditor(
       editor.use(progressiveSelectPlugin);
       // GFM task list: clickable checkboxes (toggle checked ↔ markdown - [ ] / - [x]).
       editor.use(taskCheckboxPlugin);
-      // Table: insert/delete row-col, TSV paste, Typora-style shortcuts.
+      // Empty single-paragraph placeholder hint (decoration-only).
+      editor.use(placeholderPlugin);
+      // Table: insert/delete row-col, column alignment, TSV paste, Typora-style shortcuts.
       editor.use(tableOpsPlugin);
+      editor.use(tableToolbarPlugin);
       // Table display: `.tableWrapper` for in-bar scroll; no columnResizing.
       editor.use(tableViewPlugin);
       // T4：注入图片落盘回调时拦截粘贴/拖拽图片 → 落盘 → 插入相对引用。
@@ -441,6 +446,17 @@ export async function mountEditor(
       if (view === null) return null;
       const { from, to, empty } = view.state.selection;
       return { from, to, empty };
+    },
+    getSelectedText(): string {
+      const view = getView(state);
+      if (view === null) return '';
+      const { from, to, empty } = view.state.selection;
+      if (empty || to <= from) return '';
+      try {
+        return view.state.doc.textBetween(from, to, '\n', '\n');
+      } catch {
+        return '';
+      }
     },
     getCursorPosition(): CursorPosition | null {
       const view = getView(state);

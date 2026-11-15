@@ -10,6 +10,8 @@ import {
   STATUS_BAR_VISIBLE_STORAGE_KEY,
   createStatusBar,
   cursorPositionFromOffset,
+  estimateReadingMinutes,
+  formatSelectionWordStats,
   formatWordStats,
   loadStatusBarVisible,
   saveStatusBarVisible,
@@ -349,5 +351,61 @@ describe('formatWordStats 文案', () => {
 describe('cursorPositionFromOffset', () => {
   it('counts CRLF lines and Unicode code points', () => {
     expect(cursorPositionFromOffset('first\r\n你😀好', 11)).toEqual({ line: 2, column: 4 });
+  });
+});
+
+describe('Markdown 状态栏进阶反馈（选区统计 / 阅读时长 / 模式切换胶囊）', () => {
+  it('computes reading minutes and formats selection vs total stats', () => {
+    expect(estimateReadingMinutes({ words: 0, characters: 0 })).toBe(0);
+    expect(estimateReadingMinutes({ words: 120, characters: 260 })).toBe(1);
+    expect(estimateReadingMinutes({ words: 650, characters: 1400 })).toBe(3);
+    expect(
+      formatSelectionWordStats(
+        { words: 12, characters: 28 },
+        { words: 288, characters: 631 },
+        { ...zhLabels(), selected: '已选' },
+      ),
+    ).toBe('已选 12 / 288 · 字符 28 / 631');
+  });
+
+  it('shows selection counts, reading time, and mode chip when provided', () => {
+    const host = new FakeEl('div');
+    const bar = createStatusBar(fakeDoc(), host as unknown as HTMLElement, {
+      storage: null,
+      initiallyVisible: true,
+      labels: () => ({
+        ...zhLabels(),
+        selected: '已选',
+        readingTime: (m) => `约 ${m} 分钟`,
+        mode: { wysiwyg: '所见', source: '源码', toggleTitle: '切换源码模式' },
+      }),
+    });
+    const root = bar.element as unknown as FakeEl;
+
+    bar.refresh(() => ({
+      kind: 'markdown',
+      markdown: '你好世界 hello',
+      saveStatus: 'saved',
+      cursor: { line: 1, column: 1 },
+      editorMode: 'wysiwyg',
+    }));
+    expect(childByClass(root, 'lightink-status-mode').hidden).toBe(false);
+    expect(childByClass(root, 'lightink-status-mode').textContent).toBe('所见');
+    expect(childByClass(root, 'lightink-status-counts').textContent).toBe(
+      '字数 5 · 字符 9 · 约 1 分钟',
+    );
+
+    bar.refresh(() => ({
+      kind: 'markdown',
+      markdown: '你好世界 hello',
+      selectionMarkdown: '你好',
+      saveStatus: 'dirty',
+      cursor: { line: 1, column: 3 },
+      editorMode: 'source',
+    }));
+    expect(childByClass(root, 'lightink-status-mode').textContent).toBe('源码');
+    expect(childByClass(root, 'lightink-status-counts').textContent).toBe(
+      '已选 2 / 5 · 字符 2 / 9',
+    );
   });
 });

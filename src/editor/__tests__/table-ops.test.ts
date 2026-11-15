@@ -75,10 +75,11 @@ describe('HTML table clipboard helpers', () => {
 });
 
 describe('TABLE_OP_LABELS', () => {
-  it('covers all ops in Chinese', () => {
+  it('covers all ops in Chinese (including column alignment)', () => {
     expect(TABLE_OP_LABELS['insert-col-left']).toContain('左');
     expect(TABLE_OP_LABELS['insert-row-below']).toContain('下');
-    expect(Object.keys(TABLE_OP_LABELS)).toHaveLength(9);
+    expect(TABLE_OP_LABELS['align-col-center']).toContain('居中');
+    expect(Object.keys(TABLE_OP_LABELS)).toHaveLength(12);
   });
 });
 
